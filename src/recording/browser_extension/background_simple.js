@@ -1,0 +1,410 @@
+// WebSocket 客户端（替代 Native Messaging）
+// 必须在所有其他代码之前 importScripts
+importScripts('websocket_client.js');
+
+// console.log('[BACKGROUND] Service Worker 已启动');
+
+let wsClient = null;
+let isRecording = false;
+let recordingId = null;
+
+// ⭐ 新增：网络请求存储（按 origin 分组）
+const networkRequests = new Map(); // origin -> []Array
+
+// ⭐ 动态 WebSocket URL（可通过 CDP 注入更新）
+let WEBSOCKET_URL = 'ws://localhost:8765';  // 默认值
+
+// 立即初始化并连接（使用默认 URL，稍后可通过 CDP 注入更新）
+wsClient = new WebSocketClient(WEBSOCKET_URL);
+
+// ⭐ 监听来自 Content Script 的配置消息
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'init_config') {
+    const config = message.config;
+    if (config && config.websocketUrl) {
+      console.log('[BACKGROUND] 收到 CDP 注入的配置:', config);
+
+      // 更新 WebSocket URL
+      const newUrl = config.websocketUrl;
+      if (newUrl !== WEBSOCKET_URL) {
+        console.log(`[BACKGROUND] 更新 WebSocket URL: ${WEBSOCKET_URL} → ${newUrl}`);
+
+        // 关闭旧连接
+        if (wsClient && wsClient.ws) {
+          wsClient.ws.close();
+        }
+
+        // 创建新连接
+        WEBSOCKET_URL = newUrl;
+        wsClient = new WebSocketClient(WEBSOCKET_URL);
+        wsClient.connect();
+
+        sendResponse({ success: true, message: 'WebSocket URL 已更新' });
+      } else {
+        console.log('[BACKGROUND] WebSocket URL 未变化，无需更新');
+        sendResponse({ success: true, message: 'WebSocket URL 相同' });
+      }
+    }
+  }
+  return true;  // 保持消息通道开放以支持异步响应
+});
+
+// 设置回调
+wsClient.onControlStart = (message) => {
+  recordingId = message.recording_id;
+  isRecording = true;
+  console.log('[BACKGROUND] ⭐️ 开始录制:', recordingId);  // 保留：关键日志
+
+  // ⭐ 关键修复：立即保存到 chrome.storage，让新标签页能够立即读取
+  chrome.storage.local.set({
+    isRecording: true,
+    recordingId: recordingId
+  }, () => {
+    console.log('[BACKGROUND] ✅ 录制状态已保存到 chrome.storage');
+  });
+
+  // 查询所有标签页
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      // 跳过特殊页面
+      if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url === 'about:blank') {
+        return;
+      }
+
+      // 先尝试发送消息（如果 content script 已注入）
+      chrome.tabs.sendMessage(tab.id, {
+        type: 'START_RECORDING',
+        recording_id: recordingId
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          // Content script 还没有注入，动态注入
+          chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            files: ['content_script_simple.js']
+          }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('[BACKGROUND] 注入失败:', chrome.runtime.lastError.message);
+            } else {
+              // 注入成功后，再次发送开始录制消息
+              setTimeout(() => {
+                chrome.tabs.sendMessage(tab.id, {
+                  type: 'START_RECORDING',
+                  recording_id: recordingId
+                }).catch(err => {
+                  console.error('[BACKGROUND] 发送 START_RECORDING 失败:', err);
+                });
+              }, 100);
+            }
+          });
+        }
+      });
+    });
+  });
+};
+
+wsClient.onControlStop = (message) => {
+  isRecording = false;
+  console.log('[BACKGROUND] ⏹️ 停止录制');  // 保留：关键日志
+
+  // ⭐ 关键修复：立即保存到 chrome.storage
+  chrome.storage.local.set({
+    isRecording: false,
+    recordingId: null
+  }, () => {
+    console.log('[BACKGROUND] ✅ 录制状态已保存到 chrome.storage (停止)');
+  });
+
+  // 清理网络请求缓存
+  networkRequests.clear();
+
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      chrome.tabs.sendMessage(tab.id, {
+        type: 'STOP_RECORDING'
+      }).catch(() => {});
+    });
+  });
+};
+
+// 连接
+wsClient.connect();
+// console.log('[BACKGROUND] WebSocket 客户端已初始化');
+
+// 监听所有网络请求
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (isRecording) {
+      const request = {
+        url: details.url,
+        method: details.method,
+        type: details.type,  // ⭐ 新增：保存请求类型（stylesheet, script, image, xmlhttprequest, other 等）
+        timestamp: details.timeStamp / 1000.0,
+        request_headers: {}
+      };
+
+      try {
+        const origin = new URL(details.url).origin;
+        if (!networkRequests.has(origin)) {
+          networkRequests.set(origin, []);
+        }
+        const requests = networkRequests.get(origin);
+        requests.push(request);
+
+        // 限制每个origin最多保留10个请求
+        if (requests.length > 10) {
+          requests.shift();
+        }
+      } catch (e) {
+        console.error('[BACKGROUND] URL解析失败:', e);
+      }
+    }
+  },
+  { urls: ["<all_urls>"] },
+  []
+);
+
+// 监听所有网络响应
+chrome.webRequest.onCompleted.addListener(
+  (details) => {
+    if (isRecording) {
+      // ⭐ 调试日志：记录所有请求的类型
+      if (details.url.includes('sugrec') || details.url.includes('api')) {
+        console.log('[BACKGROUND] 📥 请求完成:', {
+          type: details.type,
+          method: details.method,
+          url: details.url.substring(0, 100),
+          status: details.statusCode
+        });
+      }
+
+      try {
+        const origin = new URL(details.url).origin;
+        const requests = networkRequests.get(origin);
+        if (requests && requests.length > 0) {
+          // 查找匹配的请求（从后往前找）
+          for (let i = requests.length - 1; i >= 0; i--) {
+            if (requests[i].url === details.url) {
+              requests[i].response_status = details.statusCode;
+              requests[i].response_headers = {};
+              requests[i].duration = (details.timeStamp / 1000.0) - requests[i].timestamp;
+
+              // 标记需要从 content script 获取响应体
+              // ⭐ 扩展：对所有可能的 XHR/fetch 类型都尝试捕获
+              const needsCapture = ['xmlhttprequest', 'other', 'ping'].includes(details.type);
+              if (needsCapture) {
+                requests[i].needs_body_capture = true;
+                console.log('[BACKGROUND] ✅ 标记需要捕获响应体:', details.type, details.url.substring(0, 80));
+              } else {
+                console.log('[BACKGROUND] ❌ 跳过响应体捕获:', details.type, details.url.substring(0, 80));
+              }
+
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        console.error('[BACKGROUND] URL解析失败:', e);
+      }
+    }
+  },
+  { urls: ["<all_urls>"] },
+  []  // 注意：不使用 extraInfoSpec 来获取响应体，因为会破坏加密连接
+);
+
+// ⭐ 监听标签页创建（仅用于日志记录）
+chrome.tabs.onCreated.addListener((tab) => {
+  console.log('[BACKGROUND] 🆕 新标签页已创建:', tab.id, 'URL:', tab.url || '(空)');
+  // 注意：不在这里注入，因为新标签页的 URL 可能还是 about:blank 或空的
+  // 实际的注入在 onUpdated 的 loading 状态进行
+});
+
+// ⭐ 监听标签页更新（在页面开始加载时就注入）
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  // ⭐ 关键修复：在 loading 状态就开始注入，而不是等到 complete
+  if (changeInfo.status === 'loading' && tab.url) {
+    // 跳过特殊页面
+    if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+      console.log('[BACKGROUND] ⏭️  跳过特殊页面:', tab.url);
+      return;
+    }
+
+    console.log('[BACKGROUND] 🔄 标签页开始加载:', tabId, tab.url);
+
+    // 如果正在录制，立即注入 content scripts
+    if (isRecording && recordingId) {
+      console.log('[BACKGROUND] ⚡ 正在录制，立即注入 content scripts');
+
+      // ⭐ 先尝试直接发送消息（可能 manifest 已经自动注入了）
+      chrome.tabs.sendMessage(tabId, {
+        type: 'START_RECORDING',
+        recording_id: recordingId
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          // Manifest 没有自动注入（或还没注入完成），手动注入
+          console.log('[BACKGROUND] 📝 Content script 未就绪，手动注入 ISOLATED world');
+
+          // ⭐ 关键：必须先注入 ISOLATED world（它可以访问 chrome API）
+          chrome.scripting.executeScript({
+            target: { tabId: tabId },
+            files: ['content_script_isolated.js']
+          }, () => {
+            if (chrome.runtime.lastError) {
+              console.error('[BACKGROUND] ❌ 注入 ISOLATED world 失败:', chrome.runtime.lastError.message);
+            } else {
+              console.log('[BACKGROUND] ✅ ISOLATED world 注入成功');
+
+              // ⭐ 立即注入 MAIN world（用于拦截 fetch/XHR）
+              chrome.scripting.executeScript({
+                target: { tabId: tabId },
+                files: ['content_script_main.js'],
+                world: 'MAIN'  // ⭐ 关键：必须在 MAIN world 中
+              }, () => {
+                if (chrome.runtime.lastError) {
+                  console.error('[BACKGROUND] ❌ 注入 MAIN world 失败:', chrome.runtime.lastError.message);
+                } else {
+                  console.log('[BACKGROUND] ✅ MAIN world 注入成功');
+
+                  // ⭐ 注入完成后立即发送 START_RECORDING 消息
+                  setTimeout(() => {
+                    chrome.tabs.sendMessage(tabId, {
+                      type: 'START_RECORDING',
+                      recording_id: recordingId
+                    }, (response) => {
+                      if (chrome.runtime.lastError) {
+                        console.error('[BACKGROUND] ❌ 发送 START_RECORDING 失败:', chrome.runtime.lastError.message);
+                      } else {
+                        console.log('[BACKGROUND] ✅ 新标签页已开始录制（手动注入）');
+                      }
+                    });
+                  }, 50);  // 减少等待时间到 50ms，因为我们在 loading 状态就已经注入了
+                }
+              });
+            }
+          });
+        } else {
+          console.log('[BACKGROUND] ✅ 新标签页已开始录制（manifest 自动注入）');
+        }
+      });
+    }
+  }
+
+  // ⭐ 保留 complete 状态的处理（用于日志记录和备用注入）
+  if (changeInfo.status === 'complete' && tab.url) {
+    console.log('[BACKGROUND] ✅ 标签页加载完成:', tabId, tab.url);
+
+    // 如果正在录制，再次确认录制状态（备用机制）
+    if (isRecording && recordingId) {
+      // 发送消息确认录制状态（不强制注入，因为之前已经在 loading 状态注入了）
+      chrome.tabs.sendMessage(tabId, {
+        type: 'START_RECORDING',
+        recording_id: recordingId
+      }).catch(() => {
+        // 如果失败，说明 content script 可能没有注入成功，尝试再次注入
+        console.log('[BACKGROUND] ⚠️  complete 状态时消息发送失败，尝试再次注入');
+      });
+    }
+  }
+});
+
+// 监听来自 content script 的消息
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'RECORDING_EVENT') {
+    let event = message.event;
+
+
+    // ⭐ 新增：关联网络请求（如果有 URL）
+    if (event.url) {
+      try {
+        const url = new URL(event.url);
+        const origin = url.origin;
+        const requests = networkRequests.get(origin) || [];
+
+
+        if (requests.length > 0) {
+          event.network_requests = requests.map(req => ({
+            url: req.url,
+            method: req.method,
+            type: req.type,  // ⭐ 新增：请求类型
+            request_headers: req.request_headers || {},
+            request_body: req.request_body || null,
+            response_status: req.response_status || null,
+            response_headers: req.response_headers || {},
+            response_body: req.response_body || null,
+            timestamp: req.timestamp,
+            duration: req.duration || null
+          }));
+
+        } else {
+        }
+      } catch (e) {
+        console.error('[BACKGROUND] ❌ URL解析失败:', e);
+      }
+    } else {
+    }
+
+    // 通过 WebSocket 发送到 Python
+    if (wsClient && wsClient.connected) {
+      wsClient.sendAction(event);
+    }
+    sendResponse({ success: true });
+  } else if (message.type === 'NETWORK_REQUEST') {
+    // 处理来自 content script 的网络请求捕获
+    console.log('[BACKGROUND] 📩 收到 NETWORK_REQUEST 消息, isRecording =', isRecording);
+
+    if (isRecording) {
+      const request = message.request;
+
+      // ⭐ 调试：显示详细信息
+      const hasResponseBody = request.response_body && request.response_body.length > 0;
+      const hasRequestBody = request.request_body && request.request_body.length > 0;
+      console.log('[BACKGROUND] 📥 网络请求:', request.method, request.url.substring(0, 100),
+                 '| 有请求体:', hasRequestBody, '| 有响应体:', hasResponseBody,
+                 '| 响应体长度:', request.response_body?.length || 0);
+
+      // ⭐ 新增：立即通过 WebSocket 发送到 Python
+      if (wsClient && wsClient.connected) {
+        // 构造一个网络请求事件
+        const networkEvent = {
+          action_type: 'network_request',
+          url: request.url,
+          timestamp: request.timestamp,
+          parameters: {
+            method: request.method,
+            request_type: request.request_type || 'xmlhttprequest',  // ⭐ 新增：请求类型
+            request_headers: request.request_headers,
+            request_body: request.request_body,
+            response_status: request.response_status,
+            response_headers: request.response_headers,
+            response_body: request.response_body,
+            duration: request.duration
+          },
+          network_requests: []  // 网络请求本身不需要关联其他网络请求
+        };
+
+        wsClient.sendAction(networkEvent);
+        // console.log('[BACKGROUND] ✅ 网络请求已通过 WebSocket 发送到 Python');
+      } else {
+        console.warn('[BACKGROUND] ⚠️ WebSocket 未连接，网络请求无法发送');
+      }
+
+      // 同时也存储到缓存（用于关联到 DOM 事件）
+      const urlObj = new URL(request.url);
+      const origin = urlObj.origin;
+
+      if (!networkRequests.has(origin)) {
+        networkRequests.set(origin, []);
+      }
+
+      const requests = networkRequests.get(origin);
+      requests.push(request);
+
+      // 限制数量
+      if (requests.length > 10) {
+        requests.shift();
+      }
+    }
+
+    sendResponse({ success: true });
+  }
+  return true;
+});

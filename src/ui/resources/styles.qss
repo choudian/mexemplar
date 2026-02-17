@@ -1,0 +1,1351 @@
+/* Mexemplar 全局样式 (Claude 风格) */
+
+/* ============ 基础样式 ============ */
+QMainWindow {
+    background-color: #ffffff;
+}
+
+/* ============ 菜单栏样式 ============ */
+QMenuBar {
+    background-color: transparent;
+    spacing: 4px;
+}
+
+QMenuBar::item {
+    padding: 5px 8px;
+    background-color: transparent;
+}
+
+QMenuBar::item:selected {
+    background-color: rgba(0, 0, 0, 0.06);
+    border-radius: 4px;
+}
+
+/* 菜单下拉样式 */
+QMenu {
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 32px 6px 12px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: rgba(52, 152, 219, 0.1);
+}
+
+QMenu::separator {
+    height: 1px;
+    background-color: #e0e0e0;
+    margin: 4px 8px;
+}
+
+QWidget {
+    font-family: "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif;
+    font-size: 14px;
+    color: #2c3e50;
+}
+
+/* ============ 侧边栏样式 ============ */
+QWidget#sidebar_header {
+    background-color: #f5f5f5;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+QLabel#app_title {
+    color: #2c3e50;
+    background-color: transparent;
+}
+
+QLabel#app_subtitle {
+    color: #7f8c8d;
+    background-color: transparent;
+}
+
+QFrame#sidebar_separator {
+    background-color: #e0e0e0;
+    max-height: 1px;
+    border: none;
+}
+
+/* 导航按钮 */
+QPushButton#nav_button {
+    background-color: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    padding: 12px 16px;
+    text-align: left;
+    font-size: 14px;
+    color: #2c3e50;
+}
+
+QPushButton#nav_button:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+QPushButton#nav_button:checked {
+    background-color: rgba(52, 152, 219, 0.1);
+    border-left-color: #3498db;
+    color: #3498db;
+    font-weight: bold;
+}
+
+/* 新建对话按钮 (顶部) */
+QPushButton#new_chat_button_top {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 12px 12px 12px 16px;
+    font-size: 14px;
+    font-weight: bold;
+    margin: 8px 12px;
+    text-align: left;
+}
+
+QPushButton#new_chat_button_top:hover {
+    background-color: #2980b9;
+}
+
+QPushButton#new_chat_button_top:pressed {
+    background-color: #21618c;
+}
+
+/* 对话历史列表 */
+QListWidget#chat_history_list {
+    border: none;
+    background-color: transparent;
+    outline: none;
+}
+
+QListWidget#chat_history_list::item {
+    padding: 8px 12px;
+    border-radius: 4px;
+    color: #2c3e50;
+}
+
+QListWidget#chat_history_list::item:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+QListWidget#chat_history_list::item:selected {
+    background-color: rgba(52, 152, 219, 0.15);
+    color: #3498db;
+}
+
+/* 底部用户信息 */
+QWidget#sidebar_footer {
+    background-color: #f5f5f5;
+    border-top: 1px solid #e0e0e0;
+}
+
+QPushButton#user_avatar_button {
+    background-color: transparent;
+    border: none;
+    border-radius: 4px;
+}
+
+QPushButton#user_avatar_button:hover {
+    background-color: rgba(0, 0, 0, 0.05);
+}
+
+QLabel#user_info {
+    color: #2c3e50;
+    background-color: transparent;
+}
+
+/* 对话历史标题 */
+QLabel#history_title {
+    color: #7f8c8d;
+    background-color: transparent;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+/* ============ 折叠/展开按钮样式 (Claude 风格) ============ */
+QWidget#toggle_sidebar_container {
+    background-color: transparent;
+}
+
+QPushButton#toggle_sidebar_button {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
+}
+
+QPushButton#toggle_sidebar_button:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+}
+
+QPushButton#toggle_sidebar_button:pressed {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* ============ 菜单栏工具按钮样式 ============ */
+QWidget#menubar_left_tools {
+    background-color: transparent;
+}
+
+QPushButton#menubar_tool_button {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+}
+
+QPushButton#menubar_tool_button:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+}
+
+QPushButton#menubar_tool_button:pressed {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+/* 隐藏菜单下拉箭头指示器 */
+QPushButton#menubar_tool_button::menu-indicator {
+    width: 0;
+    height: 0;
+    image: none;
+}
+
+/* ============ 主内容区样式 ============ */
+QWidget#main_content_stack {
+    background-color: #ffffff;
+}
+
+/* ============ AI 对话页面样式 (现代风格改进版) ============ */
+
+/* === 整体背景 === */
+QWidget#chat_page {
+    background-color: #f8f9fa;
+}
+
+/* === 顶部标题栏 === */
+QWidget#chat_header {
+    background-color: #ffffff;
+    border-bottom: 1px solid #e9ecef;
+}
+
+QLabel#chat_title {
+    color: #1a1a1a;
+    font-size: 22px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QPushButton#new_chat_button {
+    background-color: #f8f9fa;
+    color: #495057;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+QPushButton#new_chat_button:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+QPushButton#new_chat_button:pressed {
+    background-color: #dee2e6;
+}
+
+/* === 消息展示区域 === */
+QScrollArea#messages_scroll {
+    border: none;
+    background-color: #f8f9fa;
+}
+
+QWidget#messages_container {
+    background-color: #f8f9fa;
+}
+
+QWidget#message_row {
+    background-color: transparent;
+}
+
+/* === 消息气泡容器 === */
+QWidget#bubble_container_user,
+QWidget#bubble_container_assistant {
+    background-color: transparent;
+}
+
+/* === 角色标签 === */
+QLabel#role_icon {
+    font-size: 18px;
+    background-color: transparent;
+}
+
+QLabel#role_name_user {
+    color: #495057;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QLabel#role_name_assistant {
+    color: #495057;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+/* === 用户消息气泡 === */
+QWidget#message_bubble_user {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #667eea,
+        stop:1 #764ba2
+    );
+    border-radius: 16px;
+    border: none;
+}
+
+QLabel#content_user {
+    color: #ffffff;
+    font-size: 15px;
+    line-height: 1.6;
+    background-color: transparent;
+}
+
+/* === AI 助手消息气泡 === */
+QWidget#message_bubble_assistant {
+    background-color: #ffffff;
+    border-radius: 16px;
+    border: 1px solid #e9ecef;
+}
+
+QLabel#content_assistant {
+    color: #212529;
+    font-size: 15px;
+    line-height: 1.6;
+    background-color: transparent;
+}
+
+/* === 输入区域容器 === */
+QWidget#input_container {
+    background-color: #ffffff;
+    border-top: 1px solid #e9ecef;
+}
+
+/* === 输入框包装器(阴影效果) === */
+QWidget#input_wrapper {
+    background-color: transparent;
+}
+
+/* === 输入框 === */
+QTextEdit#message_input {
+    border: 2px solid #e9ecef;
+    border-radius: 12px;
+    padding: 14px 16px;
+    background-color: #ffffff;
+    font-size: 15px;
+    color: #212529;
+    selection-background-color: #667eea;
+    selection-color: #ffffff;
+}
+
+QTextEdit#message_input:focus {
+    border: 2px solid #667eea;
+    background-color: #ffffff;
+}
+
+QTextEdit#message_input:hover {
+    border-color: #adb5bd;
+}
+
+/* === 提示文字 === */
+QLabel#input_hint {
+    color: #6c757d;
+    font-size: 13px;
+    background-color: transparent;
+}
+
+/* === 发送按钮 === */
+QPushButton#send_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #667eea,
+        stop:1 #764ba2
+    );
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 12px 32px;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QPushButton#send_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #5568d3,
+        stop:1 #6439a0
+    );
+}
+
+QPushButton#send_button:pressed {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #4a5bbf,
+        stop:1 #592f8e
+    );
+}
+
+QPushButton#send_button:disabled {
+    background: #e9ecef;
+    color: #adb5bd;
+}
+
+/* ============ 录制页面样式 ============ */
+QLabel#recording_title {
+    color: #2c3e50;
+    background-color: transparent;
+}
+
+QGroupBox {
+    font-weight: bold;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    color: #2c3e50;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+}
+
+QLineEdit, QComboBox, QSpinBox {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 6px 8px;
+    background-color: white;
+    font-size: 14px;
+}
+
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 1px solid #3498db;
+}
+
+QPushButton#record_btn {
+    background-color: #2ecc71;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton#record_btn:hover {
+    background-color: #27ae60;
+}
+
+QPushButton#record_btn:disabled {
+    background-color: #bdc3c7;
+}
+
+QPushButton#stop_btn {
+    background-color: #e74c3c;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 12px 24px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton#stop_btn:hover {
+    background-color: #c0392b;
+}
+
+QPushButton#stop_btn:disabled {
+    background-color: #bdc3c7;
+}
+
+QProgressBar {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    text-align: center;
+    height: 24px;
+    background-color: #ecf0f1;
+}
+
+QProgressBar::chunk {
+    background-color: #3498db;
+    border-radius: 3px;
+}
+
+QTextEdit#status_text {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: "Consolas", "Monaco", monospace;
+    font-size: 12px;
+    background-color: #f8f9fa;
+    color: #2c3e50;
+}
+
+/* ============ 工具列表页面样式 ============ */
+QLabel#tools_title {
+    color: #2c3e50;
+    background-color: transparent;
+}
+
+QLineEdit#tools_search_input {
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 10px 12px;
+    background-color: #f8f9fa;
+    font-size: 14px;
+}
+
+QLineEdit#tools_search_input:focus {
+    border: 1px solid #3498db;
+    background-color: #ffffff;
+}
+
+/* 工具卡片 */
+QWidget#tool_card {
+    background-color: #ffffff;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+}
+
+QWidget#tool_card:hover {
+    border: 1px solid #3498db;
+    background-color: #fafbfc;
+}
+
+QLabel#tool_name {
+    background-color: transparent;
+}
+
+QLabel#tool_description {
+    background-color: transparent;
+}
+
+QPushButton#tool_execute_button {
+    background-color: #2ecc71;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 12px;
+    font-size: 13px;
+}
+
+QPushButton#tool_execute_button:hover {
+    background-color: #27ae60;
+}
+
+/* ============ 设置页面样式 ============ */
+QLabel#settings_title {
+    color: #2c3e50;
+    background-color: transparent;
+}
+
+QGroupBox#settings_group {
+    font-weight: bold;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    margin-top: 12px;
+    padding-top: 12px;
+    color: #2c3e50;
+}
+
+QLineEdit#settings_input,
+QComboBox#settings_combo,
+QSpinBox#settings_spin {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 6px 8px;
+    background-color: white;
+    font-size: 14px;
+}
+
+QLineEdit#settings_input:focus,
+QComboBox#settings_combo:focus,
+QSpinBox#settings_spin:focus {
+    border: 1px solid #3498db;
+}
+
+QPushButton#settings_save_button {
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 10px 32px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+QPushButton#settings_save_button:hover {
+    background-color: #2980b9;
+}
+
+/* ============ 通用按钮样式 ============ */
+QPushButton {
+    border: none;
+    border-radius: 4px;
+    padding: 8px 16px;
+}
+
+QPushButton:hover {
+    background-color: #e0e0e0;
+}
+
+QPushButton:pressed {
+    background-color: #d0d0d0;
+}
+
+/* ============ 滚动条样式 ============ */
+QScrollBar:vertical {
+    border: none;
+    background: transparent;
+    width: 8px;
+    margin: 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #bdc3c7;
+    min-height: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #95a5a6;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    border: none;
+    background: none;
+}
+
+QScrollBar:horizontal {
+    border: none;
+    background: transparent;
+    height: 8px;
+    margin: 0px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #bdc3c7;
+    min-width: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #95a5a6;
+}
+
+QScrollBar::add-line:horizontal,
+QScrollBar::sub-line:horizontal {
+    border: none;
+    background: none;
+}
+
+/* ============ Intent 确认 UI 样式 ============ */
+
+/* === 状态栏 === */
+QWidget#intent_status_bar {
+    background-color: #f8f9fa;
+    border-bottom: 1px solid #e9ecef;
+}
+
+QLabel#status_icon {
+    font-size: 20px;
+    background-color: transparent;
+}
+
+QLabel#status_label {
+    color: #495057;
+    font-size: 15px;
+    font-weight: 500;
+    background-color: transparent;
+}
+
+/* === 左右面板 === */
+QWidget#intent_left_panel,
+QWidget#intent_right_panel {
+    background-color: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 8px;
+}
+
+QLabel#intent_section_title {
+    color: #212529;
+    font-size: 18px;
+    font-weight: 600;
+    background-color: transparent;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #e9ecef;
+}
+
+QLabel#intent_subsection_title {
+    color: #495057;
+    font-size: 15px;
+    font-weight: 600;
+    background-color: transparent;
+    margin-top: 12px;
+}
+
+QLabel#intent_info_label {
+    color: #495057;
+    font-size: 14px;
+    background-color: #f8f9fa;
+    padding: 10px 12px;
+    border-radius: 6px;
+    border: 1px solid #e9ecef;
+}
+
+QLabel#intent_result_label {
+    color: #6c757d;
+    font-size: 13px;
+    background-color: transparent;
+    padding: 4px 0;
+}
+
+QLabel#intent_loading_label {
+    color: #6c757d;
+    font-size: 14px;
+    font-style: italic;
+    background-color: transparent;
+    padding: 40px 20px;
+}
+
+QLabel#intent_hint_label {
+    color: #6c757d;
+    font-size: 13px;
+    background-color: transparent;
+    padding: 8px 12px;
+    border: 1px dashed #dee2e6;
+    border-radius: 6px;
+}
+
+QFrame#intent_separator {
+    background-color: #e9ecef;
+    max-height: 1px;
+    border: none;
+    margin: 8px 0;
+}
+
+/* === 操作勾选框 === */
+QCheckBox#intent_operation_checkbox {
+    color: #212529;
+    font-size: 14px;
+    spacing: 8px;
+    padding: 10px 12px;
+    background-color: #f8f9fa;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+}
+
+QCheckBox#intent_operation_checkbox:hover {
+    background-color: #e9ecef;
+}
+
+QCheckBox#intent_operation_checkbox::indicator {
+    width: 18px;
+    height: 18px;
+    border: 2px solid #adb5bd;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+
+QCheckBox#intent_operation_checkbox::indicator:hover {
+    border-color: #667eea;
+}
+
+QCheckBox#intent_operation_checkbox::indicator:checked {
+    background-color: #667eea;
+    border-color: #667eea;
+    image: url(data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTgiIGhlaWdodD0iMTgiIHZpZXdCb3g9IjAgMCAxOCAxOCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTE1IDZMNi41IDE0LjVMMyAxMSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+);
+}
+
+/* === 对话框消息区域 === */
+QScrollArea#intent_messages_scroll {
+    border: none;
+    background-color: #f8f9fa;
+}
+
+QWidget#intent_messages_container {
+    background-color: #f8f9fa;
+}
+
+QWidget#intent_message_row_user,
+QWidget#intent_message_row_assistant {
+    background-color: transparent;
+}
+
+/* 用户消息气泡 */
+QWidget#intent_message_bubble_user {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:1,
+        stop:0 #667eea,
+        stop:1 #764ba2
+    );
+    border-radius: 12px;
+    border: none;
+}
+
+QLabel#intent_message_content_user {
+    color: #ffffff;
+    font-size: 14px;
+    line-height: 1.5;
+    background-color: transparent;
+}
+
+/* AI 助手消息气泡 */
+QWidget#intent_message_bubble_assistant {
+    background-color: #ffffff;
+    border-radius: 12px;
+    border: 1px solid #e9ecef;
+}
+
+QLabel#intent_message_content_assistant {
+    color: #212529;
+    font-size: 14px;
+    line-height: 1.5;
+    background-color: transparent;
+}
+
+/* === 输入区域 === */
+QWidget#intent_input_container {
+    background-color: transparent;
+}
+
+QTextEdit#intent_message_input {
+    border: 2px solid #e9ecef;
+    border-radius: 8px;
+    padding: 12px;
+    background-color: #ffffff;
+    font-size: 14px;
+    color: #212529;
+}
+
+QTextEdit#intent_message_input:focus {
+    border: 2px solid #667eea;
+}
+
+QLabel#intent_input_hint {
+    color: #6c757d;
+    font-size: 12px;
+    background-color: transparent;
+}
+
+QPushButton#intent_send_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #667eea,
+        stop:1 #764ba2
+    );
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QPushButton#intent_send_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #5568d3,
+        stop:1 #6439a0
+    );
+}
+
+QPushButton#intent_send_button:disabled {
+    background: #e9ecef;
+    color: #adb5bd;
+}
+
+/* === 底部操作栏 === */
+QWidget#intent_bottom_bar {
+    background-color: #ffffff;
+    border-top: 1px solid #e9ecef;
+}
+
+QPushButton#intent_cancel_button {
+    background-color: #f8f9fa;
+    color: #6c757d;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+QPushButton#intent_cancel_button:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+QPushButton#intent_confirm_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #2ecc71,
+        stop:1 #27ae60
+    );
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QPushButton#intent_confirm_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #27ae60,
+        stop:1 #229954
+    );
+}
+
+QPushButton#intent_confirm_button:disabled {
+    background: #e9ecef;
+    color: #adb5bd;
+}
+
+/* === 滚动区域 === */
+QScrollArea#intent_scroll_area {
+    border: none;
+    background-color: transparent;
+}
+
+QWidget#intent_options_container {
+    background-color: transparent;
+}
+
+/* ============ 待试用工具列表 UI 样式 ============ */
+
+/* === 标题栏 === */
+QLabel#pending_tools_title {
+    color: #212529;
+    font-size: 24px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QLabel#pending_tools_count {
+    color: #6c757d;
+    font-size: 14px;
+    background-color: #f8f9fa;
+    padding: 6px 12px;
+    border-radius: 6px;
+}
+
+QPushButton#pending_tools_refresh_button {
+    background-color: #f8f9fa;
+    color: #495057;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+QPushButton#pending_tools_refresh_button:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+/* === 工具卡片 === */
+QWidget#pending_tool_card {
+    background-color: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 12px;
+}
+
+QWidget#pending_tool_card:hover {
+    border-color: #adb5bd;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+/* === 状态标签 === */
+QLabel#pending_tool_status_pending_trial {
+    color: #6c757d;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #f8f9fa;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+QLabel#pending_tool_status_trialing {
+    color: #0066cc;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #e6f2ff;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+QLabel#pending_tool_status_trial_success {
+    color: #28a745;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #d4edda;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+QLabel#pending_tool_status_trial_failed {
+    color: #dc3545;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #f8d7da;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+QLabel#pending_tool_status_awaiting_real_data {
+    color: #fd7e14;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #fff3cd;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+QLabel#pending_tool_status_promoted {
+    color: #6f42c1;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #e0cffc;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+QLabel#pending_tool_status_failed {
+    color: #343a40;
+    font-size: 12px;
+    font-weight: 600;
+    background-color: #e9ecef;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* === 工具信息 === */
+QLabel#pending_tool_name {
+    color: #212529;
+    font-size: 16px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QLabel#pending_tool_description {
+    color: #6c757d;
+    font-size: 13px;
+    line-height: 1.5;
+    background-color: transparent;
+}
+
+QLabel#pending_tool_trial_count {
+    color: #495057;
+    font-size: 12px;
+    background-color: transparent;
+}
+
+QLabel#pending_tool_time {
+    color: #adb5bd;
+    font-size: 11px;
+    background-color: transparent;
+}
+
+/* === 操作按钮 === */
+QPushButton#pending_tool_more_button {
+    background-color: transparent;
+    border: none;
+    color: #6c757d;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+QPushButton#pending_tool_more_button:hover {
+    background-color: #f8f9fa;
+    color: #212529;
+}
+
+QPushButton#pending_tool_trial_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #28a745,
+        stop:1 #20c997
+    );
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QPushButton#pending_tool_trial_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #218838,
+        stop:1 #1aa179
+    );
+}
+
+QLabel#pending_tool_promoted_label {
+    color: #28a745;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: #d4edda;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #c3e6cb;
+}
+
+QLabel#pending_tool_failed_label {
+    color: #dc3545;
+    font-size: 13px;
+    font-weight: 600;
+    background-color: #f8d7da;
+    padding: 10px;
+    border-radius: 8px;
+    border: 1px solid #f5c6cb;
+}
+
+/* === 空状态 === */
+QLabel#pending_tools_empty_label {
+    color: #adb5bd;
+    font-size: 16px;
+    background-color: transparent;
+    padding: 80px 40px;
+}
+
+/* === 滚动区域 === */
+QScrollArea#pending_tools_scroll {
+    border: none;
+    background-color: transparent;
+}
+
+/* === 更多操作菜单 === */
+QMenu#pending_tool_more_menu {
+    background-color: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+QMenu#pending_tool_more_menu::item {
+    padding: 8px 16px;
+    border-radius: 4px;
+}
+
+QMenu#pending_tool_more_menu::item:selected {
+    background-color: #f8f9fa;
+}
+
+/* ============ 工具管理 Tab UI 样式 ============ */
+
+/* === Tab 组件 === */
+QTabWidget#tools_management_tab::pane {
+    border: none;
+    background-color: #ffffff;
+}
+
+QTabWidget#tools_management_tab::tab-bar {
+    alignment: left;
+}
+
+QTabBar::tab {
+    background-color: #f8f9fa;
+    color: #495057;
+    padding: 12px 24px;
+    margin-right: 4px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-size: 14px;
+    font-weight: 500;
+}
+
+QTabBar::tab:selected {
+    background-color: #ffffff;
+    color: #212529;
+    font-weight: 600;
+    border-bottom: 2px solid #667eea;
+}
+
+QTabBar::tab:hover {
+    background-color: #e9ecef;
+}
+
+/* === 已发布工具标题 === */
+QLabel#published_tools_title {
+    color: #212529;
+    font-size: 24px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QLabel#published_tools_count {
+    color: #6c757d;
+    font-size: 14px;
+    background-color: #f8f9fa;
+    padding: 6px 12px;
+    border-radius: 6px;
+}
+
+QPushButton#published_tools_refresh_button {
+    background-color: #f8f9fa;
+    color: #495057;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 14px;
+}
+
+QPushButton#published_tools_refresh_button:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+/* === 已发布工具卡片 === */
+QWidget#published_tool_card {
+    background-color: #ffffff;
+    border: 1px solid #28a745;
+    border-radius: 12px;
+}
+
+QWidget#published_tool_card:hover {
+    border-color: #218838;
+    box-shadow: 0 2px 8px rgba(40, 167, 69, 0.15);
+}
+
+/* === 来源标签 === */
+QLabel#published_tool_source_label {
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 600;
+    background-color: #28a745;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+
+/* === 已发布工具信息 === */
+QLabel#published_tool_name {
+    color: #212529;
+    font-size: 16px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QLabel#published_tool_description {
+    color: #6c757d;
+    font-size: 13px;
+    line-height: 1.5;
+    background-color: transparent;
+}
+
+QLabel#published_tool_strategy_label {
+    color: #495057;
+    font-size: 12px;
+    background-color: transparent;
+}
+
+QLabel#published_tool_time {
+    color: #adb5bd;
+    font-size: 11px;
+    background-color: transparent;
+}
+
+/* === 操作按钮 === */
+QPushButton#published_tool_more_button {
+    background-color: transparent;
+    border: none;
+    color: #6c757d;
+    font-size: 16px;
+    font-weight: bold;
+}
+
+QPushButton#published_tool_more_button:hover {
+    background-color: #f8f9fa;
+    color: #212529;
+}
+
+QPushButton#published_tool_execute_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #007bff,
+        stop:1 #0056b3
+    );
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QPushButton#published_tool_execute_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #0069d9,
+        stop:1 #004085
+    );
+}
+
+QPushButton#pending_tool_promote_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #6f42c1,
+        stop:1 #5a32a3
+    );
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+QPushButton#pending_tool_promote_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #5a32a3,
+        stop:1 #4c2687
+    );
+}
+
+/* === 空状态 === */
+QLabel#published_tools_empty_label {
+    color: #adb5bd;
+    font-size: 16px;
+    background-color: transparent;
+    padding: 80px 40px;
+}
+
+/* === 滚动区域 === */
+QScrollArea#published_tools_scroll {
+    border: none;
+    background-color: transparent;
+}
+
+/* === 更多操作菜单 === */
+QMenu#published_tool_more_menu {
+    background-color: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 6px;
+    padding: 4px;
+}
+
+QMenu#published_tool_more_menu::item {
+    padding: 8px 16px;
+    border-radius: 4px;
+}
+
+QMenu#published_tool_more_menu::item:selected {
+    background-color: #f8f9fa;
+}

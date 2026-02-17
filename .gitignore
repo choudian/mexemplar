@@ -1,0 +1,121 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv
+
+# uv
+.venv/
+uv.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Logs
+*.log
+logs/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Application data (project root only)
+/data/
+*.db-journal
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.pyc
+*.pyo
+*.pyd
+
+# Claude Code temporary files
+tmpclaude-*
+.claude/
+
+# Sensitive information
+*.env
+.env.local
+.env.*.local
+config.json
+*.key
+*.pem
+secrets/
+credentials.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary and test files
+demo_*.py
+test_*.py
+!tests/**/*.py
+*_SUMMARY.md
+FILE_CHECKLIST.md
+SKIP_LLM_USAGE.md
+nul
+.reports/
+.backups/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Local documentation (not for remote)
+docs/local/
+CLAUDE.md
+
+# Scripts (local development tools)
+scripts/
+
+# Browser extension private key (DO NOT COMMIT)
+extension_key.txt
+*.pem

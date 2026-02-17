@@ -1,0 +1,210 @@
+"""
+AI 助手对话界面组件 (Claude 风格)
+
+提供 AI 对话交互界面,包括:
+- 对话消息展示 + 输入框
+"""
+
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QLabel,
+    QTextEdit,
+    QScrollArea,
+)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QKeyEvent
+from src.utils.logger import get_logger
+
+
+class MessageInputEdit(QTextEdit):
+    """支持 Ctrl+Enter 发送的自定义输入框"""
+
+    send_requested = pyqtSignal()  # 发送请求信号
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """处理按键事件"""
+        # Ctrl+Enter 或 Ctrl+Return 发送消息
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+                self.send_requested.emit()
+                return
+
+        # 其他按键正常处理
+        super().keyPressEvent(event)
+
+
+class ChatWidget(QWidget):
+    """AI 助手对话界面组件 (Claude 风格)"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.logger = get_logger(__name__)
+        self.init_ui()
+
+    def init_ui(self):
+        """初始化用户界面"""
+        # 创建主布局
+        main_layout = QVBoxLayout(self)
+        main_layout.setSpacing(16)
+        main_layout.setContentsMargins(24, 24, 24, 24)
+
+        # 对话消息标题
+        self.chat_title_label = QLabel("新对话")
+        self.chat_title_label.setObjectName("chat_title")
+        self.chat_title_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #2c3e50;")
+        main_layout.addWidget(self.chat_title_label)
+
+        # 消息展示区域
+        messages_scroll = QScrollArea()
+        messages_scroll.setWidgetResizable(True)
+        messages_scroll.setObjectName("messages_scroll")
+        messages_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+
+        self.messages_container = QWidget()
+        self.messages_layout = QVBoxLayout(self.messages_container)
+        self.messages_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.messages_layout.setSpacing(12)
+        self.messages_layout.setContentsMargins(0, 0, 0, 0)
+        messages_scroll.setWidget(self.messages_container)
+
+        main_layout.addWidget(messages_scroll, 1)  # stretch=1
+
+        # 添加分割条
+        from PyQt6.QtWidgets import QFrame
+        separator = QFrame()
+        separator.setObjectName("chat_separator")
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setFrameShadow(QFrame.Shadow.Sunken)
+        main_layout.addWidget(separator)
+
+        # 输入框区域
+        input_container = QWidget()
+        input_container.setObjectName("input_container")
+        input_layout = QVBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 16, 0, 0)
+        input_layout.setSpacing(12)
+
+        # 输入框 - 使用自定义类支持快捷键
+        self.message_input = MessageInputEdit(self)
+        self.message_input.setObjectName("message_input")
+        self.message_input.setPlaceholderText("在这里输入你的问题... (按 Ctrl+Enter 发送)")
+        self.message_input.setMinimumHeight(120)  # 最小高度
+        self.message_input.setMaximumHeight(200)  # 最大高度，类似textarea
+        self.message_input.textChanged.connect(self._on_input_changed)
+        self.message_input.send_requested.connect(self.on_send_message)
+        input_layout.addWidget(self.message_input)
+
+        # 发送按钮行
+        button_row = QHBoxLayout()
+        button_row.addStretch()
+
+        self.send_button = QPushButton("发送 📨")
+        self.send_button.setObjectName("send_button")
+        self.send_button.clicked.connect(self.on_send_message)
+        self.send_button.setEnabled(False)
+        button_row.addWidget(self.send_button)
+
+        input_layout.addLayout(button_row)
+
+        main_layout.addWidget(input_container)
+
+        # 初始化消息
+        self._add_welcome_message()
+
+    def _add_welcome_message(self):
+        """添加欢迎消息"""
+        self._add_message("assistant", "你好!我是 Mexemplar AI 助手,有什么可以帮助你的吗?")
+
+    def _add_message(self, role: str, content: str):
+        """添加消息到对话区域
+
+        Args:
+            role: 消息角色 ("user" 或 "assistant")
+            content: 消息内容
+        """
+        # 创建外层容器用于对齐
+        message_container = QWidget()
+        container_layout = QHBoxLayout(message_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(0)
+
+        # 创建消息气泡
+        message_widget = QWidget()
+        message_widget.setObjectName(f"message_{role}")
+        message_widget.setMaximumWidth(600)  # 限制最大宽度
+
+        message_layout = QVBoxLayout(message_widget)
+        message_layout.setContentsMargins(12, 10, 12, 10)
+        message_layout.setSpacing(5)
+
+        # 角色标签
+        role_label = QLabel("👤 你" if role == "user" else "🤖 AI 助手")
+        role_label.setObjectName(f"role_{role}")
+        role_label.setStyleSheet("font-weight: bold; font-size: 12px;")
+        message_layout.addWidget(role_label)
+
+        # 消息内容
+        content_label = QLabel(content)
+        content_label.setObjectName(f"content_{role}")
+        content_label.setWordWrap(True)
+        content_label.setTextFormat(Qt.TextFormat.PlainText)
+        message_layout.addWidget(content_label)
+
+        # 根据角色对齐气泡
+        if role == "user":
+            container_layout.addStretch()
+            container_layout.addWidget(message_widget)
+        else:
+            container_layout.addWidget(message_widget)
+            container_layout.addStretch()
+
+        # 添加到消息容器
+        self.messages_layout.addWidget(message_container)
+
+    def _on_input_changed(self):
+        """输入框内容变化"""
+        text = self.message_input.toPlainText().strip()
+        self.send_button.setEnabled(len(text) > 0)
+
+    def on_new_chat(self):
+        """新建对话"""
+        self.logger.info("新建对话")
+        # 清空消息区域
+        while self.messages_layout.count():
+            child = self.messages_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
+
+        # 重置标题
+        self.chat_title_label.setText("新对话")
+
+        # 添加欢迎消息
+        self._add_welcome_message()
+
+    def on_send_message(self):
+        """发送消息"""
+        message = self.message_input.toPlainText().strip()
+        if not message:
+            return
+
+        self.logger.info(f"发送消息: {message[:50]}...")
+
+        # 添加用户消息
+        self._add_message("user", message)
+
+        # 清空输入框
+        self.message_input.clear()
+
+        # 模拟 AI 响应
+        self._simulate_ai_response(message)
+
+    def _simulate_ai_response(self, user_message: str):
+        """模拟 AI 响应(占位实现)"""
+        # TODO: 集成实际的 AI API
+        response = f"我收到了你的消息:「{user_message[:50] + '...' if len(user_message) > 50 else user_message}」\n\n这是一个演示响应。AI 对话功能正在开发中,敬请期待!"
+
+        # 添加 AI 响应
+        self._add_message("assistant", response)

@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Mexemplar Recorder",
+  "version": "1.0.0",
+  "description": "Record browser interactions for Mexemplar automation",
+  "permissions": [
+    "storage",
+    "tabs",
+    "scripting",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background_simple.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script_main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script_isolated.js"],
+      "run_at": "document_start",
+      "world": "ISOLATED"
+    }
+  ]
+}

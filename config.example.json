@@ -1,0 +1,76 @@
+{
+  "app_name": "Mexemplar",
+  "version": "0.1.0",
+  "debug": false,
+
+  "database": {
+    "db_path": null,
+    "auto_init": true
+  },
+
+  "ai": {
+    "provider": "anthropic",
+    "model": "claude-sonnet-4-20250514",
+    "vision_model": "claude-3-5-sonnet-20241022",
+    "api_key": "",
+    "_comment_api_key": "请设置为你的 API 密钥，例如 sk-ant-xxx（Anthropic）或 sk-xxx（OpenAI）",
+    "base_url": null,
+    "temperature": 0.7,
+    "max_tokens": 4096,
+    "timeout": 60,
+    "compression_model_enabled": false,
+    "compression_model_provider": "anthropic",
+    "compression_model_name": "claude-3-5-haiku-20241022",
+    "compression_model_api_key": null,
+    "compression_model_base_url": null,
+    "compression_model_temperature": 0.5,
+    "compression_model_max_tokens": 1024,
+    "compression_model_threads": 4,
+    "_comment_providers": "支持的提供商: anthropic, openai, deepseek, qwen, zhipu, moonshot",
+    "_comment_anthropic_example": "Anthropic: {\"provider\": \"anthropic\", \"model\": \"claude-3-5-sonnet-20241022\"}",
+    "_comment_openai_example": "OpenAI: {\"provider\": \"openai\", \"model\": \"gpt-4o\"}",
+    "_comment_deepseek_example": "DeepSeek: {\"provider\": \"deepseek\", \"model\": \"deepseek-chat\"}",
+    "_comment_qwen_example": "通义千问: {\"provider\": \"qwen\", \"model\": \"qwen-turbo\"}",
+    "_comment_zhipu_example": "智谱AI: {\"provider\": \"zhipu\", \"model\": \"glm-4\"}",
+    "_comment_moonshot_example": "Moonshot: {\"provider\": \"moonshot\", \"model\": \"moonshot-v1-8k\"}",
+    "_comment_custom_endpoint": "自定义endpoint示例: {\"provider\": \"openai\", \"base_url\": \"https://your-proxy.com/v1\"}"
+  },
+
+  "recording": {
+    "screenshot_quality": 85,
+    "screenshot_delay_after_action": 0.2,
+    "enable_video_recording": true,
+    "video_fps": 15,
+    "video_quality": 85,
+    "record_mouse_move": false,
+    "keyframe_interval": 0.5,
+    "default_recording_mode": "desktop",
+    "browser_type": "chromium",
+    "browser_headless": false,
+    "browser_start_url": null,
+    "capture_network_requests": true,
+    "network_request_filter": "xhr_fetch",
+    "network_request_timeout": 5.0,
+    "debug_log_enabled": false,
+    "persistent_user_data": true,
+    "user_data_dir": null,
+    "websocket": {
+      "enabled": true,
+      "host": "127.0.0.1",
+      "port": 8765,
+      "ping_interval": 30.0,
+      "max_reconnect_attempts": 10,
+      "reconnect_delay": 1.0,
+      "message_queue_size": 1000,
+      "max_message_size": 52428800,
+      "max_response_body_size": 5242880
+    }
+  },
+
+  "ui": {
+    "theme": "light",
+    "language": "zh_CN",
+    "window_width": 1200,
+    "window_height": 800
+  }
+}
