@@ -178,15 +178,31 @@ class AgentUIBridge(QObject):
             try:
                 from langgraph.types import Command
 
-                # 在当前线程中重新创建 checkpointer 和 agent（解决跨线程问题）
-                checkpointer = self._create_checkpointer()
-                session.checkpointer = checkpointer
+                # 关键修复：复用原有的 checkpointer 和 agent 实例
+                # MemorySaver 是内存存储，必须使用同一实例才能保留 interrupt 状态
+                checkpointer = session.checkpointer
+                agent = self._agents.get(thread_id)
 
-                agent = create_agent_graph(
-                    conversation_type=session.conversation_type,
-                    checkpointer=checkpointer
-                )
-                self._agents[thread_id] = agent
+                if checkpointer is None or agent is None:
+                    # 如果没有保存的实例，则需要重新创建（但这种情况可能导致状态丢失）
+                    # 对于 SQLite checkpointer，可以重新连接；对于 MemorySaver，状态会丢失
+                    if self._use_persistence:
+                        # SQLite 可以重新连接
+                        checkpointer = self._create_checkpointer()
+                        session.checkpointer = checkpointer
+                    else:
+                        # MemorySaver 状态已丢失，这是一个错误状态
+                        self._handle_agent_error(
+                            thread_id,
+                            "Session state lost: MemorySaver requires same instance for resume"
+                        )
+                        return
+
+                    agent = create_agent_graph(
+                        conversation_type=session.conversation_type,
+                        checkpointer=checkpointer
+                    )
+                    self._agents[thread_id] = agent
 
                 # 恢复执行（使用 Command）
                 config = {"configurable": {"thread_id": thread_id}}

@@ -10,7 +10,6 @@ from langgraph.types import interrupt
 from langchain_core.messages import AIMessage
 
 from ..state import AgentState
-from ..prompts import get_intent_confirmation_prompt
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -21,6 +20,7 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
     意图确认节点
 
     展示完整的意图分析结果和确认问题，等待用户确认。
+    使用内部循环处理多轮反馈对话，避免图级别的无限循环。
 
     Args:
         state: 当前状态
@@ -41,10 +41,58 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
     # 获取完整分析结果
     full_analysis = current_intent.full_analysis
 
-    # 构建确认消息
+    # 构建初始 interrupt 数据
+    interrupt_data = _build_interrupt_data(current_intent, full_analysis)
+
+    # ========== 关键修复：使用内部循环处理多轮对话 ==========
+    # 不再依赖图的条件边循环，而是在节点内部循环处理
+    # 这样可以正确使用 interrupt() 等待每次用户输入
+
+    while True:
+        # 暂停，等待用户确认或反馈
+        user_response = interrupt(interrupt_data)
+
+        if user_response.get("action") == "confirm":
+            # 用户确认，保存用户的回答并退出循环
+            user_confirmations = user_response.get("confirmations", {})
+            if current_intent and user_confirmations:
+                current_intent.user_confirmations = user_confirmations
+
+            return {
+                "current_intent": current_intent,
+                "messages": [AIMessage(content="用户已确认意图")]
+            }
+        else:
+            # 用户发送了反馈
+            feedback = user_response.get("feedback", "")
+
+            if not feedback:
+                # 没有反馈内容，更新提示并继续循环
+                interrupt_data["message"] = "请提供您的反馈或点击确认按钮继续。\n\n" + _build_confirmation_message(current_intent, full_analysis)
+                continue
+
+            # 调用 LLM 处理用户反馈
+            ai_response = _process_user_feedback(current_intent, full_analysis, feedback)
+
+            # 更新 interrupt 消息，包含 AI 回复
+            interrupt_data["message"] = f"{ai_response}\n\n---\n\n{_build_confirmation_message(current_intent, full_analysis)}"
+
+            # 继续循环，等待用户下一轮输入
+
+
+def _build_interrupt_data(current_intent, full_analysis) -> Dict[str, Any]:
+    """
+    构建 interrupt 数据结构
+
+    Args:
+        current_intent: 当前意图数据
+        full_analysis: 完整分析结果
+
+    Returns:
+        interrupt 数据字典
+    """
     confirmation_message = _build_confirmation_message(current_intent, full_analysis)
 
-    # 构建 interrupt 数据（包含完整信息供 UI 显示）
     interrupt_data = {
         "type": "intent_confirmation",
         "intent": {
@@ -86,7 +134,7 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
             for item in full_analysis.parameterization_analysis
         ]
 
-        # 确认问题（重点！）
+        # 确认问题
         interrupt_data["confirmation_questions"] = [
             {
                 "id": q.id,
@@ -108,41 +156,43 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
             "input_parameters": full_analysis.tool_description.input_parameters,
         }
 
-    # 暂停，等待用户确认
-    # interrupt 会暂停 Agent 执行，直到用户通过 resume() 恢复
-    user_response = interrupt(interrupt_data)
+    return interrupt_data
 
-    # 用户恢复后，处理响应
-    if user_response.get("action") == "confirm":
-        # 用户确认，保存用户的回答
-        user_confirmations = user_response.get("confirmations", {})
 
-        # 更新 IntentData 的 user_confirmations
-        if current_intent and user_confirmations:
-            current_intent.user_confirmations = user_confirmations
+def _process_user_feedback(current_intent, full_analysis, feedback: str) -> str:
+    """
+    处理用户反馈，调用 LLM 生成回复
 
-        return {
-            "current_intent": current_intent,
-            "messages": [AIMessage(content="用户已确认意图")]
-        }
-    else:
-        # 用户发送了消息/反馈
-        feedback = user_response.get("feedback", "")
+    Args:
+        current_intent: 当前意图数据
+        full_analysis: 完整分析结果
+        feedback: 用户反馈内容
 
-        if not feedback:
-            # 没有反馈内容，继续等待
-            return {
-                "messages": [AIMessage(content="请提供您的反馈或确认意图")]
-            }
+    Returns:
+        AI 生成的回复
+    """
+    from src.business.ai.llm_client import create_llm_client
+    from src.data.unified_config import get_unified_config
 
-        # 调用 LLM 处理用户反馈，生成回复
-        from ..llm_client import get_llm_client
-        from langchain_core.messages import HumanMessage
+    config = get_unified_config()
 
-        llm = get_llm_client()
+    # 构建 LLM 客户端配置
+    client_config = {
+        "provider": config.get_ai_provider(),
+        "model": config.get_ai_model(),
+        "api_key": config.get_ai_api_key(),
+        "temperature": config.get_ai_temperature(),
+        "max_tokens": 1024,  # 短回复即可
+    }
 
-        # 构建处理用户反馈的提示词
-        feedback_prompt = f"""用户对意图分析结果提供了以下反馈：
+    base_url = config.get_ai_base_url()
+    if base_url:
+        client_config["base_url"] = base_url
+
+    llm = create_llm_client(client_config)
+
+    # 构建处理用户反馈的提示词
+    feedback_prompt = f"""用户对意图分析结果提供了以下反馈：
 
 **用户反馈**：{feedback}
 
@@ -163,29 +213,14 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
 
 请直接输出回复内容（不要加引号或其他格式）："""
 
-        try:
-            # 调用 LLM 生成回复
-            llm_response = llm.invoke([
-                HumanMessage(content=feedback_prompt)
-            ])
-            response_content = llm_response.content if hasattr(llm_response, 'content') else str(llm_response)
+    try:
+        # 调用 LLM 生成回复
+        response_text = llm.chat(prompt=feedback_prompt, max_tokens=1024)
+        return response_text
 
-            # 添加用户消息和 AI 回复到历史
-            # 图会循环回 intent_confirmation，再次 interrupt
-            return {
-                "messages": [
-                    HumanMessage(content=feedback),
-                    AIMessage(content=response_content)
-                ]
-            }
-
-        except Exception as e:
-            logger.error(f"处理用户反馈失败: {e}", exc_info=True)
-            return {
-                "messages": [
-                    AIMessage(content=f"抱歉，处理您的反馈时出错：{str(e)}。请重试或直接确认意图。")
-                ]
-            }
+    except Exception as e:
+        logger.error(f"处理用户反馈失败: {e}", exc_info=True)
+        return f"抱歉，处理您的反馈时出错：{str(e)}。请重试或直接确认意图。"
 
 
 def _build_confirmation_message(current_intent, full_analysis) -> str:

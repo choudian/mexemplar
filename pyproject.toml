@@ -48,6 +48,8 @@ dependencies = [
     "duckdb-engine>=0.17.0",
     "langgraph>=1.0.8",
     "langgraph-checkpoint>=4.0.0",
+    "langgraph-checkpoint-sqlite>=3.0.3",
+    "prompt-toolkit>=3.0.52",
 ]
 
 [[tool.uv.index]]

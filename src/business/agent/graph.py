@@ -38,40 +38,9 @@ def create_tool_generation_graph():
     # 添加边
     workflow.add_edge("intent_analysis", "intent_confirmation")
 
-    # 添加条件边：从 intent_confirmation 可以继续到 code_generation 或循环回自己
-    def should_continue_or_confirm(state: AgentState) -> Literal["code_generation", "intent_confirmation", "END"]:
-        """
-        判断下一步：
-        - 如果用户已确认，进入代码生成
-        - 如果用户提供了反馈，再次进入确认阶段（循环）
-        - 如果用户取消，结束
-        """
-        # 检查最后一条消息，判断用户操作
-        messages = state.get("messages", [])
-        if messages:
-            last_message = messages[-1]
-            if hasattr(last_message, 'content'):
-                content = last_message.content
-                # 如果是用户确认的消息，继续代码生成
-                if "用户已确认意图" in content:
-                    return "code_generation"
-                # 如果是 AI 对用户反馈的回复，循环回确认阶段
-                # 这样会再次触发 interrupt
-                elif content and not content.startswith("用户反馈："):
-                    # 这是 AI 的回复，需要再次 interrupt 等待用户
-                    return "intent_confirmation"
-
-        # 默认继续代码生成
-        return "code_generation"
-
-    workflow.add_conditional_edges(
-        "intent_confirmation",
-        should_continue_or_confirm,
-        {
-            "code_generation": "code_generation",
-            "intent_confirmation": "intent_confirmation",
-        }
-    )
+    # intent_confirmation 节点内部已使用 while 循环处理多轮对话
+    # 只有当用户确认后才会返回，直接进入代码生成
+    workflow.add_edge("intent_confirmation", "code_generation")
 
     workflow.add_edge("code_generation", END)
 
