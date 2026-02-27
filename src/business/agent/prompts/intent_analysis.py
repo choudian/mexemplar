@@ -17,7 +17,9 @@ from typing import List, Dict, Any, Optional
 
 def get_intent_analysis_prompt(
     actions: List[Any],
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None,
+    user_feedback: Optional[str] = None,
+    previous_analysis: Optional[Dict[str, Any]] = None
 ) -> str:
     """
     生成意图分析提示词
@@ -25,6 +27,8 @@ def get_intent_analysis_prompt(
     Args:
         actions: 操作序列
         metadata: 预处理元数据
+        user_feedback: 用户反馈（如果有）
+        previous_analysis: 之前的分析结果（如果有）
 
     Returns:
         提示词字符串
@@ -33,7 +37,23 @@ def get_intent_analysis_prompt(
     actions_description = _describe_actions(actions)
     context_info = _build_context_info(actions, metadata)
 
+    # 构建用户反馈部分
+    feedback_section = ""
+    if user_feedback:
+        feedback_section = f"""
+
+【用户反馈】
+用户对之前的分析提出了以下反馈：
+"{user_feedback}"
+
+请根据用户反馈，重新分析意图，修正之前分析中的错误或不足。
+
+之前的分析结果：
+{json.dumps(previous_analysis, ensure_ascii=False, indent=2) if previous_analysis else '无'}
+"""
+
     prompt = """你是一个自动化工具生成助手。你的任务是从用户的浏览器操作录制数据中，识别用户的真实意图，并生成一个可复用的自动化工具。
+{feedback_section}
 
 【核心原则】
 1. 用户录制的操作是"示例"，你要生成的是"通用工具"
@@ -209,7 +229,8 @@ def get_intent_analysis_prompt(
 
     return prompt.format(
         context_info=context_info,
-        actions_description=actions_description
+        actions_description=actions_description,
+        feedback_section=feedback_section
     )
 
 

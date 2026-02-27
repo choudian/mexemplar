@@ -61,7 +61,7 @@ class DatabaseManager:
         cursor = conn.cursor()
 
         try:
-            # 创建 tools 表（工具定义）
+            # 创建 tools 表（工具定义）- 包含代码执行相关字段
             cursor.execute(
                 """
                 CREATE TABLE IF NOT EXISTS tools (
@@ -70,6 +70,14 @@ class DatabaseManager:
                     description TEXT,
                     parameters TEXT NOT NULL,  -- JSON格式
                     steps TEXT NOT NULL,       -- JSON格式
+                    execution_code TEXT,        -- LLM生成的可执行代码
+                    code_language TEXT DEFAULT 'python',
+                    code_version TEXT DEFAULT '1.0',
+                    execution_strategy TEXT,    -- 执行策略：api, browser, hybrid
+                    source_intent_id TEXT,      -- 来源意图ID
+                    source TEXT DEFAULT 'manual', -- 来源：manual, intent, trial
+                    trial_count INTEGER DEFAULT 0,
+                    pending_tool_id TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -160,12 +168,54 @@ class DatabaseManager:
             # 插入初始版本（如果不存在）
             cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
 
+            # 执行迁移（在 commit 之前）
+            self._run_migrations(cursor)
+
             conn.commit()
             logger.info("数据库表结构初始化完成")
+
         except sqlite3.Error as e:
             conn.rollback()
             logger.error(f"数据库初始化失败: {e}")
             raise
+
+    def _run_migrations(self, cursor):
+        """执行数据库迁移"""
+        # 获取当前版本
+        cursor.execute("SELECT version FROM schema_version")
+        result = cursor.fetchone()
+        current_version = result[0] if result else 1
+
+        # 版本2：添加 execution_code 等字段到 tools 表
+        if current_version < 2:
+            try:
+                # 检查字段是否已存在
+                cursor.execute("PRAGMA table_info(tools)")
+                columns = [col[1] for col in cursor.fetchall()]
+
+                new_columns = [
+                    ("execution_code", "TEXT"),
+                    ("code_language", "TEXT DEFAULT 'python'"),
+                    ("code_version", "TEXT DEFAULT '1.0'"),
+                    ("execution_strategy", "TEXT"),
+                    ("source_intent_id", "TEXT"),
+                    ("source", "TEXT DEFAULT 'manual'"),
+                    ("trial_count", "INTEGER DEFAULT 0"),
+                    ("pending_tool_id", "TEXT"),
+                ]
+
+                for col_name, col_type in new_columns:
+                    if col_name not in columns:
+                        cursor.execute(f"ALTER TABLE tools ADD COLUMN {col_name} {col_type}")
+                        logger.info(f"添加字段: {col_name}")
+
+                # 更新版本
+                cursor.execute("UPDATE schema_version SET version = 2")
+                cursor.connection.commit()
+                logger.info("数据库迁移到版本2完成")
+            except sqlite3.Error as e:
+                cursor.connection.rollback()
+                logger.warning(f"迁移到版本2失败（可能字段已存在）: {e}")
 
     def get_version(self) -> int:
         """

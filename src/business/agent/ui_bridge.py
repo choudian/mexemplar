@@ -304,17 +304,11 @@ class AgentUIBridge(QObject):
                     ]
                 }
 
-                # 检查是否有新消息（用于反馈对话）
-                # 只有当消息数量 > 1 时才是反馈对话（首次只有 1 条分析结果消息）
-                if "messages" in result and result["messages"] and len(result["messages"]) > 1:
-                    # 发送最后一条消息（AI 的回复）
-                    last_message = result["messages"][-1]
-                    if hasattr(last_message, 'type') and last_message.type == 'ai':
-                        response_text = getattr(last_message, "content", str(last_message))
-                        # 确保不是确认消息（那是结束流程）
-                        if "用户已确认意图" not in response_text:
-                            # 在 interrupt 数据中包含 AI 回复
-                            interrupt_data["ai_response"] = response_text
+                # 从 interrupt value 中提取 ai_response（如果有）
+                # ai_response 是在 intent_confirmation_node 中设置到 interrupt_data 里的
+                first_interrupt_value = interrupt_list[0].value if interrupt_list else {}
+                if isinstance(first_interrupt_value, dict) and "ai_response" in first_interrupt_value:
+                    interrupt_data["ai_response"] = first_interrupt_value["ai_response"]
 
                 self.interrupt_requested.emit(thread_id, interrupt_data)
         else:

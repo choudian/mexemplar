@@ -154,6 +154,7 @@ class AgentState(MessagesState):
     - error_info: 错误信息（如果有）
     - requires_user_confirmation: 是否需要用户确认
     - conversation_type: 对话类型
+    - confirmation_progress: 分页确认进度状态
     """
 
     # 录制数据（输入）
@@ -185,3 +186,14 @@ class AgentState(MessagesState):
 
     # 工具执行参数
     tool_parameters: Optional[Dict[str, Any]] = None
+
+    # 分页确认进度状态
+    # 用于跟踪意图确认的分页问答进度
+    confirmation_progress: Dict[str, Any] = field(default_factory=lambda: {
+        "current_index": 0,       # 当前问题索引
+        "total_questions": 0,     # 总问题数
+        "answers": {},            # {question_id: selected_value}
+        "completed": False,       # 是否全部完成
+        "invalidated": False,     # 是否被用户打断废弃
+        "invalidated_answers": {}  # 被废弃的回答（用于追溯）
+    })

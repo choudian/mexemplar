@@ -627,22 +627,13 @@ class MainWindow(QMainWindow):
             # 保存当前 thread_id 用于后续恢复
             self._current_agent_thread_id = thread_id
 
-            # 如果有 AI 回复，说明是对用户反馈的响应，只需要更新对话框
-            if ai_response:
-                # 更新 UI 对话框，显示 AI 回复
-                intent_page = self.main_content.get_page("intent_confirmation")
-                if intent_page and hasattr(intent_page, '_add_assistant_message'):
-                    from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(0, lambda: intent_page._add_assistant_message(ai_response))
-                    # 更新状态栏
-                    if hasattr(intent_page, 'status_label'):
-                        intent_page.status_label.setText("请继续确认或发送反馈")
-                    self.logger.info(f"已添加 AI 回复到对话框: {ai_response[:50]}...")
-                return
-
-            # 首次加载或完整刷新：传递完整的 actual_data
+            # 传递完整的 actual_data（包含所有确认问题）
             intent_data = actual_data
             message = actual_data.get("message", "请确认意图")
+
+            # 如果有 AI 回复，添加到 intent_data 中
+            if ai_response:
+                intent_data["ai_response"] = ai_response
 
             # 切换到意图确认页面并显示内容
             self._show_intent_confirmation_from_agent(intent_data, message, thread_id)

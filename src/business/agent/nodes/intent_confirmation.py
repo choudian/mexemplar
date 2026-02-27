@@ -2,14 +2,16 @@
 意图确认节点
 
 等待用户确认意图（使用 interrupt）。
-支持确认问题和选项展示。
+一次性发送所有确认问题，等待用户返回所有答案。
 """
 
-from typing import Dict, Any
+import re
+import json
+from typing import Dict, Any, List, Optional
 from langgraph.types import interrupt
 from langchain_core.messages import AIMessage
 
-from ..state import AgentState
+from ..state import AgentState, IntentData, IntentAnalysisResult, PatternRecognition, ParameterizationItem, ConfirmationQuestion, ToolDescription
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -19,8 +21,7 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
     """
     意图确认节点
 
-    展示完整的意图分析结果和确认问题，等待用户确认。
-    使用内部循环处理多轮反馈对话，避免图级别的无限循环。
+    一次性发送所有确认问题，等待用户返回所有答案。
 
     Args:
         state: 当前状态
@@ -41,58 +42,128 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
     # 获取完整分析结果
     full_analysis = current_intent.full_analysis
 
-    # 构建初始 interrupt 数据
-    interrupt_data = _build_interrupt_data(current_intent, full_analysis)
+    # 获取确认问题列表
+    questions = _get_confirmation_questions(full_analysis)
 
-    # ========== 关键修复：使用内部循环处理多轮对话 ==========
-    # 不再依赖图的条件边循环，而是在节点内部循环处理
-    # 这样可以正确使用 interrupt() 等待每次用户输入
+    # 构建 interrupt 数据（一次性发送所有问题，即使为空也发送）
+    interrupt_data = _build_interrupt_data(
+        current_intent,
+        full_analysis,
+        questions
+    )
 
-    while True:
-        # 暂停，等待用户确认或反馈
-        user_response = interrupt(interrupt_data)
+    # 暂停，等待用户响应
+    user_response = interrupt(interrupt_data)
 
-        if user_response.get("action") == "confirm":
-            # 用户确认，保存用户的回答并退出循环
-            user_confirmations = user_response.get("confirmations", {})
-            if current_intent and user_confirmations:
-                current_intent.user_confirmations = user_confirmations
+    # 处理用户响应
+    action = user_response.get("action")
 
-            return {
-                "current_intent": current_intent,
-                "messages": [AIMessage(content="用户已确认意图")]
-            }
-        else:
-            # 用户发送了反馈
-            feedback = user_response.get("feedback", "")
+    if action == "confirm":
+        # 用户确认，获取所有答案
+        answers = user_response.get("answers", {})
 
-            if not feedback:
-                # 没有反馈内容，更新提示并继续循环
-                interrupt_data["message"] = "请提供您的反馈或点击确认按钮继续。\n\n" + _build_confirmation_message(current_intent, full_analysis)
-                continue
+        if current_intent:
+            current_intent.user_confirmations = answers
 
-            # 调用 LLM 处理用户反馈
-            ai_response = _process_user_feedback(current_intent, full_analysis, feedback)
+        logger.info(f"用户确认意图，答案数量: {len(answers)}")
 
-            # 更新 interrupt 消息，包含 AI 回复
-            interrupt_data["message"] = f"{ai_response}\n\n---\n\n{_build_confirmation_message(current_intent, full_analysis)}"
+        return {
+            "current_intent": current_intent,
+            "messages": [AIMessage(content="用户已确认意图")]
+        }
 
-            # 继续循环，等待用户下一轮输入
+    elif action == "feedback":
+        # 用户发送反馈，重新调用意图分析
+        feedback = user_response.get("feedback", "")
+
+        if feedback:
+            # 重新分析意图，包含用户反馈作为上下文
+            ai_response, new_intent_data = _process_user_feedback(
+                state, current_intent, full_analysis, feedback
+            )
+
+            # 更新意图数据
+            if new_intent_data:
+                current_intent = new_intent_data
+                full_analysis = new_intent_data.full_analysis
+                questions = _get_confirmation_questions(full_analysis)
+
+            # 构建 AI 回复的 interrupt 数据
+            interrupt_data_with_ai = _build_interrupt_data(
+                current_intent,
+                full_analysis,
+                questions,
+                ai_response=ai_response
+            )
+
+            # 等待用户下一步操作
+            user_response = interrupt(interrupt_data_with_ai)
+
+            # 处理用户响应
+            action = user_response.get("action")
+
+            if action == "confirm":
+                answers = user_response.get("answers", {})
+                if current_intent:
+                    current_intent.user_confirmations = answers
+
+                return {
+                    "current_intent": current_intent,
+                    "messages": [AIMessage(content="用户已确认意图")]
+                }
+
+    # 默认返回
+    return {
+        "current_intent": current_intent,
+        "messages": [AIMessage(content="意图确认完成")]
+    }
 
 
-def _build_interrupt_data(current_intent, full_analysis) -> Dict[str, Any]:
+def _get_confirmation_questions(full_analysis) -> List[Dict[str, Any]]:
     """
-    构建 interrupt 数据结构
+    从完整分析结果中提取确认问题列表
+
+    Args:
+        full_analysis: 完整分析结果
+
+    Returns:
+        问题列表
+    """
+    if not full_analysis or not hasattr(full_analysis, 'confirmation_questions'):
+        return []
+
+    questions = []
+    for q in full_analysis.confirmation_questions:
+        questions.append({
+            "id": q.id,
+            "question": q.question,
+            "context": q.context,
+            "options": q.options,
+            "recommended": q.recommended,
+            "priority": q.priority,
+        })
+
+    return questions
+
+
+def _build_interrupt_data(
+    current_intent,
+    full_analysis,
+    questions: List[Dict[str, Any]],
+    ai_response: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    构建 interrupt 数据结构（一次性发送所有问题）
 
     Args:
         current_intent: 当前意图数据
         full_analysis: 完整分析结果
+        questions: 所有确认问题列表
+        ai_response: AI 回复（如果有）
 
     Returns:
         interrupt 数据字典
     """
-    confirmation_message = _build_confirmation_message(current_intent, full_analysis)
-
     interrupt_data = {
         "type": "intent_confirmation",
         "intent": {
@@ -101,10 +172,11 @@ def _build_interrupt_data(current_intent, full_analysis) -> Dict[str, Any]:
             "parameters": current_intent.parameters,
             "confidence": current_intent.confidence,
         },
-        "message": confirmation_message,
+        "confirmation_questions": questions,  # 发送所有问题
+        "message": _build_confirmation_message(current_intent, full_analysis),
     }
 
-    # 添加完整分析结果（如果有）
+    # 添加完整分析结果
     if full_analysis:
         # 模式识别
         interrupt_data["pattern_recognition"] = {
@@ -134,19 +206,6 @@ def _build_interrupt_data(current_intent, full_analysis) -> Dict[str, Any]:
             for item in full_analysis.parameterization_analysis
         ]
 
-        # 确认问题
-        interrupt_data["confirmation_questions"] = [
-            {
-                "id": q.id,
-                "question": q.question,
-                "context": q.context,
-                "options": q.options,
-                "recommended": q.recommended,
-                "priority": q.priority,
-            }
-            for q in full_analysis.confirmation_questions
-        ]
-
         # 工具描述
         interrupt_data["tool_description"] = {
             "name": full_analysis.tool_description.name,
@@ -156,23 +215,32 @@ def _build_interrupt_data(current_intent, full_analysis) -> Dict[str, Any]:
             "input_parameters": full_analysis.tool_description.input_parameters,
         }
 
+    # 如果有 AI 回复，添加到数据中
+    if ai_response:
+        interrupt_data["ai_response"] = ai_response
+
     return interrupt_data
 
 
-def _process_user_feedback(current_intent, full_analysis, feedback: str) -> str:
+def _process_user_feedback(state, current_intent, full_analysis, feedback: str) -> tuple:
     """
-    处理用户反馈，调用 LLM 生成回复
+    处理用户反馈，重新调用意图分析
 
     Args:
+        state: 当前状态（包含录制数据）
         current_intent: 当前意图数据
         full_analysis: 完整分析结果
         feedback: 用户反馈内容
 
     Returns:
-        AI 生成的回复
+        (ai_response, updated_intent_data) - AI 回复和更新后的意图数据
     """
     from src.business.ai.llm_client import create_llm_client
     from src.data.unified_config import get_unified_config
+    from ..prompts.intent_analysis import get_intent_analysis_prompt
+    from ..state import IntentData, IntentAnalysisResult, PatternRecognition, ParameterizationItem, ConfirmationQuestion, ToolDescription
+    import json
+    import re
 
     config = get_unified_config()
 
@@ -182,7 +250,7 @@ def _process_user_feedback(current_intent, full_analysis, feedback: str) -> str:
         "model": config.get_ai_model(),
         "api_key": config.get_ai_api_key(),
         "temperature": config.get_ai_temperature(),
-        "max_tokens": 1024,  # 短回复即可
+        "max_tokens": 4096,
     }
 
     base_url = config.get_ai_base_url()
@@ -191,69 +259,263 @@ def _process_user_feedback(current_intent, full_analysis, feedback: str) -> str:
 
     llm = create_llm_client(client_config)
 
-    # 构建处理用户反馈的提示词
-    feedback_prompt = f"""用户对意图分析结果提供了以下反馈：
+    # 获取录制数据
+    recording_data = state.get("recording_data", {})
+    actions = recording_data.get("actions", [])
+    metadata = recording_data.get("metadata", {})
 
-**用户反馈**：{feedback}
+    # 构建之前的分析结果（用于提示词）
+    previous_analysis = {}
+    if full_analysis:
+        previous_analysis = {
+            "pattern_recognition": {
+                "primary_pattern": full_analysis.pattern_recognition.primary_pattern,
+                "confidence": full_analysis.pattern_recognition.confidence,
+                "description": full_analysis.pattern_recognition.description,
+            },
+            "intent_analysis": {
+                "deep_intent": full_analysis.deep_intent,
+                "final_goal": full_analysis.final_goal,
+                "user_needs": full_analysis.user_needs,
+            },
+            "tool_description": {
+                "name": full_analysis.tool_description.name,
+                "description": full_analysis.tool_description.description,
+                "natural_language_description": full_analysis.tool_description.natural_language_description,
+            },
+        }
 
-**当前意图分析**：
-- 描述：{current_intent.description}
-- 模式：{full_analysis.pattern_recognition.primary_pattern if full_analysis else '未知'}
-- 深层意图：{full_analysis.deep_intent if full_analysis else '未知'}
-
-请根据用户反馈，选择以下处理方式：
-
-1. 如果用户只是询问问题或要求澄清，直接回复用户，然后再次请求确认
-2. 如果用户要求修改意图分析，说明你理解了用户的需求，并告诉用户你会如何调整
-
-回复要求：
-- 简洁友好
-- 如果需要调整意图分析，明确说明调整内容
-- 最后引导用户确认或继续反馈
-
-请直接输出回复内容（不要加引号或其他格式）："""
+    # 生成包含用户反馈的提示词
+    prompt = get_intent_analysis_prompt(
+        actions=actions,
+        metadata=metadata,
+        user_feedback=feedback,
+        previous_analysis=previous_analysis
+    )
 
     try:
-        # 调用 LLM 生成回复
-        response_text = llm.chat(prompt=feedback_prompt, max_tokens=1024)
-        return response_text
+        # 调用 LLM 重新分析意图
+        response_text = llm.chat(prompt=prompt, max_tokens=4096)
+        logger.info(f"用户反馈后重新分析，响应长度: {len(response_text)}")
+
+        # 解析响应
+        intent_result = _parse_intent_response(response_text)
+
+        # 构建新的完整分析结果
+        new_full_analysis = _build_full_analysis(intent_result)
+
+        # 创建新的 IntentData
+        new_intent_data = IntentData(
+            intent_type=_determine_intent_type(intent_result),
+            description=intent_result.get("intent_analysis", {}).get("deep_intent", "未知任务"),
+            parameters=_extract_parameters(intent_result),
+            confidence=intent_result.get("pattern_recognition", {}).get("confidence", 0.8),
+            raw_analysis=intent_result,
+            full_analysis=new_full_analysis
+        )
+
+        logger.info(f"重新分析完成: {new_intent_data.description}")
+        logger.info(f"新确认问题数量: {len(new_full_analysis.confirmation_questions)}")
+
+        # 生成 AI 回复
+        ai_response = f"好的，我已根据您的反馈重新分析。{new_full_analysis.tool_description.natural_language_description}"
+
+        return ai_response, new_intent_data
 
     except Exception as e:
         logger.error(f"处理用户反馈失败: {e}", exc_info=True)
-        return f"抱歉，处理您的反馈时出错：{str(e)}。请重试或直接确认意图。"
+        return f"抱歉，处理您的反馈时出错：{str(e)}。请重试或直接确认意图。", None
 
 
-def _build_confirmation_message(current_intent, full_analysis) -> str:
+def _parse_intent_response(response_text: str) -> Dict[str, Any]:
+    """解析 LLM 响应"""
+    # 查找 JSON 代码块
+    json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
+    if json_match:
+        try:
+            return json.loads(json_match.group(1))
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON 解析失败（代码块）: {e}")
+
+    # 尝试直接解析
+    try:
+        return json.loads(response_text)
+    except json.JSONDecodeError as e:
+        logger.warning(f"JSON 解析失败（直接）: {e}")
+
+    # 返回默认值
+    return {
+        "pattern_recognition": {
+            "primary_pattern": "未知模式",
+            "confidence": 0.0,
+            "description": "无法识别操作模式"
+        },
+        "intent_analysis": {
+            "surface_operations": [],
+            "deep_intent": "无法识别任务意图",
+            "final_goal": "未知",
+            "user_needs": "未知"
+        },
+        "parameterization_analysis": [],
+        "confirmation_questions": [],
+        "tool_description": {
+            "name": "未知工具",
+            "description": "无法生成工具描述",
+            "category": "其他"
+        },
+        "code_generation_hints": {
+            "libraries_needed": [],
+            "complexity": "simple",
+            "error_handling_needed": [],
+            "special_considerations": []
+        }
+    }
+
+
+def _build_full_analysis(result: Dict[str, Any]) -> IntentAnalysisResult:
+    """构建完整的分析结果对象"""
+    # 模式识别
+    pattern_data = result.get("pattern_recognition", {})
+    pattern_recognition = PatternRecognition(
+        primary_pattern=pattern_data.get("primary_pattern", "未知"),
+        confidence=pattern_data.get("confidence", 0.0),
+        description=pattern_data.get("description", ""),
+        sub_patterns=pattern_data.get("sub_patterns", [])
+    )
+
+    # 参数化分析
+    param_items = []
+    for item in result.get("parameterization_analysis", []):
+        param_items.append(ParameterizationItem(
+            element=item.get("element", ""),
+            element_selector=item.get("element_selector", ""),
+            recorded_value=item.get("recorded_value", ""),
+            should_parameterize=item.get("should_parameterize", "uncertain"),
+            reason=item.get("reason", ""),
+            confidence=item.get("confidence", 0.0),
+            parameter_name=item.get("parameter_name", ""),
+            parameter_type=item.get("parameter_type", "string"),
+            default_value=item.get("default_value", ""),
+            need_confirmation=item.get("need_confirmation", False)
+        ))
+
+    # 确认问题
+    questions = []
+    for q in result.get("confirmation_questions", []):
+        questions.append(ConfirmationQuestion(
+            id=q.get("id", ""),
+            question=q.get("question", ""),
+            context=q.get("context", ""),
+            options=q.get("options", []),
+            recommended=q.get("recommended", ""),
+            priority=q.get("priority", "medium")
+        ))
+
+    # 工具描述
+    tool_data = result.get("tool_description", {})
+    tool_description = ToolDescription(
+        name=tool_data.get("name", ""),
+        description=tool_data.get("description", ""),
+        category=tool_data.get("category", "其他"),
+        input_parameters=tool_data.get("input_parameters", []),
+        natural_language_description=tool_data.get("natural_language_description", ""),
+        use_cases=tool_data.get("use_cases", [])
+    )
+
+    # 代码生成提示
+    code_hints = result.get("code_generation_hints", {})
+
+    # 意图分析
+    intent_data = result.get("intent_analysis", {})
+
+    return IntentAnalysisResult(
+        pattern_recognition=pattern_recognition,
+        surface_operations=intent_data.get("surface_operations", []),
+        deep_intent=intent_data.get("deep_intent", ""),
+        final_goal=intent_data.get("final_goal", ""),
+        user_needs=intent_data.get("user_needs", ""),
+        parameterization_analysis=param_items,
+        confirmation_questions=questions,
+        tool_description=tool_description,
+        libraries_needed=code_hints.get("libraries_needed", []),
+        complexity=code_hints.get("complexity", "simple"),
+        error_handling_needed=code_hints.get("error_handling_needed", []),
+        special_considerations=code_hints.get("special_considerations", [])
+    )
+
+
+def _extract_parameters(result: Dict[str, Any]) -> Dict[str, Any]:
+    """从分析结果中提取参数"""
+    parameters = {}
+
+    for item in result.get("parameterization_analysis", []):
+        if item.get("should_parameterize") == True:
+            param_name = item.get("parameter_name", "")
+            if param_name:
+                parameters[param_name] = {
+                    "type": item.get("parameter_type", "string"),
+                    "default": item.get("default_value", ""),
+                    "description": item.get("element", ""),
+                    "recorded_value": item.get("recorded_value", "")
+                }
+
+    return parameters
+
+
+def _determine_intent_type(result: Dict[str, Any]) -> str:
+    """
+    根据分析结果确定意图类型
+
+    Returns:
+        'browser_automation' | 'api_call' | 'hybrid'
+    """
+    pattern = result.get("pattern_recognition", {}).get("primary_pattern", "").lower()
+    category = result.get("tool_description", {}).get("category", "").lower()
+
+    if "api" in pattern or "api" in category:
+        return "api_call"
+    elif "浏览器" in pattern or "网页" in pattern or "搜索" in pattern:
+        return "browser_automation"
+    else:
+        return "hybrid"
+
+
+def _build_confirmation_message(
+    current_intent,
+    full_analysis,
+) -> str:
     """构建确认消息"""
     parts = []
 
-    # 基本信息
-    parts.append(f"我已分析完成您的操作！")
+    # 根据是否有确认问题，调整消息
+    questions_count = 0
+    if full_analysis:
+        questions_count = len(full_analysis.confirmation_questions)
+
+    if questions_count > 0:
+        parts.append("我已分析完成您的操作！请确认以下分析结果并回答问题。")
+    else:
+        parts.append("我已分析完成您的操作！请确认以下分析结果。")
 
     if full_analysis:
         # 模式识别
         pattern = full_analysis.pattern_recognition
         if pattern.primary_pattern:
-            parts.append(f"\n**操作模式**：{pattern.primary_pattern}（置信度：{pattern.confidence:.0%}）")
+            parts.append(f"\n\n**操作模式**：{pattern.primary_pattern}（置信度：{pattern.confidence:.0%}）")
 
         # 深层意图
         if full_analysis.deep_intent:
-            parts.append(f"\n**深层意图**：{full_analysis.deep_intent}")
+            parts.append(f"\n\n**深层意图**：{full_analysis.deep_intent}")
 
         # 工具描述
         tool_desc = full_analysis.tool_description
         if tool_desc.natural_language_description:
             parts.append(f"\n\n{tool_desc.natural_language_description}")
 
-        # 确认问题提示
-        questions = full_analysis.confirmation_questions
-        if questions:
-            parts.append(f"\n\n**需要您确认 {len(questions)} 个问题**，请查看左侧的确认选项。")
+        # 提示用户确认问题（仅当有问题时）
+        if questions_count > 0:
+            parts.append(f"\n\n📋 **请回答下方 {questions_count} 个确认问题**")
         else:
-            parts.append("\n\n请确认以上分析是否正确，然后点击「确认并继续」按钮。")
-    else:
-        # 降级到简单消息
-        parts.append(f"\n\n**描述**：{current_intent.description}")
-        parts.append("\n\n请确认以上分析是否正确。")
+            parts.append("\n\n✅ **分析完成，请确认后生成工具**")
 
     return "".join(parts)

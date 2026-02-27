@@ -205,23 +205,24 @@ def _save_tool_draft(tool_draft: ToolDraft, recording_id: str = None):
     try:
         from src.data.repositories import ToolRepository
         from src.data.database import DatabaseManager
+        from src.data.models import Tool
 
         db_manager = DatabaseManager()
         repo = ToolRepository(db_manager)
 
-        # 保存工具
-        tool_data = {
-            "tool_id": tool_draft.tool_id,
-            "tool_name": tool_draft.tool_name,
-            "description": tool_draft.description,
-            "execution_code": tool_draft.execution_code,
-            "parameters": tool_draft.parameters,
-            "execution_strategy": tool_draft.execution_strategy,
-            "status": "draft",
-            "recording_id": recording_id
-        }
+        # 创建 Tool 对象
+        tool = Tool(
+            tool_id=tool_draft.tool_id,
+            tool_name=tool_draft.tool_name,
+            description=tool_draft.description,
+            parameters=tool_draft.parameters if isinstance(tool_draft.parameters, list) else [],
+            steps=[],  # 步骤信息可以在后续补充
+            execution_code=tool_draft.execution_code,
+            execution_strategy=tool_draft.execution_strategy,
+            source="intent",  # 标记来源为意图生成
+        )
 
-        repo.create(tool_data)
+        repo.create(tool)
         logger.info(f"工具草稿已保存: {tool_draft.tool_id}")
 
     except Exception as e:

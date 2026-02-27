@@ -843,6 +843,126 @@ QLabel#intent_input_hint {
     background-color: transparent;
 }
 
+/* === 确认问题样式（气泡内） === */
+QLabel#confirmation_question_label {
+    color: #212529;
+    font-size: 14px;
+    line-height: 1.5;
+    background-color: transparent;
+}
+
+QLabel#confirmation_context_label {
+    color: #6c757d;
+    font-size: 12px;
+    font-style: italic;
+    background-color: transparent;
+    padding: 4px 0;
+}
+
+QWidget#confirmation_options_container {
+    background-color: transparent;
+}
+
+/* 确认选项按钮 */
+QPushButton#confirmation_option_button {
+    background-color: #f8f9fa;
+    color: #212529;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 14px;
+    text-align: left;
+}
+
+QPushButton#confirmation_option_button:hover {
+    background-color: #e9ecef;
+    border-color: #adb5bd;
+}
+
+QPushButton#confirmation_option_button:checked {
+    background-color: #e3f2fd;
+    border-color: #2196f3;
+    color: #1565c0;
+}
+
+/* 选项影响说明 */
+QLabel#confirmation_impact_label {
+    color: #6c757d;
+    font-size: 12px;
+    background-color: transparent;
+    padding-left: 4px;
+}
+
+/* 问题分隔线 */
+QFrame#question_separator {
+    background-color: #e9ecef;
+    max-height: 1px;
+    border: none;
+    margin: 8px 0;
+}
+
+/* === 确认按钮卡片 === */
+QLabel#confirm_progress_label {
+    font-size: 14px;
+    background-color: transparent;
+    padding: 4px 0;
+}
+
+QPushButton#confirm_tool_button:disabled {
+    background: #e9ecef;
+    color: #adb5bd;
+}
+
+/* === 分析摘要样式 === */
+QLabel#confirmation_message_label {
+    color: #212529;
+    font-size: 14px;
+    line-height: 1.6;
+    background-color: transparent;
+}
+
+QLabel#summary_item_label {
+    color: #495057;
+    font-size: 13px;
+    background-color: transparent;
+    padding: 2px 0;
+}
+
+QLabel#summary_desc_label {
+    color: #212529;
+    font-size: 13px;
+    line-height: 1.5;
+    background-color: transparent;
+    padding: 8px 0;
+}
+
+QPushButton#confirm_tool_button {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #2ecc71,
+        stop:1 #27ae60
+    );
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-weight: 600;
+}
+
+QPushButton#confirm_tool_button:hover {
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 #27ae60,
+        stop:1 #229954
+    );
+}
+
+QPushButton#confirm_tool_button:disabled {
+    background: #e9ecef;
+    color: #adb5bd;
+}
+
 QPushButton#intent_send_button {
     background: qlineargradient(
         x1:0, y1:0, x2:1, y2:0,
