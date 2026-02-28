@@ -540,86 +540,27 @@ class BrowserRecorder:
                 hypothesis_id="H7",
             )
 
-            # 创建第一个页面
-            self._page = await self._context.new_page()
-            self._pages.append(self._page)  # 添加到页面列表
-            logger.info(f"初始页面已创建，URL: {self._page.url}")
+            # ⭐ 使用浏览器启动时的默认页面，不再创建新页面
+            # Playwright 启动时会自动创建一个标签页
+            existing_pages = self._context.pages
+            if existing_pages:
+                self._page = existing_pages[0]
+                self._pages.append(self._page)
+                logger.info(f"使用默认页面，URL: {self._page.url}")
+            else:
+                # 兜底：如果没有默认页面，才创建一个
+                self._page = await self._context.new_page()
+                self._pages.append(self._page)
+                logger.info(f"创建新页面，URL: {self._page.url}")
 
             debug_log(
                 location="browser_recorder.py:351",
-                message="页面已创建，等待扩展加载",
+                message="页面已准备就绪",
                 data={},
                 session_id="debug-session",
                 run_id="run1",
                 hypothesis_id="H7",
             )
-
-            # 等待扩展加载（给扩展一些时间初始化）
-            # Chrome 通道可能需要更多时间加载扩展
-            await asyncio.sleep(3)  # 使用 asyncio.sleep
-
-            debug_log(
-                location="browser_recorder.py:360",
-                message="扩展加载等待完成",
-                data={},
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H7",
-            )
-
-            # 尝试通过 CDP 检查扩展加载状态
-            try:
-                # 创建一个新页面访问 chrome://extensions/ 来检查扩展是否加载
-                extensions_page = await self._context.new_page()
-                await extensions_page.goto(
-                    "chrome://extensions/", wait_until="domcontentloaded", timeout=10000
-                )
-                # 等待页面加载
-                await asyncio.sleep(2)  # 使用 asyncio.sleep 替代 time.sleep
-                # 尝试查找扩展名称
-                try:
-                    extension_name = extensions_page.locator("text=Mexemplar Recorder").first
-                    if await extension_name.count() > 0:
-                        logger.info("通过 chrome://extensions/ 检测到扩展已加载")
-                        debug_log(
-                            location="browser_recorder.py:375",
-                            message="扩展已加载（通过 chrome://extensions/ 检测）",
-                            data={},
-                            session_id="debug-session",
-                            run_id="run1",
-                            hypothesis_id="H7",
-                        )
-                    else:
-                        logger.warning("⚠ 通过 chrome://extensions/ 未检测到扩展")
-                        debug_log(
-                            location="browser_recorder.py:385",
-                            message="扩展未加载（通过 chrome://extensions/ 检测）",
-                            data={},
-                            session_id="debug-session",
-                            run_id="run1",
-                            hypothesis_id="H7",
-                        )
-                except Exception as e:
-                    logger.warning(f"检查扩展加载状态失败: {e}")
-                    debug_log(
-                        location="browser_recorder.py:393",
-                        message="检查扩展加载状态异常",
-                        data={"error": str(e)},
-                        session_id="debug-session",
-                        run_id="run1",
-                        hypothesis_id="H7",
-                    )
-                await extensions_page.close()
-            except Exception as e:
-                logger.warning(f"无法访问 chrome://extensions/: {e}")
-                debug_log(
-                    location="browser_recorder.py:401",
-                    message="无法访问 chrome://extensions/",
-                    data={"error": str(e)},
-                    session_id="debug-session",
-                    run_id="run1",
-                    hypothesis_id="H7",
-                )
 
             # 导航到起始URL（如果提供）
             if start_url:
