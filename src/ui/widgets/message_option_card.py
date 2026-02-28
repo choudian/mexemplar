@@ -396,83 +396,105 @@ class ConfirmButtonCard(QWidget):
     """
     确认按钮卡片组件
 
-    显示"确认并生成工具"按钮。
+    统一的确认按钮，根据是否有确认问题动态改变行为：
+    - 有问题：显示"提交问题"按钮
+    - 无问题：显示"最终意图确认"按钮
     """
 
     # 定义信号
-    confirm_clicked = pyqtSignal()
+    confirm_clicked = pyqtSignal()  # 确认/提交按钮点击
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
+        # 内部状态
+        self._has_questions = False
+        self._enabled = True
+
         # 主布局
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 16, 0, 0)
-        layout.setSpacing(8)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 16, 0, 0)
+        self.main_layout.setSpacing(8)
 
         # 进度提示
-        self.progress_label = QLabel("📝 请回答所有问题后确认")
+        self.progress_label = QLabel("✅ 分析完成，请确认")
         self.progress_label.setObjectName("confirm_progress_label")
         self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        layout.addWidget(self.progress_label)
+        self.main_layout.addWidget(self.progress_label)
 
-        # 确认按钮
-        self.confirm_button = QPushButton("确认并生成工具")
+        # 确认按钮（单一按钮）
+        self.confirm_button = QPushButton("最终意图确认")
         self.confirm_button.setObjectName("confirm_tool_button")
         self.confirm_button.setMinimumHeight(48)
+        self.confirm_button.setMinimumWidth(180)
         self.confirm_button.clicked.connect(self._on_confirm_clicked)
-        layout.addWidget(self.confirm_button)
-
-        # 内部状态
-        self._has_questions = True
+        self.main_layout.addWidget(self.confirm_button)
 
     def _on_confirm_clicked(self):
         """处理确认按钮点击"""
         self.confirm_clicked.emit()
 
     def set_has_questions(self, has_questions: bool):
-        """设置是否有确认问题"""
+        """
+        设置是否有确认问题，动态改变按钮文字和行为
+
+        Args:
+            has_questions: 是否有确认问题
+        """
         self._has_questions = has_questions
+
         if has_questions:
-            self.progress_label.setText("📝 请回答所有问题后确认")
+            # 有问题：显示"提交问题"
+            self.progress_label.setText("📝 请回答所有问题后提交")
             self.progress_label.setStyleSheet("color: #6c757d;")
-            self.confirm_button.setEnabled(False)
+            self.confirm_button.setText("提交问题")
+            self.confirm_button.setObjectName("submit_questions_button")
         else:
+            # 无问题：显示"最终意图确认"
             self.progress_label.setText("✅ 分析完成，请确认")
             self.progress_label.setStyleSheet("color: #28a745;")
-            self.confirm_button.setEnabled(True)
+            self.confirm_button.setText("最终意图确认")
+            self.confirm_button.setObjectName("confirm_tool_button")
 
     def set_enabled(self, enabled: bool):
         """设置按钮启用状态"""
+        self._enabled = enabled
         self.confirm_button.setEnabled(enabled)
+
         if not self._has_questions:
-            # 没有问题时的状态
+            # 无问题时，按钮始终可用
             self.progress_label.setText("✅ 分析完成，请确认")
             self.progress_label.setStyleSheet("color: #28a745;")
         elif enabled:
             # 有问题且已全部回答
-            self.progress_label.setText("✅ 所有问题已回答")
+            self.progress_label.setText("✅ 所有问题已回答，可以提交")
             self.progress_label.setStyleSheet("color: #28a745;")
         else:
             # 有问题但未全部回答
-            self.progress_label.setText("📝 请回答所有问题后确认")
+            self.progress_label.setText("📝 请回答所有问题后提交")
             self.progress_label.setStyleSheet("color: #6c757d;")
 
     def update_progress(self, answered: int, total: int):
         """更新进度提示"""
         if total == 0:
+            # 无问题
             self._has_questions = False
-            self.progress_label.setText("✅ 分析完成，请确认")
-            self.progress_label.setStyleSheet("color: #28a745;")
-            self.confirm_button.setEnabled(True)
+            self.set_has_questions(False)
+            self.set_enabled(True)
         elif answered < total:
+            # 有问题，未全部回答
             self._has_questions = True
+            self.set_has_questions(True)
             self.progress_label.setText(f"📝 已回答 {answered}/{total} 个问题")
             self.progress_label.setStyleSheet("color: #6c757d;")
+            self.confirm_button.setEnabled(False)
         else:
+            # 有问题，已全部回答
             self._has_questions = True
-            self.progress_label.setText("✅ 所有问题已回答")
+            self.set_has_questions(True)
+            self.progress_label.setText("✅ 所有问题已回答，可以提交")
             self.progress_label.setStyleSheet("color: #28a745;")
+            self.confirm_button.setEnabled(True)
 
 
 class MultiQuestionCard(QWidget):
@@ -575,6 +597,10 @@ class MultiQuestionCard(QWidget):
     def get_answers(self) -> Dict[str, str]:
         """获取所有答案"""
         return self._answers.copy()
+
+    def get_total_questions(self) -> int:
+        """获取问题总数"""
+        return len(self._questions)
 
     def is_all_answered(self) -> bool:
         """检查是否所有问题都已回答"""

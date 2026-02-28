@@ -2,7 +2,12 @@
 意图确认节点
 
 等待用户确认意图（使用 interrupt）。
-一次性发送所有确认问题，等待用户返回所有答案。
+
+核心逻辑：
+- 有问题时：显示问题 → 用户回答 → 点击"提交问题" → 重新分析（可能产生新问题）
+- 无问题时：显示分析结果 → 点击"最终意图确认" → 生成工具
+
+流程是循环的，不是线性的。"最终意图确认"是"没有确认问题"时的自然状态。
 """
 
 import re
@@ -21,7 +26,11 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
     """
     意图确认节点
 
-    一次性发送所有确认问题，等待用户返回所有答案。
+    核心逻辑：
+    - 根据是否有确认问题决定按钮文字
+    - "提交问题"：将答案合并到意图数据，重新调用意图分析，可能产生新问题
+    - "最终意图确认"：只在无问题时可用，直接生成工具
+    - 用户可随时发送反馈，打断当前流程
 
     Args:
         state: 当前状态
@@ -45,38 +54,71 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
     # 获取确认问题列表
     questions = _get_confirmation_questions(full_analysis)
 
-    # 构建 interrupt 数据（一次性发送所有问题，即使为空也发送）
+    # 构建初始 interrupt 数据
     interrupt_data = _build_interrupt_data(
         current_intent,
         full_analysis,
         questions
     )
 
-    # 暂停，等待用户响应
-    user_response = interrupt(interrupt_data)
+    # 使用循环处理多轮交互
+    while True:
+        # 暂停，等待用户响应
+        user_response = interrupt(interrupt_data)
 
-    # 处理用户响应
-    action = user_response.get("action")
+        # 处理用户响应
+        action = user_response.get("action")
 
-    if action == "confirm":
-        # 用户确认，获取所有答案
-        answers = user_response.get("answers", {})
+        if action == "submit":
+            # ========== 提交问题：重新分析意图 ==========
+            answers = user_response.get("answers", {})
 
-        if current_intent:
-            current_intent.user_confirmations = answers
+            if current_intent:
+                current_intent.user_confirmations = answers
 
-        logger.info(f"用户确认意图，答案数量: {len(answers)}")
+            logger.info(f"用户提交问题答案，数量: {len(answers)}")
 
-        return {
-            "current_intent": current_intent,
-            "messages": [AIMessage(content="用户已确认意图")]
-        }
+            # 调用 LLM 重新分析（将用户答案作为上下文）
+            ai_response, new_intent_data = _reanalyze_with_answers(
+                state, current_intent, full_analysis, answers
+            )
 
-    elif action == "feedback":
-        # 用户发送反馈，重新调用意图分析
-        feedback = user_response.get("feedback", "")
+            if new_intent_data:
+                current_intent = new_intent_data
+                full_analysis = new_intent_data.full_analysis
+                questions = _get_confirmation_questions(full_analysis)
+                logger.info(f"重新分析完成，新问题数量: {len(questions)}")
+            else:
+                # 分析失败，保持当前状态
+                logger.warning("重新分析失败，保持当前分析结果")
+                ai_response = "抱歉，重新分析时出错。请重试或直接确认意图。"
 
-        if feedback:
+            # 构建下一次 interrupt 数据（可能有问题也可能没有）
+            interrupt_data = _build_interrupt_data(
+                current_intent,
+                full_analysis,
+                questions,
+                ai_response=ai_response
+            )
+            # 继续循环，等待用户下一步操作
+            continue
+
+        elif action == "confirm":
+            # ========== 最终确认：只在无问题时到达这里 ==========
+            logger.info("用户最终确认意图")
+            return {
+                "current_intent": current_intent,
+                "messages": [AIMessage(content="用户已确认意图")]
+            }
+
+        elif action == "feedback":
+            # ========== 用户反馈：重新分析 ==========
+            feedback = user_response.get("feedback", "")
+
+            if not feedback:
+                logger.warning("收到空反馈，继续等待用户响应")
+                continue
+
             # 重新分析意图，包含用户反馈作为上下文
             ai_response, new_intent_data = _process_user_feedback(
                 state, current_intent, full_analysis, feedback
@@ -87,63 +129,26 @@ def intent_confirmation_node(state: AgentState) -> Dict[str, Any]:
                 current_intent = new_intent_data
                 full_analysis = new_intent_data.full_analysis
                 questions = _get_confirmation_questions(full_analysis)
+            else:
+                # 分析失败，保持当前状态，让用户可以重试或确认
+                logger.warning("反馈处理失败，保持当前分析结果")
 
-            # 构建 AI 回复的 interrupt 数据
-            interrupt_data_with_ai = _build_interrupt_data(
+            # 构建下一次 interrupt 数据（包含 AI 回复）
+            interrupt_data = _build_interrupt_data(
                 current_intent,
                 full_analysis,
                 questions,
                 ai_response=ai_response
             )
 
-            # 等待用户下一步操作
-            user_response = interrupt(interrupt_data_with_ai)
+            # 继续循环，等待用户下一步操作
+            logger.info("等待用户对更新后分析结果的响应")
+            continue
 
-            # 处理用户响应
-            action = user_response.get("action")
-
-            if action == "confirm":
-                answers = user_response.get("answers", {})
-                if current_intent:
-                    current_intent.user_confirmations = answers
-
-                return {
-                    "current_intent": current_intent,
-                    "messages": [AIMessage(content="用户已确认意图")]
-                }
-
-    # 默认返回
-    return {
-        "current_intent": current_intent,
-        "messages": [AIMessage(content="意图确认完成")]
-    }
-
-
-def _get_confirmation_questions(full_analysis) -> List[Dict[str, Any]]:
-    """
-    从完整分析结果中提取确认问题列表
-
-    Args:
-        full_analysis: 完整分析结果
-
-    Returns:
-        问题列表
-    """
-    if not full_analysis or not hasattr(full_analysis, 'confirmation_questions'):
-        return []
-
-    questions = []
-    for q in full_analysis.confirmation_questions:
-        questions.append({
-            "id": q.id,
-            "question": q.question,
-            "context": q.context,
-            "options": q.options,
-            "recommended": q.recommended,
-            "priority": q.priority,
-        })
-
-    return questions
+        else:
+            # 未知操作，记录警告并继续等待
+            logger.warning(f"未知的用户操作: {action}，继续等待")
+            continue
 
 
 def _build_interrupt_data(
@@ -153,7 +158,9 @@ def _build_interrupt_data(
     ai_response: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    构建 interrupt 数据结构（一次性发送所有问题）
+    构建 interrupt 数据结构
+
+    不再有阶段概念，根据 questions 是否为空决定前端显示什么按钮。
 
     Args:
         current_intent: 当前意图数据
@@ -172,7 +179,7 @@ def _build_interrupt_data(
             "parameters": current_intent.parameters,
             "confidence": current_intent.confidence,
         },
-        "confirmation_questions": questions,  # 发送所有问题
+        "confirmation_questions": questions,
         "message": _build_confirmation_message(current_intent, full_analysis),
     }
 
@@ -220,6 +227,168 @@ def _build_interrupt_data(
         interrupt_data["ai_response"] = ai_response
 
     return interrupt_data
+
+
+def _get_confirmation_questions(full_analysis) -> List[Dict[str, Any]]:
+    """
+    从完整分析结果中提取确认问题列表
+
+    Args:
+        full_analysis: 完整分析结果
+
+    Returns:
+        问题列表
+    """
+    if not full_analysis or not hasattr(full_analysis, 'confirmation_questions'):
+        return []
+
+    questions = []
+    for q in full_analysis.confirmation_questions:
+        questions.append({
+            "id": q.id,
+            "question": q.question,
+            "context": q.context,
+            "options": q.options,
+            "recommended": q.recommended,
+            "priority": q.priority,
+        })
+
+    return questions
+
+
+def _reanalyze_with_answers(
+    state,
+    current_intent,
+    full_analysis,
+    answers: Dict[str, str]
+) -> tuple:
+    """
+    根据用户答案重新分析意图
+
+    将用户答案作为上下文，重新调用意图分析 LLM，
+    LLM 根据答案调整分析结果，可能产生新的确认问题。
+
+    Args:
+        state: 当前状态（包含录制数据）
+        current_intent: 当前意图数据
+        full_analysis: 完整分析结果
+        answers: 用户对确认问题的回答
+
+    Returns:
+        (ai_response, updated_intent_data) - AI 回复和更新后的意图数据
+    """
+    from src.business.ai.llm_client import create_llm_client
+    from src.data.unified_config import get_unified_config
+    from ..prompts.intent_analysis import get_intent_analysis_prompt
+
+    config = get_unified_config()
+
+    # 构建 LLM 客户端配置
+    client_config = {
+        "provider": config.get_ai_provider(),
+        "model": config.get_ai_model(),
+        "api_key": config.get_ai_api_key(),
+        "temperature": config.get_ai_temperature(),
+        "max_tokens": 4096,
+    }
+
+    base_url = config.get_ai_base_url()
+    if base_url:
+        client_config["base_url"] = base_url
+
+    llm = create_llm_client(client_config)
+
+    # 获取录制数据
+    recording_data = state.get("recording_data", {})
+    actions = recording_data.get("actions", [])
+    metadata = recording_data.get("metadata", {})
+
+    # 构建用户答案上下文
+    answers_context = []
+    if answers and full_analysis:
+        for q in full_analysis.confirmation_questions:
+            q_id = q.id
+            if q_id in answers:
+                # 查找答案标签
+                answer_value = answers[q_id]
+                answer_label = answer_value
+                for opt in q.options:
+                    if opt.get("value") == answer_value:
+                        answer_label = opt.get("label", answer_value)
+                        break
+                answers_context.append(f"- 问题: {q.question}\n  回答: {answer_label}")
+
+    # 构建之前的分析结果（包含用户答案）
+    previous_analysis = {}
+    if full_analysis:
+        previous_analysis = {
+            "pattern_recognition": {
+                "primary_pattern": full_analysis.pattern_recognition.primary_pattern,
+                "confidence": full_analysis.pattern_recognition.confidence,
+                "description": full_analysis.pattern_recognition.description,
+            },
+            "intent_analysis": {
+                "deep_intent": full_analysis.deep_intent,
+                "final_goal": full_analysis.final_goal,
+                "user_needs": full_analysis.user_needs,
+            },
+            "tool_description": {
+                "name": full_analysis.tool_description.name,
+                "description": full_analysis.tool_description.description,
+                "natural_language_description": full_analysis.tool_description.natural_language_description,
+            },
+        }
+
+    # 添加用户答案到上下文
+    if answers_context:
+        user_feedback = f"用户对确认问题的回答：\n" + "\n".join(answers_context)
+    else:
+        user_feedback = None
+
+    try:
+        # 生成包含用户答案的提示词
+        prompt = get_intent_analysis_prompt(
+            actions=actions,
+            metadata=metadata,
+            user_feedback=user_feedback,
+            previous_analysis=previous_analysis
+        )
+
+        # 调用 LLM 重新分析意图
+        response_text = llm.chat(prompt=prompt, max_tokens=4096)
+        logger.info(f"根据用户答案重新分析，响应长度: {len(response_text)}")
+
+        # 解析响应
+        intent_result = _parse_intent_response(response_text)
+
+        # 构建新的完整分析结果
+        new_full_analysis = _build_full_analysis(intent_result)
+
+        # 创建新的 IntentData
+        new_intent_data = IntentData(
+            intent_type=_determine_intent_type(intent_result),
+            description=intent_result.get("intent_analysis", {}).get("deep_intent", "未知任务"),
+            parameters=_extract_parameters(intent_result),
+            confidence=intent_result.get("pattern_recognition", {}).get("confidence", 0.8),
+            raw_analysis=intent_result,
+            full_analysis=new_full_analysis,
+            user_confirmations=answers  # 保留用户答案
+        )
+
+        logger.info(f"重新分析完成: {new_intent_data.description}")
+        logger.info(f"新确认问题数量: {len(new_full_analysis.confirmation_questions)}")
+
+        # 生成 AI 回复
+        if len(new_full_analysis.confirmation_questions) > 0:
+            ai_response = f"感谢您的回答！我已根据您的选择重新分析，还有 {len(new_full_analysis.confirmation_questions)} 个问题需要确认。"
+        else:
+            ai_response = f"感谢您的回答！我已根据您的选择调整了分析结果，现在可以确认生成工具了。"
+
+        return ai_response, new_intent_data
+
+    except Exception as e:
+        logger.error(f"根据用户答案重新分析失败: {e}", exc_info=True)
+        return f"抱歉，重新分析时出错：{str(e)}。请重试或直接确认意图。", None
 
 
 def _process_user_feedback(state, current_intent, full_analysis, feedback: str) -> tuple:
