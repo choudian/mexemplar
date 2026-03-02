@@ -18,13 +18,9 @@ from src.business.ai.preprocessing.models import (
     ProcessedAction,
     PreprocessingResult,
 )
-from src.business.ai.preprocessing.pipeline import Pipeline, PipelineContext
-from src.business.ai.preprocessing.stages import (
-    DataCleaningStage,
-    DataCompressionStage,
-    IntelligenceAnalysisStage,
-    NetworkAnalysisStage,
-    ListOperationAnalysisStage,
+from src.business.ai.preprocessing.pipeline import (
+    PreprocessingPipeline,
+    PreprocessingPipelineContext,
 )
 from src.business.ai.preprocessing.analyzers import (
     NetworkRequestAnalyzer,
@@ -112,191 +108,44 @@ class DataPreprocessor:
                 metadata={},
             )
 
-        # 步骤 1: 基础压缩
-        logger.info("步骤1: 基础压缩...")
-        compressed_actions = self._apply_compression(actions, level)
-        logger.info(f"  ✅ 基础压缩完成，保留 {len(compressed_actions)} 个操作")
-
-        # 步骤 2: 智能过滤
-        compression_model_error = None  # 记录压缩模型错误（用于 UI 提示）
-        if enable_analysis:
-            use_compression_model = self._should_use_compression_model(level)
-            logger.info(
-                f"步骤2: 智能网络请求过滤 (数据压缩模型: {'启用' if use_compression_model else '禁用'})..."
-            )
-
-            try:
-                intelligent_analysis = self.request_intelligence_analyzer.analyze_requests(
-                    actions, use_llm=use_compression_model
-                )
-
-                # 异步更新 DuckDB
-                recording_id = (
-                    actions[0].parameters.get("recording_id", "unknown") if actions else "unknown"
-                )
-                self._duckdb_update_queue.put((recording_id, intelligent_analysis))
-                logger.info("  ✅ DuckDB更新任务已放入队列（异步）")
-
-                # 过滤网络请求
-                compressed_actions = self._filter_requests_by_intelligence(
-                    compressed_actions, intelligent_analysis
-                )
-
-            except TokenLimitExceededError as e:
-                # Token 超量：记录错误，使用规则引擎结果
-                compression_model_error = {
-                    "type": "token_exceeded",
-                    "message": "压缩模型 Token 超量，已回退到规则引擎",
-                    "detail": str(e)
-                }
-                logger.warning(f"  ⚠️ {compression_model_error['message']}")
-                # 使用规则引擎重新分析（use_llm=False）
-                intelligent_analysis = self.request_intelligence_analyzer.analyze_requests(
-                    actions, use_llm=False
-                )
-                compressed_actions = self._filter_requests_by_intelligence(
-                    compressed_actions, intelligent_analysis
-                )
-
-            except RateLimitError as e:
-                # 频率限制：记录错误，使用规则引擎结果
-                compression_model_error = {
-                    "type": "rate_limit",
-                    "message": "压缩模型请求频率限制，已回退到规则引擎",
-                    "detail": str(e)
-                }
-                logger.warning(f"  ⚠️ {compression_model_error['message']}")
-                intelligent_analysis = self.request_intelligence_analyzer.analyze_requests(
-                    actions, use_llm=False
-                )
-                compressed_actions = self._filter_requests_by_intelligence(
-                    compressed_actions, intelligent_analysis
-                )
-
-            except CompressionModelError as e:
-                # 其他压缩模型错误
-                compression_model_error = {
-                    "type": e.error_type,
-                    "message": f"压缩模型错误，已回退到规则引擎",
-                    "detail": str(e)
-                }
-                logger.warning(f"  ⚠️ {compression_model_error['message']}")
-                intelligent_analysis = self.request_intelligence_analyzer.analyze_requests(
-                    actions, use_llm=False
-                )
-                compressed_actions = self._filter_requests_by_intelligence(
-                    compressed_actions, intelligent_analysis
-                )
-
-            # 步骤 3: 网络分析
-            logger.info("步骤3: 分析网络请求...")
-            network_analysis = self.network_analyzer.analyze_requests(compressed_actions)
-            logger.info(f"  ✅ 分析了 {len(network_analysis)} 个网络请求")
-
-            # 步骤 4: 列表分析
-            logger.info("步骤4: 分析列表操作...")
-            list_analysis = self.list_analyzer.analyze_list_operations(
-                compressed_actions, network_analysis
-            )
-            logger.info(f"  ✅ 识别了 {len(list_analysis)} 个列表操作")
-
-            # 步骤 5: 过滤推荐内容
-            logger.info("步骤5: 过滤推荐内容...")
-            filter_result = self.filter_for_main_llm(intelligent_analysis)
-            logger.info(f"  ✅ 过滤完成，传给主LLM {filter_result['stats']['kept']} 个请求")
-        else:
-            network_analysis = None
-            list_analysis = None
-            intelligent_analysis = []
-            filter_result = {"stats": {}}
-            compression_model_error = None
-
-        # 步骤 6: 处理操作
-        processed_actions = []
-        for idx, action in enumerate(compressed_actions):
-            processed = self._process_action(action, idx)
-            processed_actions.append(processed)
-
-        # 步骤 7: 提取关键操作
-        key_actions = self._extract_key_actions(processed_actions)
-
-        # 步骤 8: 优化截图
-        screenshots = self._optimize_screenshots(compressed_actions, key_actions, level)
-
-        # 步骤 9: 生成元数据
-        metadata = self._generate_metadata(compressed_actions, processed_actions)
-
-        # 步骤 10: 添加压缩和分析统计
-        original_count = len(actions)
-        metadata["compression_stats"] = {
-            "original_count": original_count,
-            "compressed_count": len(compressed_actions),
-            "compression_ratio": f"{(1 - len(compressed_actions) / original_count) * 100:.1f}%",
-            "screenshots_original": len(self._collect_screenshots(actions)),
-            "screenshots_optimized": len(screenshots),
-            "compression_level": level.value,
-        }
-
-        if enable_analysis:
-            total_count = sum(
-                len(a.network_requests) if a.network_requests else 0 for a in actions
-            )
-            filtered_count = total_count - sum(
-                len(a.network_requests) if a.network_requests else 0
-                for a in compressed_actions
-            )
-
-            metadata["analysis_stats"] = {
-                "compression_level": level.value,
-                "compression_model_enabled": enable_analysis
-                and self._should_use_compression_model(level),
-                "network_requests_analyzed": len(network_analysis) if network_analysis else 0,
-                "replayable_apis": sum(1 for n in network_analysis if n.is_replayable)
-                if network_analysis
-                else 0,
-                "list_operations": len(list_analysis) if list_analysis else 0,
-                "intelligent_filter": {
-                    "total_requests": total_count,
-                    "filtered_out": filtered_count,
-                    "meaningful_kept": total_count - filtered_count,
-                    "filter_ratio": (
-                        f"{(filtered_count / total_count * 100):.1f}" if total_count > 0 else "0%"
-                    ),
-                },
-                "recommendation_filter": filter_result.get("stats", {}),
-            }
-
-            # 添加压缩模型错误信息（如果有）
-            if compression_model_error:
-                metadata["analysis_stats"]["compression_model_error"] = compression_model_error
-                metadata["analysis_stats"]["compression_model_fallback"] = True
-
-        # 构建结果
-        result = PreprocessingResult(
-            actions=processed_actions,
-            recording_mode=self._detect_recording_mode(actions),
-            key_actions=key_actions,
-            screenshots=screenshots,
-            metadata=metadata,
-            network_analysis=network_analysis,
-            list_analysis=list_analysis,
+        # 获取 recording_id
+        recording_id = (
+            actions[0].parameters.get("recording_id", "unknown") if actions else "unknown"
         )
 
+        # 使用 Pipeline 处理
+        pipeline = PreprocessingPipeline(
+            preprocessor=self,
+            compression_level=level,
+            enable_analysis=enable_analysis,
+            recording_id=recording_id,
+        )
+
+        context = pipeline.process(actions)
+
+        # 日志输出
         logger.info("=" * 80)
         logger.info(f"[OK] 预处理完成")
         logger.info(f"  压缩级别: {level.value}")
-        logger.info(f"  操作数: {original_count} -> {len(compressed_actions)}")
-        logger.info(f"  关键操作: {len(key_actions)}")
-        logger.info(f"  截图数: {len(screenshots)}")
-        if enable_analysis and metadata.get("analysis_stats"):
+        logger.info(f"  操作数: {len(actions)} -> {len(context.compressed_actions)}")
+        logger.info(f"  关键操作: {len(context.key_actions)}")
+        logger.info(f"  截图数: {len(context.screenshots)}")
+        if enable_analysis and context.metadata.get("analysis_stats"):
             logger.info(
-                f"  - 可复现 API: {metadata['analysis_stats']['replayable_apis']} 个"
-            )
-            logger.info(f"  - 列表操作: {metadata['analysis_stats']['list_operations']} 个")
-            logger.info(
-                f"  - 智能过滤: {metadata['analysis_stats']['intelligent_filter']['filter_ratio']} 请求被过滤"
+                f"  - 智能过滤: {context.metadata['analysis_stats']['intelligent_filter']['filter_ratio']} 请求被过滤"
             )
         logger.info("=" * 80)
+
+        # 构建结果
+        result = PreprocessingResult(
+            actions=context.processed_actions,
+            recording_mode=self._detect_recording_mode(actions),
+            key_actions=context.key_actions,
+            screenshots=context.screenshots,
+            metadata=context.metadata_with_stats,
+            # network_analysis=context.network_analysis,  # 已移至 Agent
+            # list_analysis=context.list_analysis,       # 已移至 Agent
+        )
 
         return result
 
@@ -355,7 +204,7 @@ class DataPreprocessor:
 
         return actions
 
-    def _should_use_compression_model(self, compression_level: CompressionLevel) -> bool:
+    def _should_use_compression_level(self, compression_level: CompressionLevel) -> bool:
         """根据压缩级别决定是否使用数据压缩模型"""
         if compression_level == CompressionLevel.NONE:
             return False
