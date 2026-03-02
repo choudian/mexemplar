@@ -23,8 +23,21 @@ class Tool(Base):
     tool_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     tool_name: Mapped[str] = mapped_column(String(200))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    steps: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, server_default='[]')
+    steps: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, server_default='[]')
+
+    # 代码执行相关字段
+    execution_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    code_language: Mapped[str] = mapped_column(String(20), default="python")
+    code_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    execution_strategy: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+
+    # 意图和试用相关字段
+    source_intent_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="manual")
+    trial_count: Mapped[int] = mapped_column(Integer, default=0)
+    pending_tool_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -40,6 +53,14 @@ class Tool(Base):
             description=data.get("description"),
             parameters=data.get("parameters"),
             steps=data.get("steps"),
+            execution_code=data.get("execution_code"),
+            code_language=data.get("code_language", "python"),
+            code_version=data.get("code_version", "1.0"),
+            execution_strategy=data.get("execution_strategy"),
+            source_intent_id=data.get("source_intent_id"),
+            source=data.get("source", "manual"),
+            trial_count=data.get("trial_count", 0),
+            pending_tool_id=data.get("pending_tool_id"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )

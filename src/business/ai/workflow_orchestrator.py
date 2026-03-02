@@ -25,7 +25,6 @@ from src.business.ai.preprocessing import (
 )
 from src.data.models import Tool
 from src.data.repositories import ToolRepository
-from src.data.database import DatabaseManager
 from src.utils.events import (
     recording_completed,
     workflow_processing_progress,
@@ -353,10 +352,12 @@ class WorkflowOrchestrator:
     def _save_tool(self, tool: Tool) -> None:
         """保存工具到数据库"""
         try:
-            db_manager = DatabaseManager()
-            db_manager.initialize()
-            tool_repo = ToolRepository(db_manager)
-            tool_repo.create(tool)
+            tool_repo = ToolRepository()
+
+            # 转换为持久层模型
+            tool_model = tool.to_persistence_model()
+
+            tool_repo.create(tool_model)
             logger.info(f"工具已保存到数据库，ID: {tool.tool_id}")
         except Exception as e:
             logger.error(f"保存工具到数据库失败: {e}")

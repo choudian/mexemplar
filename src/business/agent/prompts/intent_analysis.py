@@ -46,7 +46,11 @@ def get_intent_analysis_prompt(
 用户对之前的分析提出了以下反馈：
 "{user_feedback}"
 
-请根据用户反馈，重新分析意图，修正之前分析中的错误或不足。
+【重要指示】
+1. 用户反馈是对工具功能的明确要求，必须优先遵循
+2. 如果用户反馈与录制的具体操作冲突（例如录制的是点击百度百科，但反馈说不要限定），请以用户反馈为准，生成更通用的工具
+3. 重新分析时，工具描述、参数分析、意图分析都要根据用户反馈进行相应调整
+4. 工具应该能处理与录制示例类似但有所不同的场景
 
 之前的分析结果：
 {json.dumps(previous_analysis, ensure_ascii=False, indent=2) if previous_analysis else '无'}

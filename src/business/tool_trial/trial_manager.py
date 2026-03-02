@@ -43,13 +43,14 @@ class TrialManager:
         初始化试用管理器
 
         Args:
-            db_manager: 数据库管理器
+            db_manager: 数据库管理器（用于 Intent、PendingTool 等模块）
         """
         self.db_manager = db_manager
         self.intent_repo = IntentRepository(db_manager)
         self.pending_tool_repo = PendingToolRepository(db_manager)
         self.tool_trial_repo = ToolTrialRepository(db_manager)
-        self.tool_repo = ToolRepository(db_manager)
+        # ToolRepository 使用统一的持久层接口
+        self.tool_repo = ToolRepository()
         self.template_repo = TrialDataTemplateRepository(db_manager)
 
     # ===== PendingTool 管理 =====
@@ -336,6 +337,8 @@ class TrialManager:
         Raises:
             ValueError: 如果 pending_tool_id 无效
         """
+        from src.data.models_sqlite import Tool as ToolModel
+
         # 获取待试用工具
         pending_tool = self.pending_tool_repo.get_by_id(pending_tool_id)
         if not pending_tool:
@@ -347,7 +350,7 @@ class TrialManager:
             logger.warning(f"Intent not found for pending tool: {pending_tool_id}")
 
         # 创建正式工具
-        tool = Tool(
+        tool = ToolModel(
             tool_name=pending_tool.tool_name,
             description=pending_tool.tool_description,
             execution_code=pending_tool.execution_code,

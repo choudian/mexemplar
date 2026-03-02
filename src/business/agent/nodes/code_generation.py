@@ -204,11 +204,9 @@ def _save_tool_draft(tool_draft: ToolDraft, recording_id: str = None):
     """保存工具草稿到数据库"""
     try:
         from src.data.repositories import ToolRepository
-        from src.data.database import DatabaseManager
-        from src.data.models import Tool
+        from src.data.models_sqlite import Tool
 
-        db_manager = DatabaseManager()
-        repo = ToolRepository(db_manager)
+        repo = ToolRepository()
 
         # 创建 Tool 对象
         tool = Tool(
@@ -216,10 +214,13 @@ def _save_tool_draft(tool_draft: ToolDraft, recording_id: str = None):
             tool_name=tool_draft.tool_name,
             description=tool_draft.description,
             parameters=tool_draft.parameters if isinstance(tool_draft.parameters, list) else [],
-            steps=[],  # 步骤信息可以在后续补充
+            steps=[],
             execution_code=tool_draft.execution_code,
+            code_language="python",
+            code_version="1.0",
             execution_strategy=tool_draft.execution_strategy,
-            source="intent",  # 标记来源为意图生成
+            source="intent",
+            trial_count=0,
         )
 
         repo.create(tool)

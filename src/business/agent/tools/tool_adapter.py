@@ -20,12 +20,12 @@ def load_tools_from_repository(repository: ToolRepository) -> List:
     Returns:
         LangGraph Tools 列表
     """
-    # 加载已发布工具
-    published_tools = repository.find_by_status("published")
+    # 加载所有工具（暂不支持按状态过滤）
+    all_tools = repository.get_all()
 
     # 转换为 LangGraph Tools
     langgraph_tools = []
-    for tool_data in published_tools:
+    for tool_data in all_tools:
         langgraph_tool = create_tool_adapter(tool_data)
         langgraph_tools.append(langgraph_tool)
 

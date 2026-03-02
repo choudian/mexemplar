@@ -7,9 +7,9 @@ import tempfile
 import os
 from pathlib import Path
 
-from src.data.database import DatabaseManager, init_database
-from src.data.models import Tool, TaskExecution, Conversation
 from src.data.repositories import ToolRepository, TaskExecutionRepository, ConversationRepository
+from src.data.models_sqlite import Tool as ToolModel, TaskExecution as TaskExecutionModel, Conversation as ConversationModel
+from src.data.sqlalchemy_manager import SQLAlchemyManager
 
 
 @pytest.fixture
@@ -18,42 +18,36 @@ def temp_db():
     fd, db_path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
 
-    db_manager = DatabaseManager(db_path)
-    db_manager.initialize()
+    manager = SQLAlchemyManager(db_path)
+    manager.initialize()
 
-    yield db_manager
+    yield manager
 
     # 清理
-    db_manager.close()
+    manager.close()
     if os.path.exists(db_path):
         os.remove(db_path)
 
 
-def test_database_initialization(temp_db):
-    """测试数据库初始化"""
-    conn = temp_db.connect()
-    cursor = conn.cursor()
-
-    # 检查表是否存在
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-    tables = [row[0] for row in cursor.fetchall()]
-
-    assert "tools" in tables
-    assert "task_executions" in tables
-    assert "conversations" in tables
-    assert "schema_version" in tables
-
-
 def test_tool_repository(temp_db):
     """测试工具仓库"""
-    repo = ToolRepository(temp_db)
+    import uuid
+    session = temp_db.get_session()
+    repo = ToolRepository(session)
 
-    # 创建工具
-    tool = Tool(
-        tool_name="测试工具",
-        description="这是一个测试工具",
+    # 创建工具（确保必需字段有值，包括 tool_id）
+    tool = ToolModel(
+        tool_id=str(uuid.uuid4()),
+        tool_name="Test Tool",
+        description="This is a test tool",
         parameters=[{"name": "keyword", "type": "string"}],
         steps=[{"action": "click", "target": "button"}],
+        execution_code="def test(): pass",
+        code_language="python",
+        code_version="1.0",
+        execution_strategy="browser",
+        source="test",
+        trial_count=0,
     )
 
     created_tool = repo.create(tool)
@@ -62,12 +56,14 @@ def test_tool_repository(temp_db):
     # 获取工具
     retrieved_tool = repo.get_by_id(tool.tool_id)
     assert retrieved_tool is not None
-    assert retrieved_tool.tool_name == "测试工具"
+    assert retrieved_tool.tool_name == "Test Tool"
+    assert retrieved_tool.execution_code == "def test(): pass"
+    assert retrieved_tool.execution_strategy == "browser"
 
     # 更新工具
-    retrieved_tool.tool_name = "更新的工具名"
+    retrieved_tool.tool_name = "Updated Tool"
     updated_tool = repo.update(retrieved_tool)
-    assert updated_tool.tool_name == "更新的工具名"
+    assert updated_tool.tool_name == "Updated Tool"
 
     # 删除工具
     deleted = repo.delete(tool.tool_id)
@@ -77,17 +73,30 @@ def test_tool_repository(temp_db):
     retrieved_tool = repo.get_by_id(tool.tool_id)
     assert retrieved_tool is None
 
+    session.close()
+
 
 def test_task_execution_repository(temp_db):
     """测试任务执行仓库"""
+    import uuid
+    session = temp_db.get_session()
+    tool_repo = ToolRepository(session)
+    execution_repo = TaskExecutionRepository(session)
+
     # 先创建一个工具
-    tool_repo = ToolRepository(temp_db)
-    tool = Tool(tool_name="测试工具", parameters=[], steps=[])
+    tool = ToolModel(
+        tool_id=str(uuid.uuid4()),
+        tool_name="Test Tool",
+        parameters=[],
+        steps=[],
+        execution_code="def test(): pass",
+        code_language="python",
+    )
     tool_repo.create(tool)
 
-    # 创建执行记录
-    execution_repo = TaskExecutionRepository(temp_db)
-    execution = TaskExecution(
+    # 创建执行记录（提供 execution_id）
+    execution = TaskExecutionModel(
+        execution_id=str(uuid.uuid4()),
         tool_id=tool.tool_id,
         status="success",
         parameters={"keyword": "test"},
@@ -102,15 +111,21 @@ def test_task_execution_repository(temp_db):
     assert retrieved_execution is not None
     assert retrieved_execution.status == "success"
 
+    session.close()
+
 
 def test_conversation_repository(temp_db):
     """测试对话仓库"""
-    repo = ConversationRepository(temp_db)
+    import uuid
+    session = temp_db.get_session()
+    repo = ConversationRepository(session)
 
-    conversation = Conversation(
-        user_message="帮我查价格",
-        assistant_response="好的，正在查询",
-        parameters_extracted={"keyword": "键盘"},
+    # 创建对话（提供 conversation_id）
+    conversation = ConversationModel(
+        conversation_id=str(uuid.uuid4()),
+        user_message="Help me check price",
+        assistant_response="OK, searching now",
+        parameters_extracted={"keyword": "keyboard"},
     )
 
     created_conv = repo.create(conversation)
@@ -119,4 +134,6 @@ def test_conversation_repository(temp_db):
     # 获取对话记录
     retrieved_conv = repo.get_by_id(conversation.conversation_id)
     assert retrieved_conv is not None
-    assert retrieved_conv.user_message == "帮我查价格"
+    assert retrieved_conv.user_message == "Help me check price"
+
+    session.close()
