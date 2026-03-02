@@ -111,17 +111,17 @@ class TestRecommendationAndDuckDBUpdate:
         duckdb = DuckDBManager()
         duckdb.initialize()
 
-        # 2. 预处理（触发异步更新）
-        result = preprocessor.preprocess(sample_actions, CompressionLevel.MODERATE)
-
-        # 3. 等待异步更新完成（最多 5 秒）
-        max_wait = 5
-        start = time.time()
-        while time.time() - start < max_wait:
-            time.sleep(0.5)
-
-        # 4. 验证 DuckDB 数据（检查列是否存在）
         try:
+            # 2. 预处理（触发异步更新）
+            result = preprocessor.preprocess(sample_actions, CompressionLevel.MODERATE)
+
+            # 3. 等待异步更新完成（最多 5 秒）
+            max_wait = 5
+            start = time.time()
+            while time.time() - start < max_wait:
+                time.sleep(0.5)
+
+            # 4. 验证 DuckDB 数据（检查列是否存在）
             conn = duckdb.connect()
 
             # 检查列是否存在
@@ -150,20 +150,18 @@ class TestRecommendationAndDuckDBUpdate:
                 # 列不存在，跳过验证（迁移可能失败）
                 print("警告：DuckDB 表尚未迁移，跳过数据验证")
 
-        finally:
             # 清理测试数据
-            try:
-                conn = duckdb.connect()
-                # 使用更宽松的清理条件
-                conn.execute(
-                    """
-                    DELETE FROM network_requests
-                    WHERE url LIKE '%api.example.com%'
-                       OR url LIKE '%doubleclick.net%'
+            conn.execute(
                 """
-                )
-            except Exception as e:
-                print(f"清理测试数据失败: {e}")
+                DELETE FROM network_requests
+                WHERE url LIKE '%api.example.com%'
+                   OR url LIKE '%doubleclick.net%'
+            """
+            )
+
+        finally:
+            # 确保关闭数据库连接
+            duckdb.close()
 
     def test_filter_for_main_llm(self, preprocessor, sample_actions):
         """测试过滤逻辑"""
