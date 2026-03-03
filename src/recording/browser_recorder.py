@@ -2,6 +2,10 @@
 浏览器录制器模块（Native Messaging集成版本）
 
 实现通过Native Messaging连接浏览器插件和Mexemplar，使用Playwright启动浏览器并自动加载插件。
+
+【架构约束】本模块属于驱动层，只能被上层调用，不能调用业务层。
+如需通知业务层处理录制完成，必须使用事件系统（见 stop_recording 方法）。
+详见 CLAUDE.md 核心约束 #2 和 #3
 """
 
 import logging

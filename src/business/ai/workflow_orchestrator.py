@@ -6,6 +6,12 @@
 
 支持事件驱动模式：自动监听录制完成事件并处理
 
+【架构约束】
+1. 本模块属于业务层，只能调用下层（数据层、抽象层）
+2. 数据库访问必须通过 Repository（见 ToolRepository 使用）
+3. 使用事件系统监听录制完成（见 recording_completed）
+详见 CLAUDE.md 核心约束 #1、#2、#3
+
 架构说明：
 - use_agent=True（推荐）：使用 LangGraph Agent 处理，支持 interrupt 用户交互
 - use_agent=False（兼容）：使用旧的 SemanticAnalyzer 直接处理（已废弃，不推荐）

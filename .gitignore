@@ -112,6 +112,7 @@ build/
 # Local documentation (not for remote)
 docs/local/
 CLAUDE.md
+docs/PROJECT_CONSTRAINTS.md
 
 # Scripts (local development tools)
 scripts/
