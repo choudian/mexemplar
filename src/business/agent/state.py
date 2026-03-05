@@ -35,15 +35,6 @@ class ParameterizationItem:
 
 
 @dataclass
-class ConfirmationOption:
-    """确认问题的选项"""
-    value: str = ""  # 选项值（用于代码逻辑）
-    label: str = ""  # 选项标签（用户看到的文字）
-    impact: str = ""  # 选择此项后对工具的影响
-    code_change: str = ""  # 对生成代码的具体影响
-
-
-@dataclass
 class FieldSpec:
     """字段规范"""
     type: str  # string | number | boolean | url | selector
@@ -143,21 +134,6 @@ class ConfirmationQuestion:
     options: List[Dict[str, str]] = field(default_factory=list)  # 选项列表
     recommended: str = ""  # 推荐的选项值
     priority: str = "medium"  # high | medium | low
-
-
-@dataclass
-class InputParameter:
-    """工具输入参数"""
-    name: str = ""
-    label: str = ""  # 参数标签（用户界面显示）
-    type: str = "string"  # string | number | boolean | select
-    required: bool = True
-    default: str = ""
-    placeholder: str = ""
-    example: str = ""
-    validation: str = ""
-    help_text: str = ""
-    pending_confirmation: str = ""  # 关联的确认问题ID
 
 
 @dataclass
