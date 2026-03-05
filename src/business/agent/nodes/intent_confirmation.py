@@ -16,7 +16,13 @@ from typing import Dict, Any, List, Optional
 from langgraph.types import interrupt
 from langchain_core.messages import AIMessage
 
-from ..state import AgentState, IntentData, IntentAnalysisResult, PatternRecognition, ParameterizationItem, ConfirmationQuestion, ToolDescription
+from ..state import (
+    AgentState, IntentData, IntentAnalysisResult,
+    PatternRecognition, ParameterizationItem, ConfirmationQuestion,
+    ToolDescription,
+    ExecutionBlueprint, ParameterSpec, OutputSpec, ExecutionStep,
+    ExecutionEnvironment, FieldSpec, LocatorInfo
+)
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -221,6 +227,12 @@ def _build_interrupt_data(
             "natural_language_description": full_analysis.tool_description.natural_language_description,
             "input_parameters": full_analysis.tool_description.input_parameters,
         }
+
+        # 执行蓝图展示（去技术化）
+        if full_analysis.execution_blueprint:
+            interrupt_data["final_blueprint_display"] = _build_final_blueprint_display(
+                full_analysis.execution_blueprint
+            )
 
     # 如果有 AI 回复，添加到数据中
     if ai_response:
@@ -597,6 +609,10 @@ def _build_full_analysis(result: Dict[str, Any]) -> IntentAnalysisResult:
     # 意图分析
     intent_data = result.get("intent_analysis", {})
 
+    # 解析执行蓝图
+    blueprint_data = result.get("execution_blueprint", {})
+    execution_blueprint = _build_execution_blueprint(blueprint_data)
+
     return IntentAnalysisResult(
         pattern_recognition=pattern_recognition,
         surface_operations=intent_data.get("surface_operations", []),
@@ -605,11 +621,87 @@ def _build_full_analysis(result: Dict[str, Any]) -> IntentAnalysisResult:
         user_needs=intent_data.get("user_needs", ""),
         parameterization_analysis=param_items,
         confirmation_questions=questions,
+        execution_blueprint=execution_blueprint,
         tool_description=tool_description,
         libraries_needed=code_hints.get("libraries_needed", []),
         complexity=code_hints.get("complexity", "simple"),
         error_handling_needed=code_hints.get("error_handling_needed", []),
         special_considerations=code_hints.get("special_considerations", [])
+    )
+
+
+def _build_execution_blueprint(data: Dict[str, Any]) -> ExecutionBlueprint:
+    """从 LLM 响应构建执行蓝图"""
+    # 构建输入参数
+    input_parameters = []
+    for param in data.get("input_parameters", []):
+        input_parameters.append(ParameterSpec(
+            name=param.get("name", ""),
+            label=param.get("label", ""),
+            type=param.get("type", "string"),
+            required=param.get("required", True),
+            default_value=param.get("default_value"),
+            description=param.get("description", ""),
+            example=param.get("example", ""),
+            validation=param.get("validation", "")
+        ))
+
+    # 构建输出规范
+    output_data = data.get("output_spec", {})
+    item_fields = {}
+    for field_name, field_data in output_data.get("item_fields", {}).items():
+        item_fields[field_name] = FieldSpec(
+            type=field_data.get("type", "string"),
+            description=field_data.get("description", ""),
+            required=field_data.get("required", True)
+        )
+
+    output_spec = OutputSpec(
+        data_type=output_data.get("data_type", "object"),
+        description=output_data.get("description", ""),
+        item_type=output_data.get("item_type"),
+        item_fields=item_fields if item_fields else None
+    )
+
+    # 构建执行步骤
+    execution_steps = []
+    for step in data.get("execution_steps", []):
+        locator_info = None
+        if "locator_info" in step and step["locator_info"]:
+            loc_data = step["locator_info"]
+            locator_info = LocatorInfo(
+                locator_type=loc_data.get("type", ""),
+                value=loc_data.get("value", ""),
+                fallback=loc_data.get("fallback", [])
+            )
+
+        execution_steps.append(ExecutionStep(
+            step_number=step.get("step_number", 0),
+            step_name=step.get("step_name", ""),
+            action_type=step.get("action_type", ""),
+            description=step.get("description", ""),
+            parameters=step.get("parameters", {}),
+            locator_info=locator_info
+        ))
+
+    # 构建执行环境
+    env_data = data.get("execution_environment", {})
+    execution_environment = ExecutionEnvironment(
+        required_libraries=env_data.get("required_libraries", []),
+        python_version=env_data.get("python_version", "3.11"),
+        platform_config=env_data.get("platform_config")
+    )
+
+    return ExecutionBlueprint(
+        tool_name=data.get("tool_name", ""),
+        tool_summary=data.get("tool_summary", ""),
+        category=data.get("category", "browser_automation"),
+        input_parameters=input_parameters,
+        output_spec=output_spec,
+        execution_steps=execution_steps,
+        execution_environment=execution_environment,
+        implicit_requirements=data.get("implicit_requirements", []),
+        edge_cases=data.get("edge_cases", [])
     )
 
 
@@ -647,6 +739,39 @@ def _determine_intent_type(result: Dict[str, Any]) -> str:
         return "browser_automation"
     else:
         return "hybrid"
+
+
+def _build_final_blueprint_display(
+    blueprint
+) -> str:
+    """构建最终执行蓝图的展示文本（去技术化）"""
+    if not blueprint:
+        return ""
+
+    parts = []
+
+    parts.append(f"**工具名称**：{blueprint.tool_name}")
+    parts.append(f"\n**这个工具会做什么**：\n{blueprint.tool_summary}")
+
+    # 输入参数
+    parts.append("\n**你需要输入**：")
+    for param in blueprint.input_parameters:
+        required = "（必填）" if param.required else f"（可选，默认：{param.default_value}）"
+        parts.append(f"• {param.label} {required}")
+        if param.description:
+            parts.append(f"  {param.description}")
+
+    # 输出规范
+    parts.append("\n**你会得到**：")
+    parts.append(blueprint.output_spec.description)
+
+    # 注意事项（隐含需求）
+    if blueprint.implicit_requirements:
+        parts.append("\n**注意事项**：")
+        for req in blueprint.implicit_requirements:
+            parts.append(f"• {req}")
+
+    return "\n".join(parts)
 
 
 def _build_confirmation_message(

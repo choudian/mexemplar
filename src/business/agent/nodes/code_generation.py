@@ -1,7 +1,7 @@
 """
 代码生成节点
 
-根据确认的意图生成可执行代码。
+根据确认的意图（执行蓝图）生成可执行代码。
 """
 
 from typing import Dict, Any
@@ -9,7 +9,7 @@ from langchain_core.messages import AIMessage
 import logging
 import uuid
 
-from ..state import AgentState, ToolDraft
+from ..state import AgentState, ToolDraft, ExecutionBlueprint
 from ..prompts.code_generation import get_code_generation_prompt
 
 logger = logging.getLogger(__name__)
@@ -19,7 +19,7 @@ def code_generation_node(state: AgentState) -> Dict[str, Any]:
     """
     代码生成节点
 
-    根据意图生成可执行的自动化代码。
+    根据意图分析中的执行蓝图生成可执行的自动化代码。
 
     Args:
         state: 当前状态
@@ -39,18 +39,22 @@ def code_generation_node(state: AgentState) -> Dict[str, Any]:
             }
         }
 
-    # 提取 actions
-    actions = recording_data.get("actions", [])
+    # 获取执行蓝图
+    full_analysis = current_intent.full_analysis
+    if not full_analysis or not full_analysis.execution_blueprint:
+        return {
+            "error_info": {
+                "code": "NO_EXECUTION_BLUEPRINT",
+                "message": "No execution blueprint found in intent analysis"
+            }
+        }
+
+    blueprint = full_analysis.execution_blueprint
 
     # 生成提示词
     prompt = get_code_generation_prompt(
-        intent_data={
-            "intent_type": current_intent.intent_type,
-            "description": current_intent.description,
-            "parameters": current_intent.parameters,
-            "raw_analysis": current_intent.raw_analysis
-        },
-        actions=actions
+        blueprint=blueprint,
+        recording_data=recording_data
     )
 
     try:
@@ -75,17 +79,19 @@ def code_generation_node(state: AgentState) -> Dict[str, Any]:
         client = create_llm_client(client_config)
         response_text = client.chat(prompt=prompt, max_tokens=8192)
 
-        # 解析响应
-        workflow_result = _parse_workflow_response(response_text)
+        logger.info(f"代码生成响应长度: {len(response_text)} 字符")
+
+        # 解析代码响应
+        execution_code = _parse_code_response(response_text)
 
         # 创建 ToolDraft
         tool_draft = ToolDraft(
             tool_id=str(uuid.uuid4()),
-            tool_name=workflow_result.get("tool_name", "未命名工具"),
-            description=workflow_result.get("description", current_intent.description),
-            execution_code=_generate_execution_code(workflow_result),
-            parameters=workflow_result.get("parameters", []),
-            execution_strategy=_determine_execution_strategy(workflow_result)
+            tool_name=blueprint.tool_name,
+            description=blueprint.tool_summary,
+            execution_code=execution_code,
+            parameters=_convert_blueprint_parameters(blueprint.input_parameters),
+            execution_strategy=_determine_execution_strategy(blueprint.category)
         )
 
         # 保存工具到数据库
@@ -104,14 +110,14 @@ def code_generation_node(state: AgentState) -> Dict[str, Any]:
         }
 
     except Exception as e:
-        logger.error(f"代码生成失败: {e}")
+        logger.error(f"代码生成失败: {e}", exc_info=True)
         # 返回默认草稿
         tool_draft = ToolDraft(
             tool_id=str(uuid.uuid4()),
-            tool_name="示例工具",
-            description=current_intent.description,
-            execution_code="# 代码生成失败\nasync def execute(**kwargs):\n    pass",
-            parameters=current_intent.parameters,
+            tool_name=blueprint.tool_name or "示例工具",
+            description=blueprint.tool_summary or "代码生成失败",
+            execution_code=_generate_fallback_code(blueprint),
+            parameters=_convert_blueprint_parameters(blueprint.input_parameters),
             execution_strategy="browser"
         )
         return {
@@ -120,129 +126,87 @@ def code_generation_node(state: AgentState) -> Dict[str, Any]:
         }
 
 
-def _parse_workflow_response(response_text: str) -> Dict[str, Any]:
-    """解析 LLM 响应"""
-    import json
+def _parse_code_response(response_text: str) -> str:
+    """解析代码响应，提取 Python 代码"""
+    # 查找 Python 代码块
     import re
+    python_match = re.search(r"```python\s*(.*?)\s*```", response_text, re.DOTALL)
+    if python_match:
+        return python_match.group(1).strip()
 
-    # 查找 JSON 代码块
-    json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
-    if json_match:
-        try:
-            return json.loads(json_match.group(1))
-        except json.JSONDecodeError:
-            pass
+    # 尝试查找没有语言标识的代码块
+    code_match = re.search(r"```\s*(.*?)\s*```", response_text, re.DOTALL)
+    if code_match:
+        code = code_match.group(1).strip()
+        # 简单判断是否是 Python 代码（包含 import 或 def）
+        if "import " in code or "def " in code:
+            return code
 
-    # 尝试直接解析
-    try:
-        return json.loads(response_text)
-    except json.JSONDecodeError:
-        pass
-
-    return {}
+    # 直接返回整个响应
+    return response_text.strip()
 
 
-def _generate_execution_code(workflow: Dict[str, Any]) -> str:
-    """生成完全独立的执行代码（不依赖 src）"""
-
-    code_lines = [
-        "# -*- coding: utf-8 -*-",
-        "# 独立执行脚本 - 不依赖 src 模块",
-        "",
-        "import asyncio",
-        "import json",
-        "import sys",
-        "from playwright.async_api import async_playwright",
-        "from typing import Dict, Any, Optional",
-        "",
-        "",
-        "async def execute(**kwargs) -> Dict[str, Any]:",
-        '    """执行工具"""',
-        "    result = {",
-        '        "success": False,',
-        '        "message": "",',
-        '        "data": None',
-        "    }",
-        "",
-        "    async with async_playwright() as p:",
-        "        browser = await p.chromium.launch(headless=False)",
-        "        page = await browser.new_page()",
-        "",
-        "        try:",
-        "            # 执行步骤",
-    ]
-
-    # 生成步骤代码
-    for step in workflow.get("steps", []):
-        step_name = step.get("step_name", "未命名步骤")
-        action_type = step.get("action_type", "")
-        params = step.get("parameters", {})
-
-        code_lines.append(f"            # {step_name}")
-
-        if "navigate" in action_type:
-            url = params.get("url", "")
-            code_lines.append(f'            await page.goto("{url}")')
-
-        elif "click" in action_type:
-            selector = params.get("selector", "")
-            code_lines.append(f'            await page.click("{selector}")')
-
-        elif "input" in action_type or "fill" in action_type:
-            selector = params.get("selector", "")
-            text = params.get("text", "")
-            code_lines.append(f'            await page.fill("{selector}", "{text}")')
-
-        elif "select" in action_type:
-            selector = params.get("selector", "")
-            value = params.get("value", "")
-            code_lines.append(f'            await page.select_option("{selector}", "{value}")')
-
-        elif "extract" in action_type:
-            selector = params.get("selector", "")
-            code_lines.append(f'            data = await page.inner_text("{selector}")')
-            code_lines.append(f'            result["data"] = {{"extracted": data}}')
-
-    code_lines.extend([
-        "            result['success'] = True",
-        "            result['message'] = '执行完成'",
-        "",
-        "        except Exception as e:",
-        f"            result['message'] = f'执行错误: {{str(e)}}'",
-        "",
-        "        finally:",
-        "            await browser.close()",
-        "",
-        "    return result",
-        "",
-        "",
-        "if __name__ == '__main__':",
-        "    # 从命令行参数读取",
-        "    params = {}",
-        "    for arg in sys.argv[1:]:",
-        "        if '=' in arg:",
-        "            key, value = arg.split('=', 1)",
-        "            params[key] = value",
-        "",
-        "    # 执行并输出 JSON 结果",
-        "    result = asyncio.run(execute(**params))",
-        "    print(json.dumps(result, ensure_ascii=False, indent=2))"
-    ])
-
-    return "\n".join(code_lines)
+def _convert_blueprint_parameters(input_parameters: list) -> Dict[str, Any]:
+    """将输入参数转换为旧格式"""
+    params = {}
+    for param in input_parameters:
+        params[param.name] = {
+            "type": param.type,
+            "default": param.default_value,
+            "description": param.description,
+            "required": param.required
+        }
+    return params
 
 
-def _determine_execution_strategy(workflow: Dict[str, Any]) -> str:
-    """确定执行策略"""
-    metadata = workflow.get("metadata", {})
-    category = metadata.get("category", "").lower()
-
-    if "api" in category:
+def _determine_execution_strategy(category: str) -> str:
+    """根据类别确定执行策略"""
+    category_lower = category.lower()
+    if "api" in category_lower:
         return "api"
-    elif "browser" in category:
+    elif "browser" in category_lower:
         return "browser"
     else:
         return "hybrid"
+
+
+def _generate_fallback_code(blueprint: ExecutionBlueprint) -> str:
+    """生成备用代码"""
+    return """# -*- coding: utf-8 -*-
+import asyncio
+import json
+import sys
+from playwright.async_api import async_playwright
+
+async def execute(**kwargs) -> dict:
+    '''执行工具'''
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        page = await browser.new_page()
+
+        try:
+            # TODO: 实现具体功能
+            result = {"success": False, "message": "功能未实现", "data": None}
+
+        except Exception as e:
+            result = {"success": False, "message": str(e), "data": None}
+
+        finally:
+            await browser.close()
+
+    return result
+
+
+if __name__ == '__main__':
+    params = {}
+    for arg in sys.argv[1:]:
+        if '=' in arg:
+            key, value = arg.split('=', 1)
+            params[key] = value
+
+    result = asyncio.run(execute(**params))
+    print(json.dumps(result, ensure_ascii=False))
+"""
 
 
 def _save_tool_draft(tool_draft: ToolDraft, recording_id: str = None):

@@ -44,6 +44,97 @@ class ConfirmationOption:
 
 
 @dataclass
+class FieldSpec:
+    """字段规范"""
+    type: str  # string | number | boolean | url | selector
+    description: str
+    required: bool = True
+
+
+@dataclass
+class OutputSpec:
+    """输出规范"""
+    data_type: str  # object | array | string | number | boolean
+    description: str
+
+    # 如果是 object，定义字段
+    fields: Dict[str, FieldSpec] = None
+
+    # 如果是 array，定义元素类型
+    item_type: str = None  # array元素的类型
+    item_fields: Dict[str, FieldSpec] = None  # array元素的字段
+
+
+@dataclass
+class ParameterSpec:
+    """参数规范"""
+    name: str  # 参数名（代码中使用）
+    label: str  # 显示标签（用户界面显示）
+    type: str  # string | number | boolean | url | selector
+    required: bool
+    default_value: Any = None  # 默认值
+    description: str = ""  # 参数描述
+    example: str = ""  # 示例值
+    validation: str = ""  # 验证规则
+
+
+@dataclass
+class LocatorInfo:
+    """定位信息（用于浏览器场景）"""
+    locator_type: str = ""  # xpath | css_selector | coordinate
+    value: str = ""
+    fallback: List[str] = field(default_factory=list)
+
+
+@dataclass
+class ExecutionStep:
+    """执行步骤"""
+    step_number: int
+    step_name: str
+    action_type: str  # browser_navigate | browser_click | browser_input | ...
+    description: str
+    parameters: Dict[str, Any]
+    locator_info: Optional[LocatorInfo] = None
+
+
+@dataclass
+class ExecutionEnvironment:
+    """执行环境要求"""
+    required_libraries: List[str]
+    python_version: str = "3.11"
+
+    # 场景特定配置
+    platform_config: Dict[str, Any] = None
+
+
+@dataclass
+class ExecutionBlueprint:
+    """执行蓝图：代码生成需要的完整信息"""
+    # 工具基本信息
+    tool_name: str
+    tool_summary: str
+    category: str  # browser_automation | desktop_automation | ...
+
+    # 输入参数
+    input_parameters: List[ParameterSpec]
+
+    # 输出规范
+    output_spec: OutputSpec
+
+    # 执行步骤
+    execution_steps: List[ExecutionStep]
+
+    # 执行环境
+    execution_environment: ExecutionEnvironment
+
+    # 隐含需求
+    implicit_requirements: List[str]
+
+    # 边界情况
+    edge_cases: List[str]
+
+
+@dataclass
 class ConfirmationQuestion:
     """确认问题"""
     id: str = ""  # 问题ID
@@ -102,10 +193,13 @@ class IntentAnalysisResult:
     # 确认问题
     confirmation_questions: List[ConfirmationQuestion] = field(default_factory=list)
 
-    # 工具描述
+    # 执行蓝图（代码生成所需的完整信息）
+    execution_blueprint: ExecutionBlueprint = None
+
+    # 工具描述（向下兼容）
     tool_description: ToolDescription = field(default_factory=ToolDescription)
 
-    # 代码生成提示
+    # 代码生成提示（向下兼容）
     libraries_needed: List[str] = field(default_factory=list)
     complexity: str = "simple"  # simple | medium | complex
     error_handling_needed: List[str] = field(default_factory=list)
