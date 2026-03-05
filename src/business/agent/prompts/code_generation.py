@@ -17,12 +17,7 @@ def get_code_generation_prompt(
     """
     生成代码生成提示词
 
-    Args:
-        intent_data: 意图分析结果
-        actions: 操作序列
-
-    Returns:
-        提示词字符串
+    要求 LLM 生成完全独立的 Python 代码，不依赖 src 模块
     """
     # 构建操作描述
     actions_description = _describe_actions(actions)
@@ -40,7 +35,66 @@ def get_code_generation_prompt(
 {intent_json}
 ```
 
-请生成一个标准的工作流定义，包含以下内容：
+【重要 - 代码要求】
+
+1. **完全独立**：代码必须独立运行，不能导入 src 或 exemplar 相关模块
+
+2. **使用标准库**：只允许使用以下库：
+   - playwright / playwright.async_api（浏览器自动化）
+   - asyncio（异步支持）
+   - json（数据序列化）
+   - typing（类型注解）
+   - 其他 Python 标准库
+
+3. **代码结构**：
+```python
+# -*- coding: utf-8 -*-
+import asyncio
+import json
+import sys
+from playwright.async_api import async_playwright
+
+async def execute(**kwargs) -> Dict[str, Any]:
+    \"\"\"执行工具\"\"\"
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=False)
+        page = await browser.new_page()
+
+        try:
+            # 执行步骤（使用 page.goto, page.click, page.fill 等）
+            # ...
+
+            return {"success": True, "message": "执行完成", "data": None}
+
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+        finally:
+            await browser.close()
+
+if __name__ == '__main__':
+    # 从命令行参数读取
+    params = {}
+    for arg in sys.argv[1:]:
+        if '=' in arg:
+            key, value = arg.split('=', 1)
+            params[key] = value
+
+    # 执行并输出 JSON
+    result = asyncio.run(execute(**params))
+    print(json.dumps(result, ensure_ascii=False))
+```
+
+4. **返回格式**：必须返回 JSON 格式：
+   ```json
+   {
+     "success": boolean,
+     "message": string,
+     "data": any
+   }
+   ```
+
+请生成标准的工作流定义，包含以下内容：
 
 1. 工具名称：基于任务意图生成
 2. 工具描述：清晰描述工具的功能
@@ -106,6 +160,7 @@ def get_code_generation_prompt(
 1. 步骤参数中的变量应该使用 {{{{参数名}}}} 的格式
 2. locator_info 应该包含完整的定位策略
 3. metadata 提供了工作流的元信息
+4. 生成的代码会通过 subprocess 独立执行，不要依赖任何 src 模块
 """
 
     intent_json = json.dumps(intent_data, ensure_ascii=False, indent=2)

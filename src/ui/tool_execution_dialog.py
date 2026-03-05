@@ -22,6 +22,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
 from PyQt6.QtGui import QKeyEvent
 from typing import Dict, Any, Optional, List
 import asyncio
+import sys
 
 from src.data.models import Tool
 from src.utils.logger import get_logger
@@ -387,29 +388,13 @@ class ToolExecutor:
         try:
             self.logger.info(f"开始执行工具: {tool.tool_name}")
 
-            # 如果工具有执行代码，使用 CodeExecutor
             if tool.execution_code:
-                from src.execution.code_executor import CodeExecutor
+                # 使用独立进程执行脚本
+                return self._execute_standalone_script(tool, parameters)
 
-                code_executor = CodeExecutor()
-                exec_result = code_executor.execute(
-                    code=tool.execution_code,
-                    parameters=parameters,
-                )
-
-                # CodeExecutor 返回格式: {'success': bool, 'result': Any, 'error': str, 'output': str}
-                if exec_result["success"]:
-                    self.logger.info(f"工具执行成功: {tool.tool_name}")
-                    return True, exec_result["result"], None
-                else:
-                    error = exec_result.get("error", "未知错误")
-                    self.logger.error(f"工具执行失败: {tool.tool_name}, error: {error}")
-                    return False, None, error
-
-            # 否则使用 WorkflowExecutor（需要 steps）
             elif tool.steps:
+                # 使用 WorkflowExecutor（如果集成）
                 # TODO: 集成 WorkflowExecutor
-                # 当前 WorkflowExecutor 是异步的，需要在同步上下文中调用
                 self.logger.warning(f"WorkflowExecutor 尚未集成，工具: {tool.tool_name}")
                 return False, None, "WorkflowExecutor 尚未集成"
 
@@ -420,6 +405,57 @@ class ToolExecutor:
             error_msg = f"执行工具时发生异常: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             return False, None, error_msg
+
+    def _execute_standalone_script(self, tool: Tool, parameters: Dict[str, Any]) -> tuple[bool, Optional[Any], Optional[str]]:
+        """执行独立脚本（使用 subprocess 隔离执行环境）"""
+        import subprocess
+        import sys
+        import tempfile
+        import json
+        from pathlib import Path
+
+        # 创建临时脚本文件
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+            script_path = f.name
+            f.write(tool.execution_code)
+
+        try:
+            # 构建命令行参数
+            cmd_args = [sys.executable, script_path]
+            for key, value in parameters.items():
+                cmd_args.append(f"{key}={value}")
+
+            # 执行脚本
+            result = subprocess.run(
+                cmd_args,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5分钟超时
+                encoding='utf-8'
+            )
+
+            # 解析输出
+            if result.returncode == 0:
+                try:
+                    output = json.loads(result.stdout.strip())
+                    success = output.get('success', False)
+                    return success, output, None
+                except json.JSONDecodeError as e:
+                    return False, None, f"无法解析输出: {e}"
+            else:
+                error_msg = result.stderr or result.stdout or "未知错误"
+                return False, None, error_msg
+
+        except subprocess.TimeoutExpired:
+            return False, None, "执行超时"
+        except Exception as e:
+            return False, None, str(e)
+        finally:
+            # 清理临时文件
+            try:
+                Path(script_path).unlink()
+            except Exception:
+                pass
 
     def execute_tool_async(self, tool: Tool, parameters: Dict[str, Any]) -> tuple[bool, Optional[Any], Optional[str]]:
         """

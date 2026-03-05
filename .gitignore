@@ -42,6 +42,7 @@ uv.lock
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 .hypothesis/
@@ -103,6 +104,7 @@ SKIP_LLM_USAGE.md
 nul
 .reports/
 .backups/
+research.md
 
 # Build artifacts
 dist/

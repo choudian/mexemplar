@@ -143,45 +143,90 @@ def _parse_workflow_response(response_text: str) -> Dict[str, Any]:
 
 
 def _generate_execution_code(workflow: Dict[str, Any]) -> str:
-    """根据工作流定义生成执行代码"""
-    steps = workflow.get("steps", [])
+    """生成完全独立的执行代码（不依赖 src）"""
 
     code_lines = [
-        "async def execute(**kwargs):",
+        "# -*- coding: utf-8 -*-",
+        "# 独立执行脚本 - 不依赖 src 模块",
+        "",
+        "import asyncio",
+        "import json",
+        "import sys",
+        "from playwright.async_api import async_playwright",
+        "from typing import Dict, Any, Optional",
+        "",
+        "",
+        "async def execute(**kwargs) -> Dict[str, Any]:",
         '    """执行工具"""',
-        "    from src.execution.executor import Executor",
-        "    from src.drivers.locator.multi_layer_locator import MultiLayerLocator",
+        "    result = {",
+        '        "success": False,',
+        '        "message": "",',
+        '        "data": None',
+        "    }",
         "",
-        "    executor = Executor()",
-        "    locator = MultiLayerLocator()",
+        "    async with async_playwright() as p:",
+        "        browser = await p.chromium.launch(headless=False)",
+        "        page = await browser.new_page()",
         "",
+        "        try:",
+        "            # 执行步骤",
     ]
 
-    for step in steps:
+    # 生成步骤代码
+    for step in workflow.get("steps", []):
         step_name = step.get("step_name", "未命名步骤")
-        action_type = step.get("action_type", "unknown")
+        action_type = step.get("action_type", "")
         params = step.get("parameters", {})
 
-        code_lines.append(f"    # {step_name}")
-        code_lines.append(f"    # 类型: {action_type}")
+        code_lines.append(f"            # {step_name}")
 
-        # 根据步骤类型生成代码
-        if "browser_navigate" in action_type:
+        if "navigate" in action_type:
             url = params.get("url", "")
-            code_lines.append(f'    await executor.navigate("{url}")')
-        elif "browser_click" in action_type:
+            code_lines.append(f'            await page.goto("{url}")')
+
+        elif "click" in action_type:
             selector = params.get("selector", "")
-            code_lines.append(f'    await executor.click("{selector}")')
-        elif "browser_input" in action_type:
+            code_lines.append(f'            await page.click("{selector}")')
+
+        elif "input" in action_type or "fill" in action_type:
             selector = params.get("selector", "")
             text = params.get("text", "")
-            code_lines.append(f'    await executor.input_text("{selector}", "{text}")')
+            code_lines.append(f'            await page.fill("{selector}", "{text}")')
 
-        code_lines.append("")
+        elif "select" in action_type:
+            selector = params.get("selector", "")
+            value = params.get("value", "")
+            code_lines.append(f'            await page.select_option("{selector}", "{value}")')
+
+        elif "extract" in action_type:
+            selector = params.get("selector", "")
+            code_lines.append(f'            data = await page.inner_text("{selector}")')
+            code_lines.append(f'            result["data"] = {{"extracted": data}}')
 
     code_lines.extend([
-        '    return {"success": True, "message": "执行完成"}',
-        ""
+        "            result['success'] = True",
+        "            result['message'] = '执行完成'",
+        "",
+        "        except Exception as e:",
+        f"            result['message'] = f'执行错误: {{str(e)}}'",
+        "",
+        "        finally:",
+        "            await browser.close()",
+        "",
+        "    return result",
+        "",
+        "",
+        "if __name__ == '__main__':",
+        "    # 从命令行参数读取",
+        "    params = {}",
+        "    for arg in sys.argv[1:]:",
+        "        if '=' in arg:",
+        "            key, value = arg.split('=', 1)",
+        "            params[key] = value",
+        "",
+        "    # 执行并输出 JSON 结果",
+        "    result = asyncio.run(execute(**params))",
+        "    print(json.dumps(result, ensure_ascii=False, indent=2))"
     ])
 
     return "\n".join(code_lines)
