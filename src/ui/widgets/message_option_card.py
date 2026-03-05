@@ -186,12 +186,6 @@ class MessageOptionCard(QWidget):
 
         self.options_layout.addWidget(option_widget)
 
-        # 如果是推荐选项，默认选中
-        if is_recommended:
-            btn.setChecked(True)
-            self._set_button_style(btn, "selected", is_recommended)
-            self._selected_value = value
-
     def _set_button_style(self, btn: QPushButton, state: str, is_recommended: bool = False):
         """设置按钮样式
 
