@@ -8,7 +8,7 @@ import sys
 from datetime import datetime
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from PyQt6.QtCore import QTimer
-from src.ui.pending_tools_ui import PendingToolsUI
+from src.ui.tools_management_ui import ToolsManagementUI
 from src.data.models import Tool
 from src.utils.logger import get_logger
 
@@ -38,7 +38,7 @@ class TestMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
 
         # 创建工具管理 UI
-        self.tools_ui = PendingToolsUI()
+        self.tools_ui = ToolsManagementUI()
 
         main_layout.addWidget(self.tools_ui)
 

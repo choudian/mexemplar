@@ -23,12 +23,12 @@ def test_main_window_imports(app):
     """测试主窗口和相关组件能否正确导入"""
     from src.ui.main_window import MainWindow
     from src.ui.intent_confirmation_ui import IntentConfirmationUI
-    from src.ui.pending_tools_ui import PendingToolsUI
+    from src.ui.tools_management_ui import ToolsManagementUI
 
     # 如果没有抛出异常，说明导入成功
     assert MainWindow is not None
     assert IntentConfirmationUI is not None
-    assert PendingToolsUI is not None
+    assert ToolsManagementUI is not None
 
 
 def test_main_window_creation(app):
@@ -92,13 +92,13 @@ def test_intent_confirmation_page_widget(app):
 def test_pending_tools_page_widget(app):
     """测试待试用工具页面是否是正确的组件"""
     from src.ui.main_window import MainWindow
-    from src.ui.pending_tools_ui import PendingToolsUI
+    from src.ui.tools_management_ui import ToolsManagementUI
 
     window = MainWindow()
     pending_tools_page = window.main_content.pages.get("pending_tools")
 
     assert pending_tools_page is not None
-    assert isinstance(pending_tools_page, PendingToolsUI)
+    assert isinstance(pending_tools_page, ToolsManagementUI)
 
 
 def test_sidebar_navigation_buttons(app):

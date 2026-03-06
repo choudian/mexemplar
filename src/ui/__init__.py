@@ -12,7 +12,7 @@ from src.ui.widgets.settings_page import SettingsPage
 from src.ui.widgets.tools_list_page import ToolsListPage
 from src.ui.main_window import MainWindow
 from src.ui.intent_confirmation_ui import IntentConfirmationUI
-from src.ui.pending_tools_ui import PendingToolsUI
+from src.ui.tools_management_ui import ToolsManagementUI
 
 __all__ = [
     "MainWindow",
@@ -23,5 +23,5 @@ __all__ = [
     "SettingsPage",
     "ToolsListPage",
     "IntentConfirmationUI",
-    "PendingToolsUI",
+    "ToolsManagementUI",
 ]

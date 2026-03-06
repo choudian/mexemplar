@@ -1,5 +1,5 @@
 """
-测试待试用工具列表 UI（带 Tab）
+测试工具管理 UI（带 Tab）
 
 验证：
 1. Tab 切换正常工作
@@ -13,7 +13,7 @@ from datetime import datetime
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
 
-from src.ui.pending_tools_ui import PendingToolsUI
+from src.ui.tools_management_ui import ToolsManagementUI
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
 from src.data.models import Tool
 
@@ -23,7 +23,7 @@ def test_tab_switching():
     app = QApplication(sys.argv)
 
     # 创建 UI
-    ui = PendingToolsUI()
+    ui = ToolsManagementUI()
     ui.show()
 
     # 测试初始状态

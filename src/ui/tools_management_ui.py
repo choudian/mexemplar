@@ -374,8 +374,8 @@ class PublishedToolCard(QWidget):
             self.init_ui()
 
 
-class PendingToolsUI(QWidget):
-    """待试用工具列表 UI 组件（带 Tab 切换）"""
+class ToolsManagementUI(QWidget):
+    """工具管理 UI 组件（带 Tab 切换）"""
 
     # 定义信号
     tool_promoted = pyqtSignal(str)  # pending_tool_id

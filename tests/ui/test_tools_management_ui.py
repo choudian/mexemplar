@@ -1,14 +1,14 @@
 """
-待试用工具列表 UI 测试示例
+工具管理 UI 测试示例
 
-演示如何使用 PendingToolsUI 组件
+演示如何使用 ToolsManagementUI 组件
 """
 
 import sys
 from datetime import datetime, timedelta
 from PyQt6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget
 from PyQt6.QtCore import QTimer
-from src.ui.pending_tools_ui import PendingToolsUI
+from src.ui.tools_management_ui import ToolsManagementUI
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
 from src.utils.logger import get_logger
 
@@ -25,7 +25,7 @@ class TestMainWindow(QMainWindow):
 
     def init_ui(self):
         """初始化 UI"""
-        self.setWindowTitle("待试用工具列表 UI 测试")
+        self.setWindowTitle("工具管理 UI 测试")
         self.setMinimumSize(1200, 800)
 
         # 创建中心部件
@@ -37,13 +37,13 @@ class TestMainWindow(QMainWindow):
         main_layout.setSpacing(0)
         main_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 创建待试用工具 UI
-        self.pending_tools_ui = PendingToolsUI()
+        # 创建工具管理 UI
+        self.tools_ui = ToolsManagementUI()
 
         # 连接信号
-        self.pending_tools_ui.tool_promoted.connect(self._on_tool_promoted)
+        self.tools_ui.tool_promoted.connect(self._on_tool_promoted)
 
-        main_layout.addWidget(self.pending_tools_ui)
+        main_layout.addWidget(self.tools_ui)
 
         # 加载测试数据
         QTimer.singleShot(1000, self._load_test_data)
@@ -156,7 +156,7 @@ class TestMainWindow(QMainWindow):
             ),
         ]
 
-        self.pending_tools_ui.update_tools(test_tools)
+        self.tools_ui.update_tools(test_tools)
         self.logger.info(f"已加载 {len(test_tools)} 个测试工具")
 
     def _on_tool_promoted(self, pending_tool_id: str):
@@ -167,7 +167,7 @@ class TestMainWindow(QMainWindow):
         """窗口关闭事件"""
         self.logger.info("正在关闭窗口...")
         # 清理资源
-        self.pending_tools_ui.cleanup()
+        self.tools_ui.cleanup()
         event.accept()
 
 

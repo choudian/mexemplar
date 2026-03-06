@@ -215,8 +215,8 @@ class MainWindow(QMainWindow):
         self.main_content.add_page("intent_confirmation", self.intent_confirmation_page)
 
         # 待试用工具列表页面
-        from src.ui.pending_tools_ui import PendingToolsUI
-        self.pending_tools_page = PendingToolsUI()
+        from src.ui.tools_management_ui import ToolsManagementUI
+        self.pending_tools_page = ToolsManagementUI()
         self.main_content.add_page("pending_tools", self.pending_tools_page)
 
         # 设置页面
@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
                 self._on_agent_resume_request
             )
 
-        # ⭐ 连接 PendingToolsUI 的信号到 MainWindow 处理
+        # ⭐ 连接 ToolsManagementUI 的信号到 MainWindow 处理
         if hasattr(self, 'pending_tools_page'):
             self.pending_tools_page.trial_start_request.connect(
                 self._on_trial_start_request
