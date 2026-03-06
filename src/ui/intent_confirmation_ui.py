@@ -679,6 +679,34 @@ class IntentConfirmationUI(QWidget):
             return self._multi_question_card.get_answers()
         return {}
 
+    def show_success_message(self, tool_draft: object) -> None:
+        """
+        显示工具生成成功消息
+
+        Args:
+            tool_draft: 生成的工具草稿
+        """
+        tool_name = getattr(tool_draft, 'tool_name', '未知工具')
+        description = getattr(tool_draft, 'description', '暂无描述')
+
+        # 添加 AI 成功消息
+        success_message = f"✅ **工具生成成功！**\n\n**工具名称**：{tool_name}\n**描述**：{description}"
+        self._add_message("assistant", success_message)
+
+        # 更新状态栏
+        self.status_label.setText("✅ 工具生成成功！")
+        self.progress_indicator.setText("即将跳转到工具列表...")
+        self.status_icon.setText("🎉")
+
+        # 滚动到底部
+        QTimer.singleShot(100, self._scroll_to_bottom)
+
+        # 禁用输入和按钮
+        self.message_input.setEnabled(False)
+        self.send_button.setEnabled(False)
+        if self._confirm_card:
+            self._confirm_card.set_enabled(False)
+
     def cleanup(self):
         """清理资源"""
         pass

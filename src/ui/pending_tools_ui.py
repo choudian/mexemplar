@@ -525,9 +525,51 @@ class PendingToolsUI(QWidget):
 
     def _load_tools(self):
         """加载工具列表（待试用 + 已发布）"""
-        # 不再通过 WebSocket 请求，改为直接调用公共方法
-        # 显示示例数据（测试用）
-        self._load_sample_tools()
+        try:
+            from src.data.repositories import ToolRepository
+            from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
+            from src.data.models import Tool
+
+            repo = ToolRepository()
+            all_tools = repo.get_all()
+
+            # 分离待试用工具和已发布工具
+            pending_tools_list = []
+            published_tools_list = []
+
+            for tool in all_tools:
+                # 待试用工具：从意图生成且试用次数小于 3
+                if tool.source == "intent" and tool.trial_count < 3:
+                    pending_tools_list.append(PendingTool(
+                        pending_tool_id=tool.tool_id,
+                        tool_name=tool.tool_name,
+                        tool_description=tool.description,
+                        execution_code=tool.execution_code,
+                        execution_strategy=tool.execution_strategy,
+                        parameters=tool.parameters if tool.parameters else [],
+                        status=PendingToolStatus.PENDING_TRIAL,
+                        trial_count=tool.trial_count,
+                        max_trials=3,
+                        created_at=tool.created_at,
+                        updated_at=tool.updated_at,
+                    ))
+                # 已发布工具：手动创建或试用成功的工具
+                else:
+                    published_tools_list.append(tool)
+
+            self.update_pending_tools(pending_tools_list)
+            self.update_published_tools(published_tools_list)
+
+            self.logger.info(f"从数据库加载工具: {len(pending_tools_list)} 个待试用, {len(published_tools_list)} 个已发布")
+
+        except Exception as e:
+            self.logger.error(f"从数据库加载工具失败: {e}", exc_info=True)
+            # 如果数据库加载失败，加载示例数据
+            self._load_sample_tools()
+
+    def load_tools(self):
+        """加载工具列表（公开方法）"""
+        self._load_tools()
 
     def _load_sample_tools(self):
         """加载示例工具（测试用）"""

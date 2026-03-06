@@ -46,7 +46,7 @@ class AgentUIBridge(QObject):
     interrupt_requested = pyqtSignal(str, dict)  # (thread_id, interrupt_data)
     response_ready = pyqtSignal(str, str)  # (thread_id, response_text)
     error_occurred = pyqtSignal(str, str)  # (thread_id, error_message)
-    session_completed = pyqtSignal(str)  # thread_id
+    session_completed = pyqtSignal(str, object)  # (thread_id, tool_draft)
 
     def __init__(self, parent=None, use_persistence: bool = False):
         super().__init__(parent)
@@ -314,7 +314,12 @@ class AgentUIBridge(QObject):
         else:
             # Agent 执行完成
             session.status = "completed"
-            self.session_completed.emit(thread_id)
+
+            # 提取 tool_draft（如果存在）
+            tool_draft = result.get("tool_draft")
+
+            # 发射完成信号（带上 tool_draft）
+            self.session_completed.emit(thread_id, tool_draft)
 
             # 提取回复文本
             if "messages" in result and result["messages"]:

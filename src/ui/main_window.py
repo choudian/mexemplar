@@ -638,9 +638,27 @@ class MainWindow(QMainWindow):
             # 切换到意图确认页面并显示内容
             self._show_intent_confirmation_from_agent(intent_data, message, thread_id)
 
-    def _on_agent_session_completed(self, thread_id: str) -> None:
-        """处理 Agent 会话完成"""
+    def _on_agent_session_completed(self, thread_id: str, tool_draft: object = None) -> None:
+        """
+        处理 Agent 会话完成
+
+        Args:
+            thread_id: Agent 会话 ID
+            tool_draft: 生成的工具草稿（可选）
+        """
         self.logger.info(f"Agent 会话完成: {thread_id}")
+
+        if tool_draft:
+            self.logger.info(f"工具已生成: {getattr(tool_draft, 'tool_name', 'Unknown')}")
+
+            # 在意图确认页面显示成功消息
+            intent_page = self.main_content.get_page("intent_confirmation")
+            if intent_page and hasattr(intent_page, 'show_success_message'):
+                intent_page.show_success_message(tool_draft)
+
+            # 延迟后自动切换到待试用工具页面
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(1500, self._switch_to_pending_tools)
 
     def _on_agent_error(self, thread_id: str, error_message: str) -> None:
         """处理 Agent 错误"""
@@ -689,6 +707,16 @@ class MainWindow(QMainWindow):
                 self.logger.error(f"恢复 Agent 失败: {e}", exc_info=True)
         else:
             self.logger.warning("没有可用的 AgentUIBridge")
+
+    def _switch_to_pending_tools(self) -> None:
+        """切换到待试用工具页面"""
+        self.logger.info("自动切换到待试用工具页面")
+        self.main_content.switch_page("pending_tools")
+
+        # 刷新工具列表
+        pending_tools_page = self.main_content.get_page("pending_tools")
+        if pending_tools_page and hasattr(pending_tools_page, 'load_tools'):
+            pending_tools_page.load_tools()
 
     def _toggle_sidebar(self) -> None:
         """切换侧边栏状态"""
