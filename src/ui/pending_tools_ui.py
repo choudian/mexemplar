@@ -48,7 +48,7 @@ class PendingToolCard(QWidget):
     def init_ui(self):
         """初始化用户界面"""
         self.setObjectName("pending_tool_card")
-        self.setFixedSize(320, 200)
+        self.setFixedSize(300, 220)  # 固定高度，确保所有卡片一致
 
         # 创建主布局
         layout = QVBoxLayout(self)
@@ -75,24 +75,30 @@ class PendingToolCard(QWidget):
 
         layout.addLayout(top_layout)
 
-        # === 工具名称 ===
+        # === 工具名称（单行，超出省略）===
         name_label = QLabel(self.pending_tool.tool_name)
         name_label.setObjectName("pending_tool_name")
-        name_label.setWordWrap(True)
+        name_label.setWordWrap(False)
+        name_label.setProperty("elide", "right")  # 添加省略号标记
         layout.addWidget(name_label)
 
-        # === 工具描述 ===
+        # === 工具描述（固定高度，超出省略）===
         desc_label = QLabel(self.pending_tool.tool_description or "暂无描述")
         desc_label.setObjectName("pending_tool_description")
         desc_label.setWordWrap(True)
-        layout.addWidget(desc_label, 1)  # stretch=1
+        desc_label.setAlignment(Qt.AlignmentFlag.AlignTop)
+        desc_label.setMaximumHeight(60)  # 固定最大高度
+        layout.addWidget(desc_label)
+
+        # 弹性空间（推动底部内容向下）
+        layout.addStretch()
 
         # === 底部信息 ===
         bottom_layout = QHBoxLayout()
         bottom_layout.setSpacing(12)
 
         # 试用次数
-        trial_count_label = QLabel(f"试用: {self.pending_tool.trial_count}/{self.pending_tool.max_trials}")
+        trial_count_label = QLabel(f"试用 {self.pending_tool.trial_count}/{self.pending_tool.max_trials}")
         trial_count_label.setObjectName("pending_tool_trial_count")
         bottom_layout.addWidget(trial_count_label)
 
@@ -107,21 +113,24 @@ class PendingToolCard(QWidget):
 
         layout.addLayout(bottom_layout)
 
-        # === 操作按钮 ===
+        # === 操作按钮（固定在底部）===
         if self._can_trial():
-            trial_btn = QPushButton("▶️ 试用")
+            trial_btn = QPushButton("开始试用")
             trial_btn.setObjectName("pending_tool_trial_button")
+            trial_btn.setFixedHeight(36)  # 固定按钮高度
             trial_btn.clicked.connect(lambda: self.trial_requested.emit(self.pending_tool.pending_tool_id))
             layout.addWidget(trial_btn)
         elif self.pending_tool.status == PendingToolStatus.TRIAL_SUCCESS:
             promoted_label = QLabel("✅ 可提升为正式工具")
             promoted_label.setObjectName("pending_tool_promoted_label")
             promoted_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            promoted_label.setFixedHeight(36)
             layout.addWidget(promoted_label)
         elif self.pending_tool.status == PendingToolStatus.FAILED:
             failed_label = QLabel("❌ 试用失败")
             failed_label.setObjectName("pending_tool_failed_label")
             failed_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            failed_label.setFixedHeight(36)
             layout.addWidget(failed_label)
 
     def _get_status_text(self) -> str:
@@ -394,27 +403,8 @@ class PendingToolsUI(QWidget):
         """初始化用户界面"""
         # 创建主布局
         main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(16)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-
-        # === 顶部标题栏 ===
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(16)
-
-        # 标题
-        title_label = QLabel("🧪 工具管理")
-        title_label.setObjectName("tools_management_title")
-        header_layout.addWidget(title_label)
-
-        header_layout.addStretch()
-
-        # 刷新按钮
-        refresh_btn = QPushButton("🔄 刷新")
-        refresh_btn.setObjectName("tools_refresh_button")
-        refresh_btn.clicked.connect(self._on_refresh_clicked)
-        header_layout.addWidget(refresh_btn)
-
-        main_layout.addLayout(header_layout)
+        main_layout.setSpacing(0)
+        main_layout.setContentsMargins(0, 0, 0, 0)
 
         # === Tab Widget ===
         self.tab_widget = QTabWidget()
@@ -422,11 +412,20 @@ class PendingToolsUI(QWidget):
 
         # Tab 1: 待试用工具
         self.pending_tab = self._create_pending_tab()
-        self.tab_widget.addTab(self.pending_tab, "⏳ 待试用")
+        self.pending_tab_index = self.tab_widget.addTab(self.pending_tab, "⏳ 待试用")
 
         # Tab 2: 已发布工具
         self.published_tab = self._create_published_tab()
-        self.tab_widget.addTab(self.published_tab, "✅ 已发布")
+        self.published_tab_index = self.tab_widget.addTab(self.published_tab, "✅ 已发布")
+
+        # 添加刷新按钮到 Tab 右上角（corner widget）
+        refresh_btn = QPushButton()
+        refresh_btn.setObjectName("tools_refresh_button")
+        refresh_btn.setFixedSize(32, 32)
+        refresh_btn.setText("🔄")
+        refresh_btn.setToolTip("刷新列表")
+        refresh_btn.clicked.connect(self._on_refresh_clicked)
+        self.tab_widget.setCornerWidget(refresh_btn, Qt.Corner.TopRightCorner)
 
         main_layout.addWidget(self.tab_widget, 1)  # stretch=1
 
@@ -437,20 +436,8 @@ class PendingToolsUI(QWidget):
         """创建待试用工具 Tab"""
         tab_widget = QWidget()
         tab_layout = QVBoxLayout(tab_widget)
-        tab_layout.setSpacing(16)
-        tab_layout.setContentsMargins(0, 16, 0, 0)
-
-        # 统计信息
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(16)
-
-        self.pending_count_label = QLabel("共 0 个工具")
-        self.pending_count_label.setObjectName("pending_tools_count")
-        stats_layout.addWidget(self.pending_count_label)
-
-        stats_layout.addStretch()
-
-        tab_layout.addLayout(stats_layout)
+        tab_layout.setSpacing(20)
+        tab_layout.setContentsMargins(20, 20, 20, 20)
 
         # 工具卡片网格
         scroll_area = QScrollArea()
@@ -470,7 +457,7 @@ class PendingToolsUI(QWidget):
         tab_layout.addWidget(scroll_area, 1)  # stretch=1
 
         # 空状态提示
-        self.pending_empty_label = QLabel("📭 暂无待试用工具\n\n完成 Intent 确认后，生成的工具会显示在这里")
+        self.pending_empty_label = QLabel("📭\n\n暂无待试用工具\n\n完成 Intent 确认后，生成的工具会显示在这里")
         self.pending_empty_label.setObjectName("pending_tools_empty_label")
         self.pending_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.pending_empty_label.setVisible(False)
@@ -482,20 +469,8 @@ class PendingToolsUI(QWidget):
         """创建已发布工具 Tab"""
         tab_widget = QWidget()
         tab_layout = QVBoxLayout(tab_widget)
-        tab_layout.setSpacing(16)
-        tab_layout.setContentsMargins(0, 16, 0, 0)
-
-        # 统计信息
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(16)
-
-        self.published_count_label = QLabel("共 0 个工具")
-        self.published_count_label.setObjectName("published_tools_count")
-        stats_layout.addWidget(self.published_count_label)
-
-        stats_layout.addStretch()
-
-        tab_layout.addLayout(stats_layout)
+        tab_layout.setSpacing(20)
+        tab_layout.setContentsMargins(20, 20, 20, 20)
 
         # 工具卡片网格
         scroll_area = QScrollArea()
@@ -515,7 +490,7 @@ class PendingToolsUI(QWidget):
         tab_layout.addWidget(scroll_area, 1)  # stretch=1
 
         # 空状态提示
-        self.published_empty_label = QLabel("📭 暂无已发布工具\n\n试用通过的工具会显示在这里")
+        self.published_empty_label = QLabel("📭\n\n暂无已发布工具\n\n试用通过的工具会显示在这里")
         self.published_empty_label.setObjectName("published_tools_empty_label")
         self.published_empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.published_empty_label.setVisible(False)
@@ -647,8 +622,8 @@ class PendingToolsUI(QWidget):
         # 清空现有卡片
         self._clear_pending_cards()
 
-        # 更新计数
-        self.pending_count_label.setText(f"共 {len(pending_tools)} 个工具")
+        # 更新 Tab 标题显示计数
+        self.tab_widget.setTabText(self.pending_tab_index, f"⏳ 待试用 ({len(pending_tools)})")
 
         # 显示/隐藏空状态提示
         self.pending_empty_label.setVisible(len(pending_tools) == 0)
@@ -683,8 +658,8 @@ class PendingToolsUI(QWidget):
         # 清空现有卡片
         self._clear_published_cards()
 
-        # 更新计数
-        self.published_count_label.setText(f"共 {len(published_tools)} 个工具")
+        # 更新 Tab 标题显示计数
+        self.tab_widget.setTabText(self.published_tab_index, f"✅ 已发布 ({len(published_tools)})")
 
         # 显示/隐藏空状态提示
         self.published_empty_label.setVisible(len(published_tools) == 0)
