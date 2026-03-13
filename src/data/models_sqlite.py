@@ -2,10 +2,12 @@
 SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 
 包含：tools, task_executions, conversations, app_settings, user_preferences
+      sessions, messages, workflow_transitions (Agent 会话相关)
 """
 
 from datetime import datetime
 from typing import Optional, Any
+from enum import Enum
 from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -14,6 +16,38 @@ from sqlalchemy.sql import func
 class Base(DeclarativeBase):
     """所有模型的基类"""
     pass
+
+
+# ===== 枚举类型 =====
+
+class AgentType(str, Enum):
+    """Agent 类型枚举"""
+    PM = "pm"
+    PROGRAMMER = "programmer"
+    TRIAL = "trial"
+
+
+class SessionStatus(str, Enum):
+    """会话状态枚举"""
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    SUSPENDED = "suspended"
+    FAILED = "failed"
+
+
+class MessageRole(str, Enum):
+    """消息角色枚举"""
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+    TOOL = "tool"
+    SUMMARY = "summary"
+
+
+class MessageType(str, Enum):
+    """消息类型枚举"""
+    NORMAL = "normal"
+    COMPRESSED = "compressed"
 
 
 class Tool(Base):
@@ -150,4 +184,58 @@ class UserPreference(Base):
 
     def __repr__(self) -> str:
         return f"<UserPreference(user_id={self.user_id!r}, theme={self.theme!r})>"
+
+
+# ===== Agent 会话相关模型 =====
+
+class Session(Base):
+    """会话表 ORM 模型"""
+    __tablename__ = "sessions"
+
+    session_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    agent_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<Session(session_id={self.session_id!r}, agent_type={self.agent_type!r}, status={self.status!r})>"
+
+
+class Message(Base):
+    """消息表 ORM 模型"""
+    __tablename__ = "messages"
+
+    message_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    message_type: Mapped[str] = mapped_column(String(20), default="normal")
+    tool_call_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    tool_name: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tool_calls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    compressed_range: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<Message(message_id={self.message_id!r}, session_id={self.session_id!r}, sequence={self.sequence!r})>"
+
+
+class WorkflowTransition(Base):
+    """工作流交接记录表 ORM 模型"""
+    __tablename__ = "workflow_transitions"
+
+    transition_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    workflow_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    from_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    to_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<WorkflowTransition(transition_id={self.transition_id!r}, workflow_id={self.workflow_id!r})>"
 

@@ -2,6 +2,7 @@
 数据库迁移脚本
 
 添加意图确认和工具试用相关的表和字段
+添加 Agent 会话和消息表
 """
 
 import sqlite3
@@ -195,5 +196,90 @@ def run_migrations(db_manager):
     if current_version < 2:
         migrate_to_v2(db_manager)
         logger.info(f"数据库迁移完成：{current_version} -> 2")
-    else:
-        logger.info(f"数据库已是最新版本：{current_version}")
+
+    if current_version < 3:
+        migrate_to_v3(db_manager)
+        logger.info(f"数据库迁移完成：{min(current_version, 2)} -> 3")
+
+    logger.info(f"数据库已是最新版本：{db_manager.get_version()}")
+
+
+def migrate_to_v3(db_manager):
+    """
+    迁移到版本 3：添加 Agent 会话和消息表
+
+    新增表：
+    - sessions: Agent 运行会话
+    - messages: 会话消息（支持压缩和归档）
+    - workflow_transitions: Agent 协作交接记录
+    """
+    conn = db_manager.connect()
+    cursor = conn.cursor()
+
+    try:
+        # 1. 创建 sessions 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions (
+                session_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                agent_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 2. 创建 messages 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                sequence INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                content TEXT,
+                message_type TEXT DEFAULT 'normal',
+                tool_call_id TEXT,
+                tool_name TEXT,
+                tool_calls TEXT,
+                compressed_range TEXT,
+                is_archived INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions(session_id)
+            )
+        """)
+
+        # 3. 创建 workflow_transitions 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS workflow_transitions (
+                transition_id TEXT PRIMARY KEY,
+                workflow_id TEXT NOT NULL,
+                from_session_id TEXT,
+                to_session_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 4. 创建索引
+        indexes = [
+            ("idx_sessions_workflow", "sessions(workflow_id)"),
+            ("idx_sessions_agent_type", "sessions(agent_type)"),
+            ("idx_sessions_status", "sessions(status)"),
+            ("idx_messages_session", "messages(session_id, sequence)"),
+            ("idx_messages_archived", "messages(session_id, is_archived)"),
+            ("idx_transitions_workflow", "workflow_transitions(workflow_id)"),
+        ]
+        for index_name, index_def in indexes:
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}")
+
+        # 5. 更新版本号
+        cursor.execute("UPDATE schema_version SET version = 3")
+        conn.commit()
+
+        logger.info("数据库迁移到版本 3 完成：添加 sessions、messages、workflow_transitions 表")
+
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error(f"迁移到版本 3 失败: {e}")
+        raise
