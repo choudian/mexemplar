@@ -82,7 +82,7 @@ CREATE INDEX idx_transitions_workflow ON workflow_transitions(workflow_id);
 
 **设计说明：**
 - `workflow_id` — 与 sessions 表一致，贯穿从录制到工具生成到执行成功的完整链路
-- `event_type` — 如 `recording_completed`、`requirements_confirmed`、`code_generated`、`trial_failed`、`trial_succeeded` 等
+- `event_type` — 如 `recording_completed`、`requirement_confirmed`、`code_completed`、`trial_failed`、`triage_completed` 等（事件名称见架构 v2 第五节）
 - `payload` — 交接的关键摘要（如失败原因、确认的需求要点），不存完整数据（完整数据在消息里）
 - `from_session_id` 为 NULL 表示外部触发（如录制完成是流程起点，不来自某个 Agent session）
 - 查询完整协作链路：`WHERE workflow_id = ? ORDER BY created_at`
@@ -168,6 +168,7 @@ class SessionRepository:
 class MessageRepository:
     def add(message) -> Message
     def get_by_id(message_id) -> Optional[Message]
+    def get_first(session_id) -> Optional[Message]   # 获取 sequence 最小的消息
     def get_context(session_id) -> List[Message]
     def get_all(session_id) -> List[Message]
     def get_next_sequence(session_id) -> int

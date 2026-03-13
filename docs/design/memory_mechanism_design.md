@@ -488,6 +488,12 @@ class CompressionHandler:
         2. 从压缩区原始消息中查找对应 tool_call 数据（函数名 + 参数）
         3. 替换 tool_call_id 为完整 tool_call 信息
         4. 追加对应 tool_result 的引用指针 [REF::{message_id}]
+
+        注意：LLM 可能不会在摘要中保留所有 tool_call_id。
+        如果匹配到的 tool_call_id 数量显著少于压缩区中实际的
+        tool_call 数量，记录 warning 日志（不阻塞流程）。
+        未匹配的 tool_call 信息丢失可接受——Agent 的 assistant
+        回复已包含关键结论，压缩的目的是保留决策而非原始数据。
         """
 
     def _format_for_compression(self, messages: List[Message]) -> str:

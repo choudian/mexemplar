@@ -294,6 +294,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 |--------|------|----------|-------------------|
 | 1 | 数据层设计 | [data_layer_design.md](design/data_layer_design.md) | 见下方说明 |
 | 2 | 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) | 见下方说明 |
+| 3 | Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) | 见下方说明 |
 
 **数据层设计与第六节（记忆机制）的差异：**
 - **删掉引用数据表** — 引用替换改为运行时行为（记忆层负责），数据层始终存储原始完整消息，不单独存引用
@@ -314,6 +315,17 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 - **Token 估算安全余量** — 估算值乘 1.2，防止低估导致该压缩时未触发
 - **System prompt 存入 messages 表** — 会话自包含可追溯，压缩时跳过不参与
 - **压缩消息专用 `role='summary'`** — 与 system prompt 的 `role='system'` 区分，发 LLM 时映射为 system 角色
+
+**Agent Loop 设计与第五节（Agent Loop 设计）的细化/新增决策：**
+- **AgentLoop 上层两层架构** — "不加额外的协调层"细化为 AgentUIBridge（线程 + PyQt 信号）+ AgentOrchestrator（session 管理 + 事件发送），改编排不影响 UI，换 UI 不影响编排
+- **LLM 客户端扩展** — 在 LangChainLLMClient 上新增 chat_with_tools() 方法，返回统一的 LLMResponse（content + tool_calls），Agent Loop 不接触 LangChain 内部类型
+- **单工具调用模式** — 强制 `parallel_tool_calls=False`，每次 LLM 响应最多一个 tool_call，消除多工具调用的所有边界问题
+- **talk_to_user 哨兵机制** — "靠消息历史串联"细化为哨兵工具，调用时 Loop 中断返回 AgentResult，tool result 为"[等待用户回复]"
+- **AgentResult 返回值** — 4 种 ResultType（NEEDS_USER_INPUT / COMPLETED / ERROR / MAX_ITERATIONS_REACHED），AgentOrchestrator 据此决定后续行为
+- **工具执行错误不终止循环** — 错误作为 tool result 返回给 LLM，由 Agent 自行决定重试或换策略
+- **内置工具自动追加** — talk_to_user 和 load_reference 由 AgentLoop 自动追加到工具列表，不在 AgentConfig 中声明
+- **文件结构** — src/business/agents/（复数）新目录，与旧 agent/ 共存直至迁移完成
+- **max_iterations 默认值** — PM 50、程序员 30、试用 20
 
 ---
 
