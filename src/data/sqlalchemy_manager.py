@@ -13,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from src.data.models_sqlite import (
     Base, Tool, TaskExecution, Conversation, AppSetting, UserPreference,
-    Session, Message, WorkflowTransition
+    Session as SessionModel, Message, WorkflowTransition
 )
 
 logger = logging.getLogger(__name__)

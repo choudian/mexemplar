@@ -199,7 +199,8 @@ def run_migrations(db_manager):
 
     if current_version < 3:
         migrate_to_v3(db_manager)
-        logger.info(f"数据库迁移完成：{min(current_version, 2)} -> 3")
+        prev_version = current_version if current_version >= 2 else 2
+        logger.info(f"数据库迁移完成：{prev_version} -> 3")
 
     logger.info(f"数据库已是最新版本：{db_manager.get_version()}")
 

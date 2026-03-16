@@ -84,6 +84,14 @@ class AIConfig:
     compression_model_max_tokens: int = 1024  # 压缩模型最大 tokens（轻量级任务）
     compression_model_threads: int = 1  # 压缩模型线程数（1=单线程，>1=多线程并发）
 
+    # 记忆机制配置
+    memory_reference_steps_threshold: int = 3  # tool result 被引用替换前需要的 assistant 消息数
+    memory_reference_size_threshold: int = 2000  # 触发引用替换的最小字符数
+    memory_compression_token_threshold: int = 80000  # token 估算触发压缩的阈值
+    memory_compression_count_threshold: Optional[int] = None  # 消息条数触发压缩的阈值（可选）
+    memory_compression_keep_recent: int = 20  # 压缩时保留的最近消息数
+    memory_compression_trigger_strategy: str = "token"  # 压缩触发策略："token" | "count" | "combined"
+
 
 @dataclass
 class WebSocketConfig:

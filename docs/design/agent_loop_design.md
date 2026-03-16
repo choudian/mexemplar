@@ -238,6 +238,14 @@ class AgentType(str, Enum):
 
 
 @dataclass
+class RetryConfig:
+    """LLM 调用重试配置"""
+    max_retries: int = 3      # 最大重试次数
+    retry_delay: float = 1.0  # 重试延迟（秒）
+    retryable_errors: Tuple[type, ...] = (ConnectionError, TimeoutError)
+
+
+@dataclass
 class ToolDefinition:
     """工具定义：FC schema + 实现函数的映射"""
     name: str                      # 工具名称，必须与 schema 中的 name 一致
@@ -252,6 +260,7 @@ class AgentConfig:
     system_prompt: str             # system prompt 模板
     tools: List[ToolDefinition]    # 工具列表
     max_iterations: int = 50       # 最大迭代次数
+    retry: RetryConfig = field(default_factory=RetryConfig)  # LLM 调用重试配置
 ```
 
 ### 3.2 ToolDefinition 设计说明
@@ -376,6 +385,13 @@ TRIAL_CONFIG = AgentConfig(
 ```python
 # src/business/agents/agent_loop.py
 
+import time
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 class AgentLoop:
     """
     Agent 运行循环
@@ -433,15 +449,13 @@ def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
         # 1. 组装上下文
         messages = ctx.assemble_context()
 
-        # 2. 调用 LLM
-        try:
-            response = self._llm.chat_with_tools(messages, all_tool_schemas)
-        except Exception as e:
-            logger.error(f"[AgentLoop] LLM 调用失败: {e}")
-            ctx.update_session_status("failed")
+        # 2. 调用 LLM（带重试）
+        response = self._call_llm_with_retry(messages, all_tool_schemas, ctx)
+        if response is None:
+            # LLM 调用失败（已记录日志和更新 status），直接返回错误
             return AgentResult(
                 result_type=ResultType.ERROR,
-                error=f"LLM 调用失败: {e}"
+                error="LLM 调用失败（重试次数耗尽或不可重试错误）"
             )
 
         # 3. 保存 assistant 消息
@@ -546,6 +560,37 @@ def _build_tool_handlers(self) -> Dict[str, Callable]:
         handlers[td.name] = td.handler
     # load_reference 和 talk_to_user 不在 handlers 中，由 _execute_tool 特殊处理
     return handlers
+
+def _call_llm_with_retry(
+    self,
+    messages: List[Dict],
+    tool_schemas: List[Dict],
+    ctx: ContextManager
+) -> Optional[LLMResponse]:
+    """
+    调用 LLM，带重试机制
+
+    Returns:
+        LLMResponse，失败时返回 None（调用者需检查）
+    """
+    retry_count = 0
+    while retry_count <= self._config.retry.max_retries:
+        try:
+            return self._llm.chat_with_tools(messages, tool_schemas)
+        except self._config.retry.retryable_errors as e:
+            retry_count += 1
+            if retry_count > self._config.retry.max_retries:
+                logger.error(f"[AgentLoop] LLM 调用失败（重试 {self._config.retry.max_retries} 次后仍失败）: {e}")
+                ctx.update_session_status("failed")
+                return None
+            delay = self._config.retry.retry_delay * retry_count
+            logger.warning(f"[AgentLoop] LLM 调用失败，{delay}秒后重试（{retry_count}/{self._config.retry.max_retries}）: {e}")
+            time.sleep(delay)
+        except Exception as e:
+            # 非可重试错误，直接返回
+            logger.error(f"[AgentLoop] LLM 调用失败（不可重试）: {e}")
+            ctx.update_session_status("failed")
+            return None
 
 def _has_system_prompt(self, session_id: str) -> bool:
     """检查会话是否已有 system prompt（轻量查询，不触发压缩和引用替换）"""
@@ -756,11 +801,32 @@ Agent Loop 本身**不引入任何事件系统依赖**。它通过返回 `AgentR
 result = pm_loop.run(session_id, user_input)
 
 if result.result_type == ResultType.COMPLETED:
-    # PM 完成需求确认 → 发事件
+    # PM 完成需求确认 → 发事件 + 记录 transition
     emit("requirement_confirmed",
          sender=self,
          workflow_id=workflow_id,
          requirements_json=result.final_output)
+    transition_repo.create(
+        workflow_id=workflow_id,
+        event_type="requirement_confirmed",
+        to_session_id=session_id,
+        payload={"output": result.final_output}
+    )
+
+elif result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
+    # Agent 执行失败 → 发事件 + 记录 transition（供追踪完整工作流）
+    emit("agent_error",
+         sender=self,
+         workflow_id=workflow_id,
+         session_id=session_id,
+         agent_type=session.agent_type,
+         error=result.error)
+    transition_repo.create(
+        workflow_id=workflow_id,
+        event_type="agent_error",
+        to_session_id=session_id,
+        payload={"agent_type": session.agent_type, "error": result.error}
+    )
 ```
 
 需要在 `src/utils/events.py` 中新增的事件（优先级 4 实现）：
@@ -774,6 +840,9 @@ review_failed = _signals.signal("review_failed")
 tool_saved = _signals.signal("tool_saved")
 trial_failed = _signals.signal("trial_failed")
 triage_completed = _signals.signal("triage_completed")
+
+# Agent 错误事件
+agent_error = _signals.signal("agent_error")
 ```
 
 ---
@@ -859,13 +928,15 @@ AgentOrchestrator 应在调用 `run()` 前检查 session status。如果对 `"co
 | talk_to_user 机制 | "靠消息历史串联" | 细化为哨兵工具，tool result 为 "[等待用户回复]"，单工具调用模式下无需处理与其他工具同时出现的情况 |
 | 返回值 | 未明确 | AgentResult 数据类，4 种 ResultType |
 | 工具执行错误 | 未明确 | 错误作为 tool result 返回给 LLM，不终止循环 |
+| LLM 调用重试 | 未明确 | 新增 RetryConfig，默认重试 3 次，延迟 1 秒，可重试错误为 ConnectionError/TimeoutError |
 | 内置工具 | 未明确 | talk_to_user 和 load_reference 自动追加到工具列表，不在 AgentConfig 中声明 |
 | AgentLoop 上层架构 | "不加额外的协调层" | 拆为两层：AgentUIBridge（线程 + PyQt 信号）+ AgentOrchestrator（session 管理 + 事件发送），改编排不影响 UI，换 UI 不影响编排 |
 | 会话初始化 | 未明确 | AgentLoop 检测有无 system prompt 判断是否首次运行（轻量查询，不触发 assemble_context），避免重复初始化 |
 | 会话恢复 | 未明确 | 恢复 suspended 会话时自动将 status 更新为 active |
+| 错误事件记录 | 未明确 | Agent 执行失败时记录到 workflow_transitions，发送 agent_error 事件，方便追踪完整工作流 |
 | 文件结构 | 未明确 | src/business/agents/（复数）新目录，与旧 agent/ 共存直至迁移完成 |
 | max_iterations 默认值 | "iteration < max_iterations" | PM 50、程序员 30、试用 20 |
 
 ---
 
-*基于架构 v2 细化，记录时间：2026-03-12*
+*基于架构 v2 细化，记录时间：2026-03-12；更新时间：2026-03-13（新增 LLM 重试机制、错误事件记录）*

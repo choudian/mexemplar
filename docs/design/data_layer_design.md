@@ -166,7 +166,7 @@ class SessionRepository:
 
 ```python
 class MessageRepository:
-    def add(message) -> Message
+    def create(message) -> Message
     def get_by_id(message_id) -> Optional[Message]
     def get_first(session_id) -> Optional[Message]   # 获取 sequence 最小的消息
     def get_context(session_id) -> List[Message]

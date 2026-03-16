@@ -369,7 +369,7 @@ src/business/memory/
 class ContextManager:
     """Agent Loop 与记忆系统的唯一接口。"""
 
-    def __init__(self, session_id: str):
+    def __init__(self, session_id: str, config: UnifiedConfigManager):
         self.session_id = session_id
         self._msg_repo = MessageRepository()
         self._session_repo = SessionRepository()
@@ -517,9 +517,12 @@ class CompressionHandler:
 Agent Loop（优先级 3）使用 ContextManager 的伪代码：
 
 ```python
+# 获取配置
+config = get_unified_config()
+
 # 创建会话
 session = session_repo.create(workflow_id=wf_id, agent_type="pm")
-ctx = ContextManager(session.session_id)
+ctx = ContextManager(session.session_id, config)
 
 # 保存 system prompt
 ctx.save_message(role="system", content=agent.system_prompt)

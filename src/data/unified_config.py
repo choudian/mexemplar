@@ -250,6 +250,32 @@ class UnifiedConfigManager:
         """获取压缩模型线程数"""
         return self.get("ai.compression_model_threads", default=1)
 
+    # ===== 便捷方法：记忆机制配置 =====
+
+    def get_memory_reference_steps_threshold(self) -> int:
+        """tool result 被引用替换前需要的 assistant 消息数"""
+        return self.get("memory.reference_steps_threshold", default=3)
+
+    def get_memory_reference_size_threshold(self) -> int:
+        """触发引用替换的最小字符数"""
+        return self.get("memory.reference_size_threshold", default=2000)
+
+    def get_memory_compression_token_threshold(self) -> int:
+        """token 估算触发压缩的阈值"""
+        return self.get("memory.compression_token_threshold", default=80000)
+
+    def get_memory_compression_count_threshold(self) -> Optional[int]:
+        """消息条数触发压缩的阈值（可选）"""
+        return self.get("memory.compression_count_threshold", default=None)
+
+    def get_memory_compression_keep_recent(self) -> int:
+        """压缩时保留的最近消息数"""
+        return self.get("memory.compression_keep_recent", default=20)
+
+    def get_memory_compression_trigger_strategy(self) -> str:
+        """压缩触发策略："token" | "count" | "combined" """
+        return self.get("memory.compression_trigger_strategy", default="token")
+
     # ===== 便捷方法：录制配置 =====
 
     def get_recording_browser_type(self) -> str:

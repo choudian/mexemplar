@@ -8,7 +8,7 @@
 import logging
 from typing import List, Optional
 from datetime import datetime
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session as SQLAlchemySession
 from sqlalchemy import and_, func
 import uuid
 
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class ToolRepository:
     """工具定义仓库"""
 
-    def __init__(self, session: Optional[Session] = None):
+    def __init__(self, session: Optional[SQLAlchemySession] = None):
         """
         初始化工具仓库
 
@@ -102,7 +102,7 @@ class ToolRepository:
 class TaskExecutionRepository:
     """任务执行记录仓库"""
 
-    def __init__(self, session: Optional[Session] = None):
+    def __init__(self, session: Optional[SQLAlchemySession] = None):
         """初始化任务执行仓库"""
         if session is None:
             manager = get_sqlalchemy_manager()
@@ -171,7 +171,7 @@ class TaskExecutionRepository:
 class ConversationRepository:
     """对话历史仓库"""
 
-    def __init__(self, session: Optional[Session] = None):
+    def __init__(self, session: Optional[SQLAlchemySession] = None):
         """初始化对话仓库"""
         if session is None:
             manager = get_sqlalchemy_manager()
@@ -229,7 +229,7 @@ class ConversationRepository:
 class SessionRepository:
     """会话 Repository"""
 
-    def __init__(self, session: Optional[Session] = None):
+    def __init__(self, session: Optional[SQLAlchemySession] = None):
         """
         初始化会话仓库
 
@@ -289,7 +289,7 @@ class SessionRepository:
 class MessageRepository:
     """消息 Repository"""
 
-    def __init__(self, session: Optional[Session] = None):
+    def __init__(self, session: Optional[SQLAlchemySession] = None):
         """初始化消息仓库"""
         if session is None:
             manager = get_sqlalchemy_manager()
@@ -328,7 +328,7 @@ class MessageRepository:
         return self.session.query(Message).filter(
             and_(
                 Message.session_id == session_id,
-                Message.is_archived == False
+                Message.is_archived.is_(False)
             )
         ).order_by(Message.sequence).all()
 
@@ -388,9 +388,10 @@ class MessageRepository:
                 compressed_range=model.compressed_range,
                 is_archived=False,
             )
-            self.session.add(new_model)
             new_messages.append(new_model)
 
+        # 批量插入
+        self.session.bulk_save_objects(new_messages)
         self.session.commit()
         logger.debug(f"从 {from_session_id} 复制 {len(new_messages)} 条消息到 {to_session_id}")
 
@@ -406,7 +407,7 @@ class MessageRepository:
 class WorkflowTransitionRepository:
     """工作流交接 Repository"""
 
-    def __init__(self, session: Optional[Session] = None):
+    def __init__(self, session: Optional[SQLAlchemySession] = None):
         """初始化交接记录仓库"""
         if session is None:
             manager = get_sqlalchemy_manager()
