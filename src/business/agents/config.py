@@ -1,0 +1,147 @@
+"""
+Agent 配置系统
+
+定义不同 Agent 类型的配置和行为参数。
+"""
+
+from enum import Enum
+from dataclasses import dataclass, field
+from typing import List, Optional, Dict, Any
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class AgentType(str, Enum):
+    """Agent 类型"""
+    PM = "pm"
+    PROGRAMMER = "programmer"
+    TRIAL = "trial"
+
+
+class ResultType(str, Enum):
+    """Agent 运行结果类型"""
+    COMPLETED = "completed"
+    NEEDS_USER_INPUT = "needs_user_input"
+    MAX_ITERATIONS_REACHED = "max_iterations_reached"
+    ERROR = "error"
+
+
+@dataclass
+class RetryConfig:
+    """重试配置"""
+    max_retries: int = 3
+    retry_delay: float = 1.0
+    retryable_errors: List[str] = field(default_factory=lambda: [
+        "rate_limit_exceeded",
+        "timeout",
+        "connection_error",
+    ])
+
+
+@dataclass
+class AgentConfig:
+    """Agent 配置"""
+    agent_type: AgentType
+    system_prompt: str
+    max_iterations: int = 10
+    retry: RetryConfig = field(default_factory=RetryConfig)
+    # 工具列表（不包含内置工具）
+    tools: List[str] = field(default_factory=list)
+
+
+@dataclass
+class AgentResult:
+    """Agent 运行结果"""
+    result_type: ResultType
+    final_output: Optional[str] = None
+    question: Optional[str] = None
+    error: Optional[str] = None
+
+
+# =============================================================================
+# 内置 Agent 配置
+# =============================================================================
+
+# PM Agent 配置
+PM_CONFIG = AgentConfig(
+    agent_type=AgentType.PM,
+    system_prompt=(
+        "你是一个产品经理 Agent。负责理解用户需求，分析录制数据，"
+        "制定产品方案，回答用户问题。"
+        "\n\n当前阶段 system prompt 为占位符，后续会细化。"
+    ),
+    max_iterations=10,
+    tools=["query_recording_data", "multimodal_analysis"],
+)
+
+# Programmer Agent 配置
+PROGRAMMER_CONFIG = AgentConfig(
+    agent_type=AgentType.PROGRAMMER,
+    system_prompt=(
+        "你是一个程序员 Agent。负责代码生成、语法检查、代码优化，"
+        "根据产品需求实现功能。"
+        "\n\n当前阶段 system prompt 为占位符，后续会细化。"
+    ),
+    max_iterations=15,
+    tools=["query_recording_data", "syntax_check"],
+)
+
+# Trial Agent 配置（优先级7细化）
+TRIAL_CONFIG = AgentConfig(
+    agent_type=AgentType.TRIAL,
+    system_prompt=(
+        "你是一个试用 Agent。当前阶段功能待定义。"
+    ),
+    max_iterations=5,
+    tools=[],
+)
+
+
+# =============================================================================
+# 便捷函数
+# =============================================================================
+
+def get_agent_config(agent_type: AgentType) -> AgentConfig:
+    """
+    根据 Agent 类型获取配置
+
+    Args:
+        agent_type: Agent 类型
+
+    Returns:
+        Agent 配置
+    """
+    configs = {
+        AgentType.PM: PM_CONFIG,
+        AgentType.PROGRAMMER: PROGRAMMER_CONFIG,
+        AgentType.TRIAL: TRIAL_CONFIG,
+    }
+    return configs.get(agent_type, TRIAL_CONFIG)
+
+
+def get_agent_type_str(agent_type: AgentType) -> str:
+    """
+    获取 Agent 类型的字符串表示
+
+    Args:
+        agent_type: Agent 类型
+
+    Returns:
+        字符串表示
+    """
+    return agent_type.value
+
+
+__all__ = [
+    "AgentType",
+    "ResultType",
+    "RetryConfig",
+    "AgentConfig",
+    "AgentResult",
+    "PM_CONFIG",
+    "PROGRAMMER_CONFIG",
+    "TRIAL_CONFIG",
+    "get_agent_config",
+    "get_agent_type_str",
+]

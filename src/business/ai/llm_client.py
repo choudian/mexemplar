@@ -15,8 +15,30 @@
 
 import logging
 from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ToolCallInfo:
+    """工具调用信息"""
+
+    id: str
+    name: str
+    args: Dict[str, Any]
+
+
+@dataclass
+class LLMResponse:
+    """LLM 响应"""
+
+    content: Optional[str]
+    tool_calls: List[ToolCallInfo]
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return len(self.tool_calls) > 0
 
 
 class LangChainLLMClient:
@@ -266,6 +288,136 @@ class LangChainLLMClient:
         except Exception as e:
             logger.error(f"[LLM客户端] 调用失败: {e}")
             raise
+
+    def chat_with_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: List[Dict[str, Any]],
+        **kwargs,
+    ) -> LLMResponse:
+        """
+        发送带工具绑定的聊天请求
+
+        Args:
+            messages: 消息列表，格式：
+                [{"role": "system/user/assistant/tool", "content": "...",
+                  "tool_calls": [...], "tool_call_id": "...", "tool_name": "..."}]
+            tools: 工具 schema 列表，格式：[{"type": "function", "function": {...}}]
+            **kwargs: 额外参数（覆盖初始化参数）
+
+        Returns:
+            LLMResponse 对象
+        """
+        try:
+            # 转换为 LangChain 消息对象
+            lc_messages = self._convert_to_langchain_messages(messages)
+
+            # 绑定工具（单工具调用模式）
+            llm_with_tools = self.llm.bind_tools(
+                tools, parallel_tool_calls=False
+            )
+
+            # 调用模型
+            ai_message = llm_with_tools.invoke(lc_messages, **kwargs)
+
+            # 提取响应
+            return self._extract_response(ai_message)
+
+        except Exception as e:
+            logger.error(f"[LLM客户端] 工具调用失败: {e}")
+            raise
+
+    def _convert_to_langchain_messages(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Any]:
+        """
+        转换消息格式为 LangChain 消息对象
+
+        Args:
+            messages: 消息列表
+
+        Returns:
+            LangChain 消息对象列表
+        """
+        from langchain_core.messages import (
+            HumanMessage,
+            AIMessage,
+            SystemMessage,
+            ToolMessage,
+        )
+
+        lc_messages = []
+        for msg in messages:
+            role = msg.get("role")
+            content = msg.get("content")
+
+            if role == "system":
+                lc_messages.append(SystemMessage(content=content or ""))
+
+            elif role == "user":
+                lc_messages.append(HumanMessage(content=content or ""))
+
+            elif role == "assistant":
+                # 支持含 tool_calls 的 assistant 消息
+                tool_calls = msg.get("tool_calls")
+                if tool_calls:
+                    # tool_calls 已是解析后的列表
+                    # 转换为 LangChain 格式：[{"id": "...", "name": "...", "args": {...}}, ...]
+                    langchain_tool_calls = []
+                    for tc in tool_calls:
+                        langchain_tool_calls.append({
+                            "id": tc["id"],
+                            "name": tc["name"],
+                            "args": tc["args"],
+                        })
+                    lc_messages.append(
+                        AIMessage(content=content or "", tool_calls=langchain_tool_calls)
+                    )
+                else:
+                    lc_messages.append(AIMessage(content=content or ""))
+
+            elif role == "tool":
+                # tool 消息需要 tool_call_id 和 name
+                tool_call_id = msg.get("tool_call_id")
+                tool_name = msg.get("tool_name")
+                lc_messages.append(
+                    ToolMessage(
+                        content=content or "",
+                        tool_call_id=tool_call_id,
+                        name=tool_name,
+                    )
+                )
+
+            else:
+                logger.warning(f"[LLM客户端] 未知角色: {role}")
+
+        return lc_messages
+
+    def _extract_response(self, ai_message: Any) -> LLMResponse:
+        """
+        从 LangChain AIMessage 提取响应
+
+        Args:
+            ai_message: LangChain AIMessage 对象
+
+        Returns:
+            LLMResponse 对象
+        """
+        content = ai_message.content if ai_message.content else None
+
+        # 提取 tool_calls
+        tool_calls = []
+        if hasattr(ai_message, "tool_calls") and ai_message.tool_calls:
+            for tc in ai_message.tool_calls:
+                tool_calls.append(
+                    ToolCallInfo(
+                        id=tc["id"],
+                        name=tc["name"],
+                        args=tc["args"],
+                    )
+                )
+
+        return LLMResponse(content=content, tool_calls=tool_calls)
 
 
 def create_llm_client(config: Dict[str, Any]) -> LangChainLLMClient:
