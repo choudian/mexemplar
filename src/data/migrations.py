@@ -7,7 +7,6 @@
 
 import sqlite3
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -116,9 +115,7 @@ def migrate_to_v2(db_manager):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_intents_recording_id ON intents(recording_id)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_pending_tools_intent_id ON pending_tools(intent_id)"
         )
@@ -128,9 +125,7 @@ def migrate_to_v2(db_manager):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_tool_trials_pending_tool_id ON tool_trials(pending_tool_id)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tool_trials_status ON tool_trials(status)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_trials_status ON tool_trials(status)")
 
         # 6. 创建试用数据模板表
         cursor.execute(
@@ -154,9 +149,7 @@ def migrate_to_v2(db_manager):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_intents_recording_id ON intents(recording_id)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_pending_tools_intent_id ON pending_tools(intent_id)"
         )
@@ -166,9 +159,7 @@ def migrate_to_v2(db_manager):
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_tool_trials_pending_tool_id ON tool_trials(pending_tool_id)"
         )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tool_trials_status ON tool_trials(status)"
-        )
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_trials_status ON tool_trials(status)")
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_trial_data_templates_pending_tool_id ON trial_data_templates(pending_tool_id)"
         )
@@ -202,6 +193,10 @@ def run_migrations(db_manager):
         prev_version = current_version if current_version >= 2 else 2
         logger.info(f"数据库迁移完成：{prev_version} -> 3")
 
+    if current_version < 4:
+        migrate_to_v4(db_manager)
+        logger.info(f"数据库迁移完成：{max(current_version, 3)} -> 4")
+
     logger.info(f"数据库已是最新版本：{db_manager.get_version()}")
 
 
@@ -219,7 +214,8 @@ def migrate_to_v3(db_manager):
 
     try:
         # 1. 创建 sessions 表
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id TEXT PRIMARY KEY,
                 workflow_id TEXT NOT NULL,
@@ -228,10 +224,12 @@ def migrate_to_v3(db_manager):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # 2. 创建 messages 表
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS messages (
                 message_id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL,
@@ -247,20 +245,26 @@ def migrate_to_v3(db_manager):
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES sessions(session_id)
             )
-        """)
+        """
+        )
 
         # 3. 创建 workflow_transitions 表
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS workflow_transitions (
-                transition_id TEXT PRIMARY KEY,
-                workflow_id TEXT NOT NULL,
+        # DROP + CREATE（非 IF NOT EXISTS）：修复旧版本中 to_session_id TEXT NOT NULL 的错误约束。
+        # 该表在 v3 之前不存在，此处 DROP 安全；若数据已存在，升级到 v4 会在 migrate_to_v4 中处理。
+        cursor.execute("DROP TABLE IF EXISTS workflow_transitions")
+        cursor.execute(
+            """
+            CREATE TABLE workflow_transitions (
+                transition_id   TEXT PRIMARY KEY,
+                workflow_id     TEXT NOT NULL,
                 from_session_id TEXT,
-                to_session_id TEXT NOT NULL,
-                event_type TEXT NOT NULL,
-                payload TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                to_session_id   TEXT,
+                event_type      TEXT NOT NULL,
+                payload         TEXT,
+                created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
-        """)
+        """
+        )
 
         # 4. 创建索引
         indexes = [
@@ -283,4 +287,29 @@ def migrate_to_v3(db_manager):
     except sqlite3.Error as e:
         conn.rollback()
         logger.error(f"迁移到版本 3 失败: {e}")
+        raise
+
+
+def migrate_to_v4(db_manager):
+    """迁移到版本 4：tools 表增加 workflow_id、trial_success_count、status 字段"""
+    conn = db_manager.connect()
+    cursor = conn.cursor()
+    try:
+        for col, definition in [
+            ("workflow_id", "TEXT"),
+            ("trial_success_count", "INTEGER DEFAULT 0"),
+            ("status", "TEXT DEFAULT 'pending'"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE tools ADD COLUMN {col} {definition}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
+        cursor.execute("UPDATE schema_version SET version = 4")
+        conn.commit()
+        logger.info(
+            "数据库迁移到版本 4 完成：tools 表新增 workflow_id、trial_success_count、status"
+        )
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error(f"迁移到版本 4 失败: {e}")
         raise

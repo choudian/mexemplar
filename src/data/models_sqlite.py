@@ -15,13 +15,16 @@ from sqlalchemy.sql import func
 
 class Base(DeclarativeBase):
     """所有模型的基类"""
+
     pass
 
 
 # ===== 枚举类型 =====
 
+
 class AgentType(str, Enum):
     """Agent 类型枚举"""
+
     PM = "pm"
     PROGRAMMER = "programmer"
     TRIAL = "trial"
@@ -29,6 +32,7 @@ class AgentType(str, Enum):
 
 class SessionStatus(str, Enum):
     """会话状态枚举"""
+
     ACTIVE = "active"
     COMPLETED = "completed"
     SUSPENDED = "suspended"
@@ -37,6 +41,7 @@ class SessionStatus(str, Enum):
 
 class MessageRole(str, Enum):
     """消息角色枚举"""
+
     SYSTEM = "system"
     USER = "user"
     ASSISTANT = "assistant"
@@ -46,19 +51,21 @@ class MessageRole(str, Enum):
 
 class MessageType(str, Enum):
     """消息类型枚举"""
+
     NORMAL = "normal"
     COMPRESSED = "compressed"
 
 
 class Tool(Base):
     """工具定义表"""
+
     __tablename__ = "tools"
 
     tool_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     tool_name: Mapped[str] = mapped_column(String(200))
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, server_default='[]')
-    steps: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, server_default='[]')
+    parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, server_default="[]")
+    steps: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True, server_default="[]")
 
     # 代码执行相关字段
     execution_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -71,6 +78,11 @@ class Tool(Base):
     source: Mapped[str] = mapped_column(String(20), default="manual")
     trial_count: Mapped[int] = mapped_column(Integer, default=0)
     pending_tool_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    # Agent 工作流相关字段
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    trial_success_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
 
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -102,6 +114,7 @@ class Tool(Base):
 
 class TaskExecution(Base):
     """任务执行记录表"""
+
     __tablename__ = "task_executions"
 
     execution_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -135,6 +148,7 @@ class TaskExecution(Base):
 
 class Conversation(Base):
     """对话历史表"""
+
     __tablename__ = "conversations"
 
     conversation_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -162,6 +176,7 @@ class Conversation(Base):
 
 class AppSetting(Base):
     """应用配置表（运行时配置）"""
+
     __tablename__ = "app_settings"
 
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
@@ -174,6 +189,7 @@ class AppSetting(Base):
 
 class UserPreference(Base):
     """用户偏好表"""
+
     __tablename__ = "user_preferences"
 
     user_id: Mapped[str] = mapped_column(String(50), primary_key=True, default="default")
@@ -188,8 +204,10 @@ class UserPreference(Base):
 
 # ===== Agent 会话相关模型 =====
 
+
 class Session(Base):
     """会话表 ORM 模型"""
+
     __tablename__ = "sessions"
 
     session_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -205,6 +223,7 @@ class Session(Base):
 
 class Message(Base):
     """消息表 ORM 模型"""
+
     __tablename__ = "messages"
 
     message_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -226,16 +245,16 @@ class Message(Base):
 
 class WorkflowTransition(Base):
     """工作流交接记录表 ORM 模型"""
+
     __tablename__ = "workflow_transitions"
 
     transition_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     workflow_id: Mapped[str] = mapped_column(String(50), nullable=False)
     from_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    to_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    to_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     event_type: Mapped[str] = mapped_column(String(50), nullable=False)
     payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
     def __repr__(self) -> str:
         return f"<WorkflowTransition(transition_id={self.transition_id!r}, workflow_id={self.workflow_id!r})>"
-

@@ -71,7 +71,7 @@ CREATE TABLE workflow_transitions (
     transition_id    TEXT PRIMARY KEY,
     workflow_id      TEXT NOT NULL,
     from_session_id  TEXT,                            -- NULL 表示流程起点（如录制完成触发）
-    to_session_id    TEXT NOT NULL,
+    to_session_id    TEXT,                            -- NULL 表示无明确目标会话（如 code_completed、agent_error）
     event_type       TEXT NOT NULL,                   -- 触发事件类型
     payload          TEXT,                            -- JSON: 交接携带的关键数据摘要
     created_at       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -158,7 +158,7 @@ def load_context(session_id: str) -> List[dict]:
 class SessionRepository:
     def create(session) -> Session
     def get_by_id(session_id) -> Optional[Session]
-    def get_by_workflow(workflow_id) -> List[Session]
+    def get_by_workflow(workflow_id, agent_type=None, order_by=None) -> List[Session]
     def update_status(session_id, status)
 ```
 
@@ -188,8 +188,11 @@ class WorkflowTransitionRepository:
 
 ## 七、与现有表的关系
 
-### 保留不动
-- `tools` — 工具定义
+### 保留并扩展
+- `tools` — 工具定义，新增以下列：
+  - `workflow_id TEXT` — 关联工作流 ID，用于按 workflow 查找/更新已有工具
+  - `trial_success_count INTEGER DEFAULT 0` — 试用成功计数，3 次成功后发布
+  - 新增 ToolRepository 方法：`get_by_workflow_id(workflow_id)`、`update_code(tool_id, code)`、`update_trial_count(tool_id, count)`
 - `task_executions` — 执行记录
 - `app_settings` / `user_preferences` — 配置
 - `intents` / `pending_tools` / `tool_trials` — v2 迁移创建的表
@@ -208,6 +211,7 @@ class WorkflowTransitionRepository:
 
 在 `src/data/migrations.py` 新增 `migrate_to_v3`：
 - 创建 sessions、messages、workflow_transitions 三张表及索引
+- 扩展 tools 表：`ALTER TABLE tools ADD COLUMN workflow_id TEXT`、`ALTER TABLE tools ADD COLUMN trial_success_count INTEGER DEFAULT 0`
 - 更新 schema_version 到 3
 - 不迁移旧 conversations 数据
 

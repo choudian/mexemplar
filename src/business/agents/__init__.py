@@ -19,7 +19,6 @@ from .config import (
 from .agent_loop import AgentLoop
 from .tool_registry import agent_tool, get_tool_schemas, execute_tool, clear_registry
 from .validation import validate_parameters
-from .events import emit_event
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA
 
 # 导入业务工具（触发注册）
@@ -50,8 +49,6 @@ __all__ = [
     "clear_registry",
     # 验证
     "validate_parameters",
-    # 事件
-    "emit_event",
     # 内置工具
     "TALK_TO_USER_SCHEMA",
     "LOAD_REFERENCE_SCHEMA",

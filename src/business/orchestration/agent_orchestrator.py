@@ -1,0 +1,570 @@
+"""
+Agent 编排器
+
+负责 Agent 会话生命周期管理、调度逻辑、业务事件发送。
+Loop 不感知事件系统；所有事件由 Orchestrator 在 loop.run() 返回后发出。
+"""
+
+import json
+import logging
+import re
+import uuid
+from typing import Dict, Optional
+
+from src.business.agents.agent_loop import AgentLoop
+from src.business.agents.config import (
+    AgentResult,
+    ResultType,
+    PM_CONFIG,
+    PROGRAMMER_CONFIG,
+    TRIAL_CONFIG,
+)
+from src.business.ai.llm_client import LangChainLLMClient
+from src.data.models_sqlite import Session, WorkflowTransition
+from src.data.repositories import SessionRepository, WorkflowTransitionRepository
+from src.data.unified_config import UnifiedConfigManager
+from src.utils.events import emit
+from .llm_reviewer import LLMReviewer, ReviewResult
+
+logger = logging.getLogger(__name__)
+
+
+class AgentOrchestrator:
+    """
+    Agent 编排器
+
+    核心设计原则：
+    - workflow_id = recording_id，一个录制对应一个工具
+    - UI 只传 workflow_id，不需要保存 session_id
+    - 显式调度：根据 loop.run() 返回值通过 _dispatch_next 决定下一步
+    - 事件只通知不调度：事件发给 UI/日志/transition，不通过事件监听器调度
+    """
+
+    def __init__(
+        self,
+        llm_client: LangChainLLMClient,
+        config: UnifiedConfigManager,
+        llm_reviewer: Optional[LLMReviewer] = None,
+    ):
+        self._llm = llm_client
+        self._config = config
+        self._llm_reviewer = llm_reviewer or LLMReviewer(llm_client)
+        self._session_repo = SessionRepository()
+        self._transition_repo = WorkflowTransitionRepository()
+
+        # Loop 实例缓存（按 agent_type）
+        self._loops: Dict[str, AgentLoop] = {}
+
+        # Review 重试计数（按 workflow_id）
+        self._review_counts: Dict[str, int] = {}
+
+    # =========================================================================
+    # 核心公共 API
+    # =========================================================================
+
+    def run_agent(
+        self,
+        agent_type: str,
+        user_input: str,
+        workflow_id: str,
+    ) -> None:
+        """
+        运行 Agent
+
+        1. 查询或创建会话
+        2. 运行 Loop，获取 result
+        3. 根据 result 发事件 + 调度下一步
+        """
+        session_id = self._get_or_create_session(workflow_id, agent_type)
+        loop = self._get_loop(agent_type)
+
+        logger.info(
+            f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
+        )
+
+        result = loop.run(session_id, user_input)
+
+        if result.result_type == ResultType.COMPLETED:
+            self._dispatch_next(agent_type, result, session_id, workflow_id)
+
+        elif result.result_type == ResultType.NEEDS_USER_INPUT:
+            emit(
+                "agent_needs_user_input",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type=agent_type,
+                question=result.question,
+            )
+
+        elif result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
+            emit(
+                "agent_error",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type=agent_type,
+                error=result.error,
+                error_type=result.result_type.value,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="agent_error",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps({"error": result.error, "agent_type": agent_type}),
+                )
+            )
+
+    def start_trial(self, tool_id: str, user_input: str, workflow_id: str) -> None:
+        """启动试用 Agent"""
+        self.run_agent("trial", user_input, workflow_id)
+
+    def handle_trial_result(
+        self,
+        tool_id: str,
+        success: bool,
+        workflow_id: str,
+        session_id: str,
+        user_feedback: str = "",
+    ) -> None:
+        """
+        处理试用结果（由 UI 层在用户试用完工具后调用）
+
+        成功：累加 trial_success_count，达 3 次发布
+        失败：触发 PM 分诊
+        """
+        from src.data.repositories import ToolRepository
+
+        tool_repo = ToolRepository()
+
+        if success:
+            tool = tool_repo.get_by_id(tool_id)
+            if not tool:
+                logger.error(f"[Orchestrator] handle_trial_result: tool {tool_id} 不存在")
+                return
+
+            new_count = (tool.trial_success_count or 0) + 1
+            tool_repo.update_trial_success_count(tool_id, new_count)
+
+            published = new_count >= 3
+            if published:
+                tool_repo.update_status(tool_id, "published")
+
+            emit(
+                "trial_success",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                success_count=new_count,
+                published=published,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="trial_success",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps({"success_count": new_count, "published": published}),
+                )
+            )
+
+        else:
+            pm_session_id = self._get_or_create_session(workflow_id, "pm")
+
+            emit(
+                "trial_failed",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                tool_id=tool_id,
+                user_feedback=user_feedback,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="trial_failed",
+                    from_session_id=session_id,
+                    to_session_id=pm_session_id,
+                    payload=json.dumps({"tool_id": tool_id, "user_feedback": user_feedback}),
+                )
+            )
+
+            self._start_triage(tool_id, user_feedback, workflow_id)
+
+    # =========================================================================
+    # 内部调度逻辑
+    # =========================================================================
+
+    def _dispatch_next(
+        self,
+        agent_type: str,
+        result: AgentResult,
+        session_id: str,
+        workflow_id: str,
+    ) -> None:
+        """
+        根据完成的 Agent 类型，调度下一步。
+        所有 Agent 间衔接逻辑集中在此。
+        """
+        try:
+            if agent_type == "pm":
+                self._on_pm_completed(result, session_id, workflow_id)
+            elif agent_type == "programmer":
+                self._on_programmer_completed(result, session_id, workflow_id)
+            elif agent_type == "trial":
+                self._on_trial_completed(result, session_id, workflow_id)
+        except Exception as e:
+            logger.error(f"[Orchestrator] 调度失败: {e}", exc_info=True)
+            emit(
+                "agent_error",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type=agent_type,
+                error=f"调度失败: {str(e)}",
+                error_type="dispatch_error",
+            )
+
+    def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
+        """
+        PM 完成 → 转给程序员
+
+        两种场景统一处理：
+        - 正常需求确认：PM 输出 requirements JSON → 解析成功 → emit requirement_confirmed
+        - 分诊代码问题：PM 输出用户反馈（非 JSON）→ 解析失败 → emit triage_completed
+        两种情况都将输出转给程序员（程序员 session 复用，有完整上下文）。
+        """
+        programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
+
+        try:
+            requirements = self._parse_requirements(result.final_output)
+        except ValueError:
+            # 分诊：PM 判断为代码问题，直接输出用户反馈（非 JSON）
+            emit(
+                "triage_completed",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                triage_result="code_issue",
+                feedback=result.final_output,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="triage_completed",
+                    from_session_id=session_id,
+                    to_session_id=programmer_session_id,
+                    payload=json.dumps({"triage_result": "code_issue"}),
+                )
+            )
+        else:
+            # 正常需求确认：解析成功，emit + 记录交接
+            emit(
+                "requirement_confirmed",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                requirements_json=requirements,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="requirement_confirmed",
+                    from_session_id=session_id,
+                    to_session_id=programmer_session_id,
+                    payload=json.dumps({"requirements": requirements}),
+                )
+            )
+
+        # 两种情况都转给程序员
+        self.run_agent("programmer", result.final_output, workflow_id)
+
+    def _on_programmer_completed(
+        self, result: AgentResult, session_id: str, workflow_id: str
+    ) -> None:
+        """程序员完成 → 提取代码 → 启动 Review"""
+        code = self._extract_code(result.final_output)
+
+        emit(
+            "code_completed", sender=self, workflow_id=workflow_id, session_id=session_id, code=code
+        )
+        self._transition_repo.create(
+            WorkflowTransition(
+                transition_id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                event_type="code_completed",
+                from_session_id=session_id,
+                to_session_id=None,
+                payload=json.dumps({"code_length": len(code)}),
+            )
+        )
+
+        self._run_review(code, session_id, workflow_id)
+
+    def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
+        """试用 Agent 完成后的处理（依赖优先级 7 Trial Agent 设计，暂留空）"""
+        pass
+
+    def _run_review(self, code: str, from_session_id: str, workflow_id: str) -> None:
+        """
+        运行 LLM Review
+
+        通过/失败计数通过 self._review_counts[workflow_id] 追踪。
+        失败 < 3 次：回传给程序员修改；≥ 3 次：强制入库（pending）。
+        """
+        retry_count = self._review_counts.get(workflow_id, 0)
+        review_result: ReviewResult = self._llm_reviewer.review(code)
+
+        if review_result.passed:
+            emit(
+                "review_passed",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=from_session_id,
+                code=code,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="review_passed",
+                    from_session_id=from_session_id,
+                    to_session_id=None,
+                    payload=None,
+                )
+            )
+            self._review_counts.pop(workflow_id, None)
+            self._save_tool(code, workflow_id, from_session_id)
+
+        else:
+            retry_count += 1
+            self._review_counts[workflow_id] = retry_count
+
+            if retry_count < 3:
+                programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
+                emit(
+                    "review_failed",
+                    sender=self,
+                    workflow_id=workflow_id,
+                    session_id=from_session_id,
+                    code=code,
+                    feedback=review_result.feedback,
+                    retry_count=retry_count,
+                )
+                self._transition_repo.create(
+                    WorkflowTransition(
+                        transition_id=str(uuid.uuid4()),
+                        workflow_id=workflow_id,
+                        event_type="review_failed",
+                        from_session_id=from_session_id,
+                        to_session_id=programmer_session_id,
+                        payload=json.dumps(
+                            {"retry_count": retry_count, "feedback": review_result.feedback}
+                        ),
+                    )
+                )
+                self.run_agent(
+                    "programmer",
+                    f"Review 失败（第{retry_count}次），修改意见：{review_result.feedback}",
+                    workflow_id,
+                )
+            else:
+                # 超过 3 次，强制入库（pending 状态）
+                emit(
+                    "review_failed",
+                    sender=self,
+                    workflow_id=workflow_id,
+                    session_id=from_session_id,
+                    code=code,
+                    feedback=review_result.feedback,
+                    retry_count=retry_count,
+                )
+                self._transition_repo.create(
+                    WorkflowTransition(
+                        transition_id=str(uuid.uuid4()),
+                        workflow_id=workflow_id,
+                        event_type="review_failed",
+                        from_session_id=from_session_id,
+                        to_session_id=None,
+                        payload=json.dumps({"retry_count": retry_count, "forced_save": True}),
+                    )
+                )
+                self._review_counts.pop(workflow_id, None)
+                self._save_tool(code, workflow_id, from_session_id)
+
+    def _start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
+        """
+        启动 PM 分诊
+
+        PM session 被 _get_or_create_session 自动复用（completed → 复用），
+        PM 能看到完整的需求确认上下文。
+
+        PM 分诊后两种路径：
+        - 需求问题 → PM 调 talk_to_user 重新确认 → 正常 requirement_confirmed 流程
+        - 代码问题 → PM 直接输出用户反馈 → _on_pm_completed 转给程序员
+        """
+        initial_input = (
+            f"工具 {tool_id} 试用失败，用户反馈：{user_feedback}。"
+            "请分析问题原因：如果是需求问题，请与用户重新确认需求；"
+            "如果是代码问题，请直接输出用户反馈供程序员排查。"
+        )
+        self.run_agent("pm", initial_input, workflow_id)
+
+    # =========================================================================
+    # Session 管理
+    # =========================================================================
+
+    def _get_or_create_session(self, workflow_id: str, agent_type: str) -> str:
+        """
+        查询或创建会话（Session 复用原则）
+
+        规则：
+        - suspended / completed → 复用（review 打回、分诊回来等场景）
+        - active → 复用（记 warning，不应并发但不阻断）
+        - failed → 创建新会话（避免残留脏数据）
+        - 不存在 → 创建新会话
+        """
+        sessions = self._session_repo.get_by_workflow(
+            workflow_id, agent_type=agent_type, order_by="created_at_desc"
+        )
+
+        if sessions:
+            latest = sessions[0]
+            if latest.status == "failed":
+                return self._create_session(workflow_id, agent_type)
+            if latest.status == "active":
+                logger.warning(
+                    f"[Orchestrator] 会话 {latest.session_id} 仍在 active 状态，" "可能存在并发调用"
+                )
+            return latest.session_id
+
+        return self._create_session(workflow_id, agent_type)
+
+    def _create_session(self, workflow_id: str, agent_type: str) -> str:
+        """创建新会话，返回 session_id"""
+        model = Session(
+            session_id=str(uuid.uuid4()),
+            workflow_id=workflow_id,
+            agent_type=agent_type,
+            status="active",
+        )
+        session = self._session_repo.create(model)
+        return session.session_id
+
+    # =========================================================================
+    # 辅助方法
+    # =========================================================================
+
+    def _get_loop(self, agent_type: str) -> AgentLoop:
+        """获取或创建 Loop 实例（按 agent_type 缓存）"""
+        if agent_type not in self._loops:
+            configs = {
+                "pm": PM_CONFIG,
+                "programmer": PROGRAMMER_CONFIG,
+                "trial": TRIAL_CONFIG,
+            }
+            if agent_type not in configs:
+                raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
+            self._loops[agent_type] = AgentLoop(configs[agent_type], self._llm, self._config)
+        return self._loops[agent_type]
+
+    def _parse_requirements(self, output: str) -> dict:
+        """
+        解析 PM 输出为需求 JSON
+
+        尝试顺序：直接 json.loads → markdown 代码块提取 → 抛 ValueError
+        ValueError 由 _on_pm_completed 捕获，用于区分正常需求确认和分诊代码问题路由。
+        """
+        try:
+            return json.loads(output)
+        except json.JSONDecodeError:
+            match = re.search(r"```json\n(.*?)\n```", output, re.DOTALL)
+            if match:
+                try:
+                    return json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    pass
+            raise ValueError(f"无法解析 PM 输出为需求 JSON，原始输出: {output[:200]}...")
+
+    def _extract_code(self, output: str) -> str:
+        """从程序员输出中提取 Python 代码，失败则返回整个 output"""
+        match = re.search(r"```python\n(.*?)\n```", output, re.DOTALL)
+        if match:
+            return match.group(1)
+        return output
+
+    def _save_tool(
+        self,
+        code: str,
+        workflow_id: str,
+        session_id: str,
+        status: str = "pending",
+    ) -> str:
+        """
+        保存工具到数据库
+
+        按 workflow_id 查重：存在则更新代码并清零试用计数，不存在则创建。
+        工具名称、描述、参数的提取为临时实现，待优先级 6（程序员 Agent）细化。
+        """
+        from src.data.repositories import ToolRepository
+        from src.data.models_sqlite import Tool
+
+        tool_repo = ToolRepository()
+        existing = tool_repo.get_by_workflow_id(workflow_id)
+
+        if existing:
+            tool_id = existing.tool_id
+            tool_repo.update_code(tool_id, code)
+            tool_repo.update_trial_success_count(tool_id, 0)
+            tool_repo.update_status(tool_id, status)
+        else:
+            new_tool = Tool(
+                tool_id=str(uuid.uuid4()),
+                tool_name=self._extract_tool_name(code),
+                description=self._extract_tool_description(code),
+                execution_code=code,
+                workflow_id=workflow_id,
+                status=status,
+                trial_success_count=0,
+                parameters={},
+            )
+            created = tool_repo.create(new_tool)
+            tool_id = created.tool_id
+
+        emit(
+            "tool_saved",
+            sender=self,
+            workflow_id=workflow_id,
+            session_id=session_id,
+            tool_id=tool_id,
+        )
+        self._transition_repo.create(
+            WorkflowTransition(
+                transition_id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                event_type="tool_saved",
+                from_session_id=session_id,
+                to_session_id=None,
+                payload=json.dumps({"tool_id": tool_id}),
+            )
+        )
+
+        return tool_id
+
+    def _extract_tool_name(self, code: str) -> str:
+        """从代码中提取工具名（临时实现，待优先级6细化）"""
+        match = re.search(r"def (\w+)\(", code)
+        return match.group(1) if match else "unnamed_tool"
+
+    def _extract_tool_description(self, code: str) -> str:
+        """从代码中提取工具描述（临时实现，待优先级6细化）"""
+        match = re.search(r'"""(.*?)"""', code, re.DOTALL)
+        return match.group(1).strip() if match else ""

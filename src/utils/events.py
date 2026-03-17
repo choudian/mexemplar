@@ -54,6 +54,38 @@ tool_updated = _signals.signal("tool_updated")
 tool_executed = _signals.signal("tool_executed")
 """工具执行事件"""
 
+# Agent 交互事件
+agent_needs_user_input = _signals.signal("agent_needs_user_input")
+"""Agent 需要用户输入事件"""
+
+agent_error = _signals.signal("agent_error")
+"""Agent 执行错误事件"""
+
+# Agent 协作事件
+requirement_confirmed = _signals.signal("requirement_confirmed")
+"""PM 需求确认完成事件"""
+
+code_completed = _signals.signal("code_completed")
+"""程序员代码完成事件"""
+
+review_passed = _signals.signal("review_passed")
+"""LLM Review 通过事件"""
+
+review_failed = _signals.signal("review_failed")
+"""LLM Review 失败事件"""
+
+tool_saved = _signals.signal("tool_saved")
+"""工具入库事件"""
+
+trial_success = _signals.signal("trial_success")
+"""工具试用成功事件"""
+
+trial_failed = _signals.signal("trial_failed")
+"""工具试用失败事件"""
+
+triage_completed = _signals.signal("triage_completed")
+"""PM 分诊完成（代码问题）事件"""
+
 # =============================================================================
 # 事件数据类
 # =============================================================================
@@ -148,15 +180,15 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
         >>> emit('recording_completed', session_id='123', action_count=5)
     """
     signal = _signals.signal(signal_name)
-
-    # 记录日志
     if logger.isEnabledFor(logging.DEBUG):
-        receiver_count = len(signal.receivers_for(sender))
-        logger.debug(
-            f"发送事件 '{signal_name}' (receiver_count={receiver_count}, kwargs={list(kwargs.keys())})"
-        )
-
-    signal.send(sender, **kwargs)
+        logger.debug(f"发送事件 '{signal_name}'")
+    results = signal.send_robust(sender, event_name=signal_name, **kwargs)
+    for receiver, result in results:
+        if isinstance(result, Exception):
+            logger.error(
+                f"[Events] 监听器 {getattr(receiver, '__name__', receiver)} "
+                f"处理 {signal_name} 时异常: {result}"
+            )
 
 
 def list_signals() -> dict:
@@ -179,6 +211,16 @@ def list_signals() -> dict:
         "tool_created",
         "tool_updated",
         "tool_executed",
+        "agent_needs_user_input",
+        "agent_error",
+        "requirement_confirmed",
+        "code_completed",
+        "review_passed",
+        "review_failed",
+        "tool_saved",
+        "trial_success",
+        "trial_failed",
+        "triage_completed",
     ]:
         signal = _signals.signal(name)
         # 获取所有接收器数量（简化计算）
@@ -211,6 +253,16 @@ def clear_all() -> None:
         "tool_created",
         "tool_updated",
         "tool_executed",
+        "agent_needs_user_input",
+        "agent_error",
+        "requirement_confirmed",
+        "code_completed",
+        "review_passed",
+        "review_failed",
+        "tool_saved",
+        "trial_success",
+        "trial_failed",
+        "triage_completed",
     ]:
         signal = _signals.signal(name)
         # 清空所有接收器
@@ -260,6 +312,16 @@ __all__ = [
     "tool_created",
     "tool_updated",
     "tool_executed",
+    "agent_needs_user_input",
+    "agent_error",
+    "requirement_confirmed",
+    "code_completed",
+    "review_passed",
+    "review_failed",
+    "tool_saved",
+    "trial_success",
+    "trial_failed",
+    "triage_completed",
     # 数据类
     "RecordingEventData",
     "WorkflowProcessingEventData",

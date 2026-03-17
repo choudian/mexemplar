@@ -7,16 +7,16 @@ Agent Loop 核心
 import json
 import logging
 import time
-from typing import Optional, Dict, Any
+from typing import Optional, Dict
 
 from src.business.ai.llm_client import LangChainLLMClient, LLMResponse
 from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
+from src.data.repositories import MessageRepository
 
 from .config import AgentConfig, AgentResult, ResultType, RetryConfig
 from .tool_registry import get_tool_schemas, execute_tool
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA
-from .events import emit_event
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +32,6 @@ class AgentLoop:
     - LLM 调用重试
     - 与记忆机制（ContextManager）集成
     - 工具装饰器注册
-    - 事件通知
     - 配置缓存
     """
 
@@ -71,9 +70,7 @@ class AgentLoop:
             ContextManager 实例
         """
         if session_id not in self._ctx_cache:
-            self._ctx_cache[session_id] = ContextManager(
-                session_id, self._unified_config
-            )
+            self._ctx_cache[session_id] = ContextManager(session_id, self._unified_config)
         return self._ctx_cache[session_id]
 
     def _has_system_prompt(self, session_id: str) -> bool:
@@ -86,8 +83,6 @@ class AgentLoop:
         Returns:
             是否已有 system prompt
         """
-        from src.data.repositories import MessageRepository
-
         msg_repo = MessageRepository()
         first_msg = msg_repo.get_first(session_id)
         return first_msg and first_msg.role == "system"
@@ -95,6 +90,10 @@ class AgentLoop:
     def _is_retryable_error(self, error: Exception) -> bool:
         """
         判断错误是否可重试
+
+        使用字符串子串匹配而非异常类型匹配：LangChain 将底层 API 错误包装为
+        通用 Exception，原始异常类型丢失，类型匹配无法命中。字符串匹配覆盖
+        Anthropic/OpenAI API 的实际错误消息（如 "rate_limit_exceeded"、"timeout"）。
 
         Args:
             error: 异常对象
@@ -184,7 +183,7 @@ class AgentLoop:
             ctx.save_message(role="system", content=self._config.system_prompt)
             logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
 
-        if ctx.get_session_status() == "suspended":
+        if ctx.get_session_status() in ("suspended", "completed"):
             ctx.update_session_status("active")
             logger.debug(f"[Agent Loop] 会话恢复: {session_id}")
 
@@ -200,14 +199,6 @@ class AgentLoop:
         while iteration < self._config.max_iterations:
             iteration += 1
 
-            # 发送迭代开始事件
-            emit_event(
-                "agent_iteration_started",
-                session_id,
-                iteration=iteration,
-                agent_type=self._config.agent_type.value,
-            )
-
             # 组装上下文
             messages = ctx.assemble_context()
             logger.debug(f"[Agent Loop] 迭代 {iteration}: 组装了 {len(messages)} 条消息")
@@ -215,28 +206,27 @@ class AgentLoop:
             # 调用 LLM（带重试）
             response = self._call_llm_with_retry(messages, all_tool_schemas, iteration)
             if response is None:
-                emit_event("agent_error", session_id, error="LLM 调用失败")
                 ctx.update_session_status("failed")
                 return AgentResult(result_type=ResultType.ERROR, error="LLM 调用失败")
 
             # 保存 assistant 消息
             ctx.save_assistant_message(
                 content=response.content or "",
-                tool_calls=json.dumps([
-                    {"id": tc.id, "name": tc.name, "args": tc.args}
-                    for tc in response.tool_calls
-                ]) if response.has_tool_calls else None
+                tool_calls=(
+                    json.dumps(
+                        [
+                            {"id": tc.id, "name": tc.name, "args": tc.args}
+                            for tc in response.tool_calls
+                        ]
+                    )
+                    if response.has_tool_calls
+                    else None
+                ),
             )
 
             # 如果没有工具调用，循环结束
             if not response.has_tool_calls:
                 ctx.update_session_status("completed")
-                emit_event(
-                    "agent_completed",
-                    session_id,
-                    output=response.content,
-                    iterations=iteration,
-                )
                 logger.info(f"[Agent Loop] 完成（无工具调用）: {session_id}")
                 return AgentResult(
                     result_type=ResultType.COMPLETED,
@@ -246,25 +236,16 @@ class AgentLoop:
             # 执行工具调用（单工具模式）
             tool_call = response.tool_calls[0]
             logger.debug(
-                f"[Agent Loop] 工具调用: {tool_call.name} "
-                f"(args: {list(tool_call.args.keys())})"
+                f"[Agent Loop] 工具调用: {tool_call.name} " f"(args: {list(tool_call.args.keys())})"
             )
 
             # 检查 talk_to_user 哨兵
             if tool_call.name == "talk_to_user":
                 ctx.save_tool_result(
-                    tool_call_id=tool_call.id,
-                    tool_name="talk_to_user",
-                    content="[等待用户回复]"
+                    tool_call_id=tool_call.id, tool_name="talk_to_user", content="[等待用户回复]"
                 )
                 ctx.update_session_status("suspended")
                 question = tool_call.args.get("message", "")
-                emit_event(
-                    "agent_needs_user_input",
-                    session_id,
-                    question=question,
-                    iteration=iteration,
-                )
                 logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
                 return AgentResult(
                     result_type=ResultType.NEEDS_USER_INPUT,
@@ -285,14 +266,6 @@ class AgentLoop:
                     tool_name=tool_call.name,
                     content=result,
                 )
-
-                emit_event(
-                    "agent_tool_executed",
-                    session_id,
-                    tool_name=tool_call.name,
-                    result=result[:100] + "..." if len(result) > 100 else result,
-                    iteration=iteration,
-                )
                 logger.debug(f"[Agent Loop] 工具执行成功: {tool_call.name}")
 
             except Exception as e:
@@ -302,30 +275,11 @@ class AgentLoop:
                     tool_name=tool_call.name,
                     content=error_msg,
                 )
-                emit_event(
-                    "agent_tool_failed",
-                    session_id,
-                    tool_name=tool_call.name,
-                    error=str(e),
-                    iteration=iteration,
-                )
                 logger.warning(f"[Agent Loop] {error_msg}")
                 # 不终止循环，让 LLM 决定下一步
 
-            # 发送迭代完成事件
-            emit_event(
-                "agent_iteration_completed",
-                session_id,
-                iteration=iteration,
-            )
-
         # 超过最大迭代次数
         ctx.update_session_status("failed")
-        emit_event(
-            "agent_error",
-            session_id,
-            error=f"超过最大迭代次数 ({self._config.max_iterations})",
-        )
         logger.error(f"[Agent Loop] 超过最大迭代次数: {session_id}")
         return AgentResult(
             result_type=ResultType.MAX_ITERATIONS_REACHED,

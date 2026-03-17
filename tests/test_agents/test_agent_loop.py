@@ -50,7 +50,7 @@ class TestAgentLoop:
         mock_ctx.get_session_status.return_value = None
         mock_ctx.assemble_context.return_value = [
             {"role": "system", "content": "测试 prompt"},
-            {"role": "user", "content": "测试输入"}
+            {"role": "user", "content": "测试输入"},
         ]
         mock_ctx.save_message.return_value = None
         mock_ctx.update_session_status.return_value = None
@@ -61,10 +61,7 @@ class TestAgentLoop:
         mock_msg_repo_cls.return_value = mock_msg_repo
 
         # Mock LLM 响应（无工具调用）
-        self.mock_llm.chat_with_tools.return_value = LLMResponse(
-            content="测试回复",
-            tool_calls=[]
-        )
+        self.mock_llm.chat_with_tools.return_value = LLMResponse(content="测试回复", tool_calls=[])
 
         # 创建并运行 Agent Loop
         loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
@@ -83,9 +80,7 @@ class TestAgentLoop:
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
-        mock_ctx.assemble_context.return_value = [
-            {"role": "system", "content": "测试 prompt"}
-        ]
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
@@ -97,11 +92,9 @@ class TestAgentLoop:
         # Mock LLM 响应（包含 talk_to_user 工具调用）
         self.mock_llm.chat_with_tools.return_value = LLMResponse(
             content=None,
-            tool_calls=[ToolCallInfo(
-                id="call_123",
-                name="talk_to_user",
-                args={"message": "请问你的姓名？"}
-            )]
+            tool_calls=[
+                ToolCallInfo(id="call_123", name="talk_to_user", args={"message": "请问你的姓名？"})
+            ],
         )
 
         # 创建并运行 Agent Loop
@@ -123,9 +116,7 @@ class TestAgentLoop:
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
-        mock_ctx.assemble_context.return_value = [
-            {"role": "system", "content": "测试 prompt"}
-        ]
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
@@ -141,16 +132,9 @@ class TestAgentLoop:
         self.mock_llm.chat_with_tools.side_effect = [
             LLMResponse(
                 content=None,
-                tool_calls=[ToolCallInfo(
-                    id="call_123",
-                    name="test_tool",
-                    args={"id": "456"}
-                )]
+                tool_calls=[ToolCallInfo(id="call_123", name="test_tool", args={"id": "456"})],
             ),
-            LLMResponse(
-                content="基于工具结果的回复",
-                tool_calls=[]
-            )
+            LLMResponse(content="基于工具结果的回复", tool_calls=[]),
         ]
 
         # 创建并运行 Agent Loop
@@ -165,15 +149,15 @@ class TestAgentLoop:
     @patch("src.business.agents.agent_loop.ContextManager")
     @patch("src.business.agents.agent_loop.MessageRepository")
     @patch("src.business.agents.agent_loop.execute_tool")
-    def test_tool_execution_error_continues(self, mock_execute_tool, mock_msg_repo_cls, mock_ctx_cls):
+    def test_tool_execution_error_continues(
+        self, mock_execute_tool, mock_msg_repo_cls, mock_ctx_cls
+    ):
         """测试工具执行错误不终止循环"""
         # Mock ContextManager
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
-        mock_ctx.assemble_context.return_value = [
-            {"role": "system", "content": "测试 prompt"}
-        ]
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
@@ -188,17 +172,9 @@ class TestAgentLoop:
         # LLM 调用：工具调用 -> 最终回复
         self.mock_llm.chat_with_tools.side_effect = [
             LLMResponse(
-                content=None,
-                tool_calls=[ToolCallInfo(
-                    id="call_123",
-                    name="error_tool",
-                    args={}
-                )]
+                content=None, tool_calls=[ToolCallInfo(id="call_123", name="error_tool", args={})]
             ),
-            LLMResponse(
-                content="理解错误，继续处理",
-                tool_calls=[]
-            )
+            LLMResponse(content="理解错误，继续处理", tool_calls=[]),
         ]
 
         # 创建并运行 Agent Loop
@@ -216,9 +192,7 @@ class TestAgentLoop:
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
-        mock_ctx.assemble_context.return_value = [
-            {"role": "system", "content": "测试 prompt"}
-        ]
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
@@ -234,7 +208,7 @@ class TestAgentLoop:
         self.mock_llm.chat_with_tools.side_effect = [
             Exception("rate_limit_exceeded"),
             Exception("timeout"),
-            LLMResponse(content="重试成功", tool_calls=[])
+            LLMResponse(content="重试成功", tool_calls=[]),
         ]
 
         # 创建并运行 Agent Loop
@@ -248,15 +222,43 @@ class TestAgentLoop:
 
     @patch("src.business.agents.agent_loop.ContextManager")
     @patch("src.business.agents.agent_loop.MessageRepository")
+    def test_llm_call_retry_exhausted(self, mock_msg_repo_cls, mock_ctx_cls):
+        """测试 LLM 重试全部耗尽后返回 ERROR"""
+        mock_ctx = MagicMock()
+        mock_ctx_cls.return_value = mock_ctx
+        mock_ctx.get_session_status.return_value = None
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
+        mock_ctx.save_message.return_value = None
+        mock_ctx.update_session_status.return_value = None
+
+        mock_msg_repo = MagicMock()
+        mock_msg_repo.get_first.return_value = None
+        mock_msg_repo_cls.return_value = mock_msg_repo
+
+        # 配置：允许重试 2 次（共 3 次尝试）
+        self.test_config.retry.max_retries = 2
+
+        # 所有调用都失败（可重试错误）
+        self.mock_llm.chat_with_tools.side_effect = Exception("rate_limit_exceeded")
+
+        loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
+        result = loop.run("test-session")
+
+        # 验证结果：重试耗尽后返回 ERROR
+        assert result.result_type == ResultType.ERROR
+        assert "LLM 调用失败" in result.error
+        # max_retries=2 时，循环 range(3) 即尝试 3 次
+        assert self.mock_llm.chat_with_tools.call_count == 3
+
+    @patch("src.business.agents.agent_loop.ContextManager")
+    @patch("src.business.agents.agent_loop.MessageRepository")
     def test_max_iterations_reached(self, mock_msg_repo_cls, mock_ctx_cls):
         """测试超过最大迭代次数"""
         # Mock ContextManager
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
-        mock_ctx.assemble_context.return_value = [
-            {"role": "system", "content": "测试 prompt"}
-        ]
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
@@ -270,12 +272,7 @@ class TestAgentLoop:
 
         # LLM 始终返回工具调用
         self.mock_llm.chat_with_tools.return_value = LLMResponse(
-            content=None,
-            tool_calls=[ToolCallInfo(
-                id="call_123",
-                name="infinite_tool",
-                args={}
-            )]
+            content=None, tool_calls=[ToolCallInfo(id="call_123", name="infinite_tool", args={})]
         )
 
         # Mock execute_tool
@@ -324,39 +321,23 @@ class TestAgentLoop:
 
     @patch("src.business.agents.agent_loop.ContextManager")
     @patch("src.business.agents.agent_loop.MessageRepository")
-    @patch("src.business.agents.agent_loop.emit_event")
-    def test_events_emitted(self, mock_emit, mock_msg_repo_cls, mock_ctx_cls):
-        """测试事件发送"""
-        # Mock ContextManager
+    def test_no_events_emitted_by_loop(self, mock_msg_repo_cls, mock_ctx_cls):
+        """Loop 是纯执行引擎，不发任何业务事件（事件由 Orchestrator 发）"""
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
-        mock_ctx.assemble_context.return_value = [
-            {"role": "system", "content": "测试 prompt"}
-        ]
+        mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
+        mock_ctx.save_assistant_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
-        # Mock MessageRepository
         mock_msg_repo = MagicMock()
         mock_msg_repo.get_first.return_value = None
         mock_msg_repo_cls.return_value = mock_msg_repo
 
-        # Mock LLM 响应
-        self.mock_llm.chat_with_tools.return_value = LLMResponse(
-            content="完成",
-            tool_calls=[]
-        )
+        self.mock_llm.chat_with_tools.return_value = LLMResponse(content="完成", tool_calls=[])
 
-        # 创建并运行 Agent Loop
-        loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
-        result = loop.run("test-session")
-
-        # 验证事件发送
-        assert mock_emit.called
-
-        # 检查是否发送了预期的事件
-        event_calls = [call[0][0] for call in mock_emit.call_args_list]
-        assert "agent_iteration_started" in event_calls
-        assert "agent_iteration_completed" in event_calls
-        assert "agent_completed" in event_calls
+        with patch("src.utils.events.emit") as mock_emit:
+            loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
+            loop.run("test-session")
+            mock_emit.assert_not_called()

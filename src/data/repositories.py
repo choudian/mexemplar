@@ -14,8 +14,13 @@ import uuid
 
 from .sqlalchemy_manager import get_sqlalchemy_manager
 from .models_sqlite import (
-    Base, Tool, TaskExecution, Conversation,
-    Session, Message, WorkflowTransition
+    Base,
+    Tool,
+    TaskExecution,
+    Conversation,
+    Session,
+    Message,
+    WorkflowTransition,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,12 +96,36 @@ class ToolRepository:
         """搜索工具（按名称或描述）"""
         return (
             self.session.query(Tool)
-            .filter(
-                (Tool.tool_name.contains(keyword)) | (Tool.description.contains(keyword))
-            )
+            .filter((Tool.tool_name.contains(keyword)) | (Tool.description.contains(keyword)))
             .order_by(Tool.created_at.desc())
             .all()
         )
+
+    def get_by_workflow_id(self, workflow_id: str) -> Optional[Tool]:
+        """按 workflow_id 查找工具（一个 workflow 对应一个工具）"""
+        return self.session.query(Tool).filter(Tool.workflow_id == workflow_id).first()
+
+    def update_code(self, tool_id: str, code: str):
+        """更新工具代码"""
+        tool = self.get_by_id(tool_id)
+        if tool:
+            tool.execution_code = code
+            tool.updated_at = datetime.now()
+            self.session.commit()
+
+    def update_trial_success_count(self, tool_id: str, count: int):
+        """更新试用成功计数"""
+        tool = self.get_by_id(tool_id)
+        if tool:
+            tool.trial_success_count = count
+            self.session.commit()
+
+    def update_status(self, tool_id: str, status: str):
+        """更新工具状态（pending / published）"""
+        tool = self.get_by_id(tool_id)
+        if tool:
+            tool.status = status
+            self.session.commit()
 
 
 class TaskExecutionRepository:
@@ -226,6 +255,7 @@ class ConversationRepository:
 
 # ===== 新增：SessionRepository =====
 
+
 class SessionRepository:
     """会话 Repository"""
 
@@ -258,21 +288,27 @@ class SessionRepository:
 
     def get_by_id(self, session_id: str) -> Optional[Session]:
         """根据 ID 获取会话"""
-        return self.session.query(Session).filter(
-            Session.session_id == session_id
-        ).first()
+        return self.session.query(Session).filter(Session.session_id == session_id).first()
 
-    def get_by_workflow(self, workflow_id: str) -> List[Session]:
+    def get_by_workflow(
+        self,
+        workflow_id: str,
+        agent_type: Optional[str] = None,
+        order_by: Optional[str] = None,
+    ) -> List[Session]:
         """获取指定工作流的所有会话"""
-        return self.session.query(Session).filter(
-            Session.workflow_id == workflow_id
-        ).order_by(Session.created_at).all()
+        query = self.session.query(Session).filter(Session.workflow_id == workflow_id)
+        if agent_type:
+            query = query.filter(Session.agent_type == agent_type)
+        if order_by == "created_at_desc":
+            query = query.order_by(Session.created_at.desc())
+        else:
+            query = query.order_by(Session.created_at)
+        return query.all()
 
     def update_status(self, session_id: str, status: str):
         """更新会话状态"""
-        model = self.session.query(Session).filter(
-            Session.session_id == session_id
-        ).first()
+        model = self.session.query(Session).filter(Session.session_id == session_id).first()
         if model:
             model.status = status
             self.session.commit()
@@ -285,6 +321,7 @@ class SessionRepository:
 
 
 # ===== 新增：MessageRepository =====
+
 
 class MessageRepository:
     """消息 Repository"""
@@ -313,36 +350,42 @@ class MessageRepository:
 
     def get_by_id(self, message_id: str) -> Optional[Message]:
         """根据 ID 获取消息"""
-        return self.session.query(Message).filter(
-            Message.message_id == message_id
-        ).first()
+        return self.session.query(Message).filter(Message.message_id == message_id).first()
 
     def get_first(self, session_id: str) -> Optional[Message]:
         """获取会话的第一条消息（最小序列号）"""
-        return self.session.query(Message).filter(
-            Message.session_id == session_id
-        ).order_by(Message.sequence.asc()).first()
+        return (
+            self.session.query(Message)
+            .filter(Message.session_id == session_id)
+            .order_by(Message.sequence.asc())
+            .first()
+        )
 
     def get_context(self, session_id: str) -> List[Message]:
         """获取会话上下文（非归档消息，按序列排序）"""
-        return self.session.query(Message).filter(
-            and_(
-                Message.session_id == session_id,
-                Message.is_archived.is_(False)
-            )
-        ).order_by(Message.sequence).all()
+        return (
+            self.session.query(Message)
+            .filter(and_(Message.session_id == session_id, Message.is_archived.is_(False)))
+            .order_by(Message.sequence)
+            .all()
+        )
 
     def get_all(self, session_id: str) -> List[Message]:
         """获取会话的所有消息"""
-        return self.session.query(Message).filter(
-            Message.session_id == session_id
-        ).order_by(Message.sequence).all()
+        return (
+            self.session.query(Message)
+            .filter(Message.session_id == session_id)
+            .order_by(Message.sequence)
+            .all()
+        )
 
     def get_next_sequence(self, session_id: str) -> int:
         """获取下一条消息的序列号"""
-        max_seq = self.session.query(func.max(Message.sequence)).filter(
-            Message.session_id == session_id
-        ).scalar()
+        max_seq = (
+            self.session.query(func.max(Message.sequence))
+            .filter(Message.session_id == session_id)
+            .scalar()
+        )
         return (max_seq or 0) + 1
 
     def mark_archived(self, session_id: str, from_seq: int, to_seq: int):
@@ -351,26 +394,23 @@ class MessageRepository:
             and_(
                 Message.session_id == session_id,
                 Message.sequence >= from_seq,
-                Message.sequence <= to_seq
+                Message.sequence <= to_seq,
             )
         ).update({"is_archived": True}, synchronize_session=False)
         self.session.commit()
         logger.debug(f"会话 {session_id} 消息 {from_seq}-{to_seq} 已归档")
 
     def bulk_copy(
-        self,
-        from_session_id: str,
-        to_session_id: str,
-        up_to_sequence: int
+        self, from_session_id: str, to_session_id: str, up_to_sequence: int
     ) -> List[Message]:
         """批量复制消息（用于 Fork 操作）"""
         # 查询源消息
-        source_models = self.session.query(Message).filter(
-            and_(
-                Message.session_id == from_session_id,
-                Message.sequence <= up_to_sequence
-            )
-        ).order_by(Message.sequence).all()
+        source_models = (
+            self.session.query(Message)
+            .filter(and_(Message.session_id == from_session_id, Message.sequence <= up_to_sequence))
+            .order_by(Message.sequence)
+            .all()
+        )
 
         # 复制并创建新消息
         new_messages = []
@@ -404,6 +444,7 @@ class MessageRepository:
 
 # ===== 新增：WorkflowTransitionRepository =====
 
+
 class WorkflowTransitionRepository:
     """工作流交接 Repository"""
 
@@ -431,12 +472,17 @@ class WorkflowTransitionRepository:
 
     def get_by_id(self, transition_id: str) -> Optional[WorkflowTransition]:
         """根据 ID 获取交接记录"""
-        return self.session.query(WorkflowTransition).filter(
-            WorkflowTransition.transition_id == transition_id
-        ).first()
+        return (
+            self.session.query(WorkflowTransition)
+            .filter(WorkflowTransition.transition_id == transition_id)
+            .first()
+        )
 
     def get_by_workflow(self, workflow_id: str) -> List[WorkflowTransition]:
         """获取指定工作流的所有交接记录"""
-        return self.session.query(WorkflowTransition).filter(
-            WorkflowTransition.workflow_id == workflow_id
-        ).order_by(WorkflowTransition.created_at).all()
+        return (
+            self.session.query(WorkflowTransition)
+            .filter(WorkflowTransition.workflow_id == workflow_id)
+            .order_by(WorkflowTransition.created_at)
+            .all()
+        )

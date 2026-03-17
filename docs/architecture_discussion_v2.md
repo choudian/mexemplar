@@ -176,10 +176,10 @@ Agent 之间通过 blinker 事件通信，流程编排集中在一个独立文�
 | triage_completed | PM 分诊完成 | 分诊结果（代码问题/需求问题）、反馈详情 |
 
 **职责分离：**
-- **Agent 代码** — 只负责自己的任务，完成后发事件，不知道谁在监听
-- **流程编排文件** — 集中注册所有监听器，负责 Agent 之间的衔接逻辑（启动下一个 Agent、传递数据、控制 Review 打回次数等）
+- **Agent Loop** — 纯执行引擎，只负责跑循环和返回 AgentResult，不感知事件系统
+- **AgentOrchestrator** — 根据 loop.run() 的返回值发出业务事件、通过 `_dispatch_next` 显式调度下一个 Agent
 
-改流程只改编排文件，改 Agent 不影响流程。
+改流程只改 Orchestrator，改 Agent 不影响流程。
 
 ---
 
@@ -295,6 +295,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | 1 | 数据层设计 | [data_layer_design.md](design/data_layer_design.md) | 见下方说明 |
 | 2 | 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) | 见下方说明 |
 | 3 | Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) | 见下方说明 |
+| 4 | 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) | 见下方说明 |
 
 **数据层设计与第六节（记忆机制）的差异：**
 - **删掉引用数据表** — 引用替换改为运行时行为（记忆层负责），数据层始终存储原始完整消息，不单独存引用
@@ -326,6 +327,13 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 - **内置工具自动追加** — talk_to_user 和 load_reference 由 AgentLoop 自动追加到工具列表，不在 AgentConfig 中声明
 - **文件结构** — src/business/agents/（复数）新目录，与旧 agent/ 共存直至迁移完成
 - **max_iterations 默认值** — PM 50、程序员 30、试用 20
+
+**事件系统设计与第五节的细化/新增决策：**
+- **事件发送者** — Loop 不发任何事件，所有业务事件由 Orchestrator 在 loop.run() 返回后发出（避免 blinker 同步回调的嵌套执行问题）
+- **事件类型** — 去掉 agent_completed 等通用事件，只保留有业务含义的事件（requirement_confirmed、code_completed 等）和交互事件（agent_needs_user_input、agent_error）
+- **调度机制** — Orchestrator 根据 loop.run() 返回值通过 `_dispatch_next` 显式调度，不通过事件监听器调度
+- **内部事件粒度** — 去掉 agent_iteration_started/completed、agent_tool_executed/failed 等内部事件
+- **Orchestrator 职责** — 统一负责 session 管理、显式调度、业务事件发送，不需要独立的流程编排文件
 
 ---
 

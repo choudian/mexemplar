@@ -400,9 +400,10 @@ class AgentLoop:
     每次调用 run() 执行一轮循环（直到需要用户输入、完成或出错）。
     """
 
-    def __init__(self, config: AgentConfig, llm_client: LangChainLLMClient):
+    def __init__(self, config: AgentConfig, llm_client: LangChainLLMClient, unified_config: UnifiedConfigManager):
         self._config = config
         self._llm = llm_client
+        self._unified_config = unified_config
 
     def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
         """
@@ -430,8 +431,8 @@ def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
     if not self._has_system_prompt(session_id):
         ctx.save_message(role="system", content=self._config.system_prompt)
 
-    # 恢复已暂停的会话时，将状态更新为 active
-    if ctx.get_session_status() == "suspended":
+    # 恢复会话时（suspended 或 completed 复用），将状态更新为 active
+    if ctx.get_session_status() in ("suspended", "completed"):
         ctx.update_session_status("active")
 
     # 保存用户输入（如果有）
@@ -695,7 +696,10 @@ result = loop.run(session_id, user_input=user_reply)
 ```
 active → (run 中) → suspended（遇到 talk_to_user）
 suspended → (run 恢复，自动改为 active) → completed / suspended / failed
+completed → (复用 session，自动改为 active) → completed / suspended / failed
 ```
+
+**Session 复用原则**：一个 workflow + 一个 agent type = 一个 session。completed 的 session 会被 Orchestrator 复用（如 review 打回、分诊回来），AgentLoop 检测到 completed 状态时更新为 active 后继续运行。
 
 ### 6.3 会话完成
 
@@ -707,10 +711,9 @@ suspended → (run 恢复，自动改为 active) → completed / suspended / fai
 - **LLM 调用异常** — 网络错误、API 限流等。session status 设为 `"failed"`，返回 `ResultType.ERROR`
 - **超过最大迭代次数** — session status 设为 `"failed"`，返回 `ResultType.MAX_ITERATIONS_REACHED`
 
-AgentOrchestrator 可以选择：
-- 记录错误日志，通知用户
-- 创建新会话重试
-- 恢复同一会话（将 status 改回 `"active"` 后再调 `run()`）
+AgentOrchestrator 的处理：
+- 发 `agent_error` 事件，记录错误日志，通知用户
+- failed 的 session 不复用（可能有未配对的 tool_call 等脏数据），下次 `_get_or_create_session` 会创建新 session
 
 ---
 
