@@ -1255,6 +1255,22 @@ class BrowserRecorder:
             action_ids = self._recording_repository.save_actions(self._recording_id, actions_list)
             logger.info(f"已保存 {len(action_ids)} 条操作到 DuckDB")
 
+            # 3.5 保存兄弟元素快照（sibling_snapshots）
+            snapshot_count = 0
+            for i, action_id in enumerate(action_ids):
+                if i < len(actions_list) and actions_list[i].get("siblings_snapshot"):
+                    try:
+                        self._recording_repository.save_sibling_snapshot(
+                            action_id,
+                            actions_list[i]["siblings_snapshot"],
+                            self._recording_id,
+                        )
+                        snapshot_count += 1
+                    except Exception as e:
+                        logger.warning(f"保存兄弟元素快照失败 (action_id={action_id}): {e}")
+            if snapshot_count > 0:
+                logger.info(f"已保存 {snapshot_count} 条兄弟元素快照到 DuckDB")
+
             # 4. 保存网络请求
             request_count = 0
 

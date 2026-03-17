@@ -17,7 +17,7 @@ AgentUIBridge（优先级 4）
     ↓ 线程管理、PyQt 信号桥接
 AgentOrchestrator（优先级 4）
     ↓ session 创建、Agent 选择、事件发送
-    ↓ AgentLoop.run(session_id, user_input)
+    ↓ AgentLoop.run(session_id, user_input, tools)
     ↑ 返回 AgentResult
 AgentLoop（本模块）
     ↓ assemble_context() / save_*()    ↓ chat_with_tools()
@@ -227,7 +227,7 @@ LangChain 的 `ChatAnthropic` 和 `ChatOpenAI` 都支持 `bind_tools()` 方法�
 # src/business/agents/config.py
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Callable, Optional
+from typing import List, Dict, Any, Callable, Optional, Union
 from enum import Enum
 
 
@@ -242,7 +242,9 @@ class RetryConfig:
     """LLM 调用重试配置"""
     max_retries: int = 3      # 最大重试次数
     retry_delay: float = 1.0  # 重试延迟（秒）
-    retryable_errors: Tuple[type, ...] = (ConnectionError, TimeoutError)
+    retryable_errors: List[str] = field(default_factory=lambda: [
+        "rate_limit_exceeded", "timeout", "connection_error",
+    ])
 
 
 @dataclass
@@ -250,7 +252,7 @@ class ToolDefinition:
     """工具定义：FC schema + 实现函数的映射"""
     name: str                      # 工具名称，必须与 schema 中的 name 一致
     schema: Dict[str, Any]         # Function Calling schema（传给 LLM）
-    handler: Callable[..., str]    # 实现函数（执行时调用）
+    handler: Callable[..., Union[str, 'ToolSignal']]  # 实现函数（执行时调用）
 
 
 @dataclass
@@ -258,28 +260,45 @@ class AgentConfig:
     """Agent 配置"""
     agent_type: AgentType
     system_prompt: str             # system prompt 模板
-    tools: List[ToolDefinition]    # 工具列表
     max_iterations: int = 50       # 最大迭代次数
     retry: RetryConfig = field(default_factory=RetryConfig)  # LLM 调用重试配置
 ```
+
+注意：`AgentConfig` 不再包含 `tools` 字段。工具列表通过 `AgentLoop.run()` 的 `tools` 参数从外部传入（见 4.1 节）。
 
 ### 3.2 ToolDefinition 设计说明
 
 `ToolDefinition` 将 Function Calling schema 和 Python 实现函数绑在一起：
 
 - `schema` — 发送给 LLM 的工具描述（名称、描述、参数 JSON Schema）
-- `handler` — Agent Loop 执行工具时调用的 Python 函数，签名为 `(**kwargs) -> str`
+- `handler` — Agent Loop 执行工具时调用的 Python 函数，签名为 `(**kwargs) -> Union[str, ToolSignal]`
 - `name` — 用于 dispatch 匹配，必须与 `schema["function"]["name"]` 一致
 
-工具数量少（每个 Agent 2-3 个），直接在配置中列出，不搞注册表。
+工具 handler 的返回值决定 Loop 行为：
+- 返回 `str` → 普通工具结果，Loop 继续迭代
+- 返回 `ToolSignal` → Loop 中断，按 `ToolSignal.result_type` 返回 AgentResult
 
-**PM/程序员工具差异化说明**：架构 v2 指出 PM 和程序员使用同一个"查录制数据"工具但配置不同（PM 不查网络请求）。当前 `ToolDefinition` 没有提供配置过滤机制，工具差异化的具体实现推迟到优先级 5-6（各 Agent 的 prompt + 工具集设计）时细化。
+**工具由调用方组装，通过 `run()` 参数传入 Loop**。Loop 不关心工具从哪来，只负责发给 LLM + 按名字执行 handler。这样 PM 和程序员可以各自传入不同的 `query_recording_data`（不同 schema 和 handler），互不干扰，不需要全局注册表或命名冲突处理。
+
+### 3.2.1 ToolSignal
+
+```python
+@dataclass
+class ToolSignal:
+    """工具返回此类型时，Loop 中断并返回对应的 AgentResult。"""
+    result_type: ResultType            # 中断后返回什么类型
+    display_text: str = "[已提交]"     # 存入消息历史的占位文本
+```
+
+这是工具与 Loop 之间的唯一协议。Loop 不关心工具叫什么名字，只看返回值类型。
 
 ### 3.3 内置工具
 
-两个内置工具所有 Agent 共享，不在 `AgentConfig.tools` 中声明，由 AgentLoop 自动追加：
+两个内置工具所有 Agent 共享，由 AgentLoop 自动追加到传入的工具列表中：
 
 ```python
+# --- talk_to_user ---
+
 TALK_TO_USER_SCHEMA = {
     "type": "function",
     "function": {
@@ -297,6 +316,16 @@ TALK_TO_USER_SCHEMA = {
         }
     }
 }
+
+def talk_to_user(message: str) -> ToolSignal:
+    """talk_to_user 的 handler：返回 ToolSignal 中断循环"""
+    return ToolSignal(
+        result_type=ResultType.NEEDS_USER_INPUT,
+        display_text="[等待用户回复]"
+    )
+
+
+# --- load_reference ---
 
 LOAD_REFERENCE_SCHEMA = {
     "type": "function",
@@ -317,62 +346,56 @@ LOAD_REFERENCE_SCHEMA = {
 }
 ```
 
+`talk_to_user` 的 handler 返回 `ToolSignal`，与业务工具（如 `submit_requirements`）使用同一套机制。Loop 中没有对 `talk_to_user` 的硬编码判断。
+
+`load_reference` 仍然是普通工具（返回 `str`），由 `_execute_tool` 委托给 ContextManager。
+
 ### 3.4 三个 Agent 的配置
 
 ```python
 # src/business/agents/config.py
 
-from .tools.recording_query import query_recording_data, QUERY_RECORDING_DATA_SCHEMA
-from .tools.multimodal_analysis import multimodal_analysis, MULTIMODAL_ANALYSIS_SCHEMA
-from .tools.syntax_check import syntax_check, SYNTAX_CHECK_SCHEMA
-
-
 PM_CONFIG = AgentConfig(
     agent_type=AgentType.PM,
     system_prompt="...",  # 优先级 5 定义，此处为占位
-    tools=[
-        ToolDefinition(
-            name="query_recording_data",
-            schema=QUERY_RECORDING_DATA_SCHEMA,
-            handler=query_recording_data,
-        ),
-        ToolDefinition(
-            name="multimodal_analysis",
-            schema=MULTIMODAL_ANALYSIS_SCHEMA,
-            handler=multimodal_analysis,
-        ),
-        # talk_to_user 和 load_reference 由 AgentLoop 自动追加
-    ],
     max_iterations=50,
 )
 
 PROGRAMMER_CONFIG = AgentConfig(
     agent_type=AgentType.PROGRAMMER,
     system_prompt="...",  # 优先级 6 定义
-    tools=[
-        ToolDefinition(
-            name="query_recording_data",
-            schema=QUERY_RECORDING_DATA_SCHEMA,
-            handler=query_recording_data,
-        ),
-        ToolDefinition(
-            name="syntax_check",
-            schema=SYNTAX_CHECK_SCHEMA,
-            handler=syntax_check,
-        ),
-    ],
     max_iterations=30,
 )
 
 TRIAL_CONFIG = AgentConfig(
     agent_type=AgentType.TRIAL,
     system_prompt="...",  # 优先级 7 定义
-    tools=[
-        # 试用 Agent 的工具待优先级 7 细化
-    ],
     max_iterations=20,
 )
 ```
+
+AgentConfig 只包含 prompt 和循环控制参数。工具列表由 Orchestrator 在启动 Agent 时组装并传入 `run()`：
+
+```python
+# src/business/orchestrator/agent_orchestrator.py
+
+from src.business.agents.tools.pm_recording_query import pm_query_recording_data
+from src.business.agents.tools.multimodal_analysis import multimodal_analysis
+from src.business.agents.tools.pm_output import submit_requirements, report_code_issue
+
+PM_TOOLS = [
+    pm_query_recording_data,
+    multimodal_analysis,
+    submit_requirements,
+    report_code_issue,
+    # talk_to_user 和 load_reference 由 AgentLoop 自动追加
+]
+
+# 启动 PM
+loop.run(session_id, user_input, tools=PM_TOOLS)
+```
+
+**为什么工具在外部组装**：PM 和程序员各自有独立版本的 `query_recording_data`（不同 schema、不同 handler），如果放在 config 或全局注册表中会有命名冲突。由 Orchestrator 组装后传入，各 Agent 的工具列表完全独立。
 
 **System prompt 说明**：当前阶段 system prompt 为占位符。实际 prompt 内容在优先级 5-7 的各 Agent 设计中定义。Agent Loop 只负责将 `config.system_prompt` 作为第一条消息存入会话。
 
@@ -405,7 +428,12 @@ class AgentLoop:
         self._llm = llm_client
         self._unified_config = unified_config
 
-    def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
+    def run(
+        self,
+        session_id: str,
+        user_input: Optional[str] = None,
+        tools: Optional[List[ToolDefinition]] = None,
+    ) -> AgentResult:
         """
         执行 Agent 循环
 
@@ -413,6 +441,7 @@ class AgentLoop:
             session_id: 会话 ID
             user_input: 用户输入（首次启动时为初始输入，恢复时为用户回复）
                         为 None 时表示无需新增用户消息（如系统触发的重新运行）
+            tools: 工具列表（由调用方组装传入）。为 None 时只有内置工具可用。
 
         Returns:
             AgentResult，包含循环结束原因和相关数据
@@ -424,7 +453,7 @@ class AgentLoop:
 采用**单工具调用模式**（`parallel_tool_calls=False`），每次 LLM 响应最多包含一个 tool_call。这消除了多工具调用的所有边界问题（如 talk_to_user 与其他工具同时出现时的处理、跳过未执行工具导致 tool_call/tool_result 配对错误等）。
 
 ```python
-def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
+def run(self, session_id: str, user_input: Optional[str] = None, tools: Optional[List[ToolDefinition]] = None) -> AgentResult:
     ctx = ContextManager(session_id)
 
     # 如果是新会话（还没有 system prompt），初始化
@@ -439,9 +468,9 @@ def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
     if user_input is not None:
         ctx.save_user_message(user_input)
 
-    # 构建工具列表（config tools + 内置 tools）
-    all_tool_schemas = self._build_tool_schemas()
-    tool_handlers = self._build_tool_handlers()
+    # 构建工具列表（传入的 tools + 内置 tools）
+    all_tool_schemas = self._build_tool_schemas(tools or [])
+    tool_handlers = self._build_tool_handlers(tools or [])
 
     iteration = 0
     while iteration < self._config.max_iterations:
@@ -479,21 +508,27 @@ def run(self, session_id: str, user_input: Optional[str] = None) -> AgentResult:
         # 5. 执行单个工具调用（parallel_tool_calls=False 保证最多一个）
         tool_call = response.tool_calls[0]
 
-        # 检查是否是 talk_to_user 哨兵
-        if tool_call.name == "talk_to_user":
+        # 执行工具（普通工具或 load_reference）
+        result = self._execute_tool(tool_call, ctx, tool_handlers)
+
+        # 6. 检查返回值类型
+        if isinstance(result, ToolSignal):
+            # 工具要求中断循环
             ctx.save_tool_result(
                 tool_call_id=tool_call.id,
-                tool_name="talk_to_user",
-                content="[等待用户回复]"
+                tool_name=tool_call.name,
+                content=result.display_text
             )
-            ctx.update_session_status("suspended")
+            status = "suspended" if result.result_type == ResultType.NEEDS_USER_INPUT else "completed"
+            ctx.update_session_status(status)
             return AgentResult(
-                result_type=ResultType.NEEDS_USER_INPUT,
-                question=tool_call.args.get("message", "")
+                result_type=result.result_type,
+                question=tool_call.args.get("message") if result.result_type == ResultType.NEEDS_USER_INPUT else None,
+                final_output=None,
+                signal_tool=tool_call
             )
 
-        # 执行普通工具或 load_reference
-        result = self._execute_tool(tool_call, ctx, tool_handlers)
+        # 普通工具结果，保存并继续迭代
         ctx.save_tool_result(
             tool_call_id=tool_call.id,
             tool_name=tool_call.name,
@@ -518,14 +553,18 @@ def _execute_tool(
     tool_call: ToolCallInfo,
     ctx: ContextManager,
     tool_handlers: Dict[str, Callable]
-) -> str:
+) -> Union[str, ToolSignal]:
     """
     执行单个工具调用
 
+    Returns:
+        str — 普通工具结果，Loop 继续迭代
+        ToolSignal — 工具要求中断循环
+
     处理顺序：
-    1. load_reference → 委托给 ContextManager
-    2. 已注册的业务工具 → 调用 handler
-    3. 未知工具 → 返回错误信息（不抛异常）
+    1. load_reference → 委托给 ContextManager（返回 str）
+    2. 已注册的工具 → 调用 handler（可能返回 str 或 ToolSignal）
+    3. 未知工具 → 返回错误信息（返回 str）
     """
     try:
         if tool_call.name == "load_reference":
@@ -542,24 +581,28 @@ def _execute_tool(
         return f"工具执行出错: {tool_call.name} - {str(e)}"
 ```
 
-**关键设计**：工具执行失败时**不终止循环**，而是将错误信息作为 tool result 返回给 LLM。LLM 看到错误后可以选择重试、调整参数或直接告诉用户。这与架构 v2"复杂度在 Agent 能力上"的原则一致。
+**关键设计**：
+- 工具执行失败时**不终止循环**，而是将错误信息作为 tool result 返回给 LLM。LLM 看到错误后可以选择重试、调整参数或直接告诉用户。这与架构 v2"复杂度在 Agent 能力上"的原则一致。
+- Loop 不关心工具叫什么名字，只看返回值是 `str` 还是 `ToolSignal`。哪些工具是"中断型"的，由工具 handler 自己决定。
 
 ### 4.4 工具列表构建
 
 ```python
-def _build_tool_schemas(self) -> List[Dict[str, Any]]:
-    """构建发给 LLM 的完整工具定义列表"""
-    schemas = [td.schema for td in self._config.tools]
+def _build_tool_schemas(self, tools: List[ToolDefinition]) -> List[Dict[str, Any]]:
+    """构建发给 LLM 的完整工具定义列表（传入的 + 内置的）"""
+    schemas = [td.schema for td in tools]
     schemas.append(TALK_TO_USER_SCHEMA)
     schemas.append(LOAD_REFERENCE_SCHEMA)
     return schemas
 
-def _build_tool_handlers(self) -> Dict[str, Callable]:
+def _build_tool_handlers(self, tools: List[ToolDefinition]) -> Dict[str, Callable]:
     """构建工具名称到 handler 的映射"""
     handlers = {}
-    for td in self._config.tools:
+    for td in tools:
         handlers[td.name] = td.handler
-    # load_reference 和 talk_to_user 不在 handlers 中，由 _execute_tool 特殊处理
+    # talk_to_user 也通过 handler 注册（返回 ToolSignal）
+    handlers["talk_to_user"] = talk_to_user
+    # load_reference 不在 handlers 中，由 _execute_tool 特殊处理（需要 ctx）
     return handlers
 
 def _call_llm_with_retry(
@@ -574,24 +617,25 @@ def _call_llm_with_retry(
     Returns:
         LLMResponse，失败时返回 None（调用者需检查）
     """
-    retry_count = 0
-    while retry_count <= self._config.retry.max_retries:
+    for retry_count in range(self._config.retry.max_retries + 1):
         try:
             return self._llm.chat_with_tools(messages, tool_schemas)
-        except self._config.retry.retryable_errors as e:
-            retry_count += 1
-            if retry_count > self._config.retry.max_retries:
-                logger.error(f"[AgentLoop] LLM 调用失败（重试 {self._config.retry.max_retries} 次后仍失败）: {e}")
+        except Exception as e:
+            # LangChain 将底层 API 错误包装为通用 Exception，
+            # 原始异常类型丢失，只能用字符串子串匹配判断是否可重试
+            if retry_count < self._config.retry.max_retries and self._is_retryable_error(e):
+                delay = self._config.retry.retry_delay * (retry_count + 1)
+                logger.warning(f"[AgentLoop] LLM 调用失败，{delay}秒后重试（{retry_count + 1}/{self._config.retry.max_retries}）: {e}")
+                time.sleep(delay)
+            else:
+                logger.error(f"[AgentLoop] LLM 调用失败: {e}")
                 ctx.update_session_status("failed")
                 return None
-            delay = self._config.retry.retry_delay * retry_count
-            logger.warning(f"[AgentLoop] LLM 调用失败，{delay}秒后重试（{retry_count}/{self._config.retry.max_retries}）: {e}")
-            time.sleep(delay)
-        except Exception as e:
-            # 非可重试错误，直接返回
-            logger.error(f"[AgentLoop] LLM 调用失败（不可重试）: {e}")
-            ctx.update_session_status("failed")
-            return None
+
+def _is_retryable_error(self, error: Exception) -> bool:
+    """用字符串子串匹配判断错误是否可重试"""
+    error_str = str(error).lower()
+    return any(r.lower() in error_str for r in self._config.retry.retryable_errors)
 
 def _has_system_prompt(self, session_id: str) -> bool:
     """检查会话是否已有 system prompt（轻量查询，不触发压缩和引用替换）"""
@@ -604,9 +648,11 @@ def _has_system_prompt(self, session_id: str) -> bool:
 
 ## 五、用户交互机制
 
-### 5.1 talk_to_user 作为哨兵工具
+### 5.1 talk_to_user 的工作原理
 
-`talk_to_user` 不是一个有实际执行逻辑的工具——它是一个信号，告诉 Agent Loop"我需要跟用户说话"。当 LLM 调用此工具时，Loop 中断并返回 `AgentResult(result_type=NEEDS_USER_INPUT, question=...)`。
+`talk_to_user` 是一个 handler 返回 `ToolSignal` 的工具。当 LLM 调用它时，handler 返回 `ToolSignal(result_type=NEEDS_USER_INPUT)`，Loop 检测到后中断循环。
+
+这与业务工具（如 PM 的 `submit_requirements`）使用完全相同的机制——Loop 不知道 `talk_to_user` 是"特殊"的，它只看到返回值是 `ToolSignal`。
 
 ### 5.2 循环生命周期
 
@@ -642,7 +688,7 @@ AgentOrchestrator               AgentLoop                    ContextManager
 
 # 启动新会话
 session = session_repo.create(workflow_id=wf_id, agent_type="pm")
-loop = AgentLoop(config=PM_CONFIG, llm_client=llm)
+loop = AgentLoop(config=PM_CONFIG, llm_client=llm, unified_config=unified_config)
 
 # 首次运行
 result = loop.run(session.session_id, user_input="用户的初始输入")
@@ -740,8 +786,11 @@ class AgentResult:
     # NEEDS_USER_INPUT 时有值
     question: Optional[str] = None
 
-    # COMPLETED 时有值
+    # COMPLETED 时有值（自然结束时为 LLM 最后文本，tool_signal 触发时为 None）
     final_output: Optional[str] = None
+
+    # tool_signal 工具触发时有值（携带工具名和结构化参数）
+    signal_tool: Optional[ToolCallInfo] = None
 
     # ERROR / MAX_ITERATIONS_REACHED 时有值
     error: Optional[str] = None
@@ -752,19 +801,32 @@ class AgentResult:
 | ResultType | AgentOrchestrator（编排） | AgentUIBridge（UI 桥接） |
 |------------|--------------------------|-------------------------|
 | `NEEDS_USER_INPUT` | 记录会话状态，等待用户回复后再次调用 `run()` | 将 `question` 通过 PyQt 信号发给 UI 展示 |
-| `COMPLETED` | 根据 Agent 类型发送对应事件（如 `requirement_confirmed`） | 通知 UI 任务完成 |
+| `COMPLETED` | 检查 `signal_tool` 决定后续操作（见 7.3） | 通知 UI 任务完成 |
 | `ERROR` | 记录错误，决定是否重试 | 通知 UI 展示错误信息 |
 | `MAX_ITERATIONS_REACHED` | 记录异常 | 通知 UI 任务可能过于复杂 |
 
-### 7.3 final_output 的语义
+### 7.3 COMPLETED 的两种来源
 
-`final_output` 是 LLM 最后一条不含 tool_calls 的 assistant 消息的 `content`。对于不同 Agent：
+Loop 返回 `COMPLETED` 有两种情况：
 
-- **PM Agent**：最终输出为确认后的需求 JSON（实际内容由 prompt 控制）
-- **程序员 Agent**：最终输出为生成的代码或"完成"确认
-- **试用 Agent**：最终输出为试用结果总结
+**自然结束**：LLM 不调用任何工具。`final_output` 有值，`signal_tool` 为 None。这是兜底路径——正常流程中 Agent 应通过 tool_signal 工具结束。
 
-AgentOrchestrator 需要根据 Agent 类型解析 `final_output` 的格式。这是优先级 5-7 的职责。
+**tool_signal 工具触发**：工具 handler 返回 `ToolSignal`。`signal_tool` 有值（携带工具名和结构化参数），`final_output` 为 None。Orchestrator 通过 `signal_tool.name` 和 `signal_tool.args` 获取结构化数据并路由。
+
+```python
+# Orchestrator 中的处理示例
+if result.result_type == ResultType.COMPLETED:
+    if result.signal_tool:
+        # tool_signal 触发：从工具参数获取结构化数据
+        if result.signal_tool.name == "submit_requirements":
+            requirements = result.signal_tool.args
+            emit("requirement_confirmed", ...)
+        elif result.signal_tool.name == "report_code_issue":
+            emit("triage_completed", feedback=result.signal_tool.args["feedback"], ...)
+    else:
+        # 自然结束（兜底）：final_output 是自由文本
+        ...
+```
 
 ---
 
@@ -774,9 +836,10 @@ AgentOrchestrator 需要根据 Agent 类型解析 `final_output` 的格式。这
 src/business/agents/              # 新目录（复数），区分于现有 agent/
     __init__.py
     agent_loop.py                 # AgentLoop、AgentResult、ResultType
-    config.py                     # AgentConfig、AgentType、ToolDefinition
+    config.py                     # AgentConfig、AgentType、ToolDefinition、ToolSignal
                                   # PM_CONFIG、PROGRAMMER_CONFIG、TRIAL_CONFIG
-                                  # TALK_TO_USER_SCHEMA、LOAD_REFERENCE_SCHEMA
+    builtin_tools.py              # TALK_TO_USER_SCHEMA、LOAD_REFERENCE_SCHEMA
+                                  # talk_to_user handler
     tools/                        # 工具实现（每个工具一个文件）
         __init__.py
         recording_query.py        # query_recording_data handler + schema
@@ -801,20 +864,23 @@ Agent Loop 本身**不引入任何事件系统依赖**。它通过返回 `AgentR
 
 ```python
 # AgentOrchestrator 中的伪代码（优先级 4 设计）
-result = pm_loop.run(session_id, user_input)
+result = pm_loop.run(session_id, user_input, tools=PM_TOOLS)
 
 if result.result_type == ResultType.COMPLETED:
     # PM 完成需求确认 → 发事件 + 记录 transition
-    emit("requirement_confirmed",
-         sender=self,
-         workflow_id=workflow_id,
-         requirements_json=result.final_output)
-    transition_repo.create(
-        workflow_id=workflow_id,
-        event_type="requirement_confirmed",
-        to_session_id=session_id,
-        payload={"output": result.final_output}
-    )
+    if result.signal_tool:
+        # ToolSignal 触发：从工具参数获取结构化数据
+        if result.signal_tool.name == "submit_requirements":
+            emit("requirement_confirmed",
+                 sender=self,
+                 workflow_id=workflow_id,
+                 requirements_json=result.signal_tool.args)
+            transition_repo.create(
+                workflow_id=workflow_id,
+                event_type="requirement_confirmed",
+                to_session_id=session_id,
+                payload={"requirements": result.signal_tool.args}
+            )
 
 elif result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
     # Agent 执行失败 → 发事件 + 记录 transition（供追踪完整工作流）
@@ -898,9 +964,7 @@ agent_error = _signals.signal("agent_error")
 
 ### 11.4 已完成的会话尝试恢复
 
-AgentOrchestrator 应在调用 `run()` 前检查 session status。如果对 `"completed"` 的 session 调用 `run()`，AgentLoop 不会阻止——它会保存新的 user message 并进入循环。
-
-**建议**：不应对 `"completed"` 的会话调用 `run()`。如需继续，应创建新会话（fork 或全新）。
+AgentLoop 允许对 `"completed"` 的 session 调用 `run()`——它会将 status 更新为 `"active"`，保存新的 user message 并进入循环。这是设计意图：分诊打回、review 失败等场景下，Orchestrator 复用已有 session，PM/程序员能看到之前的上下文继续工作。
 
 ### 11.5 load_reference 的 message_id 无效
 
@@ -928,11 +992,13 @@ AgentOrchestrator 应在调用 `run()` 前检查 session status。如果对 `"co
 | LLM 客户端接口 | 未明确 | 新增 LLMResponse / ToolCallInfo 数据类，chat_with_tools() 方法 |
 | 消息格式转换 | 未明确 | _convert_to_langchain_messages 处理 tool / assistant 含 tool_calls 的消息 |
 | 单工具调用模式 | 未明确 | 强制 `parallel_tool_calls=False`，每次响应最多一个 tool_call，消除多工具调用的边界问题 |
-| talk_to_user 机制 | "靠消息历史串联" | 细化为哨兵工具，tool result 为 "[等待用户回复]"，单工具调用模式下无需处理与其他工具同时出现的情况 |
-| 返回值 | 未明确 | AgentResult 数据类，4 种 ResultType |
+| talk_to_user 机制 | "靠消息历史串联" | talk_to_user 的 handler 返回 ToolSignal(NEEDS_USER_INPUT)，Loop 通过 isinstance 判断中断循环，不硬编码工具名 |
+| ToolSignal 机制 | 未明确 | 工具 handler 返回 ToolSignal 时 Loop 中断。talk_to_user 和业务工具（如 submit_requirements）共用此机制 |
+| 返回值 | 未明确 | AgentResult 数据类，4 种 ResultType，新增 signal_tool 字段携带触发的工具调用信息 |
 | 工具执行错误 | 未明确 | 错误作为 tool result 返回给 LLM，不终止循环 |
-| LLM 调用重试 | 未明确 | 新增 RetryConfig，默认重试 3 次，延迟 1 秒，可重试错误为 ConnectionError/TimeoutError |
-| 内置工具 | 未明确 | talk_to_user 和 load_reference 自动追加到工具列表，不在 AgentConfig 中声明 |
+| LLM 调用重试 | 未明确 | 新增 RetryConfig，默认重试 3 次，延迟 1 秒，用字符串子串匹配判断可重试错误（LangChain 会包装底层异常，类型匹配不可靠） |
+| 工具传入方式 | 未明确 | 工具列表由调用方（Orchestrator）组装，通过 `run(tools=...)` 传入 Loop。AgentConfig 不含 tools 字段。PM/程序员可各自传入不同版本的同名工具，无命名冲突 |
+| 内置工具 | 未明确 | talk_to_user 和 load_reference 由 Loop 自动追加。talk_to_user 通过 handler 返回 ToolSignal，load_reference 由 _execute_tool 特殊处理（需要 ctx） |
 | AgentLoop 上层架构 | "不加额外的协调层" | 拆为两层：AgentUIBridge（线程 + PyQt 信号）+ AgentOrchestrator（session 管理 + 事件发送），改编排不影响 UI，换 UI 不影响编排 |
 | 会话初始化 | 未明确 | AgentLoop 检测有无 system prompt 判断是否首次运行（轻量查询，不触发 assemble_context），避免重复初始化 |
 | 会话恢复 | 未明确 | 恢复 suspended 会话时自动将 status 更新为 active |
@@ -942,4 +1008,4 @@ AgentOrchestrator 应在调用 `run()` 前检查 session status。如果对 `"co
 
 ---
 
-*基于架构 v2 细化，记录时间：2026-03-12；更新时间：2026-03-13（新增 LLM 重试机制、错误事件记录）*
+*基于架构 v2 细化，记录时间：2026-03-12；更新时间：2026-03-13（新增 LLM 重试机制、错误事件记录）；2026-03-17（ToolSignal 机制替代 talk_to_user 硬编码）*
