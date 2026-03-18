@@ -237,7 +237,7 @@ class AgentLoop:
                 logger.info(f"[Agent Loop] 完成（无工具调用）: {session_id}")
                 return AgentResult(
                     result_type=ResultType.COMPLETED,
-                    final_output=response.content,
+                    final_output=response.content or "",
                 )
 
             # 执行工具调用（单工具模式）
