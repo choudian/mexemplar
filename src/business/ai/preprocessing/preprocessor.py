@@ -24,7 +24,6 @@ from src.business.ai.preprocessing.pipeline import (
 )
 from src.business.ai.preprocessing.analyzers import (
     NetworkRequestAnalyzer,
-    ListOperationAnalyzer,
     RequestIntelligenceAnalyzer,
 )
 from src.business.ai.preprocessing.analyzers.intelligence_analyzer import (
@@ -58,7 +57,6 @@ class DataPreprocessor:
 
         # 初始化分析器
         self.network_analyzer = NetworkRequestAnalyzer()
-        self.list_analyzer = ListOperationAnalyzer()
         self.request_intelligence_analyzer = RequestIntelligenceAnalyzer()
 
         # 操作分类

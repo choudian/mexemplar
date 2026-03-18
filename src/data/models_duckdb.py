@@ -2,7 +2,7 @@
 SQLAlchemy ORM 模型 - DuckDB 数据库 (mexemplar.duckdb)
 
 包含：recording_sessions, actions, network_requests, sibling_snapshots,
-     list_contexts, filter_decisions
+     filter_decisions
 
 注意：DuckDB 使用 Sequence 而不是 SERIAL 来实现自增主键
 参考：https://github.com/Mause/duckdb_engine#auto-incrementing-id-columns
@@ -25,7 +25,6 @@ class Base(DeclarativeBase):
 action_id_seq = sqlalchemy.Sequence('action_id_seq')
 request_id_seq = sqlalchemy.Sequence('request_id_seq')
 snapshot_id_seq = sqlalchemy.Sequence('snapshot_id_seq')
-context_id_seq = sqlalchemy.Sequence('context_id_seq')
 decision_id_seq = sqlalchemy.Sequence('decision_id_seq')
 
 
@@ -150,29 +149,6 @@ class SiblingSnapshot(Base):
 
     def __repr__(self) -> str:
         return f"<SiblingSnapshot(snapshot_id={self.snapshot_id!r}, action_id={self.action_id!r})>"
-
-
-class ListContext(Base):
-    """列表上下文表"""
-    __tablename__ = "list_contexts"
-
-    context_id: Mapped[int] = mapped_column(
-        Integer,
-        context_id_seq,
-        server_default=context_id_seq.next_value(),
-        primary_key=True
-    )
-    action_id: Mapped[int] = mapped_column(Integer, index=True)
-    recording_id: Mapped[Optional[str]] = mapped_column(String(50), index=True)
-    list_pattern: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    parent_element: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    selection_rules: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    api_url_pattern: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    api_response_mapping: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime)
-
-    def __repr__(self) -> str:
-        return f"<ListContext(context_id={self.context_id!r}, action_id={self.action_id!r})>"
 
 
 class FilterDecision(Base):

@@ -333,27 +333,6 @@ class NetworkAnalysisStage(PipelineStage):
         return context
 
 
-class ListOperationStage(PipelineStage):
-    """列表分析：识别列表、关联 API、生成策略建议"""
-
-    def __init__(self):
-        super().__init__("list_operation")
-
-    def process(self, context: PreprocessingPipelineContext) -> PreprocessingPipelineContext:
-        if not context.enable_analysis:
-            context.list_analysis = None
-            return context
-
-        logger.info("步骤4: 分析列表操作...")
-        list_analysis = context.preprocessor.list_analyzer.analyze_list_operations(
-            context.actions, context.network_analysis or []
-        )
-        logger.info(f"  ✅ 识别了 {len(list_analysis)} 个列表操作")
-
-        context.list_analysis = list_analysis
-        return context
-
-
 class RecommendationFilterStage(PipelineStage):
     """推荐内容过滤：过滤不应传给主 LLM 的请求"""
 

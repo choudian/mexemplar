@@ -140,9 +140,6 @@ class SQLAlchemyDuckDBManager:
             elif table == "sibling_snapshots":
                 from src.data.models_duckdb import SiblingSnapshot
                 model_class = SiblingSnapshot
-            elif table == "list_contexts":
-                from src.data.models_duckdb import ListContext
-                model_class = ListContext
             elif table == "filter_decisions":
                 from src.data.models_duckdb import FilterDecision
                 model_class = FilterDecision

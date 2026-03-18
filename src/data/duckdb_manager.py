@@ -255,28 +255,6 @@ class DuckDBManager:
             """
             )
 
-            # 创建列表上下文表
-            conn.execute(
-                """
-                CREATE SEQUENCE IF NOT EXISTS context_id_seq START 1
-            """
-            )
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS list_contexts (
-                    context_id INTEGER PRIMARY KEY DEFAULT nextval('context_id_seq'),
-                    action_id INTEGER,
-                    recording_id TEXT,
-                    list_pattern TEXT,
-                    parent_element JSON,
-                    selection_rules JSON,
-                    api_url_pattern TEXT,
-                    api_response_mapping JSON,
-                    timestamp TIMESTAMP
-                )
-            """
-            )
-
             # ⭐ 创建过滤决策表（用于反馈循环）
             conn.execute(
                 """
@@ -316,9 +294,6 @@ class DuckDBManager:
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_sibling_snapshots_action ON sibling_snapshots(action_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_list_contexts_action ON list_contexts(action_id)"
             )
 
             logger.info("DuckDB 表结构初始化完成")
@@ -717,14 +692,10 @@ class DuckDBManager:
 
         迁移的表：
         - sibling_snapshots
-        - list_contexts
         - filter_decisions
         """
         # 迁移 sibling_snapshots
         self._migrate_add_recording_id("sibling_snapshots", reference_column="action_id")
-
-        # 迁移 list_contexts
-        self._migrate_add_recording_id("list_contexts", reference_column="action_id")
 
         # 迁移 filter_decisions（特殊处理：需要通过 network_requests -> actions 获取）
         self._migrate_filter_decisions_table()

@@ -293,60 +293,6 @@ class RecordingRepository:
 
         return snapshot_id
 
-    def save_list_context(
-        self,
-        action_id: int,
-        list_context: Dict[str, Any],
-        recording_id: Optional[str] = None,
-    ) -> int:
-        """
-        保存列表上下文
-
-        Args:
-            action_id: 关联的操作 ID
-            list_context: 列表上下文数据
-            recording_id: 录制会话 ID（用于直接关联，提高查询性能）
-
-        Returns:
-            插入的上下文 ID
-        """
-        # 序列化 JSON 字段
-        parent_element = (
-            json.dumps(list_context.get("parent_element"), ensure_ascii=False)
-            if list_context.get("parent_element")
-            else None
-        )
-        selection_rules = (
-            json.dumps(list_context.get("selection_rules"), ensure_ascii=False)
-            if list_context.get("selection_rules")
-            else None
-        )
-        api_response_mapping = (
-            json.dumps(list_context.get("api_response_mapping"), ensure_ascii=False)
-            if list_context.get("api_response_mapping")
-            else None
-        )
-
-        timestamp = datetime.fromtimestamp(
-            list_context.get("timestamp", datetime.now().timestamp())
-        )
-
-        context_id = self.db.insert(
-            "list_contexts",
-            {
-                "action_id": action_id,
-                "recording_id": recording_id,  # ⭐ 新增：直接关联录制会话
-                "list_pattern": list_context.get("list_pattern"),
-                "parent_element": parent_element,
-                "selection_rules": selection_rules,
-                "api_url_pattern": list_context.get("api_url_pattern"),
-                "api_response_mapping": api_response_mapping,
-                "timestamp": timestamp,
-            },
-        )
-
-        return context_id
-
     def get_recording_session(self, recording_id: str) -> Optional[Dict[str, Any]]:
         """
         获取录制会话
@@ -526,43 +472,6 @@ class RecordingRepository:
         )
         return {row[0] for row in results} if results else set()
 
-    def get_list_context(self, action_id: int) -> Optional[Dict[str, Any]]:
-        """
-        获取操作的列表上下文
-
-        Args:
-            action_id: 操作 ID
-
-        Returns:
-            列表上下文或 None
-        """
-        result = self.db.fetchone(
-            "SELECT * FROM list_contexts WHERE action_id = ?", (action_id,)
-        )
-
-        if not result:
-            return None
-
-        columns = [
-            "context_id",
-            "action_id",
-            "recording_id",
-            "list_pattern",
-            "parent_element",
-            "selection_rules",
-            "api_url_pattern",
-            "api_response_mapping",
-            "timestamp",
-        ]
-
-        context = dict(zip(columns, result))
-        # 反序列化 JSON 字段
-        for field in ["parent_element", "selection_rules", "api_response_mapping"]:
-            if context.get(field):
-                context[field] = json.loads(context[field])
-
-        return context
-
     def get_all_recording_ids(self) -> List[str]:
         """
         获取所有录制会话 ID
@@ -598,7 +507,6 @@ class RecordingRepository:
             for action_id in action_ids:
                 self.db.execute("DELETE FROM network_requests WHERE action_id = ?", (action_id,))
                 self.db.execute("DELETE FROM sibling_snapshots WHERE action_id = ?", (action_id,))
-                self.db.execute("DELETE FROM list_contexts WHERE action_id = ?", (action_id,))
 
             # 删除操作
             self.db.execute("DELETE FROM actions WHERE recording_id = ?", (recording_id,))
