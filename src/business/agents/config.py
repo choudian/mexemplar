@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Dict, Any, Union
 import logging
 
+from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT
+
 logger = logging.getLogger(__name__)
 
 
@@ -90,9 +92,6 @@ class AgentResult:
 # =============================================================================
 # 内置 Agent 配置
 # =============================================================================
-
-# 延迟导入避免潜在循环依赖（prompts 模块不依赖 config）
-from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT  # noqa: E402
 
 # PM Agent 配置
 PM_CONFIG = AgentConfig(

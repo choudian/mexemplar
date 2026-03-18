@@ -105,6 +105,8 @@ class TestAgentLoop:
         # 验证结果
         assert result.result_type == ResultType.NEEDS_USER_INPUT
         assert result.question == "请问你的姓名？"
+        assert result.signal_tool is not None
+        assert result.signal_tool.name == "talk_to_user"
         assert mock_ctx.update_session_status.called
         mock_ctx.update_session_status.assert_called_with("suspended")
 
@@ -331,25 +333,55 @@ class TestAgentLoop:
         loop.clear_cache()
         assert len(loop._ctx_cache) == 0
 
+    def test_no_events_emitted_by_loop(self):
+        """Loop 是纯执行引擎，不发任何业务事件（事件由 Orchestrator 发）
+
+        验证方式：检查 agent_loop 模块的命名空间中没有 emit 符号。
+        agent_loop.py 结构上不 import emit，因此不可能调用它。
+        """
+        import src.business.agents.agent_loop as loop_module
+        assert not hasattr(loop_module, "emit"), (
+            "agent_loop 模块不应该 import emit，事件只能由 Orchestrator 发送"
+        )
+
     @patch("src.business.agents.agent_loop.ContextManager")
     @patch("src.business.agents.agent_loop.MessageRepository")
-    def test_no_events_emitted_by_loop(self, mock_msg_repo_cls, mock_ctx_cls):
-        """Loop 是纯执行引擎，不发任何业务事件（事件由 Orchestrator 发）"""
+    def test_tool_signal_completed(self, mock_msg_repo_cls, mock_ctx_cls):
+        """测试工具返回 ToolSignal(COMPLETED) 时循环中断并返回 signal_tool"""
+        from src.business.agents.config import ToolSignal, ResultType as RT
+
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
         mock_ctx.get_session_status.return_value = None
         mock_ctx.assemble_context.return_value = [{"role": "system", "content": "测试 prompt"}]
         mock_ctx.save_message.return_value = None
-        mock_ctx.save_assistant_message.return_value = None
         mock_ctx.update_session_status.return_value = None
 
         mock_msg_repo = MagicMock()
         mock_msg_repo.get_first.return_value = None
         mock_msg_repo_cls.return_value = mock_msg_repo
 
-        self.mock_llm.chat_with_tools.return_value = LLMResponse(content="完成", tool_calls=[])
+        # 信号工具：handler 返回 ToolSignal(COMPLETED)
+        def signal_handler(goal: str) -> ToolSignal:
+            return ToolSignal(result_type=RT.COMPLETED, display_text="[已提交]")
 
-        with patch("src.utils.events.emit") as mock_emit:
-            loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
-            loop.run("test-session")
-            mock_emit.assert_not_called()
+        signal_tool = ToolDefinition(
+            name="submit_result",
+            schema={"type": "function", "function": {"name": "submit_result", "parameters": {}}},
+            handler=signal_handler,
+        )
+
+        self.mock_llm.chat_with_tools.return_value = LLMResponse(
+            content=None,
+            tool_calls=[ToolCallInfo(id="call_999", name="submit_result", args={"goal": "测试目标"})],
+        )
+
+        loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
+        result = loop.run("test-session", tools=[signal_tool])
+
+        assert result.result_type == ResultType.COMPLETED
+        assert result.signal_tool is not None
+        assert result.signal_tool.name == "submit_result"
+        assert result.signal_tool.args == {"goal": "测试目标"}
+        # 循环在第一次工具调用后中断，LLM 只调用了一次
+        assert self.mock_llm.chat_with_tools.call_count == 1
