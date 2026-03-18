@@ -511,6 +511,21 @@ class RecordingRepository:
 
         return snapshot
 
+    def get_sibling_snapshot_action_ids(self, recording_id: str) -> set:
+        """
+        获取指定录制中所有有兄弟元素快照的 action_id 集合（用于 action_summary 批量判断）
+
+        Args:
+            recording_id: 录制会话 ID
+
+        Returns:
+            有兄弟元素快照的 action_id 集合
+        """
+        results = self.db.fetchall(
+            "SELECT action_id FROM sibling_snapshots WHERE recording_id = ?", (recording_id,)
+        )
+        return {row[0] for row in results} if results else set()
+
     def get_list_context(self, action_id: int) -> Optional[Dict[str, Any]]:
         """
         获取操作的列表上下文

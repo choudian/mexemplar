@@ -91,14 +91,13 @@ class AgentResult:
 # 内置 Agent 配置
 # =============================================================================
 
+# 延迟导入避免潜在循环依赖（prompts 模块不依赖 config）
+from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT  # noqa: E402
+
 # PM Agent 配置
 PM_CONFIG = AgentConfig(
     agent_type=AgentType.PM,
-    system_prompt=(
-        "你是一个产品经理 Agent。负责理解用户需求，分析录制数据，"
-        "制定产品方案，回答用户问题。"
-        "\n\n当前阶段 system prompt 为占位符，后续会细化。"
-    ),
+    system_prompt=PM_SYSTEM_PROMPT,
     max_iterations=50,
 )
 

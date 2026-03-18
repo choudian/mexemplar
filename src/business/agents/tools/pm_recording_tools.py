@@ -145,13 +145,15 @@ def _query_action_summary(repo: RecordingRepository, recording_id: str) -> Dict[
     操作流程概览查询。
 
     遍历 actions 表，为每个操作生成一行摘要，并标记 has_input / has_siblings。
+    批量查询 sibling_snapshots 避免 N+1 问题。
     """
     actions = repo.get_actions(recording_id)
+    # 批量获取有兄弟元素快照的 action_id 集合，避免 N+1 查询
+    sibling_action_ids = repo.get_sibling_snapshot_action_ids(recording_id)
     summary_items = []
 
     for idx, action in enumerate(actions, start=1):
         action_id = action.get("action_id")
-        sibling = repo.get_sibling_snapshot(action_id) if action_id else None
 
         summary_items.append(
             {
@@ -160,7 +162,7 @@ def _query_action_summary(repo: RecordingRepository, recording_id: str) -> Dict[
                 "url": action.get("url", ""),
                 "description": _generate_action_description(action),
                 "has_input": _has_input(action),
-                "has_siblings": sibling is not None,
+                "has_siblings": action_id in sibling_action_ids if action_id is not None else False,
             }
         )
 
