@@ -23,13 +23,6 @@ from .tool_registry import agent_tool, get_tool_schemas, execute_tool, clear_reg
 from .validation import validate_parameters
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA
 
-# 导入业务工具（触发注册）
-from .tools import (
-    query_recording_data,
-    multimodal_analysis,
-    syntax_check,
-)
-
 __all__ = [
     # 配置
     "AgentType",
@@ -56,8 +49,4 @@ __all__ = [
     # 内置工具
     "TALK_TO_USER_SCHEMA",
     "LOAD_REFERENCE_SCHEMA",
-    # 业务工具
-    "query_recording_data",
-    "multimodal_analysis",
-    "syntax_check",
 ]
