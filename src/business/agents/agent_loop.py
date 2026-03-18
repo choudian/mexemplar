@@ -7,16 +7,15 @@ Agent Loop 核心
 import json
 import logging
 import time
-from typing import Optional, Dict
+from typing import Callable, Dict, List, Optional
 
 from src.business.ai.llm_client import LangChainLLMClient, LLMResponse
 from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
 from src.data.repositories import MessageRepository
 
-from .config import AgentConfig, AgentResult, ResultType, RetryConfig
-from .tool_registry import get_tool_schemas, execute_tool
-from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA
+from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
+from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +163,7 @@ class AgentLoop:
         self,
         session_id: str,
         user_input: Optional[str] = None,
+        tools: Optional[List[ToolDefinition]] = None,
     ) -> AgentResult:
         """
         执行 Agent 循环
@@ -171,6 +171,7 @@ class AgentLoop:
         Args:
             session_id: 会话 ID
             user_input: 用户输入（可选）
+            tools: 工具列表（由调用方组装传入）。为 None 时只有内置工具可用。
 
         Returns:
             AgentResult 对象
@@ -191,8 +192,14 @@ class AgentLoop:
             ctx.save_user_message(user_input)
             logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
 
-        # 构建工具列表（使用注册表 + 内置工具）
-        all_tool_schemas = get_tool_schemas() + [TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA]
+        # 构建工具列表（传入的 tools + 内置工具）
+        tools = tools or []
+        all_tool_schemas = [td.schema for td in tools] + [
+            TALK_TO_USER_SCHEMA,
+            LOAD_REFERENCE_SCHEMA,
+        ]
+        tool_handlers: Dict[str, Callable] = {td.name: td.handler for td in tools}
+        tool_handlers["talk_to_user"] = talk_to_user
 
         # 主循环
         iteration = 0
@@ -239,28 +246,42 @@ class AgentLoop:
                 f"[Agent Loop] 工具调用: {tool_call.name} " f"(args: {list(tool_call.args.keys())})"
             )
 
-            # 检查 talk_to_user 哨兵
-            if tool_call.name == "talk_to_user":
-                ctx.save_tool_result(
-                    tool_call_id=tool_call.id, tool_name="talk_to_user", content="[等待用户回复]"
-                )
-                ctx.update_session_status("suspended")
-                question = tool_call.args.get("message", "")
-                logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
-                return AgentResult(
-                    result_type=ResultType.NEEDS_USER_INPUT,
-                    question=question,
-                )
-
-            # 执行工具
+            # 执行工具（统一路径，不区分内置/注册）
             try:
                 if tool_call.name == "load_reference":
-                    # load_reference 由 AgentLoop 内部处理
+                    # load_reference 需要 ctx，由 AgentLoop 内部处理
                     result = ctx.load_reference(tool_call.args["message_id"])
                 else:
-                    # 执行注册表中的工具
-                    result = execute_tool(tool_call.name, tool_call.args)
+                    handler = tool_handlers.get(tool_call.name)
+                    if handler is None:
+                        result = f"错误：未知工具 '{tool_call.name}'"
+                    else:
+                        result = handler(**tool_call.args)
 
+                # 检查是否为 ToolSignal（工具要求中断循环）
+                if isinstance(result, ToolSignal):
+                    ctx.save_tool_result(
+                        tool_call_id=tool_call.id,
+                        tool_name=tool_call.name,
+                        content=result.display_text,
+                    )
+                    if result.result_type == ResultType.NEEDS_USER_INPUT:
+                        ctx.update_session_status("suspended")
+                        question = tool_call.args.get("message", "")
+                        logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
+                        return AgentResult(
+                            result_type=ResultType.NEEDS_USER_INPUT,
+                            question=question,
+                            signal_tool=tool_call,
+                        )
+                    else:
+                        ctx.update_session_status("completed")
+                        return AgentResult(
+                            result_type=result.result_type,
+                            signal_tool=tool_call,
+                        )
+
+                # 普通工具结果，保存并继续迭代
                 ctx.save_tool_result(
                     tool_call_id=tool_call.id,
                     tool_name=tool_call.name,

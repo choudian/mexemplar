@@ -9,22 +9,34 @@ import json
 import logging
 import re
 import uuid
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
     AgentResult,
     ResultType,
+    ToolDefinition,
     PM_CONFIG,
     PROGRAMMER_CONFIG,
     TRIAL_CONFIG,
 )
+from src.business.agents.tools.pm_recording_tools import pm_query_recording_data
+from src.business.agents.tools.pm_analysis_tools import multimodal_analysis
+from src.business.agents.tools.pm_output_tools import submit_requirements, report_code_issue
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.models_sqlite import Session, WorkflowTransition
 from src.data.repositories import SessionRepository, WorkflowTransitionRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.utils.events import emit
 from .llm_reviewer import LLMReviewer, ReviewResult
+
+# PM Agent 工具列表（talk_to_user 和 load_reference 由 AgentLoop 自动追加）
+PM_TOOLS: List[ToolDefinition] = [
+    pm_query_recording_data,
+    multimodal_analysis,
+    submit_requirements,
+    report_code_issue,
+]
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +94,8 @@ class AgentOrchestrator:
             f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
         )
 
-        result = loop.run(session_id, user_input)
+        tools = PM_TOOLS if agent_type == "pm" else None
+        result = loop.run(session_id, user_input, tools=tools)
 
         if result.result_type == ResultType.COMPLETED:
             self._dispatch_next(agent_type, result, session_id, workflow_id)
@@ -233,39 +246,18 @@ class AgentOrchestrator:
 
     def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
         """
-        PM 完成 → 转给程序员
+        PM 完成 → 根据 signal_tool 路由
 
-        两种场景统一处理：
-        - 正常需求确认：PM 输出 requirements JSON → 解析成功 → emit requirement_confirmed
-        - 分诊代码问题：PM 输出用户反馈（非 JSON）→ 解析失败 → emit triage_completed
-        两种情况都将输出转给程序员（程序员 session 复用，有完整上下文）。
+        两种场景通过 signal_tool.name 区分：
+        - submit_requirements → 正常需求确认 → emit requirement_confirmed → 转给程序员
+        - report_code_issue  → 分诊代码问题 → emit triage_completed → 转给程序员
+        - None（自然结束，兜底）→ emit agent_error
         """
         programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
 
-        try:
-            requirements = self._parse_requirements(result.final_output)
-        except ValueError:
-            # 分诊：PM 判断为代码问题，直接输出用户反馈（非 JSON）
-            emit(
-                "triage_completed",
-                sender=self,
-                workflow_id=workflow_id,
-                session_id=session_id,
-                triage_result="code_issue",
-                feedback=result.final_output,
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="triage_completed",
-                    from_session_id=session_id,
-                    to_session_id=programmer_session_id,
-                    payload=json.dumps({"triage_result": "code_issue"}),
-                )
-            )
-        else:
-            # 正常需求确认：解析成功，emit + 记录交接
+        if result.signal_tool and result.signal_tool.name == "submit_requirements":
+            # 正常需求确认：结构化数据来自 signal_tool.args，由 FC schema 保证格式
+            requirements = result.signal_tool.args
             emit(
                 "requirement_confirmed",
                 sender=self,
@@ -283,9 +275,57 @@ class AgentOrchestrator:
                     payload=json.dumps({"requirements": requirements}),
                 )
             )
+            # 将需求 JSON 转给程序员
+            self.run_agent("programmer", json.dumps(requirements, ensure_ascii=False), workflow_id)
 
-        # 两种情况都转给程序员
-        self.run_agent("programmer", result.final_output, workflow_id)
+        elif result.signal_tool and result.signal_tool.name == "report_code_issue":
+            # 分诊：PM 判定为代码问题，将用户反馈转交程序员
+            feedback = result.signal_tool.args.get("feedback", "")
+            emit(
+                "triage_completed",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                triage_result="code_issue",
+                feedback=feedback,
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="triage_completed",
+                    from_session_id=session_id,
+                    to_session_id=programmer_session_id,
+                    payload=json.dumps({"triage_result": "code_issue", "feedback": feedback}),
+                )
+            )
+            self.run_agent("programmer", feedback, workflow_id)
+
+        else:
+            # 兜底：PM 自然结束但未调用 submit_requirements 或 report_code_issue
+            # 视为异常情况（pm_agent_design.md 9.6 节）
+            logger.warning(
+                f"[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session={session_id}"
+            )
+            emit(
+                "agent_error",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type="pm",
+                error="PM Agent 未调用 submit_requirements 或 report_code_issue 即结束",
+                error_type="missing_signal_tool",
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="agent_error",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps({"agent_type": "pm", "error": "missing_signal_tool"}),
+                )
+            )
 
     def _on_programmer_completed(
         self, result: AgentResult, session_id: str, workflow_id: str

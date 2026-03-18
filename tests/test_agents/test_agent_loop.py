@@ -18,6 +18,7 @@ from src.business.agents import (
     AgentType,
     RetryConfig,
 )
+from src.business.agents.config import ToolDefinition
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 
 
@@ -109,8 +110,7 @@ class TestAgentLoop:
 
     @patch("src.business.agents.agent_loop.ContextManager")
     @patch("src.business.agents.agent_loop.MessageRepository")
-    @patch("src.business.agents.agent_loop.execute_tool")
-    def test_tool_execution_success(self, mock_execute_tool, mock_msg_repo_cls, mock_ctx_cls):
+    def test_tool_execution_success(self, mock_msg_repo_cls, mock_ctx_cls):
         """测试工具执行成功"""
         # Mock ContextManager
         mock_ctx = MagicMock()
@@ -125,8 +125,13 @@ class TestAgentLoop:
         mock_msg_repo.get_first.return_value = None
         mock_msg_repo_cls.return_value = mock_msg_repo
 
-        # Mock 工具执行
-        mock_execute_tool.return_value = "工具执行成功"
+        # 定义测试工具（通过 ToolDefinition 传入）
+        mock_handler = Mock(return_value="工具执行成功")
+        test_tool = ToolDefinition(
+            name="test_tool",
+            schema={"type": "function", "function": {"name": "test_tool", "parameters": {}}},
+            handler=mock_handler,
+        )
 
         # 第一次 LLM 调用返回工具调用，第二次返回最终结果
         self.mock_llm.chat_with_tools.side_effect = [
@@ -137,22 +142,19 @@ class TestAgentLoop:
             LLMResponse(content="基于工具结果的回复", tool_calls=[]),
         ]
 
-        # 创建并运行 Agent Loop
+        # 创建并运行 Agent Loop（传入 tools 参数）
         loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
-        result = loop.run("test-session")
+        result = loop.run("test-session", tools=[test_tool])
 
         # 验证结果
         assert result.result_type == ResultType.COMPLETED
         assert result.final_output == "基于工具结果的回复"
-        mock_execute_tool.assert_called_once_with("test_tool", {"id": "456"})
+        mock_handler.assert_called_once_with(id="456")
 
     @patch("src.business.agents.agent_loop.ContextManager")
     @patch("src.business.agents.agent_loop.MessageRepository")
-    @patch("src.business.agents.agent_loop.execute_tool")
-    def test_tool_execution_error_continues(
-        self, mock_execute_tool, mock_msg_repo_cls, mock_ctx_cls
-    ):
-        """测试工具执行错误不终止循环"""
+    def test_tool_execution_error_continues(self, mock_msg_repo_cls, mock_ctx_cls):
+        """测试工具执行错误（异常）不终止循环"""
         # Mock ContextManager
         mock_ctx = MagicMock()
         mock_ctx_cls.return_value = mock_ctx
@@ -166,8 +168,15 @@ class TestAgentLoop:
         mock_msg_repo.get_first.return_value = None
         mock_msg_repo_cls.return_value = mock_msg_repo
 
-        # Mock 工具执行失败
-        mock_execute_tool.return_value = "错误：工具执行失败"
+        # 工具 handler 抛出异常
+        def raising_handler():
+            raise RuntimeError("工具执行失败")
+
+        error_tool = ToolDefinition(
+            name="error_tool",
+            schema={"type": "function", "function": {"name": "error_tool", "parameters": {}}},
+            handler=raising_handler,
+        )
 
         # LLM 调用：工具调用 -> 最终回复
         self.mock_llm.chat_with_tools.side_effect = [
@@ -179,7 +188,7 @@ class TestAgentLoop:
 
         # 创建并运行 Agent Loop
         loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
-        result = loop.run("test-session")
+        result = loop.run("test-session", tools=[error_tool])
 
         # 验证结果：循环没有终止，继续处理
         assert result.result_type == ResultType.COMPLETED
@@ -275,17 +284,20 @@ class TestAgentLoop:
             content=None, tool_calls=[ToolCallInfo(id="call_123", name="infinite_tool", args={})]
         )
 
-        # Mock execute_tool
-        with patch("src.business.agents.agent_loop.execute_tool") as mock_execute:
-            mock_execute.return_value = "工具结果"
+        # 定义一个无限循环工具（返回普通 str，不中断）
+        infinite_tool = ToolDefinition(
+            name="infinite_tool",
+            schema={"type": "function", "function": {"name": "infinite_tool", "parameters": {}}},
+            handler=lambda: "工具结果",
+        )
 
-            # 创建并运行 Agent Loop
-            loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
-            result = loop.run("test-session")
+        # 创建并运行 Agent Loop
+        loop = AgentLoop(self.test_config, self.mock_llm, self.mock_config)
+        result = loop.run("test-session", tools=[infinite_tool])
 
-            # 验证结果：达到最大迭代次数
-            assert result.result_type == ResultType.MAX_ITERATIONS_REACHED
-            assert "超过最大迭代次数" in result.error
+        # 验证结果：达到最大迭代次数
+        assert result.result_type == ResultType.MAX_ITERATIONS_REACHED
+        assert "超过最大迭代次数" in result.error
 
     def test_config_cache(self):
         """测试配置缓存"""
