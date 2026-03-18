@@ -131,6 +131,19 @@ class AgentOrchestrator:
                 )
             )
 
+    def start_analysis(self, recording_id: str, workflow_id: str) -> None:
+        """
+        启动 PM Agent 分析录制（首次分析入口）
+
+        构造初始输入消息（pm_agent_design.md 5.3 节），
+        由 Orchestrator 保证消息格式一致，调用方只需传 recording_id。
+        """
+        initial_input = (
+            f"请分析录制 {recording_id} 的操作流程，"
+            "理解用户想要自动化的任务，并与用户确认需求。"
+        )
+        self.run_agent("pm", initial_input, workflow_id)
+
     def start_trial(self, tool_id: str, user_input: str, workflow_id: str) -> None:
         """启动试用 Agent"""
         self.run_agent("trial", user_input, workflow_id)
@@ -253,11 +266,10 @@ class AgentOrchestrator:
         - report_code_issue  → 分诊代码问题 → emit triage_completed → 转给程序员
         - None（自然结束，兜底）→ emit agent_error
         """
-        programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
-
         if result.signal_tool and result.signal_tool.name == "submit_requirements":
             # 正常需求确认：结构化数据来自 signal_tool.args，由 FC schema 保证格式
             requirements = result.signal_tool.args
+            programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
             emit(
                 "requirement_confirmed",
                 sender=self,
@@ -281,6 +293,7 @@ class AgentOrchestrator:
         elif result.signal_tool and result.signal_tool.name == "report_code_issue":
             # 分诊：PM 判定为代码问题，将用户反馈转交程序员
             feedback = result.signal_tool.args.get("feedback", "")
+            programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
             emit(
                 "triage_completed",
                 sender=self,
@@ -515,24 +528,6 @@ class AgentOrchestrator:
                 raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
             self._loops[agent_type] = AgentLoop(configs[agent_type], self._llm, self._config)
         return self._loops[agent_type]
-
-    def _parse_requirements(self, output: str) -> dict:
-        """
-        解析 PM 输出为需求 JSON
-
-        尝试顺序：直接 json.loads → markdown 代码块提取 → 抛 ValueError
-        ValueError 由 _on_pm_completed 捕获，用于区分正常需求确认和分诊代码问题路由。
-        """
-        try:
-            return json.loads(output)
-        except json.JSONDecodeError:
-            match = re.search(r"```json\n(.*?)\n```", output, re.DOTALL)
-            if match:
-                try:
-                    return json.loads(match.group(1))
-                except json.JSONDecodeError:
-                    pass
-            raise ValueError(f"无法解析 PM 输出为需求 JSON，原始输出: {output[:200]}...")
 
     def _extract_code(self, output: str) -> str:
         """从程序员输出中提取 Python 代码，失败则返回整个 output"""
