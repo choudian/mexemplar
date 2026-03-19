@@ -162,7 +162,7 @@ PM 不是程序员。PM 不关心技术实现细节（API 怎么调、代码怎�
 
 ---
 
-## 五、PM 交互流程
+## 四、PM 交互流程
 
 ### 5.1 正常需求确认流程
 
@@ -228,7 +228,7 @@ PM 启动时收到的第一条 user message（由 Orchestrator 构造）：
 
 ---
 
-## 六、submit_requirements 工具
+## 五、submit_requirements 工具
 
 ### 6.1 定位
 
@@ -307,7 +307,7 @@ if result.signal_tool and result.signal_tool.name == "submit_requirements":
 
 ---
 
-## 七、report_code_issue 工具
+## 六、report_code_issue 工具
 
 ### 7.1 定位
 
@@ -361,7 +361,7 @@ if result.signal_tool and result.signal_tool.name == "report_code_issue":
 
 ---
 
-## 八、配置更新
+## 七、配置更新
 
 ### 8.1 工具定义
 
@@ -420,7 +420,7 @@ PM 的 system prompt 从 `config.py` 中移出到 `prompts/pm_prompt.py`，保�
 
 ---
 
-## 九、边界情况
+## 八、边界情况
 
 ### 9.1 录制数据为空
 
@@ -448,7 +448,7 @@ PM 可能在没有调用 `submit_requirements` 或 `report_code_issue` 的情况
 
 ---
 
-## 十、与架构 v2 的关系
+## 九、与架构 v2 的关系
 
 ### 一致的决策
 

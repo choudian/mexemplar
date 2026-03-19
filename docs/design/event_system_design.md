@@ -226,16 +226,16 @@ ContextManager / LLM
 用户试用工具 → trial_failed → 恢复 PM session（自动复用）
 
 → PM 判断是代码问题
-    → PM 直接完成（输出用户反馈，非 JSON）
-    → _on_pm_completed 解析失败 → triage_completed (code_issue)
-    → 恢复程序员 session（自动复用）→ 程序员排查修复
-    → code_completed → review_passed → 更新工具（清零试用计数）
+    → PM 调用 report_code_issue(feedback="...")
+    → _on_pm_completed 检测 signal_tool.name == "report_code_issue"
+    → triage_completed (code_issue) → 恢复程序员 session（自动复用）
+    → 程序员排查修复 → code_completed → review_passed → 更新工具（清零试用计数）
 
 → PM 判断是需求问题
     → PM 调 talk_to_user 跟用户重新确认需求
-    → PM 完成（输出 requirements JSON）
-    → _on_pm_completed 解析成功 → requirement_confirmed
-    → 恢复程序员 session → 程序员按新需求重写
+    → PM 调用 submit_requirements(...)
+    → _on_pm_completed 检测 signal_tool.name == "submit_requirements"
+    → requirement_confirmed → 恢复程序员 session → 程序员按新需求重写
 ```
 
 ---
@@ -478,18 +478,17 @@ def _dispatch_next(
 
 def _on_pm_completed(self, result, session_id, workflow_id):
     """
-    PM 完成 → 转给程序员
+    PM 完成 → 根据 signal_tool.name 路由
 
-    两种场景统一处理：
-    - 正常需求确认：PM 输出 requirements JSON → 解析成功 → emit requirement_confirmed
-    - 分诊代码问题：PM 输出用户反馈（非 JSON）→ 解析失败 → emit triage_completed
-    两种情况都转给程序员，程序员 session 被复用，有完整的代码上下文。
+    两种路径：
+    - submit_requirements → 正常需求确认，emit requirement_confirmed，转给程序员
+    - report_code_issue → 分诊代码问题，emit triage_completed，转给程序员
     """
     programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
 
-    # 尝试解析为需求 JSON，区分正常确认和分诊
-    try:
-        requirements = self._parse_requirements(result.final_output)
+    if result.signal_tool and result.signal_tool.name == "submit_requirements":
+        # 正常需求确认：结构化数据来自 FC schema，不需要解析容错
+        requirements = result.signal_tool.args
         emit("requirement_confirmed", sender=self,
              workflow_id=workflow_id,
              session_id=session_id,
@@ -501,13 +500,16 @@ def _on_pm_completed(self, result, session_id, workflow_id):
             to_session_id=programmer_session_id,
             payload={"requirements": requirements}
         )
-    except ValueError:
-        # 分诊结果：代码问题，PM 输出的是用户反馈而非 requirements JSON
+        self.run_agent("programmer", json.dumps(requirements), workflow_id)
+
+    elif result.signal_tool and result.signal_tool.name == "report_code_issue":
+        # 分诊代码问题：转给程序员排查
+        feedback = result.signal_tool.args["feedback"]
         emit("triage_completed", sender=self,
              workflow_id=workflow_id,
              session_id=session_id,
              triage_result="code_issue",
-             feedback=result.final_output)
+             feedback=feedback)
         self._transition_repo.create(
             workflow_id=workflow_id,
             event_type="triage_completed",
@@ -515,13 +517,31 @@ def _on_pm_completed(self, result, session_id, workflow_id):
             to_session_id=programmer_session_id,
             payload={"triage_result": "code_issue"}
         )
+        self.run_agent("programmer", feedback, workflow_id)
 
-    # 两种情况都转给程序员
-    self.run_agent("programmer", result.final_output, workflow_id)
+    else:
+        # 异常：PM 未通过信号工具结束（自然结束）
+        emit("agent_error", sender=self,
+             workflow_id=workflow_id,
+             session_id=session_id,
+             agent_type="pm",
+             error="PM 未通过 submit_requirements 或 report_code_issue 结束",
+             error_type="unexpected_completion")
 
 def _on_programmer_completed(self, result, session_id, workflow_id):
-    """程序员完成 → 提取代码 → 启动 Review"""
-    code = self._extract_code(result.final_output)
+    """程序员完成 → 从 signal_tool.args 获取结构化代码数据 → 启动 Review"""
+    if result.signal_tool and result.signal_tool.name == "submit_code":
+        code_data = result.signal_tool.args
+        code = code_data["code"]
+    else:
+        # 异常：程序员未通过 submit_code 提交代码
+        emit("agent_error", sender=self,
+             workflow_id=workflow_id,
+             session_id=session_id,
+             agent_type="programmer",
+             error="程序员未通过 submit_code 提交代码",
+             error_type="unexpected_completion")
+        return
 
     emit("code_completed", sender=self,
          workflow_id=workflow_id,
@@ -535,7 +555,7 @@ def _on_programmer_completed(self, result, session_id, workflow_id):
         payload={"code_length": len(code)}
     )
 
-    self._run_review(code, session_id, workflow_id)
+    self._run_review(code_data, session_id, workflow_id)
 
 def _on_trial_completed(self, result, session_id, workflow_id):
     """试用 Agent 完成 → 解析结果 → 更新计数或触发分诊"""
@@ -549,15 +569,19 @@ def _on_trial_completed(self, result, session_id, workflow_id):
 ```python
 def _run_review(
     self,
-    code: str,
+    code_data: dict,
     from_session_id: str,
     workflow_id: str
 ) -> None:
     """
     运行 LLM Review
 
+    code_data 来自程序员 submit_code 的 signal_tool.args，
+    包含 tool_name, description, code, execution_strategy, parameters。
     Review 重试次数通过 self._review_counts[workflow_id] 追踪。
     """
+    code = code_data["code"]
+
     # 获取当前重试次数
     retry_count = self._review_counts.get(workflow_id, 0)
 
@@ -579,7 +603,7 @@ def _run_review(
         # 清理 retry 计数
         self._review_counts.pop(workflow_id, None)
 
-        tool_id = self._save_tool(code, workflow_id, from_session_id)
+        tool_id = self._save_tool(code_data, workflow_id, from_session_id)
 
     else:
         # Review 失败
@@ -626,7 +650,7 @@ def _run_review(
             )
 
             self._review_counts.pop(workflow_id, None)
-            tool_id = self._save_tool(code, workflow_id, from_session_id)
+            tool_id = self._save_tool(code_data, workflow_id, from_session_id)
 ```
 
 #### 8.3.4 start_trial — 启动试用
@@ -815,38 +839,6 @@ def _get_agent_config(self, agent_type: str) -> AgentConfig:
         raise ValueError(f"未知 Agent 类型: {agent_type}")
     return configs[agent_type]
 
-def _parse_requirements(self, output: str) -> dict:
-    """
-    解析 PM 输出为需求 JSON
-
-    尝试顺序：
-    1. 直接 json.loads
-    2. 从 markdown 代码块提取
-    3. 失败则抛出 ValueError（由 _on_pm_completed 捕获，
-       用于区分正常需求确认和分诊代码问题路由）
-    """
-    try:
-        return json.loads(output)
-    except json.JSONDecodeError:
-        import re
-        match = re.search(r'```json\n(.*?)\n```', output, re.DOTALL)
-        if match:
-            return json.loads(match.group(1))
-        raise ValueError(
-            f"无法解析 PM 输出为需求 JSON，原始输出: {output[:200]}..."
-        )
-
-def _extract_code(self, output: str) -> str:
-    """
-    提取程序员输出中的代码
-
-    尝试从 markdown 代码块提取，失败则返回整个 output。
-    """
-    import re
-    match = re.search(r'```python\n(.*?)\n```', output, re.DOTALL)
-    if match:
-        return match.group(1)
-    return output
 ```
 
 ### 8.6 工具保存
@@ -854,7 +846,7 @@ def _extract_code(self, output: str) -> str:
 ```python
 def _save_tool(
     self,
-    code: str,
+    code_data: dict,
     workflow_id: str,
     session_id: str,
     status: str = "pending"
@@ -865,13 +857,14 @@ def _save_tool(
     按 workflow_id 查已有工具：存在则更新代码并清零试用计数，不存在则创建。
     这样分诊修复后不会创建重复工具。
 
-    注意：工具信息的提取方式（名称、描述、参数）是临时实现，
-    依赖优先级 6（程序员 Agent）确定输出格式后细化。
+    code_data 来自程序员 submit_code 工具的 signal_tool.args，包含：
+    tool_name, description, code, execution_strategy, parameters
     """
     from src.data.repositories import ToolRepository
 
     tool_repo = ToolRepository()
     existing_tool = tool_repo.get_by_workflow_id(workflow_id)
+    code = code_data["code"]
 
     if existing_tool:
         # 更新已有工具（分诊修复、review 打回后重新生成）
@@ -880,12 +873,12 @@ def _save_tool(
         tool_repo.update_trial_count(tool_id, 0)  # 代码变了，清零试用计数
         tool_repo.update_status(tool_id, status)
     else:
-        # 首次创建
+        # 首次创建：使用结构化 metadata，不再需要临时解析方法
         tool_id = tool_repo.create(
-            tool_name=self._extract_tool_name(code),
-            description=self._extract_tool_description(code),
+            tool_name=code_data["tool_name"],
+            description=code_data["description"],
             code=code,
-            parameters=self._extract_tool_parameters(code),
+            parameters=json.dumps(code_data["parameters"]),
             workflow_id=workflow_id,
             status=status
         )
@@ -903,22 +896,6 @@ def _save_tool(
     )
 
     return tool_id
-
-def _extract_tool_name(self, code: str) -> str:
-    """从代码中提取工具名（临时实现）"""
-    import re
-    match = re.search(r'def (\w+)\(', code)
-    return match.group(1) if match else "unnamed_tool"
-
-def _extract_tool_description(self, code: str) -> str:
-    """从代码中提取工具描述（临时实现）"""
-    import re
-    match = re.search(r'"""(.*?)"""', code, re.DOTALL)
-    return match.group(1).strip() if match else ""
-
-def _extract_tool_parameters(self, code: str) -> str:
-    """从代码中提取工具参数（临时实现，待优先级6细化）"""
-    return "{}"
 ```
 
 ---
@@ -1157,13 +1134,9 @@ orchestrator.handle_trial_result(tool_id, success=True, workflow_id=recording_id
 
 ## 十三、边界情况
 
-### 13.1 _parse_requirements 解析失败
+### 13.1 PM 未通过信号工具结束
 
-`_on_pm_completed` 中，解析失败（`ValueError`）有两种含义：
-- **分诊场景**：PM 输出的是用户反馈（非 JSON），属于正常的 code_issue 路由，emit `triage_completed` 并转给程序员
-- **非分诊场景**：PM 输出了格式错误的 JSON，属于异常。此时 `triage_completed` 会被错误发出，但程序员收到后无法正常工作，最终会因为 max_iterations 或 LLM 判断而返回错误
-
-如果需要更精确地区分这两种情况，可在实现时根据 PM prompt 的输出约定进一步细化。
+`_on_pm_completed` 中，如果 `result.signal_tool` 为 None（PM 自然结束，未调用 `submit_requirements` 或 `report_code_issue`），视为异常情况，emit `agent_error`。这种情况下 PM 的 `final_output` 是自由文本，无法可靠路由。
 
 ### 13.2 重复事件
 
@@ -1213,7 +1186,7 @@ def emit(event_name: str, sender, **kwargs):
 | **试用成功计数** | 存 tools 表 `trial_success_count` 字段，3 次成功后发布，工具修改后清零 |
 | **AgentUIBridge** | QThread + blinker → PyQt 信号，隔离 UI 线程和 Agent 执行线程 |
 | **事件数据传字典** | 使用 kwargs 传递，避免定义过多数据类 |
-| **分诊靠输出格式路由** | PM 输出 requirements JSON → 需求确认流程；输出非 JSON → 代码问题，转给程序员。不加状态标记，不加特殊工具 |
+| **分诊靠 signal_tool.name 路由** | PM 调用 submit_requirements → 需求确认流程；调用 report_code_issue → 代码问题，转给程序员。路由由工具名决定，不依赖输出格式解析 |
 | **工具按 workflow_id 去重** | `_save_tool` 查已有工具：存在则更新代码并清零试用计数，不存在则创建。分诊修复后不会创建重复工具 |
 
 ---

@@ -7,7 +7,6 @@ Loop 不感知事件系统；所有事件由 Orchestrator 在 loop.run() 返回�
 
 import json
 import logging
-import re
 import uuid
 from typing import Dict, List, Optional
 
@@ -20,23 +19,19 @@ from src.business.agents.config import (
     PROGRAMMER_CONFIG,
     TRIAL_CONFIG,
 )
-from src.business.agents.tools.pm_recording_tools import pm_query_recording_data
-from src.business.agents.tools.pm_analysis_tools import multimodal_analysis
-from src.business.agents.tools.pm_output_tools import submit_requirements, report_code_issue
+from src.business.agents.tools import (
+    create_recording_tools,
+    submit_requirements,
+    report_code_issue,
+    syntax_check,
+    submit_code,
+)
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.models_sqlite import Session, WorkflowTransition
 from src.data.repositories import SessionRepository, WorkflowTransitionRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.utils.events import emit
 from .llm_reviewer import LLMReviewer, ReviewResult
-
-# PM Agent 工具列表（talk_to_user 和 load_reference 由 AgentLoop 自动追加）
-PM_TOOLS: List[ToolDefinition] = [
-    pm_query_recording_data,
-    multimodal_analysis,
-    submit_requirements,
-    report_code_issue,
-]
 
 logger = logging.getLogger(__name__)
 
@@ -94,8 +89,16 @@ class AgentOrchestrator:
             f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
         )
 
-        tools = PM_TOOLS if agent_type == "pm" else None
-        result = loop.run(session_id, user_input, tools=tools)
+        tools = self._build_tools(agent_type, workflow_id)
+
+        # 格式化系统提示中的 {recording_id} 模板变量（仅首次会话时生效）
+        formatted_prompt = loop.format_system_prompt(recording_id=workflow_id)
+
+        result = loop.run(
+            session_id, user_input,
+            tools=tools,
+            system_prompt_override=formatted_prompt,
+        )
 
         if result.result_type == ResultType.COMPLETED:
             self._dispatch_next(agent_type, result, session_id, workflow_id)
@@ -343,8 +346,34 @@ class AgentOrchestrator:
     def _on_programmer_completed(
         self, result: AgentResult, session_id: str, workflow_id: str
     ) -> None:
-        """程序员完成 → 提取代码 → 启动 Review"""
-        code = self._extract_code(result.final_output)
+        """程序员完成 → 从 signal_tool.args 获取结构化代码数据 → 启动 Review"""
+        if not (result.signal_tool and result.signal_tool.name == "submit_code"):
+            logger.warning(
+                f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}"
+            )
+            emit(
+                "agent_error",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type="programmer",
+                error="程序员未通过 submit_code 提交代码",
+                error_type="missing_signal_tool",
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="agent_error",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps({"agent_type": "programmer", "error": "missing_signal_tool"}),
+                )
+            )
+            return
+
+        code_data = result.signal_tool.args
+        code = code_data["code"]
 
         emit(
             "code_completed", sender=self, workflow_id=workflow_id, session_id=session_id, code=code
@@ -360,19 +389,20 @@ class AgentOrchestrator:
             )
         )
 
-        self._run_review(code, session_id, workflow_id)
+        self._run_review(code_data, session_id, workflow_id)
 
     def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
         """试用 Agent 完成后的处理（依赖优先级 7 Trial Agent 设计，暂留空）"""
         pass
 
-    def _run_review(self, code: str, from_session_id: str, workflow_id: str) -> None:
+    def _run_review(self, code_data: dict, from_session_id: str, workflow_id: str) -> None:
         """
         运行 LLM Review
 
         通过/失败计数通过 self._review_counts[workflow_id] 追踪。
         失败 < 3 次：回传给程序员修改；≥ 3 次：强制入库（pending）。
         """
+        code = code_data["code"]
         retry_count = self._review_counts.get(workflow_id, 0)
         review_result: ReviewResult = self._llm_reviewer.review(code)
 
@@ -395,7 +425,7 @@ class AgentOrchestrator:
                 )
             )
             self._review_counts.pop(workflow_id, None)
-            self._save_tool(code, workflow_id, from_session_id)
+            self._save_tool(code_data, workflow_id, from_session_id)
 
         else:
             retry_count += 1
@@ -451,7 +481,7 @@ class AgentOrchestrator:
                     )
                 )
                 self._review_counts.pop(workflow_id, None)
-                self._save_tool(code, workflow_id, from_session_id)
+                self._save_tool(code_data, workflow_id, from_session_id)
 
     def _start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
         """
@@ -516,6 +546,14 @@ class AgentOrchestrator:
     # 辅助方法
     # =========================================================================
 
+    def _build_tools(self, agent_type: str, workflow_id: str) -> List[ToolDefinition]:
+        """根据 agent_type 和 workflow_id 构建工具列表（recording_id 通过闭包绑定）"""
+        if agent_type == "pm":
+            return create_recording_tools(workflow_id) + [submit_requirements, report_code_issue]
+        elif agent_type == "programmer":
+            return create_recording_tools(workflow_id) + [syntax_check, submit_code]
+        return []
+
     def _get_loop(self, agent_type: str) -> AgentLoop:
         """获取或创建 Loop 实例（按 agent_type 缓存）"""
         if agent_type not in self._loops:
@@ -529,16 +567,9 @@ class AgentOrchestrator:
             self._loops[agent_type] = AgentLoop(configs[agent_type], self._llm, self._config)
         return self._loops[agent_type]
 
-    def _extract_code(self, output: str) -> str:
-        """从程序员输出中提取 Python 代码，失败则返回整个 output"""
-        match = re.search(r"```python\n(.*?)\n```", output, re.DOTALL)
-        if match:
-            return match.group(1)
-        return output
-
     def _save_tool(
         self,
-        code: str,
+        code_data: dict,
         workflow_id: str,
         session_id: str,
         status: str = "pending",
@@ -547,29 +578,34 @@ class AgentOrchestrator:
         保存工具到数据库
 
         按 workflow_id 查重：存在则更新代码并清零试用计数，不存在则创建。
-        工具名称、描述、参数的提取为临时实现，待优先级 6（程序员 Agent）细化。
+        工具元数据直接从 submit_code 的结构化参数中获取（code_data dict）。
         """
         from src.data.repositories import ToolRepository
         from src.data.models_sqlite import Tool
 
+        code = code_data["code"]
         tool_repo = ToolRepository()
         existing = tool_repo.get_by_workflow_id(workflow_id)
 
         if existing:
             tool_id = existing.tool_id
-            tool_repo.update_code(tool_id, code)
-            tool_repo.update_trial_success_count(tool_id, 0)
-            tool_repo.update_status(tool_id, status)
+            existing.execution_code = code
+            existing.tool_name = code_data["tool_name"]
+            existing.description = code_data["description"]
+            existing.parameters = code_data.get("parameters", [])
+            existing.trial_success_count = 0
+            existing.status = status
+            tool_repo.update(existing)
         else:
             new_tool = Tool(
                 tool_id=str(uuid.uuid4()),
-                tool_name=self._extract_tool_name(code),
-                description=self._extract_tool_description(code),
+                tool_name=code_data["tool_name"],
+                description=code_data["description"],
                 execution_code=code,
+                parameters=code_data.get("parameters", []),
                 workflow_id=workflow_id,
                 status=status,
                 trial_success_count=0,
-                parameters={},
             )
             created = tool_repo.create(new_tool)
             tool_id = created.tool_id
@@ -593,13 +629,3 @@ class AgentOrchestrator:
         )
 
         return tool_id
-
-    def _extract_tool_name(self, code: str) -> str:
-        """从代码中提取工具名（临时实现，待优先级6细化）"""
-        match = re.search(r"def (\w+)\(", code)
-        return match.group(1) if match else "unnamed_tool"
-
-    def _extract_tool_description(self, code: str) -> str:
-        """从代码中提取工具描述（临时实现，待优先级6细化）"""
-        match = re.search(r'"""(.*?)"""', code, re.DOTALL)
-        return match.group(1).strip() if match else ""

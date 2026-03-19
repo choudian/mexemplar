@@ -20,6 +20,17 @@ from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_u
 logger = logging.getLogger(__name__)
 
 
+class _PartialFormatMap(dict):
+    """
+    支持部分替换的 format_map 映射。
+
+    用于 str.format_map()：已知键正常替换，未知键保留原占位符（不抛 KeyError）。
+    """
+
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
 class AgentLoop:
     """
     Agent Loop 运行时引擎
@@ -57,6 +68,16 @@ class AgentLoop:
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
             f"max_iterations={config.max_iterations}"
         )
+
+    def format_system_prompt(self, **kwargs) -> str:
+        """
+        格式化 system prompt 模板变量（如 {recording_id}）。
+
+        Orchestrator 在首次启动 Agent 前调用，避免直接访问 _config 私有属性。
+        采用部分替换：只替换有对应值的占位符，未知占位符原样保留（不抛异常）。
+        这避免了 str.format(**kwargs) 的陷阱——多个占位符中任一缺失会导致全部不替换。
+        """
+        return self._config.system_prompt.format_map(_PartialFormatMap(kwargs))
 
     def _get_context_manager(self, session_id: str) -> ContextManager:
         """
@@ -164,6 +185,7 @@ class AgentLoop:
         session_id: str,
         user_input: Optional[str] = None,
         tools: Optional[List[ToolDefinition]] = None,
+        system_prompt_override: Optional[str] = None,
     ) -> AgentResult:
         """
         执行 Agent 循环
@@ -172,6 +194,8 @@ class AgentLoop:
             session_id: 会话 ID
             user_input: 用户输入（可选）
             tools: 工具列表（由调用方组装传入）。为 None 时只有内置工具可用。
+            system_prompt_override: 系统提示覆盖（用于注入模板变量如 {recording_id}）。
+                仅在会话首次初始化时生效，已有 system prompt 时忽略。
 
         Returns:
             AgentResult 对象
@@ -181,7 +205,8 @@ class AgentLoop:
 
         # 初始化检查
         if not self._has_system_prompt(session_id):
-            ctx.save_message(role="system", content=self._config.system_prompt)
+            prompt = system_prompt_override or self._config.system_prompt
+            ctx.save_message(role="system", content=prompt)
             logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
 
         if ctx.get_session_status() in ("suspended", "completed"):

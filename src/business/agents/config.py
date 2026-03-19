@@ -10,6 +10,7 @@ from typing import Callable, List, Optional, Dict, Any, Union
 import logging
 
 from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT
+from src.business.agents.prompts.programmer_prompt import PROGRAMMER_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,7 @@ class AgentResult:
 # =============================================================================
 
 # PM Agent 配置
+# system_prompt 含 {recording_id} 模板变量，由 Orchestrator 在启动时格式化
 PM_CONFIG = AgentConfig(
     agent_type=AgentType.PM,
     system_prompt=PM_SYSTEM_PROMPT,
@@ -101,13 +103,10 @@ PM_CONFIG = AgentConfig(
 )
 
 # Programmer Agent 配置
+# system_prompt 含 {recording_id} 模板变量，由 Orchestrator 在启动时格式化
 PROGRAMMER_CONFIG = AgentConfig(
     agent_type=AgentType.PROGRAMMER,
-    system_prompt=(
-        "你是一个程序员 Agent。负责代码生成、语法检查、代码优化，"
-        "根据产品需求实现功能。"
-        "\n\n当前阶段 system prompt 为占位符，后续会细化。"
-    ),
+    system_prompt=PROGRAMMER_SYSTEM_PROMPT,
     max_iterations=30,
 )
 
