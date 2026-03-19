@@ -162,6 +162,18 @@ class UnifiedConfigManager:
         """获取 AI Vision 模型"""
         return self.get("ai.vision_model", default="claude-3-5-sonnet-20241022")
 
+    def get_ai_vision_provider(self) -> str:
+        """获取视觉模型提供商（为空则跟随主模型 provider）"""
+        return self.get("ai.vision_provider", default=None) or self.get_ai_provider()
+
+    def get_ai_vision_api_key(self) -> Optional[str]:
+        """获取视觉模型 API key（为空则跟随主模型）"""
+        return self.get("ai.vision_api_key", default=None) or self.get_ai_api_key()
+
+    def get_ai_vision_base_url(self) -> Optional[str]:
+        """获取视觉模型 endpoint（为空则返回 None，由 LangChain 根据 provider 自动选择默认 endpoint）"""
+        return self.get("ai.vision_base_url", default=None)
+
     def get_ai_provider(self) -> str:
         """获取 AI 提供商"""
         return self.get("ai.provider", default="anthropic")

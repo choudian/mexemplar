@@ -16,6 +16,7 @@
 """
 
 import base64
+import builtins as _builtins_module
 import io
 import json
 import logging
@@ -23,9 +24,8 @@ import re
 import threading
 from typing import Any
 
-import anthropic
-
 from src.business.agents.config import ToolDefinition
+from src.business.ai.llm_client import LangChainLLMClient
 from src.data.duckdb_manager import DuckDBManager
 from src.data.unified_config import get_unified_config
 
@@ -282,6 +282,15 @@ def _query_data(recording_id: str, sql: str) -> str:
             ensure_ascii=False,
         )
 
+    # 防止多语句注入（SELECT ...; DROP TABLE ...）
+    if ";" in sql:
+        return json.dumps(
+            {
+                "error": "SQL 中不允许包含分号（;），每次只能执行单条 SELECT 语句",
+            },
+            ensure_ascii=False,
+        )
+
     db = DuckDBManager()
     try:
         cursor = db.execute(sql)
@@ -356,19 +365,63 @@ QUERY_DATA_SCHEMA: dict[str, Any] = {
 
 _EXECUTE_TIMEOUT = 30  # 秒
 
+# execute_code 允许使用的内建函数白名单（数据探索够用，阻止 open/exec/eval/__import__ 等危险操作）
+_SAFE_BUILTINS: dict[str, Any] = {
+    name: getattr(_builtins_module, name, None)
+    for name in (
+        # 类型与转换
+        "int", "float", "str", "bool", "bytes", "bytearray",
+        "list", "tuple", "dict", "set", "frozenset",
+        "type", "isinstance", "issubclass", "callable",
+        # 数值
+        "abs", "round", "min", "max", "sum", "pow", "divmod",
+        # 容器操作
+        "len", "range", "enumerate", "zip", "map", "filter", "sorted", "reversed",
+        "any", "all", "iter", "next",
+        # 字符串/repr
+        "repr", "format", "chr", "ord", "hex", "oct", "bin", "ascii",
+        # 其他安全操作
+        "id", "hash", "getattr", "setattr", "hasattr", "dir", "vars",
+        "slice", "object", "super", "property", "staticmethod", "classmethod",
+        "True", "False", "None",
+        "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
+        "RuntimeError", "StopIteration", "AttributeError",
+    )
+}
+# 允许 import 指定的安全模块（json、math、re、collections 等数据处理常用库）
+_ALLOWED_MODULES = frozenset({
+    "json", "math", "re", "collections", "itertools", "functools",
+    "datetime", "statistics", "textwrap", "string", "operator",
+    "base64", "hashlib", "urllib",
+})
+
+
+def _safe_import(name: str, globals_=None, locals_=None, fromlist=(), level=0):
+    """受限 __import__：只允许白名单中的模块。"""
+    top_level = name.split(".")[0]
+    if top_level not in _ALLOWED_MODULES:
+        raise ImportError(
+            f"不允许导入模块 '{name}'。允许的模块: {', '.join(sorted(_ALLOWED_MODULES))}"
+        )
+    return __import__(name, globals_, locals_, fromlist, level)
+
 
 def _execute_code(recording_id: str, code: str) -> str:
     """
     临时执行 Python 代码。用于 SQL 搞不定的复杂数据探索。
     预注入 conn（DuckDB 连接）和 recording_id。
+
+    安全模型：代码由 agent 生成（非用户直接输入），但仍做沙箱限制——
+    禁止文件 I/O、网络访问、os/sys/subprocess 等，只保留数据处理所需的能力。
     """
     db = DuckDBManager()
     stdout_buf = io.StringIO()
 
     # 预注入环境。用自定义 print 捕获输出，避免修改 sys.stdout（进程全局，线程不安全）。
     # 用字典合并强制覆盖 file=，防止用户代码显式传 file= 时出现 "多值关键字参数" TypeError。
+    safe_builtins = {**_SAFE_BUILTINS, "__import__": _safe_import}
     exec_globals: dict[str, Any] = {
-        "__builtins__": __builtins__,
+        "__builtins__": safe_builtins,
         "conn": db.conn,
         "recording_id": recording_id,
         "print": lambda *args, **kwargs: print(*args, **{**kwargs, "file": stdout_buf}),
@@ -437,20 +490,27 @@ EXECUTE_CODE_SCHEMA: dict[str, Any] = {
 
 _MAX_ACTION_INDICES = 5  # 单次最多分析的 action 数量
 
-# Anthropic 客户端懒加载单例，避免每次调用重新建连
-_anthropic_client: anthropic.Anthropic | None = None
+# 多模态 LLM 客户端懒加载单例（基于 LangChain，支持 Anthropic / OpenAI / 各家兼容接口）
+_vision_llm_client: LangChainLLMClient | None = None
+_vision_llm_lock = threading.Lock()
 
 
-def _get_anthropic_client() -> anthropic.Anthropic:
-    global _anthropic_client
-    if _anthropic_client is None:
-        config = get_unified_config()
-        client_kwargs: dict[str, Any] = {"api_key": config.get_ai_api_key()}
-        base_url = config.get_ai_base_url()
-        if base_url:
-            client_kwargs["base_url"] = base_url
-        _anthropic_client = anthropic.Anthropic(**client_kwargs)
-    return _anthropic_client
+def _get_vision_llm_client() -> LangChainLLMClient:
+    """获取多模态 LLM 客户端（线程安全懒加载）。"""
+    global _vision_llm_client
+    if _vision_llm_client is None:
+        with _vision_llm_lock:
+            if _vision_llm_client is None:
+                config = get_unified_config()
+                _vision_llm_client = LangChainLLMClient(
+                    provider=config.get_ai_vision_provider(),
+                    model=config.get_ai_vision_model(),
+                    api_key=config.get_ai_vision_api_key(),
+                    base_url=config.get_ai_vision_base_url(),
+                    temperature=0.3,
+                    max_tokens=1024,
+                )
+    return _vision_llm_client
 
 
 def _detect_image_type(data: bytes) -> str:
@@ -526,40 +586,28 @@ def _analyze_image(
             ensure_ascii=False,
         )
 
-    # 构建多模态消息
-    content: list[Any] = []
+    # 构建 LangChain 多模态消息（OpenAI 格式，LangChain 会自动适配各家 API）
+    content: list[dict[str, Any]] = []
     for img in images:
+        content.append({"type": "text", "text": f"[{img['label']}]"})
         content.append(
             {
-                "type": "text",
-                "text": f"[{img['label']}]",
-            }
-        )
-        content.append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": img["media_type"],
-                    "data": img["data"],
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{img['media_type']};base64,{img['data']}",
                 },
             }
         )
     content.append({"type": "text", "text": question})
 
-    # 调用多模态模型
-    vision_model = get_unified_config().get_ai_vision_model()
-
     try:
-        client = _get_anthropic_client()
-        response = client.messages.create(
-            model=vision_model,
-            max_tokens=1024,
-            messages=[{"role": "user", "content": content}],
-        )
-        if not response.content:
+        vision_client = _get_vision_llm_client()
+        from langchain_core.messages import HumanMessage
+
+        response = vision_client.llm.invoke([HumanMessage(content=content)])
+        answer = response.content
+        if not answer:
             return json.dumps({"error": "多模态模型返回空响应"}, ensure_ascii=False)
-        answer = response.content[0].text
         return json.dumps({"analysis": answer}, ensure_ascii=False)
 
     except Exception as e:

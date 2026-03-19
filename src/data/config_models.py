@@ -68,7 +68,10 @@ class AIConfig:
     provider: str = "anthropic"  # anthropic, openai等
     api_key: Optional[str] = None
     model: str = "claude-sonnet-4-20250514"  # Claude Sonnet 4.5
-    vision_model: str = "claude-3-5-sonnet-20241022"  # Claude Vision API
+    vision_model: str = "claude-3-5-sonnet-20241022"  # 多模态视觉模型名称
+    vision_provider: Optional[str] = None  # 视觉模型提供商（为空则跟随主模型 provider）
+    vision_api_key: Optional[str] = None  # 视觉模型专用 API key（为空则跟随主模型）
+    vision_base_url: Optional[str] = None  # 视觉模型专用 endpoint（为空则跟随主模型）
     temperature: float = 0.7
     max_tokens: int = 4096
     timeout: int = 60
