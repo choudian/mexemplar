@@ -93,13 +93,15 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 
 | # | 工具 | 用途 | 说明 |
 |---|------|------|------|
-| 1 | 查录制数据 | 获取操作流程、元素详情、元素上下文、截图等所有录制数据 | Agent 想看什么就查什么，不拆分多个工具 |
-| 2 | 多模态分析 | 调用多模态模型分析截图 | **非常规手段**，兜底用。截图数据从工具 1 获取，工具 2 负责调用多模态模型分析。token 消耗大，Agent 需控制使用频率 |
-| 3 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
+| 1 | describe_data | 数据发现（渐进式：无参返回表概览，传表名返回字段详情） | 任务开始先调一次了解数据概况 |
+| 2 | query_data | agent 写 SQL 直接查询 DuckDB | 主力数据获取，~90% 的查询 |
+| 3 | execute_code | 临时 Python 代码执行 | SQL 不够用时的补充（~10%） |
+| 4 | analyze_image | 多模态模型分析截图 | **非常规手段**，兜底用。图片不进 agent 主上下文，只返回文字分析结果 |
+| 5 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
 
-- 需求分析阶段**不看网络请求**，噪声太大，留给程序员
+- **所有 Agent 共用同一套 4 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）
 - 列表操作通过元素上下文启发式识别，不确定就直接问用户
-- PM 和程序员的"查录制数据"是同一个工具的不同配置 — PM 不查网络请求，程序员查所有数据
+- 详见 [recording_tools_redesign_todo.md](design/recording_tools_redesign_todo.md)
 
 ---
 
@@ -109,12 +111,12 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 
 | # | 工具 | 用途 |
 |---|------|------|
-| 1 | 查录制数据 | 一个工具覆盖所有数据查询（操作流程、网络请求、DOM、页面结构等） |
-| 2 | 语法校验 | 验证语法错误和导入问题（不是真正执行） |
+| 1~4 | 录制数据工具 | 与 PM 共用同一套 4 个工具（describe_data、query_data、execute_code、analyze_image） |
+| 5 | 语法校验 | 验证语法错误和导入问题（不是真正执行） |
 
 ### 关键设计
 
-- **不拆分多个查询工具** — 查什么、怎么分析是 Agent 自己的事，一个灵活的查询工具就够了
+- **录制数据工具所有 Agent 共用** — agent 写 SQL 自主决定查什么，不限定 query_type
 - **需求常驻上下文** — 需求和参数列表始终在上下文里，不做成工具，防止 Agent 钻进技术细节后跑偏
 - **工具集详细设计待定** — 依赖数据存储层稳定后再细化
 
@@ -296,6 +298,8 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | 2 | 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) | 见下方说明 |
 | 3 | Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) | 见下方说明 |
 | 4 | 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) | 见下方说明 |
+| 5 | PM Agent | [pm_agent_design.md](design/pm_agent_design.md) | 见下方说明 |
+| 6 | 程序员 Agent | [programmer_agent_design.md](design/programmer_agent_design.md) | 见下方说明 |
 
 **数据层设计与第六节（记忆机制）的差异：**
 - **删掉引用数据表** — 引用替换改为运行时行为（记忆层负责），数据层始终存储原始完整消息，不单独存引用
@@ -334,6 +338,20 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 - **调度机制** — Orchestrator 根据 loop.run() 返回值通过 `_dispatch_next` 显式调度，不通过事件监听器调度
 - **内部事件粒度** — 去掉 agent_iteration_started/completed、agent_tool_executed/failed 等内部事件
 - **Orchestrator 职责** — 统一负责 session 管理、显式调度、业务事件发送，不需要独立的流程编排文件
+
+**PM Agent 设计与第三节（PM Agent 工具集）的细化/新增决策：**
+- **工具数量** — 从 3 个（查录制数据、多模态分析、跟用户对话）扩展为 6 个（4 个通用录制数据工具 + submit_requirements + report_code_issue），后两者通过 ToolSignal 机制提交结构化数据
+- **需求输出方式** — 通过 submit_requirements 工具提交，结构由 FC schema 保证，不靠 prompt 约束 JSON 格式
+- **分诊路由** — PM 调用 submit_requirements（需求问题）或 report_code_issue（代码问题），Orchestrator 根据 signal_tool.name 路由
+- **录制数据工具** — 原"一个工具 + query_type"改为 4 个通用工具（describe_data、query_data、execute_code、analyze_image），所有 Agent 共用，角色差异由 prompt 引导。详见 [recording_tools_redesign_todo.md](design/recording_tools_redesign_todo.md)
+- **System prompt 风格** — ReACT 风格（思考→行动→观察循环），不写死步骤清单
+
+**程序员 Agent 设计与第四节（程序员 Agent 工具集）的细化/新增决策：**
+- **工具数量** — 从 2 个（查录制数据、语法校验）扩展为 6 个（4 个通用录制数据工具 + syntax_check + submit_code），submit_code 通过 ToolSignal 机制提交结构化代码数据
+- **代码输出格式** — `async def execute(**kwargs) -> Dict[str, Any]`，标准返回格式 `{success, message, data}`，支持命令行调用
+- **技术方案决策** — API 优先策略：有可用 API 就不用浏览器模拟
+- **录制数据工具** — 与 PM 共用同一套 4 个通用工具，agent 写 SQL 自主查询，不再受限于预定义 query_type
+- **Orchestrator 适配** — `_on_programmer_completed` 从 `signal_tool.args["code"]` 获取代码，`_save_tool` 使用结构化 metadata
 
 ---
 

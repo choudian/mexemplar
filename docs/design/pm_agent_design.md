@@ -126,376 +126,37 @@ PM 不是程序员。PM 不关心技术实现细节（API 怎么调、代码怎�
 
 ---
 
-## 三、query_recording_data 工具
+## 三、录制数据查询工具
 
-### 3.1 设计理念
+> **本节已被统一工具设计替代。** 详见 [recording_tools_redesign_todo.md](recording_tools_redesign_todo.md)。
 
-架构 v2 要求"一个工具覆盖所有查询"。PM 通过 `query_type` 参数指定想查什么，工具内部路由到不同的查询逻辑。
+### 设计变更说明
 
-PM 版本**不提供网络请求查询**（架构 v2 明确指出"需求分析阶段不看网络请求，噪声太大"）。
+原设计为 PM 和程序员分别设计了独立的 `query_recording_data` 工具（PM 4 种 query_type、程序员 7 种），后经重新设计，改为 **4 个通用工具，所有 Agent 共用**：
 
-### 3.2 Function Calling Schema
+| 工具 | 定位 | 替代原设计的 |
+|------|------|-------------|
+| `describe_data` | 数据发现入口（渐进式：无参返回表概览，传表名返回字段详情） | 无（新增） |
+| `query_data` | agent 写 SQL 直接查询 DuckDB | `query_recording_data` 的所有 query_type |
+| `execute_code` | 临时 Python 代码执行（SQL 不够用时的补充） | 无（新增） |
+| `analyze_image` | 多模态模型分析截图 | `multimodal_analysis` |
 
-```json
-{
-  "type": "function",
-  "function": {
-    "name": "query_recording_data",
-    "description": "查询录制数据。支持查询操作流程、操作详情、元素上下文、截图等。不支持查询网络请求（那是程序员的职责）。",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "recording_id": {
-          "type": "string",
-          "description": "录制会话 ID"
-        },
-        "query_type": {
-          "type": "string",
-          "enum": ["action_summary", "action_detail", "element_context", "screenshot"],
-          "description": "查询类型：action_summary=操作流程概览, action_detail=单个操作详情, element_context=元素上下文（兄弟元素、列表信息）, screenshot=操作截图"
-        },
-        "action_index": {
-          "type": "integer",
-          "description": "操作序号（从1开始）。action_detail、element_context、screenshot 时必填"
-        }
-      },
-      "required": ["recording_id", "query_type"]
-    }
-  }
-}
-```
+**核心变化**：
+- **角色差异由 prompt 处理**，工具层不做区分。PM 也用 SQL 查数据，prompt 引导它关注操作流程和用户意图。
+- **agent 自主决定看什么**。不再通过 query_type 枚举限定查询方式。
+- **recording_id 通过闭包注入**，agent 不需要传 recording_id 参数。agent 写 SQL 时自行加 `WHERE recording_id = 'xxx'`（recording_id 在 agent 启动时写入 prompt）。
 
-### 3.3 各查询类型说明
+实现代码：`src/business/agents/tools/recording_data_tools.py`
 
-#### action_summary — 操作流程概览
+### PM 使用截图的典型流程
 
-PM 的第一步操作。返回整个录制的操作流程列表，每个操作精简为一行摘要。
-
-**输入**：`recording_id`
-**输出**：
-
-```json
-{
-  "recording_id": "xxx",
-  "total_actions": 8,
-  "actions": [
-    {
-      "index": 1,
-      "action_type": "navigate",
-      "url": "https://www.baidu.com",
-      "description": "打开 https://www.baidu.com",
-      "has_input": false,
-      "has_siblings": false
-    },
-    {
-      "index": 2,
-      "action_type": "click",
-      "url": "https://www.baidu.com",
-      "description": "点击搜索框",
-      "has_input": false,
-      "has_siblings": false
-    },
-    {
-      "index": 3,
-      "action_type": "keyboard_input",
-      "url": "https://www.baidu.com",
-      "description": "输入 'Python 教程'",
-      "has_input": true,
-      "has_siblings": false
-    },
-    {
-      "index": 4,
-      "action_type": "click",
-      "url": "https://www.baidu.com",
-      "description": "点击 '百度一下'",
-      "has_input": false,
-      "has_siblings": false
-    },
-    {
-      "index": 5,
-      "action_type": "click",
-      "url": "https://www.baidu.com/s?wd=Python+教程",
-      "description": "点击 'Python 官方教程 - 菜鸟教程'",
-      "has_input": false,
-      "has_siblings": true
-    }
-  ]
-}
-```
-
-**生成逻辑**：
-- 遍历 `actions` 表，按 `sequence_number` 排序
-- 每个操作生成一行可读描述（根据 action_type + parameters + dom_element 组合）
-- `has_input`：该操作是否包含用户输入（keyboard_input 类型或 input/textarea 元素的 change 事件）
-- `has_siblings`：该操作的 action_id 在 `sibling_snapshots` 表中是否有记录
-
-`has_input` 和 `has_siblings` 是给 PM 的线索提示——有输入的操作可能包含参数，有兄弟元素的操作可能是列表操作。PM 可以据此决定是否深入查看。
-
-#### action_detail — 单个操作详情
-
-PM 想深入了解某个操作的细节。
-
-**输入**：`recording_id`, `action_index`
-**输出**：
-
-```json
-{
-  "index": 3,
-  "action_type": "keyboard_input",
-  "url": "https://www.baidu.com",
-  "timestamp": "2026-03-10T14:30:00",
-  "parameters": {
-    "text": "Python 教程",
-    "key": null
-  },
-  "dom_element": {
-    "xpath": "//*[@id='kw']",
-    "css_selector": "input#kw",
-    "tag_name": "INPUT",
-    "id": "kw",
-    "className": "s_ipt",
-    "text_content": "",
-    "attributes": {
-      "name": "wd",
-      "type": "text",
-      "placeholder": "请输入搜索关键词",
-      "maxlength": "255",
-      "autocomplete": "off"
-    },
-    "bounding_box": {"x": 350, "y": 170, "width": 550, "height": 44}
-  }
-}
-```
-
-**生成逻辑**：
-- 从 `actions` 表查指定序号的操作
-- `dom_element` 原样返回（来自浏览器扩展 `getElementLocator()`，不做字段过滤）
-- **不返回** `dom_tree_snapshot`（太大，PM 不需要）和 `visual_features`（技术细节）
-
-#### element_context — 元素上下文
-
-PM 想看某个操作的兄弟元素，判断是否是列表操作。
-
-**输入**：`recording_id`, `action_index`
-**输出**：
-
-```json
-{
-  "index": 5,
-  "has_siblings": true,
-  "siblings": {
-    "container_selector": "div.search-results",
-    "item_selector": "div.result-item",
-    "list_type": "list",
-    "total_count": 10,
-    "clicked_index": 1,
-    "items": [
-      {"index": 1, "text_summary": "Python 官方教程 - 菜鸟教程", "has_link": true, "clicked": true},
-      {"index": 2, "text_summary": "Python 入门教程 - 廖雪峰的官方网站", "has_link": true, "clicked": false},
-      {"index": 3, "text_summary": "Python 基础教程 | 菜鸟教程", "has_link": true, "clicked": false}
-    ]
-  }
-}
-```
-
-**生成逻辑**：
-- 查 `sibling_snapshots` 表（按 action_id）
-- 如有，返回兄弟元素摘要（只取每个兄弟的 `text_summary`，不返回完整 DOM 结构）
-- 如果没有，返回 `has_siblings: false`
-
-`items` 中每个兄弟只保留 `index`、`text_summary`（已由 JS 端截断到 50 字符）和 `has_link`（从 siblings JSON 中提取），控制数据量。如果兄弟元素超过 10 个，只返回前 5 个 + 后 5 个（含 clicked 项）并注明 `"truncated": true`。
-
-#### screenshot — 操作截图
-
-PM 想看某个操作的截图（操作前后各一张）。返回截图的 base64 数据，供后续 multimodal_analysis 使用。
-
-**输入**：`recording_id`, `action_index`
-**输出**：
-
-```json
-{
-  "index": 5,
-  "has_screenshot_before": true,
-  "has_screenshot_after": true,
-  "screenshot_before": "data:image/png;base64,iVBOR...",
-  "screenshot_after": "data:image/png;base64,iVBOR..."
-}
-```
-
-**生成逻辑**：
-- 从 `actions` 表查指定序号的操作
-- 返回 `screenshot_before` 和 `screenshot_after`
-- 如果截图为空，对应字段为 `null`，`has_screenshot_*` 为 `false`
-
-**注意**：截图数据很大，PM 拿到后应该传给 multimodal_analysis 去分析，而不是自己直接看 base64。这条截图数据会被引用替换机制在 N 步后替换为指针。
-
-**当前限制**：浏览器录制模式下 `screenshot_before` 和 `screenshot_after` **始终为空**（截图功能仅桌面录制实现）。这意味着浏览器录制场景中 `screenshot` 查询和 `multimodal_analysis` 工具实质上不可用。PM 需完全依赖文本数据（dom_element、parameters、sibling_snapshots）分析需求。
-
-后续可通过浏览器扩展增加截图采集（`chrome.tabs.captureVisibleTab` API）来解决此限制。
-
-### 3.4 description 生成逻辑
-
-`action_summary` 中每个操作的 `description` 按以下规则生成：
-
-这个方法不做字段转换，只是把原始数据组合成一句可读描述（给 `action_summary` 的 `description` 字段用）：
-
-```python
-def _generate_action_description(action: dict) -> str:
-    action_type = action["action_type"]
-    params = action.get("parameters", {})
-    element = action.get("dom_element") or {}
-    url = action.get("url", "")
-
-    if action_type == "navigate":
-        return f"打开 {url}"
-
-    if action_type in ("keyboard_input", "fill"):
-        text = params.get("text") or params.get("value", "")
-        if text:
-            return f"输入 '{text[:30]}'"
-        key = params.get("key", "")
-        return f"按键 {key}"
-
-    if action_type == "click":
-        text = element.get("text_content", "")
-        if text and len(text) <= 30:
-            return f"点击 '{text}'"
-        tag = element.get("tag_name", "").lower()
-        return f"点击 {tag} 元素"
-
-    if action_type == "change":
-        value = params.get("value", "")
-        tag = element.get("tag_name", "").lower()
-        return f"选择/修改 {tag}（值: {value}）"
-
-    if action_type == "submit":
-        return "提交表单"
-
-    if action_type == "dblclick":
-        text = element.get("text_content", "")
-        return f"双击 '{text}'" if text else "双击元素"
-
-    if action_type == "keydown":
-        key = params.get("key", "")
-        modifiers = []
-        if params.get("ctrlKey"): modifiers.append("Ctrl")
-        if params.get("altKey"): modifiers.append("Alt")
-        if params.get("shiftKey"): modifiers.append("Shift")
-        prefix = "+".join(modifiers) + "+" if modifiers else ""
-        return f"按键 {prefix}{key}"
-
-    return f"{action_type} 操作"
-```
-
-### 3.5 PM 与程序员的工具差异
-
-同一个工具名 `query_recording_data`，但 PM 和程序员使用不同的 schema 和 handler：
-
-| 维度 | PM 版本 | 程序员版本（优先级6设计） |
-|------|--------|----------------------|
-| query_type | action_summary, action_detail, element_context, screenshot | 以上 + network_requests, dom_tree, full_action |
-| 返回详细度 | dom_element 原样返回，不含 dom_tree_snapshot / visual_features | 完整（包含所有技术细节） |
-| 网络请求 | 不支持 | 支持 |
-| DOM 树 | 不返回 | 支持查询 |
-
-两个版本是独立的 `ToolDefinition` 实例，由 Orchestrator 组装后通过 `loop.run(tools=...)` 传入。
-
----
-
-## 四、multimodal_analysis 工具
-
-### 4.1 定位
-
-非常规手段，兜底用。当 PM 从文本数据（操作描述、元素属性）无法判断用户意图时，用截图辅助理解。
-
-**典型使用场景**：
-- 页面布局复杂，元素文本不够描述清楚
-- 需要确认"用户点的是页面上的哪个区域"
-- 列表操作中，文本相似度高，需要视觉区分
-
-### 4.2 Function Calling Schema
-
-```json
-{
-  "type": "function",
-  "function": {
-    "name": "multimodal_analysis",
-    "description": "分析操作截图，理解页面视觉布局。这是一个消耗大量 token 的操作，只在文本信息不够时才使用。截图数据需要先通过 query_recording_data（query_type=screenshot）获取。",
-    "parameters": {
-      "type": "object",
-      "properties": {
-        "screenshot_data": {
-          "type": "string",
-          "description": "截图的 base64 数据（从 query_recording_data 的 screenshot 查询结果中获取）"
-        },
-        "question": {
-          "type": "string",
-          "description": "分析问题，如'这个页面上有什么表单元素？'、'用户点击的是页面的哪个区域？'"
-        }
-      },
-      "required": ["screenshot_data", "question"]
-    }
-  }
-}
-```
-
-### 4.3 实现方案
-
-```python
-def multimodal_analysis(screenshot_data: str, question: str) -> str:
-    """
-    调用多模态 LLM 分析截图
-
-    使用 compression_model（Haiku 级别）进行分析，控制成本。
-    如果未配置多模态模型，返回错误提示。
-    """
-    config = get_unified_config()
-
-    # 复用 compression_model 配置（Haiku 级别，足够做截图分析）
-    llm = create_llm_client(
-        provider=config.get_compression_model_provider(),
-        model=config.get_compression_model_name(),
-        api_key=config.get_compression_model_api_key(),
-    )
-
-    # 构建多模态消息
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": screenshot_data.replace("data:image/png;base64,", "")
-                    }
-                },
-                {
-                    "type": "text",
-                    "text": question
-                }
-            ]
-        }
-    ]
-
-    response = llm.chat_with_messages(messages)
-    return response
-```
-
-**模型选择说明**：
-- 复用 `compression_model` 配置（默认 Haiku），控制成本
-- 截图分析不需要最强模型，Haiku 级别足够理解页面布局
-- 如果后续需要更精准的分析，可以在配置中切换到 Sonnet
-
-### 4.4 PM 使用截图的典型流程
+原设计需要先 query_recording_data(screenshot) 获取 base64 再传给 multimodal_analysis，现在合并为一步：
 
 ```
-1. PM 查看 action_summary → 发现第5步"点击 a 元素"不够清楚
-2. PM 调用 query_recording_data(query_type="screenshot", action_index=5)
-   → 获得 screenshot_before 的 base64
-3. PM 调用 multimodal_analysis(screenshot_data=..., question="用户点击的是页面上的什么？")
-   → 获得"用户点击的是搜索结果列表中的第一个链接"
+1. PM 查看 describe_data() 了解数据概况
+2. PM 用 query_data 查操作流程 → 发现第5步"点击 a 元素"不够清楚
+3. PM 调用 analyze_image(action_index=5, question="用户点击的是页面上的什么？")
+   → handler 内部从 DuckDB 读取截图，传给多模态模型，只返回文字分析结果
 4. PM 结合文本和截图分析结果，继续需求确认
 ```
 
@@ -704,24 +365,15 @@ if result.signal_tool and result.signal_tool.name == "report_code_issue":
 
 ### 8.1 工具定义
 
-PM 的每个工具是一个 `ToolDefinition`（name + schema + handler）：
+PM 的工具分为两类：**录制数据访问工具**（通用，所有 Agent 共用）和**信号工具**（PM 专用）。
 
 ```python
-# src/business/agents/tools/pm_recording_query.py
-pm_query_recording_data = ToolDefinition(
-    name="query_recording_data",
-    schema=PM_QUERY_RECORDING_DATA_SCHEMA,
-    handler=_pm_query_recording_data,
-)
+# src/business/agents/tools/recording_data_tools.py — 通用工具，闭包绑定 recording_id
+from src.business.agents.tools import create_recording_tools
+recording_tools = create_recording_tools(recording_id)
+# 返回 [describe_data, query_data, execute_code, analyze_image]
 
-# src/business/agents/tools/multimodal_analysis.py
-multimodal_analysis = ToolDefinition(
-    name="multimodal_analysis",
-    schema=MULTIMODAL_ANALYSIS_SCHEMA,
-    handler=_multimodal_analysis,
-)
-
-# src/business/agents/tools/pm_output.py
+# src/business/agents/tools/pm_output.py — PM 专用信号工具
 submit_requirements = ToolDefinition(
     name="submit_requirements",
     schema=SUBMIT_REQUIREMENTS_SCHEMA,
@@ -741,25 +393,24 @@ report_code_issue = ToolDefinition(
 
 ```python
 # src/business/orchestrator/agent_orchestrator.py
-from src.business.agents.tools.pm_recording_query import pm_query_recording_data
-from src.business.agents.tools.multimodal_analysis import multimodal_analysis
+from src.business.agents.tools import create_recording_tools
 from src.business.agents.tools.pm_output import submit_requirements, report_code_issue
 
-PM_TOOLS = [pm_query_recording_data, multimodal_analysis, submit_requirements, report_code_issue]
+recording_tools = create_recording_tools(recording_id)
+PM_TOOLS = recording_tools + [submit_requirements, report_code_issue]
 # talk_to_user 和 load_reference 由 AgentLoop 自动追加，不需要在此列出
 
 loop.run(session_id, user_input, tools=PM_TOOLS)
 ```
-
-**为什么不用全局注册表**：PM 和程序员各自有不同版本的 `query_recording_data`（不同 schema 和 handler）。全局注册表按 name 做 key，同名会覆盖。由调用方组装传入，各 Agent 工具列表完全独立，无命名冲突。
 
 ### 8.3 文件结构
 
 ```
 src/business/agents/
     tools/
-        pm_recording_query.py        # PM 版本的 query_recording_data
-        multimodal_analysis.py       # multimodal_analysis 实现
+        __init__.py                  # 导出 create_recording_tools
+        recording_data_tools.py      # 4 个通用录制数据工具（所有 Agent 共用）
+        pm_recording_tools.py        # [已废弃] 旧 PM 版 query_recording_data
         pm_output.py                 # submit_requirements + report_code_issue
     prompts/
         pm_prompt.py                 # PM system prompt（常量字符串）
@@ -802,7 +453,7 @@ PM 可能在没有调用 `submit_requirements` 或 `report_code_issue` 的情况
 ### 一致的决策
 
 - PM 不看网络请求
-- PM 和程序员的"查录制数据"是同一个工具的不同配置
+- PM 和程序员共用同一套录制数据工具（4 个通用工具，详见 [recording_tools_redesign_todo.md](recording_tools_redesign_todo.md)）
 - 分类分批提问
 - 停止条件双向
 - 列表操作通过元素上下文识别
@@ -815,12 +466,9 @@ PM 可能在没有调用 `submit_requirements` 或 `report_code_issue` 的情况
 | PM 工具数量 | "3 个工具（查录制数据、多模态分析、跟用户对话）" | 5 个工具：查录制数据、多模态分析 + talk_to_user（内置）、submit_requirements、report_code_issue |
 | 需求输出方式 | "输出结构化 JSON" | 通过 submit_requirements 工具提交，结构由 FC schema 保证，不靠 prompt 约束 JSON 格式 |
 | 分诊路由 | "PM 分诊完成 → 分诊结果" | PM 调用 submit_requirements（需求问题）或 report_code_issue（代码问题），Orchestrator 根据 signal_tool.name 路由 |
-| query_type 设计 | "Agent 想看什么就查什么，不拆分多个工具" | 一个工具 + query_type 参数路由到 4 种查询，兼顾灵活性和可控性 |
-| action_summary 输出 | 未明确 | 精简为一行摘要 + has_input/has_siblings 提示 |
-| element_context 输出 | 未明确 | 兄弟元素只取 text_summary + has_link，超过 10 个截断为前 5 + 后 5 |
-| 截图数据流 | "截图数据从工具1获取，工具2负责分析" | query_recording_data(screenshot) → base64 → multimodal_analysis(screenshot_data) |
-| 多模态模型 | "工具2负责调用多模态模型分析" | 复用 compression_model 配置（Haiku 级别） |
-| description 生成 | 未明确 | 按 action_type 生成可读描述的规则 |
+| 录制数据工具 | "Agent 想看什么就查什么，不拆分多个工具" | 4 个通用工具（describe_data、query_data、execute_code、analyze_image），所有 Agent 共用，详见 [recording_tools_redesign_todo.md](recording_tools_redesign_todo.md) |
+| 截图分析 | "截图数据从工具1获取，工具2负责分析" | analyze_image 一步完成（传操作序号 + 问题），handler 内部读取截图并调多模态模型 |
+| 多模态模型 | "工具2负责调用多模态模型分析" | 通过 UnifiedConfigManager 获取用户配置的多模态模型 |
 | PM 初始输入 | 未明确 | Orchestrator 构造的结构化文本（正常/分诊两种模板） |
 | system prompt 风格 | "PM 的人设是懂需求分析的产品经理" | ReACT 风格（思考→行动→观察循环），不写死步骤清单 |
 
