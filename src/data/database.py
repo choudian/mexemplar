@@ -169,14 +169,17 @@ class DatabaseManager:
                 )
                 """
             )
-            # 插入初始版本（如果不存在）
-            cursor.execute("INSERT OR IGNORE INTO schema_version (version) VALUES (1)")
-
-            # 执行迁移（在 commit 之前）
-            self._run_migrations(cursor)
+            # 仅在表为空时插入初始版本（避免重复插入导致 UNIQUE 冲突）
+            cursor.execute(
+                "INSERT INTO schema_version (version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
+            )
 
             conn.commit()
             logger.info("数据库表结构初始化完成")
+
+            # 在 commit 之后执行迁移（migrations.py 内部自行管理事务）
+            from src.data.migrations import run_migrations
+            run_migrations(self)
 
         except sqlite3.Error as e:
             conn.rollback()
