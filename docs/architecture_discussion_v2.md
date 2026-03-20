@@ -300,6 +300,8 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | 4 | 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) | 见下方说明 |
 | 5 | PM Agent | [pm_agent_design.md](design/pm_agent_design.md) | 见下方说明 |
 | 6 | 程序员 Agent | [programmer_agent_design.md](design/programmer_agent_design.md) | 见下方说明 |
+| 7 | 试用 Agent | [trial_agent_design.md](design/trial_agent_design.md) | 见下方说明 |
+| 8 | LLM Review | [llm_review_design.md](design/llm_review_design.md) | 见下方说明 |
 
 **数据层设计与第六节（记忆机制）的差异：**
 - **删掉引用数据表** — 引用替换改为运行时行为（记忆层负责），数据层始终存储原始完整消息，不单独存引用
@@ -352,6 +354,28 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 - **技术方案决策** — API 优先策略：有可用 API 就不用浏览器模拟
 - **录制数据工具** — 与 PM 共用同一套 4 个通用工具，agent 写 SQL 自主查询，不再受限于预定义 query_type
 - **Orchestrator 适配** — `_on_programmer_completed` 从 `signal_tool.args["code"]` 获取代码，`_save_tool` 使用结构化 metadata
+
+**LLM Review 设计与第四节（代码 Review）的细化/新增决策：**
+- **Reviewer 输入** — 代码 + description + parameters，均来自 submit_code.args，无需额外查询；无原始 PM goal 字段，用程序员写的 description 替代
+- **录制数据禁区** — Prompt 明确告知 Reviewer 不得质疑来自录制数据的技术决策（URL、API路径、响应字段结构、CSS选择器）
+- **检查项细化** — "硬伤"具体为 5 类：语法错误、参数漏用、函数签名错误、返回格式错误、必崩逻辑
+- **打回次数阈值** — retry_count < 4（程序员最多犯 3 次错，第 4 次失败强制入库），现有实现 retry_count < 3 需修正
+- **输出格式** — 自然语言 feedback，不结构化（Orchestrator 路由不依赖类型，结构化只增加出错点）
+- **打回消息** — 加轮次前缀"第 N 次，共最多 3 次"，让程序员感知进度
+- **retry_count 存储** — 内存 Dict[workflow_id, int]，不持久化（Review 循环分钟级内完成，重启概率极低）
+- **Review 异常** — 默认通过，不阻断流程
+- **Prompt 注入** — str.replace() 替换占位符，避免代码中花括号触发 format 异常
+
+**试用 Agent 设计与第一节（整体流程）的细化/新增决策：**
+- **工具数量** — 2 个专用工具：execute_tool + submit_trial_result（+ 内置 talk_to_user），不给录制数据工具
+- **参数提取** — Agent 在 execute_tool 的 parameters 字段中直接组装，不做单独的参数提取工具
+- **执行机制** — 新增 `src/execution/tool_executor.py`（`run_tool_code`）：新线程 + asyncio.new_event_loop()，120 秒超时，不限制内建（代码已通过 syntax_check 审查），与 execute_code（数据探索）完全独立
+- **System prompt 注入** — Orchestrator 在 `_build_trial_config` 中从 DB 读取工具信息注入模板，trial Loop 不缓存（每个 workflow system prompt 不同）
+- **试用结论提交** — submit_trial_result(success, feedback)，Orchestrator 通过 workflow_id 查 DB 获取 tool_id
+- **多次执行** — execute_tool 可在同一会话中多次调用，计数只在 submit_trial_result(success=True) 时更新
+- **结果展示格式** — system prompt 定义默认规则（列表取前 3-5 条 + 总数、操作类说成败、无数据明确告知）
+- **用户预期管理** — 开场主动告知用户这是自动生成的工具，遇到问题很正常
+- **反馈质量** — 用户反馈模糊时追问具体原因，收集可定位问题的描述后再提交
 
 ---
 

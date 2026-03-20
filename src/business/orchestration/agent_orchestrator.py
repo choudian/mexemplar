@@ -478,11 +478,15 @@ class AgentOrchestrator:
         运行 LLM Review
 
         通过/失败计数通过 self._review_counts[workflow_id] 追踪。
-        失败 < 3 次：回传给程序员修改；≥ 3 次：强制入库（pending）。
+        失败 < 4 次：回传给程序员修改；≥ 4 次：强制入库（pending）。
         """
         code = code_data["code"]
+        requirement = {
+            "description": code_data.get("description", ""),
+            "parameters": code_data.get("parameters", []),
+        }
         retry_count = self._review_counts.get(workflow_id, 0)
-        review_result: ReviewResult = self._llm_reviewer.review(code)
+        review_result: ReviewResult = self._llm_reviewer.review(code, requirement)
 
         if review_result.passed:
             emit(
@@ -509,7 +513,7 @@ class AgentOrchestrator:
             retry_count += 1
             self._review_counts[workflow_id] = retry_count
 
-            if retry_count < 3:
+            if retry_count < 4:
                 programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
                 emit(
                     "review_failed",
@@ -519,6 +523,7 @@ class AgentOrchestrator:
                     code=code,
                     feedback=review_result.feedback,
                     retry_count=retry_count,
+                    forced_save=False,
                 )
                 self._transition_repo.create(
                     WorkflowTransition(
@@ -534,7 +539,7 @@ class AgentOrchestrator:
                 )
                 self.run_agent(
                     "programmer",
-                    f"Review 失败（第{retry_count}次），修改意见：{review_result.feedback}",
+                    f"[LLM Review 第 {retry_count} 次，共最多 3 次]\n\n审查意见：{review_result.feedback}",
                     workflow_id,
                 )
             else:
@@ -547,6 +552,7 @@ class AgentOrchestrator:
                     code=code,
                     feedback=review_result.feedback,
                     retry_count=retry_count,
+                    forced_save=True,
                 )
                 self._transition_repo.create(
                     WorkflowTransition(
@@ -555,7 +561,7 @@ class AgentOrchestrator:
                         event_type="review_failed",
                         from_session_id=from_session_id,
                         to_session_id=None,
-                        payload=json.dumps({"retry_count": retry_count, "forced_save": True}),
+                        payload=json.dumps({"retry_count": retry_count, "forced_save": (retry_count >= 4)}),
                     )
                 )
                 self._review_counts.pop(workflow_id, None)
