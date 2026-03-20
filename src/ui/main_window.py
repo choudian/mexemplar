@@ -22,8 +22,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
 )
 
-from src.business.ai.preprocessing import CompressionLevel
-from src.business.ai.workflow_orchestrator import WorkflowOrchestrator
 from src.recording.browser_recorder import BrowserRecorder
 from src.business.intent.intent_analyzer import IntentAnalyzer
 from src.business.intent.intent_repository import IntentRepository
@@ -45,7 +43,7 @@ from src.utils.logger import get_logger
 
 
 class OrchestratorInitStatus(Enum):
-    """WorkflowOrchestrator 初始化状态枚举"""
+    """AgentUIBridge 初始化状态枚举"""
     NOT_STARTED = "not_started"
     INITIALIZING = "initializing"
     READY = "ready"
@@ -75,13 +73,13 @@ class MainWindow(QMainWindow):
         self.sidebar = None  # 侧边栏
         self.main_content = None  # 主内容区
         self.browser_recorder = None  # 浏览器录制器
-        self.workflow_orchestrator = None  # 工作流编排器（懒加载）
+        self.agent_ui_bridge = None  # v2 Agent UI 桥接（懒加载）
 
         # 意图确认相关组件
         self.intent_confirmer = None  # 意图确认器
         self.ws_manager = None  # WebSocket 服务器管理器
 
-        # WorkflowOrchestrator 异步初始化状态
+        # AgentUIBridge 异步初始化状态
         self._orchestrator_init_lock = threading.Lock()
         self._orchestrator_init_condition = threading.Condition(
             self._orchestrator_init_lock
@@ -337,7 +335,7 @@ class MainWindow(QMainWindow):
 
     def _warmup_orchestrator_async(self) -> None:
         """
-        异步预热 WorkflowOrchestrator（后台线程）
+        异步预热 AgentUIBridge（后台线程）
 
         在应用启动时自动调用，在后台准备资源，避免首次使用时卡顿
         """
@@ -345,40 +343,35 @@ class MainWindow(QMainWindow):
             """后台预热任务"""
             try:
                 with self._orchestrator_init_condition:
-                    # 双重检查：避免重复初始化
                     if self._orchestrator_init_status == OrchestratorInitStatus.READY:
-                        self.logger.info("WorkflowOrchestrator already ready, skipping warmup")
+                        self.logger.info("AgentUIBridge already ready, skipping warmup")
                         return
 
                     self._orchestrator_init_status = OrchestratorInitStatus.INITIALIZING
-                    self.logger.info("Warming up WorkflowOrchestrator in background...")
+                    self.logger.info("Warming up AgentUIBridge in background...")
 
-                # 在锁外执行初始化（避免阻塞其他检查）
-                orchestrator = self._create_orchestrator()
+                bridge = self._create_agent_ui_bridge()
 
                 with self._orchestrator_init_condition:
-                    self.workflow_orchestrator = orchestrator
+                    self.agent_ui_bridge = bridge
                     self._orchestrator_init_status = OrchestratorInitStatus.READY
-                    self.logger.info("WorkflowOrchestrator warmup completed")
-                    # 通知所有等待的线程
+                    self.logger.info("AgentUIBridge warmup completed")
                     self._orchestrator_init_condition.notify_all()
 
             except Exception as e:
                 with self._orchestrator_init_condition:
                     self._orchestrator_init_status = OrchestratorInitStatus.FAILED
                     self._orchestrator_init_error = str(e)
-                    # 通知所有等待的线程（即使失败了也要通知）
                     self._orchestrator_init_condition.notify_all()
-                self.logger.error(f"WorkflowOrchestrator warmup failed: {e}", exc_info=True)
+                self.logger.error(f"AgentUIBridge warmup failed: {e}", exc_info=True)
 
-        # 启动后台线程（非 daemon，确保初始化完成）
         self._orchestrator_warmup_thread = threading.Thread(
             target=warmup,
-            daemon=False,  # 修复：使用非 daemon 线程，避免初始化被中断
+            daemon=False,
             name="OrchestratorWarmup"
         )
         self._orchestrator_warmup_thread.start()
-        self.logger.info("WorkflowOrchestrator warmup thread started")
+        self.logger.info("AgentUIBridge warmup thread started")
 
     def _init_intent_confirmer(self) -> None:
         """
@@ -565,104 +558,93 @@ class MainWindow(QMainWindow):
             self.logger.error(f"处理意图分析消息失败: {e}", exc_info=True)
             return {"status": "error", "message": str(e)}
 
-    def _create_orchestrator(self) -> WorkflowOrchestrator:
+    def _create_agent_ui_bridge(self):
         """
-        创建 WorkflowOrchestrator 实例（内部方法）
+        创建 v2 AgentUIBridge 实例（内部方法）
 
         Returns:
-            WorkflowOrchestrator: 创建的实例
+            AgentUIBridge: 创建的实例
 
         Raises:
             Exception: 初始化失败时抛出异常
         """
-        orchestrator = WorkflowOrchestrator(
-            compression_level=CompressionLevel.MODERATE,
-            auto_process=False,  # 手动启动监听
-            use_agent=True,  # 使用 Agent 模式
-            use_persistence=False,
+        from src.business.ai.llm_client import LangChainLLMClient
+        from src.business.orchestration.agent_orchestrator import AgentOrchestrator
+        from src.business.orchestration.agent_ui_bridge import AgentUIBridge
+        from src.data.unified_config import get_unified_config
+        from src.utils.events import connect
+
+        config = get_unified_config()
+        llm_client = LangChainLLMClient(
+            provider=config.get_ai_provider(),
+            model=config.get_ai_model(),
+            api_key=config.get_ai_api_key(),
+            base_url=config.get_ai_base_url(),
+            temperature=0.7,
         )
-        # 启动监听录制完成事件
-        orchestrator.start_listening()
 
-        # 连接 AgentUIBridge 信号
-        if orchestrator.agent_bridge:
-            orchestrator.agent_bridge.interrupt_requested.connect(
-                self._on_agent_interrupt
-            )
-            orchestrator.agent_bridge.session_completed.connect(
-                self._on_agent_session_completed
-            )
-            orchestrator.agent_bridge.error_occurred.connect(
-                self._on_agent_error
-            )
-            self.logger.info("AgentUIBridge 信号已连接")
+        orchestrator = AgentOrchestrator(llm_client=llm_client, config=config)
+        bridge = AgentUIBridge(orchestrator)
 
-        return orchestrator
+        # 连接 v2 信号
+        bridge.question_received.connect(self._on_agent_question)
+        bridge.error_occurred.connect(self._on_agent_error)
+        bridge.progress_updated.connect(self._on_agent_progress)
+        bridge.tool_saved_signal.connect(self._on_tool_saved)
+        self.logger.info("AgentUIBridge 信号已连接")
 
-    def _on_agent_interrupt(self, thread_id: str, interrupt_data: dict) -> None:
+        # 监听录制完成事件，自动启动 PM Agent
+        def on_recording_completed(sender, **kwargs):
+            recording_id = kwargs.get("recording_id")
+            if not recording_id:
+                return
+            self.logger.info(f"[录制完成] 启动 PM Agent 分析: {recording_id}")
+            bridge.start_agent(
+                "pm",
+                f"请分析录制 {recording_id} 的操作流程，理解用户想要自动化的任务，并与用户确认需求。",
+                recording_id,
+            )
+
+        connect("recording_completed", on_recording_completed)
+        self.logger.info("已开始监听录制完成事件")
+
+        return bridge
+
+    def _on_agent_question(self, workflow_id: str, agent_type: str, question: str) -> None:
         """
-        处理 Agent interrupt（用户交互请求）
+        处理 Agent 提问（需要用户回答）
 
         Args:
-            thread_id: Agent 会话 ID
-            interrupt_data: interrupt 数据（格式：{"interrupts": [{"value": {...}, "id": ...}]}）
+            workflow_id: 工作流 ID（= recording_id）
+            agent_type: Agent 类型（pm / programmer / trial）
+            question: Agent 提出的问题
         """
-        self.logger.info(f"Agent interrupt 收到: {interrupt_data}")
+        self.logger.info(f"Agent 提问: workflow={workflow_id}, type={agent_type}, question={question[:80]}")
 
-        # 检查是否有 AI 回复（用于反馈对话）
-        ai_response = interrupt_data.get("ai_response", "")
+        # 保存当前会话上下文，供用户回复时使用
+        self._current_agent_workflow_id = workflow_id
+        self._current_agent_type = agent_type
 
-        # 从 interrupts 列表中提取实际数据
-        interrupts = interrupt_data.get("interrupts", [])
-        if not interrupts:
-            self.logger.warning("收到空的 interrupts 数据")
-            return
+        # 切换到意图确认页面并显示问题
+        self._show_intent_confirmation_from_agent(
+            {"message": question},
+            question,
+            workflow_id,
+        )
 
-        # 获取第一个 interrupt 的 value（实际数据）
-        actual_data = interrupts[0].get("value", {})
-        interrupt_type = actual_data.get("type")
-        self.logger.info(f"Agent interrupt 类型: {interrupt_type}")
+    def _on_agent_progress(self, workflow_id: str, event_name: str) -> None:
+        """处理 Agent 进度事件"""
+        self.logger.info(f"Agent 进度: workflow={workflow_id}, event={event_name}")
 
-        if interrupt_type == "intent_confirmation":
-            # 保存当前 thread_id 用于后续恢复
-            self._current_agent_thread_id = thread_id
+    def _on_tool_saved(self, workflow_id: str, tool_id: str) -> None:
+        """工具入库后自动切换到工具列表页"""
+        self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}")
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1500, self._switch_to_pending_tools)
 
-            # 传递完整的 actual_data（包含所有确认问题）
-            intent_data = actual_data
-            message = actual_data.get("message", "请确认意图")
-
-            # 如果有 AI 回复，添加到 intent_data 中
-            if ai_response:
-                intent_data["ai_response"] = ai_response
-
-            # 切换到意图确认页面并显示内容
-            self._show_intent_confirmation_from_agent(intent_data, message, thread_id)
-
-    def _on_agent_session_completed(self, thread_id: str, tool_draft: object = None) -> None:
-        """
-        处理 Agent 会话完成
-
-        Args:
-            thread_id: Agent 会话 ID
-            tool_draft: 生成的工具草稿（可选）
-        """
-        self.logger.info(f"Agent 会话完成: {thread_id}")
-
-        if tool_draft:
-            self.logger.info(f"工具已生成: {getattr(tool_draft, 'tool_name', 'Unknown')}")
-
-            # 在意图确认页面显示成功消息
-            intent_page = self.main_content.get_page("intent_confirmation")
-            if intent_page and hasattr(intent_page, 'show_success_message'):
-                intent_page.show_success_message(tool_draft)
-
-            # 延迟后自动切换到待试用工具页面
-            from PyQt6.QtCore import QTimer
-            QTimer.singleShot(1500, self._switch_to_pending_tools)
-
-    def _on_agent_error(self, thread_id: str, error_message: str) -> None:
+    def _on_agent_error(self, workflow_id: str, agent_type: str, error_message: str) -> None:
         """处理 Agent 错误"""
-        self.logger.error(f"Agent 错误: {thread_id} - {error_message}")
+        self.logger.error(f"Agent 错误: workflow={workflow_id}, type={agent_type} - {error_message}")
 
     def _show_intent_confirmation_from_agent(
         self, intent_data: dict, message: str, thread_id: str
@@ -675,9 +657,6 @@ class MainWindow(QMainWindow):
             message: 确认消息
             thread_id: Agent 会话 ID
         """
-        # 保存当前 thread_id 用于后续恢复
-        self._current_agent_thread_id = thread_id
-
         # 切换到意图确认页面
         self.main_content.switch_page("intent_confirmation")
 
@@ -693,20 +672,21 @@ class MainWindow(QMainWindow):
         处理 Agent 恢复请求（来自 IntentConfirmationUI）
 
         Args:
-            thread_id: Agent 会话 ID
+            thread_id: workflow_id（v2 中 thread_id 即 workflow_id）
             resume_data: 恢复数据（包含用户的确认回答）
         """
-        self.logger.info(f"收到 Agent 恢复请求: thread_id={thread_id}")
+        self.logger.info(f"收到 Agent 恢复请求: workflow_id={thread_id}")
+        user_input = resume_data.get("feedback") or resume_data.get("message", "")
+        agent_type = getattr(self, "_current_agent_type", "pm")
 
-        # 获取 AgentUIBridge 并恢复 Agent
-        if self.workflow_orchestrator and self.workflow_orchestrator.agent_bridge:
+        if self.agent_ui_bridge:
             try:
-                self.workflow_orchestrator.agent_bridge.resume(thread_id, resume_data)
+                self.agent_ui_bridge.reply_to_agent(agent_type, user_input, thread_id)
                 self.logger.info(f"已恢复 Agent: {thread_id}")
             except Exception as e:
                 self.logger.error(f"恢复 Agent 失败: {e}", exc_info=True)
         else:
-            self.logger.warning("没有可用的 AgentUIBridge")
+            self.logger.warning("AgentUIBridge 不可用")
 
     def _switch_to_pending_tools(self) -> None:
         """切换到待试用工具页面"""
@@ -800,64 +780,36 @@ class MainWindow(QMainWindow):
 
     def _ensure_workflow_orchestrator(self, timeout: float = _DEFAULT_INIT_TIMEOUT) -> bool:
         """
-        智能确保 WorkflowOrchestrator 已初始化（懒加载 + 预热支持）
-
-        支持三种状态处理：
-        1. 已完成 → 直接使用
-        2. 正在初始化 → 等待完成（最多 timeout 秒）
-        3. 未开始/失败 → 立即创建
-
-        Args:
-            timeout: 等待预热完成的最大时间（秒），默认 5 秒
-
-        Returns:
-            bool: 是否成功获取到可用的 WorkflowOrchestrator
+        智能确保 AgentUIBridge 已初始化（懒加载 + 预热支持）
         """
         with self._orchestrator_init_condition:
-            # 情况1: 已经准备好了
-            if self._orchestrator_init_status == OrchestratorInitStatus.READY and self.workflow_orchestrator:
-                self.logger.debug("WorkflowOrchestrator ready (warmup completed)")
+            if self._orchestrator_init_status == OrchestratorInitStatus.READY and self.agent_ui_bridge:
                 return True
 
-            # 情况2: 正在初始化中 → 等待完成
             if self._orchestrator_init_status == OrchestratorInitStatus.INITIALIZING:
-                self.logger.info(f"WorkflowOrchestrator is warming up, waiting up to {timeout} seconds...")
-                # 使用 Condition.wait() 代替轮询，更高效
-                waited = self._orchestrator_init_condition.wait(timeout=timeout)
+                self.logger.info(f"AgentUIBridge is warming up, waiting up to {timeout} seconds...")
+                self._orchestrator_init_condition.wait(timeout=timeout)
 
                 if self._orchestrator_init_status == OrchestratorInitStatus.READY:
-                    self.logger.info("WorkflowOrchestrator warmup completed")
                     return True
-                else:
-                    # 超时或失败
-                    if self._orchestrator_init_status == OrchestratorInitStatus.FAILED:
-                        self.logger.warning(f"Warmup failed: {self._orchestrator_init_error}, recreating...")
-                    else:
-                        self.logger.warning(f"Warmup timeout ({timeout}s), creating immediately...")
-                    # 继续下面的立即创建逻辑
+                # 超时或失败，继续往下立即创建
 
-            # 情况3: 未开始或失败 → 立即创建
-            if self._orchestrator_init_status == OrchestratorInitStatus.NOT_STARTED:
-                self.logger.info("No warmup initiated, creating immediately...")
-            elif self._orchestrator_init_status == OrchestratorInitStatus.FAILED:
+            if self._orchestrator_init_status == OrchestratorInitStatus.FAILED:
                 self.logger.warning(f"Previous warmup failed: {self._orchestrator_init_error}, recreating...")
 
-            # 双重检查：避免重复创建
-            if self.workflow_orchestrator is not None:
+            if self.agent_ui_bridge is not None:
                 return True
 
-            # 立即创建（懒加载兜底）
             self._orchestrator_init_status = OrchestratorInitStatus.INITIALIZING
 
         try:
-            self.logger.info("Creating WorkflowOrchestrator immediately...")
-            orchestrator = self._create_orchestrator()
+            self.logger.info("Creating AgentUIBridge immediately...")
+            bridge = self._create_agent_ui_bridge()
 
             with self._orchestrator_init_condition:
-                self.workflow_orchestrator = orchestrator
+                self.agent_ui_bridge = bridge
                 self._orchestrator_init_status = OrchestratorInitStatus.READY
-                self.logger.info("WorkflowOrchestrator created and ready")
-                # 通知可能等待的线程
+                self.logger.info("AgentUIBridge created and ready")
                 self._orchestrator_init_condition.notify_all()
 
             return True
@@ -866,13 +818,12 @@ class MainWindow(QMainWindow):
             with self._orchestrator_init_condition:
                 self._orchestrator_init_status = OrchestratorInitStatus.FAILED
                 self._orchestrator_init_error = str(e)
-                self.workflow_orchestrator = None
+                self.agent_ui_bridge = None
                 self._orchestrator_init_condition.notify_all()
 
-            self.logger.error(f"WorkflowOrchestrator initialization failed: {e}", exc_info=True)
-            # 使用信号而非直接调用 QMessageBox（线程安全）
+            self.logger.error(f"AgentUIBridge initialization failed: {e}", exc_info=True)
             self.recording_error.emit(
-                f"工作流编排器初始化失败：\n{str(e)}\n\n录制功能仍可使用，但不会自动生成工作流。"
+                f"Agent 编排器初始化失败：\n{str(e)}\n\n录制功能仍可使用，但不会自动启动 Agent。"
             )
             return False
 
@@ -880,16 +831,16 @@ class MainWindow(QMainWindow):
         """
         ⭐ 启动浏览器录制（在后台线程中）
 
-        优化：WorkflowOrchestrator 初始化也移到后台线程，避免阻塞 UI
+        优化：AgentUIBridge 初始化也移到后台线程，避免阻塞 UI
         """
         def start_recording():
             """在后台线程中执行录制启动"""
             browser_recorder = None
             try:
-                # ⭐ 优化1：在后台线程中确保 WorkflowOrchestrator 已初始化
-                self.logger.info("确保 WorkflowOrchestrator 已就绪...")
+                # ⭐ 优化1：在后台线程中确保 AgentUIBridge 已初始化
+                self.logger.info("确保 AgentUIBridge 已就绪...")
                 if not self._ensure_workflow_orchestrator(timeout=5.0):
-                    self.logger.error("WorkflowOrchestrator 不可用，但录制仍可继续")
+                    self.logger.error("AgentUIBridge 不可用，但录制仍可继续")
                     # 不返回，继续录制（AI 处理功能不可用）
 
                 self.logger.info("正在启动浏览器录制器...")
@@ -967,8 +918,7 @@ class MainWindow(QMainWindow):
                         # 注意：实际的意图内容会在 Agent interrupt 后通过 _on_agent_interrupt 更新
                         self.main_content.switch_page("intent_confirmation")
 
-                        # 发射录制完成事件，触发 WorkflowOrchestrator 处理
-                        # WorkflowOrchestrator 会启动 Agent，Agent interrupt 后更新 UI
+                        # 发射录制完成事件，AgentUIBridge 监听此事件后启动 PM Agent
                         emit(
                             'recording_completed',
                             event_data=RecordingEventData(
@@ -1082,23 +1032,14 @@ class MainWindow(QMainWindow):
         self.logger.info(f"收到意图分析请求: {intent_id}, 消息: {user_message[:50]}...")
 
         # Agent 模式：将用户消息作为 feedback 传递给 Agent
-        if hasattr(self, '_current_agent_thread_id') and self._current_agent_thread_id:
-            # 构建 feedback 数据
-            resume_data = {
-                "action": "feedback",
-                "feedback": user_message
-            }
-
-            # 恢复 Agent，传递用户反馈
-            if self.workflow_orchestrator and self.workflow_orchestrator.agent_bridge:
+        workflow_id = getattr(self, "_current_agent_workflow_id", None)
+        agent_type = getattr(self, "_current_agent_type", "pm")
+        if workflow_id:
+            if self.agent_ui_bridge:
                 try:
-                    self.workflow_orchestrator.agent_bridge.resume(
-                        self._current_agent_thread_id,
-                        resume_data
-                    )
-                    self.logger.info(f"已传递用户反馈给 Agent: {self._current_agent_thread_id}")
+                    self.agent_ui_bridge.reply_to_agent(agent_type, user_message, workflow_id)
+                    self.logger.info(f"已传递用户反馈给 Agent: {workflow_id}")
 
-                    # 更新 UI 状态
                     intent_page = self.main_content.get_page("intent_confirmation")
                     if intent_page and hasattr(intent_page, 'status_label'):
                         intent_page.status_label.setText("正在处理您的反馈...")
