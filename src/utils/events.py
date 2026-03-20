@@ -182,13 +182,12 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
     signal = _signals.signal(signal_name)
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug(f"发送事件 '{signal_name}'")
-    results = signal.send_robust(sender, event_name=signal_name, **kwargs)
-    for receiver, result in results:
-        if isinstance(result, Exception):
-            logger.error(
-                f"[Events] 监听器 {getattr(receiver, '__name__', receiver)} "
-                f"处理 {signal_name} 时异常: {result}"
-            )
+    try:
+        signal.send(sender, event_name=signal_name, **kwargs)
+    except Exception as exc:
+        logger.error(
+            f"[Events] 监听器处理 {signal_name} 时异常: {exc}"
+        )
 
 
 def list_signals() -> dict:
@@ -266,7 +265,7 @@ def clear_all() -> None:
     ]:
         signal = _signals.signal(name)
         # 清空所有接收器
-        signal._receivers.clear()
+        signal._clear_state()
 
 
 # =============================================================================

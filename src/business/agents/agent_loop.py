@@ -74,10 +74,14 @@ class AgentLoop:
         格式化 system prompt 模板变量（如 {recording_id}）。
 
         Orchestrator 在首次启动 Agent 前调用，避免直接访问 _config 私有属性。
-        采用部分替换：只替换有对应值的占位符，未知占位符原样保留（不抛异常）。
-        这避免了 str.format(**kwargs) 的陷阱——多个占位符中任一缺失会导致全部不替换。
+        只替换明确传入的占位符（如 {recording_id}），其余内容原样保留。
+        使用 str.replace 而非 format_map，避免 prompt 中的代码示例（含 {…} 的 JSON/Python
+        片段）触发 ValueError: Invalid format specifier。
         """
-        return self._config.system_prompt.format_map(_PartialFormatMap(kwargs))
+        prompt = self._config.system_prompt
+        for key, value in kwargs.items():
+            prompt = prompt.replace("{" + key + "}", str(value))
+        return prompt
 
     def _get_context_manager(self, session_id: str) -> ContextManager:
         """
