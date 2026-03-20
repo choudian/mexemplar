@@ -12,15 +12,17 @@ from typing import Dict, List, Optional
 
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
+    AgentConfig,
     AgentResult,
+    AgentType,
     ResultType,
     ToolDefinition,
     PM_CONFIG,
     PROGRAMMER_CONFIG,
-    TRIAL_CONFIG,
 )
 from src.business.agents.tools import (
     create_recording_tools,
+    create_trial_tools,
     submit_requirements,
     report_code_issue,
     syntax_check,
@@ -83,7 +85,30 @@ class AgentOrchestrator:
         3. 根据 result 发事件 + 调度下一步
         """
         session_id = self._get_or_create_session(workflow_id, agent_type)
-        loop = self._get_loop(agent_type)
+        try:
+            loop = self._get_loop(agent_type, workflow_id=workflow_id)
+        except ValueError as e:
+            logger.error(f"[Orchestrator] 无法创建 {agent_type} Loop: {e}")
+            emit(
+                "agent_error",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type=agent_type,
+                error=str(e),
+                error_type="setup_error",
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="agent_error",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps({"error": str(e), "agent_type": agent_type}),
+                )
+            )
+            return
 
         logger.info(
             f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
@@ -392,8 +417,61 @@ class AgentOrchestrator:
         self._run_review(code_data, session_id, workflow_id)
 
     def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
-        """试用 Agent 完成后的处理（依赖优先级 7 Trial Agent 设计，暂留空）"""
-        pass
+        """试用 Agent 完成 → 从 signal_tool.args 获取 success/feedback → 路由到计数或 PM 分诊"""
+        if result.signal_tool and result.signal_tool.name == "submit_trial_result":
+            success = result.signal_tool.args["success"]
+            feedback = result.signal_tool.args.get("feedback", "")
+
+            from src.data.repositories import ToolRepository
+            tool = ToolRepository().get_by_workflow_id(workflow_id)
+            if not tool:
+                emit(
+                    "agent_error",
+                    sender=self,
+                    workflow_id=workflow_id,
+                    session_id=session_id,
+                    agent_type="trial",
+                    error="未找到工具",
+                    error_type="tool_not_found",
+                )
+                self._transition_repo.create(
+                    WorkflowTransition(
+                        transition_id=str(uuid.uuid4()),
+                        workflow_id=workflow_id,
+                        event_type="agent_error",
+                        from_session_id=session_id,
+                        to_session_id=None,
+                        payload=json.dumps({"agent_type": "trial", "error": "tool_not_found"}),
+                    )
+                )
+                return
+
+            self.handle_trial_result(tool.tool_id, success, workflow_id, session_id, feedback)
+        else:
+            logger.warning(
+                f"[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session={session_id}"
+            )
+            emit(
+                "agent_error",
+                sender=self,
+                workflow_id=workflow_id,
+                session_id=session_id,
+                agent_type="trial",
+                error="试用 Agent 未通过 submit_trial_result 结束",
+                error_type="unexpected_completion",
+            )
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="agent_error",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps(
+                        {"agent_type": "trial", "error": "unexpected_completion"}
+                    ),
+                )
+            )
 
     def _run_review(self, code_data: dict, from_session_id: str, workflow_id: str) -> None:
         """
@@ -552,20 +630,49 @@ class AgentOrchestrator:
             return create_recording_tools(workflow_id) + [submit_requirements, report_code_issue]
         elif agent_type == "programmer":
             return create_recording_tools(workflow_id) + [syntax_check, submit_code]
+        elif agent_type == "trial":
+            return create_trial_tools(workflow_id)
         return []
 
-    def _get_loop(self, agent_type: str) -> AgentLoop:
-        """获取或创建 Loop 实例（按 agent_type 缓存）"""
+    def _get_loop(self, agent_type: str, workflow_id: str = None) -> AgentLoop:
+        """获取 Loop 实例。trial agent 不缓存（system prompt 含工具信息，每个 workflow 不同）。"""
+        if agent_type == "trial":
+            config = self._build_trial_config(workflow_id)
+            return AgentLoop(config, self._llm, self._config)
+
+        # pm / programmer 按 agent_type 缓存
         if agent_type not in self._loops:
-            configs = {
-                "pm": PM_CONFIG,
-                "programmer": PROGRAMMER_CONFIG,
-                "trial": TRIAL_CONFIG,
-            }
+            configs = {"pm": PM_CONFIG, "programmer": PROGRAMMER_CONFIG}
             if agent_type not in configs:
                 raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
             self._loops[agent_type] = AgentLoop(configs[agent_type], self._llm, self._config)
         return self._loops[agent_type]
+
+    def _build_trial_config(self, workflow_id: str) -> AgentConfig:
+        """构建包含工具信息的试用 Agent 配置。"""
+        from src.data.repositories import ToolRepository
+        from src.business.agents.prompts.trial_prompt import (
+            TRIAL_SYSTEM_PROMPT_TEMPLATE,
+            format_parameters_text,
+        )
+
+        tool = ToolRepository().get_by_workflow_id(workflow_id)
+        if not tool:
+            raise ValueError(f"未找到 workflow_id={workflow_id} 对应的工具")
+
+        parameters_text = format_parameters_text(tool.parameters or [])
+        # 用手动替换而非 str.format()，防止 tool_name/description 内容含花括号时触发 KeyError
+        system_prompt = (
+            TRIAL_SYSTEM_PROMPT_TEMPLATE
+            .replace("{tool_name}", tool.tool_name)
+            .replace("{description}", tool.description or "（无描述）")
+            .replace("{parameters_text}", parameters_text)
+        )
+        return AgentConfig(
+            agent_type=AgentType.TRIAL,
+            system_prompt=system_prompt,
+            max_iterations=20,
+        )
 
     def _save_tool(
         self,

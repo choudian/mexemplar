@@ -110,10 +110,11 @@ PROGRAMMER_CONFIG = AgentConfig(
     max_iterations=30,
 )
 
-# Trial Agent 配置（优先级7细化）
+# Trial Agent 配置（保留用于兼容，实际运行时由 _build_trial_config 动态生成）
+# 每个 workflow 的 system prompt 含工具信息，不能共用同一个 config 实例
 TRIAL_CONFIG = AgentConfig(
     agent_type=AgentType.TRIAL,
-    system_prompt=("你是一个试用 Agent。当前阶段功能待定义。"),
+    system_prompt="你是 Exemplar 的试用助手。",
     max_iterations=20,
 )
 
