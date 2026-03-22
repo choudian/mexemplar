@@ -773,11 +773,11 @@ class MainWindow(QMainWindow):
         )
 
     def _on_tools_clicked(self) -> None:
-        """工具列表按钮点击事件"""
+        """技能列表按钮点击事件"""
         QMessageBox.information(
             self,
-            "工具列表",
-            "工具列表即将推出！\n\n请使用命令行模式：\nuv run python -m src.main interactive",
+            "技能列表",
+            "技能列表即将推出！\n\n请使用命令行模式：\nuv run python -m src.main interactive",
         )
 
     def _on_settings_clicked(self) -> None:
@@ -805,7 +805,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "不支持的模式",
-                f"暂不支持 {mode} 录制模式\n\n当前仅支持浏览器录制。"
+                f"暂不支持 {mode} 模式\n\n当前仅支持浏览器操作。"
             )
             # 重置录制界面状态
             self.recording_page.reset()
@@ -982,7 +982,7 @@ class MainWindow(QMainWindow):
             <hr>
             <p>核心功能：</p>
             <ul>
-                <li>📹 浏览器/桌面操作录制</li>
+                <li>📹 浏览器/桌面技能教学</li>
                 <li>🤖 AI 智能工作流生成</li>
                 <li>▶️ 自动化脚本执行</li>
                 <li>📊 工具管理和分享</li>
@@ -1003,7 +1003,7 @@ class MainWindow(QMainWindow):
         # ⭐ 在主线程中显示错误消息（线程安全）
         QMessageBox.critical(
             self,
-            "录制失败",
+            "教学失败",
             error_message
         )
 
@@ -1013,7 +1013,7 @@ class MainWindow(QMainWindow):
         # ⭐ 在主线程中显示错误消息（线程安全）
         QMessageBox.critical(
             self,
-            "录制错误",
+            "教学错误",
             error_message
         )
 

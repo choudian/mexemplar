@@ -198,7 +198,7 @@ class IntentConfirmationUI(QWidget):
         self._clear_messages()
 
         # 添加加载提示
-        loading_label = QLabel("⏳ AI 正在分析您的录制操作，请稍候...")
+        loading_label = QLabel("⏳ AI 正在分析您的操作，请稍候...")
         loading_label.setObjectName("intent_loading_label")
         loading_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.messages_layout.addWidget(loading_label)
@@ -695,7 +695,7 @@ class IntentConfirmationUI(QWidget):
 
         # 更新状态栏
         self.status_label.setText("✅ 工具生成成功！")
-        self.progress_indicator.setText("即将跳转到工具列表...")
+        self.progress_indicator.setText("即将跳转到技能列表...")
         self.status_icon.setText("🎉")
 
         # 滚动到底部

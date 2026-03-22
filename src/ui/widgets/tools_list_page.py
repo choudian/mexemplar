@@ -79,7 +79,7 @@ class ToolsListPage(QWidget):
         main_layout.setContentsMargins(24, 24, 24, 24)
 
         # 页面标题
-        title_label = QLabel("工具列表")
+        title_label = QLabel("技能列表")
         title_label.setObjectName("tools_title")
         title_label.setStyleSheet("font-size: 24px; font-weight: bold; color: #2c3e50;")
         main_layout.addWidget(title_label)

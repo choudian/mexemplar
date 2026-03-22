@@ -102,19 +102,19 @@ class SettingsPage(QWidget):
         scroll_layout.addWidget(ai_group)
 
         # ============ 录制配置组 ============
-        recording_group = QGroupBox("录制配置")
+        recording_group = QGroupBox("教学配置")
         recording_group.setObjectName("settings_group")
         recording_layout = QVBoxLayout()
         recording_layout.setSpacing(12)
 
         # 默认录制模式
         rec_mode_layout = QHBoxLayout()
-        rec_mode_label = QLabel("默认录制模式:")
+        rec_mode_label = QLabel("默认教学模式:")
         rec_mode_label.setMinimumWidth(120)
         self.rec_mode_combo = QComboBox()
         self.rec_mode_combo.setObjectName("settings_combo")
-        self.rec_mode_combo.addItem("浏览器录制", "browser")
-        self.rec_mode_combo.addItem("桌面录制", "desktop")
+        self.rec_mode_combo.addItem("浏览器操作", "browser")
+        self.rec_mode_combo.addItem("桌面操作", "desktop")
         rec_mode_layout.addWidget(rec_mode_label)
         rec_mode_layout.addWidget(self.rec_mode_combo)
         recording_layout.addLayout(rec_mode_layout)

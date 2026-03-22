@@ -117,7 +117,7 @@ class SidebarWidget(QWidget):
         # 录制按钮
         self.recording_btn = self._create_nav_button(
             RECORDING_ICON,
-            "录制操作",
+            "技能教学",
             "recording"
         )
         nav_layout.addWidget(self.recording_btn)
@@ -125,7 +125,7 @@ class SidebarWidget(QWidget):
         # 工具列表按钮（待试用工具）
         self.pending_tools_btn = self._create_nav_button(
             PENDING_TOOLS_ICON,
-            "工具列表",
+            "技能列表",
             "pending_tools"
         )
         nav_layout.addWidget(self.pending_tools_btn)
@@ -250,7 +250,7 @@ class SidebarWidget(QWidget):
     def _load_sample_chats(self):
         """加载示例对话历史"""
         sample_chats = [
-            "录制操作帮助",
+            "技能教学帮助",
             "如何执行工具?",
             "配置 API Key",
             "浏览器设置",
