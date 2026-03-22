@@ -77,6 +77,12 @@ class AgentConfig:
     system_prompt: str
     max_iterations: int = 10
     retry: RetryConfig = field(default_factory=RetryConfig)
+    text_as_user_input: bool = False
+    """
+    为 True 时，LLM 直接返回文字（未调用任何工具）视为隐式 talk_to_user，
+    loop 返回 NEEDS_USER_INPUT 而非 COMPLETED。
+    适用于需要持续与用户对话、不能自然结束的 Agent（如 PM Agent）。
+    """
 
 
 @dataclass
@@ -100,6 +106,7 @@ PM_CONFIG = AgentConfig(
     agent_type=AgentType.PM,
     system_prompt=PM_SYSTEM_PROMPT,
     max_iterations=50,
+    text_as_user_input=True,
 )
 
 # Programmer Agent 配置

@@ -262,8 +262,16 @@ class AgentLoop:
                 ),
             )
 
-            # 如果没有工具调用，循环结束
+            # 如果没有工具调用
             if not response.has_tool_calls:
+                if self._config.text_as_user_input and response.content:
+                    # PM 等需持续对话的 Agent：文字回复视为隐式 talk_to_user
+                    ctx.update_session_status("suspended")
+                    logger.info(f"[Agent Loop] 文字回复转为用户输入等待: {session_id}")
+                    return AgentResult(
+                        result_type=ResultType.NEEDS_USER_INPUT,
+                        question=response.content,
+                    )
                 ctx.update_session_status("completed")
                 logger.info(f"[Agent Loop] 完成（无工具调用）: {session_id}")
                 return AgentResult(
