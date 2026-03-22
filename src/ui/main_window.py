@@ -62,6 +62,7 @@ class MainWindow(QMainWindow):
     recording_start_failed = pyqtSignal(str)  # 参数：错误消息
     recording_error = pyqtSignal(str)  # 参数：错误详情
     workflow_error = pyqtSignal(str, str)  # 参数：错误消息，错误类型
+    _agent_start_requested = pyqtSignal(str)  # 参数：recording_id，用于跨线程安全触发 start_agent
 
     def __init__(self) -> None:
         """初始化主窗口"""
@@ -594,21 +595,47 @@ class MainWindow(QMainWindow):
         self.logger.info("AgentUIBridge 信号已连接")
 
         # 监听录制完成事件，自动启动 PM Agent
+        # 修复：blinker 回调在后台线程触发，不能直接调用 bridge.start_agent()。
+        # 通过 _agent_start_requested 信号 + 真实 QObject slot 保证在主线程执行。
+        # 注意：必须用真实方法作为 slot，lambda 没有 QObject 归属会退化为 DirectConnection。
+        self._pending_bridge = bridge  # 让 slot 能访问到 bridge
+        self._agent_start_requested.connect(self._on_agent_start_requested)
+
         def on_recording_completed(sender, **kwargs):
-            recording_id = kwargs.get("recording_id")
+            # event_data 可能是 RecordingEventData 对象（session_id 字段），也可能是 dict
+            event_data = kwargs.get("event_data")
+            if event_data is not None:
+                recording_id = (
+                    event_data.get("recording_id")
+                    if isinstance(event_data, dict)
+                    else getattr(event_data, "session_id", None)
+                )
+            else:
+                recording_id = kwargs.get("recording_id")
             if not recording_id:
                 return
-            self.logger.info(f"[录制完成] 启动 PM Agent 分析: {recording_id}")
-            bridge.start_agent(
-                "pm",
-                f"请分析录制 {recording_id} 的操作流程，理解用户想要自动化的任务，并与用户确认需求。",
-                recording_id,
-            )
+            self.logger.info(f"[录制完成] 通过主线程信号启动 PM Agent 分析: {recording_id}")
+            self._agent_start_requested.emit(recording_id)
 
-        connect("recording_completed", on_recording_completed)
+        # 必须用实例属性持有强引用，否则 blinker 弱引用会在函数返回后被 GC 回收
+        self._on_recording_completed_handler = on_recording_completed
+        connect("recording_completed", self._on_recording_completed_handler)
         self.logger.info("已开始监听录制完成事件")
 
         return bridge
+
+    def _on_agent_start_requested(self, recording_id: str) -> None:
+        """在主线程中启动 PM Agent（由 _agent_start_requested 信号触发）"""
+        bridge = getattr(self, "_pending_bridge", None) or self.agent_ui_bridge
+        if not bridge:
+            self.logger.error("AgentUIBridge 不可用，无法启动 Agent")
+            return
+        self.logger.info(f"[主线程] 启动 PM Agent 分析: {recording_id}")
+        bridge.start_agent(
+            "pm",
+            f"请分析录制 {recording_id} 的操作流程，理解用户想要自动化的任务，并与用户确认需求。",
+            recording_id,
+        )
 
     def _on_agent_question(self, workflow_id: str, agent_type: str, question: str) -> None:
         """
