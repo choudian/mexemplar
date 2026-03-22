@@ -9,7 +9,6 @@ import sys
 from pathlib import Path
 from typing import Optional
 from logging.handlers import RotatingFileHandler
-import os
 
 
 def setup_logger(
@@ -38,9 +37,10 @@ def setup_logger(
     """
     # 首先配置根logger以捕获所有模块的日志
     root_logger = logging.getLogger()
-    if not root_logger.handlers:
-        root_logger.setLevel(log_level)
+    # 始终更新根logger级别（确保 --log-level DEBUG 等参数能生效）
+    root_logger.setLevel(log_level)
 
+    if not root_logger.handlers:
         # 日志格式
         formatter = logging.Formatter(
             "%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
@@ -70,6 +70,10 @@ def setup_logger(
             file_handler.setLevel(log_level)
             file_handler.setFormatter(formatter)
             root_logger.addHandler(file_handler)
+    else:
+        # handlers 已存在，更新它们的级别
+        for handler in root_logger.handlers:
+            handler.setLevel(log_level)
 
     # 配置指定的logger
     logger = logging.getLogger(name)

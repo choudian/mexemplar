@@ -323,8 +323,69 @@ atexit.register(cleanup)
 
 def main():
     """主程序入口"""
-    # 初始化日志系统
-    setup_logger(name="mexemplar", log_level=logging.INFO, console_output=True, file_output=True)
+    # 先解析参数，以便尽早确定日志级别
+    parser = argparse.ArgumentParser(
+        description="Mexemplar - 桌面端智能办公助理",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("--version", action="version", version="Mexemplar 0.1.0")
+    parser.add_argument("--gui", action="store_true", help="启动图形界面模式")
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help="全局日志级别（默认 INFO）",
+    )
+    parser.add_argument(
+        "--log-debug",
+        action="append",
+        dest="log_debug_modules",
+        metavar="MODULE",
+        help=(
+            "为指定模块开启 DEBUG（可多次使用，支持逗号分隔）。"
+            "例: --log-debug src.business.ai --log-debug src.business.agents,src.data"
+        ),
+    )
+
+    subparsers = parser.add_subparsers(dest="command", help="可用命令")
+
+    # 子命令：record
+    record_parser = subparsers.add_parser("record", help="启动录制模式")
+    record_parser.add_argument("--mode", choices=["browser", "desktop"], default="browser")
+
+    # 子命令：execute
+    execute_parser = subparsers.add_parser("execute", help="执行工具")
+    execute_parser.add_argument("tool_id", help="工具 ID")
+
+    # 子命令：config
+    config_parser = subparsers.add_parser("config", help="配置管理")
+    config_parser.add_argument("--list", action="store_true", help="列出所有配置")
+
+    # 子命令：interactive
+    subparsers.add_parser("interactive", help="交互式菜单")
+
+    # 子命令：recover
+    recover_parser = subparsers.add_parser("recover", help="从队列文件恢复录制数据")
+    recover_parser.add_argument("--overwrite", action="store_true", help="覆盖已存在的数据")
+    recover_parser.add_argument("--delete", action="store_true", help="恢复成功后删除队列文件")
+
+    args = parser.parse_args()
+
+    # 尽早初始化日志，后续所有模块都能按指定级别输出
+    log_level = getattr(logging, args.log_level)
+    setup_logger(name="mexemplar", log_level=log_level, console_output=True, file_output=True)
+
+    # 为指定模块单独开启 DEBUG
+    if args.log_debug_modules:
+        debug_modules = []
+        for item in args.log_debug_modules:
+            debug_modules.extend(m.strip() for m in item.split(",") if m.strip())
+        for module in debug_modules:
+            logging.getLogger(module).setLevel(logging.DEBUG)
+        # 必须同步降低 root handlers 的 level，否则 DEBUG 消息经传播后会被 handler 过滤掉
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
+        logger.info(f"[日志] 已为模块开启 DEBUG: {', '.join(debug_modules)}")
 
     logger.info("=" * 60)
     logger.info("Mexemplar 启动中...")
@@ -353,39 +414,6 @@ def main():
         if db_manager:
             db_manager.close()
         sys.exit(1)
-
-    # 创建命令行解析器
-    parser = argparse.ArgumentParser(
-        description="Mexemplar - 桌面端智能办公助理",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    parser.add_argument("--version", action="version", version="Mexemplar 0.1.0")
-    parser.add_argument("--gui", action="store_true", help="启动图形界面模式")
-
-    subparsers = parser.add_subparsers(dest="command", help="可用命令")
-
-    # 子命令：record
-    record_parser = subparsers.add_parser("record", help="启动录制模式")
-    record_parser.add_argument("--mode", choices=["browser", "desktop"], default="browser")
-
-    # 子命令：execute
-    execute_parser = subparsers.add_parser("execute", help="执行工具")
-    execute_parser.add_argument("tool_id", help="工具 ID")
-
-    # 子命令：config
-    config_parser = subparsers.add_parser("config", help="配置管理")
-    config_parser.add_argument("--list", action="store_true", help="列出所有配置")
-
-    # 子命令：interactive
-    subparsers.add_parser("interactive", help="交互式菜单")
-
-    # 子命令：recover
-    recover_parser = subparsers.add_parser("recover", help="从队列文件恢复录制数据")
-    recover_parser.add_argument("--overwrite", action="store_true", help="覆盖已存在的数据")
-    recover_parser.add_argument("--delete", action="store_true", help="恢复成功后删除队列文件")
-
-    # 解析参数
-    args = parser.parse_args()
 
     # GUI 模式优先处理
     if args.gui:

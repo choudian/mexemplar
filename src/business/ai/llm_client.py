@@ -312,6 +312,13 @@ class LangChainLLMClient:
             # 转换为 LangChain 消息对象
             lc_messages = self._convert_to_langchain_messages(messages)
 
+            # DEBUG: 打印发送给 LLM 的完整消息
+            if logger.isEnabledFor(logging.DEBUG):
+                for i, msg in enumerate(messages):
+                    role = msg.get("role", "?")
+                    content = str(msg.get("content") or "")
+                    logger.debug(f"[LLM→] [{i}] {role}: {content}")
+
             # 绑定工具（单工具调用模式）
             llm_with_tools = self.llm.bind_tools(
                 tools, parallel_tool_calls=False
@@ -321,7 +328,19 @@ class LangChainLLMClient:
             ai_message = llm_with_tools.invoke(lc_messages, **kwargs)
 
             # 提取响应
-            return self._extract_response(ai_message)
+            response = self._extract_response(ai_message)
+
+            # DEBUG: 打印 LLM 返回结果
+            if logger.isEnabledFor(logging.DEBUG):
+                if response.has_tool_calls:
+                    tc = response.tool_calls[0]
+                    import json as _json
+                    args_str = _json.dumps(tc.args, ensure_ascii=False)
+                    logger.debug(f"[←LLM] tool_call={tc.name} args={args_str}")
+                else:
+                    logger.debug(f"[←LLM] text={response.content or ''}")
+
+            return response
 
         except Exception as e:
             logger.error(f"[LLM客户端] 工具调用失败: {e}")

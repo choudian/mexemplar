@@ -153,7 +153,9 @@ class AgentLoop:
         for retry_count in range(retry_config.max_retries + 1):
             try:
                 response = self._llm.chat_with_tools(messages, tools)
-                logger.debug(f"[Agent Loop] LLM 调用成功 (iteration={iteration})")
+                logger.debug(f"[Agent Loop] LLM 回复 (iteration={iteration}): {response.content or ''}")
+                if response.has_tool_calls:
+                    logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
                 return response
 
             except Exception as e:
@@ -272,7 +274,7 @@ class AgentLoop:
             # 执行工具调用（单工具模式）
             tool_call = response.tool_calls[0]
             logger.debug(
-                f"[Agent Loop] 工具调用: {tool_call.name} " f"(args: {list(tool_call.args.keys())})"
+                f"[Agent Loop] 工具调用: {tool_call.name} args={json.dumps(tool_call.args, ensure_ascii=False)}"
             )
 
             # 执行工具（统一路径，不区分内置/注册）
@@ -316,7 +318,7 @@ class AgentLoop:
                     tool_name=tool_call.name,
                     content=result,
                 )
-                logger.debug(f"[Agent Loop] 工具执行成功: {tool_call.name}")
+                logger.debug(f"[Agent Loop] 工具结果: {tool_call.name} -> {result}")
 
             except Exception as e:
                 error_msg = f"工具执行错误: {str(e)}"
