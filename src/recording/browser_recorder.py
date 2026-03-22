@@ -1285,13 +1285,13 @@ class BrowserRecorder:
                         self._recording_repository.save_network_requests(action_id, requests, self._recording_id)
                         request_count += len(requests)
 
-            # 4.2 独立的网络请求（action_id 为 NULL）
+            # 4.2 独立的网络请求（action_id 为 NULL），批量保存
             if standalone_network_requests:
                 logger.debug(f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)")
-                for req in standalone_network_requests:
-                    # 传递 action_id=None，数据库中会存储为 NULL
-                    self._recording_repository.save_network_requests(None, [req], self._recording_id)
-                    request_count += 1
+                saved = self._recording_repository.save_network_requests(
+                    None, standalone_network_requests, self._recording_id
+                )
+                request_count += len(saved)
 
             if request_count > 0:
                 logger.info(f"已保存 {request_count} 条网络请求到 DuckDB")

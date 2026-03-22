@@ -312,12 +312,12 @@ class LangChainLLMClient:
             # 转换为 LangChain 消息对象
             lc_messages = self._convert_to_langchain_messages(messages)
 
-            # DEBUG: 打印发送给 LLM 的完整消息
-            if logger.isEnabledFor(logging.DEBUG):
-                for i, msg in enumerate(messages):
-                    role = msg.get("role", "?")
-                    content = str(msg.get("content") or "")
-                    logger.debug(f"[LLM→] [{i}] {role}: {content}")
+            # DEBUG: 打印消息总数 + 最新一条
+            if logger.isEnabledFor(logging.DEBUG) and messages:
+                last = messages[-1]
+                role = last.get("role", "?")
+                content = str(last.get("content") or "")
+                logger.debug(f"[LLM→] ({len(messages)} msgs) {role}: {content}")
 
             # 绑定工具（单工具调用模式）
             llm_with_tools = self.llm.bind_tools(

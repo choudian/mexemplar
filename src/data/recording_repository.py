@@ -211,41 +211,31 @@ class RecordingRepository:
 
         logger.debug(f"save_network_requests: 准备保存 {len(network_requests)} 条网络请求 (action_id={action_id}, recording_id={recording_id})")
 
-        request_ids = []
+        rows = []
         for request in network_requests:
-            try:
-                # 转换时间戳
-                timestamp = datetime.fromtimestamp(request.get("timestamp", 0))
+            rows.append({
+                "action_id": action_id,
+                "recording_id": recording_id,
+                "url": request.get("url"),
+                "method": request.get("method"),
+                "request_type": request.get("request_type"),
+                "request_headers": json.dumps(request.get("request_headers", {}), ensure_ascii=False),
+                "request_body": request.get("request_body"),
+                "response_status": request.get("response_status"),
+                "response_headers": json.dumps(request.get("response_headers", {}), ensure_ascii=False),
+                "response_body": request.get("response_body"),
+                "duration": request.get("duration"),
+                "timestamp": datetime.fromtimestamp(request.get("timestamp", 0)),
+                "filtered": False,
+                "filter_reason": None,
+                "filtered_at": None,
+            })
 
-                # 序列化 JSON 字段
-                request_headers = json.dumps(request.get("request_headers", {}), ensure_ascii=False)
-                response_headers = json.dumps(request.get("response_headers", {}), ensure_ascii=False)
-
-                request_id = self.db.insert(
-                    "network_requests",
-                    {
-                        "action_id": action_id,
-                        "recording_id": recording_id,
-                        "url": request.get("url"),
-                        "method": request.get("method"),
-                        "request_type": request.get("request_type"),
-                        "request_headers": request_headers,
-                        "request_body": request.get("request_body"),
-                        "response_status": request.get("response_status"),
-                        "response_headers": response_headers,
-                        "response_body": request.get("response_body"),
-                        "duration": request.get("duration"),
-                        "timestamp": timestamp,
-                        "filtered": False,  # 默认未过滤
-                        "filter_reason": None,
-                        "filtered_at": None,
-                    },
-                )
-                request_ids.append(request_id)
-                logger.debug(f"  保存网络请求成功: request_id={request_id}, url={request.get('url')}")
-            except Exception as e:
-                logger.error(f"保存网络请求失败: {e}, url={request.get('url')}", exc_info=True)
-                # 继续保存其他请求，不中断整个流程
+        try:
+            request_ids = self.db.insert_many("network_requests", rows)
+        except Exception as e:
+            logger.error(f"批量保存网络请求失败: {e}", exc_info=True)
+            return []
 
         logger.info(f"save_network_requests: 成功保存 {len(request_ids)}/{len(network_requests)} 条网络请求")
         return request_ids
