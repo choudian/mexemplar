@@ -663,6 +663,11 @@ class MainWindow(QMainWindow):
         """处理 Agent 进度事件"""
         self.logger.info(f"Agent 进度: workflow={workflow_id}, event={event_name}")
 
+        if event_name == "requirement_confirmed":
+            intent_page = self.main_content.get_page("intent_confirmation")
+            if intent_page and hasattr(intent_page, "show_generating_state"):
+                intent_page.show_generating_state()
+
     def _on_tool_saved(self, workflow_id: str, tool_id: str) -> None:
         """工具入库后自动切换到工具列表页"""
         self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}")
@@ -864,12 +869,6 @@ class MainWindow(QMainWindow):
             """在后台线程中执行录制启动"""
             browser_recorder = None
             try:
-                # ⭐ 优化1：在后台线程中确保 AgentUIBridge 已初始化
-                self.logger.info("确保 AgentUIBridge 已就绪...")
-                if not self._ensure_workflow_orchestrator(timeout=5.0):
-                    self.logger.error("AgentUIBridge 不可用，但录制仍可继续")
-                    # 不返回，继续录制（AI 处理功能不可用）
-
                 self.logger.info("正在启动浏览器录制器...")
 
                 # ⭐ 优化2：捕获所有初始化错误，确保不会卡死
@@ -944,6 +943,11 @@ class MainWindow(QMainWindow):
                         # 切换到意图确认页面（显示"正在分析..."）
                         # 注意：实际的意图内容会在 Agent interrupt 后通过 _on_agent_interrupt 更新
                         self.main_content.switch_page("intent_confirmation")
+
+                        # 确保 AgentUIBridge 已就绪（录制期间后台线程完成初始化）
+                        if not self._ensure_workflow_orchestrator(timeout=30.0):
+                            self.logger.error("AgentUIBridge 不可用，无法启动 Agent 分析")
+                            return
 
                         # 发射录制完成事件，AgentUIBridge 监听此事件后启动 PM Agent
                         emit(

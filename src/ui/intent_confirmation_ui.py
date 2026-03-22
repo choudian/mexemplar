@@ -707,6 +707,25 @@ class IntentConfirmationUI(QWidget):
         if self._confirm_card:
             self._confirm_card.set_enabled(False)
 
+    def show_generating_state(self) -> None:
+        """
+        显示"正在学习技能"状态（PM 确认完毕、程序员开始工作时调用）
+        """
+        self.status_icon.setText("📖")
+        self.status_label.setText("TA 正在学习这项技能，稍等一下...")
+        self.progress_indicator.setText("")
+
+        # 禁用输入，防止用户在生成期间继续输入
+        self.message_input.setEnabled(False)
+        self.send_button.setEnabled(False)
+        if self._confirm_card:
+            self._confirm_card.set_enabled(False)
+
+        # 添加状态消息
+        self._add_message("assistant", "好的，我已经了解了你的想法，正在学习这项技能，马上就好～")
+
+        QTimer.singleShot(100, self._scroll_to_bottom)
+
     def cleanup(self):
         """清理资源"""
         pass

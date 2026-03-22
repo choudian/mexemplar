@@ -707,6 +707,7 @@ class AgentOrchestrator:
             existing.description = code_data["description"]
             existing.parameters = code_data.get("parameters", [])
             existing.trial_success_count = 0
+            existing.source = "intent"
             existing.status = status
             tool_repo.update(existing)
         else:
@@ -716,7 +717,9 @@ class AgentOrchestrator:
                 description=code_data["description"],
                 execution_code=code,
                 parameters=code_data.get("parameters", []),
+                steps=[],
                 workflow_id=workflow_id,
+                source="intent",
                 status=status,
                 trial_success_count=0,
             )
