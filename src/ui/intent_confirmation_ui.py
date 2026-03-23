@@ -28,7 +28,6 @@ from src.business.intent.intent_models import Intent, IntentStatus
 from src.ui.widgets.message_option_card import (
     MessageOptionCard,
     MultiQuestionCard,
-    ConfirmButtonCard,
 )
 from src.utils.logger import get_logger
 
@@ -59,7 +58,6 @@ class IntentConfirmationUI(QWidget):
 
     # 用于与后端通信的信号
     analyze_intent_request = pyqtSignal(str, str)  # intent_id, user_message
-    confirm_intent_request = pyqtSignal(str)  # intent_id
 
     # Agent 模式信号
     agent_resume_request = pyqtSignal(str, dict)  # thread_id, resume_data
@@ -77,7 +75,6 @@ class IntentConfirmationUI(QWidget):
 
         # UI 组件引用
         self._multi_question_card: Optional[MultiQuestionCard] = None
-        self._confirm_card: Optional[ConfirmButtonCard] = None
         self._analysis_summary_card: Optional[QFrame] = None
 
         self.init_ui()
@@ -212,7 +209,6 @@ class IntentConfirmationUI(QWidget):
 
         # 重置组件引用
         self._multi_question_card = None
-        self._confirm_card = None
         self._analysis_summary_card = None
 
     def _add_message(self, role: str, content: str):
@@ -375,24 +371,10 @@ class IntentConfirmationUI(QWidget):
         self._update_confirmation_ui(intent_data, message)
 
     def _update_confirmation_ui(self, intent_data: dict, message: str):
-        """
-        统一的确认 UI 方法
-
-        根据是否有确认问题动态显示不同按钮：
-        - 有问题：显示"提交问题"按钮
-        - 无问题：显示"最终意图确认"按钮
-        """
-        # 获取所有确认问题
-        all_questions = intent_data.get("confirmation_questions", [])
-        total_questions = len(all_questions)
-
+        """显示分析结果并自动确认（问题已通过自然语言对话处理）"""
         # 更新状态栏
-        if total_questions > 0:
-            self.status_label.setText("请确认分析结果并回答问题")
-            self.progress_indicator.setText(f"共 {total_questions} 个问题")
-        else:
-            self.status_label.setText("请确认分析结果")
-            self.progress_indicator.setText("")
+        self.status_label.setText("分析完成")
+        self.progress_indicator.setText("")
         self.status_icon.setText("✅")
 
         # 移除 loading_label（如果存在）
@@ -400,35 +382,16 @@ class IntentConfirmationUI(QWidget):
 
         # 检查是否是反馈后的更新（有 AI 回复）
         ai_response = intent_data.get("ai_response")
-        is_feedback_update = ai_response is not None
-
-        if is_feedback_update and self._multi_question_card:
-            # 禁用旧问题卡片（新卡片会自动启用）
+        if ai_response and self._multi_question_card:
             self._multi_question_card.setEnabled(False)
+            self._add_message("assistant", ai_response)
 
-            # 显示 AI 回复
-            if ai_response:
-                self._add_message("assistant", ai_response)
-
-        # 显示分析摘要和问题（新卡片默认启用）
-        self._add_assistant_bubble_with_questions(intent_data, message, all_questions)
-
-        # 显示确认按钮（根据是否有问题显示不同按钮）
-        if self._confirm_card:
-            self._confirm_card.deleteLater()
-            self._confirm_card = None
-
-        self._confirm_card = ConfirmButtonCard()
-        self._confirm_card.set_has_questions(total_questions > 0)
-        self._confirm_card.confirm_clicked.connect(self._on_confirm_clicked)
-        self.messages_layout.addWidget(self._confirm_card)
+        # 显示分析摘要
+        self._add_assistant_bubble_with_questions(intent_data, message, [])
 
         # 添加弹性空间
         spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         self.messages_layout.addItem(spacer)
-
-        # 禁用发送按钮（等待输入）
-        self.send_button.setEnabled(False)
 
         # 滚动到底部
         QTimer.singleShot(100, self._scroll_to_bottom)
@@ -538,12 +501,12 @@ class IntentConfirmationUI(QWidget):
             if item and item.widget():
                 widget = item.widget()
                 # 检查是否是卡片组件或确认按钮
-                if isinstance(widget, (MultiQuestionCard, ConfirmButtonCard)):
+                if isinstance(widget, MultiQuestionCard):
                     items_to_remove.append((i, widget))
                 # 检查 objectName
                 elif hasattr(widget, 'objectName'):
                     name = widget.objectName()
-                    if name in ('analysis_summary_card', 'confirm_button_card'):
+                    if name == 'analysis_summary_card':
                         items_to_remove.append((i, widget))
 
         # 从后往前移除
@@ -553,70 +516,6 @@ class IntentConfirmationUI(QWidget):
 
         # 重置组件引用
         self._multi_question_card = None
-        self._confirm_card = None
-
-    def _on_all_questions_answered(self, all_answered: bool):
-        """处理所有问题已回答状态变化"""
-        if not self._confirm_card:
-            return
-
-        if not self._multi_question_card:
-            # 没有问题卡片时，直接设置状态
-            self._confirm_card.set_enabled(all_answered)
-            return
-
-        # 使用公开方法获取数据，避免直接访问私有属性
-        answered_count = len(self._multi_question_card.get_answers())
-        total_count = self._multi_question_card.get_total_questions()
-
-        if all_answered:
-            self._confirm_card.set_enabled(True)
-            self._confirm_card.update_progress(answered_count, total_count)
-        else:
-            self._confirm_card.set_enabled(False)
-            self._confirm_card.update_progress(answered_count, total_count)
-
-    def _on_confirm_clicked(self):
-        """
-        确认按钮点击
-
-        根据是否有确认问题执行不同操作：
-        - 有问题：提交问题答案，触发重新分析
-        - 无问题：最终确认，生成工具
-        """
-        self.logger.info(f"确认按钮点击: {self._agent_thread_id}")
-
-        if not (hasattr(self, '_agent_thread_id') and self._agent_thread_id):
-            return
-
-        # 检查是否有问题
-        has_questions = self._confirm_card._has_questions if self._confirm_card else False
-
-        # 收集答案
-        answers = {}
-        if self._multi_question_card:
-            answers = self._multi_question_card.get_answers()
-
-        if has_questions:
-            # 有问题：提交问题答案
-            resume_data = {
-                "action": "submit",
-                "answers": answers
-            }
-            self.status_label.setText("正在重新分析...")
-        else:
-            # 无问题：最终确认
-            resume_data = {
-                "action": "confirm"
-            }
-            self.status_label.setText("✅ 已确认！正在生成工具代码...")
-            self.progress_indicator.setText("生成中...")
-
-        self.agent_resume_request.emit(self._agent_thread_id, resume_data)
-
-        # 禁用确认按钮
-        if self._confirm_card:
-            self._confirm_card.set_enabled(False)
 
     # ===== 兼容旧接口的方法 =====
 
@@ -704,8 +603,6 @@ class IntentConfirmationUI(QWidget):
         # 禁用输入和按钮
         self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
-        if self._confirm_card:
-            self._confirm_card.set_enabled(False)
 
     def show_generating_state(self) -> None:
         """
@@ -718,8 +615,6 @@ class IntentConfirmationUI(QWidget):
         # 禁用输入，防止用户在生成期间继续输入
         self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
-        if self._confirm_card:
-            self._confirm_card.set_enabled(False)
 
         # 添加状态消息
         self._add_message("assistant", "好的，我已经了解了你的想法，正在学习这项技能，马上就好～")

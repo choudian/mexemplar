@@ -231,9 +231,6 @@ class MainWindow(QMainWindow):
             self.intent_confirmation_page.analyze_intent_request.connect(
                 self._on_intent_analyze_request
             )
-            self.intent_confirmation_page.confirm_intent_request.connect(
-                self._on_intent_confirm_request
-            )
             # Agent 模式信号：恢复 Agent
             self.intent_confirmation_page.agent_resume_request.connect(
                 self._on_agent_resume_request
@@ -1081,15 +1078,6 @@ class MainWindow(QMainWindow):
                 self.logger.warning("AgentUIBridge 不可用")
         else:
             self.logger.warning("没有活跃的 Agent 会话")
-
-    def _on_intent_confirm_request(self, intent_id: str) -> None:
-        """
-        处理意图确认请求（IntentConfirmationUI 信号）
-
-        通过 WebSocket 转发到后端
-        """
-        self.logger.info(f"收到意图确认请求: {intent_id}")
-        # TODO: 转发到 WebSocket 或直接调用后端 API
 
     def _on_trial_start_request(self, pending_tool_id: str) -> None:
         """
