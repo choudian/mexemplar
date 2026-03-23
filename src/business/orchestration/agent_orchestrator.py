@@ -678,6 +678,7 @@ class AgentOrchestrator:
             agent_type=AgentType.TRIAL,
             system_prompt=system_prompt,
             max_iterations=20,
+            text_as_user_input=True,
         )
 
     def _save_tool(

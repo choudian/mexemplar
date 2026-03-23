@@ -1083,10 +1083,45 @@ class MainWindow(QMainWindow):
         """
         处理工具试用请求（PendingToolsUI 信号）
 
-        通过 WebSocket 转发到后端
+        pending_tool_id 即 tool_id，通过 ToolRepository 查 workflow_id，
+        然后启动 trial Agent。
         """
         self.logger.info(f"收到工具试用请求: {pending_tool_id}")
-        # TODO: 转发到 WebSocket 或直接调用后端 API
+
+        # 1. 查出 workflow_id
+        try:
+            from src.data.repositories import ToolRepository
+            tool = ToolRepository().get_by_id(pending_tool_id)
+            if not tool:
+                self.logger.error(f"找不到工具: {pending_tool_id}")
+                return
+            workflow_id = tool.workflow_id
+            if not workflow_id:
+                self.logger.error(f"工具 {pending_tool_id} 没有 workflow_id，无法启动试用")
+                return
+        except Exception as e:
+            self.logger.error(f"查询工具失败: {e}", exc_info=True)
+            return
+
+        # 2. 确保 AgentUIBridge 就绪
+        if not self._ensure_workflow_orchestrator():
+            self.logger.error("AgentUIBridge 不可用，无法启动试用 Agent")
+            return
+
+        # 3. 保存当前会话上下文
+        self._current_agent_workflow_id = workflow_id
+        self._current_agent_type = "trial"
+
+        # 4. 切换到意图确认页面（对话区），等待 Agent 首次提问
+        self.main_content.switch_page("intent_confirmation")
+
+        # 5. 启动 trial Agent
+        self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
+        self.agent_ui_bridge.start_agent(
+            "trial",
+            "开始试用",
+            workflow_id,
+        )
 
     def _on_tool_delete_request(self, pending_tool_id: str) -> None:
         """
