@@ -11,7 +11,7 @@ SQLAlchemy ORM 模型 - DuckDB 数据库 (mexemplar.duckdb)
 from datetime import datetime
 from typing import Optional, Any
 import sqlalchemy
-from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, Float, LargeBinary, ForeignKey
+from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, Float, LargeBinary
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 from sqlalchemy.sql import func
 

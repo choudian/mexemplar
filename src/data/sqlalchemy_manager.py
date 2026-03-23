@@ -12,8 +12,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.data.models_sqlite import (
-    Base, Tool, TaskExecution, Conversation, AppSetting, UserPreference,
-    Session as SessionModel, Message, WorkflowTransition
+    Base, Tool, TaskExecution, Conversation,
+    Message, WorkflowTransition
 )
 
 logger = logging.getLogger(__name__)

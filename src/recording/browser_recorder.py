@@ -262,8 +262,6 @@ class BrowserRecorder:
     def _run_async(self, coro):
         """在持久事件循环中运行异步任务"""
         self._ensure_event_loop()
-        import concurrent.futures
-
         future = asyncio.run_coroutine_threadsafe(coro, self._event_loop)
         # 等待异步任务完成并返回结果
         return future.result(timeout=120)  # 设置 120 秒超时

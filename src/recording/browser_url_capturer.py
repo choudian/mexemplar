@@ -64,7 +64,6 @@ class BrowserURLCapturer:
         """
         try:
             from pywinauto import Application
-            import pywinauto
 
             # 连接到浏览器进程
             app = Application(backend="uia").connect(process=process_id)

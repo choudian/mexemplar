@@ -24,10 +24,8 @@ from src.ui.resources.icons.sidebar_icons import (
     NEW_CHAT_ICON,
     CHAT_ICON,
     RECORDING_ICON,
-    TOOLS_ICON,
     SETTINGS_ICON,
     USER_ICON,
-    INTENT_ICON,
     PENDING_TOOLS_ICON,
 )
 

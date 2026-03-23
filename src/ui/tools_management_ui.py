@@ -658,7 +658,7 @@ class ToolsManagementUI(QWidget):
 
     def update_pending_tools(self, pending_tools: List[PendingTool]):
         self.pending_tools = pending_tools
-        self._clear_grid(self.pending_tools_grid, self.pending_tool_cards)
+        self._clear_grid(self.pending_tools_grid)
         self.pending_tool_cards.clear()
 
         # 更新 Tab 文字
@@ -680,7 +680,7 @@ class ToolsManagementUI(QWidget):
 
     def update_published_tools(self, published_tools: List[Tool]):
         self.published_tools = published_tools
-        self._clear_grid(self.published_tools_grid, self.published_tool_cards)
+        self._clear_grid(self.published_tools_grid)
         self.published_tool_cards.clear()
 
         self._published_tab_btn.setText(f"已掌握 ({len(published_tools)})")
@@ -700,7 +700,7 @@ class ToolsManagementUI(QWidget):
             self.published_tools_grid.setColumnStretch(col, 1)
 
     @staticmethod
-    def _clear_grid(grid: QGridLayout, cards: list):
+    def _clear_grid(grid: QGridLayout):
         while grid.count():
             child = grid.takeAt(0)
             if child.widget():
