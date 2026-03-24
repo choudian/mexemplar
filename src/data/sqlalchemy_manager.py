@@ -7,13 +7,17 @@ SQLAlchemy 数据库管理器 - SQLite
 import logging
 from pathlib import Path
 from typing import Optional
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.data.models_sqlite import (
-    Base, Tool, TaskExecution, Conversation,
-    Message, WorkflowTransition
+    Base,
+    Tool,
+    TaskExecution,
+    Conversation,
+    Message,
+    WorkflowTransition,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,12 +69,20 @@ class SQLAlchemyManager:
             )
 
             # 创建会话工厂
-            self.SessionLocal = sessionmaker(
-                autocommit=False, autoflush=False, bind=self.engine
-            )
+            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
             # 创建所有表
             Base.metadata.create_all(self.engine)
+
+            # 迁移：为已有安装补充新列
+            with self.engine.connect() as conn:
+                try:
+                    conn.execute(
+                        text("ALTER TABLE tools ADD COLUMN dependencies JSON DEFAULT '[]'")
+                    )
+                    conn.commit()
+                except Exception:
+                    pass  # 列已存在，忽略
 
             self._initialized = True
             logger.info(f"SQLAlchemy 数据库已初始化: {self.db_path}")

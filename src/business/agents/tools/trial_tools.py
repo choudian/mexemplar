@@ -70,6 +70,7 @@ SUBMIT_TRIAL_RESULT_SCHEMA: Dict[str, Any] = {
 # 工厂函数
 # =============================================================================
 
+
 def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
     """创建试用工具列表，workflow_id 通过闭包绑定。"""
 
@@ -80,7 +81,11 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
         tool = tool_repo.get_by_workflow_id(workflow_id)
         if not tool:
             return json.dumps(
-                {"success": False, "message": f"未找到工作流 {workflow_id} 对应的工具", "data": None},
+                {
+                    "success": False,
+                    "message": f"未找到工作流 {workflow_id} 对应的工具",
+                    "data": None,
+                },
                 ensure_ascii=False,
             )
         if not tool.execution_code:
@@ -89,7 +94,8 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
                 ensure_ascii=False,
             )
 
-        result = run_tool_code(tool.execution_code, parameters)
+        dependencies = tool.dependencies or []
+        result = run_tool_code(tool.execution_code, parameters, dependencies=dependencies)
         return json.dumps(result, ensure_ascii=False, default=str)
 
     def _submit_trial_result_handler(success: bool, feedback: str = "") -> ToolSignal:

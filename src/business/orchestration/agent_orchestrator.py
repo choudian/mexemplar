@@ -120,7 +120,8 @@ class AgentOrchestrator:
         formatted_prompt = loop.format_system_prompt(recording_id=workflow_id)
 
         result = loop.run(
-            session_id, user_input,
+            session_id,
+            user_input,
             tools=tools,
             system_prompt_override=formatted_prompt,
         )
@@ -167,8 +168,7 @@ class AgentOrchestrator:
         由 Orchestrator 保证消息格式一致，调用方只需传 recording_id。
         """
         initial_input = (
-            f"请分析录制 {recording_id} 的操作流程，"
-            "理解用户想要自动化的任务，并与用户确认需求。"
+            f"请分析录制 {recording_id} 的操作流程，" "理解用户想要自动化的任务，并与用户确认需求。"
         )
         self.run_agent("pm", initial_input, workflow_id)
 
@@ -415,7 +415,9 @@ class AgentOrchestrator:
                     event_type="agent_error",
                     from_session_id=session_id,
                     to_session_id=None,
-                    payload=json.dumps({"agent_type": "programmer", "error": "missing_signal_tool"}),
+                    payload=json.dumps(
+                        {"agent_type": "programmer", "error": "missing_signal_tool"}
+                    ),
                 )
             )
             return
@@ -446,6 +448,7 @@ class AgentOrchestrator:
             feedback = result.signal_tool.args.get("feedback", "")
 
             from src.data.repositories import ToolRepository
+
             tool = ToolRepository().get_by_workflow_id(workflow_id)
             if not tool:
                 emit(
@@ -490,9 +493,7 @@ class AgentOrchestrator:
                     event_type="agent_error",
                     from_session_id=session_id,
                     to_session_id=None,
-                    payload=json.dumps(
-                        {"agent_type": "trial", "error": "unexpected_completion"}
-                    ),
+                    payload=json.dumps({"agent_type": "trial", "error": "unexpected_completion"}),
                 )
             )
 
@@ -584,7 +585,9 @@ class AgentOrchestrator:
                         event_type="review_failed",
                         from_session_id=from_session_id,
                         to_session_id=None,
-                        payload=json.dumps({"retry_count": retry_count, "forced_save": (retry_count >= 4)}),
+                        payload=json.dumps(
+                            {"retry_count": retry_count, "forced_save": (retry_count >= 4)}
+                        ),
                     )
                 )
                 self._review_counts.pop(workflow_id, None)
@@ -692,8 +695,7 @@ class AgentOrchestrator:
         parameters_text = format_parameters_text(tool.parameters or [])
         # 用手动替换而非 str.format()，防止 tool_name/description 内容含花括号时触发 KeyError
         system_prompt = (
-            TRIAL_SYSTEM_PROMPT_TEMPLATE
-            .replace("{tool_name}", tool.tool_name)
+            TRIAL_SYSTEM_PROMPT_TEMPLATE.replace("{tool_name}", tool.tool_name)
             .replace("{description}", tool.description or "（无描述）")
             .replace("{parameters_text}", parameters_text)
         )
@@ -730,6 +732,7 @@ class AgentOrchestrator:
             existing.tool_name = code_data["tool_name"]
             existing.description = code_data["description"]
             existing.parameters = code_data.get("parameters", [])
+            existing.dependencies = code_data.get("dependencies", [])
             existing.trial_success_count = 0
             existing.source = "intent"
             existing.status = status
@@ -741,6 +744,7 @@ class AgentOrchestrator:
                 description=code_data["description"],
                 execution_code=code,
                 parameters=code_data.get("parameters", []),
+                dependencies=code_data.get("dependencies", []),
                 steps=[],
                 workflow_id=workflow_id,
                 source="intent",
@@ -751,9 +755,7 @@ class AgentOrchestrator:
             tool_id = created.tool_id
 
         # 判断是否从分诊修复而来（存在 trial session 说明工具已经被试用过）
-        trial_sessions = self._session_repo.get_by_workflow(
-            workflow_id, agent_type="trial"
-        )
+        trial_sessions = self._session_repo.get_by_workflow(workflow_id, agent_type="trial")
         from_triage = bool(trial_sessions)
 
         emit(

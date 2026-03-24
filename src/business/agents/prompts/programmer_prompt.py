@@ -172,13 +172,25 @@ if __name__ == "__main__":
 - 必须有异常处理，出错时返回 success=False
 - 使用浏览器时必须在 finally 中关闭浏览器
 - 支持 `if __name__ == "__main__"` 命令行调用
-- 允许导入的模块：json, re, datetime, time, typing, asyncio, sys, playwright, requests, urllib, csv, html, math, random, string, collections, itertools, pydantic, dataclasses, enum
+- 可以使用任何 pip 包，但第三方依赖必须在 submit_code 的 dependencies 字段中声明
+
+### 依赖声明
+
+标准库（json, re, datetime, asyncio, sys, os, pathlib 等）和已预装包（playwright, requests, pydantic）无需声明。
+
+其他第三方包需要在 submit_code 时通过 dependencies 声明 pip 包名（注意 pip 包名与 import 名可能不同）：
+
+```
+from bs4 import BeautifulSoup   → dependencies: ["beautifulsoup4"]
+from PIL import Image            → dependencies: ["pillow"]
+import pandas as pd              → dependencies: ["pandas"]
+import lxml                      → dependencies: ["lxml"]
+```
 
 ### 禁止的操作
 
-- 禁止导入 os, subprocess, shutil, importlib, ctypes, socket 等系统操作模块
+- 禁止导入 subprocess, shutil, ctypes, socket, multiprocessing, signal, pickle, shelve, marshal, code, codeop
 - 禁止使用 eval, exec, compile
-- 禁止文件读写操作（open, unlink, mkdir）
 - 禁止硬编码敏感信息
 
 ## 技术参数补充

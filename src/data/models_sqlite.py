@@ -72,6 +72,7 @@ class Tool(Base):
     code_language: Mapped[str] = mapped_column(String(20), default="python")
     code_version: Mapped[str] = mapped_column(String(20), default="1.0")
     execution_strategy: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    dependencies: Mapped[Optional[list]] = mapped_column(JSON, nullable=True, server_default="[]")
 
     # 意图和试用相关字段
     source_intent_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -103,6 +104,7 @@ class Tool(Base):
             code_language=data.get("code_language", "python"),
             code_version=data.get("code_version", "1.0"),
             execution_strategy=data.get("execution_strategy"),
+            dependencies=data.get("dependencies", []),
             source_intent_id=data.get("source_intent_id"),
             source=data.get("source", "manual"),
             trial_count=data.get("trial_count", 0),

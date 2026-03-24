@@ -2,7 +2,7 @@
 程序员 Agent — 专用工具
 
 定义程序员 Agent 专用的工具：
-- syntax_check：代码语法校验（AST 解析 + 导入白名单 + 禁止调用检查）
+- syntax_check：代码语法校验（AST 解析 + 导入黑名单 + 禁止调用检查）
 - submit_code：提交代码（ToolSignal 中断循环，结构化数据通过 signal_tool.args 传递）
 """
 
@@ -38,15 +38,23 @@ SYNTAX_CHECK_SCHEMA: Dict[str, Any] = {
     },
 }
 
-# 与 system prompt 的允许列表对齐
-_ALLOWED_MODULES = frozenset({
-    "json", "re", "datetime", "time", "typing", "asyncio", "sys",
-    "playwright", "requests", "urllib", "csv", "html", "math",
-    "random", "string", "collections", "itertools",
-    "pydantic", "dataclasses", "enum",
-})
+_BLOCKED_MODULES = frozenset(
+    {
+        "subprocess",
+        "shutil",
+        "ctypes",
+        "socket",
+        "multiprocessing",
+        "signal",
+        "pickle",
+        "shelve",
+        "marshal",
+        "code",
+        "codeop",
+    }
+)
 
-_FORBIDDEN_CALLS = frozenset({"eval", "exec", "compile", "__import__", "open"})
+_FORBIDDEN_CALLS = frozenset({"eval", "exec", "compile", "__import__"})
 
 
 def _syntax_check(code: str) -> str:
@@ -55,9 +63,9 @@ def _syntax_check(code: str) -> str:
 
     检查项：
     1. AST 解析（语法错误）
-    2. 导入合法性（白名单校验）
+    2. 导入合法性（黑名单校验）
     3. execute 函数签名（必须存在且建议 async）
-    4. 禁止的函数调用（eval, exec, open 等）
+    4. 禁止的函数调用（eval, exec 等）
 
     Returns:
         JSON 格式的检查结果
@@ -84,13 +92,13 @@ def _syntax_check(code: str) -> str:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 top_module = alias.name.split(".")[0]
-                if top_module not in _ALLOWED_MODULES:
-                    errors.append(f"禁止导入模块: {alias.name}（不在允许列表中）")
+                if top_module in _BLOCKED_MODULES:
+                    errors.append(f"禁止导入模块: {alias.name}")
         elif isinstance(node, ast.ImportFrom):
             if node.module:
                 top_module = node.module.split(".")[0]
-                if top_module not in _ALLOWED_MODULES:
-                    errors.append(f"禁止导入模块: {node.module}（不在允许列表中）")
+                if top_module in _BLOCKED_MODULES:
+                    errors.append(f"禁止导入模块: {node.module}")
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if node.name == "execute":
                 has_execute = True
@@ -137,9 +145,7 @@ SUBMIT_CODE_SCHEMA: Dict[str, Any] = {
                 "execution_strategy": {
                     "type": "string",
                     "enum": ["browser", "api", "hybrid"],
-                    "description": (
-                        "执行策略：browser=浏览器自动化, api=直接调用API, hybrid=混合"
-                    ),
+                    "description": ("执行策略：browser=浏览器自动化, api=直接调用API, hybrid=混合"),
                 },
                 "parameters": {
                     "type": "array",
@@ -168,8 +174,14 @@ SUBMIT_CODE_SCHEMA: Dict[str, Any] = {
                         },
                         "required": ["name", "description", "type", "required"],
                     },
+                    "description": ("完整参数列表（包含 PM 定义的参数和你补充的技术参数）"),
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {"type": "string"},
                     "description": (
-                        "完整参数列表（包含 PM 定义的参数和你补充的技术参数）"
+                        "代码依赖的第三方 pip 包名列表（标准库和已预装包无需声明）。"
+                        '例如：["beautifulsoup4", "lxml"]'
                     ),
                 },
             },
@@ -191,6 +203,7 @@ def _submit_code(
     code: str,
     execution_strategy: str,
     parameters: List[Dict[str, Any]],
+    dependencies: List[str] = None,
 ) -> ToolSignal:
     """提交代码，中断循环。结构化数据通过 signal_tool.args 传递给 Orchestrator。"""
     return ToolSignal(
