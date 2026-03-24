@@ -580,7 +580,9 @@ class ToolsManagementUI(QWidget):
             published_tools_list = []
 
             for tool in all_tools:
-                if tool.source == "intent" and tool.trial_count < 3:
+                if tool.status == "published":
+                    published_tools_list.append(tool)
+                elif tool.source == "intent":
                     pending_tools_list.append(PendingTool(
                         pending_tool_id=tool.tool_id,
                         tool_name=tool.tool_name,
@@ -589,13 +591,11 @@ class ToolsManagementUI(QWidget):
                         execution_strategy=tool.execution_strategy,
                         parameters=tool.parameters if tool.parameters else [],
                         status=PendingToolStatus.PENDING_TRIAL,
-                        trial_count=tool.trial_count,
+                        trial_count=tool.trial_success_count,
                         max_trials=3,
                         created_at=tool.created_at,
                         updated_at=tool.updated_at,
                     ))
-                else:
-                    published_tools_list.append(tool)
 
             self.update_pending_tools(pending_tools_list)
             self.update_published_tools(published_tools_list)

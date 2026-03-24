@@ -227,6 +227,29 @@ class AgentOrchestrator:
                 )
             )
 
+            if published:
+                # 3 次试用全部成功，发布工具
+                logger.info(f"[Orchestrator] 工具已发布: tool_id={tool_id}")
+                emit(
+                    "tool_published",
+                    sender=self,
+                    workflow_id=workflow_id,
+                    session_id=session_id,
+                    tool_id=tool_id,
+                )
+            else:
+                # 还需继续试用，在同一个 trial session 中继续
+                remaining = 3 - new_count
+                logger.info(
+                    f"[Orchestrator] 试用成功 {new_count}/3，继续试用: workflow={workflow_id}"
+                )
+                self.run_agent(
+                    "trial",
+                    f"第 {new_count} 次试用成功（共需 3 次），还需再成功 {remaining} 次。"
+                    "请引导用户用不同的参数再试一次。",
+                    workflow_id,
+                )
+
         else:
             pm_session_id = self._get_or_create_session(workflow_id, "pm")
 
@@ -727,12 +750,19 @@ class AgentOrchestrator:
             created = tool_repo.create(new_tool)
             tool_id = created.tool_id
 
+        # 判断是否从分诊修复而来（存在 trial session 说明工具已经被试用过）
+        trial_sessions = self._session_repo.get_by_workflow(
+            workflow_id, agent_type="trial"
+        )
+        from_triage = bool(trial_sessions)
+
         emit(
             "tool_saved",
             sender=self,
             workflow_id=workflow_id,
             session_id=session_id,
             tool_id=tool_id,
+            from_triage=from_triage,
         )
         self._transition_repo.create(
             WorkflowTransition(
@@ -741,8 +771,14 @@ class AgentOrchestrator:
                 event_type="tool_saved",
                 from_session_id=session_id,
                 to_session_id=None,
-                payload=json.dumps({"tool_id": tool_id}),
+                payload=json.dumps({"tool_id": tool_id, "from_triage": from_triage}),
             )
         )
+
+        if from_triage:
+            logger.info(
+                f"[Orchestrator] 分诊修复完成，自动重启 trial Agent: workflow={workflow_id}"
+            )
+            self.run_agent("trial", "代码已修复，请重新执行工具试用", workflow_id)
 
         return tool_id

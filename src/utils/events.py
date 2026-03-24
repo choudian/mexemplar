@@ -86,6 +86,9 @@ trial_failed = _signals.signal("trial_failed")
 triage_completed = _signals.signal("triage_completed")
 """PM 分诊完成（代码问题）事件"""
 
+tool_published = _signals.signal("tool_published")
+"""工具发布事件（试用成功3次后自动发布）"""
+
 # =============================================================================
 # 事件数据类
 # =============================================================================
@@ -220,6 +223,7 @@ def list_signals() -> dict:
         "trial_success",
         "trial_failed",
         "triage_completed",
+        "tool_published",
     ]:
         signal = _signals.signal(name)
         # 获取所有接收器数量（简化计算）
@@ -262,6 +266,7 @@ def clear_all() -> None:
         "trial_success",
         "trial_failed",
         "triage_completed",
+        "tool_published",
     ]:
         signal = _signals.signal(name)
         # 清空所有接收器
@@ -321,6 +326,7 @@ __all__ = [
     "trial_success",
     "trial_failed",
     "triage_completed",
+    "tool_published",
     # 数据类
     "RecordingEventData",
     "WorkflowProcessingEventData",

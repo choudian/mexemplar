@@ -60,7 +60,8 @@ class AgentUIBridge(QObject):
     question_received = pyqtSignal(str, str, str)  # workflow_id, agent_type, question
     error_occurred = pyqtSignal(str, str, str)  # workflow_id, agent_type, error
     progress_updated = pyqtSignal(str, str)  # workflow_id, event_name
-    tool_saved_signal = pyqtSignal(str, str)  # workflow_id, tool_id
+    tool_saved_signal = pyqtSignal(str, str, bool)  # workflow_id, tool_id, from_triage
+    tool_published_signal = pyqtSignal(str, str)  # workflow_id, tool_id
 
     def __init__(self, orchestrator: AgentOrchestrator):
         super().__init__()
@@ -78,6 +79,7 @@ class AgentUIBridge(QObject):
         connect("tool_saved", self._on_tool_saved)
         connect("trial_success", self._on_progress)
         connect("triage_completed", self._on_progress)
+        connect("tool_published", self._on_tool_published)
 
     def start_agent(self, agent_type: str, user_input: str, workflow_id: str) -> None:
         """
@@ -129,6 +131,13 @@ class AgentUIBridge(QObject):
 
     def _on_tool_saved(self, sender, **kwargs):
         self.tool_saved_signal.emit(
+            kwargs.get("workflow_id", ""),
+            kwargs.get("tool_id", ""),
+            kwargs.get("from_triage", False),
+        )
+
+    def _on_tool_published(self, sender, **kwargs):
+        self.tool_published_signal.emit(
             kwargs.get("workflow_id", ""),
             kwargs.get("tool_id", ""),
         )

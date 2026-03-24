@@ -225,6 +225,8 @@ class MainWindow(QMainWindow):
         # ============ 连接信号和槽 ============
         # 侧边栏导航 -> 主内容区页面切换
         self.sidebar.navigation_requested.connect(self.main_content.switch_page)
+        # 每次切页时触发各页面刷新
+        self.main_content.page_changed.connect(self._on_page_changed)
 
         # ⭐ 连接 IntentConfirmationUI 的信号到 MainWindow 处理
         if hasattr(self, 'intent_confirmation_page'):
@@ -589,6 +591,7 @@ class MainWindow(QMainWindow):
         bridge.error_occurred.connect(self._on_agent_error)
         bridge.progress_updated.connect(self._on_agent_progress)
         bridge.tool_saved_signal.connect(self._on_tool_saved)
+        bridge.tool_published_signal.connect(self._on_tool_published)
         self.logger.info("AgentUIBridge 信号已连接")
 
         # 监听录制完成事件，自动启动 PM Agent
@@ -665,9 +668,19 @@ class MainWindow(QMainWindow):
             if intent_page and hasattr(intent_page, "show_generating_state"):
                 intent_page.show_generating_state()
 
-    def _on_tool_saved(self, workflow_id: str, tool_id: str) -> None:
-        """工具入库后自动切换到工具列表页"""
-        self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}")
+    def _on_tool_saved(self, workflow_id: str, tool_id: str, from_triage: bool = False) -> None:
+        """工具入库后处理页面切换"""
+        self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}, from_triage={from_triage}")
+        if from_triage:
+            # 分诊修复：不切换页面，Orchestrator 已自动重启 trial Agent，
+            # 等待 agent_needs_user_input 信号自然切换到对话页
+            return
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1500, self._switch_to_pending_tools)
+
+    def _on_tool_published(self, workflow_id: str, tool_id: str) -> None:
+        """工具发布后切换到工具列表页"""
+        self.logger.info(f"工具已发布: workflow={workflow_id}, tool_id={tool_id}")
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(1500, self._switch_to_pending_tools)
 
@@ -717,15 +730,17 @@ class MainWindow(QMainWindow):
         else:
             self.logger.warning("AgentUIBridge 不可用")
 
+    def _on_page_changed(self, page_name: str) -> None:
+        """每次切换页面时触发各页面刷新"""
+        if page_name == "pending_tools":
+            page = self.main_content.get_page("pending_tools")
+            if page and hasattr(page, "load_tools"):
+                page.load_tools()
+
     def _switch_to_pending_tools(self) -> None:
-        """切换到待试用工具页面"""
+        """切换到待试用工具页面（switch_page 会触发 _on_page_changed 自动刷新）"""
         self.logger.info("自动切换到待试用工具页面")
         self.main_content.switch_page("pending_tools")
-
-        # 刷新工具列表
-        pending_tools_page = self.main_content.get_page("pending_tools")
-        if pending_tools_page and hasattr(pending_tools_page, 'load_tools'):
-            pending_tools_page.load_tools()
 
     def _toggle_sidebar(self) -> None:
         """切换侧边栏状态"""
