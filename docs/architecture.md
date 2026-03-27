@@ -6,6 +6,10 @@
 
 ## 一、整体流程
 
+系统有两个独立入口：**教技能**（录制流程）和**用技能**（办公助理）。
+
+### 教技能：录制 → 分析 → 生成 → 试用 → 发布
+
 ```
 用户触发录制 → 录制完成
 
@@ -31,6 +35,23 @@
         → 需求问题 → 恢复 PM Agent Loop → 重新确认 → 再派程序员
 ```
 
+### 用技能：办公助理日常入口
+
+```
+用户在 ChatWidget 中发消息
+  → 办公助理理解任务
+  → 判断需要哪个工具、缺什么参数
+  → 参数不够 → 问用户
+  → 参数齐了 → 调用工具（run_tool_code）
+  → 执行成功 → 展示结果
+  → 执行失败 → 自主判断原因
+      → 参数问题 → 重新问用户
+      → 临时错误 → 告知用户稍后重试
+      → 代码 bug → 自动触发修复流程（PM 分诊）
+```
+
+工具不只从录制产生，共有三条路径：**录制浏览器操作**（路径 1）、**用户主动要求助理"做成工具"**（路径 2）、**助理检测到重复模式主动建议**（路径 3）。三条路径共享后半段管线（PM → 程序员 → 试用 → 发布）。
+
 ### 关键设计决策
 
 1. **各阶段不是连续的** — 代码生成后工具进入列表，用户随时试用，中间可能隔很久
@@ -40,26 +61,40 @@
 5. **试用成功 3 次后发布** — 工具修改后成功次数清零
 6. **需求确认分类分批提问** — 不一次全问也不一个一个问
 7. **停止条件双向** — Agent 觉得够了或用户说够了，任一方都可以结束需求确认
+8. **办公助理是独立入口** — 不属于录制工作流，长期存在，随时可对话
 
 ---
 
-## 二、三个 Agent 分工
+## 二、四个 Agent 分工
 
 ### 角色定义
 
-| Agent | 职责 | 阶段 |
-|-------|------|------|
-| **产品经理 Agent** | 需求分析、跟用户确认、试用失败时分诊 | 需求确认、分诊 |
-| **程序员 Agent** | 分析录制数据、决定技术方案、写代码 | 代码开发 |
-| **试用 Agent** | 引导用户、提取参数、执行工具、展示结果 | 工具试用 |
+| Agent | 职责 | 阶段 | 触发方式 |
+|-------|------|------|---------|
+| **产品经理 Agent** | 需求分析、跟用户确认、试用失败时分诊 | 需求确认、分诊 | 录制完成自动触发 |
+| **程序员 Agent** | 分析录制数据、决定技术方案、写代码 | 代码开发 | PM 确认需求后自动触发 |
+| **试用 Agent** | 引导用户、提取参数、执行工具、展示结果 | 工具试用 | 用户主动试用 |
+| **办公助理 Agent** | 调用已发布工具执行日常任务、闲聊、触发修复/工具沉淀 | 日常使用 | 用户主动发起对话 |
 
-三个 Agent 用**同一套 Loop 代码**，只是配置不同（prompt、工具集）。
+四个 Agent 用**同一套 Loop 代码**，只是配置不同（prompt、工具集）。
+
+### Agent 分类对比
+
+| | PM / 程序员 | 试用 | 办公助理 |
+|---|---|---|---|
+| 定位 | 教技能（内部流程） | 教技能（验证阶段） | 用技能（面向用户的日常入口） |
+| 生命周期 | 任务完成即结束 | 任务完成即结束 | 长期存在，随时可对话 |
+| 工具集 | 录制数据工具 + 信号工具（固定） | execute_tool + submit_trial_result（固定） | 已发布的用户工具（动态）+ 内置通用工具 |
+| 会话绑定 | 绑定 workflow_id | 绑定 workflow_id | 不绑定 workflow_id，独立存在 |
 
 ### 为什么拆分
 
 - 一个 Agent 又要像产品经理思考又要像程序员写代码，prompt 很难调，两种思维模式互相干扰
 - 各自职责清晰，prompt 聚焦
 - 试用阶段的职责（引导、参数提取、执行）跟需求分析和代码开发都不相关
+- 办公助理面向日常使用，工具集动态变化，与教技能流程解耦
+
+办公助理的详细设计（工具集、会话管理、首次引导、执行失败处理、工具沉淀路径）见 [assistant_agent_design.md](design/assistant_agent_design.md)。
 
 ### PM → 程序员的交接
 
@@ -99,7 +134,7 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 | 4 | analyze_image | 多模态模型分析截图 | **非常规手段**，兜底用。图片不进 agent 主上下文，只返回文字分析结果 |
 | 5 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
 
-- **所有 Agent 共用同一套 4 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）
+- **PM 和程序员共用同一套 4 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）。试用 Agent 和办公助理不使用录制数据工具
 - 列表操作通过元素上下文启发式识别，不确定就直接问用户
 - 详见 [recording_tools_redesign_todo.md](design/recording_tools_redesign_todo.md)
 
@@ -116,7 +151,7 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 
 ### 关键设计
 
-- **录制数据工具所有 Agent 共用** — agent 写 SQL 自主决定查什么，不限定 query_type
+- **录制数据工具 PM 和程序员共用** — agent 写 SQL 自主决定查什么，不限定 query_type
 - **需求常驻上下文** — 需求和参数列表始终在上下文里，不做成工具，防止 Agent 钻进技术细节后跑偏
 - **工具集详细设计待定** — 依赖数据存储层稳定后再细化
 
@@ -149,9 +184,9 @@ while not done and iteration < max_iterations:
 
 ### 工具注册方式：Function Calling
 
-当前采用 FC（Function Calling）方式，tool definitions 每次 LLM 调用都随请求发送。每个 Agent 只有 2-3 个工具，definition 占用的 token 量很小，不是成本大头（真正吃 token 的是消息历史，由引用机制控制）。
+PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），token 开销可忽略。
 
-如果后期工具数量增多导致 token 浪费明显，可改为 Skill 渐进式披露模式（按需加载 tool definition 到 prompt 中）。当前阶段不需要。
+办公助理 Agent 采用 **FC + 懒加载**——内置工具全量 FC 注入，用户动态工具按需注入。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 4.1-4.4 节。
 
 ### 用户交互
 
@@ -161,21 +196,15 @@ while not done and iteration < max_iterations:
 
 不加额外的协调层。各 Agent 在各自阶段独立运行。以后加新 Agent 角色，通过通用的 Agent 注册/派发机制扩展。
 
+办公助理不需要 `_dispatch_next`（没有下游 Agent），Loop 完成后不调度。助理触发的修复流程（`report_tool_bug`）和工具沉淀（`codify_as_tool`）通过异步任务队列投递，由后台 worker 消费后调用现有 PM 分诊流程。
+
 ### Agent 之间的衔接：事件驱动
 
-Agent 之间通过 blinker 事件通信，流程编排集中在一个独立文件中。
+Agent 之间通过 blinker 事件通信，流程编排由 AgentOrchestrator 统一负责（不单独拆文件）。
 
-**事件定义：**
+**事件列表**：requirement_confirmed、code_completed、review_passed/failed、tool_saved、trial_failed、triage_completed、tool_published、agent_needs_user_input、agent_error。各事件的携带数据和触发时机详见 [event_system_design.md](design/event_system_design.md) 第三节。
 
-| 事件 | 触发时机 | 携带数据 |
-|------|---------|---------|
-| requirement_confirmed | PM 确认完需求，用户确认后 | 需求 JSON、recording_id |
-| code_completed | 程序员写完代码 | 代码、需求 JSON |
-| review_passed | LLM Review 通过 | 代码 |
-| review_failed | LLM Review 不通过 | 代码、修改意见、当前次数 |
-| tool_saved | 工具入库 | 工具 ID |
-| trial_failed | 试用失败 | 用户反馈、工具 ID |
-| triage_completed | PM 分诊完成 | 分诊结果（代码问题/需求问题）、反馈详情 |
+PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应 UI，办公助理通过 `session_id` 路由到对应 ChatWidget 实例。
 
 **职责分离：**
 - **Agent Loop** — 纯执行引擎，只负责跑循环和返回 AgentResult，不感知事件系统
@@ -216,17 +245,22 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 引用替换不体现为消息类型，而是运行时行为（见记忆机制设计）。
 
-### 全局记忆
+### 跨会话记忆（办公助理专用）
+
+办公助理需要跨会话记忆来理解用户的使用模式和历史任务。采用**层级摘要 + ID 引用**机制（全局摘要 → 分组摘要 → 会话摘要 → 原始消息），与会话内的引用替换同构，通过 `load_reference` 逐层下钻。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 第七节。
+
+### 全局记忆（PM/程序员/试用）
 
 暂不实现，等项目跑通有真实用户数据后再加。
 
 ### 记忆使用范围
 
-| Agent | 短期记忆 | 会话级长期记忆 | 全局级长期记忆 |
-|-------|---------|--------------|--------------|
+| Agent | 短期记忆 | 会话级长期记忆 | 跨会话记忆 |
+|-------|---------|--------------|------------|
 | 产品经理 | ✅ | ✅ 需求历史、修改记录 | 📋 暂不实现 |
 | 程序员 | ✅ | ✅ 历次修改和试用反馈 | ❌ 不需要 |
 | 试用 | ✅ | ✅ 试用历史 | ❌ 不需要 |
+| 办公助理 | ✅ | ✅ 当前会话上下文 | ✅ 层级摘要 + 语义搜索 |
 
 ---
 
@@ -270,12 +304,16 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 - PM 分类分批提问
 - 程序员不需要全局记忆
 - PM 给程序员的交接信息只给需要的，不给分析过程
+- 办公助理的懒加载机制 — 只在 LLM 决定使用某个用户工具时才注入 FC schema，不一次性灌入所有工具定义
+- 办公助理的跨会话记忆层级 — 全局摘要 ≤500 token 常驻 system prompt，需要细节时按 REF ID 逐层下钻
 
 ---
 
 ## 九、实现优先级
 
 数据先行，基础设施先于业务角色。
+
+**教技能流程（优先级 1-8）：**
 
 | 优先级 | 模块 | 说明 |
 |--------|------|------|
@@ -288,100 +326,47 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | 7 | **试用 Agent** | prompt + 工具集 |
 | 8 | **LLM Review** | 代码质量检查 |
 
+**用技能流程（优先级 9-20）：**
+
+| 优先级 | 模块 | 说明 |
+|--------|------|------|
+| 9 | **助理 AgentConfig + Prompt** | 助理 Agent 配置、system prompt 模板 |
+| 10 | **动态工具懒加载** | DynamicToolManager + search_tools / get_tool_detail |
+| 11 | **Orchestrator 适配** | assistant 类型的会话管理、工具构建、签名变更 |
+| 12 | **ChatWidget 接通** | 去掉模拟回复，接通 AgentUIBridge |
+| 13 | **report_tool_bug** | 工具 bug 报告 → PM 分诊流程 |
+| 14 | **首次引导流程** | profile 收集、存储、注入 |
+| 15 | **内置通用工具** | web_search、web_fetch、exec 等内置工具实现 |
+| 16 | **侧边栏会话列表** | 多会话管理 UI |
+| 17 | **新建会话工具选择** | 手动选择工具子集 |
+| 18 | **工具沉淀路径 2** | codify_as_tool + PM 适配执行记录输入 |
+| 19 | **工具沉淀路径 3** | 重复模式检测 + 自动建议 + 拒绝冷却 |
+| 20 | **跨会话记忆** | 层级摘要 + memory_search + load_reference 扩展 |
+
 每个模块单独细化为独立的设计文档，细化到可直接开发的程度。
 
 ### 已完成的细化设计
 
-| 优先级 | 模块 | 设计文档 | 与本文档的差异决策 |
-|--------|------|----------|-------------------|
-| 1 | 数据层设计 | [data_layer_design.md](design/data_layer_design.md) | 见下方说明 |
-| 2 | 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) | 见下方说明 |
-| 3 | Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) | 见下方说明 |
-| 4 | 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) | 见下方说明 |
-| 5 | PM Agent | [pm_agent_design.md](design/pm_agent_design.md) | 见下方说明 |
-| 6 | 程序员 Agent | [programmer_agent_design.md](design/programmer_agent_design.md) | 见下方说明 |
-| 7 | 试用 Agent | [trial_agent_design.md](design/trial_agent_design.md) | 见下方说明 |
-| 8 | LLM Review | [llm_review_design.md](design/llm_review_design.md) | 见下方说明 |
+| 优先级 | 模块 | 设计文档 |
+|--------|------|----------|
+| 1 | 数据层设计 | [data_layer_design.md](design/data_layer_design.md) |
+| 2 | 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) |
+| 3 | Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) |
+| 4 | 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) |
+| 5 | PM Agent | [pm_agent_design.md](design/pm_agent_design.md) |
+| 6 | 程序员 Agent | [programmer_agent_design.md](design/programmer_agent_design.md) |
+| 7 | 试用 Agent | [trial_agent_design.md](design/trial_agent_design.md) |
+| 8 | LLM Review | [llm_review_design.md](design/llm_review_design.md) |
+| 新增 | 办公助理 Agent | [assistant_agent_design.md](design/assistant_agent_design.md) |
 
-**数据层设计与第六节（记忆机制）的差异：**
-- **删掉引用数据表** — 引用替换改为运行时行为（记忆层负责），数据层始终存储原始完整消息，不单独存引用
-- **消息类型只保留 normal/compressed** — 去掉 reference 类型，因为引用不在数据层体现
-- **会话表不存业务关联字段** — 不存 recording_id、tool_id 等，跨 Agent 传递的数据直接作为消息写入
-- **新增 workflow_id 替代 parent_session_id** — 同一次录制触发的所有会话共享 workflow_id，避免多 Agent 反复协作时 parent 语义模糊
-- **Fork 采用消息复制** — 分叉时创建新 session + 复制消息，所有 ID 换新，无递归依赖
-- **新增 workflow_transitions 表** — 记录 Agent 之间的交接事件（谁交给谁、什么事件、携带什么数据），供未来调度模型分析协作模式
-
-**记忆机制设计与第六节的细化/新增决策：**
-- **引用步数按 assistant 消息计数** — "N步"细化为 tool result 之后的 assistant 回复数
-- **引用大小阈值 2000 字符** — 小于此值的 tool result 不值得做引用替换
-- **指针格式 `[REF::{message_id}]`** — 用 message_id 作为引用键，包含大小和加载指令
-- **压缩触发为可组合策略** — 默认 token 估算，支持消息条数、组合策略，用户可配
-- **Tool 交互内嵌** — 摘要保留 tool_call_id，后处理替换为 tool_call 数据 + tool_result 引用指针，内嵌在摘要文本中，不追加额外消息，不存在边界问题
-- **结构化摘要格式** — 压缩输出强制固定章节（关键决策/技术发现/当前进展/待确认/标识符清单），保证摘要质量稳定
-- **标识符保留** — 压缩时原样保留 recording_id、API 端点、CSS 选择器等不可重构的标识符
-- **Token 估算安全余量** — 估算值乘 1.2，防止低估导致该压缩时未触发
-- **System prompt 存入 messages 表** — 会话自包含可追溯，压缩时跳过不参与
-- **压缩消息专用 `role='summary'`** — 与 system prompt 的 `role='system'` 区分，发 LLM 时映射为 system 角色
-
-**Agent Loop 设计与第五节（Agent Loop 设计）的细化/新增决策：**
-- **AgentLoop 上层两层架构** — "不加额外的协调层"细化为 AgentUIBridge（线程 + PyQt 信号）+ AgentOrchestrator（session 管理 + 事件发送），改编排不影响 UI，换 UI 不影响编排
-- **LLM 客户端扩展** — 在 LangChainLLMClient 上新增 chat_with_tools() 方法，返回统一的 LLMResponse（content + tool_calls），Agent Loop 不接触 LangChain 内部类型
-- **单工具调用模式** — 强制 `parallel_tool_calls=False`，每次 LLM 响应最多一个 tool_call，消除多工具调用的所有边界问题
-- **talk_to_user 哨兵机制** — "靠消息历史串联"细化为哨兵工具，调用时 Loop 中断返回 AgentResult，tool result 为"[等待用户回复]"
-- **AgentResult 返回值** — 4 种 ResultType（NEEDS_USER_INPUT / COMPLETED / ERROR / MAX_ITERATIONS_REACHED），AgentOrchestrator 据此决定后续行为
-- **工具执行错误不终止循环** — 错误作为 tool result 返回给 LLM，由 Agent 自行决定重试或换策略
-- **内置工具自动追加** — talk_to_user 和 load_reference 由 AgentLoop 自动追加到工具列表，不在 AgentConfig 中声明
-- **文件结构** — src/business/agents/（复数）新目录，与旧 agent/ 共存直至迁移完成
-- **max_iterations 默认值** — PM 50、程序员 30、试用 20
-
-**事件系统设计与第五节的细化/新增决策：**
-- **事件发送者** — Loop 不发任何事件，所有业务事件由 Orchestrator 在 loop.run() 返回后发出（避免 blinker 同步回调的嵌套执行问题）
-- **事件类型** — 去掉 agent_completed 等通用事件，只保留有业务含义的事件（requirement_confirmed、code_completed 等）和交互事件（agent_needs_user_input、agent_error）
-- **调度机制** — Orchestrator 根据 loop.run() 返回值通过 `_dispatch_next` 显式调度，不通过事件监听器调度
-- **内部事件粒度** — 去掉 agent_iteration_started/completed、agent_tool_executed/failed 等内部事件
-- **Orchestrator 职责** — 统一负责 session 管理、显式调度、业务事件发送，不需要独立的流程编排文件
-
-**PM Agent 设计与第三节（PM Agent 工具集）的细化/新增决策：**
-- **工具数量** — 从 3 个（查录制数据、多模态分析、跟用户对话）扩展为 6 个（4 个通用录制数据工具 + submit_requirements + report_code_issue），后两者通过 ToolSignal 机制提交结构化数据
-- **需求输出方式** — 通过 submit_requirements 工具提交，结构由 FC schema 保证，不靠 prompt 约束 JSON 格式
-- **分诊路由** — PM 调用 submit_requirements（需求问题）或 report_code_issue（代码问题），Orchestrator 根据 signal_tool.name 路由
-- **录制数据工具** — 原"一个工具 + query_type"改为 4 个通用工具（describe_data、query_data、execute_code、analyze_image），所有 Agent 共用，角色差异由 prompt 引导。详见 [recording_tools_redesign_todo.md](design/recording_tools_redesign_todo.md)
-- **System prompt 风格** — ReACT 风格（思考→行动→观察循环），不写死步骤清单
-
-**程序员 Agent 设计与第四节（程序员 Agent 工具集）的细化/新增决策：**
-- **工具数量** — 从 2 个（查录制数据、语法校验）扩展为 6 个（4 个通用录制数据工具 + syntax_check + submit_code），submit_code 通过 ToolSignal 机制提交结构化代码数据
-- **代码输出格式** — `async def execute(**kwargs) -> Dict[str, Any]`，标准返回格式 `{success, message, data}`，支持命令行调用
-- **技术方案决策** — API 优先策略：有可用 API 就不用浏览器模拟
-- **录制数据工具** — 与 PM 共用同一套 4 个通用工具，agent 写 SQL 自主查询，不再受限于预定义 query_type
-- **Orchestrator 适配** — `_on_programmer_completed` 从 `signal_tool.args["code"]` 获取代码，`_save_tool` 使用结构化 metadata
-
-**LLM Review 设计与第四节（代码 Review）的细化/新增决策：**
-- **Reviewer 输入** — 代码 + description + parameters，均来自 submit_code.args，无需额外查询；无原始 PM goal 字段，用程序员写的 description 替代
-- **录制数据禁区** — Prompt 明确告知 Reviewer 不得质疑来自录制数据的技术决策（URL、API路径、响应字段结构、CSS选择器）
-- **检查项细化** — "硬伤"具体为 5 类：语法错误、参数漏用、函数签名错误、返回格式错误、必崩逻辑
-- **打回次数阈值** — retry_count < 4（程序员最多犯 3 次错，第 4 次失败强制入库），现有实现 retry_count < 3 需修正
-- **输出格式** — 自然语言 feedback，不结构化（Orchestrator 路由不依赖类型，结构化只增加出错点）
-- **打回消息** — 加轮次前缀"第 N 次，共最多 3 次"，让程序员感知进度
-- **retry_count 存储** — 内存 Dict[workflow_id, int]，不持久化（Review 循环分钟级内完成，重启概率极低）
-- **Review 异常** — 默认通过，不阻断流程
-- **Prompt 注入** — str.replace() 替换占位符，避免代码中花括号触发 format 异常
-
-**试用 Agent 设计与第一节（整体流程）的细化/新增决策：**
-- **工具数量** — 2 个专用工具：execute_tool + submit_trial_result（+ 内置 talk_to_user），不给录制数据工具
-- **参数提取** — Agent 在 execute_tool 的 parameters 字段中直接组装，不做单独的参数提取工具
-- **执行机制** — 新增 `src/execution/tool_executor.py`（`run_tool_code`）：新线程 + asyncio.new_event_loop()，120 秒超时，不限制内建（代码已通过 syntax_check 审查），与 execute_code（数据探索）完全独立
-- **System prompt 注入** — Orchestrator 在 `_build_trial_config` 中从 DB 读取工具信息注入模板，trial Loop 不缓存（每个 workflow system prompt 不同）
-- **试用结论提交** — submit_trial_result(success, feedback)，Orchestrator 通过 workflow_id 查 DB 获取 tool_id
-- **多次执行** — execute_tool 可在同一会话中多次调用，计数只在 submit_trial_result(success=True) 时更新
-- **结果展示格式** — system prompt 定义默认规则（列表取前 3-5 条 + 总数、操作类说成败、无数据明确告知）
-- **用户预期管理** — 开场主动告知用户这是自动生成的工具，遇到问题很正常
-- **反馈质量** — 用户反馈模糊时追问具体原因，收集可定位问题的描述后再提交
+细化设计文档在架构 v2 基础上做了进一步决策，**以各设计文档为准**。
 
 ---
 
 ## 十、待讨论事项
 
 - [x] ~~Agent 之间的衔接机制~~（已确定，事件驱动 + 集中编排，见第五节）
+- [x] ~~办公助理 Agent 设计~~（已确定，详见 [assistant_agent_design.md](design/assistant_agent_design.md)）
 - [ ] 测试策略
 - [ ] 文档规范化
 - [ ] UI 术语优化
@@ -390,3 +375,4 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 ---
 
 *基于 v1 讨论精炼，记录时间：2026-03-11*
+*更新：2026-03-27 — 精简文档：删除与设计文档重复的差异决策、办公助理详细设计和工具沉淀章节（已收入 assistant_agent_design.md），工具沉淀三条路径概述移至第一节*
