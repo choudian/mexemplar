@@ -1,10 +1,9 @@
 """
-AI 助手对话界面组件 (现代风格改进版)
+AI 助手对话界面组件 (Claude Chats 风格)
 
-提供 AI 对话交互界面,包括:
-- 左侧会话列表（侧边栏）
-- 右侧消息展示 + 输入框
-- 接通 AgentUIBridge 进行真实 AI 对话
+双视图设计:
+- 会话列表视图：大搜索框 + 会话卡片 + 滚动加载
+- 对话视图：消息展示 + 输入框（通过侧边栏导航返回列表）
 """
 
 import json
@@ -19,9 +18,8 @@ from PyQt6.QtWidgets import (
     QTextEdit,
     QScrollArea,
     QFrame,
-    QListWidget,
-    QListWidgetItem,
-    QSplitter,
+    QLineEdit,
+    QStackedWidget,
     QMenu,
     QDialog,
     QCheckBox,
@@ -47,73 +45,148 @@ class MessageInputEdit(QTextEdit):
         super().keyPressEvent(event)
 
 
+class SessionCard(QFrame):
+    """会话卡片组件 — 显示在会话列表中"""
+
+    clicked = pyqtSignal(str)  # session_id
+
+    def __init__(self, session_id: str, title: str, preview: str, date_str: str, parent=None):
+        super().__init__(parent)
+        self._session_id = session_id
+        self.setObjectName("session_card")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(6)
+
+        # 第一行：标题 + 日期
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+        title_label = QLabel(title)
+        title_label.setObjectName("session_card_title")
+        top_row.addWidget(title_label, 1)
+
+        date_label = QLabel(date_str)
+        date_label.setObjectName("session_card_date")
+        top_row.addWidget(date_label)
+        layout.addLayout(top_row)
+
+        # 第二行：预览文本
+        if preview and preview != title:
+            preview_label = QLabel(preview)
+            preview_label.setObjectName("session_card_preview")
+            preview_label.setWordWrap(False)
+            layout.addWidget(preview_label)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._session_id)
+        super().mousePressEvent(event)
+
+
 class ChatWidget(QWidget):
-    """AI 助手对话界面组件（含侧边栏会话列表）"""
+    """AI 助手对话界面组件（双视图：会话列表 + 对话）"""
 
     # 发出信号给 MainWindow，让它通过 UIBridge 启动 Agent
     send_message_requested = pyqtSignal(str, str, str)  # session_id, agent_type, user_input
 
+    # 视图索引常量
+    VIEW_SESSION_LIST = 0
+    VIEW_CONVERSATION = 1
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.logger = get_logger(__name__)
-        self._session_id = None  # 当前会话 ID
+        self._session_id = None  # 当前会话 ID（None = 尚未创建）
+        self._pending_tool_ids = None  # 延迟创建时暂存的 tool_ids
         self._loading = False  # 是否正在等待 Agent 响应
+        self._sessions_page = 0  # 当前滚动加载页码
+        self._sessions_page_size = 20  # 每页加载数
+        self._all_sessions = []  # 缓存的会话数据
+        self._search_text = ""  # 搜索关键词
         self.init_ui()
 
     def init_ui(self):
         """初始化用户界面"""
-        root_layout = QHBoxLayout(self)
+        root_layout = QVBoxLayout(self)
         root_layout.setSpacing(0)
         root_layout.setContentsMargins(0, 0, 0, 0)
 
-        # =====================================================================
-        # 左侧：会话列表侧边栏
-        # =====================================================================
-        sidebar = QWidget()
-        sidebar.setObjectName("chat_sidebar")
-        sidebar.setMinimumWidth(180)
-        sidebar.setMaximumWidth(240)
-        sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(8, 12, 8, 8)
-        sidebar_layout.setSpacing(8)
+        self._stack = QStackedWidget()
+        root_layout.addWidget(self._stack)
 
-        # 标题 + 新建按钮（带下拉选择工具）
-        sidebar_header = QHBoxLayout()
-        sidebar_title = QLabel("会话")
-        sidebar_title.setObjectName("sidebar_title")
-        sidebar_header.addWidget(sidebar_title)
-        sidebar_header.addStretch()
-        self.new_chat_btn = QPushButton("+")
-        self.new_chat_btn.setObjectName("new_chat_btn")
-        self.new_chat_btn.setToolTip("新建对话（右键选择工具）")
-        self.new_chat_btn.setFixedSize(QSize(28, 28))
-        self.new_chat_btn.clicked.connect(self._on_new_chat_clicked)
-        self.new_chat_btn.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.new_chat_btn.customContextMenuRequested.connect(self._on_new_chat_menu)
-        sidebar_header.addWidget(self.new_chat_btn)
-        sidebar_layout.addLayout(sidebar_header)
+        # 视图 0：会话列表
+        self._init_session_list_view()
 
-        # 会话列表
-        self.session_list = QListWidget()
-        self.session_list.setObjectName("session_list")
-        self.session_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.session_list.itemClicked.connect(self._on_session_item_clicked)
-        sidebar_layout.addWidget(self.session_list, 1)
+        # 视图 1：对话
+        self._init_conversation_view()
 
-        root_layout.addWidget(sidebar)
+        # 默认显示会话列表
+        self._stack.setCurrentIndex(self.VIEW_SESSION_LIST)
+        self._load_sessions()
 
-        # 分隔线
-        separator = QFrame()
-        separator.setFrameShape(QFrame.Shape.VLine)
-        separator.setObjectName("sidebar_separator")
-        root_layout.addWidget(separator)
+    # =========================================================================
+    # 视图 0：会话列表
+    # =========================================================================
 
-        # =====================================================================
-        # 右侧：对话区域
-        # =====================================================================
-        chat_area = QWidget()
-        chat_area.setObjectName("chat_area")
-        chat_layout = QVBoxLayout(chat_area)
+    def _init_session_list_view(self):
+        """初始化会话列表视图"""
+        view = QWidget()
+        view.setObjectName("chats_list_view")
+        layout = QVBoxLayout(view)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # 顶部：标题 + 搜索框
+        search_container = QWidget()
+        search_container.setObjectName("chats_search_container")
+        search_layout = QVBoxLayout(search_container)
+        search_layout.setContentsMargins(48, 36, 48, 20)
+        search_layout.setSpacing(16)
+
+        title = QLabel("对话")
+        title.setObjectName("chats_list_title")
+        search_layout.addWidget(title)
+
+        self._search_input = QLineEdit()
+        self._search_input.setObjectName("chats_search_input")
+        self._search_input.setPlaceholderText("搜索对话...")
+        self._search_input.setMinimumHeight(46)
+        self._search_input.textChanged.connect(self._on_search_changed)
+        search_layout.addWidget(self._search_input)
+
+        layout.addWidget(search_container)
+
+        # 会话卡片滚动区域
+        scroll = QScrollArea()
+        scroll.setObjectName("chats_list_scroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.verticalScrollBar().valueChanged.connect(self._on_list_scroll)
+        self._chats_scroll = scroll
+
+        self._cards_container = QWidget()
+        self._cards_container.setObjectName("session_cards_container")
+        self._cards_layout = QVBoxLayout(self._cards_container)
+        self._cards_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._cards_layout.setSpacing(2)
+        self._cards_layout.setContentsMargins(48, 0, 48, 48)
+        scroll.setWidget(self._cards_container)
+
+        layout.addWidget(scroll, 1)
+        self._stack.addWidget(view)
+
+    # =========================================================================
+    # 视图 1：对话
+    # =========================================================================
+
+    def _init_conversation_view(self):
+        """初始化对话视图"""
+        view = QWidget()
+        view.setObjectName("chat_area")
+        chat_layout = QVBoxLayout(view)
         chat_layout.setSpacing(0)
         chat_layout.setContentsMargins(0, 0, 0, 0)
 
@@ -173,87 +246,123 @@ class ChatWidget(QWidget):
         input_layout.addLayout(bottom_bar)
 
         chat_layout.addWidget(input_container)
-        root_layout.addWidget(chat_area, 1)
-
-        # 初始化：加载会话列表并创建/恢复第一个会话
-        self._refresh_session_list()
-        if self._session_id is None:
-            self._new_session()
+        self._stack.addWidget(view)
 
     # =========================================================================
-    # 侧边栏会话管理
+    # 会话列表：数据加载与渲染
     # =========================================================================
 
-    def _refresh_session_list(self):
-        """从数据库加载助理会话列表到侧边栏"""
-        self.session_list.clear()
+    def _load_sessions(self):
+        """从数据库加载会话列表"""
         try:
-            from src.data.repositories import SessionRepository
-            repo = SessionRepository()
-            sessions = repo.get_by_agent_type(AgentType.ASSISTANT, limit=50)
+            from src.data.repositories import SessionRepository, MessageRepository
+            session_repo = SessionRepository()
+            msg_repo = MessageRepository()
+            sessions = session_repo.get_by_agent_type(AgentType.ASSISTANT, limit=200)
+
+            self._all_sessions = []
             for s in sessions:
-                label = self._session_label(s.session_id, s.created_at)
-                item = QListWidgetItem(label)
-                item.setData(Qt.ItemDataRole.UserRole, s.session_id)
-                self.session_list.addItem(item)
+                # 获取第一条用户消息作为预览
+                messages = msg_repo.get_context(s.session_id)
+                first_user_msg = ""
+                for m in messages:
+                    if m.role == "user" and m.content:
+                        first_user_msg = m.content
+                        break
+
+                title = first_user_msg[:50] if first_user_msg else "新对话"
+                preview_text = first_user_msg[:120] if first_user_msg else ""
+
+                self._all_sessions.append({
+                    "session_id": s.session_id,
+                    "title": title,
+                    "preview": preview_text,
+                    "date": s.created_at,
+                    "date_str": s.created_at.strftime("%m/%d %H:%M") if s.created_at else "",
+                })
         except Exception as e:
             self.logger.error(f"加载会话列表失败: {e}")
+            self._all_sessions = []
 
-        # 高亮当前会话
-        self._highlight_current_session()
+        self._sessions_page = 0
+        self._render_session_cards()
 
-    def _highlight_current_session(self):
-        """高亮当前活动会话"""
-        for i in range(self.session_list.count()):
-            item = self.session_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == self._session_id:
-                self.session_list.setCurrentItem(item)
-                return
+    def _get_filtered_sessions(self):
+        """根据搜索关键词过滤会话"""
+        if not self._search_text:
+            return self._all_sessions
+        keyword = self._search_text.lower()
+        return [
+            s for s in self._all_sessions
+            if keyword in s["title"].lower() or keyword in s["preview"].lower()
+        ]
 
-    def _session_label(self, session_id: str, created_at) -> str:
-        """生成会话列表显示名称"""
-        if created_at:
-            return created_at.strftime("%m/%d %H:%M")
-        return session_id[:12]
+    def _render_session_cards(self):
+        """渲染会话卡片"""
+        # 清空已有卡片
+        while self._cards_layout.count():
+            child = self._cards_layout.takeAt(0)
+            if child.widget():
+                child.widget().deleteLater()
 
-    def _on_session_item_clicked(self, item: QListWidgetItem):
-        """切换到选中的会话"""
-        session_id = item.data(Qt.ItemDataRole.UserRole)
-        if session_id == self._session_id:
-            return
+        filtered = self._get_filtered_sessions()
+        show_count = min(
+            (self._sessions_page + 1) * self._sessions_page_size,
+            len(filtered),
+        )
+
+        for s in filtered[:show_count]:
+            card = SessionCard(
+                s["session_id"], s["title"], s["preview"], s["date_str"]
+            )
+            card.clicked.connect(self._on_session_card_clicked)
+            self._cards_layout.addWidget(card)
+
+        # 空状态提示
+        if show_count == 0:
+            hint_text = "没有找到匹配的对话" if self._search_text else "还没有对话，点击「新建对话」开始吧"
+            empty_label = QLabel(hint_text)
+            empty_label.setObjectName("chats_empty_hint")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._cards_layout.addWidget(empty_label)
+
+    def _on_search_changed(self, text: str):
+        """搜索框内容变化"""
+        self._search_text = text.strip()
+        self._sessions_page = 0
+        self._render_session_cards()
+
+    def _on_list_scroll(self, value):
+        """会话列表滚动 — 触底加载更多"""
+        scrollbar = self._chats_scroll.verticalScrollBar()
+        if value >= scrollbar.maximum() - 50:
+            filtered = self._get_filtered_sessions()
+            current_count = (self._sessions_page + 1) * self._sessions_page_size
+            if current_count < len(filtered):
+                self._sessions_page += 1
+                self._render_session_cards()
+
+    def _on_session_card_clicked(self, session_id: str):
+        """点击会话卡片 → 切换到对话视图"""
         self._switch_to_session(session_id)
+        self._stack.setCurrentIndex(self.VIEW_CONVERSATION)
 
-    def _on_new_chat_clicked(self):
-        """新建会话（使用全部工具）"""
-        self._new_session(tool_ids=None)
+    def _show_session_list(self):
+        """返回会话列表视图"""
+        self._load_sessions()
+        self._stack.setCurrentIndex(self.VIEW_SESSION_LIST)
 
-    def _on_new_chat_menu(self, pos):
-        """新建按钮右键菜单"""
-        menu = QMenu(self)
-        menu.addAction("新建对话（全部工具）", lambda: self._new_session(tool_ids=None))
-        menu.addAction("新建对话（选择工具）", self._new_session_with_tool_selection)
-        menu.exec(self.new_chat_btn.mapToGlobal(pos))
+    # =========================================================================
+    # 对话视图：会话管理
+    # =========================================================================
 
-    def _new_session_with_tool_selection(self):
-        """弹出工具选择 dialog，然后新建会话"""
-        tool_ids = self._show_tool_selection_dialog()
-        if tool_ids is not None:
-            self._new_session(tool_ids=tool_ids)
-
-    def _new_session(self, tool_ids=None):
-        """创建新会话并切换到它。tool_ids=None 表示使用全部工具。"""
-        session_id = self._create_session(tool_ids=tool_ids)
-        self._session_id = session_id
+    def _prepare_new_chat(self, tool_ids=None):
+        """准备新对话界面（不立即创建 DB 会话，等用户发第一条消息时再创建）"""
+        self._session_id = None
+        self._pending_tool_ids = tool_ids
         self._clear_messages()
         self._add_welcome_message()
-        self._refresh_session_list()
-
-        # 触发跨会话记忆生成（后台异步，不阻塞 UI）
-        try:
-            from src.business.memory.assistant_memory import get_memory_manager
-            get_memory_manager().trigger_on_new_session(session_id)
-        except Exception as e:
-            self.logger.warning(f"触发记忆生成失败: {e}")
+        self._stack.setCurrentIndex(self.VIEW_CONVERSATION)
 
     def _switch_to_session(self, session_id: str):
         """切换到指定会话（加载历史消息）"""
@@ -263,7 +372,6 @@ class ChatWidget(QWidget):
         self.send_button.setText("发送")
         self._clear_messages()
         self._load_session_messages(session_id)
-        self._highlight_current_session()
 
     def _load_session_messages(self, session_id: str):
         """从数据库加载会话历史消息（只加载非归档消息）"""
@@ -366,9 +474,16 @@ class ChatWidget(QWidget):
     # =========================================================================
 
     def get_session_id(self) -> str:
-        """获取当前会话 ID"""
+        """获取当前会话 ID（如果尚未创建则立即创建）"""
         if not self._session_id:
-            self._new_session()
+            self._session_id = self._create_session(tool_ids=self._pending_tool_ids)
+            self._pending_tool_ids = None
+            # 触发跨会话记忆生成（后台异步）
+            try:
+                from src.business.memory.assistant_memory import get_memory_manager
+                get_memory_manager().trigger_on_new_session(self._session_id)
+            except Exception as e:
+                self.logger.warning(f"触发记忆生成失败: {e}")
         return self._session_id
 
     def set_loading(self, loading: bool):
@@ -386,8 +501,13 @@ class ChatWidget(QWidget):
         self._add_message("assistant", f"出了点问题: {error}")
 
     def on_new_chat(self):
-        """新建对话（外部调用入口）"""
-        self._new_session()
+        """新建对话（外部调用入口）— 只准备 UI，不创建 DB 会话"""
+        self._prepare_new_chat()
+
+    def show_session_list(self):
+        """显示会话列表视图（供 MainWindow 在页面切换时调用）"""
+        self._load_sessions()
+        self._stack.setCurrentIndex(self.VIEW_SESSION_LIST)
 
     def on_send_message(self):
         """发送消息"""

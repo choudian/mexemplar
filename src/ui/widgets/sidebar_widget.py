@@ -3,8 +3,7 @@
 
 提供左侧导航栏，包括：
 - 应用头部 (Logo + 标题)
-- 导航按钮 (AI对话、录制、工具、设置)
-- 对话历史区域 (仅在 AI 对话页面显示)
+- 导航按钮 (会话列表、录制、工具、设置)
 - 底部用户信息
 """
 
@@ -14,8 +13,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QLabel,
-    QListWidget,
-    QListWidgetItem,
     QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
@@ -104,10 +101,10 @@ class SidebarWidget(QWidget):
         self.new_chat_btn.clicked.connect(self._on_new_chat_clicked)
         nav_layout.addWidget(self.new_chat_btn)
 
-        # AI 对话按钮
+        # 会话列表按钮
         self.chat_btn = self._create_nav_button(
             CHAT_ICON,
-            "AI 对话",
+            "会话列表",
             "chat"
         )
         nav_layout.addWidget(self.chat_btn)
@@ -138,36 +135,8 @@ class SidebarWidget(QWidget):
 
         main_layout.addWidget(nav_container)
 
-        # 分隔线
-        separator2 = QFrame()
-        separator2.setObjectName("sidebar_separator")
-        separator2.setFrameShape(QFrame.Shape.HLine)
-        separator2.setFrameShadow(QFrame.Shadow.Sunken)
-        main_layout.addWidget(separator2)
-
-        # ============ 对话历史区域 ============
-        self.chat_history_container = QWidget()
-        self.chat_history_container.setObjectName("chat_history_container")
-        history_layout = QVBoxLayout(self.chat_history_container)
-        history_layout.setContentsMargins(12, 8, 12, 8)
-        history_layout.setSpacing(8)
-
-        # 对话历史标题
-        history_title = QLabel("对话历史")
-        history_title.setObjectName("history_title")
-        history_title.setStyleSheet("font-size: 12px; font-weight: bold; color: #7f8c8d;")
-        history_layout.addWidget(history_title)
-
-        # 对话历史列表
-        self.chat_history_list = QListWidget()
-        self.chat_history_list.setObjectName("chat_history_list")
-
-        # 添加示例对话
-        self._load_sample_chats()
-
-        history_layout.addWidget(self.chat_history_list, 1)  # stretch=1
-
-        main_layout.addWidget(self.chat_history_container)  # 移除 stretch，避免布局重分配
+        # 弹性空间 — 将底部用户信息推到最下方
+        main_layout.addStretch(1)
 
         # ============ 底部用户信息 ============
         footer = QWidget()
@@ -238,25 +207,6 @@ class SidebarWidget(QWidget):
         # 如果切换到其他页面，取消"新建对话"的选中状态
         if page_name != "new_chat":
             self.new_chat_btn.setChecked(False)
-
-        # 控制对话历史区域显示/隐藏（使用 setVisible 保持布局稳定）
-        if page_name == "chat":
-            self.chat_history_container.setVisible(True)
-        else:
-            self.chat_history_container.setVisible(False)
-
-    def _load_sample_chats(self):
-        """加载示例对话历史"""
-        sample_chats = [
-            "技能教学帮助",
-            "如何执行工具?",
-            "配置 API Key",
-            "浏览器设置",
-        ]
-
-        for chat_title in sample_chats:
-            item = QListWidgetItem(chat_title)
-            self.chat_history_list.addItem(item)
 
     def get_logger(self):
         """获取日志记录器"""

@@ -941,5 +941,87 @@ QWidget#intent_options_container {
     background-color: transparent;
 }
 
+/* ============ 会话列表视图 (Claude Chats 风格) ============ */
+
+QWidget#chats_list_view {
+    background-color: #f8f9fa;
+}
+
+QWidget#chats_search_container {
+    background-color: #f8f9fa;
+}
+
+QLabel#chats_list_title {
+    color: #1a1a1a;
+    font-size: 26px;
+    font-weight: 700;
+    background-color: transparent;
+}
+
+QLineEdit#chats_search_input {
+    border: 2px solid #e0e0e0;
+    border-radius: 12px;
+    padding: 12px 18px;
+    background-color: #ffffff;
+    font-size: 15px;
+    color: #212529;
+}
+
+QLineEdit#chats_search_input:focus {
+    border: 2px solid #667eea;
+}
+
+QLineEdit#chats_search_input:hover {
+    border-color: #adb5bd;
+}
+
+QScrollArea#chats_list_scroll {
+    border: none;
+    background-color: #f8f9fa;
+}
+
+QWidget#session_cards_container {
+    background-color: #f8f9fa;
+}
+
+/* 会话卡片 */
+QFrame#session_card {
+    background-color: #ffffff;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    padding: 0px;
+}
+
+QFrame#session_card:hover {
+    background-color: #f0f2ff;
+    border-color: #c5cae9;
+}
+
+QLabel#session_card_title {
+    color: #1a1a1a;
+    font-size: 14px;
+    font-weight: 600;
+    background-color: transparent;
+}
+
+QLabel#session_card_date {
+    color: #6c757d;
+    font-size: 12px;
+    background-color: transparent;
+}
+
+QLabel#session_card_preview {
+    color: #6c757d;
+    font-size: 13px;
+    background-color: transparent;
+}
+
+QLabel#chats_empty_hint {
+    color: #adb5bd;
+    font-size: 15px;
+    padding: 60px 20px;
+    background-color: transparent;
+}
+
 /* ============ 技能列表 UI 样式（卡片样式由组件内联管理）============ */
 

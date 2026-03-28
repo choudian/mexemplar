@@ -764,7 +764,11 @@ class MainWindow(QMainWindow):
 
     def _on_page_changed(self, page_name: str) -> None:
         """每次切换页面时触发各页面刷新"""
-        if page_name == "pending_tools":
+        if page_name == "chat":
+            chat_page = self.main_content.get_page("chat")
+            if chat_page and hasattr(chat_page, "show_session_list"):
+                chat_page.show_session_list()
+        elif page_name == "pending_tools":
             page = self.main_content.get_page("pending_tools")
             if page and hasattr(page, "load_tools"):
                 page.load_tools()
@@ -792,8 +796,9 @@ class MainWindow(QMainWindow):
             self.logger.info("Sidebar expanded")
 
     def _on_new_chat_requested(self) -> None:
-        """新建对话请求"""
+        """新建对话请求 — 创建新会话并切换到对话视图"""
         self.logger.info("新建对话")
+        self.main_content.switch_page("chat")
         chat_page = self.main_content.get_page("chat")
         if chat_page:
             chat_page.on_new_chat()
