@@ -1023,5 +1023,39 @@ QLabel#chats_empty_hint {
     background-color: transparent;
 }
 
+/* ============ 欢迎页面 (Claude 风格) ============ */
+
+QWidget#welcome_container {
+    background-color: transparent;
+}
+
+QLabel#welcome_greeting {
+    color: #2d3436;
+    font-size: 28px;
+    font-weight: 300;
+    background-color: transparent;
+    padding: 0 0 4px 0;
+}
+
+/* === 欢迎页居中输入框 === */
+QTextEdit#welcome_input {
+    border: 1px solid #dfe4ea;
+    border-radius: 12px;
+    padding: 16px 20px;
+    background-color: #ffffff;
+    font-size: 15px;
+    color: #2d3436;
+    selection-background-color: #667eea;
+    selection-color: #ffffff;
+}
+
+QTextEdit#welcome_input:focus {
+    border: 1px solid #667eea;
+}
+
+QTextEdit#welcome_input:hover {
+    border-color: #b2bec3;
+}
+
 /* ============ 技能列表 UI 样式（卡片样式由组件内联管理）============ */
 

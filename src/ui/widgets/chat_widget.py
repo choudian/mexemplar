@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QLineEdit,
     QStackedWidget,
+    QSizePolicy,
     QMenu,
     QDialog,
     QCheckBox,
@@ -105,6 +106,8 @@ class ChatWidget(QWidget):
         self._sessions_page_size = 20  # 每页加载数
         self._all_sessions = []  # 缓存的会话数据
         self._search_text = ""  # 搜索关键词
+        self._welcome_visible = False  # 欢迎页是否显示中
+        self._welcome_input = None  # 欢迎页输入框引用
         self.init_ui()
 
     def init_ui(self):
@@ -208,9 +211,9 @@ class ChatWidget(QWidget):
         chat_layout.addWidget(messages_scroll, 1)
 
         # 输入框区域
-        input_container = QWidget()
-        input_container.setObjectName("input_container")
-        input_layout = QVBoxLayout(input_container)
+        self.input_container = QWidget()
+        self.input_container.setObjectName("input_container")
+        input_layout = QVBoxLayout(self.input_container)
         input_layout.setContentsMargins(32, 24, 32, 24)
         input_layout.setSpacing(16)
 
@@ -245,7 +248,7 @@ class ChatWidget(QWidget):
         bottom_bar.addWidget(self.send_button)
         input_layout.addLayout(bottom_bar)
 
-        chat_layout.addWidget(input_container)
+        chat_layout.addWidget(self.input_container)
         self._stack.addWidget(view)
 
     # =========================================================================
@@ -371,6 +374,7 @@ class ChatWidget(QWidget):
         self.send_button.setEnabled(False)
         self.send_button.setText("发送")
         self._clear_messages()
+        self.input_container.show()
         self._load_session_messages(session_id)
 
     def _load_session_messages(self, session_id: str):
@@ -395,17 +399,65 @@ class ChatWidget(QWidget):
 
     def _clear_messages(self):
         """清空消息区域"""
+        self._welcome_visible = False
+        self._welcome_input = None
         while self.messages_layout.count():
             child = self.messages_layout.takeAt(0)
             if child.widget():
                 child.widget().deleteLater()
 
     def _add_welcome_message(self):
-        """添加欢迎消息"""
-        self._add_message(
-            "assistant",
-            "你好! 我是你的办公助理。\n\n有什么可以帮助你的吗?"
-        )
+        """添加 Claude 风格的欢迎页面 — 居中输入框"""
+        if self._welcome_visible:
+            return
+        self._welcome_visible = True
+
+        # 隐藏底部输入区域，欢迎页自带居中输入框
+        self.input_container.hide()
+
+        welcome = QWidget()
+        welcome.setObjectName("welcome_container")
+        welcome.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        welcome_layout = QVBoxLayout(welcome)
+        welcome_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 内容组：问候语 + 输入框作为整体一起居中
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setSpacing(20)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        # 问候语
+        greeting = QLabel("有什么可以帮助你的？")
+        greeting.setObjectName("welcome_greeting")
+        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content_layout.addWidget(greeting)
+
+        # 居中输入框 — 圆角矩形
+        self._welcome_input = MessageInputEdit()
+        self._welcome_input.setObjectName("welcome_input")
+        self._welcome_input.setPlaceholderText("问我任何问题，或让我帮你完成一项任务...")
+        self._welcome_input.setMinimumWidth(640)
+        self._welcome_input.setMinimumHeight(100)
+        self._welcome_input.setMaximumHeight(160)
+        self._welcome_input.setMaximumWidth(720)
+        self._welcome_input.send_requested.connect(self._on_welcome_send)
+
+        center_layout = QHBoxLayout()
+        center_layout.addStretch()
+        center_layout.addWidget(self._welcome_input)
+        center_layout.addStretch()
+        content_layout.addLayout(center_layout)
+
+        welcome_layout.addStretch(2)
+        welcome_layout.addWidget(content)
+        welcome_layout.addStretch(3)
+
+        # 使用 stretch 使欢迎页占据全部可用空间
+        self.messages_layout.addWidget(welcome, 1)
+
+        QTimer.singleShot(100, self._welcome_input.setFocus)
 
     def _add_message(self, role: str, content: str):
         """添加消息到对话区域"""
@@ -518,6 +570,30 @@ class ChatWidget(QWidget):
         if not message:
             return
 
+        self._dismiss_welcome()
+        self._do_send(message)
+
+    # =========================================================================
+    # Private
+    # =========================================================================
+
+    def _on_welcome_send(self):
+        """从欢迎页输入框发送"""
+        text = self._welcome_input.toPlainText().strip()
+        if not text:
+            return
+        self._dismiss_welcome()
+        self._do_send(text)
+
+    def _dismiss_welcome(self):
+        """清除欢迎页并恢复底部输入栏"""
+        if not self._welcome_visible:
+            return
+        self._clear_messages()
+        self.input_container.show()
+
+    def _do_send(self, message: str):
+        """核心发送逻辑"""
         self.logger.info(f"发送消息: {message[:50]}...")
         self._add_message("user", message)
         self.message_input.clear()
@@ -525,10 +601,6 @@ class ChatWidget(QWidget):
 
         session_id = self.get_session_id()
         self.send_message_requested.emit(session_id, AgentType.ASSISTANT, message)
-
-    # =========================================================================
-    # Private
-    # =========================================================================
 
     def _create_session(self, tool_ids=None) -> str:
         """创建新的助理会话。tool_ids: list[str] 或 None（全部工具）"""

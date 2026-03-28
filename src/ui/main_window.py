@@ -13,7 +13,16 @@ import threading
 import time
 
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QAction, QIcon, QPixmap, QPainter
+
+from src.ui.page_ids import (
+    CONVERSATIONS,
+    INTENT_CONFIRMATION,
+    SETTINGS,
+    SKILLS,
+    TEACHING,
+    TOOLS,
+)
+from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
     QMainWindow,
     QWidget,
@@ -22,6 +31,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
 )
 
+from src.ui.utils import create_svg_icon
 from src.recording.browser_recorder import BrowserRecorder
 from src.business.intent.intent_analyzer import IntentAnalyzer
 from src.business.intent.intent_repository import IntentRepository
@@ -132,42 +142,8 @@ class MainWindow(QMainWindow):
         color: str = "#666666",
         size: int = 20
     ) -> QIcon:
-        """从 SVG 字符串创建 QIcon
-
-        Args:
-            svg_string: SVG 字符串
-            color: 图标颜色（十六进制）
-            size: 图标尺寸
-
-        Returns:
-            QIcon 对象
-        """
-        try:
-            from PyQt6.QtSvg import QSvgRenderer
-
-            # 替换 currentColor 为指定颜色
-            svg_with_color = svg_string.replace('fill="currentColor"', f'fill="{color}"')
-
-            # 创建 SVG 渲染器
-            renderer = QSvgRenderer(svg_with_color.encode())
-
-            # 创建 pixmap
-            pixmap = QPixmap(size, size)
-            pixmap.fill(Qt.GlobalColor.transparent)
-
-            # 渲染 SVG
-            painter = QPainter(pixmap)
-            renderer.render(painter)
-            painter.end()
-
-            return QIcon(pixmap)
-        except ImportError:
-            # 如果没有 QSvgRenderer，使用备用方案（简单箭头）
-            self.logger.warning("QSvgRenderer 不可用，使用备用图标方案")
-            # 创建一个简单的 pixmap 作为备用
-            pixmap = QPixmap(size, size)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            return QIcon(pixmap)
+        """从 SVG 字符串创建 QIcon（委托给共享工具函数）"""
+        return create_svg_icon(svg_string, color, size)
 
     def init_ui(self) -> None:
         """初始化用户界面"""
@@ -200,31 +176,31 @@ class MainWindow(QMainWindow):
         # AI 对话页面
         chat_page = ChatWidget()
         chat_page.send_message_requested.connect(self._on_chat_send_message)
-        self.main_content.add_page("chat", chat_page)
+        self.main_content.add_page(CONVERSATIONS, chat_page)
 
         # 录制页面
         self.recording_page = RecordingWidget()
         self.recording_page.recording_started.connect(self._on_recording_started)
         self.recording_page.recording_stopped.connect(self._on_recording_stopped)
-        self.main_content.add_page("recording", self.recording_page)
+        self.main_content.add_page(TEACHING, self.recording_page)
 
         # 工具列表页面
         tools_page = ToolsListPage()
-        self.main_content.add_page("tools", tools_page)
+        self.main_content.add_page(TOOLS, tools_page)
 
         # 意图确认页面
         from src.ui.intent_confirmation_ui import IntentConfirmationUI
         self.intent_confirmation_page = IntentConfirmationUI()
-        self.main_content.add_page("intent_confirmation", self.intent_confirmation_page)
+        self.main_content.add_page(INTENT_CONFIRMATION, self.intent_confirmation_page)
 
         # 待试用工具列表页面
         from src.ui.tools_management_ui import ToolsManagementUI
         self.pending_tools_page = ToolsManagementUI()
-        self.main_content.add_page("pending_tools", self.pending_tools_page)
+        self.main_content.add_page(SKILLS, self.pending_tools_page)
 
         # 设置页面
         settings_page = SettingsPage()
-        self.main_content.add_page("settings", settings_page)
+        self.main_content.add_page(SETTINGS, settings_page)
 
         # ============ 连接信号和槽 ============
         # 侧边栏导航 -> 主内容区页面切换
@@ -267,8 +243,13 @@ class MainWindow(QMainWindow):
         from src.utils.events import workflow_processing_failed
         workflow_processing_failed.connect(self._on_workflow_processing_failed)
 
-        # 默认显示 AI 对话页面
-        self.main_content.switch_page("chat")
+        # 默认显示 AI 对话页面（新建对话欢迎页）
+        # 先 switch_page 让 main_content 切到 ChatWidget（内部栈默认显示会话列表），
+        # 再调用 on_new_chat 翻转到欢迎页
+        self.main_content.switch_page(CONVERSATIONS)
+        chat_page = self._get_chat_widget()
+        if chat_page:
+            chat_page.on_new_chat()
 
         # 创建菜单栏
         self.create_menu_bar()
@@ -554,7 +535,7 @@ class MainWindow(QMainWindow):
             self.logger.info(f"收到意图分析完成消息: {intent_id}, 录制ID: {recording_id}")
 
             # 切换到意图确认页面
-            self.main_content.switch_page("intent_confirmation")
+            self.main_content.switch_page(INTENT_CONFIRMATION)
 
             return {"status": "success"}
 
@@ -688,7 +669,7 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Agent 进度: workflow={workflow_id}, event={event_name}")
 
         if event_name == "requirement_confirmed":
-            intent_page = self.main_content.get_page("intent_confirmation")
+            intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
             if intent_page and hasattr(intent_page, "show_generating_state"):
                 intent_page.show_generating_state()
 
@@ -731,10 +712,10 @@ class MainWindow(QMainWindow):
             thread_id: Agent 会话 ID
         """
         # 切换到意图确认页面
-        self.main_content.switch_page("intent_confirmation")
+        self.main_content.switch_page(INTENT_CONFIRMATION)
 
         # 获取意图确认页面并更新内容
-        intent_page = self.main_content.get_page("intent_confirmation")
+        intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
         if intent_page and hasattr(intent_page, 'load_intent_from_agent'):
             intent_page.load_intent_from_agent(intent_data, message, thread_id)
 
@@ -764,19 +745,19 @@ class MainWindow(QMainWindow):
 
     def _on_page_changed(self, page_name: str) -> None:
         """每次切换页面时触发各页面刷新"""
-        if page_name == "chat":
-            chat_page = self.main_content.get_page("chat")
+        if page_name == CONVERSATIONS:
+            chat_page = self._get_chat_widget()
             if chat_page and hasattr(chat_page, "show_session_list"):
                 chat_page.show_session_list()
-        elif page_name == "pending_tools":
-            page = self.main_content.get_page("pending_tools")
+        elif page_name == SKILLS:
+            page = self.main_content.get_page(SKILLS)
             if page and hasattr(page, "load_tools"):
                 page.load_tools()
 
     def _switch_to_pending_tools(self) -> None:
         """切换到待试用工具页面（switch_page 会触发 _on_page_changed 自动刷新）"""
         self.logger.info("自动切换到待试用工具页面")
-        self.main_content.switch_page("pending_tools")
+        self.main_content.switch_page(SKILLS)
 
     def _toggle_sidebar(self) -> None:
         """切换侧边栏状态"""
@@ -798,19 +779,19 @@ class MainWindow(QMainWindow):
     def _on_new_chat_requested(self) -> None:
         """新建对话请求 — 创建新会话并切换到对话视图"""
         self.logger.info("新建对话")
-        self.main_content.switch_page("chat")
-        chat_page = self.main_content.get_page("chat")
+        self.main_content.switch_page(CONVERSATIONS)
+        chat_page = self._get_chat_widget()
         if chat_page:
             chat_page.on_new_chat()
 
     def _on_record_clicked(self) -> None:
         """录制按钮点击 - 切换到录制页面"""
         self.logger.info("用户点击录制按钮")
-        self.main_content.switch_page("recording")
+        self.main_content.switch_page(TEACHING)
 
     def _get_chat_widget(self):
         """获取 ChatWidget 实例"""
-        return self.main_content.get_page("chat")
+        return self.main_content.get_page(CONVERSATIONS)
 
     def _on_confirm_action_requested(self, request_id: str, message: str):
         """
@@ -846,7 +827,7 @@ class MainWindow(QMainWindow):
     def _on_chat_clicked(self) -> None:
         """AI 助手按钮点击 - 切换到对话页面"""
         self.logger.info("用户点击 AI 助手按钮")
-        self.main_content.switch_page("chat")
+        self.main_content.switch_page(CONVERSATIONS)
 
     def _on_execute_clicked(self) -> None:
         """执行按钮点击事件"""
@@ -875,7 +856,7 @@ class MainWindow(QMainWindow):
     def go_back_to_home(self) -> None:
         """返回主页面"""
         self.logger.info("用户返回主页面")
-        self.main_content.switch_page("chat")
+        self.main_content.switch_page(CONVERSATIONS)
 
     def _on_recording_started(self, mode: str, url: str) -> None:
         """开始录制处理函数"""
@@ -1026,7 +1007,7 @@ class MainWindow(QMainWindow):
 
                         # 切换到意图确认页面（显示"正在分析..."）
                         # 注意：实际的意图内容会在 Agent interrupt 后通过 _on_agent_interrupt 更新
-                        self.main_content.switch_page("intent_confirmation")
+                        self.main_content.switch_page(INTENT_CONFIRMATION)
 
                         # 确保 AgentUIBridge 已就绪（录制期间后台线程完成初始化）
                         if not self._ensure_workflow_orchestrator(timeout=30.0):
@@ -1156,7 +1137,7 @@ class MainWindow(QMainWindow):
                     self.agent_ui_bridge.reply_to_agent(agent_type, user_message, workflow_id)
                     self.logger.info(f"已传递用户反馈给 Agent: {workflow_id}")
 
-                    intent_page = self.main_content.get_page("intent_confirmation")
+                    intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
                     if intent_page and hasattr(intent_page, 'status_label'):
                         intent_page.status_label.setText("正在处理您的反馈...")
 
@@ -1202,7 +1183,7 @@ class MainWindow(QMainWindow):
         self._current_agent_type = AgentType.TRIAL
 
         # 4. 切换到意图确认页面（对话区），等待 Agent 首次提问
-        self.main_content.switch_page("intent_confirmation")
+        self.main_content.switch_page(INTENT_CONFIRMATION)
 
         # 5. 启动 trial Agent
         self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")

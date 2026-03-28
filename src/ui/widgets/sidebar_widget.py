@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QIcon, QPixmap, QPainter
+from PyQt6.QtGui import QFont, QIcon
 from src.ui.resources.icons.sidebar_icons import (
     NEW_CHAT_ICON,
     CHAT_ICON,
@@ -25,6 +25,9 @@ from src.ui.resources.icons.sidebar_icons import (
     USER_ICON,
     PENDING_TOOLS_ICON,
 )
+from src.ui.page_ids import CONVERSATIONS, TEACHING, SKILLS, SETTINGS
+from src.ui.utils import create_svg_icon
+from src.utils.logger import get_logger
 
 
 class SidebarWidget(QWidget):
@@ -36,45 +39,14 @@ class SidebarWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.current_page = "chat"  # 当前页面
+        self.logger = get_logger(__name__)
+        self.current_page = None  # 启动时不选中任何页面
         self.nav_buttons = {}  # 导航按钮字典
         self.init_ui()
 
-    def _create_svg_icon(self, svg_string: str, color: str = "#ffffff") -> QIcon:
-        """从 SVG 字符串创建 QIcon
-
-        Args:
-            svg_string: SVG 字符串
-            color: 图标颜色（十六进制）
-
-        Returns:
-            QIcon 对象
-        """
-        try:
-            from PyQt6.QtSvg import QSvgRenderer
-
-            # 替换 currentColor 为指定颜色
-            svg_with_color = svg_string.replace('fill="currentColor"', f'fill="{color}"')
-
-            # 创建 SVG 渲染器
-            renderer = QSvgRenderer(svg_with_color.encode())
-
-            # 创建 pixmap
-            pixmap = QPixmap(16, 16)
-            pixmap.fill(Qt.GlobalColor.transparent)
-
-            # 渲染 SVG
-            painter = QPainter(pixmap)
-            renderer.render(painter)
-            painter.end()
-
-            return QIcon(pixmap)
-        except ImportError:
-            # 如果没有 QSvgRenderer，返回空图标
-            self.logger.warning("QSvgRenderer 不可用，使用空图标")
-            pixmap = QPixmap(16, 16)
-            pixmap.fill(Qt.GlobalColor.transparent)
-            return QIcon(pixmap)
+    def _create_svg_icon(self, svg_string: str, color: str = "#666666") -> QIcon:
+        """从 SVG 字符串创建 QIcon（委托给共享工具函数）"""
+        return create_svg_icon(svg_string, color, size=16)
 
     def init_ui(self):
         """初始化用户界面"""
@@ -105,7 +77,7 @@ class SidebarWidget(QWidget):
         self.chat_btn = self._create_nav_button(
             CHAT_ICON,
             "会话列表",
-            "chat"
+            CONVERSATIONS
         )
         nav_layout.addWidget(self.chat_btn)
 
@@ -113,7 +85,7 @@ class SidebarWidget(QWidget):
         self.recording_btn = self._create_nav_button(
             RECORDING_ICON,
             "技能教学",
-            "recording"
+            TEACHING
         )
         nav_layout.addWidget(self.recording_btn)
 
@@ -121,7 +93,7 @@ class SidebarWidget(QWidget):
         self.pending_tools_btn = self._create_nav_button(
             PENDING_TOOLS_ICON,
             "技能列表",
-            "pending_tools"
+            SKILLS
         )
         nav_layout.addWidget(self.pending_tools_btn)
 
@@ -129,7 +101,7 @@ class SidebarWidget(QWidget):
         self.settings_btn = self._create_nav_button(
             SETTINGS_ICON,
             "设置",
-            "settings"
+            SETTINGS
         )
         nav_layout.addWidget(self.settings_btn)
 
@@ -162,9 +134,6 @@ class SidebarWidget(QWidget):
 
         main_layout.addWidget(footer)
 
-        # 设置初始选中状态
-        self._set_active_page("chat")
-
     def _create_nav_button(self, icon: str, text: str, page_name: str) -> QPushButton:
         """创建导航按钮"""
         button = QPushButton(text)
@@ -189,10 +158,9 @@ class SidebarWidget(QWidget):
     def _on_new_chat_clicked(self):
         """新建对话按钮点击"""
         self.logger.info("点击新建对话")
-        # 取消所有导航按钮的选中状态
-        for name, button in self.nav_buttons.items():
+        # 取消所有按钮的选中状态（新建对话是动作按钮，不是菜单项）
+        for button in self.nav_buttons.values():
             button.setChecked(False)
-        self.new_chat_btn.setChecked(True)  # 只选中"新建对话"
         self.new_chat_requested.emit()
 
     def _set_active_page(self, page_name: str):
@@ -207,13 +175,3 @@ class SidebarWidget(QWidget):
         # 如果切换到其他页面，取消"新建对话"的选中状态
         if page_name != "new_chat":
             self.new_chat_btn.setChecked(False)
-
-    def get_logger(self):
-        """获取日志记录器"""
-        from src.utils.logger import get_logger
-        return get_logger(__name__)
-
-    @property
-    def logger(self):
-        """日志记录器属性"""
-        return self.get_logger()
