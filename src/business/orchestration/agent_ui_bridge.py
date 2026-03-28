@@ -107,6 +107,10 @@ class AgentUIBridge(QObject):
                 f"[AgentUIBridge] worker {worker_key} 仍在运行，忽略本次请求"
             )
             return
+        # 清理残留：旧线程已退出但 thread.finished 尚未交付，防止误删新 worker
+        if existing:
+            existing.finished.disconnect()
+            self._cleanup_worker(worker_key)
 
         thread = QThread()
         worker = AgentWorker(
@@ -116,7 +120,7 @@ class AgentUIBridge(QObject):
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
         worker.finished.connect(thread.quit)
-        worker.finished.connect(lambda: self._cleanup_worker(worker_key))
+        thread.finished.connect(lambda: self._cleanup_worker(worker_key))
         thread.start()
 
         self._worker_threads[worker_key] = thread
@@ -139,9 +143,13 @@ class AgentUIBridge(QObject):
         )
 
     def _cleanup_worker(self, worker_key: str):
-        """清理已完成的 worker"""
-        self._worker_threads.pop(worker_key, None)
-        self._workers.pop(worker_key, None)
+        """清理已完成的 worker（由 thread.finished 触发，线程已停止）"""
+        thread = self._worker_threads.pop(worker_key, None)
+        worker = self._workers.pop(worker_key, None)
+        if thread:
+            thread.deleteLater()
+        if worker:
+            worker.deleteLater()
 
     # -------------------------------------------------------------------------
     # blinker 事件监听器 → PyQt 信号
