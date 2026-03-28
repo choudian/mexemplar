@@ -7,8 +7,11 @@ Loop 不感知事件系统；所有事件由 Orchestrator 在 loop.run() 返回�
 
 import json
 import logging
+import threading
+import time
 import uuid
-from typing import Dict, List, Optional
+from collections import OrderedDict
+from typing import Callable, Dict, List, Optional, Union
 
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
@@ -19,6 +22,7 @@ from src.business.agents.config import (
     ToolDefinition,
     PM_CONFIG,
     PROGRAMMER_CONFIG,
+    ASSISTANT_CONFIG,
 )
 from src.business.agents.tools import (
     create_recording_tools,
@@ -67,6 +71,15 @@ class AgentOrchestrator:
         # Review 重试计数（按 workflow_id）
         self._review_counts: Dict[str, int] = {}
 
+        # DynamicToolManager 缓存（按 session_id，LRU 淘汰防泄漏）
+        self._dynamic_managers: OrderedDict[str, "DynamicToolManager"] = OrderedDict()
+        self._dynamic_managers_lock = threading.Lock()
+        self._MAX_DYNAMIC_MANAGERS = 20
+
+        # 后台队列 Worker：轮询 pending_assistant_tasks 表
+        self._task_queue_event = threading.Event()  # 入队时唤醒
+        self._task_worker_running = False
+
     # =========================================================================
     # 核心公共 API
     # =========================================================================
@@ -75,16 +88,24 @@ class AgentOrchestrator:
         self,
         agent_type: str,
         user_input: str,
-        workflow_id: str,
+        workflow_id: str = None,
+        session_id: str = None,
     ) -> None:
         """
         运行 Agent
+
+        PM/程序员/试用：传 workflow_id（现有逻辑不变）
+        assistant：传 session_id（不传 workflow_id）
 
         1. 查询或创建会话
         2. 运行 Loop，获取 result
         3. 根据 result 发事件 + 调度下一步
         """
-        session_id = self._get_or_create_session(workflow_id, agent_type)
+        if agent_type == AgentType.ASSISTANT:
+            assert session_id, "assistant 类型必须传 session_id"
+        else:
+            session_id = self._get_or_create_session(workflow_id, agent_type)
+
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
         except ValueError as e:
@@ -92,32 +113,36 @@ class AgentOrchestrator:
             emit(
                 "agent_error",
                 sender=self,
-                workflow_id=workflow_id,
+                workflow_id=workflow_id or "",
                 session_id=session_id,
                 agent_type=agent_type,
                 error=str(e),
                 error_type="setup_error",
             )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="agent_error",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps({"error": str(e), "agent_type": agent_type}),
+            if workflow_id:
+                self._transition_repo.create(
+                    WorkflowTransition(
+                        transition_id=str(uuid.uuid4()),
+                        workflow_id=workflow_id,
+                        event_type="agent_error",
+                        from_session_id=session_id,
+                        to_session_id=None,
+                        payload=json.dumps({"error": str(e), "agent_type": agent_type}),
+                    )
                 )
-            )
             return
 
         logger.info(
             f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
         )
 
-        tools = self._build_tools(agent_type, workflow_id)
+        tools = self._build_tools(agent_type, workflow_id=workflow_id, session_id=session_id)
 
-        # 格式化系统提示中的 {recording_id} 模板变量（仅首次会话时生效）
-        formatted_prompt = loop.format_system_prompt(recording_id=workflow_id)
+        # 格式化系统提示（assistant 走独立路径）
+        if agent_type == AgentType.ASSISTANT:
+            formatted_prompt = self._format_assistant_prompt(session_id)
+        else:
+            formatted_prompt = loop.format_system_prompt(recording_id=workflow_id)
 
         result = loop.run(
             session_id,
@@ -127,13 +152,14 @@ class AgentOrchestrator:
         )
 
         if result.result_type == ResultType.COMPLETED:
-            self._dispatch_next(agent_type, result, session_id, workflow_id)
+            if agent_type != AgentType.ASSISTANT:
+                self._dispatch_next(agent_type, result, session_id, workflow_id)
 
         elif result.result_type == ResultType.NEEDS_USER_INPUT:
             emit(
                 "agent_needs_user_input",
                 sender=self,
-                workflow_id=workflow_id,
+                workflow_id=workflow_id or "",
                 session_id=session_id,
                 agent_type=agent_type,
                 question=result.question,
@@ -143,22 +169,23 @@ class AgentOrchestrator:
             emit(
                 "agent_error",
                 sender=self,
-                workflow_id=workflow_id,
+                workflow_id=workflow_id or "",
                 session_id=session_id,
                 agent_type=agent_type,
                 error=result.error,
                 error_type=result.result_type.value,
             )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="agent_error",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps({"error": result.error, "agent_type": agent_type}),
+            if workflow_id:
+                self._transition_repo.create(
+                    WorkflowTransition(
+                        transition_id=str(uuid.uuid4()),
+                        workflow_id=workflow_id,
+                        event_type="agent_error",
+                        from_session_id=session_id,
+                        to_session_id=None,
+                        payload=json.dumps({"error": result.error, "agent_type": agent_type}),
+                    )
                 )
-            )
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
         """
@@ -290,11 +317,11 @@ class AgentOrchestrator:
         所有 Agent 间衔接逻辑集中在此。
         """
         try:
-            if agent_type == "pm":
+            if agent_type == AgentType.PM:
                 self._on_pm_completed(result, session_id, workflow_id)
-            elif agent_type == "programmer":
+            elif agent_type == AgentType.PROGRAMMER:
                 self._on_programmer_completed(result, session_id, workflow_id)
-            elif agent_type == "trial":
+            elif agent_type == AgentType.TRIAL:
                 self._on_trial_completed(result, session_id, workflow_id)
         except Exception as e:
             logger.error(f"[Orchestrator] 调度失败: {e}", exc_info=True)
@@ -656,29 +683,238 @@ class AgentOrchestrator:
     # 辅助方法
     # =========================================================================
 
-    def _build_tools(self, agent_type: str, workflow_id: str) -> List[ToolDefinition]:
-        """根据 agent_type 和 workflow_id 构建工具列表（recording_id 通过闭包绑定）"""
-        if agent_type == "pm":
+    def _build_tools(
+        self,
+        agent_type: str,
+        workflow_id: str = None,
+        session_id: str = None,
+    ) -> Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]:
+        """根据 agent_type 构建工具列表。assistant 返回 callable（工厂函数）。"""
+        if agent_type == AgentType.PM:
             return create_recording_tools(workflow_id) + [submit_requirements, report_code_issue]
-        elif agent_type == "programmer":
+        elif agent_type == AgentType.PROGRAMMER:
             return create_recording_tools(workflow_id) + [syntax_check, submit_code]
-        elif agent_type == "trial":
+        elif agent_type == AgentType.TRIAL:
             return create_trial_tools(workflow_id)
+        elif agent_type == AgentType.ASSISTANT:
+            return self._build_assistant_tools(session_id)
         return []
 
+    def _build_assistant_tools(
+        self, session_id: str
+    ) -> Callable[[], List[ToolDefinition]]:
+        """返回工厂函数，每轮迭代调用时拿到最新的已激活工具"""
+        from src.business.agents.tools.dynamic_tool_manager import (
+            DynamicToolManager,
+            create_assistant_search_tools,
+        )
+
+        # 获取 session 的 tool_ids 限制
+        session = self._session_repo.get_by_id(session_id)
+        allowed_ids = session.get_tool_id_set() if session else None
+
+        # 按 session_id 缓存 DynamicToolManager（OrderedDict LRU）
+        with self._dynamic_managers_lock:
+            if session_id in self._dynamic_managers:
+                self._dynamic_managers.move_to_end(session_id)
+            else:
+                self._dynamic_managers[session_id] = DynamicToolManager(allowed_ids)
+                while len(self._dynamic_managers) > self._MAX_DYNAMIC_MANAGERS:
+                    self._dynamic_managers.popitem(last=False)
+            dynamic_manager = self._dynamic_managers[session_id]
+
+        from src.business.agents.tools.assistant_tools import (
+            REPORT_TOOL_BUG, SAVE_PROFILE_SCHEMA, create_save_profile_handler, DISMISS_SUGGESTION,
+            CODIFY_AS_TOOL_SCHEMA, create_codify_as_tool_handler,
+        )
+        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
+        from src.business.memory.assistant_memory import (
+            MEMORY_SEARCH_SCHEMA, memory_search_handler,
+        )
+
+        codify_tool = ToolDefinition(
+            name="codify_as_tool",
+            schema=CODIFY_AS_TOOL_SCHEMA,
+            handler=create_codify_as_tool_handler(session_id),
+        )
+        save_profile_tool = ToolDefinition(
+            name="save_profile",
+            schema=SAVE_PROFILE_SCHEMA,
+            handler=create_save_profile_handler(session_id),
+        )
+        memory_search_tool = ToolDefinition(
+            name="memory_search",
+            schema=MEMORY_SEARCH_SCHEMA,
+            handler=memory_search_handler,
+        )
+
+        # 固定工具：搜索/懒加载辅助 + 业务工具 + 通用内置工具
+        search_tools = create_assistant_search_tools(dynamic_manager)
+        static_tools = (
+            [REPORT_TOOL_BUG, save_profile_tool, codify_tool, DISMISS_SUGGESTION, memory_search_tool]
+            + BUILTIN_GENERAL_TOOLS
+        )
+
+        def tool_factory() -> List[ToolDefinition]:
+            return search_tools + static_tools + dynamic_manager.get_activated_tools()
+
+        return tool_factory
+
     def _get_loop(self, agent_type: str, workflow_id: str = None) -> AgentLoop:
-        """获取 Loop 实例。trial agent 不缓存（system prompt 含工具信息，每个 workflow 不同）。"""
-        if agent_type == "trial":
+        """获取 Loop 实例。trial/assistant 不缓存（system prompt 含动态内容，每个会话不同）。"""
+        if agent_type == AgentType.TRIAL:
             config = self._build_trial_config(workflow_id)
             return AgentLoop(config, self._llm, self._config)
 
+        if agent_type == AgentType.ASSISTANT:
+            return AgentLoop(ASSISTANT_CONFIG, self._llm, self._config)
+
         # pm / programmer 按 agent_type 缓存
         if agent_type not in self._loops:
-            configs = {"pm": PM_CONFIG, "programmer": PROGRAMMER_CONFIG}
+            configs = {AgentType.PM: PM_CONFIG, AgentType.PROGRAMMER: PROGRAMMER_CONFIG}
             if agent_type not in configs:
                 raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
             self._loops[agent_type] = AgentLoop(configs[agent_type], self._llm, self._config)
         return self._loops[agent_type]
+
+    # =========================================================================
+    # 助理任务队列 Worker（后台轮询 pending_assistant_tasks）
+    # =========================================================================
+
+    def start_task_worker(self):
+        """启动后台任务队列 Worker。由外部（如 MainWindow）在初始化完成后调用。"""
+        if self._task_worker_running:
+            return
+        self._task_worker_running = True
+
+        # 注入唤醒回调给 assistant_tools（handler 入队后调用以立即唤醒 Worker）
+        from src.business.agents.tools.assistant_tools import register_task_worker_notify
+        register_task_worker_notify(self.notify_task_enqueued)
+
+        threading.Thread(target=self._task_worker_loop, daemon=True).start()
+        logger.info("[Orchestrator] 后台任务队列 Worker 已启动")
+
+    def notify_task_enqueued(self):
+        """入队时调用，立即唤醒 Worker（避免等待轮询间隔）"""
+        self._task_queue_event.set()
+
+    def _task_worker_loop(self):
+        """后台 Worker 主循环：轮询 pending_assistant_tasks 表"""
+        POLL_INTERVAL = 5.0  # 默认轮询间隔（秒）
+        while self._task_worker_running:
+            try:
+                self._process_pending_tasks()
+            except Exception as e:
+                logger.error(f"[TaskWorker] 处理异常: {e}", exc_info=True)
+            # 等待唤醒或超时
+            self._task_queue_event.clear()
+            self._task_queue_event.wait(timeout=POLL_INTERVAL)
+
+    def _process_pending_tasks(self):
+        """取出并执行所有 pending 任务（串行，每次一个）"""
+        from src.data.repositories import PendingTaskRepository
+        repo = PendingTaskRepository()
+        tasks = repo.get_pending()
+        for task in tasks:
+            try:
+                repo.update_status(task.task_id, "processing")
+                if task.task_type == "codify_tool":
+                    self._process_codify_task(task)
+                elif task.task_type == "fix_tool_bug":
+                    self._process_bug_task(task)
+                else:
+                    logger.warning(f"[TaskWorker] 未知任务类型: {task.task_type}")
+                    repo.update_status(task.task_id, "failed")
+                    continue
+                repo.update_status(task.task_id, "completed")
+            except Exception as e:
+                logger.error(f"[TaskWorker] 任务 {task.task_id} 处理失败: {e}", exc_info=True)
+                repo.update_status(task.task_id, "failed")
+
+    def _process_codify_task(self, task):
+        """处理 codify_tool 任务：构造 PM 输入，启动 PM 分析"""
+        payload = json.loads(task.payload or "{}")
+        task_description = payload.get("task_description", "")
+        execution_trace = payload.get("execution_trace", [])
+
+        trace_text = "\n".join(
+            f"- [{t['type']}] {t.get('name', '')}：{t.get('args', '') or t.get('content', '')[:200]}"
+            for t in execution_trace[:20]
+        )
+        initial_input = (
+            f"用户要求将以下任务做成可复用工具：\n\n"
+            f"任务描述：{task_description}\n\n"
+            f"执行记录：\n{trace_text}\n\n"
+            "请基于执行记录分析任务逻辑，与用户确认工具的名称、参数和说明，然后生成代码。"
+        )
+
+        new_workflow_id = f"codify_{task.task_id[:8]}"
+        self.run_agent("pm", initial_input, workflow_id=new_workflow_id)
+
+    def _process_bug_task(self, task):
+        """处理 fix_tool_bug 任务：找到 workflow_id，触发 PM 分诊"""
+        payload = json.loads(task.payload or "{}")
+        tool_id = payload.get("tool_id", "")
+        error_message = payload.get("error_message", "")
+
+        from src.data.repositories import ToolRepository
+        tool = ToolRepository().get_by_id(tool_id)
+        if not tool or not tool.workflow_id:
+            logger.warning(f"[TaskWorker] fix_tool_bug: 找不到 workflow_id, tool_id={tool_id}")
+            return
+
+        self._start_triage(tool_id, error_message, tool.workflow_id)
+
+    def _format_assistant_prompt(self, session_id: str) -> str:
+        """格式化助理 Agent 的 system prompt（独立路径，不走 format_system_prompt）"""
+        from src.business.agents.prompts.assistant_prompt import format_assistant_prompt
+        from src.data.repositories import ToolRepository
+
+        # 获取 profile
+        profile = self._get_assistant_profile()
+
+        # 获取用户工具列表（用于 system prompt 简表）
+        session = self._session_repo.get_by_id(session_id)
+        tool_repo = ToolRepository()
+        allowed_tool_ids = session.get_tool_id_set() if session else None
+        all_published = tool_repo.get_published()
+        if allowed_tool_ids is not None:
+            tools = [t for t in all_published if t.tool_id in allowed_tool_ids]
+        else:
+            tools = all_published
+
+        tool_list = [{"name": t.tool_name, "description": t.description or ""} for t in tools]
+
+        # 获取全局摘要
+        try:
+            from src.business.memory.assistant_memory import get_memory_manager
+            memory_manager = get_memory_manager(llm_client=self._llm)
+            memory_summary = memory_manager.get_global_summary()
+        except Exception as e:
+            logger.warning(f"[Orchestrator] 获取全局摘要失败: {e}")
+            memory_summary = None
+
+        return format_assistant_prompt(
+            profile=profile,
+            tools=tool_list if tool_list else None,
+            memory_summary=memory_summary,
+        )
+
+    def _get_assistant_profile(self) -> Optional[dict]:
+        """获取助理用户偏好档案"""
+        try:
+            from src.data.repositories import AssistantProfileRepository
+
+            profile = AssistantProfileRepository().get_default()
+            if profile:
+                return {
+                    "display_name": profile.display_name,
+                    "style": profile.style,
+                    "notes": profile.notes,
+                }
+        except Exception as e:
+            logger.warning(f"[Orchestrator] 获取 assistant profile 失败: {e}")
+        return None
 
     def _build_trial_config(self, workflow_id: str) -> AgentConfig:
         """构建包含工具信息的试用 Agent 配置。"""

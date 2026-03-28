@@ -53,6 +53,9 @@ class OrchestratorInitStatus(Enum):
 class MainWindow(QMainWindow):
     """Mexemplar 主窗口"""
 
+    # 高危工具用户确认信号（跨线程：worker 线程 emit → UI 线程弹框）
+    _confirm_action_signal = pyqtSignal(str, str)  # (request_id, message)
+
     # 类常量
     _POLL_INTERVAL = 0.1  # 轮询间隔（秒）
     _DEFAULT_INIT_TIMEOUT = 5.0  # 默认初始化超时（秒）
@@ -196,6 +199,7 @@ class MainWindow(QMainWindow):
         # ============ 添加页面到主内容区 ============
         # AI 对话页面
         chat_page = ChatWidget()
+        chat_page.send_message_requested.connect(self._on_chat_send_message)
         self.main_content.add_page("chat", chat_page)
 
         # 录制页面
@@ -586,6 +590,14 @@ class MainWindow(QMainWindow):
         orchestrator = AgentOrchestrator(llm_client=llm_client, config=config)
         bridge = AgentUIBridge(orchestrator)
 
+        # 注册高危工具跨线程确认机制
+        from src.business.agents.tools.builtin_general_tools import register_confirm_mechanism
+        self._confirm_action_signal.connect(self._on_confirm_action_requested)
+        register_confirm_mechanism(self._confirm_action_signal)
+
+        # 启动后台任务队列 Worker
+        orchestrator.start_task_worker()
+
         # 连接 v2 信号
         bridge.question_received.connect(self._on_agent_question)
         bridge.error_occurred.connect(self._on_agent_error)
@@ -637,16 +649,28 @@ class MainWindow(QMainWindow):
             recording_id,
         )
 
-    def _on_agent_question(self, workflow_id: str, agent_type: str, question: str) -> None:
+    def _on_agent_question(self, workflow_id: str, session_id: str, agent_type: str, question: str) -> None:
         """
         处理 Agent 提问（需要用户回答）
 
         Args:
-            workflow_id: 工作流 ID（= recording_id）
-            agent_type: Agent 类型（pm / programmer / trial）
+            workflow_id: 工作流 ID（= recording_id），assistant 类型为空字符串
+            session_id: 会话 ID，assistant 类型使用此 ID 路由
+            agent_type: Agent 类型（pm / programmer / trial / assistant）
             question: Agent 提出的问题
         """
-        self.logger.info(f"Agent 提问: workflow={workflow_id}, type={agent_type}, question={question[:80]}")
+        self.logger.info(f"Agent 提问: workflow={workflow_id}, session={session_id}, type={agent_type}, question={question[:80]}")
+
+        from src.business.agents.config import AgentType
+        if agent_type == AgentType.ASSISTANT:
+            # assistant 路由到 ChatWidget
+            self._current_agent_session_id = session_id
+            self._current_agent_type = agent_type
+            chat_widget = self._get_chat_widget()
+            if chat_widget:
+                chat_widget.add_assistant_message(question)
+                chat_widget.set_loading(False)
+            return
 
         # 保存当前会话上下文，供用户回复时使用
         self._current_agent_workflow_id = workflow_id
@@ -684,9 +708,16 @@ class MainWindow(QMainWindow):
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(1500, self._switch_to_pending_tools)
 
-    def _on_agent_error(self, workflow_id: str, agent_type: str, error_message: str) -> None:
+    def _on_agent_error(self, workflow_id: str, session_id: str, agent_type: str, error_message: str) -> None:
         """处理 Agent 错误"""
-        self.logger.error(f"Agent 错误: workflow={workflow_id}, type={agent_type} - {error_message}")
+        self.logger.error(f"Agent 错误: workflow={workflow_id}, session={session_id}, type={agent_type} - {error_message}")
+
+        from src.business.agents.config import AgentType
+        if agent_type == AgentType.ASSISTANT:
+            chat = self._get_chat_widget()
+            if chat:
+                chat.add_error_message(error_message)
+                chat.set_loading(False)
 
     def _show_intent_confirmation_from_agent(
         self, intent_data: dict, message: str, thread_id: str
@@ -718,8 +749,9 @@ class MainWindow(QMainWindow):
             resume_data: 恢复数据（包含用户的确认回答）
         """
         self.logger.info(f"收到 Agent 恢复请求: workflow_id={thread_id}")
+        from src.business.agents.config import AgentType
         user_input = resume_data.get("feedback") or resume_data.get("message", "")
-        agent_type = getattr(self, "_current_agent_type", "pm")
+        agent_type = getattr(self, "_current_agent_type", AgentType.PM)
 
         if self.agent_ui_bridge:
             try:
@@ -770,6 +802,41 @@ class MainWindow(QMainWindow):
         """录制按钮点击 - 切换到录制页面"""
         self.logger.info("用户点击录制按钮")
         self.main_content.switch_page("recording")
+
+    def _get_chat_widget(self):
+        """获取 ChatWidget 实例"""
+        return self.main_content.get_page("chat")
+
+    def _on_confirm_action_requested(self, request_id: str, message: str):
+        """
+        UI 线程槽函数：收到 worker 线程的确认请求后弹框，
+        结果通过 set_confirm_result(request_id, result) 唤醒对应 worker。
+        """
+        from src.business.agents.tools.builtin_general_tools import set_confirm_result
+        reply = QMessageBox.question(
+            self,
+            "操作确认",
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        set_confirm_result(request_id, reply == QMessageBox.StandardButton.Yes)
+
+    def _on_chat_send_message(self, session_id: str, agent_type: str, user_input: str):
+        """ChatWidget 发送消息 → 通过 UIBridge 启动 Agent"""
+        self.logger.info(f"Chat 发送消息: session={session_id}, input={user_input[:50]}...")
+        if hasattr(self, "agent_ui_bridge") and self.agent_ui_bridge:
+            self.agent_ui_bridge.start_agent(
+                agent_type=agent_type,
+                user_input=user_input,
+                session_id=session_id,
+            )
+        else:
+            self.logger.warning("[MainWindow] agent_ui_bridge 未初始化")
+            chat = self._get_chat_widget()
+            if chat:
+                chat.add_error_message("AI 助手尚未初始化，请稍候...")
+                chat.set_loading(False)
 
     def _on_chat_clicked(self) -> None:
         """AI 助手按钮点击 - 切换到对话页面"""
@@ -1075,8 +1142,9 @@ class MainWindow(QMainWindow):
         self.logger.info(f"收到意图分析请求: {intent_id}, 消息: {user_message[:50]}...")
 
         # Agent 模式：将用户消息作为 feedback 传递给 Agent
+        from src.business.agents.config import AgentType
         workflow_id = getattr(self, "_current_agent_workflow_id", None)
-        agent_type = getattr(self, "_current_agent_type", "pm")
+        agent_type = getattr(self, "_current_agent_type", AgentType.PM)
         if workflow_id:
             if self.agent_ui_bridge:
                 try:
@@ -1125,7 +1193,8 @@ class MainWindow(QMainWindow):
 
         # 3. 保存当前会话上下文
         self._current_agent_workflow_id = workflow_id
-        self._current_agent_type = "trial"
+        from src.business.agents.config import AgentType
+        self._current_agent_type = AgentType.TRIAL
 
         # 4. 切换到意图确认页面（对话区），等待 Agent 首次提问
         self.main_content.switch_page("intent_confirmation")
@@ -1133,7 +1202,7 @@ class MainWindow(QMainWindow):
         # 5. 启动 trial Agent
         self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
         self.agent_ui_bridge.start_agent(
-            "trial",
+            AgentType.TRIAL,
             "开始试用",
             workflow_id,
         )

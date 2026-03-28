@@ -150,24 +150,38 @@ class ContextManager:
 
     # --- 引用加载 ---
 
-    def load_reference(self, message_id: str) -> str:
+    def load_reference(self, reference_id: str) -> str:
         """
-        加载被引用替换的原始消息内容。供 load_reference 工具调用。
+        加载被引用替换的原始内容。供 load_reference 工具调用。
+
+        根据 ID 前缀路由到不同的存储：
+        - ss_* / gs_* / global_* → assistant_summaries 表（跨会话记忆摘要）
+        - 其他（msg_* 等） → messages 表（会话内消息）
 
         Args:
-            message_id: 消息 ID
+            reference_id: 引用 ID（消息 ID 或摘要 ID）
 
         Returns:
-            原始消息内容
+            原始内容文本
 
         Raises:
-            ValueError: 如果消息不存在
+            ValueError: 如果引用不存在
         """
-        msg = self._msg_repo.get_by_id(message_id)
-        if not msg:
-            raise ValueError(f"消息不存在: {message_id}")
+        # 摘要 ID 路由：ss_ (会话摘要), gs_ (分组摘要), global_ (全局摘要)
+        if reference_id.startswith(("ss_", "gs_", "global_")):
+            from src.data.repositories import AssistantSummaryRepository
+            summary = AssistantSummaryRepository().get_by_summary_id(reference_id)
+            if not summary:
+                raise ValueError(f"摘要不存在: {reference_id}")
+            logger.info(f"[引用加载] 摘要 {reference_id}: {len(summary.content or '')} 字符")
+            return summary.content or ""
 
-        logger.info(f"[引用加载] {message_id}: {len(msg.content or '')} 字符")
+        # 消息 ID 路由（默认路径）
+        msg = self._msg_repo.get_by_id(reference_id)
+        if not msg:
+            raise ValueError(f"消息不存在: {reference_id}")
+
+        logger.info(f"[引用加载] {reference_id}: {len(msg.content or '')} 字符")
         return msg.content or ""
 
     # --- 会话管理 ---

@@ -7,7 +7,7 @@ Agent Loop 核心
 import json
 import logging
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, Union
 
 from src.business.ai.llm_client import LangChainLLMClient, LLMResponse
 from src.data.unified_config import UnifiedConfigManager
@@ -190,7 +190,7 @@ class AgentLoop:
         self,
         session_id: str,
         user_input: Optional[str] = None,
-        tools: Optional[List[ToolDefinition]] = None,
+        tools: Optional[Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]] = None,
         system_prompt_override: Optional[str] = None,
     ) -> AgentResult:
         """
@@ -199,7 +199,10 @@ class AgentLoop:
         Args:
             session_id: 会话 ID
             user_input: 用户输入（可选）
-            tools: 工具列表（由调用方组装传入）。为 None 时只有内置工具可用。
+            tools: 工具列表或工厂函数（由调用方组装传入）。
+                传入 list 时直接使用（兼容现有 PM/程序员/试用）。
+                传入 callable 时每轮迭代调用获取最新列表（支持助理的动态工具懒加载）。
+                为 None 时只有内置工具可用。
             system_prompt_override: 系统提示覆盖（用于注入模板变量如 {recording_id}）。
                 仅在会话首次初始化时生效，已有 system prompt 时忽略。
 
@@ -223,19 +226,34 @@ class AgentLoop:
             ctx.save_user_message(user_input)
             logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
 
-        # 构建工具列表（传入的 tools + 内置工具）
-        tools = tools or []
-        all_tool_schemas = [td.schema for td in tools] + [
-            TALK_TO_USER_SCHEMA,
-            LOAD_REFERENCE_SCHEMA,
-        ]
-        tool_handlers: Dict[str, Callable] = {td.name: td.handler for td in tools}
-        tool_handlers["talk_to_user"] = talk_to_user
+        # 构建工具 schemas 和 handlers 的辅助函数
+        def _rebuild_tools(tool_defs: List[ToolDefinition]):
+            nonlocal all_tool_schemas, tool_handlers
+            all_tool_schemas = [td.schema for td in tool_defs] + [
+                TALK_TO_USER_SCHEMA,
+                LOAD_REFERENCE_SCHEMA,
+            ]
+            tool_handlers = {td.name: td.handler for td in tool_defs}
+            tool_handlers["talk_to_user"] = talk_to_user
+
+        _tools_callable = callable(tools)
+        all_tool_schemas: list = []
+        tool_handlers: Dict[str, Callable] = {}
+        _last_tool_names: Optional[frozenset] = None
+        if not _tools_callable:
+            _rebuild_tools(tools or [])
 
         # 主循环
         iteration = 0
         while iteration < self._config.max_iterations:
             iteration += 1
+
+            if _tools_callable:
+                new_tools = tools()
+                new_names = frozenset(td.name for td in new_tools)
+                if new_names != _last_tool_names:
+                    _rebuild_tools(new_tools)
+                    _last_tool_names = new_names
 
             # 组装上下文
             messages = ctx.assemble_context()
@@ -289,7 +307,7 @@ class AgentLoop:
             try:
                 if tool_call.name == "load_reference":
                     # load_reference 需要 ctx，由 AgentLoop 内部处理
-                    result = ctx.load_reference(tool_call.args["message_id"])
+                    result = ctx.load_reference(tool_call.args["reference_id"])
                 else:
                     handler = tool_handlers.get(tool_call.name)
                     if handler is None:
@@ -339,7 +357,11 @@ class AgentLoop:
                 # 不终止循环，让 LLM 决定下一步
 
         # 超过最大迭代次数
-        ctx.update_session_status("failed")
+        if self._config.text_as_user_input:
+            # 持续对话类 Agent（assistant 等）：标记 suspended，用户下条消息可恢复
+            ctx.update_session_status("suspended")
+        else:
+            ctx.update_session_status("failed")
         logger.error(f"[Agent Loop] 超过最大迭代次数: {session_id}")
         return AgentResult(
             result_type=ResultType.MAX_ITERATIONS_REACHED,

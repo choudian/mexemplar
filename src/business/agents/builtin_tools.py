@@ -30,8 +30,8 @@ LOAD_REFERENCE_SCHEMA = {
         "description": "加载被引用替换的原始消息内容。当工具结果被引用替换时，使用此工具获取完整内容。",
         "parameters": {
             "type": "object",
-            "properties": {"message_id": {"type": "string", "description": "要加载的消息 ID"}},
-            "required": ["message_id"],
+            "properties": {"reference_id": {"type": "string", "description": "要加载的引用 ID（消息 ID 或摘要 ID）"}},
+            "required": ["reference_id"],
         },
     },
 }

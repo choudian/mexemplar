@@ -8,7 +8,7 @@ SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 from datetime import datetime
 from typing import Optional, Any
 from enum import Enum
-from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON
+from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, LargeBinary
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -28,6 +28,7 @@ class AgentType(str, Enum):
     PM = "pm"
     PROGRAMMER = "programmer"
     TRIAL = "trial"
+    ASSISTANT = "assistant"
 
 
 class SessionStatus(str, Enum):
@@ -213,11 +214,19 @@ class Session(Base):
     __tablename__ = "sessions"
 
     session_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    workflow_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    workflow_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     agent_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active")
+    tool_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def get_tool_id_set(self) -> Optional[set]:
+        """解析 tool_ids JSON 字段为 set。None 表示全部工具。"""
+        if not self.tool_ids:
+            return None
+        import json
+        return set(json.loads(self.tool_ids))
 
     def __repr__(self) -> str:
         return f"<Session(session_id={self.session_id!r}, agent_type={self.agent_type!r}, status={self.status!r})>"
@@ -260,3 +269,71 @@ class WorkflowTransition(Base):
 
     def __repr__(self) -> str:
         return f"<WorkflowTransition(transition_id={self.transition_id!r}, workflow_id={self.workflow_id!r})>"
+
+
+# ===== 办公助理相关模型 =====
+
+
+class AssistantProfile(Base):
+    """助理用户偏好档案表"""
+
+    __tablename__ = "assistant_profile"
+
+    profile_id: Mapped[str] = mapped_column(String(50), primary_key=True, default="default")
+    display_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    style: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    raw_answers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<AssistantProfile(profile_id={self.profile_id!r}, display_name={self.display_name!r})>"
+
+
+class PendingAssistantTask(Base):
+    """助理异步任务队列表"""
+
+    __tablename__ = "pending_assistant_tasks"
+
+    task_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    payload: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<PendingAssistantTask(task_id={self.task_id!r}, task_type={self.task_type!r}, status={self.status!r})>"
+
+
+class ToolSuggestionHistory(Base):
+    """工具化建议历史表（重复模式检测 + 拒绝冷却）"""
+
+    __tablename__ = "tool_suggestion_history"
+
+    suggestion_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    suggested_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    accepted: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    times_seen: Mapped[int] = mapped_column(Integer, default=0)
+
+    def __repr__(self) -> str:
+        return f"<ToolSuggestionHistory(suggestion_id={self.suggestion_id!r}, task_pattern={self.task_pattern!r})>"
+
+
+class AssistantSummary(Base):
+    """助理跨会话记忆摘要表"""
+
+    __tablename__ = "assistant_summaries"
+
+    summary_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    level: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    embedding: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<AssistantSummary(summary_id={self.summary_id!r}, level={self.level!r})>"

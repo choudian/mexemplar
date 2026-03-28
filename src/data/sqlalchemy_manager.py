@@ -7,7 +7,7 @@ SQLAlchemy 数据库管理器 - SQLite
 import logging
 from pathlib import Path
 from typing import Optional
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, event, select, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -67,6 +67,17 @@ class SQLAlchemyManager:
                 poolclass=StaticPool,
                 echo=False,  # 设置为 True 可以查看 SQL 语句
             )
+
+            # 注册连接事件：每个新连接加载 sqlite-vec 扩展（可选）
+            @event.listens_for(self.engine, "connect")
+            def _load_sqlite_vec(dbapi_conn, connection_record):
+                try:
+                    import sqlite_vec
+                    dbapi_conn.enable_load_extension(True)
+                    dbapi_conn.load_extension(sqlite_vec.loadable_path())
+                    dbapi_conn.enable_load_extension(False)
+                except (ImportError, Exception):
+                    pass  # sqlite-vec 未安装，向量搜索将降级为 FTS
 
             # 创建会话工厂
             self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)

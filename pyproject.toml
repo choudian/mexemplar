@@ -50,6 +50,8 @@ dependencies = [
     "langgraph-checkpoint>=4.0.0",
     "langgraph-checkpoint-sqlite>=3.0.3",
     "prompt-toolkit>=3.0.52",
+    "sqlite-vec>=0.1.6",
+    "openai>=1.0.0",
 ]
 
 [[tool.uv.index]]

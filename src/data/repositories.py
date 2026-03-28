@@ -21,27 +21,29 @@ from .models_sqlite import (
     Session,
     Message,
     WorkflowTransition,
+    PendingAssistantTask,
+    AssistantProfile,
+    AssistantSummary,
+    ToolSuggestionHistory,
 )
 
 logger = logging.getLogger(__name__)
 
 
-class ToolRepository:
-    """工具定义仓库"""
+class BaseRepository:
+    """Repository 基类，提供统一的会话初始化"""
 
     def __init__(self, session: Optional[SQLAlchemySession] = None):
-        """
-        初始化工具仓库
-
-        Args:
-            session: SQLAlchemy 会话，如果为 None 则使用全局会话
-        """
         if session is None:
             manager = get_sqlalchemy_manager()
             manager.initialize()
             self.session = manager.get_session()
         else:
             self.session = session
+
+
+class ToolRepository(BaseRepository):
+    """工具定义仓库"""
 
     def create(self, tool: Tool) -> Tool:
         """创建工具"""
@@ -127,18 +129,35 @@ class ToolRepository:
             tool.status = status
             self.session.commit()
 
+    def get_published(self) -> List[Tool]:
+        """获取所有已发布的工具"""
+        return (
+            self.session.query(Tool)
+            .filter(Tool.status == "published")
+            .order_by(Tool.created_at.desc())
+            .all()
+        )
 
-class TaskExecutionRepository:
+    def search_published(self, query: str) -> List[Tool]:
+        """搜索已发布的工具（参数化 LIKE 查询，防注入）"""
+        pattern = f"%{query}%"
+        return (
+            self.session.query(Tool)
+            .filter(
+                Tool.status == "published",
+                (Tool.tool_name.like(pattern)) | (Tool.description.like(pattern)),
+            )
+            .order_by(Tool.created_at.desc())
+            .all()
+        )
+
+    def get_by_name(self, name: str) -> Optional[Tool]:
+        """按工具名称精确查询"""
+        return self.session.query(Tool).filter(Tool.tool_name == name).first()
+
+
+class TaskExecutionRepository(BaseRepository):
     """任务执行记录仓库"""
-
-    def __init__(self, session: Optional[SQLAlchemySession] = None):
-        """初始化任务执行仓库"""
-        if session is None:
-            manager = get_sqlalchemy_manager()
-            manager.initialize()
-            self.session = manager.get_session()
-        else:
-            self.session = session
 
     def create(self, execution: TaskExecution) -> TaskExecution:
         """创建执行记录"""
@@ -197,17 +216,8 @@ class TaskExecutionRepository:
         )
 
 
-class ConversationRepository:
+class ConversationRepository(BaseRepository):
     """对话历史仓库"""
-
-    def __init__(self, session: Optional[SQLAlchemySession] = None):
-        """初始化对话仓库"""
-        if session is None:
-            manager = get_sqlalchemy_manager()
-            manager.initialize()
-            self.session = manager.get_session()
-        else:
-            self.session = session
 
     def create(self, conversation: Conversation) -> Conversation:
         """创建对话记录"""
@@ -256,22 +266,8 @@ class ConversationRepository:
 # ===== 新增：SessionRepository =====
 
 
-class SessionRepository:
+class SessionRepository(BaseRepository):
     """会话 Repository"""
-
-    def __init__(self, session: Optional[SQLAlchemySession] = None):
-        """
-        初始化会话仓库
-
-        Args:
-            session: SQLAlchemy 会话，如果为 None 则使用全局会话
-        """
-        if session is None:
-            manager = get_sqlalchemy_manager()
-            manager.initialize()
-            self.session = manager.get_session()
-        else:
-            self.session = session
 
     def create(self, model: Session) -> Session:
         """创建会话"""
@@ -319,21 +315,22 @@ class SessionRepository:
         model = self.get_by_id(session_id)
         return model.status if model else None
 
+    def get_by_agent_type(self, agent_type: str, limit: int = 50) -> List[Session]:
+        """获取指定 agent_type 的会话列表，按最近更新排序"""
+        return (
+            self.session.query(Session)
+            .filter(Session.agent_type == agent_type)
+            .order_by(Session.updated_at.desc())
+            .limit(limit)
+            .all()
+        )
+
 
 # ===== 新增：MessageRepository =====
 
 
-class MessageRepository:
+class MessageRepository(BaseRepository):
     """消息 Repository"""
-
-    def __init__(self, session: Optional[SQLAlchemySession] = None):
-        """初始化消息仓库"""
-        if session is None:
-            manager = get_sqlalchemy_manager()
-            manager.initialize()
-            self.session = manager.get_session()
-        else:
-            self.session = session
 
     def create(self, model: Message) -> Message:
         """创建消息"""
@@ -379,6 +376,9 @@ class MessageRepository:
             .all()
         )
 
+    # 别名：外部模块（chat_widget, assistant_memory, assistant_tools）统一使用此名称
+    get_by_session = get_all
+
     def get_next_sequence(self, session_id: str) -> int:
         """获取下一条消息的序列号"""
         max_seq = (
@@ -399,6 +399,13 @@ class MessageRepository:
         ).update({"is_archived": True}, synchronize_session=False)
         self.session.commit()
         logger.debug(f"会话 {session_id} 消息 {from_seq}-{to_seq} 已归档")
+
+    def update_content(self, message_id: str, content: str):
+        """更新消息内容"""
+        msg = self.get_by_id(message_id)
+        if msg:
+            msg.content = content
+            self.session.commit()
 
     def bulk_copy(
         self, from_session_id: str, to_session_id: str, up_to_sequence: int
@@ -445,17 +452,8 @@ class MessageRepository:
 # ===== 新增：WorkflowTransitionRepository =====
 
 
-class WorkflowTransitionRepository:
+class WorkflowTransitionRepository(BaseRepository):
     """工作流交接 Repository"""
-
-    def __init__(self, session: Optional[SQLAlchemySession] = None):
-        """初始化交接记录仓库"""
-        if session is None:
-            manager = get_sqlalchemy_manager()
-            manager.initialize()
-            self.session = manager.get_session()
-        else:
-            self.session = session
 
     def create(self, model: WorkflowTransition) -> WorkflowTransition:
         """创建交接记录"""
@@ -486,3 +484,342 @@ class WorkflowTransitionRepository:
             .order_by(WorkflowTransition.created_at)
             .all()
         )
+
+
+class PendingTaskRepository(BaseRepository):
+    """助理异步任务队列仓库"""
+
+    def create(self, task: PendingAssistantTask) -> PendingAssistantTask:
+        """创建任务"""
+        try:
+            self.session.add(task)
+            self.session.commit()
+            self.session.refresh(task)
+            logger.info(f"待处理任务已创建: {task.task_id} ({task.task_type})")
+            return task
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"创建待处理任务失败: {e}")
+            raise
+
+    def get_by_id(self, task_id: str) -> Optional[PendingAssistantTask]:
+        """根据 ID 获取任务"""
+        return self.session.query(PendingAssistantTask).filter(
+            PendingAssistantTask.task_id == task_id
+        ).first()
+
+    def get_pending(self, task_type: Optional[str] = None) -> List[PendingAssistantTask]:
+        """获取待处理任务"""
+        q = self.session.query(PendingAssistantTask).filter(
+            PendingAssistantTask.status == "pending"
+        )
+        if task_type:
+            q = q.filter(PendingAssistantTask.task_type == task_type)
+        return q.order_by(PendingAssistantTask.created_at).all()
+
+    def update_status(self, task_id: str, status: str):
+        """更新任务状态"""
+        task = self.session.query(PendingAssistantTask).filter(
+            PendingAssistantTask.task_id == task_id
+        ).first()
+        if task:
+            task.status = status
+            self.session.commit()
+
+
+class AssistantProfileRepository(BaseRepository):
+    """助理用户偏好档案仓库"""
+
+    def get_default(self) -> Optional[AssistantProfile]:
+        """获取默认 profile"""
+        return self.session.query(AssistantProfile).filter(
+            AssistantProfile.profile_id == "default"
+        ).first()
+
+    def save(self, display_name: str = "", style: str = "", notes: str = "") -> AssistantProfile:
+        """保存或更新默认 profile"""
+        existing = self.get_default()
+        if existing:
+            if display_name:
+                existing.display_name = display_name
+            if style:
+                existing.style = style
+            if notes:
+                existing.notes = notes
+            self.session.commit()
+            return existing
+        else:
+            profile = AssistantProfile(
+                profile_id="default",
+                display_name=display_name or None,
+                style=style or None,
+                notes=notes or None,
+            )
+            self.session.add(profile)
+            self.session.commit()
+            self.session.refresh(profile)
+            return profile
+
+
+class AssistantSummaryRepository(BaseRepository):
+    """助理跨会话记忆摘要仓库"""
+
+    def create(self, summary: AssistantSummary) -> AssistantSummary:
+        """创建摘要"""
+        try:
+            self.session.add(summary)
+            self.session.commit()
+            self.session.refresh(summary)
+            return summary
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"创建摘要失败: {e}")
+            raise
+
+    def get_by_summary_id(self, summary_id: str) -> Optional[AssistantSummary]:
+        """按 summary_id 查询单条摘要"""
+        return (
+            self.session.query(AssistantSummary)
+            .filter(AssistantSummary.summary_id == summary_id)
+            .first()
+        )
+
+    def get_by_level(self, level: int, limit: int = 100) -> List[AssistantSummary]:
+        """获取指定层级的摘要"""
+        return (
+            self.session.query(AssistantSummary)
+            .filter(AssistantSummary.level == level)
+            .order_by(AssistantSummary.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+    def get_latest_global(self, level: int = 3) -> Optional[AssistantSummary]:
+        """获取最新的指定层级摘要（默认 level=3 即全局摘要）"""
+        return (
+            self.session.query(AssistantSummary)
+            .filter(AssistantSummary.level == level)
+            .order_by(AssistantSummary.created_at.desc())
+            .first()
+        )
+
+    def get_summarized_source_ids(self, level: int) -> set:
+        """获取已有摘要的来源 ID 集合（只查 source_ids 列，避免加载 content/embedding）"""
+        rows = (
+            self.session.query(AssistantSummary.source_ids)
+            .filter(AssistantSummary.level == level)
+            .all()
+        )
+        ids = set()
+        for (source_ids,) in rows:
+            if source_ids:
+                ids.update(source_ids.split(","))
+        return ids
+
+    def search_fts(self, query: str, levels: List[int], limit: int = 10) -> list:
+        """
+        FTS5 全文搜索摘要。
+
+        Returns:
+            list of dict: [{summary_id, level, content, created_at, fts_rank}]
+        """
+        from sqlalchemy import text
+
+        # 构造 FTS5 查询：按空格拆分关键词用 OR 连接
+        keywords = query.strip().split()
+        if not keywords:
+            return []
+        fts_query = " OR ".join(f'"{kw.replace(chr(34), "")}"' for kw in keywords)
+
+        # 动态构造 IN 子句（levels 是 int，安全）
+        level_placeholders = ",".join(str(int(lv)) for lv in levels)
+
+        sql = text(f"""
+            SELECT s.summary_id, s.level, s.content, s.created_at,
+                   fts.rank AS fts_rank
+            FROM assistant_summaries_fts fts
+            JOIN assistant_summaries s ON s.summary_id = fts.summary_id
+            WHERE assistant_summaries_fts MATCH :query
+              AND s.level IN ({level_placeholders})
+            ORDER BY fts.rank
+            LIMIT :limit
+        """)
+        try:
+            rows = self.session.execute(sql, {"query": fts_query, "limit": limit}).fetchall()
+            return [
+                {
+                    "summary_id": r[0],
+                    "level": r[1],
+                    "content": r[2],
+                    "created_at": r[3],
+                    "fts_rank": r[4],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"FTS5 搜索失败（可能表不存在），降级到 LIKE: {e}")
+            return []
+
+    def search_like(self, keywords: List[str], levels: List[int], limit: int = 5) -> List[AssistantSummary]:
+        """关键词 LIKE 模糊搜索（FTS5 不可用时的最终降级）"""
+        from sqlalchemy import or_
+        q = self.session.query(AssistantSummary).filter(
+            AssistantSummary.level.in_(levels)
+        )
+        if keywords:
+            conditions = [AssistantSummary.content.contains(kw) for kw in keywords]
+            q = q.filter(or_(*conditions))
+        return q.order_by(AssistantSummary.created_at.desc()).limit(limit).all()
+
+    def search_vec(self, query_embedding: list, levels: list, limit: int = 10) -> list:
+        """
+        sqlite-vec 向量相似度搜索。
+
+        Args:
+            query_embedding: 查询向量（float list，1536 维）
+            levels: 搜索的摘要层级
+            limit: 返回数量
+
+        Returns:
+            list of dict: [{summary_id, level, content, created_at, distance}]
+        """
+        try:
+            import sqlite_vec
+        except ImportError:
+            return []
+
+        from sqlalchemy import text
+
+        query_blob = sqlite_vec.serialize_float32(query_embedding)
+        level_placeholders = ",".join(str(int(lv)) for lv in levels)
+
+        sql = text(f"""
+            SELECT s.summary_id, s.level, s.content, s.created_at, v.distance
+            FROM (
+                SELECT summary_id, distance
+                FROM assistant_summaries_vec
+                WHERE embedding MATCH :query
+                AND k = :k
+            ) v
+            JOIN assistant_summaries s ON s.summary_id = v.summary_id
+            WHERE s.level IN ({level_placeholders})
+            ORDER BY v.distance
+        """)
+        try:
+            rows = self.session.execute(sql, {"query": query_blob, "k": limit}).fetchall()
+            return [
+                {
+                    "summary_id": r[0],
+                    "level": r[1],
+                    "content": r[2],
+                    "created_at": r[3],
+                    "distance": r[4],
+                }
+                for r in rows
+            ]
+        except Exception as e:
+            logger.warning(f"向量搜索失败: {e}")
+            return []
+
+    def store_embedding(self, summary_id: str, embedding: list):
+        """存储摘要的向量表示到 vec0 表和 assistant_summaries.embedding 列"""
+        try:
+            import sqlite_vec
+        except ImportError:
+            return
+
+        from sqlalchemy import text
+        import struct
+
+        embedding_blob = sqlite_vec.serialize_float32(embedding)
+
+        try:
+            # 更新 assistant_summaries.embedding 列（持久化备份）
+            summary = self.session.query(AssistantSummary).filter(
+                AssistantSummary.summary_id == summary_id
+            ).first()
+            if summary:
+                summary.embedding = embedding_blob
+                self.session.commit()
+
+            # 插入 vec0 虚拟表
+            self.session.execute(
+                text("""
+                    INSERT INTO assistant_summaries_vec(summary_id, embedding)
+                    VALUES (:summary_id, :embedding)
+                """),
+                {"summary_id": summary_id, "embedding": embedding_blob},
+            )
+            self.session.commit()
+        except Exception as e:
+            self.session.rollback()
+            logger.warning(f"存储 embedding 失败（summary_id={summary_id}）: {e}")
+
+    def delete_by_level(self, level: int):
+        """删除指定层级的所有摘要（用于重建全局摘要）"""
+        # 先获取要删除的 summary_id（用于清理 vec0 表）
+        summaries = self.session.query(AssistantSummary.summary_id).filter(
+            AssistantSummary.level == level
+        ).all()
+        summary_ids = [s[0] for s in summaries]
+
+        # 批量删除 vec0 表中的对应记录
+        if summary_ids:
+            from sqlalchemy import text
+            try:
+                placeholders = ",".join(f":id{i}" for i in range(len(summary_ids)))
+                params = {f"id{i}": sid for i, sid in enumerate(summary_ids)}
+                self.session.execute(
+                    text(f"DELETE FROM assistant_summaries_vec WHERE summary_id IN ({placeholders})"),
+                    params,
+                )
+            except Exception:
+                pass  # vec0 表可能不存在
+
+        self.session.query(AssistantSummary).filter(
+            AssistantSummary.level == level
+        ).delete()
+        self.session.commit()
+
+
+class ToolSuggestionRepository(BaseRepository):
+    """工具化建议历史仓库（重复模式检测）"""
+
+    def get_by_pattern(self, task_pattern: str) -> Optional[ToolSuggestionHistory]:
+        """按任务模式查询"""
+        return self.session.query(ToolSuggestionHistory).filter(
+            ToolSuggestionHistory.task_pattern == task_pattern
+        ).first()
+
+    def create(self, task_pattern: str) -> ToolSuggestionHistory:
+        """创建新的建议历史记录"""
+        import uuid as _uuid
+        record = ToolSuggestionHistory(
+            suggestion_id=str(_uuid.uuid4()),
+            task_pattern=task_pattern,
+            times_seen=1,
+        )
+        try:
+            self.session.add(record)
+            self.session.commit()
+            self.session.refresh(record)
+            return record
+        except Exception as e:
+            self.session.rollback()
+            raise
+
+    def increment(self, record: ToolSuggestionHistory):
+        """执行次数 +1"""
+        record.times_seen += 1
+        self.session.commit()
+
+    def mark_rejected(self, record: ToolSuggestionHistory):
+        """记录拒绝状态，重置次数进入冷却"""
+        record.accepted = False
+        record.times_seen = 0
+        self.session.commit()
+
+    def reset_accepted(self, record: ToolSuggestionHistory):
+        """冷却期结束，重置拒绝状态"""
+        record.accepted = None
+        self.session.commit()

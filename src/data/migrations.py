@@ -197,6 +197,10 @@ def run_migrations(db_manager):
         migrate_to_v4(db_manager)
         logger.info(f"数据库迁移完成：{max(current_version, 3)} -> 4")
 
+    if current_version < 5:
+        migrate_to_v5(db_manager)
+        logger.info(f"数据库迁移完成：{max(current_version, 4)} -> 5")
+
     logger.info(f"数据库已是最新版本：{db_manager.get_version()}")
 
 
@@ -312,4 +316,166 @@ def migrate_to_v4(db_manager):
     except sqlite3.Error as e:
         conn.rollback()
         logger.error(f"迁移到版本 4 失败: {e}")
+        raise
+
+
+def migrate_to_v5(db_manager):
+    """
+    迁移到版本 5：办公助理 Agent 相关表
+
+    变更：
+    - Session 表：workflow_id 改为 nullable，新增 tool_ids 字段（SQLite 不支持 ALTER COLUMN，需重建表）
+    - 新增 assistant_profile 表
+    - 新增 pending_assistant_tasks 表
+    - 新增 tool_suggestion_history 表
+    - 新增 assistant_summaries 表
+    """
+    conn = db_manager.connect()
+    cursor = conn.cursor()
+    try:
+        # 1. 重建 sessions 表：workflow_id nullable + 新增 tool_ids
+        cursor.execute("PRAGMA foreign_keys=OFF")
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS sessions_new (
+                session_id TEXT PRIMARY KEY,
+                workflow_id TEXT,
+                agent_type TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                tool_ids TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cursor.execute("""
+            INSERT OR IGNORE INTO sessions_new (session_id, workflow_id, agent_type, status, created_at, updated_at)
+            SELECT session_id, workflow_id, agent_type, status, created_at, updated_at FROM sessions
+        """)
+        cursor.execute("DROP TABLE IF EXISTS sessions")
+        cursor.execute("ALTER TABLE sessions_new RENAME TO sessions")
+
+        cursor.execute("PRAGMA foreign_keys=ON")
+
+        # 2. 新增 assistant_profile 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS assistant_profile (
+                profile_id TEXT PRIMARY KEY DEFAULT 'default',
+                display_name TEXT,
+                style TEXT,
+                notes TEXT,
+                raw_answers TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 3. 新增 pending_assistant_tasks 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS pending_assistant_tasks (
+                task_id TEXT PRIMARY KEY,
+                task_type TEXT NOT NULL,
+                payload TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 4. 新增 tool_suggestion_history 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS tool_suggestion_history (
+                suggestion_id TEXT PRIMARY KEY,
+                task_pattern TEXT NOT NULL,
+                suggested_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                accepted BOOLEAN,
+                times_seen INTEGER DEFAULT 0
+            )
+        """)
+
+        # 5. 新增 assistant_summaries 表
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS assistant_summaries (
+                summary_id TEXT PRIMARY KEY,
+                level INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                source_ids TEXT,
+                embedding BLOB,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # 6. 添加索引
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_pending_tasks_status
+            ON pending_assistant_tasks (status)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_assistant_summaries_level
+            ON assistant_summaries (level)
+        """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_tool_suggestion_accepted
+            ON tool_suggestion_history (accepted)
+        """)
+
+        # 7. FTS5 全文搜索虚拟表 + 同步触发器
+        cursor.execute("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS assistant_summaries_fts
+            USING fts5(summary_id UNINDEXED, content, tokenize='unicode61')
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS trg_summaries_fts_insert
+            AFTER INSERT ON assistant_summaries
+            BEGIN
+                INSERT INTO assistant_summaries_fts(summary_id, content)
+                VALUES (new.summary_id, new.content);
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS trg_summaries_fts_delete
+            AFTER DELETE ON assistant_summaries
+            BEGIN
+                DELETE FROM assistant_summaries_fts
+                WHERE summary_id = old.summary_id;
+            END
+        """)
+        cursor.execute("""
+            CREATE TRIGGER IF NOT EXISTS trg_summaries_fts_update
+            AFTER UPDATE OF content ON assistant_summaries
+            BEGIN
+                UPDATE assistant_summaries_fts SET content = new.content
+                WHERE summary_id = new.summary_id;
+            END
+        """)
+
+        # 8. sqlite-vec 向量搜索虚拟表（可选，未安装时跳过）
+        try:
+            import sqlite_vec
+            conn.enable_load_extension(True)
+            conn.load_extension(sqlite_vec.loadable_path())
+            conn.enable_load_extension(False)
+
+            cursor.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS assistant_summaries_vec
+                USING vec0(
+                    summary_id TEXT,
+                    embedding float[1536] distance_metric=cosine
+                )
+            """)
+            logger.info("sqlite-vec 向量表创建成功")
+        except ImportError:
+            logger.info("sqlite-vec 未安装，跳过向量表创建（将使用 FTS-only 模式）")
+        except Exception as e:
+            logger.warning(f"向量表创建失败（将使用 FTS-only 模式）: {e}")
+
+        cursor.execute("UPDATE schema_version SET version = 5")
+        conn.commit()
+        logger.info(
+            "数据库迁移到版本 5 完成：sessions 表重建（workflow_id nullable + tool_ids）、"
+            "新增 assistant_profile/pending_assistant_tasks/tool_suggestion_history/assistant_summaries 表"
+        )
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error(f"迁移到版本 5 失败: {e}")
         raise

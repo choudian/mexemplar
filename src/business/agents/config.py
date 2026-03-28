@@ -11,6 +11,7 @@ import logging
 
 from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT
 from src.business.agents.prompts.programmer_prompt import PROGRAMMER_SYSTEM_PROMPT
+from src.business.agents.prompts.assistant_prompt import ASSISTANT_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class AgentType(str, Enum):
     PM = "pm"
     PROGRAMMER = "programmer"
     TRIAL = "trial"
+    ASSISTANT = "assistant"
 
 
 class ResultType(str, Enum):
@@ -125,6 +127,16 @@ TRIAL_CONFIG = AgentConfig(
     max_iterations=20,
 )
 
+# Assistant Agent 配置
+# system_prompt 含 {profile_section}/{memory_section}/{tools_section} 占位符，
+# 由 Orchestrator 通过 format_assistant_prompt() 格式化后传入 system_prompt_override
+ASSISTANT_CONFIG = AgentConfig(
+    agent_type=AgentType.ASSISTANT,
+    system_prompt=ASSISTANT_SYSTEM_PROMPT,
+    max_iterations=200,
+    text_as_user_input=True,
+)
+
 
 # =============================================================================
 # 便捷函数
@@ -145,6 +157,7 @@ def get_agent_config(agent_type: AgentType) -> AgentConfig:
         AgentType.PM: PM_CONFIG,
         AgentType.PROGRAMMER: PROGRAMMER_CONFIG,
         AgentType.TRIAL: TRIAL_CONFIG,
+        AgentType.ASSISTANT: ASSISTANT_CONFIG,
     }
     return configs.get(agent_type, TRIAL_CONFIG)
 
@@ -173,6 +186,7 @@ __all__ = [
     "PM_CONFIG",
     "PROGRAMMER_CONFIG",
     "TRIAL_CONFIG",
+    "ASSISTANT_CONFIG",
     "get_agent_config",
     "get_agent_type_str",
 ]
