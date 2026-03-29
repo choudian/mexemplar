@@ -33,17 +33,21 @@ from src.utils.logger import get_logger
 
 
 class MessageInputEdit(QTextEdit):
-    """支持 Ctrl+Enter 发送的自定义输入框"""
+    """支持 Enter 发送、Ctrl+Enter/Shift+Enter 换行的自定义输入框"""
 
     send_requested = pyqtSignal()  # 发送请求信号
 
     def keyPressEvent(self, event: QKeyEvent):
         """处理按键事件"""
-        # Ctrl+Enter 或 Ctrl+Return 发送消息
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
-                self.send_requested.emit()
+            # Ctrl+Enter 或 Shift+Enter 换行
+            if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+                # 插入换行
+                self.insertPlainText("\n")
                 return
+            # Enter 发送消息
+            self.send_requested.emit()
+            return
 
         # 其他按键正常处理
         super().keyPressEvent(event)
@@ -144,7 +148,7 @@ class IntentConfirmationUI(QWidget):
         # 输入框
         self.message_input = MessageInputEdit()
         self.message_input.setObjectName("intent_message_input")
-        self.message_input.setPlaceholderText("输入消息与 AI 沟通... (Ctrl+Enter 发送)")
+        self.message_input.setPlaceholderText("输入消息与 AI 沟通... (Enter 发送，Shift+Enter 换行)")
         self.message_input.setMinimumHeight(80)
         self.message_input.setMaximumHeight(150)
         self.message_input.textChanged.connect(self._on_input_changed)
@@ -155,7 +159,7 @@ class IntentConfirmationUI(QWidget):
         bottom_bar = QHBoxLayout()
         bottom_bar.setSpacing(12)
 
-        hint_label = QLabel("💡 Ctrl+Enter 快速发送 | 可随时发送反馈")
+        hint_label = QLabel("💡 Enter 发送 | Shift+Enter 换行 | 可随时发送反馈")
         hint_label.setObjectName("intent_input_hint")
         bottom_bar.addWidget(hint_label)
 
@@ -170,7 +174,7 @@ class IntentConfirmationUI(QWidget):
         bottom_bar.addWidget(self.cancel_button)
 
         # 发送按钮
-        self.send_button = QPushButton("发送反馈")
+        self.send_button = QPushButton("发送")
         self.send_button.setObjectName("intent_send_button")
         self.send_button.setEnabled(False)
         self.send_button.setMinimumWidth(100)
