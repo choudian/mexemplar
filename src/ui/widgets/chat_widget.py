@@ -431,8 +431,10 @@ class ChatWidget(QWidget):
         content_layout.setSpacing(20)
         content_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 问候语
-        greeting = QLabel("有什么可以帮助你的？")
+        # 问候语 — 个性化显示
+        display_name = self._get_display_name()
+        greeting_text = f"Hi, {display_name}，接下来做什么？" if display_name else "接下来做什么？"
+        greeting = QLabel(greeting_text)
         greeting.setObjectName("welcome_greeting")
         greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
         content_layout.addWidget(greeting)
@@ -579,6 +581,15 @@ class ChatWidget(QWidget):
     # =========================================================================
     # Private
     # =========================================================================
+
+    def _get_display_name(self) -> str:
+        """从用户偏好档案获取称呼"""
+        try:
+            from src.data.repositories import AssistantProfileRepository
+            profile = AssistantProfileRepository().get_default()
+            return profile.display_name if profile and profile.display_name else ""
+        except Exception:
+            return ""
 
     def _on_welcome_send(self):
         """从欢迎页输入框发送"""
