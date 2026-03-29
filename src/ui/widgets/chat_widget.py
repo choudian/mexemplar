@@ -33,14 +33,17 @@ from src.utils.logger import get_logger
 
 
 class MessageInputEdit(QTextEdit):
-    """支持 Ctrl+Enter 发送的自定义输入框"""
+    """回车发送，Shift+Enter / Ctrl+Enter 换行的输入框"""
 
     send_requested = pyqtSignal()  # 发送请求信号
 
     def keyPressEvent(self, event: QKeyEvent):
-        """处理按键事件"""
+        """处理按键事件：Enter 发送，Shift/Ctrl+Enter 换行"""
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
+            if event.modifiers() in (
+                Qt.KeyboardModifier.NoModifier,
+                Qt.KeyboardModifier.KeypadModifier,
+            ):
                 self.send_requested.emit()
                 return
         super().keyPressEvent(event)
@@ -225,7 +228,7 @@ class ChatWidget(QWidget):
 
         self.message_input = MessageInputEdit(self)
         self.message_input.setObjectName("message_input")
-        self.message_input.setPlaceholderText("输入消息... (Ctrl+Enter 发送)")
+        self.message_input.setPlaceholderText("输入消息... (Enter 发送，Shift+Enter 换行)")
         self.message_input.setMinimumHeight(100)
         self.message_input.setMaximumHeight(300)
         self.message_input.textChanged.connect(self._on_input_changed)
@@ -235,7 +238,7 @@ class ChatWidget(QWidget):
 
         bottom_bar = QHBoxLayout()
         bottom_bar.setSpacing(12)
-        hint_label = QLabel("按 Ctrl+Enter 快速发送")
+        hint_label = QLabel("Enter 发送，Shift+Enter 换行")
         hint_label.setObjectName("input_hint")
         bottom_bar.addWidget(hint_label)
         bottom_bar.addStretch()
