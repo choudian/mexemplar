@@ -155,6 +155,12 @@ class AgentOrchestrator:
             if agent_type != AgentType.ASSISTANT:
                 self._dispatch_next(agent_type, result, session_id, workflow_id)
 
+        elif result.result_type == ResultType.STILL_WAITING:
+            # 会话处于等待状态，Agent 未执行，不发任何事件
+            logger.info(
+                f"[Orchestrator] 会话处于等待状态: session={session_id}, workflow={workflow_id}"
+            )
+
         elif result.result_type == ResultType.NEEDS_USER_INPUT:
             emit(
                 "agent_needs_user_input",

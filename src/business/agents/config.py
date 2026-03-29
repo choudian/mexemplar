@@ -30,6 +30,7 @@ class ResultType(str, Enum):
 
     COMPLETED = "completed"
     NEEDS_USER_INPUT = "needs_user_input"
+    STILL_WAITING = "still_waiting"  # 会话处于等待状态，Agent 未执行
     MAX_ITERATIONS_REACHED = "max_iterations_reached"
     ERROR = "error"
 

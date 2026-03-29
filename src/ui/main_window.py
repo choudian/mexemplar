@@ -102,6 +102,7 @@ class MainWindow(QMainWindow):
         self._orchestrator_init_error = None  # 初始化错误信息
         self._orchestrator_warmup_thread = None  # 预热线程引用
 
+
         self._sidebar_visible = True  # 跟踪侧边栏状态（统一使用 _ 前缀）
         self.menubar = None  # 菜单栏引用
 
@@ -657,6 +658,7 @@ class MainWindow(QMainWindow):
         self._current_agent_workflow_id = workflow_id
         self._current_agent_type = agent_type
 
+
         # 切换到意图确认页面并显示问题
         self._show_intent_confirmation_from_agent(
             {"message": question},
@@ -730,6 +732,7 @@ class MainWindow(QMainWindow):
             resume_data: 恢复数据（包含用户的确认回答）
         """
         self.logger.info(f"收到 Agent 恢复请求: workflow_id={thread_id}")
+
         from src.business.agents.config import AgentType
         user_input = resume_data.get("feedback") or resume_data.get("message", "")
         agent_type = getattr(self, "_current_agent_type", AgentType.PM)
@@ -1005,8 +1008,9 @@ class MainWindow(QMainWindow):
                         self.logger.info(f"录制已停止: {recording_id}")
                         self.logger.info(f"捕获了 {action_count} 个操作")
 
-                        # 切换到意图确认页面（显示"正在分析..."）
+                        # 重置意图确认页面并切换（显示"正在分析..."）
                         # 注意：实际的意图内容会在 Agent interrupt 后通过 _on_agent_interrupt 更新
+                        self.intent_confirmation_page.reset()
                         self.main_content.switch_page(INTENT_CONFIRMATION)
 
                         # 确保 AgentUIBridge 已就绪（录制期间后台线程完成初始化）
@@ -1178,11 +1182,12 @@ class MainWindow(QMainWindow):
             return
 
         # 3. 保存当前会话上下文
-        self._current_agent_workflow_id = workflow_id
         from src.business.agents.config import AgentType
+        self._current_agent_workflow_id = workflow_id
         self._current_agent_type = AgentType.TRIAL
 
-        # 4. 切换到意图确认页面（对话区），等待 Agent 首次提问
+        # 4. 重置意图确认页面并切换（防止上次会话遗留的禁用状态）
+        self.intent_confirmation_page.reset()
         self.main_content.switch_page(INTENT_CONFIRMATION)
 
         # 5. 启动 trial Agent

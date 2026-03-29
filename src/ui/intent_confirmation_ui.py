@@ -188,12 +188,25 @@ class IntentConfirmationUI(QWidget):
         # 初始化状态
         self._set_analyzing_state()
 
+    def reset(self):
+        """重置页面状态，准备新的会话"""
+        self._set_analyzing_state()
+
     def _set_analyzing_state(self):
         """设置分析中状态"""
         self.status_label.setText("正在分析您的操作...")
         self.status_icon.setText("🔍")
         self.progress_indicator.setText("")
+
+        # 重新启用输入（可能被 show_generating_state / show_success_message 禁用）
+        self.message_input.setEnabled(True)
+        self.message_input.clear()
         self.send_button.setEnabled(False)
+
+        # 重置 Agent 模式上下文
+        self._agent_thread_id = None
+        self._full_intent_data = {}
+        self.current_intent = None
 
         # 清空消息区域
         self._clear_messages()
