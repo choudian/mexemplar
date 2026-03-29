@@ -8,6 +8,7 @@ AI 助手对话界面组件 (Claude Chats 风格)
 
 import json
 import uuid
+from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QWidget,
@@ -27,7 +28,7 @@ from PyQt6.QtWidgets import (
     QDialogButtonBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtGui import QKeyEvent, QPixmap
 from src.business.agents.config import AgentType
 from src.utils.logger import get_logger
 
@@ -431,13 +432,32 @@ class ChatWidget(QWidget):
         content_layout.setSpacing(20)
         content_layout.setContentsMargins(0, 0, 0, 0)
 
-        # 问候语 — 个性化显示
+        # 问候语 — 图标 + 文字
+        greeting_row = QWidget()
+        greeting_layout = QHBoxLayout(greeting_row)
+        greeting_layout.setContentsMargins(0, 0, 0, 0)
+        greeting_layout.setSpacing(10)
+        greeting_layout.addStretch()
+
+        icon_label = QLabel()
+        icon_path = Path(__file__).parent.parent / "resources" / "icons" / "app_icon.png"
+        if icon_path.exists():
+            pixmap = QPixmap(str(icon_path)).scaled(
+                32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+            )
+            icon_label.setPixmap(pixmap)
+        icon_label.setFixedSize(32, 32)
+
         display_name = self._get_display_name()
         greeting_text = f"Hi, {display_name}，接下来做什么？" if display_name else "接下来做什么？"
         greeting = QLabel(greeting_text)
         greeting.setObjectName("welcome_greeting")
-        greeting.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        content_layout.addWidget(greeting)
+
+        greeting_layout.addWidget(icon_label)
+        greeting_layout.addWidget(greeting)
+        greeting_layout.addStretch()
+        greeting_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        content_layout.addWidget(greeting_row)
 
         # 居中输入框 — 圆角矩形
         self._welcome_input = MessageInputEdit()
