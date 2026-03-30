@@ -8,7 +8,7 @@ AgentUIBridge 将其放入后台 QThread，通过 PyQt 信号将结果安全传�
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
@@ -125,6 +125,14 @@ class AgentUIBridge(QObject):
 
         self._worker_threads[worker_key] = thread
         self._workers[worker_key] = worker
+
+    def get_trial_messages(self, workflow_id: str) -> List[dict]:
+        """同步获取 trial 历史消息，可在主线程调用
+
+        设计说明：打破本类"所有 orchestrator 调用都走后台线程"的模式。
+        纯 DB 只读查询，毫秒级，有意为之。不要将此模式用于耗时操作。
+        """
+        return self._orchestrator.get_trial_messages(workflow_id)
 
     def reply_to_agent(
         self,

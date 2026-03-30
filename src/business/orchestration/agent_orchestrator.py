@@ -33,8 +33,8 @@ from src.business.agents.tools import (
     submit_code,
 )
 from src.business.ai.llm_client import LangChainLLMClient
-from src.data.models_sqlite import Session, WorkflowTransition
-from src.data.repositories import SessionRepository, WorkflowTransitionRepository
+from src.data.models_sqlite import Session, SessionStatus, WorkflowTransition
+from src.data.repositories import MessageRepository, SessionRepository, WorkflowTransitionRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.utils.events import emit
 from .llm_reviewer import LLMReviewer, ReviewResult
@@ -63,6 +63,7 @@ class AgentOrchestrator:
         self._config = config
         self._llm_reviewer = llm_reviewer or LLMReviewer(llm_client)
         self._session_repo = SessionRepository()
+        self._message_repo = MessageRepository()
         self._transition_repo = WorkflowTransitionRepository()
 
         # Loop 实例缓存（按 agent_type）
@@ -684,6 +685,41 @@ class AgentOrchestrator:
         )
         session = self._session_repo.create(model)
         return session.session_id
+
+    def get_trial_messages(self, workflow_id: str) -> List[dict]:
+        """获取 trial session 的用户可见消息历史（同步，主线程安全）
+
+        设计说明：纯 DB 只读查询，毫秒级，有意不走 QThread。
+        不要在 orchestrator 上模仿此模式添加耗时同步调用。
+        """
+        sessions = self._session_repo.get_by_workflow(
+            workflow_id, agent_type=AgentType.TRIAL, order_by="created_at_desc"
+        )
+        if not sessions or sessions[0].status in (SessionStatus.FAILED, SessionStatus.ACTIVE):
+            # failed: 脏数据，不展示；active: Agent 正在运行，由事件驱动 UI
+            return []
+
+        session_id = sessions[0].session_id
+        messages = self._message_repo.get_context(session_id)
+        result = []
+        for msg in messages:
+            if msg.role == "user" and msg.content:
+                result.append({"role": "user", "content": msg.content})
+            elif msg.role == "assistant":
+                if msg.content:
+                    result.append({"role": "assistant", "content": msg.content})
+                elif msg.tool_calls:
+                    try:
+                        tool_calls = json.loads(msg.tool_calls)
+                    except (json.JSONDecodeError, TypeError):
+                        logger.warning(f"跳过损坏的 tool_calls: session={session_id}")
+                        continue
+                    for tc in tool_calls:
+                        if tc.get("name") == "talk_to_user":
+                            question = tc.get("args", {}).get("message", "")
+                            if question:
+                                result.append({"role": "assistant", "content": question})
+        return result
 
     # =========================================================================
     # 辅助方法

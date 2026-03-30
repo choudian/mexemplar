@@ -219,8 +219,8 @@ class AgentLoop:
             logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
 
         session_status = ctx.get_session_status()
-        if session_status == "suspended":
-            # suspended = 会话处于等待状态，Agent 不应启动
+        if session_status == "suspended" and user_input is None:
+            # suspended 且无用户输入 = 会话处于等待状态，Agent 不应启动
             logger.info(f"[Agent Loop] 会话处于等待状态，不进入循环: {session_id}")
             return AgentResult(result_type=ResultType.STILL_WAITING)
         if session_status == "completed":

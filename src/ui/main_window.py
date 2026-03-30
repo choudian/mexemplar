@@ -12,7 +12,8 @@ from pathlib import Path
 import threading
 import time
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
+from PyQt6.QtGui import QResizeEvent
 
 from src.ui.page_ids import (
     CONVERSATIONS,
@@ -24,15 +25,18 @@ from src.ui.page_ids import (
 )
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
-    QMainWindow,
-    QWidget,
+    QFrame,
     QHBoxLayout,
+    QLabel,
+    QMainWindow,
     QMessageBox,
     QPushButton,
+    QWidget,
 )
 
 from src.ui.utils import create_svg_icon
 from src.recording.browser_recorder import BrowserRecorder
+from src.business.agents.config import AgentType
 from src.business.intent.intent_analyzer import IntentAnalyzer
 from src.business.intent.intent_repository import IntentRepository
 from src.business.intent.intent_confirmer import IntentConfirmer
@@ -70,12 +74,20 @@ class MainWindow(QMainWindow):
     _POLL_INTERVAL = 0.1  # 轮询间隔（秒）
     _DEFAULT_INIT_TIMEOUT = 5.0  # 默认初始化超时（秒）
 
+    # Agent 类型中文显示名
+    _AGENT_TYPE_DISPLAY = {
+        "pm": "需求分析",
+        "programmer": "技能学习",
+        "trial": "试用",
+    }
+
     # 定义信号（线程安全的 UI 通信）
     recording_start_success = pyqtSignal()
     recording_start_failed = pyqtSignal(str)  # 参数：错误消息
     recording_error = pyqtSignal(str)  # 参数：错误详情
     workflow_error = pyqtSignal(str, str)  # 参数：错误消息，错误类型
     _agent_start_requested = pyqtSignal(str)  # 参数：recording_id，用于跨线程安全触发 start_agent
+    _switch_to_intent_page = pyqtSignal()  # 跨线程安全切换到意图确认页面
 
     def __init__(self) -> None:
         """初始化主窗口"""
@@ -104,6 +116,7 @@ class MainWindow(QMainWindow):
 
 
         self._sidebar_visible = True  # 跟踪侧边栏状态（统一使用 _ 前缀）
+        self._active_toast = None  # 当前活跃的 toast 通知
         self.menubar = None  # 菜单栏引用
 
         self.logger.info("[MainWindow] 开始加载样式")
@@ -121,7 +134,6 @@ class MainWindow(QMainWindow):
         self.logger.info("[MainWindow] __init__ 完成")
 
         # 使用 QTimer 延迟启动 WebSocket 服务器
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(100, self._delayed_init_intent_confirmer)
 
     def _load_styles(self) -> None:
@@ -594,6 +606,7 @@ class MainWindow(QMainWindow):
         # 注意：必须用真实方法作为 slot，lambda 没有 QObject 归属会退化为 DirectConnection。
         self._pending_bridge = bridge  # 让 slot 能访问到 bridge
         self._agent_start_requested.connect(self._on_agent_start_requested)
+        self._switch_to_intent_page.connect(self._on_switch_to_intent_page)
 
         def on_recording_completed(sender, **kwargs):
             # event_data 可能是 RecordingEventData 对象（session_id 字段），也可能是 dict
@@ -617,6 +630,11 @@ class MainWindow(QMainWindow):
         self.logger.info("已开始监听录制完成事件")
 
         return bridge
+
+    def _on_switch_to_intent_page(self) -> None:
+        """在主线程中重置意图确认页面并切换（由 _switch_to_intent_page 信号触发）"""
+        self.intent_confirmation_page.reset()
+        self.main_content.switch_page(INTENT_CONFIRMATION)
 
     def _on_agent_start_requested(self, recording_id: str) -> None:
         """在主线程中启动 PM Agent（由 _agent_start_requested 信号触发）"""
@@ -643,7 +661,6 @@ class MainWindow(QMainWindow):
         """
         self.logger.info(f"Agent 提问: workflow={workflow_id}, session={session_id}, type={agent_type}, question={question[:80]}")
 
-        from src.business.agents.config import AgentType
         if agent_type == AgentType.ASSISTANT:
             # assistant 路由到 ChatWidget
             self._current_agent_session_id = session_id
@@ -658,13 +675,100 @@ class MainWindow(QMainWindow):
         self._current_agent_workflow_id = workflow_id
         self._current_agent_type = agent_type
 
+        if agent_type == AgentType.TRIAL:
+            # Trial Agent：通过公共方法添加消息气泡，启用输入框
+            self.main_content.switch_page(INTENT_CONFIRMATION)
+            intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
+            if intent_page:
+                intent_page.add_trial_question(question, workflow_id)
+            return
 
-        # 切换到意图确认页面并显示问题
+        # PM Agent：使用结构化意图数据展示
         self._show_intent_confirmation_from_agent(
             {"message": question},
             question,
             workflow_id,
         )
+
+    def _switch_to_welcome_page(self) -> None:
+        """需求确认后自动切回欢迎页（仅当用户仍在意图确认页时）"""
+        if self.main_content.get_current_page() != INTENT_CONFIRMATION:
+            self.logger.info("用户已离开意图确认页，跳过自动切换")
+            return
+        self.logger.info("切换到欢迎页")
+        try:
+            self.main_content.blockSignals(True)
+            self.main_content.switch_page(CONVERSATIONS)
+        finally:
+            self.main_content.blockSignals(False)
+        chat_widget = self._get_chat_widget()
+        if chat_widget:
+            chat_widget.on_new_chat()
+
+    def _show_toast(self, text: str, auto_dismiss_ms: int = 8000, toast_type: str = "success") -> None:
+        """右下角浮层 toast 通知"""
+        if self._active_toast is not None:
+            self._active_toast.deleteLater()
+            self._active_toast = None
+
+        toast = QFrame(self.centralWidget())
+        toast.setProperty("toastType", toast_type)
+        toast.setObjectName("notification_toast")
+
+        layout = QHBoxLayout(toast)
+        layout.setContentsMargins(14, 8, 14, 8)
+
+        icon = QLabel("❌" if toast_type == "error" else "✅")
+        icon.setFixedWidth(20)
+        layout.addWidget(icon)
+
+        label = QLabel(text)
+        label.setObjectName("notification_toast_text")
+        label.setWordWrap(True)
+        layout.addWidget(label, 1)
+
+        close_btn = QPushButton("×")
+        close_btn.setObjectName("notification_toast_close")
+        close_btn.setFixedSize(18, 18)
+        close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.addWidget(close_btn)
+
+        toast.setFixedWidth(320)
+        toast.adjustSize()
+        x = self.centralWidget().width() - toast.width() - 16
+        y = self.centralWidget().height() - toast.height() - 16
+        toast.move(x, y)
+        toast.raise_()
+        # unpolish/polish toast 及其子控件，确保动态属性 toastType 生效
+        style = toast.style()
+        for w in (toast, label):
+            style.unpolish(w)
+            style.polish(w)
+        toast.show()
+
+        self._active_toast = toast
+
+        # timer 以 toast 为父对象——toast 删除时 timer 自动删除，信号自动断开
+        auto_timer = QTimer(toast)
+        auto_timer.setSingleShot(True)
+
+        def _dismiss():
+            if self._active_toast is toast:
+                self._active_toast = None
+            toast.deleteLater()
+
+        close_btn.clicked.connect(_dismiss)
+        auto_timer.timeout.connect(_dismiss)
+        auto_timer.start(auto_dismiss_ms)
+
+    def resizeEvent(self, event: QResizeEvent):
+        """窗口大小变化时重新定位 toast 通知"""
+        super().resizeEvent(event)
+        if self._active_toast is not None:
+            central = self.centralWidget()
+            x = central.width() - self._active_toast.width() - 16
+            y = central.height() - self._active_toast.height() - 16
+            self._active_toast.move(x, y)
 
     def _on_agent_progress(self, workflow_id: str, event_name: str) -> None:
         """处理 Agent 进度事件"""
@@ -674,33 +778,48 @@ class MainWindow(QMainWindow):
             intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
             if intent_page and hasattr(intent_page, "show_generating_state"):
                 intent_page.show_generating_state()
+            QTimer.singleShot(2000, self._switch_to_welcome_page)
+
+    def _notify_skill_learned(self) -> None:
+        """技能学习完毕后弹 toast 通知"""
+        self._show_toast(
+            "技能学习完毕！可以到「技能列表」查看并开始考核。",
+            auto_dismiss_ms=10000,
+        )
 
     def _on_tool_saved(self, workflow_id: str, tool_id: str, from_triage: bool = False) -> None:
-        """工具入库后处理页面切换"""
+        """工具入库后弹 toast 通知"""
         self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}, from_triage={from_triage}")
         if from_triage:
-            # 分诊修复：不切换页面，Orchestrator 已自动重启 trial Agent，
-            # 等待 agent_needs_user_input 信号自然切换到对话页
+            # 分诊修复：重置意图确认页面，等待 trial Agent 消息刷新
+            self._on_switch_to_intent_page()
             return
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(1500, self._switch_to_pending_tools)
+        QTimer.singleShot(500, self._notify_skill_learned)
 
     def _on_tool_published(self, workflow_id: str, tool_id: str) -> None:
         """工具发布后切换到工具列表页"""
         self.logger.info(f"工具已发布: workflow={workflow_id}, tool_id={tool_id}")
-        from PyQt6.QtCore import QTimer
         QTimer.singleShot(1500, self._switch_to_pending_tools)
 
     def _on_agent_error(self, workflow_id: str, session_id: str, agent_type: str, error_message: str) -> None:
         """处理 Agent 错误"""
         self.logger.error(f"Agent 错误: workflow={workflow_id}, session={session_id}, type={agent_type} - {error_message}")
 
-        from src.business.agents.config import AgentType
         if agent_type == AgentType.ASSISTANT:
             chat = self._get_chat_widget()
             if chat:
                 chat.add_error_message(error_message)
                 chat.set_loading(False)
+            return
+
+        # agent_type 经 PyQt 信号传入，始终是 str（如 "pm"、"programmer"）
+        display_type = self._AGENT_TYPE_DISPLAY.get(agent_type, agent_type)
+        truncated = error_message[:80] + ("..." if len(error_message) > 80 else "")
+        self._show_toast(
+            f"{display_type}遇到问题：{truncated}",
+            auto_dismiss_ms=15000,
+            toast_type="error",
+        )
 
     def _show_intent_confirmation_from_agent(
         self, intent_data: dict, message: str, thread_id: str
@@ -733,7 +852,6 @@ class MainWindow(QMainWindow):
         """
         self.logger.info(f"收到 Agent 恢复请求: workflow_id={thread_id}")
 
-        from src.business.agents.config import AgentType
         user_input = resume_data.get("feedback") or resume_data.get("message", "")
         agent_type = getattr(self, "_current_agent_type", AgentType.PM)
 
@@ -1010,8 +1128,8 @@ class MainWindow(QMainWindow):
 
                         # 重置意图确认页面并切换（显示"正在分析..."）
                         # 注意：实际的意图内容会在 Agent interrupt 后通过 _on_agent_interrupt 更新
-                        self.intent_confirmation_page.reset()
-                        self.main_content.switch_page(INTENT_CONFIRMATION)
+                        # 必须在 GUI 线程中操作 Qt 控件，通过 pyqtSignal 投递到主线程
+                        self._switch_to_intent_page.emit()
 
                         # 确保 AgentUIBridge 已就绪（录制期间后台线程完成初始化）
                         if not self._ensure_workflow_orchestrator(timeout=30.0):
@@ -1132,7 +1250,6 @@ class MainWindow(QMainWindow):
         self.logger.info(f"收到意图分析请求: {intent_id}, 消息: {user_message[:50]}...")
 
         # Agent 模式：将用户消息作为 feedback 传递给 Agent
-        from src.business.agents.config import AgentType
         workflow_id = getattr(self, "_current_agent_workflow_id", None)
         agent_type = getattr(self, "_current_agent_type", AgentType.PM)
         if workflow_id:
@@ -1182,21 +1299,26 @@ class MainWindow(QMainWindow):
             return
 
         # 3. 保存当前会话上下文
-        from src.business.agents.config import AgentType
         self._current_agent_workflow_id = workflow_id
         self._current_agent_type = AgentType.TRIAL
 
-        # 4. 重置意图确认页面并切换（防止上次会话遗留的禁用状态）
-        self.intent_confirmation_page.reset()
-        self.main_content.switch_page(INTENT_CONFIRMATION)
+        # 4. 查询历史消息（同步，毫秒级）并加载或启动
+        try:
+            messages = self.agent_ui_bridge.get_trial_messages(workflow_id)
+        except Exception as e:
+            self.logger.error(f"查询 trial 历史消息失败，降级为启动新会话: {e}", exc_info=True)
+            messages = None
 
-        # 5. 启动 trial Agent
-        self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
-        self.agent_ui_bridge.start_agent(
-            AgentType.TRIAL,
-            "开始试用",
-            workflow_id,
-        )
+        if messages:
+            # 有历史：直接展示，不重启 Agent
+            self.logger.info(f"加载 trial 历史消息: workflow_id={workflow_id}, count={len(messages)}")
+            self.intent_confirmation_page.load_trial_history(messages, workflow_id)
+            self.main_content.switch_page(INTENT_CONFIRMATION)
+        else:
+            # 无历史：重置页面，启动 Agent
+            self._on_switch_to_intent_page()
+            self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
+            self.agent_ui_bridge.start_agent(AgentType.TRIAL, "开始试用", workflow_id)
 
     def _on_tool_delete_request(self, pending_tool_id: str) -> None:
         """

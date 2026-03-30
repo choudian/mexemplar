@@ -1059,3 +1059,33 @@ QTextEdit#welcome_input:hover {
 
 /* ============ 技能列表 UI 样式（卡片样式由组件内联管理）============ */
 
+/* ============ Toast 通知（右下角浮层）============ */
+QFrame#notification_toast {
+    background-color: #e8f5e9;
+    border: 1px solid #a5d6a7;
+    border-radius: 8px;
+}
+QFrame#notification_toast QLabel#notification_toast_text {
+    color: #2e7d32;
+    font-size: 13px;
+}
+QPushButton#notification_toast_close {
+    background: transparent;
+    border: none;
+    padding: 0px;
+    color: #999;
+    font-size: 14px;
+}
+QPushButton#notification_toast_close:hover {
+    color: #333;
+}
+
+/* Toast — 错误 */
+QFrame#notification_toast[toastType="error"] {
+    background-color: #fdecea;
+    border: 1px solid #f5c6cb;
+}
+QFrame#notification_toast[toastType="error"] QLabel#notification_toast_text {
+    color: #c62828;
+}
+

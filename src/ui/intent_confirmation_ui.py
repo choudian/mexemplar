@@ -192,6 +192,39 @@ class IntentConfirmationUI(QWidget):
         """重置页面状态，准备新的会话"""
         self._set_analyzing_state()
 
+    def _setup_trial_input_state(self, workflow_id: str) -> None:
+        """设置 trial 对话的输入就绪状态（去掉加载提示，启用输入框）"""
+        self._agent_thread_id = workflow_id
+        self._full_intent_data = {}
+        self.current_intent = None
+
+        self._remove_loading_label()
+        self.status_label.setText("等待您的回复...")
+        self.status_icon.setText("💬")
+        self.progress_indicator.setText("")
+        self.message_input.setEnabled(True)
+        self.message_input.clear()
+        self.send_button.setEnabled(False)
+
+    def load_trial_history(self, messages: List[dict], workflow_id: str) -> None:
+        """加载并渲染 trial 历史对话，开启输入框等待用户继续"""
+        self._clear_messages()
+        self._setup_trial_input_state(workflow_id)
+
+        # 批量添加消息，避免每条消息都触发一次滚动定时器
+        for msg in messages:
+            role = msg.get("role", "assistant")
+            content = msg.get("content", "")
+            if content:
+                self._add_message(role, content, scroll=False)
+
+        QTimer.singleShot(100, self._scroll_to_bottom)
+
+    def add_trial_question(self, question: str, workflow_id: str) -> None:
+        """添加单条 trial Agent 提问并开启输入框（Agent 实时提问时调用）"""
+        self._setup_trial_input_state(workflow_id)
+        self._add_message("assistant", question)
+
     def _set_analyzing_state(self):
         """设置分析中状态"""
         self.status_label.setText("正在分析您的操作...")
@@ -228,12 +261,13 @@ class IntentConfirmationUI(QWidget):
         self._multi_question_card = None
         self._analysis_summary_card = None
 
-    def _add_message(self, role: str, content: str):
+    def _add_message(self, role: str, content: str, scroll: bool = True):
         """添加消息到对话区域
 
         Args:
             role: 消息角色 ("user" 或 "assistant")
             content: 消息内容
+            scroll: 是否自动滚动到底部（批量添加时传 False，由调用方统一滚动）
         """
         # 创建消息容器
         message_container = QWidget()
@@ -274,7 +308,8 @@ class IntentConfirmationUI(QWidget):
         self.messages_layout.addWidget(message_container)
 
         # 滚动到底部
-        QTimer.singleShot(100, self._scroll_to_bottom)
+        if scroll:
+            QTimer.singleShot(100, self._scroll_to_bottom)
 
     def _scroll_to_bottom(self):
         """滚动消息区域到底部"""
@@ -626,17 +661,12 @@ class IntentConfirmationUI(QWidget):
         显示"正在学习技能"状态（PM 确认完毕、程序员开始工作时调用）
         """
         self.status_icon.setText("📖")
-        self.status_label.setText("TA 正在学习这项技能，稍等一下...")
+        self.status_label.setText("正在学习技能中，学习完后会找您考核")
         self.progress_indicator.setText("")
-
-        # 禁用输入，防止用户在生成期间继续输入
+        # 禁用输入——页面 2 秒后会自动切走，但防期间用户误操作
         self.message_input.setEnabled(False)
         self.send_button.setEnabled(False)
-
-        # 添加状态消息
-        self._add_message("assistant", "好的，我已经了解了你的想法，正在学习这项技能，马上就好～")
-
-        QTimer.singleShot(100, self._scroll_to_bottom)
+        # 不再添加消息气泡——页面 2 秒后会自动切走，气泡来不及看
 
     def cleanup(self):
         """清理资源"""
