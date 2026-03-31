@@ -89,6 +89,16 @@ triage_completed = _signals.signal("triage_completed")
 tool_published = _signals.signal("tool_published")
 """工具发布事件（试用成功3次后自动发布）"""
 
+# 教学失败追踪事件
+teaching_failure_updated = _signals.signal("teaching_failure_updated")
+"""失败记录新增/更新/dismiss"""
+
+teaching_failure_resolved = _signals.signal("teaching_failure_resolved")
+"""失败记录已解决"""
+
+teaching_failure_retrying = _signals.signal("teaching_failure_retrying")
+"""开始重试"""
+
 # =============================================================================
 # 事件数据类
 # =============================================================================
@@ -224,6 +234,9 @@ def list_signals() -> dict:
         "trial_failed",
         "triage_completed",
         "tool_published",
+        "teaching_failure_updated",
+        "teaching_failure_resolved",
+        "teaching_failure_retrying",
     ]:
         signal = _signals.signal(name)
         # 获取所有接收器数量（简化计算）
@@ -267,6 +280,9 @@ def clear_all() -> None:
         "trial_failed",
         "triage_completed",
         "tool_published",
+        "teaching_failure_updated",
+        "teaching_failure_resolved",
+        "teaching_failure_retrying",
     ]:
         signal = _signals.signal(name)
         # 清空所有接收器
@@ -327,6 +343,9 @@ __all__ = [
     "trial_failed",
     "triage_completed",
     "tool_published",
+    "teaching_failure_updated",
+    "teaching_failure_resolved",
+    "teaching_failure_retrying",
     # 数据类
     "RecordingEventData",
     "WorkflowProcessingEventData",

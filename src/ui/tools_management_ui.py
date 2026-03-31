@@ -2,7 +2,7 @@
 技能列表 UI 组件
 
 提供技能管理界面，包括：
-1. 待考核 / 已掌握 两个分类 Tab
+1. 待考核 / 已掌握 / 失败记录 三个分类 Tab
 2. 技能卡片展示（名称、描述、状态、创建时间、考核次数）
 3. 操作：考核、删除、编辑名称/描述
 4. 实时状态更新
@@ -30,6 +30,7 @@ from datetime import datetime
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
 from src.utils.logger import get_logger
 from src.data.models import Tool
+from src.data.models_sqlite import TeachingFailureRecord
 
 
 # ── 公共样式常量 ──
@@ -94,6 +95,17 @@ _MORE_BTN_STYLE = """
 
 _META_STYLE = "font-size: 11px; color: #adb5bd; background: transparent;"
 
+_MENU_STYLE = """
+    QMenu {
+        background-color: #ffffff;
+        border: 1px solid #e9ecef;
+        border-radius: 6px;
+        padding: 4px;
+    }
+    QMenu::item { padding: 8px 16px; border-radius: 4px; }
+    QMenu::item:selected { background-color: {selected_color}; }
+"""
+
 
 class _SkillCardBase(QFrame):
     """技能卡片基类"""
@@ -110,13 +122,24 @@ class _SkillCardBase(QFrame):
         self.setMinimumHeight(160)
         self.setMaximumHeight(200)
 
+    @staticmethod
+    def _format_time(dt: datetime) -> str:
+        delta = datetime.now() - dt
+        if delta.days > 0:
+            return f"{delta.days}天前"
+        elif delta.seconds >= 3600:
+            return f"{delta.seconds // 3600}小时前"
+        elif delta.seconds >= 60:
+            return f"{delta.seconds // 60}分钟前"
+        return "刚刚"
+
     # ── 通用构建块 ──
 
     def _build_top_row(self, left_widget: QWidget) -> QHBoxLayout:
         row = QHBoxLayout()
         row.addWidget(left_widget)
         row.addStretch()
-        more_btn = QPushButton("⋮")
+        more_btn = QPushButton("...")
         more_btn.setFixedSize(26, 26)
         more_btn.setStyleSheet(_MORE_BTN_STYLE)
         more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -143,16 +166,7 @@ class _SkillCardBase(QFrame):
 
     def _show_menu(self):
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #ffffff;
-                border: 1px solid #e9ecef;
-                border-radius: 6px;
-                padding: 4px;
-            }
-            QMenu::item { padding: 8px 16px; border-radius: 4px; }
-            QMenu::item:selected { background-color: #f0f1ff; }
-        """)
+        menu.setStyleSheet(_MENU_STYLE.format(selected_color="#f0f1ff"))
         edit_action = QAction("编辑", self)
         edit_action.triggered.connect(lambda: self.edit_requested.emit(self._card_id))
         menu.addAction(edit_action)
@@ -188,9 +202,7 @@ class PendingToolCard(_SkillCardBase):
 
         # 顶部：状态标签 + 更多
         status_lbl = QLabel(self._status_text())
-        status_lbl.setStyleSheet(
-            _STATUS_PILL_STYLE.format(**self._status_colors())
-        )
+        status_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(**self._status_colors()))
         self._status_label = status_lbl
         layout.addLayout(self._build_top_row(status_lbl))
 
@@ -201,9 +213,7 @@ class PendingToolCard(_SkillCardBase):
 
         # 底部信息
         meta_row = QHBoxLayout()
-        trial_lbl = QLabel(
-            f"考核 {self.pending_tool.trial_count}/{self.pending_tool.max_trials}"
-        )
+        trial_lbl = QLabel(f"考核 {self.pending_tool.trial_count}/{self.pending_tool.max_trials}")
         trial_lbl.setStyleSheet(_META_STYLE)
         meta_row.addWidget(trial_lbl)
         meta_row.addStretch()
@@ -218,10 +228,14 @@ class PendingToolCard(_SkillCardBase):
             btn = QPushButton("开始考核")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(34)
-            btn.setStyleSheet(_ACTION_BTN_STYLE.format(
-                fg="white", bg="#5b6abf", border="none",
-                hover_bg="#4a58a8",
-            ))
+            btn.setStyleSheet(
+                _ACTION_BTN_STYLE.format(
+                    fg="white",
+                    bg="#5b6abf",
+                    border="none",
+                    hover_bg="#4a58a8",
+                )
+            )
             btn.clicked.connect(
                 lambda: self.trial_requested.emit(self.pending_tool.pending_tool_id)
             )
@@ -258,25 +272,14 @@ class PendingToolCard(_SkillCardBase):
 
     def _status_colors(self) -> dict:
         return {
-            PendingToolStatus.PENDING_TRIAL:    {"fg": "#6c757d", "bg": "#f1f3f5"},
-            PendingToolStatus.TRIALING:         {"fg": "#5b6abf", "bg": "#f0f1ff"},
-            PendingToolStatus.TRIAL_SUCCESS:    {"fg": "#28a745", "bg": "#f0fff4"},
-            PendingToolStatus.TRIAL_FAILED:     {"fg": "#dc3545", "bg": "#fff5f5"},
+            PendingToolStatus.PENDING_TRIAL: {"fg": "#6c757d", "bg": "#f1f3f5"},
+            PendingToolStatus.TRIALING: {"fg": "#5b6abf", "bg": "#f0f1ff"},
+            PendingToolStatus.TRIAL_SUCCESS: {"fg": "#28a745", "bg": "#f0fff4"},
+            PendingToolStatus.TRIAL_FAILED: {"fg": "#dc3545", "bg": "#fff5f5"},
             PendingToolStatus.AWAITING_REAL_DATA: {"fg": "#fd7e14", "bg": "#fff8f0"},
-            PendingToolStatus.PROMOTED:         {"fg": "#6f42c1", "bg": "#f8f0ff"},
-            PendingToolStatus.FAILED:           {"fg": "#343a40", "bg": "#f1f3f5"},
+            PendingToolStatus.PROMOTED: {"fg": "#6f42c1", "bg": "#f8f0ff"},
+            PendingToolStatus.FAILED: {"fg": "#343a40", "bg": "#f1f3f5"},
         }.get(self.pending_tool.status, {"fg": "#6c757d", "bg": "#f1f3f5"})
-
-    @staticmethod
-    def _format_time(dt: datetime) -> str:
-        delta = datetime.now() - dt
-        if delta.days > 0:
-            return f"{delta.days}天前"
-        elif delta.seconds >= 3600:
-            return f"{delta.seconds // 3600}小时前"
-        elif delta.seconds >= 60:
-            return f"{delta.seconds // 60}分钟前"
-        return "刚刚"
 
     def update_tool(self, pending_tool: PendingTool):
         self.pending_tool = pending_tool
@@ -319,9 +322,7 @@ class PublishedToolCard(_SkillCardBase):
             "trial": "考核转化",
         }.get(self.tool.source, "未知")
         source_lbl = QLabel(source_text)
-        source_lbl.setStyleSheet(
-            _STATUS_PILL_STYLE.format(fg="#5b6abf", bg="#f0f1ff")
-        )
+        source_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg="#5b6abf", bg="#f0f1ff"))
         layout.addLayout(self._build_top_row(source_lbl))
 
         # 名称
@@ -338,7 +339,7 @@ class PublishedToolCard(_SkillCardBase):
             meta_row.addWidget(param_lbl)
         meta_row.addStretch()
         if self.tool.created_at:
-            time_lbl = QLabel(PendingToolCard._format_time(self.tool.created_at))
+            time_lbl = QLabel(_SkillCardBase._format_time(self.tool.created_at))
             time_lbl.setStyleSheet(_META_STYLE)
             meta_row.addWidget(time_lbl)
         layout.addLayout(meta_row)
@@ -349,10 +350,14 @@ class PublishedToolCard(_SkillCardBase):
             btn = QPushButton("执行")
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(34)
-            btn.setStyleSheet(_ACTION_BTN_STYLE.format(
-                fg="white", bg="#28a745", border="none",
-                hover_bg="#218838",
-            ))
+            btn.setStyleSheet(
+                _ACTION_BTN_STYLE.format(
+                    fg="white",
+                    bg="#28a745",
+                    border="none",
+                    hover_bg="#218838",
+                )
+            )
             btn.clicked.connect(lambda: self.execute_requested.emit(self.tool.tool_id))
             layout.addWidget(btn)
         else:
@@ -360,10 +365,14 @@ class PublishedToolCard(_SkillCardBase):
             btn.setFixedHeight(34)
             btn.setEnabled(False)
             btn.setToolTip(f"该技能需要 {param_count} 个参数\n参数配置功能开发中")
-            btn.setStyleSheet(_ACTION_BTN_STYLE.format(
-                fg="#6c757d", bg="#f8f9fa", border="1px solid #e0e0e0",
-                hover_bg="#e9ecef",
-            ))
+            btn.setStyleSheet(
+                _ACTION_BTN_STYLE.format(
+                    fg="#6c757d",
+                    bg="#f8f9fa",
+                    border="1px solid #e0e0e0",
+                    hover_bg="#e9ecef",
+                )
+            )
             layout.addWidget(btn)
 
     def update_tool(self, tool: Tool):
@@ -377,6 +386,110 @@ class PublishedToolCard(_SkillCardBase):
             self._init_ui()
 
 
+class FailureCard(_SkillCardBase):
+    """失败记录卡片"""
+
+    retry_requested = pyqtSignal(str, str)  # workflow_id, failed_stage
+    dismiss_requested = pyqtSignal(str)  # workflow_id
+
+    _STAGE_DISPLAY = {"pm": "需求分析", "programmer": "代码生成", "trial": "技能试用"}
+
+    def __init__(self, record: TeachingFailureRecord, parent=None):
+        super().__init__(
+            card_id=record.workflow_id,
+            name=record.tool_name or record.workflow_id[:8],
+            desc=record.error_summary or "未知错误",
+            parent=parent,
+        )
+        self._record = record
+        self._init_failure_ui()
+
+    def _init_failure_ui(self):
+        self.setStyleSheet(_CARD_STYLE.format(border="#f5c6cb", hover_border="#dc3545"))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        # 顶部：失败阶段 pill
+        stage_text = self._STAGE_DISPLAY.get(self._record.failed_stage, self._record.failed_stage)
+        stage_lbl = QLabel(stage_text)
+        stage_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg="#dc3545", bg="#fff5f5"))
+        self._stage_label = stage_lbl
+        layout.addLayout(self._build_top_row(stage_lbl))
+
+        # 工具名 / 错误摘要
+        self._name_label = self._build_name_label()
+        layout.addWidget(self._name_label)
+        self._desc_label = self._build_desc_label()
+        layout.addWidget(self._desc_label, 1)
+
+        # 底部：时间 + 失败次数
+        meta_row = QHBoxLayout()
+        if self._record.created_at:
+            time_lbl = QLabel(_SkillCardBase._format_time(self._record.created_at))
+            time_lbl.setStyleSheet(_META_STYLE)
+            meta_row.addWidget(time_lbl)
+        retry_lbl = QLabel(f"已失败 {self._record.retry_count} 次")
+        retry_lbl.setStyleSheet(_META_STYLE)
+        meta_row.addWidget(retry_lbl)
+        meta_row.addStretch()
+        layout.addLayout(meta_row)
+
+        # 重试按钮 / 正在修复状态
+        self._action_widget = QWidget()
+        action_layout = QHBoxLayout(self._action_widget)
+        action_layout.setContentsMargins(0, 0, 0, 0)
+        self._retry_btn = QPushButton("重试")
+        self._retry_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._retry_btn.setFixedHeight(34)
+        self._retry_btn.setStyleSheet(
+            _ACTION_BTN_STYLE.format(
+                fg="white",
+                bg="#dc3545",
+                border="none",
+                hover_bg="#c82333",
+            )
+        )
+        self._retry_btn.clicked.connect(
+            lambda: self.retry_requested.emit(self._record.workflow_id, self._record.failed_stage)
+        )
+        action_layout.addWidget(self._retry_btn)
+        self._retrying_label = QLabel("正在修复...")
+        self._retrying_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._retrying_label.setFixedHeight(34)
+        self._retrying_label.setStyleSheet(
+            "font-size: 13px; font-weight: 600; color: #868e96; background-color: #f8f9fa; "
+            "border: 1px solid #e0e0e0; border-radius: 6px;"
+        )
+        self._retrying_label.setVisible(False)
+        action_layout.addWidget(self._retrying_label)
+        layout.addWidget(self._action_widget)
+
+        if self._record.status == "retrying":
+            self._show_retrying_state()
+
+    def _show_retrying_state(self):
+        """切换到正在修复状态"""
+        self._retry_btn.setVisible(False)
+        self._retrying_label.setVisible(True)
+
+    def _show_active_state(self):
+        """切换到可操作状态"""
+        self._retry_btn.setVisible(True)
+        self._retrying_label.setVisible(False)
+
+    def _show_menu(self):
+        """只显示忽略选项"""
+        menu = QMenu(self)
+        menu.setStyleSheet(_MENU_STYLE.format(selected_color="#fff5f5"))
+        dismiss_action = QAction("忽略", self)
+        dismiss_action.setToolTip("忽略后不会再显示；如需恢复只能重新录制")
+        dismiss_action.triggered.connect(lambda: self.dismiss_requested.emit(self._record.workflow_id))
+        menu.addAction(dismiss_action)
+        menu.exec(self._more_btn.mapToGlobal(self._more_btn.rect().bottomLeft()))
+
+
 class ToolsManagementUI(QWidget):
     """技能列表 UI 组件（带 Tab 切换）"""
 
@@ -384,6 +497,8 @@ class ToolsManagementUI(QWidget):
     trial_start_request = pyqtSignal(str)
     tool_delete_request = pyqtSignal(str)
     tool_update_request = pyqtSignal(str, str, str)
+    retry_requested = pyqtSignal(str, str)  # workflow_id, failed_stage
+    failure_dismiss_requested = pyqtSignal(str)  # workflow_id
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -392,6 +507,8 @@ class ToolsManagementUI(QWidget):
         self.pending_tool_cards: List[PendingToolCard] = []
         self.published_tools: List[Tool] = []
         self.published_tool_cards: List[PublishedToolCard] = []
+        self.failure_records: List[TeachingFailureRecord] = []
+        self.failure_cards: List[FailureCard] = []
         self.init_ui()
 
     def init_ui(self):
@@ -420,9 +537,7 @@ class ToolsManagementUI(QWidget):
         )
         title_col.addWidget(title)
         subtitle = QLabel("通过教学习得的技能在这里考核和管理")
-        subtitle.setStyleSheet(
-            "font-size: 14px; color: #6c757d; background: transparent;"
-        )
+        subtitle.setStyleSheet("font-size: 14px; color: #6c757d; background: transparent;")
         title_col.addWidget(subtitle)
         hero_layout.addLayout(title_col, 1)
 
@@ -448,6 +563,12 @@ class ToolsManagementUI(QWidget):
         self._published_tab_btn = self._create_tab_btn("已掌握", False)
         self._published_tab_btn.clicked.connect(lambda: self._switch_tab("published"))
         tab_bar_layout.addWidget(self._published_tab_btn)
+
+        tab_bar_layout.addSpacing(8)
+
+        self._failures_tab_btn = self._create_tab_btn("失败记录", False)
+        self._failures_tab_btn.clicked.connect(lambda: self._switch_tab("failures"))
+        tab_bar_layout.addWidget(self._failures_tab_btn)
 
         tab_bar_layout.addStretch()
         content_layout.addWidget(tab_bar)
@@ -493,6 +614,24 @@ class ToolsManagementUI(QWidget):
         self.published_empty_label.setVisible(False)
         cards_layout.addWidget(self.published_empty_label)
 
+        # 失败记录 scroll
+        self._failures_scroll = self._create_scroll_area()
+        self._failures_scroll.setVisible(False)
+        self._failures_scroll_content = QWidget()
+        self.failures_grid = QGridLayout(self._failures_scroll_content)
+        self.failures_grid.setSpacing(14)
+        self.failures_grid.setContentsMargins(0, 0, 0, 0)
+        self.failures_grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._failures_scroll.setWidget(self._failures_scroll_content)
+        cards_layout.addWidget(self._failures_scroll)
+
+        # 失败记录空状态
+        self.failures_empty_label = self._create_empty_label(
+            "暂无失败记录\n\n教学流程中的异常会自动记录在这里"
+        )
+        self.failures_empty_label.setVisible(False)
+        cards_layout.addWidget(self.failures_empty_label)
+
         content_layout.addWidget(self._cards_area, 1)
         main_layout.addWidget(content)
 
@@ -512,16 +651,19 @@ class ToolsManagementUI(QWidget):
     @staticmethod
     def _apply_tab_style(btn: QPushButton, active: bool):
         if active:
-            btn.setStyleSheet("""
+            btn.setStyleSheet(
+                """
                 QPushButton {
                     font-size: 14px; font-weight: 600; color: #5b6abf;
                     background: transparent; border: none;
                     border-bottom: 2.5px solid #5b6abf;
                     padding: 0 20px;
                 }
-            """)
+            """
+            )
         else:
-            btn.setStyleSheet("""
+            btn.setStyleSheet(
+                """
                 QPushButton {
                     font-size: 14px; font-weight: 500; color: #868e96;
                     background: transparent; border: none;
@@ -529,20 +671,28 @@ class ToolsManagementUI(QWidget):
                     padding: 0 20px;
                 }
                 QPushButton:hover { color: #5b6abf; }
-            """)
+            """
+            )
 
     def _switch_tab(self, tab: str):
         self._current_tab = tab
-        is_pending = tab == "pending"
 
-        self._apply_tab_style(self._pending_tab_btn, is_pending)
-        self._apply_tab_style(self._published_tab_btn, not is_pending)
+        self._pending_scroll.setVisible(tab == "pending")
+        self.pending_empty_label.setVisible(tab == "pending" and len(self.pending_tools) == 0)
 
-        self._pending_scroll.setVisible(is_pending)
-        self.pending_empty_label.setVisible(is_pending and len(self.pending_tools) == 0)
+        self._published_scroll.setVisible(tab == "published")
+        self.published_empty_label.setVisible(tab == "published" and len(self.published_tools) == 0)
 
-        self._published_scroll.setVisible(not is_pending)
-        self.published_empty_label.setVisible(not is_pending and len(self.published_tools) == 0)
+        self._failures_scroll.setVisible(tab == "failures")
+        self.failures_empty_label.setVisible(tab == "failures" and len(self.failure_records) == 0)
+
+        self._apply_tab_style(self._pending_tab_btn, tab == "pending")
+        self._apply_tab_style(self._published_tab_btn, tab == "published")
+        self._apply_tab_style(self._failures_tab_btn, tab == "failures")
+
+        # 切换到失败记录 Tab 时刷新数据
+        if tab == "failures":
+            self._load_failures()
 
     # ── 辅助创建 ──
 
@@ -583,19 +733,21 @@ class ToolsManagementUI(QWidget):
                 if tool.status == "published":
                     published_tools_list.append(tool)
                 elif tool.source == "intent":
-                    pending_tools_list.append(PendingTool(
-                        pending_tool_id=tool.tool_id,
-                        tool_name=tool.tool_name,
-                        tool_description=tool.description,
-                        execution_code=tool.execution_code,
-                        execution_strategy=tool.execution_strategy,
-                        parameters=tool.parameters if tool.parameters else [],
-                        status=PendingToolStatus.PENDING_TRIAL,
-                        trial_count=tool.trial_success_count,
-                        max_trials=3,
-                        created_at=tool.created_at,
-                        updated_at=tool.updated_at,
-                    ))
+                    pending_tools_list.append(
+                        PendingTool(
+                            pending_tool_id=tool.tool_id,
+                            tool_name=tool.tool_name,
+                            tool_description=tool.description,
+                            execution_code=tool.execution_code,
+                            execution_strategy=tool.execution_strategy,
+                            parameters=tool.parameters if tool.parameters else [],
+                            status=PendingToolStatus.PENDING_TRIAL,
+                            trial_count=tool.trial_success_count,
+                            max_trials=3,
+                            created_at=tool.created_at,
+                            updated_at=tool.updated_at,
+                        )
+                    )
 
             self.update_pending_tools(pending_tools_list)
             self.update_published_tools(published_tools_list)
@@ -617,21 +769,24 @@ class ToolsManagementUI(QWidget):
                 tool_name="网页登录",
                 tool_description="自动登录到指定网站",
                 status=PendingToolStatus.PENDING_TRIAL,
-                trial_count=0, max_trials=3,
+                trial_count=0,
+                max_trials=3,
                 created_at=datetime.now(),
             ),
             PendingTool(
                 tool_name="数据提取",
                 tool_description="从网页提取表格数据",
                 status=PendingToolStatus.TRIAL_SUCCESS,
-                trial_count=1, max_trials=3,
+                trial_count=1,
+                max_trials=3,
                 created_at=datetime.now(),
             ),
             PendingTool(
                 tool_name="表单填写",
                 tool_description="自动填写并提交表单",
                 status=PendingToolStatus.TRIAL_FAILED,
-                trial_count=2, max_trials=3,
+                trial_count=2,
+                max_trials=3,
                 last_error="找不到元素：#submit-button",
                 created_at=datetime.now(),
             ),
@@ -639,17 +794,30 @@ class ToolsManagementUI(QWidget):
                 tool_name="文件下载",
                 tool_description="下载指定文件",
                 status=PendingToolStatus.AWAITING_REAL_DATA,
-                trial_count=1, max_trials=3,
+                trial_count=1,
+                max_trials=3,
                 created_at=datetime.now(),
             ),
         ]
         sample_published = [
-            Tool(tool_name="邮件发送", description="自动发送邮件通知",
-                 source="intent", created_at=datetime.now()),
-            Tool(tool_name="数据备份", description="自动备份重要数据到云盘",
-                 source="trial", created_at=datetime.now()),
-            Tool(tool_name="报表生成", description="自动生成周报和月报",
-                 source="manual", created_at=datetime.now()),
+            Tool(
+                tool_name="邮件发送",
+                description="自动发送邮件通知",
+                source="intent",
+                created_at=datetime.now(),
+            ),
+            Tool(
+                tool_name="数据备份",
+                description="自动备份重要数据到云盘",
+                source="trial",
+                created_at=datetime.now(),
+            ),
+            Tool(
+                tool_name="报表生成",
+                description="自动生成周报和月报",
+                source="manual",
+                created_at=datetime.now(),
+            ),
         ]
         self.update_pending_tools(sample_pending)
         self.update_published_tools(sample_published)
@@ -720,7 +888,9 @@ class ToolsManagementUI(QWidget):
     def _on_delete_requested(self, pending_tool_id: str):
         self.logger.info(f"删除待考核技能: {pending_tool_id}")
         reply = QMessageBox.question(
-            self, "确认删除", "确定要删除这个技能吗？\n\n此操作不可恢复。",
+            self,
+            "确认删除",
+            "确定要删除这个技能吗？\n\n此操作不可恢复。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -769,14 +939,19 @@ class ToolsManagementUI(QWidget):
             progress_dialog.exec()
             success, exec_result, error = progress_dialog.get_result()
             ExecutionResultDialog(
-                tool_name=tool.tool_name, success=success,
-                result=result, error=error, parent=self,
+                tool_name=tool.tool_name,
+                success=success,
+                result=exec_result,
+                error=error,
+                parent=self,
             ).exec()
 
     def _on_published_delete_requested(self, tool_id: str):
         self.logger.info(f"删除已掌握技能: {tool_id}")
         reply = QMessageBox.question(
-            self, "确认删除", "确定要删除这个技能吗？\n\n此操作不可恢复。",
+            self,
+            "确认删除",
+            "确定要删除这个技能吗？\n\n此操作不可恢复。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -804,6 +979,39 @@ class ToolsManagementUI(QWidget):
 
     def _refresh_published_cards(self):
         self.update_published_tools(self.published_tools)
+
+    # ── 失败记录 ──
+
+    def update_failure_records(self, failure_records: List[TeachingFailureRecord]):
+        self.failure_records = failure_records
+        self._clear_grid(self.failures_grid)
+        self.failure_cards.clear()
+
+        self._failures_tab_btn.setText(f"失败记录 ({len(failure_records)})")
+
+        show_empty = len(failure_records) == 0 and self._current_tab == "failures"
+        self.failures_empty_label.setVisible(show_empty)
+
+        for i, record in enumerate(failure_records):
+            card = FailureCard(record)
+            card.retry_requested.connect(self.retry_requested.emit)
+            card.dismiss_requested.connect(self.failure_dismiss_requested.emit)
+            self.failures_grid.addWidget(card, i // 3, i % 3)
+            self.failure_cards.append(card)
+
+        for col in range(3):
+            self.failures_grid.setColumnStretch(col, 1)
+
+    def _load_failures(self):
+        try:
+            from src.data.repositories import TeachingFailureRepository
+
+            repo = TeachingFailureRepository()
+            records = repo.get_active_failures()
+            self.update_failure_records(records)
+        except Exception as e:
+            self.logger.error(f"加载失败记录失败: {e}", exc_info=True)
+            self.update_failure_records([])
 
     # ── 外部状态更新 ──
 

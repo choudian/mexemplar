@@ -201,6 +201,10 @@ def run_migrations(db_manager):
         migrate_to_v5(db_manager)
         logger.info(f"数据库迁移完成：{max(current_version, 4)} -> 5")
 
+    if current_version < 6:
+        migrate_to_v6(db_manager)
+        logger.info(f"数据库迁移完成：{max(current_version, 5)} -> 6")
+
     logger.info(f"数据库已是最新版本：{db_manager.get_version()}")
 
 
@@ -478,4 +482,43 @@ def migrate_to_v5(db_manager):
     except sqlite3.Error as e:
         conn.rollback()
         logger.error(f"迁移到版本 5 失败: {e}")
+        raise
+
+
+def migrate_to_v6(db_manager):
+    """
+    迁移到版本 6：新增 teaching_failure_records 表
+
+    记录技能教学流程中的失败信息，支持重试和忽略操作。
+    """
+    conn = db_manager.connect()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS teaching_failure_records (
+                record_id TEXT PRIMARY KEY,
+                workflow_id TEXT UNIQUE,
+                tool_name TEXT,
+                failed_stage TEXT NOT NULL,
+                error_summary TEXT,
+                error_type TEXT,
+                status TEXT DEFAULT 'active',
+                retry_count INTEGER DEFAULT 1,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                resolved_at DATETIME
+            )
+        """)
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tfr_status ON teaching_failure_records (status)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_tfr_updated_at ON teaching_failure_records (updated_at DESC)"
+        )
+        cursor.execute("UPDATE schema_version SET version = 6")
+        conn.commit()
+        logger.info("数据库迁移到版本 6 完成：新增 teaching_failure_records 表")
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error(f"迁移到版本 6 失败: {e}")
         raise

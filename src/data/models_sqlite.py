@@ -307,6 +307,27 @@ class PendingAssistantTask(Base):
         return f"<PendingAssistantTask(task_id={self.task_id!r}, task_type={self.task_type!r}, status={self.status!r})>"
 
 
+class TeachingFailureRecord(Base):
+    """技能教学失败记录表"""
+
+    __tablename__ = "teaching_failure_records"
+
+    record_id: Mapped[str] = mapped_column(String(50), primary_key=True)  # UUID
+    workflow_id: Mapped[str] = mapped_column(String(50), unique=True)  # = recording_id
+    tool_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    failed_stage: Mapped[str] = mapped_column(String(20))  # "pm"|"programmer"|"trial"
+    error_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active|retrying|resolved|dismissed
+    retry_count: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<TeachingFailureRecord(record_id={self.record_id!r}, workflow_id={self.workflow_id!r}, status={self.status!r})>"
+
+
 class ToolSuggestionHistory(Base):
     """工具化建议历史表（重复模式检测 + 拒绝冷却）"""
 
