@@ -116,6 +116,18 @@ def _ensure_runner() -> str:
     return str(_RUNNER_PATH)
 
 
+_IMPORT_TO_PIP = {v: k for k, v in _PIP_TO_IMPORT.items()}
+
+
+def _extract_imports(code: str) -> list[str]:
+    """从代码中提取非标准库的顶层 import 名（转为 pip 包名）。"""
+    from src.utils.ast_helpers import extract_import_names
+
+    names = extract_import_names(code)
+    stdlib = getattr(sys, "stdlib_module_names", frozenset())
+    return [_IMPORT_TO_PIP.get(n, n) for n in names if n not in stdlib]
+
+
 def _ensure_dependencies(venv_python: str, dependencies: list[str]) -> tuple[bool, str]:
     """
     检查并安装缺失的 pip 依赖到 venv。
@@ -187,8 +199,9 @@ def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = 
     except RuntimeError as e:
         return {"success": False, "message": str(e), "data": None}
 
-    # 2. 安装依赖
-    ok, err = _ensure_dependencies(venv_python, dependencies or [])
+    # 2. 安装依赖：合并显式声明 + 代码中自动检测的 import
+    all_deps = list({*( dependencies or []), *_extract_imports(code)})
+    ok, err = _ensure_dependencies(venv_python, all_deps)
     if not ok:
         return {"success": False, "message": err, "data": None}
 

@@ -176,14 +176,6 @@ SUBMIT_CODE_SCHEMA: Dict[str, Any] = {
                     },
                     "description": ("完整参数列表（包含 PM 定义的参数和你补充的技术参数）"),
                 },
-                "dependencies": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "代码依赖的第三方 pip 包名列表（标准库和已预装包无需声明）。"
-                        '例如：["beautifulsoup4", "lxml"]'
-                    ),
-                },
             },
             "required": [
                 "tool_name",
@@ -203,7 +195,6 @@ def _submit_code(
     code: str,
     execution_strategy: str,
     parameters: List[Dict[str, Any]],
-    dependencies: List[str] = None,
 ) -> ToolSignal:
     """提交代码，中断循环。结构化数据通过 signal_tool.args 传递给 Orchestrator。"""
     return ToolSignal(

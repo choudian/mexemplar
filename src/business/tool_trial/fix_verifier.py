@@ -4,8 +4,8 @@
 验证修复后的代码是否可用，运行测试用例，对比执行结果
 """
 
-import logging
 import ast
+import logging
 import subprocess
 import tempfile
 import os
@@ -174,28 +174,9 @@ class FixVerifier:
             return False
 
     def _extract_imports(self, code: str) -> set:
-        """
-        提取代码中的导入语句
-
-        Args:
-            code: 代码字符串
-
-        Returns:
-            导入模块集合
-        """
-        imports = set()
-        try:
-            tree = ast.parse(code)
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Import):
-                    for alias in node.names:
-                        imports.add(alias.name.split(".")[0])
-                elif isinstance(node, ast.ImportFrom):
-                    if node.module:
-                        imports.add(node.module.split(".")[0])
-        except Exception:
-            pass
-        return imports
+        """提取代码中的导入模块名集合"""
+        from src.utils.ast_helpers import extract_import_names
+        return extract_import_names(code)
 
     async def _run_tests(
         self, verification: FixVerification, code: str, test_cases: List[TestCase]
