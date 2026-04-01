@@ -178,7 +178,6 @@ class MainWindow(QMainWindow):
         # ============ 创建侧边栏 ============
         self.sidebar = SidebarWidget()
         self.sidebar.setFixedWidth(260)
-        self.sidebar_visible = True
         main_layout.addWidget(self.sidebar)
 
         # ============ 创建主内容区 ============
@@ -241,6 +240,9 @@ class MainWindow(QMainWindow):
             )
             self.pending_tools_page.tool_update_request.connect(
                 self._on_tool_update_request
+            )
+            self.pending_tools_page.retry_requested.connect(
+                self._on_retry_requested
             )
 
         # 侧边栏新建对话 -> AI 对话页面新建对话
@@ -598,6 +600,8 @@ class MainWindow(QMainWindow):
         bridge.progress_updated.connect(self._on_agent_progress)
         bridge.tool_saved_signal.connect(self._on_tool_saved)
         bridge.tool_published_signal.connect(self._on_tool_published)
+        bridge.retry_failed_signal.connect(self._on_retry_failed)
+        bridge.failure_updated_signal.connect(self._on_failure_updated)
         self.logger.info("AgentUIBridge 信号已连接")
 
         # 监听录制完成事件，自动启动 PM Agent
@@ -705,6 +709,11 @@ class MainWindow(QMainWindow):
         if chat_widget:
             chat_widget.on_new_chat()
 
+    @staticmethod
+    def _truncate_error(msg: str, max_len: int = 80) -> str:
+        """截断错误信息用于 toast 显示"""
+        return msg[:max_len] + ("..." if len(msg) > max_len else "")
+
     def _show_toast(self, text: str, auto_dismiss_ms: int = 8000, toast_type: str = "success") -> None:
         """右下角浮层 toast 通知"""
         if self._active_toast is not None:
@@ -775,9 +784,10 @@ class MainWindow(QMainWindow):
         self.logger.info(f"Agent 进度: workflow={workflow_id}, event={event_name}")
 
         if event_name == "requirement_confirmed":
-            intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
-            if intent_page and hasattr(intent_page, "show_generating_state"):
-                intent_page.show_generating_state()
+            self._show_toast(
+                "技能学习中，稍后回来…",
+                auto_dismiss_ms=10000,
+            )
             QTimer.singleShot(2000, self._switch_to_welcome_page)
 
     def _notify_skill_learned(self) -> None:
@@ -791,8 +801,8 @@ class MainWindow(QMainWindow):
         """工具入库后弹 toast 通知"""
         self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}, from_triage={from_triage}")
         if from_triage:
-            # 分诊修复：重置意图确认页面，等待 trial Agent 消息刷新
-            self._on_switch_to_intent_page()
+            # 分诊修复：保留用户对话，只切换到对话页面，等待 Agent 继续追加消息
+            self.main_content.switch_page(INTENT_CONFIRMATION)
             return
         QTimer.singleShot(500, self._notify_skill_learned)
 
@@ -814,12 +824,16 @@ class MainWindow(QMainWindow):
 
         # agent_type 经 PyQt 信号传入，始终是 str（如 "pm"、"programmer"）
         display_type = self._AGENT_TYPE_DISPLAY.get(agent_type, agent_type)
-        truncated = error_message[:80] + ("..." if len(error_message) > 80 else "")
+        truncated = self._truncate_error(error_message)
         self._show_toast(
             f"{display_type}遇到问题：{truncated}",
             auto_dismiss_ms=15000,
             toast_type="error",
         )
+
+        # PM Agent 失败时，切回欢迎页（否则用户会卡在意图确认页）
+        if agent_type == AgentType.PM:
+            self._switch_to_welcome_page()
 
     def _show_intent_confirmation_from_agent(
         self, intent_data: dict, message: str, thread_id: str
@@ -1337,6 +1351,42 @@ class MainWindow(QMainWindow):
         """
         self.logger.info(f"收到工具更新请求: {pending_tool_id}, {name}")
         # TODO: 转发到 WebSocket 或直接调用后端 API
+
+    def _on_retry_requested(self, workflow_id: str, failed_stage: str) -> None:
+        """处理失败记录重试请求"""
+        self.logger.info(f"收到重试请求: workflow={workflow_id}, stage={failed_stage}")
+        if not self._ensure_workflow_orchestrator():
+            self.logger.warning("Orchestrator 未就绪，无法重试")
+            return
+        if self.agent_ui_bridge:
+            if failed_stage == AgentType.PM:
+                # 加载上次 PM 会话历史，切换到意图确认页，禁用输入（PM 正在重新跑）
+                history = self.agent_ui_bridge.get_pm_messages(workflow_id)
+                self.intent_confirmation_page.load_trial_history(history, workflow_id)
+                self.main_content.switch_page(INTENT_CONFIRMATION)
+            self.agent_ui_bridge.retry_teaching(workflow_id)
+        else:
+            self.logger.warning("AgentUIBridge 不可用，无法重试")
+
+    def _on_retry_failed(self, workflow_id: str, error: str) -> None:
+        """重试失败：弹 toast + 如果当前在意图确认页则跳回欢迎页"""
+        self.logger.error(f"重试失败: workflow={workflow_id}, error={error}")
+        self._show_toast(f"重试失败：{self._truncate_error(error)}", auto_dismiss_ms=15000, toast_type="error")
+        self._switch_to_welcome_page()
+
+    def _on_failure_updated(self, workflow_id: str, failed_stage: str, event_type: str, is_new: bool) -> None:
+        """失败记录状态变化：防抖刷新技能列表页的失败 tab"""
+        if not hasattr(self, "_failure_refresh_timer"):
+            self._failure_refresh_timer = QTimer(self)
+            self._failure_refresh_timer.setSingleShot(True)
+            self._failure_refresh_timer.timeout.connect(self._do_refresh_failures)
+        self._failure_refresh_timer.start(200)
+
+    def _do_refresh_failures(self):
+        """实际刷新失败列表（由 debounce timer 触发）"""
+        skills_page = self.main_content.get_page(SKILLS)
+        if skills_page and hasattr(skills_page, "_load_failures"):
+            skills_page._load_failures()
 
     def closeEvent(self, event) -> None:
         """

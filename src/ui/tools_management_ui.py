@@ -762,6 +762,7 @@ class ToolsManagementUI(QWidget):
     def load_tools(self):
         """公开刷新方法"""
         self._load_tools()
+        self._load_failures()
 
     def _load_sample_tools(self):
         sample_pending = [
