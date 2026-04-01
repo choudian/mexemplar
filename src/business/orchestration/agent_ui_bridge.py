@@ -27,7 +27,7 @@ class AgentWorker(QObject):
         self,
         orchestrator: AgentOrchestrator,
         agent_type: str,
-        user_input: str,
+        user_input: Optional[str],
         workflow_id: Optional[str] = None,
         session_id: Optional[str] = None,
     ):
@@ -133,7 +133,7 @@ class AgentUIBridge(QObject):
     def start_agent(
         self,
         agent_type: str,
-        user_input: str,
+        user_input: Optional[str],
         workflow_id: str = None,
         session_id: str = None,
     ) -> None:
@@ -147,6 +147,10 @@ class AgentUIBridge(QObject):
             workflow_id=workflow_id, session_id=session_id,
         )
         self._run_in_background(worker_key, worker)
+
+    def get_pm_messages(self, workflow_id: str) -> List[dict]:
+        """同步获取 PM session 历史消息，可在主线程调用"""
+        return self._orchestrator.get_pm_messages(workflow_id)
 
     def get_trial_messages(self, workflow_id: str) -> List[dict]:
         """同步获取 trial 历史消息，可在主线程调用

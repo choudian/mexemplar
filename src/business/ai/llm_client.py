@@ -27,6 +27,7 @@ class ToolCallInfo:
     id: str
     name: str
     args: Dict[str, Any]
+    display_text: Optional[str] = None  # ToolSignal 时携带执行结果
 
 
 @dataclass

@@ -311,11 +311,16 @@ class SessionRepository(BaseRepository):
             self.session.commit()
             logger.debug(f"会话 {session_id} 状态更新为 {status}")
 
-    def fail_teaching_sessions(self, workflow_id: str):
-        """将指定 workflow 下所有 pm/programmer/trial 会话标记为 failed"""
+    def fail_teaching_sessions(self, workflow_id: str, only_types: Optional[list] = None):
+        """将指定 workflow 下的教学会话标记为 failed。
+
+        Args:
+            only_types: 只标记指定类型（如 ["programmer"]）。为 None 时标记全部。
+        """
+        types = only_types or ["pm", "programmer", "trial"]
         self.session.query(Session).filter(
             Session.workflow_id == workflow_id,
-            Session.agent_type.in_(["pm", "programmer", "trial"]),
+            Session.agent_type.in_(types),
         ).update({"status": "failed"}, synchronize_session=False)
         self.session.commit()
 
@@ -366,6 +371,13 @@ class MessageRepository(BaseRepository):
             .order_by(Message.sequence.asc())
             .first()
         )
+
+    def get_last(self, session_id: str, non_archived: bool = True) -> Optional[Message]:
+        """获取会话的最后一条消息（最大序列号）"""
+        query = self.session.query(Message).filter(Message.session_id == session_id)
+        if non_archived:
+            query = query.filter(Message.is_archived.is_(False))
+        return query.order_by(Message.sequence.desc()).first()
 
     def get_context(self, session_id: str) -> List[Message]:
         """获取会话上下文（非归档消息，按序列排序）"""

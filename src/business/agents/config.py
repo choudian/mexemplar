@@ -61,6 +61,7 @@ class ToolSignal:
 
     result_type: "ResultType"
     display_text: str = "[已提交]"
+    save_result: bool = True  # False 时 AgentLoop 不保存 tool result（用于失败快速分诊）
 
 
 @dataclass

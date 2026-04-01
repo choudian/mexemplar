@@ -100,7 +100,7 @@ class AgentOrchestrator:
     def run_agent(
         self,
         agent_type: str,
-        user_input: str,
+        user_input: Optional[str],
         workflow_id: str = None,
         session_id: str = None,
     ) -> None:
@@ -116,33 +116,18 @@ class AgentOrchestrator:
         """
         if agent_type == AgentType.ASSISTANT:
             assert session_id, "assistant 类型必须传 session_id"
-        else:
+        elif not session_id:
             session_id = self._get_or_create_session(workflow_id, agent_type)
+        # else: 调用方显式传入 session_id（如 PM 重试恢复旧 session），直接使用
 
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
         except ValueError as e:
             logger.error(f"[Orchestrator] 无法创建 {agent_type} Loop: {e}")
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id or "",
-                session_id=session_id,
-                agent_type=agent_type,
-                error=str(e),
-                error_type="setup_error",
+            self._emit_agent_error(
+                workflow_id or "", session_id, agent_type,
+                str(e), "setup_error",
             )
-            if workflow_id:
-                self._transition_repo.create(
-                    WorkflowTransition(
-                        transition_id=str(uuid.uuid4()),
-                        workflow_id=workflow_id,
-                        event_type="agent_error",
-                        from_session_id=session_id,
-                        to_session_id=None,
-                        payload=json.dumps({"error": str(e), "agent_type": agent_type}),
-                    )
-                )
             return
 
         logger.info(
@@ -166,6 +151,7 @@ class AgentOrchestrator:
 
         if result.result_type == ResultType.COMPLETED:
             if agent_type != AgentType.ASSISTANT:
+                self._try_resolve_failure(workflow_id)
                 self._dispatch_next(agent_type, result, session_id, workflow_id)
 
         elif result.result_type == ResultType.STILL_WAITING:
@@ -185,26 +171,10 @@ class AgentOrchestrator:
             )
 
         elif result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id or "",
-                session_id=session_id,
-                agent_type=agent_type,
-                error=result.error,
-                error_type=result.result_type.value,
+            self._emit_agent_error(
+                workflow_id or "", session_id, agent_type,
+                result.error, result.result_type.value,
             )
-            if workflow_id:
-                self._transition_repo.create(
-                    WorkflowTransition(
-                        transition_id=str(uuid.uuid4()),
-                        workflow_id=workflow_id,
-                        event_type="agent_error",
-                        from_session_id=session_id,
-                        to_session_id=None,
-                        payload=json.dumps({"error": result.error, "agent_type": agent_type}),
-                    )
-                )
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
         """
@@ -279,7 +249,6 @@ class AgentOrchestrator:
                     session_id=session_id,
                     tool_id=tool_id,
                 )
-                self._resolve_failure_record(workflow_id)
             else:
                 # 还需继续试用，在同一个 trial session 中继续
                 remaining = 3 - new_count
@@ -321,6 +290,32 @@ class AgentOrchestrator:
     # 内部调度逻辑
     # =========================================================================
 
+    def _emit_agent_error(
+        self, workflow_id: str, session_id: str,
+        agent_type: str, error: str, error_type: str,
+    ):
+        """统一的 agent 错误处理：emit 事件 + 记录 transition"""
+        emit(
+            "agent_error",
+            sender=self,
+            workflow_id=workflow_id,
+            session_id=session_id,
+            agent_type=agent_type,
+            error=error,
+            error_type=error_type,
+        )
+        if workflow_id:
+            self._transition_repo.create(
+                WorkflowTransition(
+                    transition_id=str(uuid.uuid4()),
+                    workflow_id=workflow_id,
+                    event_type="agent_error",
+                    from_session_id=session_id,
+                    to_session_id=None,
+                    payload=json.dumps({"agent_type": agent_type, "error": error, "error_type": error_type}),
+                )
+            )
+
     def _dispatch_next(
         self,
         agent_type: str,
@@ -341,14 +336,9 @@ class AgentOrchestrator:
                 self._on_trial_completed(result, session_id, workflow_id)
         except Exception as e:
             logger.error(f"[Orchestrator] 调度失败: {e}", exc_info=True)
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id,
-                session_id=session_id,
-                agent_type=agent_type,
-                error=f"调度失败: {str(e)}",
-                error_type="dispatch_error",
+            self._emit_agent_error(
+                workflow_id, session_id, agent_type,
+                f"调度失败: {str(e)}", "dispatch_error",
             )
 
     def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
@@ -414,24 +404,10 @@ class AgentOrchestrator:
             logger.warning(
                 f"[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session={session_id}"
             )
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id,
-                session_id=session_id,
-                agent_type="pm",
-                error="PM Agent 未调用 submit_requirements 或 report_code_issue 即结束",
-                error_type="missing_signal_tool",
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="agent_error",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps({"agent_type": "pm", "error": "missing_signal_tool"}),
-                )
+            self._emit_agent_error(
+                workflow_id, session_id, "pm",
+                "PM Agent 未调用 submit_requirements 或 report_code_issue 即结束",
+                "missing_signal_tool",
             )
 
     def _on_programmer_completed(
@@ -442,26 +418,10 @@ class AgentOrchestrator:
             logger.warning(
                 f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}"
             )
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id,
-                session_id=session_id,
-                agent_type="programmer",
-                error="程序员未通过 submit_code 提交代码",
-                error_type="missing_signal_tool",
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="agent_error",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps(
-                        {"agent_type": "programmer", "error": "missing_signal_tool"}
-                    ),
-                )
+            self._emit_agent_error(
+                workflow_id, session_id, "programmer",
+                "程序员未通过 submit_code 提交代码",
+                "missing_signal_tool",
             )
             return
 
@@ -485,58 +445,40 @@ class AgentOrchestrator:
         self._run_review(code_data, session_id, workflow_id)
 
     def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
-        """试用 Agent 完成 → 从 signal_tool.args 获取 success/feedback → 路由到计数或 PM 分诊"""
-        if result.signal_tool and result.signal_tool.name == "submit_trial_result":
-            success = result.signal_tool.args["success"]
-            feedback = result.signal_tool.args.get("feedback", "")
+        """试用 Agent 完成 → 路由到计数或 PM 分诊
 
-            tool = self._tool_repo.get_by_workflow_id(workflow_id)
-            if not tool:
-                emit(
-                    "agent_error",
-                    sender=self,
-                    workflow_id=workflow_id,
-                    session_id=session_id,
-                    agent_type="trial",
-                    error="未找到工具",
-                    error_type="tool_not_found",
-                )
-                self._transition_repo.create(
-                    WorkflowTransition(
-                        transition_id=str(uuid.uuid4()),
-                        workflow_id=workflow_id,
-                        event_type="agent_error",
-                        from_session_id=session_id,
-                        to_session_id=None,
-                        payload=json.dumps({"agent_type": "trial", "error": "tool_not_found"}),
-                    )
-                )
-                return
-
-            self.handle_trial_result(tool.tool_id, success, workflow_id, session_id, feedback)
+        两种正常退出路径：
+        - submit_trial_result：用户确认结果后提交，success/feedback 来自 LLM 参数
+        - execute_tool：工具执行失败直接触发分诊，无需 LLM 转述
+        """
+        signal_tool = result.signal_tool
+        if signal_tool and signal_tool.name == "submit_trial_result":
+            success = signal_tool.args["success"]
+            feedback = signal_tool.args.get("feedback", "")
+        elif signal_tool and signal_tool.name == "execute_tool":
+            success = False
+            feedback = signal_tool.display_text or "工具执行失败（无详细错误信息）"
         else:
             logger.warning(
                 f"[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session={session_id}"
             )
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id,
-                session_id=session_id,
-                agent_type="trial",
-                error="试用 Agent 未通过 submit_trial_result 结束",
-                error_type="unexpected_completion",
+            self._emit_agent_error(
+                workflow_id, session_id, "trial",
+                "试用 Agent 未通过 submit_trial_result 结束",
+                "unexpected_completion",
             )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="agent_error",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps({"agent_type": "trial", "error": "unexpected_completion"}),
-                )
+            return
+
+        tool = self._tool_repo.get_by_workflow_id(workflow_id)
+        if not tool:
+            self._emit_agent_error(
+                workflow_id, session_id, "trial",
+                "未找到工具",
+                "tool_not_found",
             )
+            return
+
+        self.handle_trial_result(tool.tool_id, success, workflow_id, session_id, feedback)
 
     def _run_review(self, code_data: dict, from_session_id: str, workflow_id: str) -> None:
         """
@@ -645,8 +587,9 @@ class AgentOrchestrator:
         - 需求问题 → PM 调 talk_to_user 重新确认 → 正常 requirement_confirmed 流程
         - 代码问题 → PM 直接输出用户反馈 → _on_pm_completed 转给程序员
         """
+        failure_context = f"用户反馈：{user_feedback}" if user_feedback else "工具执行报错（错误详情见试用会话历史）"
         initial_input = (
-            f"工具 {tool_id} 试用失败，用户反馈：{user_feedback}。"
+            f"工具 {tool_id} 试用失败，{failure_context}。"
             "请分析问题原因：如果是需求问题，请与用户重新确认需求；"
             "如果是代码问题，请直接输出用户反馈供程序员排查。"
         )
@@ -668,9 +611,10 @@ class AgentOrchestrator:
         workflow_id = kwargs.get("workflow_id", "")
         if not workflow_id:
             return
-        # 重试流程中的错误由 RetryTeachingWorker 负责，跳过避免状态冲突
+        # 重试流程中的 agent_error：重置为 active 让用户可再次重试
         existing = self._failure_repo.get_by_workflow_id(workflow_id)
         if existing and existing.status == "retrying":
+            self.reset_retrying_status(workflow_id)
             return
         self._record_teaching_failure(
             workflow_id=workflow_id,
@@ -715,16 +659,24 @@ class AgentOrchestrator:
         """标记失败记录为已解决"""
         self._set_failure_status(workflow_id, "resolved", "teaching_failure_resolved")
 
+    def _try_resolve_failure(self, workflow_id: str):
+        """如果该 workflow 有 retrying 状态的失败记录，标记为已解决。
+        任何阶段重试成功后都会走到这里。"""
+        record = self._failure_repo.get_by_workflow_id(workflow_id)
+        if record and record.status == "retrying":
+            self._resolve_failure_record(workflow_id)
+
     def dismiss_failure(self, workflow_id: str):
         """忽略失败记录"""
         self._set_failure_status(workflow_id, "dismissed", "teaching_failure_updated")
         # dismissed 需要额外触发 UI 刷新，teaching_failure_updated 会处理
 
     def reset_retrying_status(self, workflow_id: str):
-        """重试异常时将 retrying 恢复为 active"""
+        """重试异常时将 retrying 恢复为 active，并累加 retry_count"""
         record = self._failure_repo.get_by_workflow_id(workflow_id)
         if record and record.status == "retrying":
             record.status = "active"
+            record.retry_count = (record.retry_count or 0) + 1
             self._failure_repo.update(record)
             emit(
                 "teaching_failure_updated",
@@ -763,8 +715,9 @@ class AgentOrchestrator:
 
         failed_stage = record.failed_stage
 
-        # 清理旧教学 session（批量 UPDATE，只清理 pm/programmer/trial）
-        self._session_repo.fail_teaching_sessions(workflow_id)
+        # session 状态由 agent_loop 出错时标记为 failed，这里不需要再动。
+        # 各阶段重试方法（_resume_pm / _retry_programmer / _retry_trial）
+        # 会自行查找旧 session、恢复状态、复用消息历史。
         self._review_counts.pop(workflow_id, None)
 
         # 先更新状态为 retrying，再 emit，再分发
@@ -779,72 +732,99 @@ class AgentOrchestrator:
 
         # 按失败阶段分发
         if failed_stage == "pm":
-            self.start_analysis(workflow_id, workflow_id)
+            self._retry_stage(workflow_id, record, "pm",
+                              fallback_action=lambda: self.start_analysis(workflow_id, workflow_id))
 
         elif failed_stage == "programmer":
-            self._retry_programmer(workflow_id, record)
+            self._retry_stage(workflow_id, record, "programmer",
+                              transition_event="requirement_confirmed",
+                              transition_key="requirements",
+                              fallback_stage="pm")
 
         elif failed_stage == "trial":
-            self._retry_trial(workflow_id)
+            self._retry_stage(workflow_id, record, "trial",
+                              fallback_stage="programmer")
 
         else:
             logger.warning(f"[Orchestrator] 未知失败阶段 {failed_stage}，降级为 PM 重启")
-            self._fallback_to_pm(workflow_id, record)
+            self._fallback_to_stage(workflow_id, record, "pm")
 
-    def _retry_programmer(self, workflow_id: str, record):
-        """Programmer 阶段重试：三级查找策略"""
+    def _retry_stage(
+        self,
+        workflow_id: str,
+        record,
+        stage: str,
+        transition_event: str | None = None,
+        transition_key: str | None = None,
+        fallback_stage: str | None = None,
+        fallback_action=None,
+        *,
+        _depth: int = 0,
+    ):
+        """通用阶段重试逻辑。
 
-        # 优先级 1：triage_completed → feedback
-        feedback = self._extract_transition_payload(workflow_id, "triage_completed", "feedback")
-        if feedback:
-            self.run_agent("programmer", feedback, workflow_id)
+        三级策略：
+        1. 旧 session 存在 → 直接恢复（user_input=None，复用消息历史）
+        2. 旧 session 不存在，但 transition 有上阶段结果 → 新 session，用上阶段结果当输入
+        3. 都没有 → 降级到上一阶段（或自定义 fallback_action）
+
+        _depth 参数防止降级链无限递归，超过 3 层直接走 start_analysis 兜底。
+        """
+        # 策略 1：复用旧 session
+        session_id = self._find_old_session(workflow_id, stage)
+        if session_id:
+            self.run_agent(stage, None, workflow_id, session_id=session_id)
             return
 
-        # 优先级 2：requirement_confirmed → requirements JSON
-        requirements = self._extract_transition_payload(workflow_id, "requirement_confirmed", "requirements")
-        if requirements and isinstance(requirements, dict):
-            self.run_agent(
-                "programmer",
-                json.dumps(requirements, ensure_ascii=False),
-                workflow_id,
-            )
-            return
+        # 策略 2：从 transition 取上阶段结果，新 session 跑
+        if transition_event and transition_key:
+            payload = self._extract_transition_payload(workflow_id, transition_event, transition_key)
+            if payload:
+                user_input = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else str(payload)
+                self.run_agent(stage, user_input, workflow_id)
+                return
 
-        # 优先级 3：降级为 PM 重启
-        logger.warning(
-            f"[Orchestrator] Programmer 重试找不到有效上下文，降级为 PM 重启: {workflow_id}"
-        )
-        self._fallback_to_pm(workflow_id, record)
-
-    def _retry_trial(self, workflow_id: str):
-        """Trial 阶段重试"""
-        tool = self._tool_repo.get_by_workflow_id(workflow_id)
-        if not tool:
-            logger.warning(f"[Orchestrator] Trial 重试：工具不存在，workflow_id={workflow_id}")
-            emit(
-                "agent_error",
-                sender=self,
-                workflow_id=workflow_id,
-                agent_type="trial",
-                error="工具记录不存在，无法从试用阶段重试",
-                error_type="tool_not_found",
-            )
+        # 策略 3：降级
+        if _depth >= 3:
+            logger.error(f"[Orchestrator] 降级链超过最大深度: {workflow_id}，走 start_analysis 兜底")
+            self.start_analysis(workflow_id, workflow_id)
+        elif fallback_action:
+            fallback_action()
+        elif fallback_stage:
+            self._fallback_to_stage(workflow_id, record, fallback_stage, _depth=_depth + 1)
+        else:
+            logger.error(f"[Orchestrator] {stage} 重试失败且无降级路径: {workflow_id}")
             self.reset_retrying_status(workflow_id)
-            return
-        self.run_agent("trial", "重新开始试用", workflow_id)
 
-    def _fallback_to_pm(self, workflow_id: str, record):
-        """降级为 PM 阶段重启教学流程"""
-        record.failed_stage = "pm"
+    def _find_old_session(self, workflow_id: str, agent_type: str) -> str | None:
+        """查找旧 session，返回 session_id；找不到则返回 None。
+        session 状态恢复由 agent_loop.run() 自动处理（failed/completed → active）。"""
+        sessions = self._session_repo.get_by_workflow(
+            workflow_id, agent_type=agent_type, order_by="created_at_desc"
+        )
+        if sessions:
+            session_id = sessions[0].session_id
+            logger.info(
+                f"[Orchestrator] {agent_type} 重试复用旧 session: {session_id}, workflow={workflow_id}"
+            )
+            return session_id
+        return None
+
+    def _fallback_to_stage(self, workflow_id: str, record, target_stage: str, *, _depth: int = 0):
+        """降级到指定阶段重启"""
+        record.failed_stage = target_stage
         self._failure_repo.update(record)
         emit(
             "teaching_failure_updated",
             sender=self,
             workflow_id=workflow_id,
-            failed_stage="pm",
+            failed_stage=target_stage,
             error_type=record.error_type or "",
         )
-        self.start_analysis(workflow_id, workflow_id)
+        # 递归重试目标阶段
+        self._retry_stage(workflow_id, record, target_stage,
+                          fallback_action=lambda: self.start_analysis(workflow_id, workflow_id),
+                          _depth=_depth + 1)
 
     def _extract_transition_payload(self, workflow_id: str, event_type: str, key: str):
         """从 WorkflowTransition 的 payload JSON 中提取指定 key"""
@@ -899,24 +879,23 @@ class AgentOrchestrator:
         session = self._session_repo.create(model)
         return session.session_id
 
-    def get_trial_messages(self, workflow_id: str) -> List[dict]:
-        """获取 trial session 的用户可见消息历史（同步，主线程安全）
+    def _format_messages_for_display(
+        self, messages, session_id: str, skip_first_user: bool = False
+    ) -> List[dict]:
+        """将 DB 消息记录转为用户可见的显示格式
 
-        设计说明：纯 DB 只读查询，毫秒级，有意不走 QThread。
-        不要在 orchestrator 上模仿此模式添加耗时同步调用。
+        Args:
+            messages: Message ORM 对象列表
+            session_id: 用于日志
+            skip_first_user: 是否跳过第一条 user 消息（PM 场景需要跳过内部指令）
         """
-        sessions = self._session_repo.get_by_workflow(
-            workflow_id, agent_type=AgentType.TRIAL, order_by="created_at_desc"
-        )
-        if not sessions or sessions[0].status in (SessionStatus.FAILED, SessionStatus.ACTIVE):
-            # failed: 脏数据，不展示；active: Agent 正在运行，由事件驱动 UI
-            return []
-
-        session_id = sessions[0].session_id
-        messages = self._message_repo.get_context(session_id)
         result = []
+        first_user_skipped = False
         for msg in messages:
             if msg.role == "user" and msg.content:
+                if skip_first_user and not first_user_skipped:
+                    first_user_skipped = True
+                    continue
                 result.append({"role": "user", "content": msg.content})
             elif msg.role == "assistant":
                 if msg.content:
@@ -933,6 +912,34 @@ class AgentOrchestrator:
                             if question:
                                 result.append({"role": "assistant", "content": question})
         return result
+
+    def get_trial_messages(self, workflow_id: str) -> List[dict]:
+        """获取 trial session 的用户可见消息历史（同步，主线程安全）
+
+        设计说明：纯 DB 只读查询，毫秒级，有意不走 QThread。
+        不要在 orchestrator 上模仿此模式添加耗时同步调用。
+        """
+        sessions = self._session_repo.get_by_workflow(
+            workflow_id, agent_type=AgentType.TRIAL, order_by="created_at_desc"
+        )
+        if not sessions or sessions[0].status in (SessionStatus.FAILED, SessionStatus.ACTIVE):
+            # failed: 脏数据，不展示；active: Agent 正在运行，由事件驱动 UI
+            return []
+
+        session_id = sessions[0].session_id
+        messages = self._message_repo.get_context(session_id)
+        return self._format_messages_for_display(messages, session_id)
+
+    def get_pm_messages(self, workflow_id: str) -> List[dict]:
+        """获取最近一次 PM session 的用户可见消息历史（同步，主线程安全）"""
+        sessions = self._session_repo.get_by_workflow(
+            workflow_id, agent_type=AgentType.PM, order_by="created_at_desc"
+        )
+        if not sessions:
+            return []
+        session_id = sessions[0].session_id
+        messages = self._message_repo.get_context(session_id)
+        return self._format_messages_for_display(messages, session_id, skip_first_user=True)
 
     # =========================================================================
     # 辅助方法
@@ -1217,7 +1224,7 @@ class AgentOrchestrator:
             existing.tool_name = code_data["tool_name"]
             existing.description = code_data["description"]
             existing.parameters = code_data.get("parameters", [])
-            existing.dependencies = code_data.get("dependencies", [])
+            existing.dependencies = []
             existing.trial_success_count = 0
             existing.source = "intent"
             existing.status = status
@@ -1229,7 +1236,7 @@ class AgentOrchestrator:
                 description=code_data["description"],
                 execution_code=code,
                 parameters=code_data.get("parameters", []),
-                dependencies=code_data.get("dependencies", []),
+                dependencies=[],
                 steps=[],
                 workflow_id=workflow_id,
                 source="intent",
@@ -1266,6 +1273,6 @@ class AgentOrchestrator:
             logger.info(
                 f"[Orchestrator] 分诊修复完成，自动重启 trial Agent: workflow={workflow_id}"
             )
-            self.run_agent("trial", "代码已修复，请重新执行工具试用", workflow_id)
+            self.run_agent("trial", None, workflow_id)
 
         return tool_id

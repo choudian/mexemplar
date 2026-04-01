@@ -64,7 +64,7 @@ _COMMON_TABLES: dict[str, dict] = {
             "process_name": ("VARCHAR", "进程名称（desktop 模式）", None),
             "window_title": ("TEXT", "窗口标题（desktop 模式）", None),
             "parameters": ("JSON", "操作参数（输入值、按键、坐标等）", None),
-            "dom_element": ("JSON", "操作目标 DOM 元素信息（tag, id, class, text 等）", None),
+            "dom_element": ("JSON", "操作目标 DOM 元素信息，JSON 对象，常用键：tag_name、id、class、text、css_selector 等（⚠️ 这是 JSON 内部字段，不是 SQL 列，不能直接 SELECT tag_name）", None),
             "dom_tree_snapshot": (
                 "JSON",
                 "操作时的完整 DOM 树快照",
@@ -74,12 +74,12 @@ _COMMON_TABLES: dict[str, dict] = {
             "screenshot_before": (
                 "BLOB",
                 "操作前截图（二进制）",
-                "⚠️ 二进制数据，SQL 无法直接查看，请使用 analyze_image 工具",
+                "⚠️ 二进制数据，SQL 无法直接查看。仅在文本字段不足以回答问题时才用 analyze_image 查看",
             ),
             "screenshot_after": (
                 "BLOB",
                 "操作后截图（二进制）",
-                "⚠️ 二进制数据，SQL 无法直接查看，请使用 analyze_image 工具",
+                "⚠️ 二进制数据，SQL 无法直接查看。仅在文本字段不足以回答问题时才用 analyze_image 查看",
             ),
             "timestamp": ("DATETIME", "操作发生时间", None),
         },
@@ -306,7 +306,7 @@ def _query_data(recording_id: str, sql: str) -> str:
             for col, val in zip(col_names, row):
                 # 二进制字段替换为占位提示
                 if isinstance(val, (bytes, bytearray)):
-                    record[col] = "[二进制数据，请使用 analyze_image 工具]"
+                    record[col] = "[截图（二进制）]"
                 else:
                     record[col] = val
             result_rows.append(record)
@@ -463,10 +463,11 @@ EXECUTE_CODE_SCHEMA: dict[str, Any] = {
             "临时执行 Python 代码，用于 SQL 不够用的复杂数据探索（如遍历 JSON 字段、统计计算等）。\n"
             "这是探索工具，代码跑完即丢，不会入库。与 submit_code（交付代码）完全不同。\n"
             "预注入变量：conn（DuckDB 连接）、recording_id（当前录制 ID）。\n"
-            "示例：\n"
+            "示例（注意：tag_name 是 dom_element JSON 里的键，不是 SQL 列）：\n"
             "import json\n"
             "rows = conn.execute(\"SELECT dom_element FROM actions WHERE recording_id = ?\" , "
             "[recording_id]).fetchall()\n"
+            "# json.loads 解析 JSON 字符串，tag_name 是 JSON 内部的 key，不是数据库列\n"
             "tags = [json.loads(r[0])['tag_name'] for r in rows if r[0]]\n"
             "print(set(tags))"
         ),
@@ -620,7 +621,10 @@ ANALYZE_IMAGE_SCHEMA: dict[str, Any] = {
     "function": {
         "name": "analyze_image",
         "description": (
-            "使用多模态模型分析录制截图。适用于需要理解页面视觉内容的场景。\n"
+            "⚠️ 最后手段工具。仅当文本数据（URL、parameters、dom_element、css_selector 等）"
+            "完全不足以回答问题时才使用。调用多模态模型成本高、耗时长。\n"
+            "绝大多数情况下，查询文本字段已足够，不要把截图分析当作常规步骤。\n"
+            "适用场景举例：需要识别截图中的验证码、图片内容、无法从 DOM 推断的视觉布局。\n"
             "单次最多传入 5 个操作序号（每个操作有操作前/后两张截图）。\n"
             "图片不会进入对话上下文，只返回模型的文字分析结果。"
         ),

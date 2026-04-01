@@ -13,6 +13,18 @@ from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
 from src.execution.tool_executor import run_tool_code
 
 
+def _error_signal(message: str, data=None, *, save_result: bool = True) -> ToolSignal:
+    """构造工具执行失败的 ToolSignal（统一格式）"""
+    return ToolSignal(
+        result_type=ResultType.COMPLETED,
+        display_text=json.dumps(
+            {"success": False, "message": message, "data": data},
+            ensure_ascii=False,
+        ),
+        save_result=save_result,
+    )
+
+
 # =============================================================================
 # execute_tool schema
 # =============================================================================
@@ -74,29 +86,28 @@ SUBMIT_TRIAL_RESULT_SCHEMA: Dict[str, Any] = {
 def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
     """创建试用工具列表，workflow_id 通过闭包绑定。"""
 
-    def _execute_tool_handler(parameters: dict) -> str:
+    def _execute_tool_handler(parameters: dict) -> str | ToolSignal:
         from src.data.repositories import ToolRepository
 
         tool_repo = ToolRepository()
         tool = tool_repo.get_by_workflow_id(workflow_id)
         if not tool:
-            return json.dumps(
-                {
-                    "success": False,
-                    "message": f"未找到工作流 {workflow_id} 对应的工具",
-                    "data": None,
-                },
-                ensure_ascii=False,
-            )
+            return _error_signal(f"未找到工作流 {workflow_id} 对应的工具")
         if not tool.execution_code:
-            return json.dumps(
-                {"success": False, "message": "工具代码为空", "data": None},
-                ensure_ascii=False,
-            )
+            return _error_signal("工具代码为空")
 
         dependencies = tool.dependencies or []
         result = run_tool_code(tool.execution_code, parameters, dependencies=dependencies)
-        return json.dumps(result, ensure_ascii=False, default=str)
+        result_json = json.dumps(result, ensure_ascii=False, default=str)
+
+        if not result.get("success", False):
+            return _error_signal(
+                result.get("message", "工具执行失败"),
+                result.get("data"),
+                save_result=False,
+            )
+
+        return result_json
 
     def _submit_trial_result_handler(success: bool, feedback: str = "") -> ToolSignal:
         # success / feedback 不需要在这里处理。

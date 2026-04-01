@@ -148,6 +148,32 @@ class ContextManager:
             tool_name=tool_name,
         )
 
+    def get_pending_tool_call(self) -> Optional[dict]:
+        """
+        检测 session 是否有待重试的工具调用。
+
+        当 execute_tool 失败且 save_result=False 时，最后一条消息是 assistant 的
+        tool_calls（无对应 tool result）。重启后 AgentLoop 可直接重执行，无需再问 LLM。
+
+        Returns:
+            {"id": ..., "name": ..., "args": {...}} 或 None
+        """
+        last = self._msg_repo.get_last(self.session_id)
+        if last and last.role == "assistant" and last.tool_calls:
+            try:
+                tcs = json.loads(last.tool_calls)
+                if tcs:
+                    if len(tcs) > 1:
+                        logger.warning(f"[上下文] session {self.session_id} 有多个待重试 tool call，只取第一个")
+                    tc = tcs[0]
+                    if "name" not in tc:
+                        logger.warning(f"[上下文] 待重试 tool call 缺少 name 字段: {tc}")
+                        return None
+                    return tc
+            except Exception:
+                logger.debug(f"[上下文] 解析 tool_calls 失败: {last.tool_calls!r}")
+        return None
+
     # --- 引用加载 ---
 
     def load_reference(self, reference_id: str) -> str:

@@ -96,8 +96,8 @@ class ReferenceHandler:
         Returns:
             LLM API 格式的消息字典
         """
-        # summary 角色映射为 system 发给 LLM
-        llm_role = "system" if msg.role == "summary" else msg.role
+        # summary 角色映射为 user 发给 LLM（压缩摘要是之前对话的总结，属于用户侧上下文）
+        llm_role = "user" if msg.role == "summary" else msg.role
         content = msg.content
 
         if msg.role == "assistant":
