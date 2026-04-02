@@ -447,17 +447,14 @@ class AgentOrchestrator:
     def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
         """试用 Agent 完成 → 路由到计数或 PM 分诊
 
-        两种正常退出路径：
-        - submit_trial_result：用户确认结果后提交，success/feedback 来自 LLM 参数
-        - execute_tool：工具执行失败直接触发分诊，无需 LLM 转述
+        正常退出路径：
+        - submit_trial_result：用户确认结果后提交，或自修复失败后提交失败结论。
+          success/feedback 来自 LLM 参数。
         """
         signal_tool = result.signal_tool
         if signal_tool and signal_tool.name == "submit_trial_result":
             success = signal_tool.args["success"]
             feedback = signal_tool.args.get("feedback", "")
-        elif signal_tool and signal_tool.name == "execute_tool":
-            success = False
-            feedback = signal_tool.display_text or "工具执行失败（无详细错误信息）"
         else:
             logger.warning(
                 f"[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session={session_id}"

@@ -10,18 +10,14 @@ import json
 from typing import Any, Dict
 
 from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
-from src.execution.tool_executor import run_tool_code
+from src.execution.tool_executor import install_dependency_to_venv, run_tool_code
 
 
-def _error_signal(message: str, data=None, *, save_result: bool = True) -> ToolSignal:
-    """构造工具执行失败的 ToolSignal（统一格式）"""
-    return ToolSignal(
-        result_type=ResultType.COMPLETED,
-        display_text=json.dumps(
-            {"success": False, "message": message, "data": data},
-            ensure_ascii=False,
-        ),
-        save_result=save_result,
+def _error_json(message: str) -> str:
+    """构造工具执行失败的 JSON 字符串（让 LLM 决定下一步）。"""
+    return json.dumps(
+        {"success": False, "message": message, "data": None},
+        ensure_ascii=False,
     )
 
 
@@ -79,6 +75,35 @@ SUBMIT_TRIAL_RESULT_SCHEMA: Dict[str, Any] = {
 
 
 # =============================================================================
+# install_dependency schema
+# =============================================================================
+
+INSTALL_DEPENDENCY_SCHEMA: Dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "install_dependency",
+        "description": (
+            "安装缺失的 Python 依赖包到工具执行环境。"
+            "仅在 execute_tool 报错提示缺少模块（如 ModuleNotFoundError、ImportError）时调用。"
+            "安装完成后应重新调用 execute_tool 重试。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "package_name": {
+                    "type": "string",
+                    "description": (
+                        "pip 包名（如 requests）或 import 名（如 bs4），系统会自动映射为正确的 pip 包名。"
+                    ),
+                },
+            },
+            "required": ["package_name"],
+        },
+    },
+}
+
+
+# =============================================================================
 # 工厂函数
 # =============================================================================
 
@@ -86,28 +111,26 @@ SUBMIT_TRIAL_RESULT_SCHEMA: Dict[str, Any] = {
 def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
     """创建试用工具列表，workflow_id 通过闭包绑定。"""
 
-    def _execute_tool_handler(parameters: dict) -> str | ToolSignal:
+    # 自修复计数器：生命周期 = 单次 run_agent("trial") 调用
+    # 每次 Orchestrator 启动试用 Agent 时都会重置
+    _install_attempts: dict[str, int] = {}  # package_name -> 安装尝试次数（含失败）
+    _total_install_attempts = 0  # 安装尝试总次数（上限 3，含失败）
+
+    def _execute_tool_handler(parameters: dict) -> str:
         from src.data.repositories import ToolRepository
 
         tool_repo = ToolRepository()
         tool = tool_repo.get_by_workflow_id(workflow_id)
         if not tool:
-            return _error_signal(f"未找到工作流 {workflow_id} 对应的工具")
+            return _error_json(f"未找到工作流 {workflow_id} 对应的工具")
         if not tool.execution_code:
-            return _error_signal("工具代码为空")
+            return _error_json("工具代码为空")
 
         dependencies = tool.dependencies or []
         result = run_tool_code(tool.execution_code, parameters, dependencies=dependencies)
-        result_json = json.dumps(result, ensure_ascii=False, default=str)
-
-        if not result.get("success", False):
-            return _error_signal(
-                result.get("message", "工具执行失败"),
-                result.get("data"),
-                save_result=False,
-            )
-
-        return result_json
+        result.setdefault("message", "工具执行失败")
+        result.setdefault("data", None)
+        return json.dumps(result, ensure_ascii=False, default=str)
 
     def _submit_trial_result_handler(success: bool, feedback: str = "") -> ToolSignal:
         # success / feedback 不需要在这里处理。
@@ -118,6 +141,19 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
             result_type=ResultType.COMPLETED,
             display_text="[试用结果已提交]",
         )
+
+    def _install_dependency_handler(package_name: str) -> str:
+        nonlocal _total_install_attempts
+        count = _install_attempts.get(package_name, 0)
+        if count >= 2:
+            return _error_json(f"依赖 {package_name} 已尝试安装 2 次，不再重试")
+        if _total_install_attempts >= 3:
+            return _error_json("依赖安装总次数已达上限（3次），请直接报告失败")
+        _install_attempts[package_name] = count + 1
+        _total_install_attempts += 1
+
+        result = install_dependency_to_venv(package_name)
+        return json.dumps(result, ensure_ascii=False)
 
     return [
         ToolDefinition(
@@ -130,6 +166,11 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
             schema=SUBMIT_TRIAL_RESULT_SCHEMA,
             handler=_submit_trial_result_handler,
         ),
+        ToolDefinition(
+            name="install_dependency",
+            schema=INSTALL_DEPENDENCY_SCHEMA,
+            handler=_install_dependency_handler,
+        ),
     ]
 
 
@@ -137,4 +178,5 @@ __all__ = [
     "create_trial_tools",
     "EXECUTE_TOOL_SCHEMA",
     "SUBMIT_TRIAL_RESULT_SCHEMA",
+    "INSTALL_DEPENDENCY_SCHEMA",
 ]

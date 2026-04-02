@@ -7,6 +7,7 @@
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -126,6 +127,24 @@ def _extract_imports(code: str) -> list[str]:
     names = extract_import_names(code)
     stdlib = getattr(sys, "stdlib_module_names", frozenset())
     return [_IMPORT_TO_PIP.get(n, n) for n in names if n not in stdlib]
+
+
+def install_dependency_to_venv(package_name: str) -> dict:
+    """安装单个 pip 包到工具 venv。供业务层 install_dependency 工具调用。"""
+    if not re.match(r'^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$', package_name):
+        return {"success": False, "message": f"无效的包名: {package_name}"}
+
+    try:
+        venv_python = _get_venv_python()
+    except RuntimeError as e:
+        return {"success": False, "message": str(e)}
+
+    # Agent 可能传入 import 名（如 bs4），反查 pip 名（如 beautifulsoup4）
+    pip_name = _IMPORT_TO_PIP.get(package_name, package_name)
+    ok, err = _ensure_dependencies(venv_python, [pip_name])
+    if ok:
+        return {"success": True, "message": f"依赖 {pip_name} 安装成功"}
+    return {"success": False, "message": err}
 
 
 def _ensure_dependencies(venv_python: str, dependencies: list[str]) -> tuple[bool, str]:
