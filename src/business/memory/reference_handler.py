@@ -13,6 +13,8 @@ from src.data.unified_config import UnifiedConfigManager
 
 logger = logging.getLogger(__name__)
 
+_USER_ROLES = frozenset({"summary", "program", "agent"})
+
 
 class ReferenceHandler:
     """引用替换逻辑：将旧的大体积 tool result 替换为指针。"""
@@ -96,8 +98,11 @@ class ReferenceHandler:
         Returns:
             LLM API 格式的消息字典
         """
-        # summary 角色映射为 user 发给 LLM（压缩摘要是之前对话的总结，属于用户侧上下文）
-        llm_role = "user" if msg.role == "summary" else msg.role
+        # summary / program / agent 角色映射为 user 发给 LLM
+        # - summary: 压缩摘要，属于用户侧上下文
+        # - program: 程序自动追加的指令（如分诊修复通知）
+        # - agent: agent 间传递的消息
+        llm_role = "user" if msg.role in _USER_ROLES else msg.role
         content = msg.content
 
         if msg.role == "assistant":

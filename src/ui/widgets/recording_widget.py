@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QFrame,
     QTextEdit,
-    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from src.data.unified_config import get_unified_config
@@ -57,9 +56,7 @@ class _ModeCard(QFrame):
         text_layout.addWidget(title_label)
 
         desc_label = QLabel(desc)
-        desc_label.setStyleSheet(
-            "font-size: 12px; color: #6c757d; background: transparent;"
-        )
+        desc_label.setStyleSheet("font-size: 12px; color: #6c757d; background: transparent;")
         desc_label.setWordWrap(True)
         text_layout.addWidget(desc_label)
 
@@ -84,15 +81,18 @@ class _ModeCard(QFrame):
 
     def _apply_style(self):
         if self._selected:
-            self.setStyleSheet("""
+            self.setStyleSheet(
+                """
                 QFrame#mode_card {
                     background-color: #f0f1ff;
                     border: 2px solid #5b6abf;
                     border-radius: 10px;
                 }
-            """)
+            """
+            )
         else:
-            self.setStyleSheet("""
+            self.setStyleSheet(
+                """
                 QFrame#mode_card {
                     background-color: #f8f9fa;
                     border: 1.5px solid #e0e0e0;
@@ -102,7 +102,8 @@ class _ModeCard(QFrame):
                     background-color: #f0f1ff;
                     border-color: #b0b5e0;
                 }
-            """)
+            """
+            )
 
     def mousePressEvent(self, event):
         self.clicked.emit()
@@ -152,9 +153,7 @@ class RecordingWidget(QWidget):
         hero_layout.addWidget(title)
 
         subtitle = QLabel("像教新同事一样，演示一遍操作，AI 就能学会并帮你重复执行")
-        subtitle.setStyleSheet(
-            "font-size: 14px; color: #6c757d; background: transparent;"
-        )
+        subtitle.setStyleSheet("font-size: 14px; color: #6c757d; background: transparent;")
         subtitle.setWordWrap(True)
         hero_layout.addWidget(subtitle)
 
@@ -175,24 +174,18 @@ class RecordingWidget(QWidget):
 
         # 步骤 1: 选择模式
         step1_label = QLabel("选择教学方式")
-        step1_label.setStyleSheet(
-            "font-size: 14px; font-weight: 600; color: #1a1a2e;"
-        )
+        step1_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #1a1a2e;")
         body_layout.addWidget(step1_label)
 
         # 模式卡片
         cards_layout = QHBoxLayout()
         cards_layout.setSpacing(12)
 
-        self.browser_card = _ModeCard(
-            "🌐", "浏览器操作", "在浏览器中演示网页操作流程"
-        )
+        self.browser_card = _ModeCard("🌐", "浏览器操作", "在浏览器中演示网页操作流程")
         self.browser_card.clicked.connect(lambda: self._select_mode("browser"))
         cards_layout.addWidget(self.browser_card)
 
-        self.desktop_card = _ModeCard(
-            "🖥️", "桌面操作", "演示桌面应用的操作流程"
-        )
+        self.desktop_card = _ModeCard("🖥️", "桌面操作", "演示桌面应用的操作流程")
         self.desktop_card.clicked.connect(lambda: self._select_mode("desktop"))
         cards_layout.addWidget(self.desktop_card)
 
@@ -206,15 +199,14 @@ class RecordingWidget(QWidget):
         url_layout.setSpacing(8)
 
         url_label = QLabel("起始网址")
-        url_label.setStyleSheet(
-            "font-size: 14px; font-weight: 600; color: #1a1a2e;"
-        )
+        url_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #1a1a2e;")
         url_layout.addWidget(url_label)
 
         self.url_input = QLineEdit()
         self.url_input.setObjectName("url_input")
         self.url_input.setPlaceholderText("输入要打开的网址，留空则打开空白页")
-        self.url_input.setStyleSheet("""
+        self.url_input.setStyleSheet(
+            """
             QLineEdit {
                 border: 1.5px solid #e0e0e0;
                 border-radius: 8px;
@@ -226,7 +218,8 @@ class RecordingWidget(QWidget):
                 border-color: #5b6abf;
                 background-color: #ffffff;
             }
-        """)
+        """
+        )
         url_layout.addWidget(self.url_input)
 
         body_layout.addWidget(self.url_container)
@@ -239,7 +232,8 @@ class RecordingWidget(QWidget):
         self.record_btn.setObjectName("record_btn")
         self.record_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.record_btn.setFixedHeight(44)
-        self.record_btn.setStyleSheet("""
+        self.record_btn.setStyleSheet(
+            """
             QPushButton {
                 font-size: 15px;
                 font-weight: 600;
@@ -258,7 +252,8 @@ class RecordingWidget(QWidget):
             QPushButton:disabled {
                 background-color: #c5c9e0;
             }
-        """)
+        """
+        )
         self.record_btn.clicked.connect(self.on_record_clicked)
         btn_layout.addWidget(self.record_btn)
 
@@ -267,7 +262,8 @@ class RecordingWidget(QWidget):
         self.stop_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.stop_btn.setFixedHeight(44)
         self.stop_btn.setEnabled(False)
-        self.stop_btn.setStyleSheet("""
+        self.stop_btn.setStyleSheet(
+            """
             QPushButton {
                 font-size: 15px;
                 font-weight: 600;
@@ -288,7 +284,8 @@ class RecordingWidget(QWidget):
                 border-color: #e0e0e0;
                 background-color: #f8f9fa;
             }
-        """)
+        """
+        )
         self.stop_btn.clicked.connect(self.on_stop_clicked)
         btn_layout.addWidget(self.stop_btn)
 
@@ -298,28 +295,26 @@ class RecordingWidget(QWidget):
         # ── 教学中状态指示 ──
         self.recording_indicator = QWidget()
         self.recording_indicator.setVisible(False)
-        self.recording_indicator.setStyleSheet("""
+        self.recording_indicator.setStyleSheet(
+            """
             QWidget {
                 background-color: #fff8f0;
                 border: 1px solid #ffd6a5;
                 border-radius: 8px;
             }
-        """)
+        """
+        )
         indicator_layout = QHBoxLayout(self.recording_indicator)
         indicator_layout.setContentsMargins(16, 12, 16, 12)
         indicator_layout.setSpacing(10)
 
         self._pulse_dot = QLabel("●")
-        self._pulse_dot.setStyleSheet(
-            "font-size: 14px; color: #e67e22; background: transparent;"
-        )
+        self._pulse_dot.setStyleSheet("font-size: 14px; color: #e67e22; background: transparent;")
         self._pulse_dot.setFixedWidth(20)
         indicator_layout.addWidget(self._pulse_dot)
 
         indicator_text = QLabel("教学进行中 — 请在打开的窗口中演示操作，完成后点击「结束教学」")
-        indicator_text.setStyleSheet(
-            "font-size: 13px; color: #8a6d3b; background: transparent;"
-        )
+        indicator_text.setStyleSheet("font-size: 13px; color: #8a6d3b; background: transparent;")
         indicator_text.setWordWrap(True)
         indicator_layout.addWidget(indicator_text, 1)
 
@@ -335,9 +330,7 @@ class RecordingWidget(QWidget):
 
         status_header = QHBoxLayout()
         status_title = QLabel("运行日志")
-        status_title.setStyleSheet(
-            "font-size: 12px; font-weight: 600; color: #868e96;"
-        )
+        status_title.setStyleSheet("font-size: 12px; font-weight: 600; color: #868e96;")
         status_header.addWidget(status_title)
         status_header.addStretch()
         status_layout.addLayout(status_header)
@@ -346,7 +339,8 @@ class RecordingWidget(QWidget):
         self.status_text.setObjectName("status_text")
         self.status_text.setReadOnly(True)
         self.status_text.setMaximumHeight(120)
-        self.status_text.setStyleSheet("""
+        self.status_text.setStyleSheet(
+            """
             QTextEdit {
                 border: 1px solid #e9ecef;
                 border-radius: 6px;
@@ -356,7 +350,8 @@ class RecordingWidget(QWidget):
                 background-color: #f8f9fa;
                 color: #495057;
             }
-        """)
+        """
+        )
         status_layout.addWidget(self.status_text)
 
         body_layout.addWidget(self.status_section)
@@ -365,9 +360,6 @@ class RecordingWidget(QWidget):
         content_layout.addWidget(body, 1)
 
         main_layout.addWidget(content)
-
-        # 兼容旧代码：保留 mode_combo 接口（内部用 _current_mode 管理）
-        self._mode_data_map = {"browser": 0, "desktop": 1}
 
     # ── 模式选择 ──
 
@@ -387,9 +379,7 @@ class RecordingWidget(QWidget):
     def load_config(self):
         """从配置加载初始值"""
         try:
-            default_mode = self.config.get(
-                "recording.default_recording_mode", default="browser"
-            )
+            default_mode = self.config.get("recording.default_recording_mode", default="browser")
             self._select_mode(default_mode)
 
             default_url = self.config.get("recording.browser_start_url", default="")
@@ -449,11 +439,6 @@ class RecordingWidget(QWidget):
         # 有日志时自动显示日志区
         if not self.status_section.isVisible():
             self.status_section.setVisible(True)
-
-    def update_progress(self, value: int, message: str = ""):
-        """更新进度（保持接口兼容，通过日志展示）"""
-        if message:
-            self.append_status(message)
 
     def reset(self):
         """重置界面状态"""

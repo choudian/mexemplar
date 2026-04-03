@@ -90,7 +90,7 @@ def code_repair_node(state: AgentState) -> Dict[str, Any]:
         return {
             "tool_draft": updated_tool_draft,
             "error_info": None,
-            "messages": [AIMessage(content=f"代码已修复，准备重新执行")]
+            "messages": [AIMessage(content="代码已修复，准备重新执行")]
         }
 
     except Exception as e:

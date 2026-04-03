@@ -4,7 +4,7 @@ LangGraph Agent 图定义
 定义 Agent 的状态流转图。
 """
 
-from typing import Literal, Optional
+from typing import Literal
 from langgraph.graph import StateGraph, END
 
 from .state import AgentState

@@ -4,8 +4,7 @@ LangGraph Agent 状态定义
 定义 Agent 在执行过程中需要维护的状态数据。
 """
 
-from typing import Annotated, Optional, Dict, List, Any
-from langgraph.graph import add_messages
+from typing import Optional, Dict, List, Any
 from langgraph.graph import MessagesState
 from dataclasses import dataclass, field
 

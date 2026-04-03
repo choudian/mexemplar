@@ -10,7 +10,6 @@ PyQt6 主窗口
 from enum import Enum
 from pathlib import Path
 import threading
-import time
 
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QResizeEvent
@@ -37,9 +36,6 @@ from PyQt6.QtWidgets import (
 from src.ui.utils import create_svg_icon
 from src.recording.browser_recorder import BrowserRecorder
 from src.business.agents.config import AgentType
-from src.business.intent.intent_analyzer import IntentAnalyzer
-from src.business.intent.intent_repository import IntentRepository
-from src.business.intent.intent_confirmer import IntentConfirmer
 from src.communication.websocket_manager import WebSocketServerManager
 from src.ui.widgets.chat_widget import ChatWidget
 from src.ui.widgets.main_content_widget import MainContentWidget
@@ -58,6 +54,7 @@ from src.utils.logger import get_logger
 
 class OrchestratorInitStatus(Enum):
     """AgentUIBridge 初始化状态枚举"""
+
     NOT_STARTED = "not_started"
     INITIALIZING = "initializing"
     READY = "ready"
@@ -102,18 +99,14 @@ class MainWindow(QMainWindow):
         self.agent_ui_bridge = None  # v2 Agent UI 桥接（懒加载）
 
         # 意图确认相关组件
-        self.intent_confirmer = None  # 意图确认器
         self.ws_manager = None  # WebSocket 服务器管理器
 
         # AgentUIBridge 异步初始化状态
         self._orchestrator_init_lock = threading.Lock()
-        self._orchestrator_init_condition = threading.Condition(
-            self._orchestrator_init_lock
-        )
+        self._orchestrator_init_condition = threading.Condition(self._orchestrator_init_lock)
         self._orchestrator_init_status = OrchestratorInitStatus.NOT_STARTED
         self._orchestrator_init_error = None  # 初始化错误信息
         self._orchestrator_warmup_thread = None  # 预热线程引用
-
 
         self._sidebar_visible = True  # 跟踪侧边栏状态（统一使用 _ 前缀）
         self._active_toast = None  # 当前活跃的 toast 通知
@@ -149,12 +142,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.logger.warning(f"加载样式表失败: {e}")
 
-    def _create_svg_icon(
-        self,
-        svg_string: str,
-        color: str = "#666666",
-        size: int = 20
-    ) -> QIcon:
+    def _create_svg_icon(self, svg_string: str, color: str = "#666666", size: int = 20) -> QIcon:
         """从 SVG 字符串创建 QIcon（委托给共享工具函数）"""
         return create_svg_icon(svg_string, color, size)
 
@@ -164,7 +152,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Mexemplar")
         self.setMinimumSize(1000, 700)
         self.resize(1200, 800)  # 显式设置初始大小
-        self.logger.info(f"窗口几何信息: x={self.x()}, y={self.y()}, width={self.width()}, height={self.height()}")
+        self.logger.info(
+            f"窗口几何信息: x={self.x()}, y={self.y()}, width={self.width()}, height={self.height()}"
+        )
 
         # 创建中心部件
         central_widget = QWidget()
@@ -202,11 +192,13 @@ class MainWindow(QMainWindow):
 
         # 意图确认页面
         from src.ui.intent_confirmation_ui import IntentConfirmationUI
+
         self.intent_confirmation_page = IntentConfirmationUI()
         self.main_content.add_page(INTENT_CONFIRMATION, self.intent_confirmation_page)
 
         # 待试用工具列表页面
         from src.ui.tools_management_ui import ToolsManagementUI
+
         self.pending_tools_page = ToolsManagementUI()
         self.main_content.add_page(SKILLS, self.pending_tools_page)
 
@@ -221,7 +213,7 @@ class MainWindow(QMainWindow):
         self.main_content.page_changed.connect(self._on_page_changed)
 
         # ⭐ 连接 IntentConfirmationUI 的信号到 MainWindow 处理
-        if hasattr(self, 'intent_confirmation_page'):
+        if hasattr(self, "intent_confirmation_page"):
             self.intent_confirmation_page.analyze_intent_request.connect(
                 self._on_intent_analyze_request
             )
@@ -231,19 +223,11 @@ class MainWindow(QMainWindow):
             )
 
         # ⭐ 连接 ToolsManagementUI 的信号到 MainWindow 处理
-        if hasattr(self, 'pending_tools_page'):
-            self.pending_tools_page.trial_start_request.connect(
-                self._on_trial_start_request
-            )
-            self.pending_tools_page.tool_delete_request.connect(
-                self._on_tool_delete_request
-            )
-            self.pending_tools_page.tool_update_request.connect(
-                self._on_tool_update_request
-            )
-            self.pending_tools_page.retry_requested.connect(
-                self._on_retry_requested
-            )
+        if hasattr(self, "pending_tools_page"):
+            self.pending_tools_page.trial_start_request.connect(self._on_trial_start_request)
+            self.pending_tools_page.tool_delete_request.connect(self._on_tool_delete_request)
+            self.pending_tools_page.tool_update_request.connect(self._on_tool_update_request)
+            self.pending_tools_page.retry_requested.connect(self._on_retry_requested)
 
         # 侧边栏新建对话 -> AI 对话页面新建对话
         self.sidebar.new_chat_requested.connect(self._on_new_chat_requested)
@@ -256,6 +240,7 @@ class MainWindow(QMainWindow):
 
         # ⭐ 连接工作流处理失败事件（用于显示压缩模型错误等）
         from src.utils.events import workflow_processing_failed
+
         workflow_processing_failed.connect(self._on_workflow_processing_failed)
 
         # 默认显示 AI 对话页面（新建对话欢迎页）
@@ -295,8 +280,7 @@ class MainWindow(QMainWindow):
 
         # ============ 折叠按钮 ============
         self.toggle_sidebar_btn = create_toolbar_btn(
-            self._create_svg_icon(SIDEBAR_OPEN_ICON),
-            "折叠侧边栏"
+            self._create_svg_icon(SIDEBAR_OPEN_ICON), "折叠侧边栏"
         )
         self.toggle_sidebar_btn.clicked.connect(self._toggle_sidebar)
         left_layout.addWidget(self.toggle_sidebar_btn)
@@ -309,10 +293,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        btn_file = create_toolbar_btn(
-            self._create_svg_icon(FILE_ICON),
-            "文件"
-        )
+        btn_file = create_toolbar_btn(self._create_svg_icon(FILE_ICON), "文件")
         btn_file.setMenu(file_menu)
         left_layout.addWidget(btn_file)
 
@@ -323,10 +304,7 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
 
-        btn_help = create_toolbar_btn(
-            self._create_svg_icon(HELP_ICON),
-            "帮助"
-        )
+        btn_help = create_toolbar_btn(self._create_svg_icon(HELP_ICON), "帮助")
         btn_help.setMenu(help_menu)
         left_layout.addWidget(btn_help)
 
@@ -339,6 +317,7 @@ class MainWindow(QMainWindow):
 
         在应用启动时自动调用，在后台准备资源，避免首次使用时卡顿
         """
+
         def warmup() -> None:
             """后台预热任务"""
             try:
@@ -366,103 +345,10 @@ class MainWindow(QMainWindow):
                 self.logger.error(f"AgentUIBridge warmup failed: {e}", exc_info=True)
 
         self._orchestrator_warmup_thread = threading.Thread(
-            target=warmup,
-            daemon=False,
-            name="OrchestratorWarmup"
+            target=warmup, daemon=False, name="OrchestratorWarmup"
         )
         self._orchestrator_warmup_thread.start()
         self.logger.info("AgentUIBridge warmup thread started")
-
-    def _init_intent_confirmer(self) -> None:
-        """
-        初始化意图确认组件
-
-        使用 WebSocketServerManager 自动启动和管理 WebSocket 服务器
-        """
-        try:
-            # 创建 LLM 客户端
-            from src.business.ai.llm_client import LangChainLLMClient
-            from src.data.unified_config import get_unified_config
-
-            config = get_unified_config()
-            provider = config.get_ai_provider()  # 获取提供商
-
-            llm_client = LangChainLLMClient(
-                provider=provider,
-                model=config.get_ai_model(),
-                api_key=config.get_ai_api_key(),
-                base_url=config.get_ai_base_url(),
-                temperature=0.7,
-            )
-
-            # 创建意图分析器
-            analyzer = IntentAnalyzer(llm_client=llm_client)
-
-            # 创建意图仓库（需要 DatabaseManager）
-            from src.data.database import DatabaseManager
-            db_manager = DatabaseManager()
-            repository = IntentRepository(db_manager=db_manager)
-
-            # 创建 WebSocket 服务器管理器（不自动启动，避免阻塞）
-            self.ws_manager = WebSocketServerManager(
-                host="127.0.0.1",
-                port=8766,
-                auto_start=False,  # 改为 False，避免阻塞
-                startup_timeout=5.0,
-            )
-
-            # 在后台启动服务器
-            import threading
-            def start_ws_server():
-                try:
-                    self.ws_manager.start()
-                except Exception as e:
-                    self.logger.error(f"WebSocket 服务器启动失败: {e}", exc_info=True)
-
-            ws_thread = threading.Thread(target=start_ws_server, daemon=True)
-            ws_thread.start()
-            self.logger.info("WebSocket 服务器启动线程已创建")
-
-            # 注册错误回调
-            def on_ws_error(manager, error_msg):
-                self.logger.error(f"WebSocket 服务器错误: {error_msg}")
-                QMessageBox.warning(
-                    self,
-                    "WebSocket 服务器启动失败",
-                    f"WebSocket 服务器启动失败：\n\n{error_msg}\n\n"
-                    f"意图确认功能将不可用。"
-                )
-
-            self.ws_manager.on_error(on_ws_error)
-
-            # ❌ 不再等待服务器启动完成，避免阻塞
-            # WebSocket 服务器在后台线程中启动，稍后可用
-
-            # 获取 WebSocket 处理器（可能暂时为 None）
-            ws_handler = self.ws_manager.get_handler()
-            if not ws_handler:
-                self.logger.warning("WebSocket 处理器尚未就绪，将等待服务器启动")
-                # 不 return，继续初始化其他组件
-
-            # 创建意图确认器
-            self.intent_confirmer = IntentConfirmer(
-                analyzer=analyzer,
-                repository=repository,
-                ws_handler=ws_handler,
-            )
-
-            # 注册意图分析完成的消息处理器
-            from src.communication.message_types import MessageType
-            ws_handler.register_handler(
-                MessageType.INTENT_ANALYZED,
-                self._on_intent_analyzed
-            )
-
-            self.logger.info("✅ 意图确认组件初始化成功")
-
-        except Exception as e:
-            self.logger.error(f"初始化意图确认组件失败: {e}", exc_info=True)
-            # 不抛出异常，允许主窗口继续运行
 
     def _delayed_init_intent_confirmer(self) -> None:
         """
@@ -476,29 +362,6 @@ class MainWindow(QMainWindow):
             """在后台线程中初始化"""
             try:
                 self.logger.info("[延迟初始化] 开始在后台线程中初始化意图确认组件")
-
-                # 创建 LLM 客户端
-                from src.business.ai.llm_client import LangChainLLMClient
-                from src.data.unified_config import get_unified_config
-
-                config = get_unified_config()
-                provider = config.get_ai_provider()  # 获取提供商
-
-                llm_client = LangChainLLMClient(
-                    provider=provider,
-                    model=config.get_ai_model(),
-                    api_key=config.get_ai_api_key(),
-                    base_url=config.get_ai_base_url(),
-                    temperature=0.7,
-                )
-
-                # 创建意图分析器
-                analyzer = IntentAnalyzer(llm_client=llm_client)
-
-                # 创建意图仓库（需要 DatabaseManager）
-                from src.data.database import DatabaseManager
-                db_manager = DatabaseManager()
-                repository = IntentRepository(db_manager=db_manager)
 
                 # 创建 WebSocket 服务器管理器（不阻塞）
                 self.ws_manager = WebSocketServerManager(
@@ -517,19 +380,10 @@ class MainWindow(QMainWindow):
                     self.logger.error("无法获取 WebSocket 处理器")
                     return
 
-                # 创建意图确认器
-                self.intent_confirmer = IntentConfirmer(
-                    analyzer=analyzer,
-                    repository=repository,
-                    ws_handler=ws_handler,
-                )
-
                 # 注册意图分析完成的消息处理器
                 from src.communication.message_types import MessageType
-                ws_handler.register_handler(
-                    MessageType.INTENT_ANALYZED,
-                    self._on_intent_analyzed
-                )
+
+                ws_handler.register_handler(MessageType.INTENT_ANALYZED, self._on_intent_analyzed)
 
                 self.logger.info("✅ [延迟初始化] 意图确认组件初始化成功")
 
@@ -588,6 +442,7 @@ class MainWindow(QMainWindow):
 
         # 注册高危工具跨线程确认机制
         from src.business.agents.tools.builtin_general_tools import register_confirm_mechanism
+
         self._confirm_action_signal.connect(self._on_confirm_action_requested)
         register_confirm_mechanism(self._confirm_action_signal)
 
@@ -653,7 +508,9 @@ class MainWindow(QMainWindow):
             recording_id,
         )
 
-    def _on_agent_question(self, workflow_id: str, session_id: str, agent_type: str, question: str) -> None:
+    def _on_agent_question(
+        self, workflow_id: str, session_id: str, agent_type: str, question: str
+    ) -> None:
         """
         处理 Agent 提问（需要用户回答）
 
@@ -663,11 +520,12 @@ class MainWindow(QMainWindow):
             agent_type: Agent 类型（pm / programmer / trial / assistant）
             question: Agent 提出的问题
         """
-        self.logger.info(f"Agent 提问: workflow={workflow_id}, session={session_id}, type={agent_type}, question={question[:80]}")
+        self.logger.info(
+            f"Agent 提问: workflow={workflow_id}, session={session_id}, type={agent_type}, question={question[:80]}"
+        )
 
         if agent_type == AgentType.ASSISTANT:
             # assistant 路由到 ChatWidget
-            self._current_agent_session_id = session_id
             self._current_agent_type = agent_type
             chat_widget = self._get_chat_widget()
             if chat_widget:
@@ -714,7 +572,9 @@ class MainWindow(QMainWindow):
         """截断错误信息用于 toast 显示"""
         return msg[:max_len] + ("..." if len(msg) > max_len else "")
 
-    def _show_toast(self, text: str, auto_dismiss_ms: int = 8000, toast_type: str = "success") -> None:
+    def _show_toast(
+        self, text: str, auto_dismiss_ms: int = 8000, toast_type: str = "success"
+    ) -> None:
         """右下角浮层 toast 通知"""
         if self._active_toast is not None:
             self._active_toast.deleteLater()
@@ -799,7 +659,9 @@ class MainWindow(QMainWindow):
 
     def _on_tool_saved(self, workflow_id: str, tool_id: str, from_triage: bool = False) -> None:
         """工具入库后弹 toast 通知"""
-        self.logger.info(f"工具已入库: workflow={workflow_id}, tool_id={tool_id}, from_triage={from_triage}")
+        self.logger.info(
+            f"工具已入库: workflow={workflow_id}, tool_id={tool_id}, from_triage={from_triage}"
+        )
         if from_triage:
             # 分诊修复：保留用户对话，只切换到对话页面，等待 Agent 继续追加消息
             self.main_content.switch_page(INTENT_CONFIRMATION)
@@ -811,9 +673,13 @@ class MainWindow(QMainWindow):
         self.logger.info(f"工具已发布: workflow={workflow_id}, tool_id={tool_id}")
         QTimer.singleShot(1500, self._switch_to_pending_tools)
 
-    def _on_agent_error(self, workflow_id: str, session_id: str, agent_type: str, error_message: str) -> None:
+    def _on_agent_error(
+        self, workflow_id: str, session_id: str, agent_type: str, error_message: str
+    ) -> None:
         """处理 Agent 错误"""
-        self.logger.error(f"Agent 错误: workflow={workflow_id}, session={session_id}, type={agent_type} - {error_message}")
+        self.logger.error(
+            f"Agent 错误: workflow={workflow_id}, session={session_id}, type={agent_type} - {error_message}"
+        )
 
         if agent_type == AgentType.ASSISTANT:
             chat = self._get_chat_widget()
@@ -851,7 +717,7 @@ class MainWindow(QMainWindow):
 
         # 获取意图确认页面并更新内容
         intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
-        if intent_page and hasattr(intent_page, 'load_intent_from_agent'):
+        if intent_page and hasattr(intent_page, "load_intent_from_agent"):
             intent_page.load_intent_from_agent(intent_data, message, thread_id)
 
         self.logger.info("已切换到意图确认页面")
@@ -919,11 +785,6 @@ class MainWindow(QMainWindow):
         if chat_page:
             chat_page.on_new_chat()
 
-    def _on_record_clicked(self) -> None:
-        """录制按钮点击 - 切换到录制页面"""
-        self.logger.info("用户点击录制按钮")
-        self.main_content.switch_page(TEACHING)
-
     def _get_chat_widget(self):
         """获取 ChatWidget 实例"""
         return self.main_content.get_page(CONVERSATIONS)
@@ -934,6 +795,7 @@ class MainWindow(QMainWindow):
         结果通过 set_confirm_result(request_id, result) 唤醒对应 worker。
         """
         from src.business.agents.tools.builtin_general_tools import set_confirm_result
+
         reply = QMessageBox.question(
             self,
             "操作确认",
@@ -959,40 +821,6 @@ class MainWindow(QMainWindow):
                 chat.add_error_message("AI 助手尚未初始化，请稍候...")
                 chat.set_loading(False)
 
-    def _on_chat_clicked(self) -> None:
-        """AI 助手按钮点击 - 切换到对话页面"""
-        self.logger.info("用户点击 AI 助手按钮")
-        self.main_content.switch_page(CONVERSATIONS)
-
-    def _on_execute_clicked(self) -> None:
-        """执行按钮点击事件"""
-        QMessageBox.information(
-            self,
-            "执行工具",
-            "执行功能即将推出！\n\n请使用命令行模式：\nuv run python -m src.main interactive",
-        )
-
-    def _on_tools_clicked(self) -> None:
-        """技能列表按钮点击事件"""
-        QMessageBox.information(
-            self,
-            "技能列表",
-            "技能列表即将推出！\n\n请使用命令行模式：\nuv run python -m src.main interactive",
-        )
-
-    def _on_settings_clicked(self) -> None:
-        """设置按钮点击事件"""
-        QMessageBox.information(
-            self,
-            "设置",
-            "设置功能即将推出！\n\n请使用命令行模式：\nuv run python -m src.main interactive",
-        )
-
-    def go_back_to_home(self) -> None:
-        """返回主页面"""
-        self.logger.info("用户返回主页面")
-        self.main_content.switch_page(CONVERSATIONS)
-
     def _on_recording_started(self, mode: str, url: str) -> None:
         """开始录制处理函数"""
         self.logger.info(f"开始录制: mode={mode}, url={url}")
@@ -1003,9 +831,7 @@ class MainWindow(QMainWindow):
         else:
             self.logger.warning(f"暂不支持 {mode} 录制模式")
             QMessageBox.warning(
-                self,
-                "不支持的模式",
-                f"暂不支持 {mode} 模式\n\n当前仅支持浏览器操作。"
+                self, "不支持的模式", f"暂不支持 {mode} 模式\n\n当前仅支持浏览器操作。"
             )
             # 重置录制界面状态
             self.recording_page.reset()
@@ -1015,7 +841,10 @@ class MainWindow(QMainWindow):
         智能确保 AgentUIBridge 已初始化（懒加载 + 预热支持）
         """
         with self._orchestrator_init_condition:
-            if self._orchestrator_init_status == OrchestratorInitStatus.READY and self.agent_ui_bridge:
+            if (
+                self._orchestrator_init_status == OrchestratorInitStatus.READY
+                and self.agent_ui_bridge
+            ):
                 return True
 
             if self._orchestrator_init_status == OrchestratorInitStatus.INITIALIZING:
@@ -1027,7 +856,9 @@ class MainWindow(QMainWindow):
                 # 超时或失败，继续往下立即创建
 
             if self._orchestrator_init_status == OrchestratorInitStatus.FAILED:
-                self.logger.warning(f"Previous warmup failed: {self._orchestrator_init_error}, recreating...")
+                self.logger.warning(
+                    f"Previous warmup failed: {self._orchestrator_init_error}, recreating..."
+                )
 
             if self.agent_ui_bridge is not None:
                 return True
@@ -1065,6 +896,7 @@ class MainWindow(QMainWindow):
 
         优化：AgentUIBridge 初始化也移到后台线程，避免阻塞 UI
         """
+
         def start_recording():
             """在后台线程中执行录制启动"""
             browser_recorder = None
@@ -1075,14 +907,16 @@ class MainWindow(QMainWindow):
                 try:
                     browser_recorder = BrowserRecorder()
                 except Exception as init_error:
-                    error_msg = f"浏览器录制器初始化失败：\n{str(init_error)}\n\n可能的原因：\n" \
-                                f"1. DuckDB 数据库文件被其他程序占用（如 PyCharm）\n" \
-                                f"2. 数据库文件损坏\n" \
-                                f"3. 磁盘空间不足\n\n" \
-                                f"解决方案：\n" \
-                                f"1. 关闭 PyCharm 或其他可能占用数据库的程序\n" \
-                                f"2. 检查 data/mexemplar.duckdb 文件是否存在\n" \
-                                f"3. 查看日志获取详细信息"
+                    error_msg = (
+                        f"浏览器录制器初始化失败：\n{str(init_error)}\n\n可能的原因：\n"
+                        f"1. DuckDB 数据库文件被其他程序占用（如 PyCharm）\n"
+                        f"2. 数据库文件损坏\n"
+                        f"3. 磁盘空间不足\n\n"
+                        f"解决方案：\n"
+                        f"1. 关闭 PyCharm 或其他可能占用数据库的程序\n"
+                        f"2. 检查 data/mexemplar.duckdb 文件是否存在\n"
+                        f"3. 查看日志获取详细信息"
+                    )
 
                     self.logger.error(f"浏览器录制器初始化失败: {init_error}", exc_info=True)
                     # ⭐ 使用信号而不是直接调用 QMessageBox（线程安全）
@@ -1134,8 +968,8 @@ class MainWindow(QMainWindow):
                 def stop_recording():
                     try:
                         result = self.browser_recorder.stop_recording()
-                        recording_id = result.get('recording_id')
-                        action_count = result.get('action_count', 0)
+                        recording_id = result.get("recording_id")
+                        action_count = result.get("action_count", 0)
 
                         self.logger.info(f"录制已停止: {recording_id}")
                         self.logger.info(f"捕获了 {action_count} 个操作")
@@ -1152,14 +986,14 @@ class MainWindow(QMainWindow):
 
                         # 发射录制完成事件，AgentUIBridge 监听此事件后启动 PM Agent
                         emit(
-                            'recording_completed',
+                            "recording_completed",
                             event_data=RecordingEventData(
                                 session_id=recording_id,
-                                recording_mode='browser',
-                                start_time=result.get('start_time'),
-                                end_time=result.get('end_time'),
+                                recording_mode="browser",
+                                start_time=result.get("start_time"),
+                                end_time=result.get("end_time"),
                                 action_count=action_count,
-                            )
+                            ),
                         )
                         self.logger.info("已发射 recording_completed 事件，等待 Agent 处理...")
                     except Exception as e:
@@ -1202,21 +1036,13 @@ class MainWindow(QMainWindow):
         """录制启动失败的槽函数（主线程中执行）"""
         self.logger.error(f"❌ 录制启动失败: {error_message}")
         # ⭐ 在主线程中显示错误消息（线程安全）
-        QMessageBox.critical(
-            self,
-            "教学失败",
-            error_message
-        )
+        QMessageBox.critical(self, "教学失败", error_message)
 
     def _on_recording_error(self, error_message: str) -> None:
         """录制错误的槽函数（主线程中执行）"""
         self.logger.error(f"❌ 录制错误: {error_message}")
         # ⭐ 在主线程中显示错误消息（线程安全）
-        QMessageBox.critical(
-            self,
-            "教学错误",
-            error_message
-        )
+        QMessageBox.critical(self, "教学错误", error_message)
 
     def _on_workflow_error(self, error_message: str, error_type: str) -> None:
         """工作流错误的槽函数（主线程中执行）"""
@@ -1228,15 +1054,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "压缩模型警告",
-                f"{error_message}\n\n已自动回退到规则引擎，工具生成将继续进行。"
+                f"{error_message}\n\n已自动回退到规则引擎，工具生成将继续进行。",
             )
         else:
             # 其他错误：显示普通提示
-            QMessageBox.warning(
-                self,
-                "工作流提示",
-                error_message
-            )
+            QMessageBox.warning(self, "工作流提示", error_message)
 
     def _on_workflow_processing_failed(self, sender, **kwargs) -> None:
         """处理工作流处理失败事件（从 blinker 信号）"""
@@ -1273,7 +1095,7 @@ class MainWindow(QMainWindow):
                     self.logger.info(f"已传递用户反馈给 Agent: {workflow_id}")
 
                     intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
-                    if intent_page and hasattr(intent_page, 'status_label'):
+                    if intent_page and hasattr(intent_page, "status_label"):
                         intent_page.status_label.setText("正在处理您的反馈...")
 
                 except Exception as e:
@@ -1295,6 +1117,7 @@ class MainWindow(QMainWindow):
         # 1. 查出 workflow_id
         try:
             from src.data.repositories import ToolRepository
+
             tool = ToolRepository().get_by_id(pending_tool_id)
             if not tool:
                 self.logger.error(f"找不到工具: {pending_tool_id}")
@@ -1316,23 +1139,25 @@ class MainWindow(QMainWindow):
         self._current_agent_workflow_id = workflow_id
         self._current_agent_type = AgentType.TRIAL
 
-        # 4. 查询历史消息（同步，毫秒级）并加载或启动
+        # 4. 切页，预加载试用历史（无历史时清空旧消息）
         try:
             messages = self.agent_ui_bridge.get_trial_messages(workflow_id)
         except Exception as e:
-            self.logger.error(f"查询 trial 历史消息失败，降级为启动新会话: {e}", exc_info=True)
-            messages = None
+            self.logger.error(f"查询 trial 历史消息失败: {e}", exc_info=True)
+            messages = []
+
+        self.main_content.switch_page(INTENT_CONFIRMATION)
 
         if messages:
-            # 有历史：直接展示，不重启 Agent
-            self.logger.info(f"加载 trial 历史消息: workflow_id={workflow_id}, count={len(messages)}")
-            self.intent_confirmation_page.load_trial_history(messages, workflow_id)
-            self.main_content.switch_page(INTENT_CONFIRMATION)
+            display_messages = messages[:-1] if messages[-1].get("role") == "assistant" else messages
+            self.intent_confirmation_page.preload_trial_history(display_messages or [])
+            self.logger.info(f"预加载 trial 历史: workflow_id={workflow_id}, count={len(display_messages or [])}")
         else:
-            # 无历史：重置页面，启动 Agent
-            self._on_switch_to_intent_page()
-            self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
-            self.agent_ui_bridge.start_agent(AgentType.TRIAL, "开始试用", workflow_id)
+            self.intent_confirmation_page.preload_trial_history([])
+
+        self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
+        user_input = None if messages else "开始试用"
+        self.agent_ui_bridge.start_agent(AgentType.TRIAL, user_input, workflow_id)
 
     def _on_tool_delete_request(self, pending_tool_id: str) -> None:
         """
@@ -1371,10 +1196,14 @@ class MainWindow(QMainWindow):
     def _on_retry_failed(self, workflow_id: str, error: str) -> None:
         """重试失败：弹 toast + 如果当前在意图确认页则跳回欢迎页"""
         self.logger.error(f"重试失败: workflow={workflow_id}, error={error}")
-        self._show_toast(f"重试失败：{self._truncate_error(error)}", auto_dismiss_ms=15000, toast_type="error")
+        self._show_toast(
+            f"重试失败：{self._truncate_error(error)}", auto_dismiss_ms=15000, toast_type="error"
+        )
         self._switch_to_welcome_page()
 
-    def _on_failure_updated(self, workflow_id: str, failed_stage: str, event_type: str, is_new: bool) -> None:
+    def _on_failure_updated(
+        self, workflow_id: str, failed_stage: str, event_type: str, is_new: bool
+    ) -> None:
         """失败记录状态变化：防抖刷新技能列表页的失败 tab"""
         if not hasattr(self, "_failure_refresh_timer"):
             self._failure_refresh_timer = QTimer(self)

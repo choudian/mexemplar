@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import mss
 import mss.tools
+
 # 延迟导入 pynput 以避免在无图形界面环境导入失败
 if TYPE_CHECKING:
-    from pynput import mouse, keyboard
+    pass
 from PIL import Image
 import io
 import base64
@@ -115,32 +116,6 @@ class ScreenCapture:
                 return ScreenshotData(image_data=img_bytes.read(), region=region)
         except Exception as e:
             logger.error(f"屏幕截图失败: {e}")
-            raise
-
-    def capture_region(self, left: int, top: int, width: int, height: int) -> ScreenshotData:
-        """
-        捕获指定区域
-
-        Args:
-            left: 左边界
-            top: 上边界
-            width: 宽度
-            height: 高度
-        """
-        try:
-            monitor = {"left": left, "top": top, "width": width, "height": height}
-            # 使用上下文管理器确保线程安全
-            with mss.mss() as sct:
-                screenshot = sct.grab(monitor)
-                img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-
-                img_bytes = io.BytesIO()
-                img.save(img_bytes, format="PNG", optimize=True)
-                img_bytes.seek(0)
-
-                return ScreenshotData(image_data=img_bytes.read(), region=monitor)
-        except Exception as e:
-            logger.error(f"区域截图失败: {e}")
             raise
 
     def close(self):
@@ -667,7 +642,7 @@ class DataCollector:
             if self.video_recorder and self.video_recorder.sct:
                 try:
                     self.video_recorder.sct.close()
-                except:
+                except Exception:
                     pass
                 self.video_recorder.sct = None
 
@@ -835,10 +810,6 @@ class DataCollector:
     def get_events(self) -> List[RecordingEvent]:
         """获取采集的事件列表"""
         return self.events.copy()
-
-    def clear_events(self):
-        """清空事件列表"""
-        self.events.clear()
 
     def is_collecting(self) -> bool:
         """检查是否正在采集"""

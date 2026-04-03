@@ -100,7 +100,7 @@ class VideoRecorder:
             if self.sct:
                 try:
                     self.sct.close()
-                except:
+                except Exception:
                     pass
                 self.sct = None
 

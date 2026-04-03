@@ -15,18 +15,15 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QTextEdit,
-    QFrame,
     QSpacerItem,
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QKeyEvent
-from typing import List, Dict, Any, Optional
-import uuid
+from typing import List, Optional
 
 from src.business.intent.intent_models import Intent, IntentStatus
 from src.ui.widgets.message_option_card import (
-    MessageOptionCard,
     MultiQuestionCard,
 )
 from src.utils.logger import get_logger
@@ -41,7 +38,9 @@ class MessageInputEdit(QTextEdit):
         """处理按键事件"""
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             # Ctrl+Enter 或 Shift+Enter 换行
-            if event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            if event.modifiers() & (
+                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+            ):
                 # 插入换行
                 self.insertPlainText("\n")
                 return
@@ -57,7 +56,6 @@ class IntentConfirmationUI(QWidget):
     """Intent 确认 UI 组件（列表式交互）"""
 
     # 定义信号
-    intent_confirmed = pyqtSignal(str)  # intent_id
     intent_cancelled = pyqtSignal(str)  # intent_id
 
     # 用于与后端通信的信号
@@ -75,11 +73,9 @@ class IntentConfirmationUI(QWidget):
 
         # Agent 模式相关
         self._agent_thread_id: Optional[str] = None
-        self._full_intent_data: Dict[str, Any] = {}
 
         # UI 组件引用
         self._multi_question_card: Optional[MultiQuestionCard] = None
-        self._analysis_summary_card: Optional[QFrame] = None
 
         self.init_ui()
 
@@ -148,7 +144,9 @@ class IntentConfirmationUI(QWidget):
         # 输入框
         self.message_input = MessageInputEdit()
         self.message_input.setObjectName("intent_message_input")
-        self.message_input.setPlaceholderText("输入消息与 AI 沟通... (Enter 发送，Shift+Enter 换行)")
+        self.message_input.setPlaceholderText(
+            "输入消息与 AI 沟通... (Enter 发送，Shift+Enter 换行)"
+        )
         self.message_input.setMinimumHeight(80)
         self.message_input.setMaximumHeight(150)
         self.message_input.textChanged.connect(self._on_input_changed)
@@ -195,7 +193,6 @@ class IntentConfirmationUI(QWidget):
     def _setup_trial_input_state(self, workflow_id: str) -> None:
         """设置 trial 对话的输入就绪状态（去掉加载提示，启用输入框）"""
         self._agent_thread_id = workflow_id
-        self._full_intent_data = {}
         self.current_intent = None
 
         self._remove_loading_label()
@@ -205,6 +202,17 @@ class IntentConfirmationUI(QWidget):
         self.message_input.setEnabled(True)
         self.message_input.clear()
         self.send_button.setEnabled(False)
+
+    def preload_trial_history(self, messages: List[dict]) -> None:
+        """清空旧消息，渲染试用历史，不启用输入框（由后续 add_trial_question 事件激活）"""
+        self._clear_messages()
+        for msg in messages:
+            role = msg.get("role", "assistant")
+            content = msg.get("content", "")
+            if content:
+                self._add_message(role, content, scroll=False)
+        if messages:
+            QTimer.singleShot(100, self._scroll_to_bottom)
 
     def load_trial_history(self, messages: List[dict], workflow_id: str) -> None:
         """加载并渲染 trial 历史对话，开启输入框等待用户继续"""
@@ -231,14 +239,13 @@ class IntentConfirmationUI(QWidget):
         self.status_icon.setText("🔍")
         self.progress_indicator.setText("")
 
-        # 重新启用输入（可能被 show_generating_state / show_success_message 禁用）
+        # 重新启用输入（可能被之前的会话禁用）
         self.message_input.setEnabled(True)
         self.message_input.clear()
         self.send_button.setEnabled(False)
 
         # 重置 Agent 模式上下文
         self._agent_thread_id = None
-        self._full_intent_data = {}
         self.current_intent = None
 
         # 清空消息区域
@@ -259,7 +266,6 @@ class IntentConfirmationUI(QWidget):
 
         # 重置组件引用
         self._multi_question_card = None
-        self._analysis_summary_card = None
 
     def _add_message(self, role: str, content: str, scroll: bool = True):
         """添加消息到对话区域
@@ -294,9 +300,7 @@ class IntentConfirmationUI(QWidget):
         content_label.setObjectName(f"intent_message_content_{role}")
         content_label.setWordWrap(True)
         content_label.setTextFormat(Qt.TextFormat.MarkdownText)
-        content_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
-        )
+        content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         bubble_layout.addWidget(content_label)
 
         container_layout.addWidget(message_bubble)
@@ -338,11 +342,8 @@ class IntentConfirmationUI(QWidget):
         self.message_input.clear()
 
         # 发送反馈到后端
-        if hasattr(self, '_agent_thread_id') and self._agent_thread_id:
-            resume_data = {
-                "action": "feedback",
-                "feedback": message
-            }
+        if hasattr(self, "_agent_thread_id") and self._agent_thread_id:
+            resume_data = {"action": "feedback", "feedback": message}
             self.agent_resume_request.emit(self._agent_thread_id, resume_data)
 
             # 更新状态
@@ -358,9 +359,7 @@ class IntentConfirmationUI(QWidget):
         # 关闭对话框（如果在对话框中）
         self.parent().close() if self.parent() else None
 
-    def load_intent_from_agent(
-        self, intent_data: dict, message: str, thread_id: str
-    ) -> None:
+    def load_intent_from_agent(self, intent_data: dict, message: str, thread_id: str) -> None:
         """
         从 Agent 加载意图数据（一次性显示所有问题）
 
@@ -373,9 +372,6 @@ class IntentConfirmationUI(QWidget):
 
         # 保存 thread_id 用于后续恢复 Agent
         self._agent_thread_id = thread_id
-
-        # 保存完整数据
-        self._full_intent_data = intent_data
 
         try:
             # 提取基本信息
@@ -400,14 +396,6 @@ class IntentConfirmationUI(QWidget):
                 analysis_confidence=intent_info.get("confidence", 0.8),
             )
             intent.status = IntentStatus.PENDING_CONFIRMATION
-
-            # 保存完整分析数据
-            intent._description = intent_info.get("description", "")
-            intent._intent_type = intent_info.get("intent_type", "unknown")
-            intent._pattern_recognition = intent_data.get("pattern_recognition", {})
-            intent._intent_analysis = intent_data.get("intent_analysis", {})
-            intent._parameterization_analysis = intent_data.get("parameterization_analysis", [])
-            intent._tool_description = intent_data.get("tool_description", {})
 
             self.current_intent = intent
 
@@ -454,11 +442,13 @@ class IntentConfirmationUI(QWidget):
             item = self.messages_layout.itemAt(i)
             if item and item.widget():
                 widget = item.widget()
-                if hasattr(widget, 'objectName') and widget.objectName() == "intent_loading_label":
+                if hasattr(widget, "objectName") and widget.objectName() == "intent_loading_label":
                     widget.deleteLater()
                     return
 
-    def _add_assistant_bubble_with_questions(self, intent_data: dict, message: str, questions: list):
+    def _add_assistant_bubble_with_questions(
+        self, intent_data: dict, message: str, questions: list
+    ):
         """创建包含分析摘要和问题的 AI 消息气泡"""
         # 创建消息容器
         message_container = QWidget()
@@ -493,7 +483,9 @@ class IntentConfirmationUI(QWidget):
         if questions:
             self._multi_question_card = MultiQuestionCard()
             self._multi_question_card.set_questions(questions)
-            self._multi_question_card.all_questions_answered.connect(self._on_all_questions_answered)
+            self._multi_question_card.all_questions_answered.connect(
+                self._on_all_questions_answered
+            )
             bubble_layout.addWidget(self._multi_question_card)
 
         container_layout.addWidget(message_bubble)
@@ -543,130 +535,6 @@ class IntentConfirmationUI(QWidget):
             summary_layout.addWidget(tool_label)
 
         return summary_widget
-
-    def _remove_old_cards(self):
-        """移除旧的卡片组件（保留对话历史）"""
-        items_to_remove = []
-
-        for i in range(self.messages_layout.count()):
-            item = self.messages_layout.itemAt(i)
-            if item and item.widget():
-                widget = item.widget()
-                # 检查是否是卡片组件或确认按钮
-                if isinstance(widget, MultiQuestionCard):
-                    items_to_remove.append((i, widget))
-                # 检查 objectName
-                elif hasattr(widget, 'objectName'):
-                    name = widget.objectName()
-                    if name == 'analysis_summary_card':
-                        items_to_remove.append((i, widget))
-
-        # 从后往前移除
-        for i, widget in reversed(items_to_remove):
-            widget.deleteLater()
-            self.messages_layout.takeAt(i)
-
-        # 重置组件引用
-        self._multi_question_card = None
-
-    # ===== 兼容旧接口的方法 =====
-
-    def on_intent_analyzed(self, intent_data: dict):
-        """处理意图分析完成消息（兼容旧接口）"""
-        try:
-            intent = Intent.from_dict(intent_data)
-            self.logger.info(f"收到意图分析结果: {intent.intent_id}")
-            QTimer.singleShot(0, lambda: self._set_confirmation_state(intent))
-        except Exception as e:
-            self.logger.error(f"处理意图分析消息失败: {e}")
-
-    def _set_confirmation_state(self, intent: Intent):
-        """设置确认状态（兼容旧接口）"""
-        self.current_intent = intent
-        self.status_label.setText("请确认以下分析结果：")
-        self.status_icon.setText("✅")
-        self._clear_messages()
-
-        # 显示简单的确认消息
-        self._add_message("assistant", f"我已分析完成您的操作！\n\n**目标**：{intent.target or '未识别'}\n\n请确认以上分析是否正确。")
-
-    def on_intent_updated(self, data: dict):
-        """处理意图更新消息（兼容旧接口）"""
-        try:
-            intent_data = data.get("intent", {})
-            intent = Intent.from_dict(intent_data)
-            self.logger.info(f"收到意图更新: {intent.intent_id}")
-            QTimer.singleShot(0, lambda: self._set_confirmation_state(intent))
-            ai_message = data.get("ai_message", "意图已更新")
-            QTimer.singleShot(0, lambda: self._add_message("assistant", ai_message))
-        except Exception as e:
-            self.logger.error(f"处理意图更新消息失败: {e}")
-
-    def on_intent_confirmed(self, intent_id: str):
-        """处理意图确认消息（兼容旧接口）"""
-        self.logger.info(f"意图已确认: {intent_id}")
-        self.status_label.setText("✅ 意图已确认！正在生成工作流...")
-
-    def load_intent(self, intent: Intent):
-        """加载意图数据（兼容旧接口）"""
-        self.current_intent = intent
-        if intent.status == IntentStatus.ANALYZING:
-            self._set_analyzing_state()
-        elif intent.status == IntentStatus.PENDING_CONFIRMATION:
-            self._set_confirmation_state(intent)
-        elif intent.status == IntentStatus.CONFIRMED:
-            self.status_label.setText("✅ 意图已确认")
-            self.status_icon.setText("✅")
-
-    def get_confirmed_operations(self) -> List[str]:
-        """获取用户确认的操作列表（兼容旧接口）"""
-        if not self.current_intent:
-            return []
-        return self.current_intent.confirmed_operations
-
-    def get_confirmation_answers(self) -> Dict[str, str]:
-        """获取所有确认问题的回答"""
-        if self._multi_question_card:
-            return self._multi_question_card.get_answers()
-        return {}
-
-    def show_success_message(self, tool_draft: object) -> None:
-        """
-        显示工具生成成功消息
-
-        Args:
-            tool_draft: 生成的工具草稿
-        """
-        tool_name = getattr(tool_draft, 'tool_name', '未知工具')
-        description = getattr(tool_draft, 'description', '暂无描述')
-
-        # 添加 AI 成功消息
-        success_message = f"✅ **工具生成成功！**\n\n**工具名称**：{tool_name}\n**描述**：{description}"
-        self._add_message("assistant", success_message)
-
-        # 更新状态栏
-        self.status_label.setText("✅ 工具生成成功！")
-        self.progress_indicator.setText("即将跳转到技能列表...")
-        self.status_icon.setText("🎉")
-
-        # 滚动到底部
-        QTimer.singleShot(100, self._scroll_to_bottom)
-
-        # 禁用输入和按钮
-        self.message_input.setEnabled(False)
-        self.send_button.setEnabled(False)
-
-    def show_generating_state(self) -> None:
-        """
-        显示"正在学习技能"状态（PM 确认完毕、程序员开始工作时调用）
-        """
-        self.status_icon.setText("📖")
-        self.status_label.setText("正在学习技能中，学习完后会找您考核")
-        self.progress_indicator.setText("")
-        # 禁用输入——页面 2 秒后会自动切走，但防期间用户误操作
-        self.message_input.setEnabled(False)
-        self.send_button.setEnabled(False)
-        # 不再添加消息气泡——页面 2 秒后会自动切走，气泡来不及看
 
     def cleanup(self):
         """清理资源"""

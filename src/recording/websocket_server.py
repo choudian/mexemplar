@@ -119,7 +119,7 @@ class WebSocketServer:
 
         elif msg_type == "pong":
             # 心跳响应
-            logger.debug(f"[WS] 收到心跳响应")
+            logger.debug("[WS] 收到心跳响应")
 
         elif msg_type == "browser_action":
             # 浏览器事件（已由 message_handler 处理）
@@ -354,11 +354,3 @@ class WebSocketServer:
         """检查服务器是否运行"""
         return self._is_running and len(self.clients) > 0
 
-    def get_stats(self) -> Dict[str, Any]:
-        """
-        获取统计信息
-
-        Returns:
-            统计数据
-        """
-        return self.stats.copy()

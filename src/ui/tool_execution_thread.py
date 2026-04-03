@@ -7,7 +7,6 @@
 from PyQt6.QtCore import QThread, pyqtSignal, QMutex, QMutexLocker
 from PyQt6.QtWidgets import QApplication, QDialog
 from typing import Dict, Any, Optional
-import logging
 
 from src.data.models import Tool
 from src.utils.logger import get_logger
@@ -124,11 +123,6 @@ class ToolExecutionThread(QThread):
         self.logger.info(f"用户请求取消执行: {self.tool.tool_name}")
         with QMutexLocker(self._mutex):
             self._is_cancelled = True
-
-    def is_cancelled(self) -> bool:
-        """检查是否已取消"""
-        with QMutexLocker(self._mutex):
-            return self._is_cancelled
 
     def get_result(self) -> tuple[bool, Optional[Any], Optional[str]]:
         """

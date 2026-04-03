@@ -4,17 +4,14 @@
 负责协调数据采集、存储和管理录制过程
 """
 
-import json
 import uuid
 import logging
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-import os
 from .data_collector import DataCollector, RecordingEvent, ScreenshotData
 from src.utils.events import emit, RecordingEventData
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -489,7 +486,7 @@ class Recorder:
                     and not self.browser_recorder.page._is_closed
                 ):
                     window_title = self.browser_recorder.page.title()
-        except Exception as e:
+        except Exception:
             # 静默忽略所有错误（跨线程、页面关闭等）
             # 不记录日志，避免干扰用户
             pass
@@ -578,61 +575,6 @@ class Recorder:
 
         return actions
 
-    def save_recording(self, session: Optional[RecordingSession] = None) -> Optional[str]:
-        """
-        保存录制数据
-
-        Args:
-            session: 录制会话，如果为None则使用当前会话
-
-        Returns:
-            保存的文件路径
-        """
-        if session is None:
-            session = self.current_session
-
-        if session is None:
-            logger.error("没有可保存的录制会话")
-            return None
-
-        try:
-            # 保存为JSON文件
-            file_path = self.storage_path / f"{session.recording_id}.json"
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(session.to_dict(), f, indent=2, ensure_ascii=False)
-
-            logger.info(f"录制数据已保存: {file_path}")
-            return str(file_path)
-        except Exception as e:
-            logger.error(f"保存录制数据失败: {e}")
-            raise
-
-    def load_recording(self, recording_id: str) -> Optional[RecordingSession]:
-        """
-        加载录制数据
-
-        Args:
-            recording_id: 录制会话ID
-
-        Returns:
-            录制会话对象
-        """
-        try:
-            file_path = self.storage_path / f"{recording_id}.json"
-            if not file_path.exists():
-                logger.error(f"录制文件不存在: {file_path}")
-                return None
-
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            session = RecordingSession.from_dict(data)
-            logger.info(f"录制数据已加载: {recording_id}")
-            return session
-        except Exception as e:
-            logger.error(f"加载录制数据失败: {e}")
-            return None
-
     def capture_screenshot(self) -> Optional[ScreenshotData]:
         """
         捕获屏幕截图
@@ -645,30 +587,6 @@ class Recorder:
             return None
         else:
             return self.data_collector.capture_screenshot() if self.data_collector else None
-
-    def get_recording_status(self) -> str:
-        """
-        获取录制状态
-
-        Returns:
-            状态字符串
-        """
-        if self.current_session:
-            return self.current_session.status
-        return "idle"
-
-    def get_current_session(self) -> Optional[RecordingSession]:
-        """获取当前录制会话"""
-        return self.current_session
-
-    def clear_session(self):
-        """清空当前会话"""
-        self.current_session = None
-        if self.data_collector:
-            self.data_collector.clear_events()
-        if self.browser_recorder:
-            self.browser_recorder._recent_actions.clear()
-            self.browser_recorder._recent_requests.clear()
 
     def close(self):
         """关闭录制器"""
@@ -687,164 +605,6 @@ class Recorder:
                     self.data_collector.close()
         except Exception as e:
             logger.warning(f"关闭录制器时出错: {e}")
-
-
-# ============================================================================
-# 增强的数据类（Phase 2: DuckDB 集成）
-# ============================================================================
-
-
-@dataclass
-class VisualFeatures:
-    """视觉特征信息"""
-
-    element_position: Dict[str, int] = field(default_factory=dict)  # {x, y, width, height}
-    viewport_position: Dict[str, int] = field(default_factory=dict)  # 相对视口的位置
-    background_color: Optional[str] = None
-    text_color: Optional[str] = None
-    font_size: Optional[int] = None
-    is_visible: bool = True
-    z_index: Optional[int] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "element_position": self.element_position,
-            "viewport_position": self.viewport_position,
-            "background_color": self.background_color,
-            "text_color": self.text_color,
-            "font_size": self.font_size,
-            "is_visible": self.is_visible,
-            "z_index": self.z_index,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "VisualFeatures":
-        """从字典创建"""
-        return cls(
-            element_position=data.get("element_position", {}),
-            viewport_position=data.get("viewport_position", {}),
-            background_color=data.get("background_color"),
-            text_color=data.get("text_color"),
-            font_size=data.get("font_size"),
-            is_visible=data.get("is_visible", True),
-            z_index=data.get("z_index"),
-        )
-
-
-@dataclass
-class SiblingElement:
-    """单个兄弟元素的信息"""
-
-    index: int  # 在列表中的位置
-
-    # 结构信息
-    tag: str
-    class_list: List[str] = field(default_factory=list)
-    xpath: Optional[str] = None
-    css_selector: Optional[str] = None
-
-    # 内容摘要
-    text_summary: Optional[str] = None  # 前 50 字符
-    href: Optional[str] = None
-    src: Optional[str] = None  # 图片/资源
-
-    # 内部结构
-    has_link: bool = False
-    has_image: bool = False
-    child_tags: List[str] = field(default_factory=list)
-
-    # 视觉特征（精简）
-    position: Optional[Dict[str, int]] = None  # {x, y, width, height}
-    background_color: Optional[str] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "index": self.index,
-            "tag": self.tag,
-            "class_list": self.class_list,
-            "xpath": self.xpath,
-            "css_selector": self.css_selector,
-            "text_summary": self.text_summary,
-            "href": self.href,
-            "src": self.src,
-            "has_link": self.has_link,
-            "has_image": self.has_image,
-            "child_tags": self.child_tags,
-            "position": self.position,
-            "background_color": self.background_color,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SiblingElement":
-        """从字典创建"""
-        return cls(
-            index=data["index"],
-            tag=data["tag"],
-            class_list=data.get("class_list", []),
-            xpath=data.get("xpath"),
-            css_selector=data.get("css_selector"),
-            text_summary=data.get("text_summary"),
-            href=data.get("href"),
-            src=data.get("src"),
-            has_link=data.get("has_link", False),
-            has_image=data.get("has_image", False),
-            child_tags=data.get("child_tags", []),
-            position=data.get("position"),
-            background_color=data.get("background_color"),
-        )
-
-
-@dataclass
-class SiblingsSnapshot:
-    """兄弟元素快照"""
-
-    container_selector: Optional[str] = None
-    item_selector: Optional[str] = None
-    list_type: Optional[str] = None  # 'list', 'grid', 'table'
-    structure_similarity: float = 0.0
-    is_homogeneous: bool = False
-    clicked_index: int = -1
-    total_count: int = 0
-    siblings: List[SiblingElement] = field(default_factory=list)
-    timestamp: float = 0.0
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "container_selector": self.container_selector,
-            "item_selector": self.item_selector,
-            "list_type": self.list_type,
-            "structure_similarity": self.structure_similarity,
-            "is_homogeneous": self.is_homogeneous,
-            "clicked_index": self.clicked_index,
-            "total_count": self.total_count,
-            "siblings": [s.to_dict() for s in self.siblings],
-            "timestamp": self.timestamp,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "SiblingsSnapshot":
-        """从字典创建"""
-        siblings = []
-        for sibling_data in data.get("siblings", []):
-            if isinstance(sibling_data, dict):
-                siblings.append(SiblingElement.from_dict(sibling_data))
-            elif isinstance(sibling_data, SiblingElement):
-                siblings.append(sibling_data)
-
-        return cls(
-            container_selector=data.get("container_selector"),
-            item_selector=data.get("item_selector"),
-            list_type=data.get("list_type"),
-            structure_similarity=data.get("structure_similarity", 0.0),
-            is_homogeneous=data.get("is_homogeneous", False),
-            clicked_index=data.get("clicked_index", -1),
-            total_count=data.get("total_count", 0),
-            siblings=siblings,
-            timestamp=data.get("timestamp", 0.0),
-        )
 
 
 @dataclass
@@ -883,100 +643,4 @@ class NetworkRequestDetail(NetworkRequest):
             duration=base_request.duration,
             response_body_parsed=data.get("response_body_parsed"),
             is_json_response=data.get("is_json_response", False),
-        )
-
-
-@dataclass
-class EnhancedAction(Action):
-    """增强的操作类，继承自 Action"""
-
-    # 新增字段
-    dom_tree_snapshot: Optional[Dict[str, Any]] = None  # 完整 DOM 树快照
-    visual_features: Optional[VisualFeatures] = None  # 视觉特征
-    siblings_snapshot: Optional[SiblingsSnapshot] = None  # 兄弟元素快照
-    network_requests_detail: Optional[List[NetworkRequestDetail]] = None  # 增强的网络请求
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        data = super().to_dict()
-
-        # 添加新字段
-        if self.dom_tree_snapshot:
-            data["dom_tree_snapshot"] = self.dom_tree_snapshot
-
-        if self.visual_features:
-            data["visual_features"] = self.visual_features.to_dict()
-
-        if self.siblings_snapshot:
-            data["siblings_snapshot"] = self.siblings_snapshot.to_dict()
-
-        if self.network_requests_detail:
-            data["network_requests_detail"] = [
-                req.to_dict() for req in self.network_requests_detail
-            ]
-
-        return data
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "EnhancedAction":
-        """从字典创建"""
-        # 先创建 Action 基类
-        action = Action.from_dict(data)
-
-        # 解析视觉特征
-        visual_features = None
-        if data.get("visual_features"):
-            visual_features = VisualFeatures.from_dict(data["visual_features"])
-
-        # 解析兄弟元素快照
-        siblings_snapshot = None
-        if data.get("siblings_snapshot"):
-            siblings_snapshot = SiblingsSnapshot.from_dict(data["siblings_snapshot"])
-
-        # 解析增强的网络请求
-        network_requests_detail = None
-        if data.get("network_requests_detail"):
-            network_requests_detail = [
-                NetworkRequestDetail.from_dict(req) for req in data["network_requests_detail"]
-            ]
-
-        return cls(
-            action_type=action.action_type,
-            recording_mode=action.recording_mode,
-            app_name=action.app_name,
-            process_name=action.process_name,
-            app_path=action.app_path,
-            process_id=action.process_id,
-            window_title=action.window_title,
-            parameters=action.parameters,
-            screenshot_before=action.screenshot_before,
-            screenshot_after=action.screenshot_after,
-            url=action.url,
-            dom_element=action.dom_element,
-            network_requests=action.network_requests,
-            timestamp=action.timestamp,
-            dom_tree_snapshot=data.get("dom_tree_snapshot"),
-            visual_features=visual_features,
-            siblings_snapshot=siblings_snapshot,
-            network_requests_detail=network_requests_detail,
-        )
-
-    @classmethod
-    def from_action(cls, action: Action) -> "EnhancedAction":
-        """从 Action 转换为 EnhancedAction"""
-        return cls(
-            action_type=action.action_type,
-            recording_mode=action.recording_mode,
-            app_name=action.app_name,
-            process_name=action.process_name,
-            app_path=action.app_path,
-            process_id=action.process_id,
-            window_title=action.window_title,
-            parameters=action.parameters,
-            screenshot_before=action.screenshot_before,
-            screenshot_after=action.screenshot_after,
-            url=action.url,
-            dom_element=action.dom_element,
-            network_requests=action.network_requests,
-            timestamp=action.timestamp,
         )

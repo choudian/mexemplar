@@ -17,7 +17,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

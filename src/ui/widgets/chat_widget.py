@@ -22,12 +22,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QStackedWidget,
     QSizePolicy,
-    QMenu,
-    QDialog,
-    QCheckBox,
-    QDialogButtonBox,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QKeyEvent, QPixmap
 from src.business.agents.config import AgentType
 from src.utils.logger import get_logger
@@ -263,6 +259,7 @@ class ChatWidget(QWidget):
         """从数据库加载会话列表"""
         try:
             from src.data.repositories import SessionRepository, MessageRepository
+
             session_repo = SessionRepository()
             msg_repo = MessageRepository()
             sessions = session_repo.get_by_agent_type(AgentType.ASSISTANT, limit=200)
@@ -280,13 +277,15 @@ class ChatWidget(QWidget):
                 title = first_user_msg[:50] if first_user_msg else "新对话"
                 preview_text = first_user_msg[:120] if first_user_msg else ""
 
-                self._all_sessions.append({
-                    "session_id": s.session_id,
-                    "title": title,
-                    "preview": preview_text,
-                    "date": s.created_at,
-                    "date_str": s.created_at.strftime("%m/%d %H:%M") if s.created_at else "",
-                })
+                self._all_sessions.append(
+                    {
+                        "session_id": s.session_id,
+                        "title": title,
+                        "preview": preview_text,
+                        "date": s.created_at,
+                        "date_str": s.created_at.strftime("%m/%d %H:%M") if s.created_at else "",
+                    }
+                )
         except Exception as e:
             self.logger.error(f"加载会话列表失败: {e}")
             self._all_sessions = []
@@ -300,7 +299,8 @@ class ChatWidget(QWidget):
             return self._all_sessions
         keyword = self._search_text.lower()
         return [
-            s for s in self._all_sessions
+            s
+            for s in self._all_sessions
             if keyword in s["title"].lower() or keyword in s["preview"].lower()
         ]
 
@@ -319,15 +319,15 @@ class ChatWidget(QWidget):
         )
 
         for s in filtered[:show_count]:
-            card = SessionCard(
-                s["session_id"], s["title"], s["preview"], s["date_str"]
-            )
+            card = SessionCard(s["session_id"], s["title"], s["preview"], s["date_str"])
             card.clicked.connect(self._on_session_card_clicked)
             self._cards_layout.addWidget(card)
 
         # 空状态提示
         if show_count == 0:
-            hint_text = "没有找到匹配的对话" if self._search_text else "还没有对话，点击「新建对话」开始吧"
+            hint_text = (
+                "没有找到匹配的对话" if self._search_text else "还没有对话，点击「新建对话」开始吧"
+            )
             empty_label = QLabel(hint_text)
             empty_label.setObjectName("chats_empty_hint")
             empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -353,11 +353,6 @@ class ChatWidget(QWidget):
         """点击会话卡片 → 切换到对话视图"""
         self._switch_to_session(session_id)
         self._stack.setCurrentIndex(self.VIEW_CONVERSATION)
-
-    def _show_session_list(self):
-        """返回会话列表视图"""
-        self._load_sessions()
-        self._stack.setCurrentIndex(self.VIEW_SESSION_LIST)
 
     # =========================================================================
     # 对话视图：会话管理
@@ -385,6 +380,7 @@ class ChatWidget(QWidget):
         """从数据库加载会话历史消息（只加载非归档消息）"""
         try:
             from src.data.repositories import MessageRepository
+
             repo = MessageRepository()
             messages = repo.get_context(session_id)  # 只返回非 archived 消息
             if not messages:
@@ -443,7 +439,10 @@ class ChatWidget(QWidget):
         icon_path = Path(__file__).parent.parent / "resources" / "icons" / "app_icon.png"
         if icon_path.exists():
             pixmap = QPixmap(str(icon_path)).scaled(
-                32, 32, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                32,
+                32,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
             icon_label.setPixmap(pixmap)
         icon_label.setFixedSize(32, 32)
@@ -558,6 +557,7 @@ class ChatWidget(QWidget):
             # 触发跨会话记忆生成（后台异步）
             try:
                 from src.business.memory.assistant_memory import get_memory_manager
+
                 get_memory_manager().trigger_on_new_session(self._session_id)
             except Exception as e:
                 self.logger.warning(f"触发记忆生成失败: {e}")
@@ -606,6 +606,7 @@ class ChatWidget(QWidget):
         """从用户偏好档案获取称呼"""
         try:
             from src.data.repositories import AssistantProfileRepository
+
             profile = AssistantProfileRepository().get_default()
             return profile.display_name if profile and profile.display_name else ""
         except Exception:
@@ -658,58 +659,3 @@ class ChatWidget(QWidget):
         except Exception as e:
             self.logger.error(f"创建会话失败: {e}")
         return session_id
-
-    def _show_tool_selection_dialog(self):
-        """弹出工具选择 dialog，返回选中的 tool_id 列表，用户取消则返回 None"""
-        try:
-            from src.data.repositories import ToolRepository
-            tools = ToolRepository().get_published()
-        except Exception as e:
-            self.logger.error(f"获取工具列表失败: {e}")
-            return None
-
-        if not tools:
-            return None
-
-        dialog = QDialog(self)
-        dialog.setWindowTitle("选择工具")
-        dialog.setMinimumWidth(360)
-        layout = QVBoxLayout(dialog)
-
-        hint = QLabel("勾选本次会话要使用的工具（默认全选）：")
-        hint.setWordWrap(True)
-        layout.addWidget(hint)
-
-        checkboxes = []
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setMaximumHeight(300)
-        tool_list_widget = QWidget()
-        tool_list_layout = QVBoxLayout(tool_list_widget)
-        for tool in tools:
-            cb = QCheckBox(f"{tool.tool_name}  —  {tool.description or ''}")
-            cb.setChecked(True)
-            cb.setProperty("tool_id", tool.tool_id)
-            checkboxes.append(cb)
-            tool_list_layout.addWidget(cb)
-        scroll.setWidget(tool_list_widget)
-        layout.addWidget(scroll)
-
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return None
-
-        selected = [cb.property("tool_id") for cb in checkboxes if cb.isChecked()]
-        # 未选中任何工具时等同于取消
-        if not selected:
-            return None
-        # 如果全选则等同于 None（全部）
-        if len(selected) == len(tools):
-            return None
-        return selected

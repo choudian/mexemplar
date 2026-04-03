@@ -168,14 +168,3 @@ class BrowserURLCapturer:
 
         return None
 
-    def get_clicked_url(self, process_id: Optional[int], x: int, y: int) -> Optional[str]:
-        """
-        获取被点击位置的URL（如果是链接）
-
-        注意：这个方法比较复杂，需要知道页面的DOM结构
-        暂时不实现，可以在后续版本中添加
-        """
-        # 这个方法需要在点击后通过UI Automation或DOM查询获取
-        # 暂时不实现，因为需要知道页面DOM结构
-        # 可以在后续通过Playwright连接到浏览器时实现
-        return None

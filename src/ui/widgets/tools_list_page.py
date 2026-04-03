@@ -16,7 +16,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QGridLayout,
 )
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from src.utils.logger import get_logger
 
 

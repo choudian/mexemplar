@@ -4,7 +4,7 @@
 分析用户录制操作的意图，基于完整的提示词设计。
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any
 from langchain_core.messages import AIMessage
 import logging
 import json
@@ -320,7 +320,7 @@ def _extract_parameters(result: Dict[str, Any]) -> Dict[str, Any]:
     parameters = {}
 
     for item in result.get("parameterization_analysis", []):
-        if item.get("should_parameterize") == True:
+        if item.get("should_parameterize"):
             param_name = item.get("parameter_name", "")
             if param_name:
                 parameters[param_name] = {

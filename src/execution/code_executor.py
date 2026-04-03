@@ -11,7 +11,7 @@ import logging
 import sys
 import traceback
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from pathlib import Path
 import tempfile
 

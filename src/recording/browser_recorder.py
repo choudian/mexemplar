@@ -11,15 +11,12 @@
 import logging
 import json
 import time
-import threading
 import os
-import tempfile
 import asyncio  # ⭐ 新增：异步支持
 from contextlib import contextmanager  # ⭐ 新增：上下文管理器支持
 from typing import Optional, List, Dict, Any, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from enum import Enum
 
 from src.data.unified_config import get_unified_config
 
@@ -123,7 +120,6 @@ class BrowserRecorder:
 
         # ⭐ WebSocket 服务器（替代 Native Messaging）
         self._ws_server = None
-        self._ws_thread = None
 
         # 事件回调（用于实时处理）
         self.on_action: Optional[Callable[[BrowserAction], None]] = None
@@ -219,11 +215,6 @@ class BrowserRecorder:
             logger.info("资源清理完成")
         except Exception as e:
             logger.error(f"清理资源时出错: {e}", exc_info=True)
-
-    def _get_default_extension_path(self) -> Path:
-        """获取扩展路径"""
-        project_root = Path(__file__).parent.parent.parent
-        return project_root / "src" / "recording" / "browser_extension"
 
     def _get_queue_paths(self, recording_id: str):
         """获取队列文件路径（WebSocket 模式只需要 action_queue）"""
@@ -499,7 +490,7 @@ class BrowserRecorder:
                                     # 等待页面加载
                                     try:
                                         if page.url == "about:blank" or not page.url:
-                                            logger.info(f"[POLLED] 页面 URL 为空，等待导航...")
+                                            logger.info("[POLLED] 页面 URL 为空，等待导航...")
                                             page.wait_for_load_state(
                                                 "domcontentloaded", timeout=10000
                                             )
@@ -1027,7 +1018,7 @@ class BrowserRecorder:
         # 7. 设置录制状态
         self._is_recording = True
 
-        logger.info(f"浏览器录制已启动 (WebSocket 模式)")
+        logger.info("浏览器录制已启动 (WebSocket 模式)")
         logger.info(f"   - recording_id: {self._recording_id}")
         logger.info(f"   - 队列文件: {self._action_queue_path}")
         # ⭐ 从配置读取 WebSocket 地址
@@ -1142,7 +1133,7 @@ class BrowserRecorder:
         self._page = None
         self._playwright = None
 
-        logger.info(f"浏览器录制已停止 (WebSocket 模式)")
+        logger.info("浏览器录制已停止 (WebSocket 模式)")
         logger.info(f"   - recording_id: {self._recording_id}")
         logger.info(f"   - 队列文件: {self._action_queue_path}")
         logger.info(f"   - 事件数量: {action_count}")
@@ -1167,7 +1158,6 @@ class BrowserRecorder:
             end_time: 录制结束时间
             action_count: 操作数量
         """
-        from src.recording.recorder import Action, NetworkRequest
 
         # RecordingRepository 在 __init__ 时已初始化，直接使用
 
@@ -1215,7 +1205,7 @@ class BrowserRecorder:
                                     action_dict["_extracted_network_request"]
                                 )
                             logger.debug(
-                                f"跳过独立的 network_request action，直接保存到 network_requests 表"
+                                "跳过独立的 network_request action，直接保存到 network_requests 表"
                             )
                         else:
                             actions_list.append(action_dict)
@@ -1370,22 +1360,3 @@ class BrowserRecorder:
         """检查是否正在录制"""
         return self._is_recording
 
-    def import_from_json(self, file_path: Path):
-        """
-        从JSON文件导入浏览器插件录制的数据
-
-        Args:
-            file_path: JSON文件路径（由插件导出的文件）
-
-        Returns:
-            RecordingSession对象
-        """
-        from .recorder_import import import_recording_from_json
-
-        logger.info(f"从JSON文件导入浏览器录制数据: {file_path}")
-
-        session = import_recording_from_json(file_path)
-
-        logger.info(f"导入成功: {session.recording_id}, 操作数: {len(session.actions)}")
-
-        return session

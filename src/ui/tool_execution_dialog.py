@@ -12,17 +12,13 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QLineEdit,
     QTextEdit,
-    QProgressBar,
     QScrollArea,
     QFrame,
     QMessageBox,
     QWidget,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QThread, QTimer
-from PyQt6.QtGui import QKeyEvent
+from PyQt6.QtCore import Qt
 from typing import Dict, Any, Optional, List
-import asyncio
-import sys
 
 from src.data.models import Tool
 from src.utils.logger import get_logger
@@ -242,11 +238,7 @@ class ToolExecutionDialog(QDialog):
         for param_widget in self.parameter_widgets:
             if not param_widget.is_valid():
                 param_name = param_widget.param.get("name", "参数")
-                QMessageBox.warning(
-                    self,
-                    "参数验证失败",
-                    f"请填写必填参数：{param_name}"
-                )
+                QMessageBox.warning(self, "参数验证失败", f"请填写必填参数：{param_name}")
                 return
 
         # 所有参数有效，接受对话框
@@ -265,8 +257,15 @@ class ToolExecutionDialog(QDialog):
 class ExecutionResultDialog(QDialog):
     """执行结果对话框"""
 
-    def __init__(self, tool_name: str, success: bool, result: Optional[Dict[str, Any]] = None,
-                 error: Optional[str] = None, execution_log: Optional[str] = None, parent=None):
+    def __init__(
+        self,
+        tool_name: str,
+        success: bool,
+        result: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
+        execution_log: Optional[str] = None,
+        parent=None,
+    ):
         super().__init__(parent)
         self.tool_name = tool_name
         self.success = success
@@ -361,6 +360,7 @@ class ExecutionResultDialog(QDialog):
     def _format_result(self, result: Dict[str, Any]) -> str:
         """格式化结果"""
         import json
+
         try:
             return json.dumps(result, indent=2, ensure_ascii=False)
         except Exception:
@@ -374,7 +374,9 @@ class ToolExecutor:
         self.logger = get_logger(__name__)
         self.executor = None  # WorkflowExecutor 实例
 
-    def execute_tool(self, tool: Tool, parameters: Dict[str, Any]) -> tuple[bool, Optional[Any], Optional[str]]:
+    def execute_tool(
+        self, tool: Tool, parameters: Dict[str, Any]
+    ) -> tuple[bool, Optional[Any], Optional[str]]:
         """
         执行工具
 
@@ -406,7 +408,9 @@ class ToolExecutor:
             self.logger.error(error_msg, exc_info=True)
             return False, None, error_msg
 
-    def _execute_standalone_script(self, tool: Tool, parameters: Dict[str, Any]) -> tuple[bool, Optional[Any], Optional[str]]:
+    def _execute_standalone_script(
+        self, tool: Tool, parameters: Dict[str, Any]
+    ) -> tuple[bool, Optional[Any], Optional[str]]:
         """执行独立脚本（使用 subprocess 隔离执行环境）"""
         import subprocess
         import sys
@@ -415,7 +419,9 @@ class ToolExecutor:
         from pathlib import Path
 
         # 创建临时脚本文件
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".py", delete=False, encoding="utf-8"
+        ) as f:
             script_path = f.name
             f.write(tool.execution_code)
 
@@ -427,18 +433,14 @@ class ToolExecutor:
 
             # 执行脚本
             result = subprocess.run(
-                cmd_args,
-                capture_output=True,
-                text=True,
-                timeout=300,  # 5分钟超时
-                encoding='utf-8'
+                cmd_args, capture_output=True, text=True, timeout=300, encoding="utf-8"  # 5分钟超时
             )
 
             # 解析输出
             if result.returncode == 0:
                 try:
                     output = json.loads(result.stdout.strip())
-                    success = output.get('success', False)
+                    success = output.get("success", False)
                     return success, output, None
                 except json.JSONDecodeError as e:
                     return False, None, f"无法解析输出: {e}"
@@ -456,18 +458,3 @@ class ToolExecutor:
                 Path(script_path).unlink()
             except Exception:
                 pass
-
-    def execute_tool_async(self, tool: Tool, parameters: Dict[str, Any]) -> tuple[bool, Optional[Any], Optional[str]]:
-        """
-        同步执行工具（简化版本，直接调用 execute_tool）
-
-        Args:
-            tool: 工具定义
-            parameters: 执行参数
-
-        Returns:
-            (success, result, error) - 成功标志、结果、错误信息
-        """
-        # 简化版本：直接调用同步方法
-        # TODO: 未来可以实现真正的异步执行
-        return self.execute_tool(tool, parameters)

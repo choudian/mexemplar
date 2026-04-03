@@ -6,14 +6,13 @@ Agent UI 桥接层
 
 import threading
 import time
-from typing import Optional, Dict, Any, Callable, List
+from typing import Optional, Dict, Any, Callable
 from dataclasses import dataclass
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
 from .graph import create_agent_graph
-from .state import AgentState
-from .checkpointer import get_memory_checkpointer, get_checkpointer_context
+from .checkpointer import get_memory_checkpointer
 
 
 @dataclass
@@ -62,18 +61,6 @@ class AgentUIBridge(QObject):
 
         # 是否使用持久化
         self._use_persistence = use_persistence
-
-    def _get_checkpointer_context(self):
-        """获取 checkpointer 上下文管理器"""
-        if self._use_persistence:
-            return get_checkpointer_context()
-        else:
-            # MemorySaver 不需要上下文管理器，包装一下保持接口一致
-            from contextlib import contextmanager
-            @contextmanager
-            def memory_context():
-                yield get_memory_checkpointer()
-            return memory_context()
 
     def _create_checkpointer(self):
         """
@@ -220,66 +207,6 @@ class AgentUIBridge(QObject):
         thread = threading.Thread(target=resume_agent, daemon=True)
         thread.start()
 
-    def start_chat_conversation(
-        self,
-        thread_id: str,
-        user_message: str
-    ):
-        """
-        启动普通对话流程
-
-        Args:
-            thread_id: 会话 ID
-            user_message: 用户消息
-        """
-        # 创建会话（不在这里创建 checkpointer）
-        session = AgentSession(
-            thread_id=thread_id,
-            conversation_type="chat",
-            status="running",
-            created_at=time.time(),
-            checkpointer=None  # 将在工作线程中创建
-        )
-        self._sessions[thread_id] = session
-
-        # 启动后台线程
-        def run_agent():
-            try:
-                # 在工作线程中创建 checkpointer（解决跨线程问题）
-                checkpointer = self._create_checkpointer()
-                session.checkpointer = checkpointer
-
-                # 创建 Agent
-                agent = create_agent_graph(
-                    conversation_type="chat",
-                    checkpointer=checkpointer
-                )
-                self._agents[thread_id] = agent
-
-                from langchain_core.messages import HumanMessage
-
-                # 初始状态
-                initial_state = {
-                    "messages": [HumanMessage(content=user_message)],
-                    "conversation_type": "chat"
-                }
-
-                # 执行 Agent
-                config = {"configurable": {"thread_id": thread_id}}
-                result = agent.invoke(initial_state, config)
-
-                # 处理结果
-                self._handle_agent_result(thread_id, result)
-
-            except Exception as e:
-                import traceback
-                self._handle_agent_error(thread_id, f"{str(e)}\n{traceback.format_exc()}")
-
-        # 启动线程
-        thread = threading.Thread(target=run_agent, daemon=True)
-        self._agent_threads[thread_id] = thread
-        thread.start()
-
     def _handle_agent_result(self, thread_id: str, result: Dict[str, Any]):
         """
         处理 Agent 执行结果
@@ -339,12 +266,3 @@ class AgentUIBridge(QObject):
         """获取会话状态"""
         session = self._sessions.get(thread_id)
         return session.status if session else None
-
-    def cleanup_session(self, thread_id: str):
-        """清理会话资源"""
-        if thread_id in self._sessions:
-            del self._sessions[thread_id]
-        if thread_id in self._agents:
-            del self._agents[thread_id]
-        if thread_id in self._agent_threads:
-            del self._agent_threads[thread_id]

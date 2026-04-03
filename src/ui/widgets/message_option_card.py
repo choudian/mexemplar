@@ -9,13 +9,11 @@ from typing import Dict, List, Optional
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QFrame,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QFont
 
 from src.utils.logger import get_logger
 
@@ -41,7 +39,6 @@ class MessageOptionCard(QWidget):
 
         # 当前问题数据
         self._question_data: Optional[Dict] = None
-        self._selected_value: Optional[str] = None
         self._option_buttons: List[QPushButton] = []
 
         self.init_ui()
@@ -90,11 +87,9 @@ class MessageOptionCard(QWidget):
                 - recommended: 推荐选项值（可选）
         """
         self._question_data = question_data
-        self._selected_value = None
 
         # 更新问题文本（包含序号）
         index = question_data.get("index", 1)
-        total = question_data.get("total", 1)
         question_text = question_data.get("question", "")
         self.question_label.setText(f"<b>Q{index}.</b> {question_text}")
 
@@ -118,7 +113,7 @@ class MessageOptionCard(QWidget):
                 value=opt.get("value", ""),
                 label=opt.get("label", ""),
                 impact=opt.get("impact", ""),
-                is_recommended=(opt.get("value") == recommended)
+                is_recommended=(opt.get("value") == recommended),
             )
 
         self.logger.debug(f"设置问题: {question_data.get('id')}, 选项数: {len(options)}")
@@ -130,11 +125,7 @@ class MessageOptionCard(QWidget):
         self._option_buttons.clear()
 
     def _add_option_button(
-        self,
-        value: str,
-        label: str,
-        impact: str = "",
-        is_recommended: bool = False
+        self, value: str, label: str, impact: str = "", is_recommended: bool = False
     ):
         """
         添加一个选项按钮
@@ -196,7 +187,8 @@ class MessageOptionCard(QWidget):
         """
         if state == "selected":
             # 用户选中状态：浅绿色
-            btn.setStyleSheet("""
+            btn.setStyleSheet(
+                """
                 QPushButton {
                     text-align: left;
                     padding-left: 12px;
@@ -206,10 +198,12 @@ class MessageOptionCard(QWidget):
                     color: #2e7d32;
                     font-weight: 500;
                 }
-            """)
+            """
+            )
         else:
             # 未选中状态：无特殊颜色
-            btn.setStyleSheet("""
+            btn.setStyleSheet(
+                """
                 QPushButton {
                     text-align: left;
                     padding-left: 12px;
@@ -218,12 +212,11 @@ class MessageOptionCard(QWidget):
                     border-radius: 6px;
                     color: #424242;
                 }
-            """)
+            """
+            )
 
     def _on_option_clicked(self, value: str, btn: QPushButton):
         """处理选项点击"""
-        self._selected_value = value
-
         # 更新所有按钮样式
         for b in self._option_buttons:
             recommended = b.property("recommended")
@@ -240,150 +233,6 @@ class MessageOptionCard(QWidget):
 
             # 发射信号
             self.option_selected.emit(question_id, value)
-
-    def get_selected_value(self) -> Optional[str]:
-        """获取当前选中的值"""
-        return self._selected_value
-
-    def get_question_id(self) -> Optional[str]:
-        """获取当前问题 ID"""
-        if self._question_data:
-            return self._question_data.get("id")
-        return None
-
-
-class InvalidatedQuestionsCard(QWidget):
-    """
-    废弃问题卡片组件
-
-    显示被用户打断废弃的确认问题。
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        # 主布局
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # 卡片容器
-        self.card = QFrame()
-        self.card.setObjectName("invalidated_questions_card")
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(16, 12, 16, 12)
-        card_layout.setSpacing(8)
-
-        # 警告标题
-        warning_label = QLabel("⚠️ 以下问题已失效（用户提供了新的反馈）")
-        warning_label.setObjectName("warning_label")
-        warning_label.setWordWrap(True)
-        card_layout.addWidget(warning_label)
-
-        # 废弃问题列表容器
-        self.questions_container = QWidget()
-        self.questions_layout = QVBoxLayout(self.questions_container)
-        self.questions_layout.setContentsMargins(0, 0, 0, 0)
-        self.questions_layout.setSpacing(4)
-        card_layout.addWidget(self.questions_container)
-
-        layout.addWidget(self.card)
-
-    def set_invalidated_questions(self, questions: List[Dict]):
-        """
-        设置废弃的问题列表
-
-        Args:
-            questions: 废弃问题列表，每个元素包含：
-                - id: 问题 ID
-                - answer: 用户之前的回答
-        """
-        # 清除旧内容
-        while self.questions_layout.count():
-            child = self.questions_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        # 添加废弃问题
-        for q in questions:
-            q_text = f'<s>问题 {q.get("id")}: 已选答案 - {q.get("answer", "")}</s>'
-            q_label = QLabel(q_text)
-            q_label.setObjectName("invalidated_question_label")
-            q_label.setWordWrap(True)
-            q_label.setTextFormat(Qt.TextFormat.RichText)
-            self.questions_layout.addWidget(q_label)
-
-
-class ConfirmationSummaryCard(QWidget):
-    """
-    确认进度摘要卡片组件
-
-    显示已确认问题的摘要和进度。
-    """
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-
-        # 主布局
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
-
-        # 卡片容器
-        self.card = QFrame()
-        self.card.setObjectName("confirmation_summary_card")
-        card_layout = QVBoxLayout(self.card)
-        card_layout.setContentsMargins(16, 12, 16, 12)
-        card_layout.setSpacing(8)
-
-        # 标题
-        self.title_label = QLabel("✅ 已确认的问题")
-        self.title_label.setObjectName("summary_title_label")
-        card_layout.addWidget(self.title_label)
-
-        # 已确认问题列表容器
-        self.answers_container = QWidget()
-        self.answers_layout = QVBoxLayout(self.answers_container)
-        self.answers_layout.setContentsMargins(0, 0, 0, 0)
-        self.answers_layout.setSpacing(4)
-        card_layout.addWidget(self.answers_container)
-
-        # 剩余问题提示
-        self.remaining_label = QLabel()
-        self.remaining_label.setObjectName("remaining_label")
-        card_layout.addWidget(self.remaining_label)
-
-        layout.addWidget(self.card)
-
-    def set_summary(self, answered: List[Dict], remaining: int, total: int):
-        """
-        设置确认摘要
-
-        Args:
-            answered: 已回答的问题列表
-            remaining: 剩余问题数
-            total: 总问题数
-        """
-        # 清除旧内容
-        while self.answers_layout.count():
-            child = self.answers_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
-        # 添加已回答的问题
-        for ans in answered:
-            ans_text = f"✓ {ans.get('id')}: {ans.get('answer', '')}"
-            ans_label = QLabel(ans_text)
-            ans_label.setObjectName("answered_question_label")
-            ans_label.setWordWrap(True)
-            self.answers_layout.addWidget(ans_label)
-
-        # 更新剩余问题提示
-        if remaining > 0:
-            self.remaining_label.setText(f"📌 还有 {remaining} 个问题需要确认")
-            self.remaining_label.show()
-        else:
-            self.remaining_label.hide()
 
 
 class MultiQuestionCard(QWidget):
@@ -482,21 +331,3 @@ class MultiQuestionCard(QWidget):
         # 检查是否所有问题都已回答
         all_answered = len(self._answers) == len(self._questions)
         self.all_questions_answered.emit(all_answered)
-
-    def get_answers(self) -> Dict[str, str]:
-        """获取所有答案"""
-        return self._answers.copy()
-
-    def get_total_questions(self) -> int:
-        """获取问题总数"""
-        return len(self._questions)
-
-    def is_all_answered(self) -> bool:
-        """检查是否所有问题都已回答"""
-        return len(self._answers) == len(self._questions)
-
-    def get_unanswered_questions(self) -> List[str]:
-        """获取未回答问题的 ID 列表"""
-        answered_ids = set(self._answers.keys())
-        all_ids = {q.get("id") for q in self._questions}
-        return list(all_ids - answered_ids)

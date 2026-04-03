@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QScrollArea,
 )
-from PyQt6.QtCore import Qt
 from src.data.unified_config import get_unified_config
 from src.utils.logger import get_logger
 

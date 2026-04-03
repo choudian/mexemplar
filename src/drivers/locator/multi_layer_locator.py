@@ -336,13 +336,9 @@ class ImageLocator:
 
         try:
             import base64
-            from PIL import Image
-            import io
 
-            # 解码base64图片
-            image_data = base64.b64decode(locator_info.screenshot_base64)
-            template = Image.open(io.BytesIO(image_data))
-            template_array = self.np.array(template)
+            # 解码base64图片（用于后续模板匹配）
+            _image_data = base64.b64decode(locator_info.screenshot_base64)
 
             # 这里需要在实际屏幕截图中查找模板图片
             # 这是一个简化的实现，实际需要：
@@ -410,7 +406,7 @@ class MultiLayerLocator:
         # 策略2：坐标定位
         result = self.coordinate_locator.locate(locator_info)
         if result.success:
-            logger.debug(f"坐标定位成功")
+            logger.debug("坐标定位成功")
             return result
 
         # 策略3：图像识别定位（兜底方案）

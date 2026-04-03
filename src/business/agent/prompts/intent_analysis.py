@@ -461,7 +461,6 @@ def _build_context_info(actions: List[Any], metadata: Optional[Dict[str, Any]] =
     # 从 actions 中提取上下文
     if actions:
         first_action = actions[0]
-        last_action = actions[-1]
 
         # 提取 URL 信息
         urls = set()

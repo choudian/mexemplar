@@ -137,8 +137,6 @@ class ToolEventData:
     tool_id: str
     tool_name: str
     description: str
-    parameter_count: int
-    step_count: int
 
 
 # =============================================================================
@@ -198,9 +196,7 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
     try:
         signal.send(sender, event_name=signal_name, **kwargs)
     except Exception as exc:
-        logger.error(
-            f"[Events] 监听器处理 {signal_name} 时异常: {exc}"
-        )
+        logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}")
 
 
 def list_signals() -> dict:

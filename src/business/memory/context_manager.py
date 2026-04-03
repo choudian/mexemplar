@@ -13,9 +13,8 @@ from typing import List, Optional, Dict
 from src.data.repositories import (
     SessionRepository,
     MessageRepository,
-    WorkflowTransitionRepository,
 )
-from src.data.models_sqlite import Session, Message, WorkflowTransition
+from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
 from .reference_handler import ReferenceHandler
 from .compression_handler import CompressionHandler
@@ -40,7 +39,6 @@ class ContextManager:
         # 初始化 Repository
         self._msg_repo = MessageRepository()
         self._session_repo = SessionRepository()
-        self._wf_repo = WorkflowTransitionRepository()
 
         # 初始化引用替换处理器
         self._reference_handler = ReferenceHandler(config)
@@ -148,6 +146,10 @@ class ContextManager:
             tool_name=tool_name,
         )
 
+    def get_last_message(self):
+        """获取最后一条非归档消息（用于判断是否需要等待用户输入）"""
+        return self._msg_repo.get_last(self.session_id)
+
     def get_pending_tool_call(self) -> Optional[dict]:
         """
         检测 session 是否有待重试的工具调用。
@@ -164,7 +166,9 @@ class ContextManager:
                 tcs = json.loads(last.tool_calls)
                 if tcs:
                     if len(tcs) > 1:
-                        logger.warning(f"[上下文] session {self.session_id} 有多个待重试 tool call，只取第一个")
+                        logger.warning(
+                            f"[上下文] session {self.session_id} 有多个待重试 tool call，只取第一个"
+                        )
                     tc = tcs[0]
                     if "name" not in tc:
                         logger.warning(f"[上下文] 待重试 tool call 缺少 name 字段: {tc}")
@@ -196,6 +200,7 @@ class ContextManager:
         # 摘要 ID 路由：ss_ (会话摘要), gs_ (分组摘要), global_ (全局摘要)
         if reference_id.startswith(("ss_", "gs_", "global_")):
             from src.data.repositories import AssistantSummaryRepository
+
             summary = AssistantSummaryRepository().get_by_summary_id(reference_id)
             if not summary:
                 raise ValueError(f"摘要不存在: {reference_id}")
@@ -225,77 +230,3 @@ class ContextManager:
         """
         self._session_repo.update_status(self.session_id, status)
         logger.debug(f"[会话] {self.session_id} 状态更新为 {status}")
-
-    def fork_session(self, fork_at_sequence: int) -> str:
-        """
-        从指定位置分叉会话，返回新 session_id
-
-        Args:
-            fork_at_sequence: 分叉位置（保留该序号之前的消息）
-
-        Returns:
-            新会话 ID
-        """
-        # 获取原会话信息
-        old_session = self._session_repo.get_by_id(self.session_id)
-        if not old_session:
-            raise ValueError(f"会话不存在: {self.session_id}")
-
-        # 创建新会话
-        new_session = Session(
-            session_id=str(uuid.uuid4()),
-            workflow_id=old_session.workflow_id,
-            agent_type=old_session.agent_type,
-            status="active",
-        )
-        self._session_repo.create(new_session)
-
-        # 复制消息
-        self._msg_repo.bulk_copy(
-            from_session_id=self.session_id,
-            to_session_id=new_session.session_id,
-            up_to_sequence=fork_at_sequence,
-        )
-
-        logger.info(
-            f"[会话] 从 {self.session_id} 分叉到 {new_session.session_id} "
-            f"(保留前 {fork_at_sequence} 条消息)"
-        )
-
-        return new_session.session_id
-
-    # --- 交接记录 ---
-
-    def record_transition(
-        self,
-        to_session_id: str,
-        event_type: str,
-        payload: Optional[Dict] = None,
-    ):
-        """
-        记录 Agent 之间的交接事件
-
-        Args:
-            to_session_id: 目标会话 ID
-            event_type: 事件类型
-            payload: 交接携带的关键数据摘要
-        """
-        # 获取当前会话的 workflow_id
-        current_session = self._session_repo.get_by_id(self.session_id)
-        if not current_session:
-            raise ValueError(f"会话不存在: {self.session_id}")
-
-        transition = WorkflowTransition(
-            transition_id=str(uuid.uuid4()),
-            workflow_id=current_session.workflow_id,
-            from_session_id=self.session_id,
-            to_session_id=to_session_id,
-            event_type=event_type,
-            payload=json.dumps(payload) if payload else None,
-        )
-
-        self._wf_repo.create(transition)
-        logger.info(
-            f"[交接] {self.session_id} → {to_session_id} "
-            f"(事件: {event_type})"
-        )

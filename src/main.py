@@ -321,6 +321,75 @@ signal.signal(signal.SIGTERM, signal_handler)
 atexit.register(cleanup)
 
 
+def _init_logging(args):
+    """根据命令行参数初始化日志系统。
+
+    包含全局日志级别设置和按模块 DEBUG 开启逻辑。
+    """
+    log_level = getattr(logging, args.log_level)
+    setup_logger(name="mexemplar", log_level=log_level, console_output=True, file_output=True)
+
+    if args.log_debug_modules:
+        debug_modules = []
+        for item in args.log_debug_modules:
+            debug_modules.extend(m.strip() for m in item.split(",") if m.strip())
+        for module in debug_modules:
+            logging.getLogger(module).setLevel(logging.DEBUG)
+        # 必须同步降低 root handlers 的 level，否则 DEBUG 消息经传播后会被 handler 过滤掉
+        for handler in logging.getLogger().handlers:
+            handler.setLevel(logging.DEBUG)
+        logger.info(f"[日志] 已为模块开启 DEBUG: {', '.join(debug_modules)}")
+
+
+def _launch_gui():
+    """启动 PyQt6 图形界面。
+
+    Returns:
+        int: app.exec() 的返回值（正常退出），或 1（启动失败）。
+
+    包含完整的错误处理：主窗口启动失败时尝试显示 QMessageBox 错误对话框，
+    若 PyQt6 不可用则回退到控制台输出。
+    """
+    try:
+        from PyQt6.QtWidgets import QApplication, QMessageBox
+        from PyQt6.QtGui import QFont
+        from src.ui.main_window import MainWindow
+
+        app = QApplication([])
+
+        # 设置默认字体，避免 point size <= 0 的警告
+        font = QFont()
+        font.setPointSize(10)
+        font.setFamily("Microsoft YaHei")
+        app.setFont(font)
+
+        window = MainWindow()
+        window.show()
+        return app.exec()
+    except Exception as e:
+        logger.error(f"启动 GUI 失败: {e}", exc_info=True)
+
+        # 尝试显示错误对话框
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            from PyQt6.QtGui import QFont
+
+            error_app = QApplication([])
+            error_app.setFont(QFont("Microsoft YaHei", 10))
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Icon.Critical)
+            msg.setWindowTitle("Mexemplar 启动失败")
+            msg.setText("应用程序初始化失败")
+            msg.setInformativeText(str(e))
+            msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+            msg.exec()
+        except ImportError as ie:
+            console.print(f"[red]GUI 模块导入失败: {ie}[/red]")
+        except Exception as ex:
+            console.print(f"[red]GUI 启动失败: {ex}[/red]")
+        return 1
+
+
 def main():
     """主程序入口"""
     # 先解析参数，以便尽早确定日志级别
@@ -372,20 +441,7 @@ def main():
     args = parser.parse_args()
 
     # 尽早初始化日志，后续所有模块都能按指定级别输出
-    log_level = getattr(logging, args.log_level)
-    setup_logger(name="mexemplar", log_level=log_level, console_output=True, file_output=True)
-
-    # 为指定模块单独开启 DEBUG
-    if args.log_debug_modules:
-        debug_modules = []
-        for item in args.log_debug_modules:
-            debug_modules.extend(m.strip() for m in item.split(",") if m.strip())
-        for module in debug_modules:
-            logging.getLogger(module).setLevel(logging.DEBUG)
-        # 必须同步降低 root handlers 的 level，否则 DEBUG 消息经传播后会被 handler 过滤掉
-        for handler in logging.getLogger().handlers:
-            handler.setLevel(logging.DEBUG)
-        logger.info(f"[日志] 已为模块开启 DEBUG: {', '.join(debug_modules)}")
+    _init_logging(args)
 
     logger.info("=" * 60)
     logger.info("Mexemplar 启动中...")
@@ -417,90 +473,22 @@ def main():
 
     # GUI 模式优先处理
     if args.gui:
-        try:
-            from PyQt6.QtWidgets import QApplication, QMessageBox
-            from PyQt6.QtGui import QFont
-            from src.ui.main_window import MainWindow
-
-            app = QApplication([])
-
-            # 设置默认字体，避免 point size <= 0 的警告
-            font = QFont()
-            font.setPointSize(10)
-            font.setFamily("Microsoft YaHei")
-            app.setFont(font)
-
-            window = MainWindow()
-            window.show()
-            return app.exec()
-        except Exception as e:
-            logger.error(f"启动 GUI 失败: {e}", exc_info=True)
-
-            # 尝试显示错误对话框
-            try:
-                error_app = QApplication([])
-                error_app.setFont(QFont("Microsoft YaHei", 10))
-                msg = QMessageBox()
-                msg.setIcon(QMessageBox.Icon.Critical)
-                msg.setWindowTitle("Mexemplar 启动失败")
-                msg.setText("应用程序初始化失败")
-                msg.setInformativeText(str(e))
-                msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-                msg.exec()
-            except ImportError as ie:
-                console.print(f"[red]GUI 模块导入失败: {ie}[/red]")
-            except Exception as ex:
-                console.print(f"[red]GUI 启动失败: {ex}[/red]")
-            return 1
+        return _launch_gui()
 
     if args.command is None:
         # 无参数时默认启动 GUI（用于打包后的 exe 双击启动）
         # 检测是否在 PyInstaller 打包环境中运行
-        if getattr(sys, 'frozen', False):
+        if getattr(sys, "frozen", False):
             # 打包后的 exe，默认启动 GUI
-            try:
-                from PyQt6.QtWidgets import QApplication, QMessageBox
-                from PyQt6.QtGui import QFont
-                from src.ui.main_window import MainWindow
-
-                app = QApplication([])
-
-                # 设置默认字体，避免 point size <= 0 的警告
-                font = QFont()
-                font.setPointSize(10)
-                font.setFamily("Microsoft YaHei")
-                app.setFont(font)
-
-                window = MainWindow()
-                window.show()
-                return app.exec()
-            except Exception as e:
-                logger.error(f"启动 GUI 失败: {e}", exc_info=True)
-
-                # 尝试显示错误对话框
-                try:
-                    error_app = QApplication([])
-                    error_app.setFont(QFont("Microsoft YaHei", 10))
-                    msg = QMessageBox()
-                    msg.setIcon(QMessageBox.Icon.Critical)
-                    msg.setWindowTitle("Mexemplar 启动失败")
-                    msg.setText("应用程序初始化失败")
-                    msg.setInformativeText(str(e))
-                    msg.setStandardButtons(QMessageBox.StandardButton.Ok)
-                    msg.exec()
-                except ImportError as ie:
-                    console.print(f"[red]GUI 模块导入失败: {ie}[/red]")
-                except Exception as ex:
-                    console.print(f"[red]GUI 启动失败: {ex}[/red]")
-                return 1
+            return _launch_gui()
         else:
             # 开发环境，显示帮助
             console.print(
                 Panel.fit(
                     "[bold blue]Mexemplar CLI[/bold blue]\n[dim]桌面端智能办公助理[/dim]",
-                border_style="blue",
+                    border_style="blue",
+                )
             )
-        )
         console.print(
             "\n[tip]提示: 使用 [cyan]python -m src.main interactive[/cyan] 进入交互式菜单\n"
         )
@@ -544,8 +532,7 @@ def main():
         logger.info("=" * 60)
 
         results = recover_from_queues(
-            overwrite=getattr(args, "overwrite", False),
-            delete_after=getattr(args, "delete", False)
+            overwrite=getattr(args, "overwrite", False), delete_after=getattr(args, "delete", False)
         )
 
         logger.info("=" * 60)
@@ -557,7 +544,7 @@ def main():
         logger.info("=" * 60)
 
         if results["recovered"] > 0:
-            logger.info("✅ 恢复成功！以下录制已恢复:")
+            logger.info("恢复成功！以下录制已恢复:")
             for detail in results["details"]:
                 if detail["status"] == "recovered":
                     logger.info(f"  - {detail['recording_id']}: {detail['action_count']} 条操作")

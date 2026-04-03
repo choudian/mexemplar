@@ -4,7 +4,10 @@
 基于执行蓝图生成可执行的 Playwright 代码。
 """
 
-from typing import Dict, Any
+from typing import TYPE_CHECKING, Dict, Any
+
+if TYPE_CHECKING:
+    from src.business.agent.state import ExecutionBlueprint, OutputSpec
 
 
 def get_code_generation_prompt(

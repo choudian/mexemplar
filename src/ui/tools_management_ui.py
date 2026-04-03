@@ -22,9 +22,9 @@ from PyQt6.QtWidgets import (
     QFrame,
     QDialog,
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
@@ -203,7 +203,6 @@ class PendingToolCard(_SkillCardBase):
         # 顶部：状态标签 + 更多
         status_lbl = QLabel(self._status_text())
         status_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(**self._status_colors()))
-        self._status_label = status_lbl
         layout.addLayout(self._build_top_row(status_lbl))
 
         # 名称
@@ -280,16 +279,6 @@ class PendingToolCard(_SkillCardBase):
             PendingToolStatus.PROMOTED: {"fg": "#6f42c1", "bg": "#f8f0ff"},
             PendingToolStatus.FAILED: {"fg": "#343a40", "bg": "#f1f3f5"},
         }.get(self.pending_tool.status, {"fg": "#6c757d", "bg": "#f1f3f5"})
-
-    def update_tool(self, pending_tool: PendingTool):
-        self.pending_tool = pending_tool
-        layout = self.layout()
-        if layout:
-            while layout.count():
-                child = layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            self._init_ui()
 
 
 class PublishedToolCard(_SkillCardBase):
@@ -375,16 +364,6 @@ class PublishedToolCard(_SkillCardBase):
             )
             layout.addWidget(btn)
 
-    def update_tool(self, tool: Tool):
-        self.tool = tool
-        layout = self.layout()
-        if layout:
-            while layout.count():
-                child = layout.takeAt(0)
-                if child.widget():
-                    child.widget().deleteLater()
-            self._init_ui()
-
 
 class FailureCard(_SkillCardBase):
     """失败记录卡片"""
@@ -415,7 +394,6 @@ class FailureCard(_SkillCardBase):
         stage_text = self._STAGE_DISPLAY.get(self._record.failed_stage, self._record.failed_stage)
         stage_lbl = QLabel(stage_text)
         stage_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg="#dc3545", bg="#fff5f5"))
-        self._stage_label = stage_lbl
         layout.addLayout(self._build_top_row(stage_lbl))
 
         # 工具名 / 错误摘要
@@ -474,18 +452,15 @@ class FailureCard(_SkillCardBase):
         self._retry_btn.setVisible(False)
         self._retrying_label.setVisible(True)
 
-    def _show_active_state(self):
-        """切换到可操作状态"""
-        self._retry_btn.setVisible(True)
-        self._retrying_label.setVisible(False)
-
     def _show_menu(self):
         """只显示忽略选项"""
         menu = QMenu(self)
         menu.setStyleSheet(_MENU_STYLE.format(selected_color="#fff5f5"))
         dismiss_action = QAction("忽略", self)
         dismiss_action.setToolTip("忽略后不会再显示；如需恢复只能重新录制")
-        dismiss_action.triggered.connect(lambda: self.dismiss_requested.emit(self._record.workflow_id))
+        dismiss_action.triggered.connect(
+            lambda: self.dismiss_requested.emit(self._record.workflow_id)
+        )
         menu.addAction(dismiss_action)
         menu.exec(self._more_btn.mapToGlobal(self._more_btn.rect().bottomLeft()))
 
@@ -493,7 +468,6 @@ class FailureCard(_SkillCardBase):
 class ToolsManagementUI(QWidget):
     """技能列表 UI 组件（带 Tab 切换）"""
 
-    tool_promoted = pyqtSignal(str)
     trial_start_request = pyqtSignal(str)
     tool_delete_request = pyqtSignal(str)
     tool_update_request = pyqtSignal(str, str, str)
@@ -721,7 +695,6 @@ class ToolsManagementUI(QWidget):
         try:
             from src.data.repositories import ToolRepository
             from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
-            from src.data.models import Tool
 
             repo = ToolRepository()
             all_tools = repo.get_all()
@@ -1013,27 +986,3 @@ class ToolsManagementUI(QWidget):
         except Exception as e:
             self.logger.error(f"加载失败记录失败: {e}", exc_info=True)
             self.update_failure_records([])
-
-    # ── 外部状态更新 ──
-
-    def on_trial_status_update(self, data: dict):
-        try:
-            pending_tool_id = data.get("pending_tool_id")
-            status = data.get("status")
-            error = data.get("error")
-
-            self.logger.info(f"收到考核状态更新: {pending_tool_id}, status={status}")
-
-            for tool in self.pending_tools:
-                if tool.pending_tool_id == pending_tool_id:
-                    if status == "running":
-                        tool.status = PendingToolStatus.TRIALING
-                    elif status == "success":
-                        tool.status = PendingToolStatus.TRIAL_SUCCESS
-                    elif status == "failed":
-                        tool.status = PendingToolStatus.TRIAL_FAILED
-                        tool.last_error = error
-                    QTimer.singleShot(0, self._refresh_pending_cards)
-                    break
-        except Exception as e:
-            self.logger.error(f"处理考核状态更新失败: {e}", exc_info=True)

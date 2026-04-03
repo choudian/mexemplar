@@ -16,6 +16,8 @@ from typing import Dict, Any, List, Optional
 from langgraph.types import interrupt
 from langchain_core.messages import AIMessage
 
+from .intent_analysis import _extract_parameters, _determine_intent_type
+
 from ..state import (
     AgentState, IntentData, IntentAnalysisResult,
     PatternRecognition, ParameterizationItem, ConfirmationQuestion,
@@ -353,7 +355,7 @@ def _reanalyze_with_answers(
 
     # 添加用户答案到上下文
     if answers_context:
-        user_feedback = f"用户对确认问题的回答：\n" + "\n".join(answers_context)
+        user_feedback = "用户对确认问题的回答：\n" + "\n".join(answers_context)
     else:
         user_feedback = None
 
@@ -394,7 +396,7 @@ def _reanalyze_with_answers(
         if len(new_full_analysis.confirmation_questions) > 0:
             ai_response = f"感谢您的回答！我已根据您的选择重新分析，还有 {len(new_full_analysis.confirmation_questions)} 个问题需要确认。"
         else:
-            ai_response = f"感谢您的回答！我已根据您的选择调整了分析结果，现在可以确认生成工具了。"
+            ai_response = "感谢您的回答！我已根据您的选择调整了分析结果，现在可以确认生成工具了。"
 
         return ai_response, new_intent_data
 
@@ -419,9 +421,7 @@ def _process_user_feedback(state, current_intent, full_analysis, feedback: str) 
     from src.business.ai.llm_client import create_llm_client
     from src.data.unified_config import get_unified_config
     from ..prompts.intent_analysis import get_intent_analysis_prompt
-    from ..state import IntentData, IntentAnalysisResult, PatternRecognition, ParameterizationItem, ConfirmationQuestion, ToolDescription
-    import json
-    import re
+    from ..state import IntentData
 
     config = get_unified_config()
 
@@ -703,42 +703,6 @@ def _build_execution_blueprint(data: Dict[str, Any]) -> ExecutionBlueprint:
         implicit_requirements=data.get("implicit_requirements", []),
         edge_cases=data.get("edge_cases", [])
     )
-
-
-def _extract_parameters(result: Dict[str, Any]) -> Dict[str, Any]:
-    """从分析结果中提取参数"""
-    parameters = {}
-
-    for item in result.get("parameterization_analysis", []):
-        if item.get("should_parameterize") == True:
-            param_name = item.get("parameter_name", "")
-            if param_name:
-                parameters[param_name] = {
-                    "type": item.get("parameter_type", "string"),
-                    "default": item.get("default_value", ""),
-                    "description": item.get("element", ""),
-                    "recorded_value": item.get("recorded_value", "")
-                }
-
-    return parameters
-
-
-def _determine_intent_type(result: Dict[str, Any]) -> str:
-    """
-    根据分析结果确定意图类型
-
-    Returns:
-        'browser_automation' | 'api_call' | 'hybrid'
-    """
-    pattern = result.get("pattern_recognition", {}).get("primary_pattern", "").lower()
-    category = result.get("tool_description", {}).get("category", "").lower()
-
-    if "api" in pattern or "api" in category:
-        return "api_call"
-    elif "浏览器" in pattern or "网页" in pattern or "搜索" in pattern:
-        return "browser_automation"
-    else:
-        return "hybrid"
 
 
 def _build_final_blueprint_display(
