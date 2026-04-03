@@ -1,7 +1,7 @@
 """
 SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 
-包含：tools, task_executions, conversations, app_settings, user_preferences
+包含：tools, task_executions, conversations
       sessions, messages, workflow_transitions (Agent 会话相关)
 """
 
@@ -36,25 +36,7 @@ class SessionStatus(str, Enum):
 
     ACTIVE = "active"
     COMPLETED = "completed"
-    SUSPENDED = "suspended"
     FAILED = "failed"
-
-
-class MessageRole(str, Enum):
-    """消息角色枚举"""
-
-    SYSTEM = "system"
-    USER = "user"
-    ASSISTANT = "assistant"
-    TOOL = "tool"
-    SUMMARY = "summary"
-
-
-class MessageType(str, Enum):
-    """消息类型枚举"""
-
-    NORMAL = "normal"
-    COMPRESSED = "compressed"
 
 
 class Tool(Base):
@@ -115,96 +97,6 @@ class Tool(Base):
         )
 
 
-class TaskExecution(Base):
-    """任务执行记录表"""
-
-    __tablename__ = "task_executions"
-
-    execution_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    tool_id: Mapped[str] = mapped_column(String(50))
-    parameters: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    status: Mapped[str] = mapped_column(String(20))  # pending, running, completed, failed
-    result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-    execution_log: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    def __repr__(self) -> str:
-        return f"<TaskExecution(execution_id={self.execution_id!r}, status={self.status!r})>"
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "TaskExecution":
-        """从字典创建 TaskExecution 对象（兼容旧代码）"""
-        return cls(
-            execution_id=data.get("execution_id"),
-            tool_id=data.get("tool_id"),
-            parameters=data.get("parameters"),
-            status=data.get("status"),
-            result=data.get("result"),
-            error_message=data.get("error_message"),
-            started_at=data.get("started_at"),
-            finished_at=data.get("finished_at"),
-            execution_log=data.get("execution_log"),
-        )
-
-
-class Conversation(Base):
-    """对话历史表"""
-
-    __tablename__ = "conversations"
-
-    conversation_id: Mapped[str] = mapped_column(String(50), primary_key=True)
-    user_message: Mapped[str] = mapped_column(Text)
-    assistant_response: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    tool_used: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    parameters_extracted: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-
-    def __repr__(self) -> str:
-        return f"<Conversation(conversation_id={self.conversation_id!r})>"
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Conversation":
-        """从字典创建 Conversation 对象（兼容旧代码）"""
-        return cls(
-            conversation_id=data.get("conversation_id"),
-            user_message=data.get("user_message"),
-            assistant_response=data.get("assistant_response"),
-            tool_used=data.get("tool_used"),
-            parameters_extracted=data.get("parameters_extracted"),
-            timestamp=data.get("timestamp"),
-        )
-
-
-class AppSetting(Base):
-    """应用配置表（运行时配置）"""
-
-    __tablename__ = "app_settings"
-
-    key: Mapped[str] = mapped_column(String(100), primary_key=True)
-    value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
-
-    def __repr__(self) -> str:
-        return f"<AppSetting(key={self.key!r}, value={self.value!r})>"
-
-
-class UserPreference(Base):
-    """用户偏好表"""
-
-    __tablename__ = "user_preferences"
-
-    user_id: Mapped[str] = mapped_column(String(50), primary_key=True, default="default")
-    theme: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
-    language: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
-    auto_save: Mapped[bool] = mapped_column(Boolean, default=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
-
-    def __repr__(self) -> str:
-        return f"<UserPreference(user_id={self.user_id!r}, theme={self.theme!r})>"
-
-
 # ===== Agent 会话相关模型 =====
 
 
@@ -226,6 +118,7 @@ class Session(Base):
         if not self.tool_ids:
             return None
         import json
+
         return set(json.loads(self.tool_ids))
 
     def __repr__(self) -> str:
@@ -283,7 +176,6 @@ class AssistantProfile(Base):
     display_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     style: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    raw_answers: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -318,11 +210,12 @@ class TeachingFailureRecord(Base):
     failed_stage: Mapped[str] = mapped_column(String(20))  # "pm"|"programmer"|"trial"
     error_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error_type: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
-    status: Mapped[str] = mapped_column(String(20), default="active")  # active|retrying|resolved|dismissed
+    status: Mapped[str] = mapped_column(
+        String(20), default="active"
+    )  # active|retrying|resolved|dismissed
     retry_count: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
-    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     def __repr__(self) -> str:
         return f"<TeachingFailureRecord(record_id={self.record_id!r}, workflow_id={self.workflow_id!r}, status={self.status!r})>"
@@ -335,7 +228,6 @@ class ToolSuggestionHistory(Base):
 
     suggestion_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     task_pattern: Mapped[str] = mapped_column(Text, nullable=False)
-    suggested_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     accepted: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     times_seen: Mapped[int] = mapped_column(Integer, default=0)
 

@@ -87,7 +87,10 @@ class DuckDBManager:
                 error_msg = str(e)
 
                 # ⭐ 检测是否为文件被占用错误
-                if "another program" in error_msg.lower() or "process cannot access" in error_msg.lower():
+                if (
+                    "another program" in error_msg.lower()
+                    or "process cannot access" in error_msg.lower()
+                ):
                     logger.error(f"DuckDB 连接失败: {e}")
                     logger.error("⚠️  数据库文件被其他程序占用（如 PyCharm、DBeaver 等）")
                     raise IOError(
@@ -99,7 +102,9 @@ class DuckDBManager:
                     ) from e
 
                 # 检测是否为 WAL 文件错误
-                if allow_wal_recovery and ("WAL" in error_msg or "Failure while replaying" in error_msg):
+                if allow_wal_recovery and (
+                    "WAL" in error_msg or "Failure while replaying" in error_msg
+                ):
                     logger.warning(f"⚠️  DuckDB WAL 文件损坏: {error_msg}")
                     logger.warning("📋 将从 queues 队列文件恢复数据...")
 
@@ -373,7 +378,9 @@ class DuckDBManager:
         # 返回第一列（通常是主键 ID）
         return result[0] if result else 0
 
-    def insert_many(self, table: str, data_list: List[Dict[str, Any]], auto_commit: bool = False) -> List[int]:
+    def insert_many(
+        self, table: str, data_list: List[Dict[str, Any]], auto_commit: bool = False
+    ) -> List[int]:
         """
         批量插入数据
 
@@ -408,46 +415,6 @@ class DuckDBManager:
 
         return row_ids
 
-    def to_df(self, sql: str, parameters: Optional[tuple] = None):
-        """
-        执行 SQL 并返回 DataFrame（需要安装 pandas）
-
-        Args:
-            sql: SQL 语句
-            parameters: 参数元组
-
-        Returns:
-            DataFrame 对象
-        """
-        conn = self.connect()
-        if parameters:
-            return conn.execute(sql, parameters).df()
-        return conn.execute(sql).df()
-
-    def get_table_count(self, table: str) -> int:
-        """
-        获取表的行数
-
-        Args:
-            table: 表名
-
-        Returns:
-            行数
-        """
-        result = self.execute(f"SELECT COUNT(*) FROM {table}")
-        row = result.fetchone()
-        return row[0] if row else 0
-
-    def get_tables(self) -> List[str]:
-        """
-        获取所有表名
-
-        Returns:
-            表名列表
-        """
-        result = self.execute("SHOW TABLES")
-        return [row[0] for row in result.fetchall()]
-
     def needs_queue_recovery(self) -> bool:
         """
         检查是否需要从 queues 队列文件恢复数据
@@ -470,7 +437,9 @@ class DuckDBManager:
         """上下文管理器出口"""
         self.close()
 
-    def _migrate_add_recording_id(self, table_name: str, reference_column: str = "action_id") -> bool:
+    def _migrate_add_recording_id(
+        self, table_name: str, reference_column: str = "action_id"
+    ) -> bool:
         """
         通用迁移：为表添加 recording_id 列，并从关联表回填数据
 
@@ -517,8 +486,12 @@ class DuckDBManager:
                     AND t.recording_id IS NULL
                 """
                 )
-                updated_count = conn.execute(f"SELECT COUNT(*) FROM {table_name} WHERE recording_id IS NOT NULL").fetchone()[0]
-                logger.info(f"✅ DuckDB迁移: 已通过 action_id 回填 {table_name} 的 {updated_count} 条记录")
+                updated_count = conn.execute(
+                    f"SELECT COUNT(*) FROM {table_name} WHERE recording_id IS NOT NULL"
+                ).fetchone()[0]
+                logger.info(
+                    f"✅ DuckDB迁移: 已通过 action_id 回填 {table_name} 的 {updated_count} 条记录"
+                )
 
                 # 特殊处理 network_requests 表：回填孤立请求（通过时间戳匹配）
                 if table_name == "network_requests":
@@ -526,7 +499,9 @@ class DuckDBManager:
 
             # 创建索引以提高查询性能
             try:
-                conn.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_recording ON {table_name}(recording_id)")
+                conn.execute(
+                    f"CREATE INDEX IF NOT EXISTS idx_{table_name}_recording ON {table_name}(recording_id)"
+                )
                 logger.info(f"✅ DuckDB迁移: 已为 {table_name}.recording_id 创建索引")
             except Exception as idx_err:
                 logger.warning(f"创建索引失败（已忽略）: {idx_err}")
@@ -576,9 +551,13 @@ class DuckDBManager:
                 "SELECT COUNT(*) FROM network_requests WHERE recording_id IS NULL"
             ).fetchone()[0]
 
-            logger.info(f"✅ DuckDB迁移: 已通过时间戳回填 {backfilled_count} 条网络请求的 recording_id")
+            logger.info(
+                f"✅ DuckDB迁移: 已通过时间戳回填 {backfilled_count} 条网络请求的 recording_id"
+            )
             if remaining_orphaned > 0:
-                logger.warning(f"⚠️ 仍有 {remaining_orphaned} 条网络请求的 recording_id 为 NULL（无法匹配到录制会话）")
+                logger.warning(
+                    f"⚠️ 仍有 {remaining_orphaned} 条网络请求的 recording_id 为 NULL（无法匹配到录制会话）"
+                )
 
         except Exception as e:
             logger.error(f"回填孤立网络请求失败: {e}")
@@ -745,8 +724,12 @@ class DuckDBManager:
                     AND fd.action_id IS NULL
                 """
                 )
-                updated_count = conn.execute("SELECT COUNT(*) FROM filter_decisions WHERE action_id IS NOT NULL").fetchone()[0]
-                logger.info(f"✅ DuckDB迁移: 已回填 filter_decisions 的 {updated_count} 条记录的 action_id")
+                updated_count = conn.execute(
+                    "SELECT COUNT(*) FROM filter_decisions WHERE action_id IS NOT NULL"
+                ).fetchone()[0]
+                logger.info(
+                    f"✅ DuckDB迁移: 已回填 filter_decisions 的 {updated_count} 条记录的 action_id"
+                )
 
             # 添加 recording_id 列
             self._migrate_add_recording_id("filter_decisions", reference_column="action_id")
@@ -798,18 +781,3 @@ class DuckDBManager:
         except Exception as e:
             logger.error(f"DuckDB 迁移失败 (filter_decisions): {e}")
             # 不抛出异常，允许系统继续运行
-
-
-def init_duckdb(db_path: Optional[str] = None) -> DuckDBManager:
-    """
-    初始化 DuckDB 数据库
-
-    Args:
-        db_path: 数据库文件路径
-
-    Returns:
-        DuckDBManager 实例
-    """
-    db_manager = DuckDBManager(db_path)
-    db_manager.initialize()
-    return db_manager

@@ -9,7 +9,6 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from datetime import datetime
 
 from .duckdb_manager import DuckDBManager
 from .recording_repository import RecordingRepository
@@ -319,7 +318,7 @@ class RecordingRecovery:
 
         # 第二步：连接数据库（DuckDB 自动恢复 WAL）
         try:
-            conn = self.db_manager.connect()
+            self.db_manager.connect()
             logger.info("✅ 数据库连接成功，WAL 已自动恢复")
             return False  # WAL 恢复成功，不需要进一步处理
 
@@ -350,7 +349,7 @@ class RecordingRecovery:
             logger.error("❌ 无法恢复：数据库连接失败，也没有队列文件作为保底")
             return False
 
-        logger.info(f"🔄 尝试从队列文件恢复（保底方案）...")
+        logger.info("🔄 尝试从队列文件恢复（保底方案）...")
 
         # 统计队列文件对应的录制，哪些已在 DuckDB 中，哪些缺失
         missing_recordings = []

@@ -14,10 +14,7 @@ import uuid
 
 from .sqlalchemy_manager import get_sqlalchemy_manager
 from .models_sqlite import (
-    Base,
     Tool,
-    TaskExecution,
-    Conversation,
     Session,
     Message,
     WorkflowTransition,
@@ -108,14 +105,6 @@ class ToolRepository(BaseRepository):
         """按 workflow_id 查找工具（一个 workflow 对应一个工具）"""
         return self.session.query(Tool).filter(Tool.workflow_id == workflow_id).first()
 
-    def update_code(self, tool_id: str, code: str):
-        """更新工具代码"""
-        tool = self.get_by_id(tool_id)
-        if tool:
-            tool.execution_code = code
-            tool.updated_at = datetime.now()
-            self.session.commit()
-
     def update_trial_success_count(self, tool_id: str, count: int):
         """更新试用成功计数"""
         tool = self.get_by_id(tool_id)
@@ -156,112 +145,6 @@ class ToolRepository(BaseRepository):
         """按工具名称精确查询"""
         return self.session.query(Tool).filter(Tool.tool_name == name).first()
 
-
-class TaskExecutionRepository(BaseRepository):
-    """任务执行记录仓库"""
-
-    def create(self, execution: TaskExecution) -> TaskExecution:
-        """创建执行记录"""
-        try:
-            if execution.started_at is None:
-                execution.started_at = datetime.now()
-
-            self.session.add(execution)
-            self.session.commit()
-            self.session.refresh(execution)
-            logger.info(f"执行记录已创建: {execution.execution_id}")
-            return execution
-        except Exception as e:
-            self.session.rollback()
-            logger.error(f"创建执行记录失败: {e}")
-            raise
-
-    def get_by_id(self, execution_id: str) -> Optional[TaskExecution]:
-        """根据ID获取执行记录"""
-        return (
-            self.session.query(TaskExecution)
-            .filter(TaskExecution.execution_id == execution_id)
-            .first()
-        )
-
-    def get_by_tool_id(self, tool_id: str, limit: int = 100) -> List[TaskExecution]:
-        """获取指定工具的执行记录"""
-        return (
-            self.session.query(TaskExecution)
-            .filter(TaskExecution.tool_id == tool_id)
-            .order_by(TaskExecution.started_at.desc())
-            .limit(limit)
-            .all()
-        )
-
-    def update(self, execution: TaskExecution) -> TaskExecution:
-        """更新执行记录"""
-        try:
-            self.session.commit()
-            self.session.refresh(execution)
-            logger.info(f"执行记录已更新: {execution.execution_id}")
-            return execution
-        except Exception as e:
-            self.session.rollback()
-            logger.error(f"更新执行记录失败: {e}")
-            raise
-
-    def get_by_status(self, status: str, limit: int = 100) -> List[TaskExecution]:
-        """根据状态获取执行记录"""
-        return (
-            self.session.query(TaskExecution)
-            .filter(TaskExecution.status == status)
-            .order_by(TaskExecution.started_at.desc())
-            .limit(limit)
-            .all()
-        )
-
-
-class ConversationRepository(BaseRepository):
-    """对话历史仓库"""
-
-    def create(self, conversation: Conversation) -> Conversation:
-        """创建对话记录"""
-        try:
-            if conversation.timestamp is None:
-                conversation.timestamp = datetime.now()
-
-            self.session.add(conversation)
-            self.session.commit()
-            self.session.refresh(conversation)
-            logger.info(f"对话记录已创建: {conversation.conversation_id}")
-            return conversation
-        except Exception as e:
-            self.session.rollback()
-            logger.error(f"创建对话记录失败: {e}")
-            raise
-
-    def get_by_id(self, conversation_id: str) -> Optional[Conversation]:
-        """根据ID获取对话记录"""
-        return (
-            self.session.query(Conversation)
-            .filter(Conversation.conversation_id == conversation_id)
-            .first()
-        )
-
-    def get_recent(self, limit: int = 100) -> List[Conversation]:
-        """获取最近的对话记录"""
-        return (
-            self.session.query(Conversation)
-            .order_by(Conversation.timestamp.desc())
-            .limit(limit)
-            .all()
-        )
-
-    def get_by_tool(self, tool_id: str, limit: int = 100) -> List[Conversation]:
-        """获取使用指定工具的对话记录"""
-        return (
-            self.session.query(Conversation)
-            .filter(Conversation.tool_used == tool_id)
-            .order_by(Conversation.timestamp.desc())
-            .limit(limit)
-            .all()
-        )
 
 
 # ===== 新增：SessionRepository =====
@@ -310,19 +193,6 @@ class SessionRepository(BaseRepository):
             model.status = status
             self.session.commit()
             logger.debug(f"会话 {session_id} 状态更新为 {status}")
-
-    def fail_teaching_sessions(self, workflow_id: str, only_types: Optional[list] = None):
-        """将指定 workflow 下的教学会话标记为 failed。
-
-        Args:
-            only_types: 只标记指定类型（如 ["programmer"]）。为 None 时标记全部。
-        """
-        types = only_types or ["pm", "programmer", "trial"]
-        self.session.query(Session).filter(
-            Session.workflow_id == workflow_id,
-            Session.agent_type.in_(types),
-        ).update({"status": "failed"}, synchronize_session=False)
-        self.session.commit()
 
     def get_status(self, session_id: str) -> Optional[str]:
         """获取会话状态"""
@@ -427,47 +297,6 @@ class MessageRepository(BaseRepository):
         if msg:
             msg.content = content
             self.session.commit()
-
-    def bulk_copy(
-        self, from_session_id: str, to_session_id: str, up_to_sequence: int
-    ) -> List[Message]:
-        """批量复制消息（用于 Fork 操作）"""
-        # 查询源消息
-        source_models = (
-            self.session.query(Message)
-            .filter(and_(Message.session_id == from_session_id, Message.sequence <= up_to_sequence))
-            .order_by(Message.sequence)
-            .all()
-        )
-
-        # 复制并创建新消息
-        new_messages = []
-        for model in source_models:
-            new_model = Message(
-                message_id=str(uuid.uuid4()),
-                session_id=to_session_id,
-                sequence=model.sequence,
-                role=model.role,
-                content=model.content,
-                message_type=model.message_type,
-                tool_call_id=model.tool_call_id,
-                tool_name=model.tool_name,
-                tool_calls=model.tool_calls,
-                compressed_range=model.compressed_range,
-                is_archived=False,
-            )
-            new_messages.append(new_model)
-
-        # 批量插入
-        self.session.bulk_save_objects(new_messages)
-        self.session.commit()
-        logger.debug(f"从 {from_session_id} 复制 {len(new_messages)} 条消息到 {to_session_id}")
-
-        # 刷新并返回
-        for msg in new_messages:
-            self.session.refresh(msg)
-
-        return new_messages
 
 
 # ===== 新增：WorkflowTransitionRepository =====
@@ -766,7 +595,6 @@ class AssistantSummaryRepository(BaseRepository):
             return
 
         from sqlalchemy import text
-        import struct
 
         embedding_blob = sqlite_vec.serialize_float32(embedding)
 
@@ -841,7 +669,7 @@ class ToolSuggestionRepository(BaseRepository):
             self.session.commit()
             self.session.refresh(record)
             return record
-        except Exception as e:
+        except Exception:
             self.session.rollback()
             raise
 
@@ -919,17 +747,6 @@ class TeachingFailureRepository(BaseRepository):
             .all()
         )
 
-    def reset_retrying_to_active(self) -> List[str]:
-        """将所有 retrying 状态重置为 active，返回被重置的 workflow_id 列表"""
-        records = self.session.query(TeachingFailureRecord).filter(
-            TeachingFailureRecord.status == "retrying"
-        ).all()
-        workflow_ids = [r.workflow_id for r in records]
-        for r in records:
-            r.status = "active"
-        self.session.commit()
-        return workflow_ids
-
     def upsert_by_workflow(
         self,
         workflow_id: str,
@@ -970,7 +787,6 @@ class TeachingFailureRepository(BaseRepository):
         existing.error_type = error_type
         existing.status = "active"
         existing.retry_count = (existing.retry_count or 0) + 1
-        existing.resolved_at = None
         if tool_name is not None:
             existing.tool_name = tool_name
         self.session.commit()

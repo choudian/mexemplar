@@ -35,7 +35,6 @@ class WebSocketClient:
         self.websocket: Optional[WebSocketClientProtocol] = None
         self._connected = False
         self._reconnect_enabled = True
-        self._reconnect_interval = 5  # 秒
 
         # 消息处理器注册表
         self.message_handlers: Dict[MessageType, Callable] = {}
@@ -49,9 +48,7 @@ class WebSocketClient:
         self._loop = None
         self._thread = None
 
-    def register_handler(
-        self, msg_type: MessageType, handler: Callable[[WebSocketMessage], Any]
-    ):
+    def register_handler(self, msg_type: MessageType, handler: Callable[[WebSocketMessage], Any]):
         """
         注册消息处理器
 
@@ -61,17 +58,6 @@ class WebSocketClient:
         """
         self.message_handlers[msg_type] = handler
         logger.info(f"注册消息处理器: {msg_type}")
-
-    def unregister_handler(self, msg_type: MessageType):
-        """
-        取消注册消息处理器
-
-        Args:
-            msg_type: 消息类型
-        """
-        if msg_type in self.message_handlers:
-            del self.message_handlers[msg_type]
-            logger.info(f"取消注册消息处理器: {msg_type}")
 
     async def connect(self) -> bool:
         """
@@ -230,23 +216,6 @@ class WebSocketClient:
             logger.error(f"发送消息失败: {e}")
             self._connected = False
 
-    async def send_request(
-        self, msg_type: MessageType, data: Dict[str, Any]
-    ) -> str:
-        """
-        发送请求消息
-
-        Args:
-            msg_type: 消息类型
-            data: 消息数据
-
-        Returns:
-            str: 请求 ID
-        """
-        msg = WebSocketMessage.create_request(msg_type, data)
-        await self.send(msg)
-        return msg.request_id
-
     def is_connected(self) -> bool:
         """
         检查是否已连接
@@ -290,32 +259,3 @@ class WebSocketClient:
             self._thread.join(timeout=5)
 
         logger.info("WebSocket 客户端已停止")
-
-    def send_sync(self, msg: WebSocketMessage):
-        """
-        同步发送消息（线程安全）
-
-        Args:
-            msg: 消息对象
-        """
-        if self._loop and self._connected:
-            asyncio.run_coroutine_threadsafe(self.send(msg), self._loop)
-
-    def send_request_sync(
-        self, msg_type: MessageType, data: Dict[str, Any]
-    ) -> Optional[str]:
-        """
-        同步发送请求消息（线程安全）
-
-        Args:
-            msg_type: 消息类型
-            data: 消息数据
-
-        Returns:
-            Optional[str]: 请求 ID
-        """
-        if self._loop and self._connected:
-            msg = WebSocketMessage.create_request(msg_type, data)
-            asyncio.run_coroutine_threadsafe(self.send(msg), self._loop)
-            return msg.request_id
-        return None

@@ -7,7 +7,7 @@ WebSocket 通信处理器
 import asyncio
 import json
 import logging
-from typing import Dict, Any, Optional, Callable, Set
+from typing import Dict, Any, Callable, Set
 from datetime import datetime
 import websockets
 from websockets.server import WebSocketServerProtocol
@@ -42,15 +42,12 @@ class WebSocketHandler:
 
         # 心跳配置
         self.ping_interval = 30  # 秒
-        self.ping_timeout = 10  # 秒
         self._ping_task = None
 
         # 待确认的消息队列（request_id -> 消息）
         self.pending_acks: Dict[str, WebSocketMessage] = {}
 
-    def register_handler(
-        self, msg_type: MessageType, handler: Callable[[WebSocketMessage], Any]
-    ):
+    def register_handler(self, msg_type: MessageType, handler: Callable[[WebSocketMessage], Any]):
         """
         注册消息处理器
 
@@ -98,9 +95,7 @@ class WebSocketHandler:
             self.clients.discard(websocket)
             logger.info(f"客户端清理完成: {client_id}")
 
-    async def process_message(
-        self, websocket: WebSocketServerProtocol, raw_message: str
-    ):
+    async def process_message(self, websocket: WebSocketServerProtocol, raw_message: str):
         """
         处理收到的消息
 
@@ -154,9 +149,7 @@ class WebSocketHandler:
                     await self.send_to_client(websocket, error_msg)
             else:
                 logger.warning(f"未找到处理器: {msg.type}")
-                error_msg = WebSocketMessage.create_error(
-                    msg, f"未知的消息类型: {msg.type}"
-                )
+                error_msg = WebSocketMessage.create_error(msg, f"未知的消息类型: {msg.type}")
                 await self.send_to_client(websocket, error_msg)
 
         except json.JSONDecodeError as e:
@@ -166,9 +159,7 @@ class WebSocketHandler:
             logger.error(f"处理消息时出错: {e}", exc_info=True)
             await self.send_error(websocket, f"处理消息失败: {e}")
 
-    async def _call_handler(
-        self, handler: Callable, msg: WebSocketMessage
-    ) -> Dict[str, Any]:
+    async def _call_handler(self, handler: Callable, msg: WebSocketMessage) -> Dict[str, Any]:
         """
         调用消息处理器
 
@@ -234,9 +225,7 @@ class WebSocketHandler:
             return
 
         # 创建任务列表
-        tasks = [
-            self.send_to_client(client, msg) for client in self.clients.copy()
-        ]
+        tasks = [self.send_to_client(client, msg) for client in self.clients.copy()]
 
         # 并发发送
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -245,14 +234,9 @@ class WebSocketHandler:
         success_count = sum(1 for r in results if not isinstance(r, Exception))
         fail_count = len(results) - success_count
 
-        logger.info(
-            f"广播消息完成: {msg.type}, "
-            f"成功: {success_count}, 失败: {fail_count}"
-        )
+        logger.info(f"广播消息完成: {msg.type}, " f"成功: {success_count}, 失败: {fail_count}")
 
-    async def send_error(
-        self, websocket: WebSocketServerProtocol, error_message: str
-    ):
+    async def send_error(self, websocket: WebSocketServerProtocol, error_message: str):
         """
         发送错误消息
 
@@ -270,6 +254,7 @@ class WebSocketHandler:
 
     async def start_ping_task(self):
         """启动心跳任务"""
+
         async def ping_loop():
             while self.server:
                 try:
@@ -330,7 +315,3 @@ class WebSocketHandler:
     def get_client_count(self) -> int:
         """获取当前连接的客户端数量"""
         return len(self.clients)
-
-    def get_pending_ack_count(self) -> int:
-        """获取待确认的消息数量"""
-        return len(self.pending_acks)

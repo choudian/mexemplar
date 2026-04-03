@@ -31,7 +31,6 @@ class WebSocketServerManager:
         port: int = 8766,
         auto_start: bool = True,
         startup_timeout: float = 5.0,
-        health_check_interval: float = 10.0,
     ):
         """
         初始化 WebSocket 服务器管理器
@@ -41,12 +40,10 @@ class WebSocketServerManager:
             port: 监听端口
             auto_start: 是否自动启动
             startup_timeout: 启动超时时间（秒）
-            health_check_interval: 健康检查间隔（秒）
         """
         self.host = host
         self.port = port
         self.startup_timeout = startup_timeout
-        self.health_check_interval = health_check_interval
 
         # WebSocket 处理器
         self.ws_handler: Optional[WebSocketHandler] = None
@@ -66,7 +63,6 @@ class WebSocketServerManager:
         self._startup_complete = threading.Condition(self._startup_lock)
 
         # 回调函数
-        self._on_ready: Optional[Callable] = None
         self._on_error: Optional[Callable] = None
 
         if auto_start:
@@ -81,10 +77,6 @@ class WebSocketServerManager:
     def server_url(self) -> str:
         """获取服务器 URL"""
         return f"ws://{self.host}:{self.port}"
-
-    def on_ready(self, callback: Callable):
-        """注册服务器就绪回调"""
-        self._on_ready = callback
 
     def on_error(self, callback: Callable):
         """注册错误回调"""
@@ -138,13 +130,6 @@ class WebSocketServerManager:
             # 检查启动结果
             if self._is_running:
                 logger.info(f"✅ WebSocket 服务器启动成功: {self.server_url}")
-
-                # 调用就绪回调
-                if self._on_ready:
-                    try:
-                        self._on_ready(self)
-                    except Exception as e:
-                        logger.error(f"执行就绪回调失败: {e}", exc_info=True)
 
                 return True
             else:
@@ -276,25 +261,6 @@ class WebSocketServerManager:
             WebSocket 处理器，如果服务器未运行则返回 None
         """
         return self.ws_handler if self._is_running else None
-
-    def health_check(self) -> bool:
-        """
-        健康检查
-
-        Returns:
-            服务器是否健康
-        """
-        if not self._is_running:
-            return False
-
-        if not self.ws_handler:
-            return False
-
-        # 检查是否有客户端连接
-        client_count = self.ws_handler.get_client_count()
-        logger.debug(f"WebSocket 服务器健康检查: {client_count} 个客户端连接")
-
-        return True
 
     def __enter__(self):
         """上下文管理器入口"""

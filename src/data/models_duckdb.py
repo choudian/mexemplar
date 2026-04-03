@@ -9,7 +9,7 @@ SQLAlchemy ORM 模型 - DuckDB 数据库 (mexemplar.duckdb)
 """
 
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional
 import sqlalchemy
 from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, Float, LargeBinary
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship

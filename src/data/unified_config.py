@@ -130,28 +130,6 @@ class UnifiedConfigManager:
         if old_value != value:
             self._notify_observers(key, old_value, value)
 
-    def set_runtime(self, key: str, value: Any):
-        """
-        设置运行时配置（立即生效，重启后失效）
-
-        这是最常用的方法，用于运行时动态修改配置
-
-        Args:
-            key: 配置键
-            value: 配置值
-        """
-        self.set(key, value, persist="runtime")
-
-    def reload(self):
-        """
-        重新加载配置
-
-        清除缓存，重新从配置文件读取
-        """
-        self._runtime_cache.clear()
-        self.file_config = self.file_loader.load()
-        logger.info("[配置] 已重新加载配置文件")
-
     # ===== 便捷方法：AI 配置 =====
 
     def get_ai_model(self) -> str:
@@ -394,35 +372,6 @@ class UnifiedConfigManager:
         # 保存配置文件
         self.file_loader.save(self.file_config)
 
-    # ===== 批量操作 =====
-
-    def get_all_configs(self) -> Dict[str, Any]:
-        """
-        获取所有配置（合并后的结果）
-
-        Returns:
-            所有配置的字典
-        """
-        # TODO: 实现完整的配置遍历
-        return {
-            "ai": {
-                "model": self.get_ai_model(),
-                "api_key": self.get_ai_api_key(),
-                "temperature": self.get_ai_temperature(),
-                "max_tokens": self.get_ai_max_tokens(),
-            },
-            "recording": {
-                "browser_type": self.get_recording_browser_type(),
-                "screenshot_quality": self.get_recording_screenshot_quality(),
-                "websocket": {
-                    "host": self.get_websocket_host(),
-                    "port": self.get_websocket_port(),
-                },
-                "debug_log_enabled": self.get_debug_log_enabled(),
-            },
-            "ui": {"theme": self.get_ui_theme(), "language": self.get_ui_language()},
-        }
-
     # ===== 观察者模式（配置变化通知）=====
 
     def register_observer(
@@ -448,21 +397,6 @@ class UnifiedConfigManager:
         with self._observer_lock:
             self._observers.append({"callback": callback, "keys": keys, "id": id(callback)})
             logger.info(f"[配置] 已注册观察者: {callback.__name__} (监听: {keys or '所有配置'})")
-
-    def unregister_observer(self, callback: Callable[[str, Any, Any], None]):
-        """
-        取消注册配置变化观察者
-
-        Args:
-            callback: 要取消的回调函数
-        """
-        with self._observer_lock:
-            initial_count = len(self._observers)
-            self._observers = [obs for obs in self._observers if obs["id"] != id(callback)]
-            removed_count = initial_count - len(self._observers)
-
-            if removed_count > 0:
-                logger.info(f"[配置] 已取消注册观察者: {callback.__name__}")
 
     def _notify_observers(self, key: str, old_value: Any, new_value: Any):
         """
@@ -525,38 +459,3 @@ def get_unified_config() -> UnifiedConfigManager:
             logger.info("[配置] 统一配置管理器已初始化（线程安全）")
 
     return _unified_config_manager
-
-
-# ===== 便捷函数 =====
-
-
-def get_config(key: str, default: Any = None) -> Any:
-    """
-    获取配置值（快捷方式）
-
-    Args:
-        key: 配置键
-        default: 默认值
-
-    Returns:
-        配置值
-
-    示例:
-        # 获取 AI 模型
-        model = get_config('ai.model')
-        # 或使用便捷方法
-        model = get_unified_config().get_ai_model()
-    """
-    return get_unified_config().get(key, default)
-
-
-def set_config(key: str, value: Any, persist: str = "database"):
-    """
-    设置配置值（快捷方式）
-
-    Args:
-        key: 配置键
-        value: 配置值
-        persist: 存储位置（database/runtime/file）
-    """
-    get_unified_config().set(key, value, persist)

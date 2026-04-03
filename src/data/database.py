@@ -9,11 +9,10 @@
 """
 
 import sqlite3
-import os
 import json
 import threading
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any
 import logging
 
 logger = logging.getLogger(__name__)
@@ -47,8 +46,6 @@ class DatabaseManager:
             self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
             # 启用外键约束
             self.conn.execute("PRAGMA foreign_keys = ON")
-            # 设置行工厂，返回字典格式
-            self.conn.row_factory = sqlite3.Row
             logger.info(f"数据库连接已建立: {self.db_path}")
         return self.conn
 
@@ -179,50 +176,13 @@ class DatabaseManager:
 
             # 在 commit 之后执行迁移（migrations.py 内部自行管理事务）
             from src.data.migrations import run_migrations
+
             run_migrations(self)
 
         except sqlite3.Error as e:
             conn.rollback()
             logger.error(f"数据库初始化失败: {e}")
             raise
-
-    def _run_migrations(self, cursor):
-        """执行数据库迁移"""
-        # 获取当前版本
-        cursor.execute("SELECT version FROM schema_version")
-        result = cursor.fetchone()
-        current_version = result[0] if result else 1
-
-        # 版本2：添加 execution_code 等字段到 tools 表
-        if current_version < 2:
-            try:
-                # 检查字段是否已存在
-                cursor.execute("PRAGMA table_info(tools)")
-                columns = [col[1] for col in cursor.fetchall()]
-
-                new_columns = [
-                    ("execution_code", "TEXT"),
-                    ("code_language", "TEXT DEFAULT 'python'"),
-                    ("code_version", "TEXT DEFAULT '1.0'"),
-                    ("execution_strategy", "TEXT"),
-                    ("source_intent_id", "TEXT"),
-                    ("source", "TEXT DEFAULT 'manual'"),
-                    ("trial_count", "INTEGER DEFAULT 0"),
-                    ("pending_tool_id", "TEXT"),
-                ]
-
-                for col_name, col_type in new_columns:
-                    if col_name not in columns:
-                        cursor.execute(f"ALTER TABLE tools ADD COLUMN {col_name} {col_type}")
-                        logger.info(f"添加字段: {col_name}")
-
-                # 更新版本
-                cursor.execute("UPDATE schema_version SET version = 2")
-                cursor.connection.commit()
-                logger.info("数据库迁移到版本2完成")
-            except sqlite3.Error as e:
-                cursor.connection.rollback()
-                logger.warning(f"迁移到版本2失败（可能字段已存在）: {e}")
 
     def get_version(self) -> int:
         """
@@ -258,18 +218,6 @@ class DatabaseManager:
         cursor.execute("SELECT version FROM schema_version")
         result = cursor.fetchone()
         return result[0] if result else 1
-
-    def set_version(self, version: int):
-        """
-        设置数据库版本
-
-        Args:
-            version: 版本号
-        """
-        conn = self.connect()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE schema_version SET version = ?", (version,))
-        conn.commit()
 
     def __enter__(self):
         """上下文管理器入口"""
@@ -347,18 +295,3 @@ class DatabaseManager:
             )
 
             conn.commit()
-
-
-def init_database(db_path: Optional[str] = None) -> DatabaseManager:
-    """
-    初始化数据库
-
-    Args:
-        db_path: 数据库文件路径
-
-    Returns:
-        DatabaseManager实例
-    """
-    db_manager = DatabaseManager(db_path)
-    db_manager.initialize()
-    return db_manager

@@ -22,7 +22,6 @@ config = AIConfig()  # 不要这样做！
 ```
 """
 
-import os
 import json
 import logging
 import dataclasses

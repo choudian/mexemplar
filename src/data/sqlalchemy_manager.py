@@ -7,17 +7,12 @@ SQLAlchemy 数据库管理器 - SQLite
 import logging
 from pathlib import Path
 from typing import Optional
-from sqlalchemy import create_engine, event, select, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from src.data.models_sqlite import (
     Base,
-    Tool,
-    TaskExecution,
-    Conversation,
-    Message,
-    WorkflowTransition,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,6 +68,7 @@ class SQLAlchemyManager:
             def _load_sqlite_vec(dbapi_conn, connection_record):
                 try:
                     import sqlite_vec
+
                     dbapi_conn.enable_load_extension(True)
                     dbapi_conn.load_extension(sqlite_vec.loadable_path())
                     dbapi_conn.enable_load_extension(False)
@@ -139,15 +135,3 @@ def get_sqlalchemy_manager() -> SQLAlchemyManager:
         _sqlalchemy_instance = SQLAlchemyManager()
 
     return _sqlalchemy_instance
-
-
-def init_sqlalchemy() -> SQLAlchemyManager:
-    """
-    初始化 SQLAlchemy 数据库
-
-    Returns:
-        SQLAlchemyManager: 管理器实例
-    """
-    manager = get_sqlalchemy_manager()
-    manager.initialize()
-    return manager

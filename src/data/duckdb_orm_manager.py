@@ -15,10 +15,9 @@ SQLAlchemy 数据库管理器 - DuckDB
 """
 
 import logging
-import os
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from src.data.models_duckdb import Base
@@ -65,6 +64,7 @@ class SQLAlchemyDuckDBManager:
 
         # 返回原生连接（兼容旧代码）
         import duckdb
+
         return duckdb.connect(self.db_path)
 
     def initialize(self):
@@ -87,9 +87,7 @@ class SQLAlchemyDuckDBManager:
             )
 
             # 创建会话工厂
-            self.SessionLocal = sessionmaker(
-                autocommit=False, autoflush=False, bind=self.engine
-            )
+            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
             # ⭐ 自动创建所有表（CS 架构：用户无需手动操作）
             Base.metadata.create_all(self.engine)
@@ -130,18 +128,23 @@ class SQLAlchemyDuckDBManager:
             # 根据表名选择模型
             if table == "recording_sessions":
                 from src.data.models_duckdb import RecordingSession
+
                 model_class = RecordingSession
             elif table == "actions":
                 from src.data.models_duckdb import Action
+
                 model_class = Action
             elif table == "network_requests":
                 from src.data.models_duckdb import NetworkRequest
+
                 model_class = NetworkRequest
             elif table == "sibling_snapshots":
                 from src.data.models_duckdb import SiblingSnapshot
+
                 model_class = SiblingSnapshot
             elif table == "filter_decisions":
                 from src.data.models_duckdb import FilterDecision
+
                 model_class = FilterDecision
             else:
                 raise ValueError(f"Unknown table: {table}")
@@ -256,22 +259,3 @@ class SQLAlchemyDuckDBManager:
             self.engine.dispose()
             self._initialized = False
             logger.debug("DuckDB ORM 连接已关闭")
-
-
-# 全局单例
-_duckdb_orm_instance: Optional[SQLAlchemyDuckDBManager] = None
-
-
-def get_duckdb_orm_manager() -> SQLAlchemyDuckDBManager:
-    """
-    获取 DuckDB ORM 管理器单例
-
-    Returns:
-        SQLAlchemyDuckDBManager: 全局唯一的管理器实例
-    """
-    global _duckdb_orm_instance
-
-    if _duckdb_orm_instance is None:
-        _duckdb_orm_instance = SQLAlchemyDuckDBManager()
-
-    return _duckdb_orm_instance

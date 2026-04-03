@@ -10,8 +10,6 @@ from .websocket_manager import WebSocketServerManager
 from .message_types import (
     MessageType,
     WebSocketMessage,
-    TrialStatusUpdate,
-    IntentConfirmationData,
 )
 
 __all__ = [
@@ -20,6 +18,4 @@ __all__ = [
     "WebSocketServerManager",
     "MessageType",
     "WebSocketMessage",
-    "TrialStatusUpdate",
-    "IntentConfirmationData",
 ]
