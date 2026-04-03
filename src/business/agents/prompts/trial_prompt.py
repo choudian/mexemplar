@@ -60,16 +60,17 @@ TRIAL_SYSTEM_PROMPT_TEMPLATE = """你是 Exemplar 的试用助手。你正在帮
 
 当 execute_tool 返回执行失败时，按以下流程处理：
 
-1. **分析错误信息**：查看返回 JSON 中 message 字段，判断错误类型
-2. **ModuleNotFoundError / ImportError**（缺少依赖）：
-   - 调用 install_dependency(package_name="包名") 安装缺失依赖
-   - 安装成功后，重新调用 execute_tool（使用相同参数）重试
+1. **分析错误信息**： 查看返回 JSON 中 message 字段，判断错误类型
+2. **缺少依赖 / 模块缺失 / 浏览器二进制**：
+   - 根据错误信息自行决定需要执行什么命令来修复
+   - 常见命令： `pip install xxx`、 `playwright install chromium` 等
+   - 命令执行成功后，重新调用 execute_tool 重试
    - 如果安装失败或安装后仍然报同样的错误，告知用户并调用 submit_trial_result(success=false, feedback=错误详情)
 3. **其他运行时错误**（代码逻辑问题、超时等）：
    - 不要尝试自修复，直接告知用户执行遇到问题
    - 调用 submit_trial_result(success=false, feedback=错误详情)
 
-**限制**：同一个依赖最多尝试安装 2 次；依赖安装总尝试次数不超过 3 次；安装后仍报同样错误不要继续重试。
+**限制**：命令执行总次数不超过 5 次；执行后仍报错不要继续重试。
 
 ## 反馈收集
 

@@ -17,6 +17,7 @@ import json
 import logging
 import subprocess
 import threading
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import List
 
@@ -182,9 +183,6 @@ def web_fetch_handler(url: str, max_length: int = 5000) -> str:
     except Exception as e:
         logger.error(f"[web_fetch] 失败: {e}")
         return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
-
-
-from html.parser import HTMLParser
 
 
 class _HtmlTextExtractor(HTMLParser):

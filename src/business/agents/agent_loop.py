@@ -20,17 +20,6 @@ from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_u
 logger = logging.getLogger(__name__)
 
 
-class _PartialFormatMap(dict):
-    """
-    支持部分替换的 format_map 映射。
-
-    用于 str.format_map()：已知键正常替换，未知键保留原占位符（不抛 KeyError）。
-    """
-
-    def __missing__(self, key):
-        return "{" + key + "}"
-
-
 class AgentLoop:
     """
     Agent Loop 运行时引擎
@@ -153,7 +142,9 @@ class AgentLoop:
         for retry_count in range(retry_config.max_retries + 1):
             try:
                 response = self._llm.chat_with_tools(messages, tools)
-                logger.debug(f"[Agent Loop] LLM 回复 (iteration={iteration}): {response.content or ''}")
+                logger.debug(
+                    f"[Agent Loop] LLM 回复 (iteration={iteration}): {response.content or ''}"
+                )
                 if response.has_tool_calls:
                     logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
                 return response
@@ -172,24 +163,151 @@ class AgentLoop:
 
         return None
 
-    def clear_cache(self, session_id: Optional[str] = None):
+    def _execute_tool_call(
+        self,
+        tool_call: ToolCallInfo,
+        tool_handlers: Dict[str, Callable],
+        ctx: ContextManager,
+    ) -> Union[str, ToolSignal]:
         """
-        清除缓存
+        执行单个工具调用
+
+        查找工具 handler 并执行，处理 load_reference 特殊情况和未知工具。
+        不处理 ToolSignal 判断 -- 由 _handle_tool_result 负责。
 
         Args:
-            session_id: 会话 ID，为 None 时清除所有缓存
+            tool_call: 工具调用信息
+            tool_handlers: 工具名称到 handler 的映射
+            ctx: 上下文管理器
+
+        Returns:
+            工具执行结果（str 或 ToolSignal）
         """
-        if session_id:
-            self._ctx_cache.pop(session_id, None)
-            logger.debug(f"[Agent Loop] 清除会话缓存: {session_id}")
-        else:
-            self._ctx_cache.clear()
-            logger.debug("[Agent Loop] 清除所有缓存")
+        if tool_call.name == "load_reference":
+            return ctx.load_reference(tool_call.args["reference_id"])
+
+        handler = tool_handlers.get(tool_call.name)
+        if handler is None:
+            return f"错误：未知工具 '{tool_call.name}'"
+
+        return handler(**tool_call.args)
+
+    def _handle_tool_result(
+        self,
+        result: Union[str, ToolSignal],
+        tool_call: ToolCallInfo,
+        ctx: ContextManager,
+    ) -> Optional[AgentResult]:
+        """
+        处理工具执行结果
+
+        检查是否为 ToolSignal（工具要求中断循环），根据 result_type 决定
+        是否提前返回 AgentResult。普通结果保存后返回 None（继续循环）。
+
+        Args:
+            result: 工具执行结果（str 或 ToolSignal）
+            tool_call: 工具调用信息
+            ctx: 上下文管理器
+
+        Returns:
+            AgentResult 表示应终止循环并返回，None 表示继续循环
+        """
+        if isinstance(result, ToolSignal):
+            content = result.display_text if result.save_result else "[工具执行失败，已提交分诊处理]"
+            ctx.save_tool_result(
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                content=content,
+            )
+            # 携带 ToolSignal 的 display_text 到 ToolCallInfo
+            signal_call_info = ToolCallInfo(
+                id=tool_call.id,
+                name=tool_call.name,
+                args=tool_call.args,
+                display_text=result.display_text,
+            )
+            if result.result_type == ResultType.NEEDS_USER_INPUT:
+                ctx.update_session_status("suspended")
+                question = tool_call.args.get("message", "")
+                logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
+                return AgentResult(
+                    result_type=ResultType.NEEDS_USER_INPUT,
+                    question=question,
+                    signal_tool=signal_call_info,
+                )
+            else:
+                ctx.update_session_status("completed")
+                return AgentResult(
+                    result_type=result.result_type,
+                    signal_tool=signal_call_info,
+                )
+
+        # 普通工具结果，保存并继续迭代
+        ctx.save_tool_result(
+            tool_call_id=tool_call.id,
+            tool_name=tool_call.name,
+            content=result,
+        )
+        logger.debug(f"[Agent Loop] 工具结果: {tool_call.name} -> {result}")
+        return None
+
+    def _process_llm_response(
+        self,
+        response: LLMResponse,
+        ctx: ContextManager,
+    ) -> Union[AgentResult, ToolCallInfo]:
+        """
+        处理 LLM 响应
+
+        保存 assistant 消息，处理文本响应（转为用户输入或完成），
+        解析工具调用。调用方根据返回类型判断下一步：
+        - AgentResult: 终止循环并返回该结果
+        - ToolCallInfo: 进入工具执行阶段
+
+        Args:
+            response: LLM 响应对象
+            ctx: 上下文管理器
+
+        Returns:
+            AgentResult 表示终止循环，ToolCallInfo 表示需要执行的工具
+        """
+        ctx.save_assistant_message(
+            content=response.content or "",
+            tool_calls=(
+                json.dumps(
+                    [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in response.tool_calls]
+                )
+                if response.has_tool_calls
+                else None
+            ),
+        )
+
+        if not response.has_tool_calls:
+            if self._config.text_as_user_input and response.content:
+                ctx.update_session_status("suspended")
+                logger.info(f"[Agent Loop] 文字回复转为用户输入等待: {ctx.session_id}")
+                return AgentResult(
+                    result_type=ResultType.NEEDS_USER_INPUT,
+                    question=response.content,
+                )
+            ctx.update_session_status("completed")
+            logger.info(f"[Agent Loop] 完成（无工具调用）: {ctx.session_id}")
+            return AgentResult(
+                result_type=ResultType.COMPLETED,
+                final_output=response.content or "",
+            )
+
+        tool_call = response.tool_calls[0]
+        logger.debug(
+            f"[Agent Loop] 工具调用: {tool_call.name} "
+            f"args={json.dumps(tool_call.args, ensure_ascii=False)}"
+        )
+        return tool_call
 
     def run(
         self,
         session_id: str,
-        user_input: Optional[str] = None,
+        user_input: Optional[Union[str, dict]] = None,
         tools: Optional[Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]] = None,
         system_prompt_override: Optional[str] = None,
     ) -> AgentResult:
@@ -198,7 +316,10 @@ class AgentLoop:
 
         Args:
             session_id: 会话 ID
-            user_input: 用户输入（可选）
+            user_input: 用户输入（可选）。
+                str: 普通用户输入，以 user 角色存储。
+                dict: {"role": "program"/"agent"/"user", "content": "..."}，
+                以指定角色存储（如分诊修复通知用 program 角色）。
             tools: 工具列表或工厂函数（由调用方组装传入）。
                 传入 list 时直接使用（兼容现有 PM/程序员/试用）。
                 传入 callable 时每轮迭代调用获取最新列表（支持助理的动态工具懒加载）。
@@ -218,18 +339,34 @@ class AgentLoop:
             ctx.save_message(role="system", content=prompt)
             logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
 
+        if user_input is None:
+            last_msg = ctx.get_last_message()
+            if last_msg and last_msg.role == "assistant" and last_msg.content:
+                # 最后一条是 assistant 文字消息，已经在等用户回答，不需要跑 LLM
+                ctx.update_session_status("suspended")
+                logger.info(f"[Agent Loop] 最后一条是 assistant，等待用户输入: {session_id}")
+                return AgentResult(
+                    result_type=ResultType.NEEDS_USER_INPUT,
+                    question=last_msg.content,
+                )
+
         session_status = ctx.get_session_status()
-        if session_status == "suspended" and user_input is None:
-            # suspended 且无用户输入 = 会话处于等待状态，Agent 不应启动
-            logger.info(f"[Agent Loop] 会话处于等待状态，不进入循环: {session_id}")
-            return AgentResult(result_type=ResultType.STILL_WAITING)
         if session_status in ("completed", "failed"):
             ctx.update_session_status("active")
             logger.debug(f"[Agent Loop] 会话恢复（{session_status} → active）: {session_id}")
 
         if user_input is not None:
-            ctx.save_user_message(user_input)
-            logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
+            if isinstance(user_input, dict):
+                role = user_input.get("role")
+                content = user_input.get("content")
+                if not role or not content:
+                    logger.warning(f"[Agent Loop] dict user_input 缺少 'role' 或 'content': {user_input}")
+                    return AgentResult(result_type=ResultType.ERROR, error="user_input dict 缺少 'role' 或 'content'")
+                ctx.save_message(role=role, content=content)
+                logger.debug(f"[Agent Loop] 输入({role}): {content[:50]}...")
+            else:
+                ctx.save_user_message(user_input)
+                logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
 
         # 构建工具 schemas 和 handlers 的辅助函数
         def _rebuild_tools(tool_defs: List[ToolDefinition]):
@@ -283,98 +420,17 @@ class AgentLoop:
                     ctx.update_session_status("failed")
                     return AgentResult(result_type=ResultType.ERROR, error="LLM 调用失败")
 
-                ctx.save_assistant_message(
-                    content=response.content or "",
-                    tool_calls=(
-                        json.dumps(
-                            [
-                                {"id": tc.id, "name": tc.name, "args": tc.args}
-                                for tc in response.tool_calls
-                            ]
-                        )
-                        if response.has_tool_calls
-                        else None
-                    ),
-                )
-
-                if not response.has_tool_calls:
-                    if self._config.text_as_user_input and response.content:
-                        ctx.update_session_status("suspended")
-                        logger.info(f"[Agent Loop] 文字回复转为用户输入等待: {session_id}")
-                        return AgentResult(
-                            result_type=ResultType.NEEDS_USER_INPUT,
-                            question=response.content,
-                        )
-                    ctx.update_session_status("completed")
-                    logger.info(f"[Agent Loop] 完成（无工具调用）: {session_id}")
-                    return AgentResult(
-                        result_type=ResultType.COMPLETED,
-                        final_output=response.content or "",
-                    )
-
-                tool_call = response.tool_calls[0]
-                logger.debug(
-                    f"[Agent Loop] 工具调用: {tool_call.name} args={json.dumps(tool_call.args, ensure_ascii=False)}"
-                )
+                llm_outcome = self._process_llm_response(response, ctx)
+                if isinstance(llm_outcome, AgentResult):
+                    return llm_outcome
+                tool_call = llm_outcome
 
             # 执行工具（统一路径，不区分内置/注册）
             try:
-                if tool_call.name == "load_reference":
-                    result = ctx.load_reference(tool_call.args["reference_id"])
-                else:
-                    handler = tool_handlers.get(tool_call.name)
-                    if handler is None:
-                        result = f"错误：未知工具 '{tool_call.name}'"
-                    else:
-                        result = handler(**tool_call.args)
-
-                # 检查是否为 ToolSignal（工具要求中断循环）
-                if isinstance(result, ToolSignal):
-                    if result.save_result:
-                        ctx.save_tool_result(
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.name,
-                            content=result.display_text,
-                        )
-                    else:
-                        # save_result=False 时仍需保存占位结果，否则下次 run()
-                        # get_pending_tool_call() 会再次检测到悬空的 assistant tool_call，
-                        # 导致无限重试循环
-                        ctx.save_tool_result(
-                            tool_call_id=tool_call.id,
-                            tool_name=tool_call.name,
-                            content="[工具执行失败，已提交分诊处理]",
-                        )
-                    # 携带 ToolSignal 的 display_text 到 ToolCallInfo
-                    signal_call_info = ToolCallInfo(
-                        id=tool_call.id,
-                        name=tool_call.name,
-                        args=tool_call.args,
-                        display_text=result.display_text,
-                    )
-                    if result.result_type == ResultType.NEEDS_USER_INPUT:
-                        ctx.update_session_status("suspended")
-                        question = tool_call.args.get("message", "")
-                        logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
-                        return AgentResult(
-                            result_type=ResultType.NEEDS_USER_INPUT,
-                            question=question,
-                            signal_tool=signal_call_info,
-                        )
-                    else:
-                        ctx.update_session_status("completed")
-                        return AgentResult(
-                            result_type=result.result_type,
-                            signal_tool=signal_call_info,
-                        )
-
-                # 普通工具结果，保存并继续迭代
-                ctx.save_tool_result(
-                    tool_call_id=tool_call.id,
-                    tool_name=tool_call.name,
-                    content=result,
-                )
-                logger.debug(f"[Agent Loop] 工具结果: {tool_call.name} -> {result}")
+                result = self._execute_tool_call(tool_call, tool_handlers, ctx)
+                signal = self._handle_tool_result(result, tool_call, ctx)
+                if signal is not None:
+                    return signal
 
             except Exception as e:
                 error_msg = f"工具执行错误: {str(e)}"

@@ -13,7 +13,6 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -129,22 +128,66 @@ def _extract_imports(code: str) -> list[str]:
     return [_IMPORT_TO_PIP.get(n, n) for n in names if n not in stdlib]
 
 
-def install_dependency_to_venv(package_name: str) -> dict:
-    """安装单个 pip 包到工具 venv。供业务层 install_dependency 工具调用。"""
-    if not re.match(r'^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$', package_name):
-        return {"success": False, "message": f"无效的包名: {package_name}"}
+def run_command_in_venv(command: str) -> dict:
+    """
+    在工具 venv 环境中执行 shell 命令。供业务层 run_command 工具调用。
+
+    LLM 根据错误信息自行决定执行什么命令，如：
+    - pip install requests
+    - playwright install chromium
+    - python -c "import playwright; print(playwright.__version__)"
+    """
+    if not command.strip():
+        return {"success": False, "message": "命令不能为空"}
+
+    # 安全校验：拒绝换行符和 shell 元字符，防止命令拼接注入
+    cmd_stripped = command.strip()
+    if re.search(r'[\r\n;&|`$]', cmd_stripped):
+        return {"success": False, "message": "命令包含不安全字符"}
+
+    # 安全校验：只允许常见安全命令前缀
+    if not any(
+        cmd_stripped.startswith(p)
+        for p in (
+            "pip install ",
+            "pip3 install ",
+            "python -m pip install ",
+            "python3 -m pip install ",
+            "playwright install ",
+        )
+    ):
+        return {"success": False, "message": "不支持的命令，仅允许: pip install, playwright install"}
 
     try:
         venv_python = _get_venv_python()
     except RuntimeError as e:
         return {"success": False, "message": str(e)}
 
-    # Agent 可能传入 import 名（如 bs4），反查 pip 名（如 beautifulsoup4）
-    pip_name = _IMPORT_TO_PIP.get(package_name, package_name)
-    ok, err = _ensure_dependencies(venv_python, [pip_name])
-    if ok:
-        return {"success": True, "message": f"依赖 {pip_name} 安装成功"}
-    return {"success": False, "message": err}
+    # 替换命令中的 python → venv python
+    if cmd_stripped.startswith("python ") or cmd_stripped.startswith("python3 "):
+        cmd_stripped = venv_python + cmd_stripped[cmd_stripped.index(" "):]
+    elif cmd_stripped.startswith("pip ") or cmd_stripped.startswith("pip3 "):
+        cmd_stripped = f'{venv_python} -m pip{cmd_stripped[4:]}'
+    elif cmd_stripped.startswith("playwright "):
+        cmd_stripped = f"{venv_python} -m playwright {cmd_stripped[11:]}"
+
+    try:
+        proc = subprocess.run(
+            cmd_stripped,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            shell=True,
+        )
+        output = proc.stdout.strip()
+        error = proc.stderr.strip()
+        if proc.returncode != 0:
+            return {"success": False, "message": error or output or f"命令执行失败 (exit code {proc.returncode})"}
+        return {"success": True, "message": output or "命令执行成功"}
+    except subprocess.TimeoutExpired:
+        return {"success": False, "message": "命令执行超时（180秒）"}
+    except Exception as e:
+        return {"success": False, "message": f"命令执行出错: {e}"}
 
 
 def _ensure_dependencies(venv_python: str, dependencies: list[str]) -> tuple[bool, str]:
@@ -219,7 +262,7 @@ def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = 
         return {"success": False, "message": str(e), "data": None}
 
     # 2. 安装依赖：合并显式声明 + 代码中自动检测的 import
-    all_deps = list({*( dependencies or []), *_extract_imports(code)})
+    all_deps = list({*(dependencies or []), *_extract_imports(code)})
     ok, err = _ensure_dependencies(venv_python, all_deps)
     if not ok:
         return {"success": False, "message": err, "data": None}

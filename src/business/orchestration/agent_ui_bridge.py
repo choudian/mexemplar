@@ -12,7 +12,7 @@ from typing import Dict, List, Optional, Set
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
-from src.utils.events import connect, emit
+from src.utils.events import connect
 from .agent_orchestrator import AgentOrchestrator
 
 logger = logging.getLogger(__name__)
@@ -87,14 +87,18 @@ class AgentUIBridge(QObject):
     """
 
     # UI 关注的 PyQt 信号（新增 session_id 参数）
-    question_received = pyqtSignal(str, str, str, str)  # workflow_id, session_id, agent_type, question
+    question_received = pyqtSignal(
+        str, str, str, str
+    )  # workflow_id, session_id, agent_type, question
     error_occurred = pyqtSignal(str, str, str, str)  # workflow_id, session_id, agent_type, error
     progress_updated = pyqtSignal(str, str)  # workflow_id, event_name
     tool_saved_signal = pyqtSignal(str, str, bool)  # workflow_id, tool_id, from_triage
     tool_published_signal = pyqtSignal(str, str)  # workflow_id, tool_id
 
     # 失败追踪信号
-    failure_updated_signal = pyqtSignal(str, str, str, bool)  # workflow_id, failed_stage, event_type, is_new
+    failure_updated_signal = pyqtSignal(
+        str, str, str, bool
+    )  # workflow_id, failed_stage, event_type, is_new
     retry_failed_signal = pyqtSignal(str, str)  # workflow_id, error
 
     def __init__(self, orchestrator: AgentOrchestrator):
@@ -126,10 +130,6 @@ class AgentUIBridge(QObject):
         # 竞态窗口极窄，最坏情况仅是一次 toast 重复或缺失，不影响数据正确性。
         self._retrying_workflows: Set[str] = set()
 
-    def is_retrying(self, workflow_id: str) -> bool:
-        """查询指定 workflow 是否正在重试中"""
-        return workflow_id in self._retrying_workflows
-
     def start_agent(
         self,
         agent_type: str,
@@ -143,8 +143,11 @@ class AgentUIBridge(QObject):
         """
         worker_key = session_id or workflow_id or "default"
         worker = AgentWorker(
-            self._orchestrator, agent_type, user_input,
-            workflow_id=workflow_id, session_id=session_id,
+            self._orchestrator,
+            agent_type,
+            user_input,
+            workflow_id=workflow_id,
+            session_id=session_id,
         )
         self._run_in_background(worker_key, worker)
 
@@ -172,8 +175,10 @@ class AgentUIBridge(QObject):
         与 start_agent 相同机制（上一个 loop 返回 NEEDS_USER_INPUT 后线程已结束）。
         """
         self.start_agent(
-            agent_type, user_input,
-            workflow_id=workflow_id, session_id=session_id,
+            agent_type,
+            user_input,
+            workflow_id=workflow_id,
+            session_id=session_id,
         )
 
     def _cleanup_worker(self, worker_key: str):
@@ -291,8 +296,11 @@ class AgentUIBridge(QObject):
         self._retrying_workflows.add(workflow_id)
         worker_key = workflow_id  # 与 start_agent 共享 worker 字典，防止并发
         worker = RetryTeachingWorker(self._orchestrator, workflow_id)
-        on_cleanup = lambda wid=workflow_id: self._retrying_workflows.discard(wid)
-        if not self._run_in_background(worker_key, worker, on_finished=on_cleanup):
+
+        def _on_cleanup(wid=workflow_id):
+            self._retrying_workflows.discard(wid)
+
+        if not self._run_in_background(worker_key, worker, on_finished=_on_cleanup):
             self._retrying_workflows.discard(workflow_id)
 
     def dismiss_failure(self, workflow_id: str) -> None:
@@ -301,15 +309,3 @@ class AgentUIBridge(QObject):
             logger.warning(f"[AgentUIBridge] 正在重试中，不允许忽略: {workflow_id}")
             return
         self._orchestrator.dismiss_failure(workflow_id)
-
-    def reset_stale_retrying(self) -> None:
-        """启动时重置所有 retrying 状态为 active（同步，可在预热线程调用）"""
-        workflow_ids = self._orchestrator.reset_all_retrying()
-        for wid in workflow_ids:
-            emit(
-                "teaching_failure_updated",
-                sender=self._orchestrator,
-                workflow_id=wid,
-                failed_stage="",
-                error_type="",
-            )

@@ -8,11 +8,13 @@ Loop 不感知事件系统；所有事件由 Orchestrator 在 loop.run() 返回�
 import json
 import logging
 import threading
-import time
 import uuid
 from collections import OrderedDict
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
+
+if TYPE_CHECKING:
+    from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
@@ -100,7 +102,7 @@ class AgentOrchestrator:
     def run_agent(
         self,
         agent_type: str,
-        user_input: Optional[str],
+        user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
     ) -> None:
@@ -109,6 +111,10 @@ class AgentOrchestrator:
 
         PM/程序员/试用：传 workflow_id（现有逻辑不变）
         assistant：传 session_id（不传 workflow_id）
+
+        Args:
+            user_input: str 为普通用户输入；dict 格式 {"role": "program", "content": "..."}
+                        为程序注入消息（不展示给用户，给 LLM 时映射为 user）。
 
         1. 查询或创建会话
         2. 运行 Loop，获取 result
@@ -125,8 +131,11 @@ class AgentOrchestrator:
         except ValueError as e:
             logger.error(f"[Orchestrator] 无法创建 {agent_type} Loop: {e}")
             self._emit_agent_error(
-                workflow_id or "", session_id, agent_type,
-                str(e), "setup_error",
+                workflow_id or "",
+                session_id,
+                agent_type,
+                str(e),
+                "setup_error",
             )
             return
 
@@ -154,12 +163,6 @@ class AgentOrchestrator:
                 self._try_resolve_failure(workflow_id)
                 self._dispatch_next(agent_type, result, session_id, workflow_id)
 
-        elif result.result_type == ResultType.STILL_WAITING:
-            # 会话处于等待状态，Agent 未执行，不发任何事件
-            logger.info(
-                f"[Orchestrator] 会话处于等待状态: session={session_id}, workflow={workflow_id}"
-            )
-
         elif result.result_type == ResultType.NEEDS_USER_INPUT:
             emit(
                 "agent_needs_user_input",
@@ -172,8 +175,11 @@ class AgentOrchestrator:
 
         elif result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
             self._emit_agent_error(
-                workflow_id or "", session_id, agent_type,
-                result.error, result.result_type.value,
+                workflow_id or "",
+                session_id,
+                agent_type,
+                result.error,
+                result.result_type.value,
             )
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
@@ -291,8 +297,12 @@ class AgentOrchestrator:
     # =========================================================================
 
     def _emit_agent_error(
-        self, workflow_id: str, session_id: str,
-        agent_type: str, error: str, error_type: str,
+        self,
+        workflow_id: str,
+        session_id: str,
+        agent_type: str,
+        error: str,
+        error_type: str,
     ):
         """统一的 agent 错误处理：emit 事件 + 记录 transition"""
         emit(
@@ -312,7 +322,9 @@ class AgentOrchestrator:
                     event_type="agent_error",
                     from_session_id=session_id,
                     to_session_id=None,
-                    payload=json.dumps({"agent_type": agent_type, "error": error, "error_type": error_type}),
+                    payload=json.dumps(
+                        {"agent_type": agent_type, "error": error, "error_type": error_type}
+                    ),
                 )
             )
 
@@ -337,8 +349,11 @@ class AgentOrchestrator:
         except Exception as e:
             logger.error(f"[Orchestrator] 调度失败: {e}", exc_info=True)
             self._emit_agent_error(
-                workflow_id, session_id, agent_type,
-                f"调度失败: {str(e)}", "dispatch_error",
+                workflow_id,
+                session_id,
+                agent_type,
+                f"调度失败: {str(e)}",
+                "dispatch_error",
             )
 
     def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
@@ -405,7 +420,9 @@ class AgentOrchestrator:
                 f"[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session={session_id}"
             )
             self._emit_agent_error(
-                workflow_id, session_id, "pm",
+                workflow_id,
+                session_id,
+                "pm",
                 "PM Agent 未调用 submit_requirements 或 report_code_issue 即结束",
                 "missing_signal_tool",
             )
@@ -419,7 +436,9 @@ class AgentOrchestrator:
                 f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}"
             )
             self._emit_agent_error(
-                workflow_id, session_id, "programmer",
+                workflow_id,
+                session_id,
+                "programmer",
                 "程序员未通过 submit_code 提交代码",
                 "missing_signal_tool",
             )
@@ -460,7 +479,9 @@ class AgentOrchestrator:
                 f"[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session={session_id}"
             )
             self._emit_agent_error(
-                workflow_id, session_id, "trial",
+                workflow_id,
+                session_id,
+                "trial",
                 "试用 Agent 未通过 submit_trial_result 结束",
                 "unexpected_completion",
             )
@@ -469,7 +490,9 @@ class AgentOrchestrator:
         tool = self._tool_repo.get_by_workflow_id(workflow_id)
         if not tool:
             self._emit_agent_error(
-                workflow_id, session_id, "trial",
+                workflow_id,
+                session_id,
+                "trial",
                 "未找到工具",
                 "tool_not_found",
             )
@@ -584,7 +607,11 @@ class AgentOrchestrator:
         - 需求问题 → PM 调 talk_to_user 重新确认 → 正常 requirement_confirmed 流程
         - 代码问题 → PM 直接输出用户反馈 → _on_pm_completed 转给程序员
         """
-        failure_context = f"用户反馈：{user_feedback}" if user_feedback else "工具执行报错（错误详情见试用会话历史）"
+        failure_context = (
+            f"用户反馈：{user_feedback}"
+            if user_feedback
+            else "工具执行报错（错误详情见试用会话历史）"
+        )
         initial_input = (
             f"工具 {tool_id} 试用失败，{failure_context}。"
             "请分析问题原因：如果是需求问题，请与用户重新确认需求；"
@@ -683,10 +710,6 @@ class AgentOrchestrator:
                 error_type=record.error_type or "",
             )
 
-    def reset_all_retrying(self) -> list:
-        """启动时重置所有 retrying 状态为 active，返回被重置的 workflow_id 列表"""
-        return self._failure_repo.reset_retrying_to_active()
-
     def retry_teaching(self, workflow_id: str):
         """从失败阶段重启教学流程"""
         record = self._failure_repo.get_by_workflow_id(workflow_id)
@@ -729,18 +752,25 @@ class AgentOrchestrator:
 
         # 按失败阶段分发
         if failed_stage == "pm":
-            self._retry_stage(workflow_id, record, "pm",
-                              fallback_action=lambda: self.start_analysis(workflow_id, workflow_id))
+            self._retry_stage(
+                workflow_id,
+                record,
+                "pm",
+                fallback_action=lambda: self.start_analysis(workflow_id, workflow_id),
+            )
 
         elif failed_stage == "programmer":
-            self._retry_stage(workflow_id, record, "programmer",
-                              transition_event="requirement_confirmed",
-                              transition_key="requirements",
-                              fallback_stage="pm")
+            self._retry_stage(
+                workflow_id,
+                record,
+                "programmer",
+                transition_event="requirement_confirmed",
+                transition_key="requirements",
+                fallback_stage="pm",
+            )
 
         elif failed_stage == "trial":
-            self._retry_stage(workflow_id, record, "trial",
-                              fallback_stage="programmer")
+            self._retry_stage(workflow_id, record, "trial", fallback_stage="programmer")
 
         else:
             logger.warning(f"[Orchestrator] 未知失败阶段 {failed_stage}，降级为 PM 重启")
@@ -775,15 +805,23 @@ class AgentOrchestrator:
 
         # 策略 2：从 transition 取上阶段结果，新 session 跑
         if transition_event and transition_key:
-            payload = self._extract_transition_payload(workflow_id, transition_event, transition_key)
+            payload = self._extract_transition_payload(
+                workflow_id, transition_event, transition_key
+            )
             if payload:
-                user_input = json.dumps(payload, ensure_ascii=False) if isinstance(payload, dict) else str(payload)
+                user_input = (
+                    json.dumps(payload, ensure_ascii=False)
+                    if isinstance(payload, dict)
+                    else str(payload)
+                )
                 self.run_agent(stage, user_input, workflow_id)
                 return
 
         # 策略 3：降级
         if _depth >= 3:
-            logger.error(f"[Orchestrator] 降级链超过最大深度: {workflow_id}，走 start_analysis 兜底")
+            logger.error(
+                f"[Orchestrator] 降级链超过最大深度: {workflow_id}，走 start_analysis 兜底"
+            )
             self.start_analysis(workflow_id, workflow_id)
         elif fallback_action:
             fallback_action()
@@ -819,15 +857,17 @@ class AgentOrchestrator:
             error_type=record.error_type or "",
         )
         # 递归重试目标阶段
-        self._retry_stage(workflow_id, record, target_stage,
-                          fallback_action=lambda: self.start_analysis(workflow_id, workflow_id),
-                          _depth=_depth + 1)
+        self._retry_stage(
+            workflow_id,
+            record,
+            target_stage,
+            fallback_action=lambda: self.start_analysis(workflow_id, workflow_id),
+            _depth=_depth + 1,
+        )
 
     def _extract_transition_payload(self, workflow_id: str, event_type: str, key: str):
         """从 WorkflowTransition 的 payload JSON 中提取指定 key"""
-        transition = self._transition_repo.get_latest_by_workflow_and_event(
-            workflow_id, event_type
-        )
+        transition = self._transition_repo.get_latest_by_workflow_and_event(workflow_id, event_type)
         if transition and transition.payload:
             try:
                 return json.loads(transition.payload).get(key)
@@ -889,6 +929,9 @@ class AgentOrchestrator:
         result = []
         first_user_skipped = False
         for msg in messages:
+            # program / agent 消息不展示给用户
+            if msg.role in ("program", "agent"):
+                continue
             if msg.role == "user" and msg.content:
                 if skip_first_user and not first_user_skipped:
                     first_user_skipped = True
@@ -959,9 +1002,7 @@ class AgentOrchestrator:
             return self._build_assistant_tools(session_id)
         return []
 
-    def _build_assistant_tools(
-        self, session_id: str
-    ) -> Callable[[], List[ToolDefinition]]:
+    def _build_assistant_tools(self, session_id: str) -> Callable[[], List[ToolDefinition]]:
         """返回工厂函数，每轮迭代调用时拿到最新的已激活工具"""
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
@@ -983,12 +1024,17 @@ class AgentOrchestrator:
             dynamic_manager = self._dynamic_managers[session_id]
 
         from src.business.agents.tools.assistant_tools import (
-            REPORT_TOOL_BUG, SAVE_PROFILE_SCHEMA, create_save_profile_handler, DISMISS_SUGGESTION,
-            CODIFY_AS_TOOL_SCHEMA, create_codify_as_tool_handler,
+            REPORT_TOOL_BUG,
+            SAVE_PROFILE_SCHEMA,
+            create_save_profile_handler,
+            DISMISS_SUGGESTION,
+            CODIFY_AS_TOOL_SCHEMA,
+            create_codify_as_tool_handler,
         )
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.memory.assistant_memory import (
-            MEMORY_SEARCH_SCHEMA, memory_search_handler,
+            MEMORY_SEARCH_SCHEMA,
+            memory_search_handler,
         )
 
         codify_tool = ToolDefinition(
@@ -1009,10 +1055,13 @@ class AgentOrchestrator:
 
         # 固定工具：搜索/懒加载辅助 + 业务工具 + 通用内置工具
         search_tools = create_assistant_search_tools(dynamic_manager)
-        static_tools = (
-            [REPORT_TOOL_BUG, save_profile_tool, codify_tool, DISMISS_SUGGESTION, memory_search_tool]
-            + BUILTIN_GENERAL_TOOLS
-        )
+        static_tools = [
+            REPORT_TOOL_BUG,
+            save_profile_tool,
+            codify_tool,
+            DISMISS_SUGGESTION,
+            memory_search_tool,
+        ] + BUILTIN_GENERAL_TOOLS
 
         def tool_factory() -> List[ToolDefinition]:
             return search_tools + static_tools + dynamic_manager.get_activated_tools()
@@ -1048,6 +1097,7 @@ class AgentOrchestrator:
 
         # 注入唤醒回调给 assistant_tools（handler 入队后调用以立即唤醒 Worker）
         from src.business.agents.tools.assistant_tools import register_task_worker_notify
+
         register_task_worker_notify(self.notify_task_enqueued)
 
         threading.Thread(target=self._task_worker_loop, daemon=True).start()
@@ -1072,6 +1122,7 @@ class AgentOrchestrator:
     def _process_pending_tasks(self):
         """取出并执行所有 pending 任务（串行，每次一个）"""
         from src.data.repositories import PendingTaskRepository
+
         repo = PendingTaskRepository()
         tasks = repo.get_pending()
         for task in tasks:
@@ -1144,6 +1195,7 @@ class AgentOrchestrator:
         # 获取全局摘要
         try:
             from src.business.memory.assistant_memory import get_memory_manager
+
             memory_manager = get_memory_manager(llm_client=self._llm)
             memory_summary = memory_manager.get_global_summary()
         except Exception as e:
@@ -1270,6 +1322,10 @@ class AgentOrchestrator:
             logger.info(
                 f"[Orchestrator] 分诊修复完成，自动重启 trial Agent: workflow={workflow_id}"
             )
-            self.run_agent("trial", None, workflow_id)
+            self.run_agent(
+                "trial",
+                {"role": "program", "content": "工具代码已修复，请重新执行工具试用。"},
+                workflow_id,
+            )
 
         return tool_id

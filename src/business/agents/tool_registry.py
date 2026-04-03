@@ -90,16 +90,6 @@ def execute_tool(name: str, args: Dict[str, Any]) -> str:
         return f"错误：{str(e)}"
 
 
-def get_registered_tools() -> List[str]:
-    """
-    获取所有已注册工具的名称列表
-
-    Returns:
-        工具名称列表
-    """
-    return list(_tool_registry.keys())
-
-
 def clear_registry():
     """
     清空工具注册表（主要用于测试）

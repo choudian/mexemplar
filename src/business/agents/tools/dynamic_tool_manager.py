@@ -246,7 +246,7 @@ class DynamicToolManager:
             )
         if not tool.parameters:
             lines.append("  （无参数）")
-        lines.append(f"\n工具已激活，你现在可以直接调用它了。")
+        lines.append("\n工具已激活，你现在可以直接调用它了。")
         return "\n".join(lines)
 
 
