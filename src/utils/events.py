@@ -28,32 +28,6 @@ recording_stopped = _signals.signal("recording_stopped")
 recording_completed = _signals.signal("recording_completed")
 """录制完成事件 - 当录制数据准备就绪时触发"""
 
-recording_failed = _signals.signal("recording_failed")
-"""录制失败事件"""
-
-# 工作流相关事件
-workflow_processing_started = _signals.signal("workflow_processing_started")
-"""工作流处理开始事件"""
-
-workflow_processing_progress = _signals.signal("workflow_processing_progress")
-"""工作流处理进度事件"""
-
-workflow_processing_completed = _signals.signal("workflow_processing_completed")
-"""工作流处理完成事件"""
-
-workflow_processing_failed = _signals.signal("workflow_processing_failed")
-"""工作流处理失败事件"""
-
-# 工具相关事件
-tool_created = _signals.signal("tool_created")
-"""工具创建事件"""
-
-tool_updated = _signals.signal("tool_updated")
-"""工具更新事件"""
-
-tool_executed = _signals.signal("tool_executed")
-"""工具执行事件"""
-
 # Agent 交互事件
 agent_needs_user_input = _signals.signal("agent_needs_user_input")
 """Agent 需要用户输入事件"""
@@ -114,29 +88,6 @@ class RecordingEventData:
     end_time: Optional[float] = None
     action_count: int = 0
     error: Optional[str] = None
-
-
-@dataclass
-class WorkflowProcessingEventData:
-    """工作流处理事件数据"""
-
-    session_id: str
-    current_step: int
-    total_steps: int
-    step_name: str
-    message: str
-    percent: int
-    tool_id: Optional[str] = None
-    error: Optional[str] = None
-
-
-@dataclass
-class ToolEventData:
-    """工具事件数据"""
-
-    tool_id: str
-    tool_name: str
-    description: str
 
 
 # =============================================================================
@@ -207,33 +158,7 @@ def list_signals() -> dict:
         字典，键为信号名称，值为监听器数量
     """
     result = {}
-    for name in [
-        "recording_started",
-        "recording_stopped",
-        "recording_completed",
-        "recording_failed",
-        "workflow_processing_started",
-        "workflow_processing_progress",
-        "workflow_processing_completed",
-        "workflow_processing_failed",
-        "tool_created",
-        "tool_updated",
-        "tool_executed",
-        "agent_needs_user_input",
-        "agent_error",
-        "requirement_confirmed",
-        "code_completed",
-        "review_passed",
-        "review_failed",
-        "tool_saved",
-        "trial_success",
-        "trial_failed",
-        "triage_completed",
-        "tool_published",
-        "teaching_failure_updated",
-        "teaching_failure_resolved",
-        "teaching_failure_retrying",
-    ]:
+    for name in _signal_names:
         signal = _signals.signal(name)
         # 获取所有接收器数量（简化计算）
         try:
@@ -253,36 +178,31 @@ def clear_all() -> None:
     """
     清除所有信号的监听器（主要用于测试）
     """
-    for name in [
-        "recording_started",
-        "recording_stopped",
-        "recording_completed",
-        "recording_failed",
-        "workflow_processing_started",
-        "workflow_processing_progress",
-        "workflow_processing_completed",
-        "workflow_processing_failed",
-        "tool_created",
-        "tool_updated",
-        "tool_executed",
-        "agent_needs_user_input",
-        "agent_error",
-        "requirement_confirmed",
-        "code_completed",
-        "review_passed",
-        "review_failed",
-        "tool_saved",
-        "trial_success",
-        "trial_failed",
-        "triage_completed",
-        "tool_published",
-        "teaching_failure_updated",
-        "teaching_failure_resolved",
-        "teaching_failure_retrying",
-    ]:
+    for name in _signal_names:
         signal = _signals.signal(name)
         # 清空所有接收器
         signal._clear_state()
+
+
+_signal_names = [
+    "recording_started",
+    "recording_stopped",
+    "recording_completed",
+    "agent_needs_user_input",
+    "agent_error",
+    "requirement_confirmed",
+    "code_completed",
+    "review_passed",
+    "review_failed",
+    "tool_saved",
+    "trial_success",
+    "trial_failed",
+    "triage_completed",
+    "tool_published",
+    "teaching_failure_updated",
+    "teaching_failure_resolved",
+    "teaching_failure_retrying",
+]
 
 
 # =============================================================================
@@ -320,14 +240,6 @@ __all__ = [
     "recording_started",
     "recording_stopped",
     "recording_completed",
-    "recording_failed",
-    "workflow_processing_started",
-    "workflow_processing_progress",
-    "workflow_processing_completed",
-    "workflow_processing_failed",
-    "tool_created",
-    "tool_updated",
-    "tool_executed",
     "agent_needs_user_input",
     "agent_error",
     "requirement_confirmed",
@@ -344,8 +256,6 @@ __all__ = [
     "teaching_failure_retrying",
     # 数据类
     "RecordingEventData",
-    "WorkflowProcessingEventData",
-    "ToolEventData",
     # 函数
     "connect",
     "disconnect",

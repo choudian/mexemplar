@@ -10,33 +10,28 @@ import ast
 import json
 from typing import Any, Dict, List
 
-from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
+from src.business.agents.config import ToolDefinition
+from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler
 
 
 # =============================================================================
 # syntax_check
 # =============================================================================
 
-SYNTAX_CHECK_SCHEMA: Dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "syntax_check",
-        "description": (
-            "检查 Python 代码的语法正确性和导入合法性。不执行代码，只做静态分析。"
-            "建议在提交代码前调用。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string",
-                    "description": "要检查的 Python 代码",
-                },
-            },
-            "required": ["code"],
+SYNTAX_CHECK_SCHEMA: Dict[str, Any] = make_tool_schema(
+    name="syntax_check",
+    description=(
+        "检查 Python 代码的语法正确性和导入合法性。不执行代码，只做静态分析。"
+        "建议在提交代码前调用。"
+    ),
+    properties={
+        "code": {
+            "type": "string",
+            "description": "要检查的 Python 代码",
         },
     },
-}
+    required=["code"],
+)
 
 _BLOCKED_MODULES = frozenset(
     {
@@ -122,85 +117,65 @@ def _syntax_check(code: str) -> str:
 # submit_code
 # =============================================================================
 
-SUBMIT_CODE_SCHEMA: Dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "submit_code",
-        "description": "提交编写完成的代码。代码必须通过语法校验后再提交。",
+SUBMIT_CODE_SCHEMA: Dict[str, Any] = make_tool_schema(
+    name="submit_code",
+    description="提交编写完成的代码。代码必须通过语法校验后再提交。",
+    properties={
+        "tool_name": {
+            "type": "string",
+            "description": "工具名称（英文，snake_case，如 baidu_search_scraper）",
+        },
+        "description": {
+            "type": "string",
+            "description": "工具功能描述（中文，一句话）",
+        },
+        "code": {
+            "type": "string",
+            "description": "完整的 Python 代码",
+        },
+        "execution_strategy": {
+            "type": "string",
+            "enum": ["browser", "api", "hybrid"],
+            "description": ("执行策略：browser=浏览器自动化, api=直接调用API, hybrid=混合"),
+        },
         "parameters": {
-            "type": "object",
-            "properties": {
-                "tool_name": {
-                    "type": "string",
-                    "description": "工具名称（英文，snake_case，如 baidu_search_scraper）",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "工具功能描述（中文，一句话）",
-                },
-                "code": {
-                    "type": "string",
-                    "description": "完整的 Python 代码",
-                },
-                "execution_strategy": {
-                    "type": "string",
-                    "enum": ["browser", "api", "hybrid"],
-                    "description": ("执行策略：browser=浏览器自动化, api=直接调用API, hybrid=混合"),
-                },
-                "parameters": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "name": {
-                                "type": "string",
-                                "description": "参数名",
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": "参数说明",
-                            },
-                            "type": {
-                                "type": "string",
-                                "description": "参数类型（string/integer/boolean）",
-                            },
-                            "required": {
-                                "type": "boolean",
-                                "description": "是否必填",
-                            },
-                            "default": {
-                                "description": "默认值（可选，类型与参数类型一致）",
-                            },
-                        },
-                        "required": ["name", "description", "type", "required"],
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "参数名",
                     },
-                    "description": ("完整参数列表（包含 PM 定义的参数和你补充的技术参数）"),
+                    "description": {
+                        "type": "string",
+                        "description": "参数说明",
+                    },
+                    "type": {
+                        "type": "string",
+                        "description": "参数类型（string/integer/boolean）",
+                    },
+                    "required": {
+                        "type": "boolean",
+                        "description": "是否必填",
+                    },
+                    "default": {
+                        "description": "默认值（可选，类型与参数类型一致）",
+                    },
                 },
+                "required": ["name", "description", "type", "required"],
             },
-            "required": [
-                "tool_name",
-                "description",
-                "code",
-                "execution_strategy",
-                "parameters",
-            ],
+            "description": ("完整参数列表（包含 PM 定义的参数和你补充的技术参数）"),
         },
     },
-}
-
-
-def _submit_code(
-    tool_name: str,
-    description: str,
-    code: str,
-    execution_strategy: str,
-    parameters: List[Dict[str, Any]],
-) -> ToolSignal:
-    """提交代码，中断循环。结构化数据通过 signal_tool.args 传递给 Orchestrator。"""
-    return ToolSignal(
-        result_type=ResultType.COMPLETED,
-        display_text="[代码已提交]",
-    )
+    required=[
+        "tool_name",
+        "description",
+        "code",
+        "execution_strategy",
+        "parameters",
+    ],
+)
 
 
 # =============================================================================
@@ -216,7 +191,7 @@ syntax_check = ToolDefinition(
 submit_code = ToolDefinition(
     name="submit_code",
     schema=SUBMIT_CODE_SCHEMA,
-    handler=_submit_code,
+    handler=make_signal_handler("[代码已提交]"),
 )
 
 __all__ = [

@@ -22,8 +22,26 @@ from pathlib import Path
 from typing import List
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.tool_helpers import make_tool_schema, error_json
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# 常量
+# =============================================================================
+
+# 用户确认超时（秒）
+_CONFIRM_TIMEOUT = 120
+
+# web_fetch 返回内容最大字符数
+_WEB_FETCH_MAX_LENGTH = 5000
+
+# read_file 最大读取字节数
+_READ_FILE_MAX_BYTES = 50000
+
+# exec 输出截断（stdout / stderr 最大字符数）
+_EXEC_STDOUT_MAX = 5000
+_EXEC_STDERR_MAX = 2000
 
 # exec 安全白名单（无需用户确认即可执行的命令）
 EXEC_SAFE_COMMANDS = frozenset([
@@ -83,7 +101,7 @@ def _ask_user_confirm(message: str) -> bool:
         _pending_confirms[request_id] = {"event": event, "result": False}
 
     _confirm_signal.emit(request_id, message)
-    event.wait(timeout=120)
+    event.wait(timeout=_CONFIRM_TIMEOUT)
 
     with _confirm_lock:
         pending = _pending_confirms.pop(request_id, None)
@@ -94,24 +112,18 @@ def _ask_user_confirm(message: str) -> bool:
 # web_search
 # =========================================================================
 
-WEB_SEARCH_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "web_search",
-        "description": "在网页上搜索信息。返回搜索结果标题和摘要。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "搜索关键词"},
-                "num_results": {
-                    "type": "integer",
-                    "description": "返回结果数量，默认 5",
-                },
-            },
-            "required": ["query"],
+WEB_SEARCH_SCHEMA = make_tool_schema(
+    name="web_search",
+    description="在网页上搜索信息。返回搜索结果标题和摘要。",
+    properties={
+        "query": {"type": "string", "description": "搜索关键词"},
+        "num_results": {
+            "type": "integer",
+            "description": "返回结果数量，默认 5",
         },
     },
-}
+    required=["query"],
+)
 
 
 def web_search_handler(query: str, num_results: int = 5) -> str:
@@ -132,40 +144,31 @@ def web_search_handler(query: str, num_results: int = 5) -> str:
             ensure_ascii=False,
         )
     except ImportError:
-        return json.dumps(
-            {"success": False, "message": "需要安装 duckduckgo-search：pip install duckduckgo-search"},
-            ensure_ascii=False,
-        )
+        return error_json("需要安装 duckduckgo-search：pip install duckduckgo-search")
     except Exception as e:
         logger.error(f"[web_search] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 # =========================================================================
 # web_fetch
 # =========================================================================
 
-WEB_FETCH_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "web_fetch",
-        "description": "抓取指定网页的文本内容（自动去除 HTML 标签）。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {"type": "string", "description": "要抓取的网页 URL"},
-                "max_length": {
-                    "type": "integer",
-                    "description": "返回内容最大字符数，默认 5000",
-                },
-            },
-            "required": ["url"],
+WEB_FETCH_SCHEMA = make_tool_schema(
+    name="web_fetch",
+    description="抓取指定网页的文本内容（自动去除 HTML 标签）。",
+    properties={
+        "url": {"type": "string", "description": "要抓取的网页 URL"},
+        "max_length": {
+            "type": "integer",
+            "description": f"返回内容最大字符数，默认 {_WEB_FETCH_MAX_LENGTH}",
         },
     },
-}
+    required=["url"],
+)
 
 
-def web_fetch_handler(url: str, max_length: int = 5000) -> str:
+def web_fetch_handler(url: str, max_length: int = _WEB_FETCH_MAX_LENGTH) -> str:
     """抓取网页文本内容"""
     try:
         import urllib.request
@@ -182,7 +185,7 @@ def web_fetch_handler(url: str, max_length: int = 5000) -> str:
         )
     except Exception as e:
         logger.error(f"[web_fetch] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 class _HtmlTextExtractor(HTMLParser):
@@ -218,38 +221,32 @@ def _extract_text_from_html(html: str) -> str:
 # read_file
 # =========================================================================
 
-READ_FILE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "read_file",
-        "description": "读取本地文件的内容。支持文本文件。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "文件路径（绝对路径或相对路径）"},
-                "encoding": {
-                    "type": "string",
-                    "description": "文件编码，默认 utf-8",
-                },
-                "max_bytes": {
-                    "type": "integer",
-                    "description": "最多读取字节数，默认 50000",
-                },
-            },
-            "required": ["path"],
+READ_FILE_SCHEMA = make_tool_schema(
+    name="read_file",
+    description="读取本地文件的内容。支持文本文件。",
+    properties={
+        "path": {"type": "string", "description": "文件路径（绝对路径或相对路径）"},
+        "encoding": {
+            "type": "string",
+            "description": "文件编码，默认 utf-8",
+        },
+        "max_bytes": {
+            "type": "integer",
+            "description": f"最多读取字节数，默认 {_READ_FILE_MAX_BYTES}",
         },
     },
-}
+    required=["path"],
+)
 
 
-def read_file_handler(path: str, encoding: str = "utf-8", max_bytes: int = 50000) -> str:
+def read_file_handler(path: str, encoding: str = "utf-8", max_bytes: int = _READ_FILE_MAX_BYTES) -> str:
     """读取本地文件"""
     try:
         p = Path(path).expanduser().resolve()
         if not p.exists():
-            return json.dumps({"success": False, "message": f"文件不存在: {p}"}, ensure_ascii=False)
+            return error_json(f"文件不存在: {p}")
         if not p.is_file():
-            return json.dumps({"success": False, "message": f"不是文件: {p}"}, ensure_ascii=False)
+            return error_json(f"不是文件: {p}")
 
         size = p.stat().st_size
         with open(p, "r", encoding=encoding, errors="replace") as f:
@@ -267,29 +264,23 @@ def read_file_handler(path: str, encoding: str = "utf-8", max_bytes: int = 50000
         )
     except Exception as e:
         logger.error(f"[read_file] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 # =========================================================================
 # write_file（高危，需用户确认）
 # =========================================================================
 
-WRITE_FILE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "write_file",
-        "description": "将内容写入本地文件（覆盖写）。写入前会请求用户确认。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "文件路径"},
-                "content": {"type": "string", "description": "要写入的内容"},
-                "encoding": {"type": "string", "description": "文件编码，默认 utf-8"},
-            },
-            "required": ["path", "content"],
-        },
+WRITE_FILE_SCHEMA = make_tool_schema(
+    name="write_file",
+    description="将内容写入本地文件（覆盖写）。写入前会请求用户确认。",
+    properties={
+        "path": {"type": "string", "description": "文件路径"},
+        "content": {"type": "string", "description": "要写入的内容"},
+        "encoding": {"type": "string", "description": "文件编码，默认 utf-8"},
     },
-}
+    required=["path", "content"],
+)
 
 
 def write_file_handler(path: str, content: str, encoding: str = "utf-8") -> str:
@@ -302,17 +293,14 @@ def write_file_handler(path: str, content: str, encoding: str = "utf-8") -> str:
         for sys_dir in system_dirs:
             try:
                 p.relative_to(sys_dir)
-                return json.dumps(
-                    {"success": False, "message": "禁止写入系统目录"},
-                    ensure_ascii=False,
-                )
+                return error_json("禁止写入系统目录")
             except ValueError:
                 pass
 
         # 请求用户确认
         confirmed = _ask_user_confirm(f"将向文件写入内容：\n{p}\n\n是否确认？")
         if not confirmed:
-            return json.dumps({"success": False, "message": "用户取消了该操作"}, ensure_ascii=False)
+            return error_json("用户取消了该操作")
 
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding=encoding) as f:
@@ -324,29 +312,23 @@ def write_file_handler(path: str, content: str, encoding: str = "utf-8") -> str:
         )
     except Exception as e:
         logger.error(f"[write_file] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 # =========================================================================
 # edit_file（局部替换）
 # =========================================================================
 
-EDIT_FILE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "edit_file",
-        "description": "替换文件中的指定文本片段。精确替换，要求 old_text 在文件中唯一存在。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {"type": "string", "description": "文件路径"},
-                "old_text": {"type": "string", "description": "要替换的原始文本"},
-                "new_text": {"type": "string", "description": "替换后的新文本"},
-            },
-            "required": ["path", "old_text", "new_text"],
-        },
+EDIT_FILE_SCHEMA = make_tool_schema(
+    name="edit_file",
+    description="替换文件中的指定文本片段。精确替换，要求 old_text 在文件中唯一存在。",
+    properties={
+        "path": {"type": "string", "description": "文件路径"},
+        "old_text": {"type": "string", "description": "要替换的原始文本"},
+        "new_text": {"type": "string", "description": "替换后的新文本"},
     },
-}
+    required=["path", "old_text", "new_text"],
+)
 
 
 def edit_file_handler(path: str, old_text: str, new_text: str) -> str:
@@ -354,57 +336,48 @@ def edit_file_handler(path: str, old_text: str, new_text: str) -> str:
     try:
         p = Path(path).expanduser().resolve()
         if not p.exists():
-            return json.dumps({"success": False, "message": f"文件不存在: {p}"}, ensure_ascii=False)
+            return error_json(f"文件不存在: {p}")
 
         content = p.read_text(encoding="utf-8", errors="replace")
         count = content.count(old_text)
         if count == 0:
-            return json.dumps({"success": False, "message": "未找到指定文本"}, ensure_ascii=False)
+            return error_json("未找到指定文本")
         if count > 1:
-            return json.dumps(
-                {"success": False, "message": f"文本出现 {count} 次，请提供更多上下文确保唯一性"},
-                ensure_ascii=False,
-            )
+            return error_json(f"文本出现 {count} 次，请提供更多上下文确保唯一性")
 
         confirmed = _ask_user_confirm(
             f"将编辑文件：{p}\n替换：{old_text[:80]}...\n为：{new_text[:80]}...\n是否确认？"
         )
         if not confirmed:
-            return json.dumps({"success": False, "message": "用户取消了该操作"}, ensure_ascii=False)
+            return error_json("用户取消了该操作")
 
         new_content = content.replace(old_text, new_text, 1)
         p.write_text(new_content, encoding="utf-8")
         return json.dumps({"success": True, "path": str(p)}, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[edit_file] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 # =========================================================================
 # list_dir
 # =========================================================================
 
-LIST_DIR_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "list_dir",
-        "description": "列出目录中的文件和子目录。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "目录路径，默认为当前工作目录",
-                },
-                "show_hidden": {
-                    "type": "boolean",
-                    "description": "是否显示隐藏文件，默认 false",
-                },
-            },
-            "required": [],
+LIST_DIR_SCHEMA = make_tool_schema(
+    name="list_dir",
+    description="列出目录中的文件和子目录。",
+    properties={
+        "path": {
+            "type": "string",
+            "description": "目录路径，默认为当前工作目录",
+        },
+        "show_hidden": {
+            "type": "boolean",
+            "description": "是否显示隐藏文件，默认 false",
         },
     },
-}
+    required=[],
+)
 
 
 def list_dir_handler(path: str = ".", show_hidden: bool = False) -> str:
@@ -412,9 +385,9 @@ def list_dir_handler(path: str = ".", show_hidden: bool = False) -> str:
     try:
         p = Path(path).expanduser().resolve()
         if not p.exists():
-            return json.dumps({"success": False, "message": f"路径不存在: {p}"}, ensure_ascii=False)
+            return error_json(f"路径不存在: {p}")
         if not p.is_dir():
-            return json.dumps({"success": False, "message": f"不是目录: {p}"}, ensure_ascii=False)
+            return error_json(f"不是目录: {p}")
 
         items = []
         for item in sorted(p.iterdir()):
@@ -432,31 +405,25 @@ def list_dir_handler(path: str = ".", show_hidden: bool = False) -> str:
         )
     except Exception as e:
         logger.error(f"[list_dir] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 # =========================================================================
 # exec（高危，白名单 + 用户确认）
 # =========================================================================
 
-EXEC_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "exec",
-        "description": "执行 shell 命令并返回输出。安全命令（如 ls、dir）无需确认，其他命令需用户确认。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "command": {"type": "string", "description": "要执行的命令"},
-                "timeout": {
-                    "type": "integer",
-                    "description": "超时秒数，默认 30",
-                },
-            },
-            "required": ["command"],
+EXEC_SCHEMA = make_tool_schema(
+    name="exec",
+    description="执行 shell 命令并返回输出。安全命令（如 ls、dir）无需确认，其他命令需用户确认。",
+    properties={
+        "command": {"type": "string", "description": "要执行的命令"},
+        "timeout": {
+            "type": "integer",
+            "description": "超时秒数，默认 30",
         },
     },
-}
+    required=["command"],
+)
 
 
 def exec_handler(command: str, timeout: int = 30) -> str:
@@ -470,7 +437,7 @@ def exec_handler(command: str, timeout: int = 30) -> str:
         if not is_safe:
             confirmed = _ask_user_confirm(f"将执行以下命令：\n\n{command}\n\n是否确认？")
             if not confirmed:
-                return json.dumps({"success": False, "message": "用户取消了该操作"}, ensure_ascii=False)
+                return error_json("用户取消了该操作")
 
         result = subprocess.run(
             command,
@@ -486,16 +453,16 @@ def exec_handler(command: str, timeout: int = 30) -> str:
             {
                 "success": result.returncode == 0,
                 "returncode": result.returncode,
-                "stdout": result.stdout[:5000],
-                "stderr": result.stderr[:2000],
+                "stdout": result.stdout[:_EXEC_STDOUT_MAX],
+                "stderr": result.stderr[:_EXEC_STDERR_MAX],
             },
             ensure_ascii=False,
         )
     except subprocess.TimeoutExpired:
-        return json.dumps({"success": False, "message": f"命令超时（{timeout}s）"}, ensure_ascii=False)
+        return error_json(f"命令超时（{timeout}s）")
     except Exception as e:
         logger.error(f"[exec] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 # =========================================================================

@@ -13,6 +13,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.recording.recorder import Action
 from src.data.unified_config import get_unified_config
+from src.utils.llm_helpers import extract_json_from_response
+from src.utils.helpers import to_seconds
+from .encryption_detector import EncryptionDetector
+from .dependency_analyzer import DependencyAnalyzer
 
 logger = logging.getLogger(__name__)
 
@@ -449,12 +453,11 @@ class RequestIntelligenceAnalyzer:
             from src.data.duckdb_manager import DuckDBManager
 
             duckdb = DuckDBManager()
-            conn = duckdb.connect()
 
             # 获取请求和时间戳信息（如果没有提供）
             if action_id is None or request_timestamp is None:
                 try:
-                    req_info = conn.execute(
+                    req_info = duckdb.fetchone(
                         """
                         SELECT action_id, timestamp
                         FROM network_requests
@@ -462,7 +465,7 @@ class RequestIntelligenceAnalyzer:
                         LIMIT 1
                     """,
                         (req_id,),
-                    ).fetchone()
+                    )
 
                     if req_info:
                         if action_id is None:
@@ -475,10 +478,10 @@ class RequestIntelligenceAnalyzer:
             # 获取 recording_id（如果还没有）
             if recording_id is None and action_id is not None:
                 try:
-                    rec_info = conn.execute(
+                    rec_info = duckdb.fetchone(
                         "SELECT recording_id, timestamp FROM actions WHERE action_id = ?",
                         (action_id,),
-                    ).fetchone()
+                    )
 
                     if rec_info:
                         recording_id = rec_info[0]
@@ -486,7 +489,7 @@ class RequestIntelligenceAnalyzer:
                     pass
 
             # 插入记录（包含新字段）
-            conn.execute(
+            duckdb.execute(
                 """
                 INSERT INTO filter_decisions (
                     request_id, action_id, recording_id, decision, source, confidence, reason,
@@ -1103,14 +1106,7 @@ class RequestIntelligenceAnalyzer:
             # 计算发生时机（与上一步操作的时间差）
             if current_index > 0:
                 prev_action = all_actions[current_index - 1]
-                time_diff = action.timestamp - prev_action.timestamp
-                # 兼容处理 float 和 datetime 两种类型
-                if hasattr(time_diff, "total_seconds"):
-                    # datetime.timedelta 对象
-                    time_diff_seconds = time_diff.total_seconds()
-                else:
-                    # float 类型（秒）
-                    time_diff_seconds = time_diff
+                time_diff_seconds = to_seconds(action.timestamp - prev_action.timestamp)
 
                 if time_diff_seconds < 1:
                     timing = f"紧接着上一步操作（{time_diff_seconds:.2f}秒）"
@@ -1365,182 +1361,6 @@ class RequestIntelligenceAnalyzer:
                 is_replayable=False,
             )
 
-    def _extract_json_from_response(self, response_text: str) -> Dict[str, Any]:
-        """
-        从 LLM 响应中提取 JSON
-
-        处理以下情况：
-        1. 响应被 ```json 和 ``` 包裹
-        2. 响应被 ``` 和 ``` 包裹
-        3. 响应前后有多余的空白字符
-        4. 响应包含其他说明文字（只提取 JSON 部分）
-        5. 使用括号匹配算法提取完整的 JSON 对象（支持嵌套）
-
-        Args:
-            response_text: 原始响应文本
-
-        Returns:
-            解析后的 JSON 字典
-
-        Raises:
-            ValueError: 无法提取有效 JSON
-        """
-        import re
-
-        # 去除首尾空白
-        response_text = response_text.strip()
-
-        # 情况 1: 提取 ```json``` 代码块中的内容
-        json_block_pattern = r"```json\s*(.*?)\s*```"
-        match = re.search(json_block_pattern, response_text, re.DOTALL)
-        if match:
-            json_str = match.group(1).strip()
-            logger.debug("[智能过滤] 从 ```json``` 代码块中提取 JSON")
-            try:
-                result = json.loads(json_str)
-                if isinstance(result, dict):
-                    return result
-                else:
-                    logger.warning(f"[智能过滤] LLM 返回的不是字典而是 {type(result)}")
-            except json.JSONDecodeError as e:
-                logger.warning(f"[智能过滤] ```json``` 代码块解析失败: {e}")
-
-        # 情况 2: 提取 ``` ``` 代码块中的内容（无 json 标记）
-        code_block_pattern = r"```\s*(.*?)\s*```"
-        match = re.search(code_block_pattern, response_text, re.DOTALL)
-        if match:
-            json_str = match.group(1).strip()
-            # 尝试解析为 JSON
-            try:
-                logger.debug("[智能过滤] 从 ``` ``` 代码块中提取 JSON")
-                result = json.loads(json_str)
-                if isinstance(result, dict):
-                    return result
-                else:
-                    logger.warning(f"[智能过滤] LLM 返回的不是字典而是 {type(result)}")
-            except json.JSONDecodeError:
-                # 如果不是 JSON，继续尝试其他方法
-                logger.debug("[智能过滤] ``` ``` 代码块不是有效 JSON，尝试其他方法")
-
-        # 情况 3: 使用括号匹配算法查找完整的 JSON 对象
-        # 这个方法支持任意层级的嵌套
-        json_str = self._extract_complete_json_object(response_text)
-        if json_str:
-            try:
-                logger.debug("[智能过滤] 使用括号匹配算法提取 JSON 对象")
-                result = json.loads(json_str)
-                if isinstance(result, dict):
-                    return result
-                else:
-                    logger.warning(f"[智能过滤] LLM 返回的不是字典而是 {type(result)}")
-            except json.JSONDecodeError as e:
-                logger.warning(f"[智能过滤] 括号匹配提取的 JSON 解析失败: {e}")
-
-        # 情况 4: 直接解析整个响应
-        try:
-            logger.debug("[智能过滤] 尝试直接解析整个响应")
-            result = json.loads(response_text)
-            # 验证返回的是字典而不是其他类型（如字符串、数字等）
-            if isinstance(result, dict):
-                return result
-            else:
-                # LLM 返回了非字典类型
-                logger.error(f"[智能过滤] LLM 返回的不是字典: {type(result)} = {result}")
-                raise ValueError(
-                    f"LLM 返回的不是 JSON 对象（字典），而是 {type(result).__name__}: {str(result)[:100]}"
-                )
-        except json.JSONDecodeError as e:
-            # 提供更详细的错误信息
-            logger.error(f"[智能过滤] JSON 解析失败: {e}")
-            logger.error(f"[智能过滤] 响应前500字符: {response_text[:500]}")
-            raise ValueError(
-                f"无法从响应中提取有效 JSON: {e}\n" f"响应内容: {response_text[:200]}"
-            ) from e
-
-    def _extract_complete_json_object(self, text: str) -> Optional[str]:
-        """
-        使用括号匹配算法提取完整的 JSON 对象
-
-        支持任意层级的嵌套，包括数组和对象
-
-        Args:
-            text: 待搜索的文本
-
-        Returns:
-            提取到的 JSON 字符串，如果找不到则返回 None
-        """
-        # 查找第一个 {
-        start_idx = text.find("{")
-        if start_idx == -1:
-            return None
-
-        # 使用栈来匹配括号（同时支持 {} 和 []）
-        stack = []
-        in_string = False
-        escape_next = False
-
-        for i in range(start_idx, len(text)):
-            char = text[i]
-
-            # 处理字符串内的转义字符
-            if escape_next:
-                escape_next = False
-                continue
-
-            if char == "\\" and in_string:
-                escape_next = True
-                continue
-
-            # 处理字符串边界
-            if char == '"' and not escape_next:
-                in_string = not in_string
-                continue
-
-            # 如果在字符串内，跳过括号匹配
-            if in_string:
-                continue
-
-            # 括号匹配
-            if char in "{[":
-                stack.append(char)
-            elif char in "}]":
-                if not stack:
-                    # 括号不匹配（多余的右括号）
-                    break
-
-                last_bracket = stack.pop()
-                # 检查括号是否匹配
-                if (char == "}" and last_bracket != "{") or (char == "]" and last_bracket != "["):
-                    # 括号类型不匹配
-                    break
-
-                # 栈为空，找到完整的对象
-                if not stack:
-                    json_str = text[start_idx : i + 1]
-                    # 验证是否看起来像 JSON（包含基本字段）
-                    if any(
-                        key in json_str
-                        for key in [
-                            "is_meaningful",
-                            "reason",
-                            "confidence",
-                            "category",
-                            "is_replayable",
-                        ]
-                    ):
-                        return json_str
-                    # 如果不包含预期字段，继续寻找下一个完整的对象
-                    # 因为可能找到的是嵌套的内部对象
-                    start_idx = text.find("{", i + 1)
-                    if start_idx == -1:
-                        return None
-                    # 重置栈并继续
-                    stack = []
-                    continue
-
-        # 未找到完整的 JSON 对象
-        return None
-
     def _call_compression_model(self, prompt: str) -> Dict[str, Any]:
         """
         调用数据压缩模型进行分析
@@ -1593,7 +1413,7 @@ class RequestIntelligenceAnalyzer:
 
             # 提取并解析 JSON
             try:
-                result = self._extract_json_from_response(response_text)
+                result = extract_json_from_response(response_text, log_prefix="智能过滤")
                 logger.debug(f"[智能过滤] LLM 响应解析成功: {result}")
                 return result
             except ValueError as e:
@@ -1737,182 +1557,3 @@ class RequestIntelligenceAnalyzer:
 
         return analysis
 
-
-class EncryptionDetector:
-    """加密检测器"""
-
-    def is_encrypted(self, data: str) -> bool:
-        """
-        判断数据是否被加密
-
-        启发式规则：
-        1. 熵值检测（加密数据熵值 > 7.5）
-        2. 字符分布均匀
-        3. Base64 但解码后仍是乱码
-        """
-        if not data:
-            return False
-
-        # 规则 1: 明显的加密标记（即使很短也识别）
-        if data.startswith("gAAAAA"):  # Django 加密标记
-            return True
-
-        # 规则 2: 熵值检测（需要足够长度）
-        if len(data) >= 50:
-            entropy = self._calculate_entropy(data[:500])
-            if entropy > 7.5:
-                return True
-
-        return False
-
-    def _calculate_entropy(self, data: str) -> float:
-        """计算字符串的熵值"""
-        import math
-        from collections import Counter
-
-        if not data:
-            return 0.0
-
-        counter = Counter(data)
-        total = len(data)
-        entropy = 0.0
-
-        for count in counter.values():
-            p = count / total
-            entropy -= p * math.log2(p)
-
-        return entropy
-
-
-class DependencyAnalyzer:
-    """依赖关系分析器"""
-
-    def build_dependency_graph(self, requests: Dict[str, Dict[str, Any]]) -> Dict[str, Dict]:
-        """
-        构建依赖关系图
-
-        检测逻辑：
-        1. 请求 B 的 URL 包含请求 A 响应中的 ID
-        2. 请求 B 的 headers 使用了请求 A 返回的 token
-        3. 请求 B 的 request_body 引用了请求 A 的数据
-
-        Returns:
-            {
-                request_id: {
-                    'depends_on': [...],  # 依赖的请求 ID
-                    'used_by': [...],     # 被哪些请求依赖
-                    'used_by_count': 3    # 被依赖次数
-                }
-            }
-        """
-        graph = {}
-
-        # 初始化图
-        for req_id in requests:
-            graph[req_id] = {"depends_on": [], "used_by": [], "used_by_count": 0}
-
-        # 分析每对请求的依赖关系
-        req_ids = list(requests.keys())
-        for i, id_a in enumerate(req_ids):
-            for id_b in req_ids[i + 1 :]:
-                req_a = requests[id_a]
-                req_b = requests[id_b]
-
-                # 检测 B 是否依赖 A（B 在 A 之后）
-                if self._check_dependency(req_b, req_a):
-                    graph[id_b]["depends_on"].append(id_a)
-                    graph[id_a]["used_by"].append(id_b)
-
-        # 更新计数
-        for req_id in graph:
-            graph[req_id]["used_by_count"] = len(graph[req_id]["used_by"])
-
-        return graph
-
-    def _check_dependency(self, req_b: Dict[str, Any], req_a: Dict[str, Any]) -> bool:
-        """
-        检测 req_b 是否依赖 req_a
-
-        检测点：
-        1. URL 中包含 req_a 响应的 ID
-        2. Headers 中使用了 req_a 的 token
-        3. Request body 引用了 req_a 的数据
-        """
-        # 提取 req_a 的关键字段
-        response_a = req_a.get("response_body", "")
-        if not response_a:
-            return False
-
-        # 尝试提取 ID/token（JSON 响应）
-        try:
-
-            data_a = json.loads(response_a)
-            ids_or_tokens = self._extract_ids(data_a)
-        except (json.JSONDecodeError, TypeError):
-            ids_or_tokens = []
-
-        # 如果没有提取到 ID，尝试简单的字符串匹配（查找数字 ID）
-        if not ids_or_tokens:
-            # 简单模式：在 JSON 响应中查找 "id": 数字 的模式
-            import re
-
-            id_matches = re.findall(r'"[^"]*id[^"]*"\s*:\s*(\d+)', response_a)
-            if id_matches:
-                ids_or_tokens = id_matches
-
-        if not ids_or_tokens:
-            return False
-
-        # 检测 req_b 是否引用了这些 ID
-        url_b = req_b.get("url", "")
-        headers_b = str(req_b.get("headers", {}))
-        body_b = str(req_b.get("request_body", ""))
-
-        for id_token in ids_or_tokens:
-            if id_token in url_b or id_token in headers_b or id_token in body_b:
-                return True
-
-        return False
-
-    def _extract_ids(self, data: Any, prefix: str = "") -> List[str]:
-        """
-        从 JSON 数据中提取可能的 ID/token
-
-        策略：
-        1. 字段名包含 id/token/key 的值
-        2. UUID 格式的字符串
-        3. 长度 > 20 的字符串（可能是 token）
-        """
-        import uuid as uuid_lib
-
-        results = []
-
-        if isinstance(data, dict):
-            for key, value in data.items():
-                current_path = f"{prefix}.{key}" if prefix else key
-
-                # 检查字段名
-                if any(keyword in key.lower() for keyword in ["id", "token", "key", "session"]):
-                    if isinstance(value, str) and len(value) >= 3:
-                        results.append(value)
-
-                # 递归
-                results.extend(self._extract_ids(value, current_path))
-
-        elif isinstance(data, list):
-            for i, item in enumerate(data):
-                results.extend(self._extract_ids(item, f"{prefix}[{i}]"))
-
-        elif isinstance(data, str):
-            # UUID 检测
-            try:
-                uuid_lib.UUID(data)
-                results.append(data)
-            except (ValueError, AttributeError):
-                pass
-
-            # 长字符串检测（可能是 token）
-            if len(data) > 20:
-                results.append(data)
-
-        return results

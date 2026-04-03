@@ -111,23 +111,8 @@ def migrate_to_v2(db_manager):
         if "pending_tool_id" not in existing_columns:
             cursor.execute("ALTER TABLE tools ADD COLUMN pending_tool_id TEXT")
 
-        # 5. 创建索引以提高查询性能
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_intents_recording_id ON intents(recording_id)"
-        )
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_intents_status ON intents(status)")
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pending_tools_intent_id ON pending_tools(intent_id)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_pending_tools_status ON pending_tools(status)"
-        )
-        cursor.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tool_trials_pending_tool_id ON tool_trials(pending_tool_id)"
-        )
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_trials_status ON tool_trials(status)")
 
-        # 6. 创建试用数据模板表
+        # 5. 创建试用数据模板表
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS trial_data_templates (

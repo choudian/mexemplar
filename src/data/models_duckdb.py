@@ -122,7 +122,7 @@ class NetworkRequest(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<NetworkRequest(request_id={self.request_id!r}, url={self.url[:50]!r}...)"
+        return f"<NetworkRequest(request_id={self.request_id!r}, url={self.url[:50]!r}...)>"
 
 
 class SiblingSnapshot(Base):

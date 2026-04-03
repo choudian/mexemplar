@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Set
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from src.utils.events import connect
-from .agent_orchestrator import AgentOrchestrator
+from src.business.orchestration.agent_orchestrator import AgentOrchestrator
 
 logger = logging.getLogger(__name__)
 

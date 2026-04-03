@@ -4,7 +4,6 @@
 使用 QStackedWidget 管理多个页面：
 - ChatPage (AI 对话)
 - RecordingPage (录制)
-- ToolsListPage (工具列表)
 - SettingsPage (设置)
 """
 

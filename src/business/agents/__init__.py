@@ -15,13 +15,12 @@ from .config import (
     PM_CONFIG,
     PROGRAMMER_CONFIG,
     TRIAL_CONFIG,
+    ASSISTANT_CONFIG,
     get_agent_config,
-    get_agent_type_str,
 )
 from .agent_loop import AgentLoop
-from .tool_registry import agent_tool, get_tool_schemas, execute_tool, clear_registry
-from .validation import validate_parameters
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA
+from .tool_helpers import make_tool_schema, make_signal_handler, error_json
 
 __all__ = [
     # 配置
@@ -35,18 +34,15 @@ __all__ = [
     "PM_CONFIG",
     "PROGRAMMER_CONFIG",
     "TRIAL_CONFIG",
+    "ASSISTANT_CONFIG",
     "get_agent_config",
-    "get_agent_type_str",
     # 核心类
     "AgentLoop",
-    # 工具注册
-    "agent_tool",
-    "get_tool_schemas",
-    "execute_tool",
-    "clear_registry",
-    # 验证
-    "validate_parameters",
     # 内置工具
     "TALK_TO_USER_SCHEMA",
     "LOAD_REFERENCE_SCHEMA",
+    # 工具辅助函数
+    "make_tool_schema",
+    "make_signal_handler",
+    "error_json",
 ]

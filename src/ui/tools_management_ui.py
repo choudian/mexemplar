@@ -31,6 +31,13 @@ from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
 from src.utils.logger import get_logger
 from src.data.models import Tool
 from src.data.models_sqlite import TeachingFailureRecord
+from src.ui.style_constants import (
+    PRIMARY_COLOR,
+    TITLE_COLOR,
+    SUBTITLE_COLOR,
+    HERO_BG_COLOR,
+    DIVIDER_COLOR,
+)
 
 
 # ── 公共样式常量 ──
@@ -43,7 +50,7 @@ _CARD_STYLE = """
     }}
     QFrame#skill_card:hover {{
         border-color: {hover_border};
-        background-color: #fafbff;
+        background-color: """ + HERO_BG_COLOR + """;
     }}
 """
 
@@ -78,19 +85,19 @@ _ACTION_BTN_STYLE = """
     }}
 """
 
-_MORE_BTN_STYLE = """
-    QPushButton {
+_MORE_BTN_STYLE = f"""
+    QPushButton {{
         background: transparent;
         border: none;
         color: #adb5bd;
         font-size: 18px;
         font-weight: bold;
         border-radius: 4px;
-    }
-    QPushButton:hover {
+    }}
+    QPushButton:hover {{
         background-color: #f0f1ff;
-        color: #5b6abf;
-    }
+        color: {PRIMARY_COLOR};
+    }}
 """
 
 _META_STYLE = "font-size: 11px; color: #adb5bd; background: transparent;"
@@ -151,14 +158,14 @@ class _SkillCardBase(QFrame):
     def _build_name_label(self) -> QLabel:
         lbl = QLabel(self._name)
         lbl.setStyleSheet(
-            "font-size: 15px; font-weight: 600; color: #1a1a2e; background: transparent;"
+            f"font-size: 15px; font-weight: 600; color: {TITLE_COLOR}; background: transparent;"
         )
         lbl.setWordWrap(True)
         return lbl
 
     def _build_desc_label(self) -> QLabel:
         lbl = QLabel(self._desc or "暂无描述")
-        lbl.setStyleSheet("font-size: 12px; color: #6c757d; background: transparent;")
+        lbl.setStyleSheet(f"font-size: 12px; color: {SUBTITLE_COLOR}; background: transparent;")
         lbl.setWordWrap(True)
         lbl.setMaximumHeight(50)
         lbl.setAlignment(Qt.AlignmentFlag.AlignTop)
@@ -230,7 +237,7 @@ class PendingToolCard(_SkillCardBase):
             btn.setStyleSheet(
                 _ACTION_BTN_STYLE.format(
                     fg="white",
-                    bg="#5b6abf",
+                    bg=PRIMARY_COLOR,
                     border="none",
                     hover_bg="#4a58a8",
                 )
@@ -271,14 +278,14 @@ class PendingToolCard(_SkillCardBase):
 
     def _status_colors(self) -> dict:
         return {
-            PendingToolStatus.PENDING_TRIAL: {"fg": "#6c757d", "bg": "#f1f3f5"},
-            PendingToolStatus.TRIALING: {"fg": "#5b6abf", "bg": "#f0f1ff"},
+            PendingToolStatus.PENDING_TRIAL: {"fg": SUBTITLE_COLOR, "bg": "#f1f3f5"},
+            PendingToolStatus.TRIALING: {"fg": PRIMARY_COLOR, "bg": "#f0f1ff"},
             PendingToolStatus.TRIAL_SUCCESS: {"fg": "#28a745", "bg": "#f0fff4"},
             PendingToolStatus.TRIAL_FAILED: {"fg": "#dc3545", "bg": "#fff5f5"},
             PendingToolStatus.AWAITING_REAL_DATA: {"fg": "#fd7e14", "bg": "#fff8f0"},
             PendingToolStatus.PROMOTED: {"fg": "#6f42c1", "bg": "#f8f0ff"},
             PendingToolStatus.FAILED: {"fg": "#343a40", "bg": "#f1f3f5"},
-        }.get(self.pending_tool.status, {"fg": "#6c757d", "bg": "#f1f3f5"})
+        }.get(self.pending_tool.status, {"fg": SUBTITLE_COLOR, "bg": "#f1f3f5"})
 
 
 class PublishedToolCard(_SkillCardBase):
@@ -311,7 +318,7 @@ class PublishedToolCard(_SkillCardBase):
             "trial": "考核转化",
         }.get(self.tool.source, "未知")
         source_lbl = QLabel(source_text)
-        source_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg="#5b6abf", bg="#f0f1ff"))
+        source_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg=PRIMARY_COLOR, bg="#f0f1ff"))
         layout.addLayout(self._build_top_row(source_lbl))
 
         # 名称
@@ -356,7 +363,7 @@ class PublishedToolCard(_SkillCardBase):
             btn.setToolTip(f"该技能需要 {param_count} 个参数\n参数配置功能开发中")
             btn.setStyleSheet(
                 _ACTION_BTN_STYLE.format(
-                    fg="#6c757d",
+                    fg=SUBTITLE_COLOR,
                     bg="#f8f9fa",
                     border="1px solid #e0e0e0",
                     hover_bg="#e9ecef",
@@ -498,7 +505,7 @@ class ToolsManagementUI(QWidget):
 
         # ── Hero 区域 ──
         hero = QWidget()
-        hero.setStyleSheet("background-color: #fafbff;")
+        hero.setStyleSheet(f"background-color: {HERO_BG_COLOR};")
         hero_layout = QHBoxLayout(hero)
         hero_layout.setContentsMargins(40, 30, 40, 22)
 
@@ -507,11 +514,11 @@ class ToolsManagementUI(QWidget):
         title = QLabel("技能列表")
         title.setObjectName("tools_title")
         title.setStyleSheet(
-            "font-size: 26px; font-weight: 700; color: #1a1a2e; background: transparent;"
+            f"font-size: 26px; font-weight: 700; color: {TITLE_COLOR}; background: transparent;"
         )
         title_col.addWidget(title)
         subtitle = QLabel("通过教学习得的技能在这里考核和管理")
-        subtitle.setStyleSheet("font-size: 14px; color: #6c757d; background: transparent;")
+        subtitle.setStyleSheet(f"font-size: 14px; color: {SUBTITLE_COLOR}; background: transparent;")
         title_col.addWidget(subtitle)
         hero_layout.addLayout(title_col, 1)
 
@@ -520,7 +527,7 @@ class ToolsManagementUI(QWidget):
         # ── 分隔线 ──
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("background-color: #eef0f4; max-height: 1px;")
+        sep.setStyleSheet(f"background-color: {DIVIDER_COLOR}; max-height: 1px;")
         content_layout.addWidget(sep)
 
         # ── Tab 切换条 ──
@@ -626,25 +633,25 @@ class ToolsManagementUI(QWidget):
     def _apply_tab_style(btn: QPushButton, active: bool):
         if active:
             btn.setStyleSheet(
-                """
-                QPushButton {
-                    font-size: 14px; font-weight: 600; color: #5b6abf;
+                f"""
+                QPushButton {{
+                    font-size: 14px; font-weight: 600; color: {PRIMARY_COLOR};
                     background: transparent; border: none;
-                    border-bottom: 2.5px solid #5b6abf;
+                    border-bottom: 2.5px solid {PRIMARY_COLOR};
                     padding: 0 20px;
-                }
+                }}
             """
             )
         else:
             btn.setStyleSheet(
-                """
-                QPushButton {
+                f"""
+                QPushButton {{
                     font-size: 14px; font-weight: 500; color: #868e96;
                     background: transparent; border: none;
                     border-bottom: 2.5px solid transparent;
                     padding: 0 20px;
-                }
-                QPushButton:hover { color: #5b6abf; }
+                }}
+                QPushButton:hover {{ color: {PRIMARY_COLOR}; }}
             """
             )
 

@@ -167,14 +167,6 @@ class ToolExecutionProgressDialog:
         self.dialog.setWindowTitle(f"执行工具: {tool_name}")
         self.dialog.setMinimumWidth(500)
 
-        self.tool_name = tool_name
-        self.logger = get_logger(__name__)
-
-        # 创建对话框
-        self.dialog = QDialog(parent)
-        self.dialog.setWindowTitle(f"执行工具: {tool_name}")
-        self.dialog.setMinimumWidth(500)
-
         # 布局
         layout = QVBoxLayout()
 

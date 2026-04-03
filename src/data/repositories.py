@@ -94,9 +94,12 @@ class ToolRepository(BaseRepository):
 
     def search(self, keyword: str) -> List[Tool]:
         """搜索工具（按名称或描述）"""
+        escaped = keyword.replace("%", "\\%").replace("_", "\\_")
         return (
             self.session.query(Tool)
-            .filter((Tool.tool_name.contains(keyword)) | (Tool.description.contains(keyword)))
+            .filter(
+                (Tool.tool_name.contains(escaped, escape="\\")) | (Tool.description.contains(escaped, escape="\\"))
+            )
             .order_by(Tool.created_at.desc())
             .all()
         )
@@ -130,12 +133,13 @@ class ToolRepository(BaseRepository):
 
     def search_published(self, query: str) -> List[Tool]:
         """搜索已发布的工具（参数化 LIKE 查询，防注入）"""
-        pattern = f"%{query}%"
+        escaped = query.replace("%", "\\%").replace("_", "\\_")
+        pattern = f"%{escaped}%"
         return (
             self.session.query(Tool)
             .filter(
                 Tool.status == "published",
-                (Tool.tool_name.like(pattern)) | (Tool.description.like(pattern)),
+                (Tool.tool_name.like(pattern, escape="\\")) | (Tool.description.like(pattern, escape="\\")),
             )
             .order_by(Tool.created_at.desc())
             .all()
@@ -497,8 +501,9 @@ class AssistantSummaryRepository(BaseRepository):
             return []
         fts_query = " OR ".join(f'"{kw.replace(chr(34), "")}"' for kw in keywords)
 
-        # 动态构造 IN 子句（levels 是 int，安全）
-        level_placeholders = ",".join(str(int(lv)) for lv in levels)
+        # 参数化 IN 子句
+        level_params = {f"lv{i}": int(lv) for i, lv in enumerate(levels)}
+        level_placeholders = ",".join(f":lv{i}" for i in range(len(levels)))
 
         sql = text(f"""
             SELECT s.summary_id, s.level, s.content, s.created_at,
@@ -511,7 +516,9 @@ class AssistantSummaryRepository(BaseRepository):
             LIMIT :limit
         """)
         try:
-            rows = self.session.execute(sql, {"query": fts_query, "limit": limit}).fetchall()
+            params = {"query": fts_query, "limit": limit}
+            params.update(level_params)
+            rows = self.session.execute(sql, params).fetchall()
             return [
                 {
                     "summary_id": r[0],
@@ -557,7 +564,10 @@ class AssistantSummaryRepository(BaseRepository):
         from sqlalchemy import text
 
         query_blob = sqlite_vec.serialize_float32(query_embedding)
-        level_placeholders = ",".join(str(int(lv)) for lv in levels)
+
+        # 参数化 IN 子句
+        level_params = {f"lv{i}": int(lv) for i, lv in enumerate(levels)}
+        level_placeholders = ",".join(f":lv{i}" for i in range(len(levels)))
 
         sql = text(f"""
             SELECT s.summary_id, s.level, s.content, s.created_at, v.distance
@@ -572,7 +582,9 @@ class AssistantSummaryRepository(BaseRepository):
             ORDER BY v.distance
         """)
         try:
-            rows = self.session.execute(sql, {"query": query_blob, "k": limit}).fetchall()
+            params = {"query": query_blob, "k": limit}
+            params.update(level_params)
+            rows = self.session.execute(sql, params).fetchall()
             return [
                 {
                     "summary_id": r[0],

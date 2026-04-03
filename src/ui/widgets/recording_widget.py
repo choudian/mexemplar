@@ -20,6 +20,13 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from src.data.unified_config import get_unified_config
+from src.ui.style_constants import (
+    PRIMARY_COLOR,
+    TITLE_COLOR,
+    SUBTITLE_COLOR,
+    HERO_BG_COLOR,
+    DIVIDER_COLOR,
+)
 
 
 class _ModeCard(QFrame):
@@ -51,12 +58,12 @@ class _ModeCard(QFrame):
 
         title_label = QLabel(title)
         title_label.setStyleSheet(
-            "font-size: 15px; font-weight: 600; color: #1a1a2e; background: transparent;"
+            f"font-size: 15px; font-weight: 600; color: {TITLE_COLOR}; background: transparent;"
         )
         text_layout.addWidget(title_label)
 
         desc_label = QLabel(desc)
-        desc_label.setStyleSheet("font-size: 12px; color: #6c757d; background: transparent;")
+        desc_label.setStyleSheet(f"font-size: 12px; color: {SUBTITLE_COLOR}; background: transparent;")
         desc_label.setWordWrap(True)
         text_layout.addWidget(desc_label)
 
@@ -65,7 +72,7 @@ class _ModeCard(QFrame):
         # 选中指示器
         self._check = QLabel("✓")
         self._check.setStyleSheet(
-            "font-size: 16px; font-weight: bold; color: #5b6abf; background: transparent;"
+            f"font-size: 16px; font-weight: bold; color: {PRIMARY_COLOR}; background: transparent;"
         )
         self._check.setFixedWidth(24)
         self._check.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -82,12 +89,12 @@ class _ModeCard(QFrame):
     def _apply_style(self):
         if self._selected:
             self.setStyleSheet(
-                """
-                QFrame#mode_card {
+                f"""
+                QFrame#mode_card {{
                     background-color: #f0f1ff;
-                    border: 2px solid #5b6abf;
+                    border: 2px solid {PRIMARY_COLOR};
                     border-radius: 10px;
-                }
+                }}
             """
             )
         else:
@@ -140,7 +147,7 @@ class RecordingWidget(QWidget):
 
         # ── Hero 区域 ──
         hero = QWidget()
-        hero.setStyleSheet("background-color: #fafbff;")
+        hero.setStyleSheet(f"background-color: {HERO_BG_COLOR};")
         hero_layout = QVBoxLayout(hero)
         hero_layout.setContentsMargins(40, 36, 40, 28)
         hero_layout.setSpacing(10)
@@ -148,12 +155,12 @@ class RecordingWidget(QWidget):
         title = QLabel("技能教学")
         title.setObjectName("recording_title")
         title.setStyleSheet(
-            "font-size: 26px; font-weight: 700; color: #1a1a2e; background: transparent;"
+            f"font-size: 26px; font-weight: 700; color: {TITLE_COLOR}; background: transparent;"
         )
         hero_layout.addWidget(title)
 
         subtitle = QLabel("像教新同事一样，演示一遍操作，AI 就能学会并帮你重复执行")
-        subtitle.setStyleSheet("font-size: 14px; color: #6c757d; background: transparent;")
+        subtitle.setStyleSheet(f"font-size: 14px; color: {SUBTITLE_COLOR}; background: transparent;")
         subtitle.setWordWrap(True)
         hero_layout.addWidget(subtitle)
 
@@ -162,7 +169,7 @@ class RecordingWidget(QWidget):
         # ── 分隔线 ──
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.HLine)
-        sep.setStyleSheet("background-color: #eef0f4; max-height: 1px;")
+        sep.setStyleSheet(f"background-color: {DIVIDER_COLOR}; max-height: 1px;")
         content_layout.addWidget(sep)
 
         # ── 主体设置区 ──
@@ -174,7 +181,7 @@ class RecordingWidget(QWidget):
 
         # 步骤 1: 选择模式
         step1_label = QLabel("选择教学方式")
-        step1_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #1a1a2e;")
+        step1_label.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {TITLE_COLOR};")
         body_layout.addWidget(step1_label)
 
         # 模式卡片
@@ -199,25 +206,25 @@ class RecordingWidget(QWidget):
         url_layout.setSpacing(8)
 
         url_label = QLabel("起始网址")
-        url_label.setStyleSheet("font-size: 14px; font-weight: 600; color: #1a1a2e;")
+        url_label.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {TITLE_COLOR};")
         url_layout.addWidget(url_label)
 
         self.url_input = QLineEdit()
         self.url_input.setObjectName("url_input")
         self.url_input.setPlaceholderText("输入要打开的网址，留空则打开空白页")
         self.url_input.setStyleSheet(
-            """
-            QLineEdit {
+            f"""
+            QLineEdit {{
                 border: 1.5px solid #e0e0e0;
                 border-radius: 8px;
                 padding: 10px 14px;
                 font-size: 14px;
                 background-color: #f8f9fa;
-            }
-            QLineEdit:focus {
-                border-color: #5b6abf;
+            }}
+            QLineEdit:focus {{
+                border-color: {PRIMARY_COLOR};
                 background-color: #ffffff;
-            }
+            }}
         """
         )
         url_layout.addWidget(self.url_input)
@@ -233,25 +240,25 @@ class RecordingWidget(QWidget):
         self.record_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.record_btn.setFixedHeight(44)
         self.record_btn.setStyleSheet(
-            """
-            QPushButton {
+            f"""
+            QPushButton {{
                 font-size: 15px;
                 font-weight: 600;
                 padding: 0 32px;
-                background-color: #5b6abf;
+                background-color: {PRIMARY_COLOR};
                 color: white;
                 border: none;
                 border-radius: 8px;
-            }
-            QPushButton:hover {
+            }}
+            QPushButton:hover {{
                 background-color: #4a58a8;
-            }
-            QPushButton:pressed {
+            }}
+            QPushButton:pressed {{
                 background-color: #3d4a91;
-            }
-            QPushButton:disabled {
+            }}
+            QPushButton:disabled {{
                 background-color: #c5c9e0;
-            }
+            }}
         """
         )
         self.record_btn.clicked.connect(self.on_record_clicked)

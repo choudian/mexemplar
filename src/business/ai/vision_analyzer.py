@@ -12,6 +12,7 @@ import logging
 from anthropic import Anthropic
 
 from src.data.unified_config import get_unified_config
+from src.utils.llm_helpers import extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -166,28 +167,15 @@ class VisionAnalyzer:
 
     def _parse_response(self, response_text: str, task: str) -> Dict[str, Any]:
         """解析 API 响应"""
-        import json
-        import re
-
         result = {"raw_response": response_text, "task": task}
 
-        # 尝试提取 JSON
         if task == "elements":
-            # 查找 JSON 代码块
-            json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
-            if json_match:
-                try:
-                    json_data = json.loads(json_match.group(1))
-                    result["parsed"] = json_data
-                except json.JSONDecodeError:
-                    # 如果解析失败，尝试直接解析整个响应
-                    try:
-                        json_data = json.loads(response_text)
-                        result["parsed"] = json_data
-                    except json.JSONDecodeError:
-                        logger.warning("无法解析 JSON 响应")
-                        result["parsed"] = None
-            else:
+            try:
+                result["parsed"] = extract_json_from_response(
+                    response_text, require_dict=False, log_prefix="Vision"
+                )
+            except ValueError:
+                logger.warning("无法解析 JSON 响应")
                 result["parsed"] = None
 
         return result

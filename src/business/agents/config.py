@@ -163,19 +163,6 @@ def get_agent_config(agent_type: AgentType) -> AgentConfig:
     return configs.get(agent_type, TRIAL_CONFIG)
 
 
-def get_agent_type_str(agent_type: AgentType) -> str:
-    """
-    获取 Agent 类型的字符串表示
-
-    Args:
-        agent_type: Agent 类型
-
-    Returns:
-        字符串表示
-    """
-    return agent_type.value
-
-
 __all__ = [
     "AgentType",
     "ResultType",
@@ -189,5 +176,4 @@ __all__ = [
     "TRIAL_CONFIG",
     "ASSISTANT_CONFIG",
     "get_agent_config",
-    "get_agent_type_str",
 ]

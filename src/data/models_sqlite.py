@@ -1,8 +1,7 @@
 """
 SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 
-包含：tools, task_executions, conversations
-      sessions, messages, workflow_transitions (Agent 会话相关)
+包含：tools, sessions, messages, workflow_transitions (Agent 会话相关)
 """
 
 from datetime import datetime

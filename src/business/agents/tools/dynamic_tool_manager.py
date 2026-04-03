@@ -13,10 +13,15 @@ from collections import OrderedDict
 from typing import Callable, List, Optional, Set
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.tool_helpers import make_tool_schema, error_json
 from src.data.repositories import ToolRepository
 from src.execution.tool_executor import run_tool_code
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# 常量
+# =============================================================================
 
 # 重复模式检测参数
 SUGGESTION_THRESHOLD = 3   # 执行 N 次后建议工具化
@@ -71,35 +76,23 @@ def _check_tool_suggestion(tool_name: str) -> Optional[str]:
 
 
 # FC schema 定义
-SEARCH_TOOLS_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "search_tools",
-        "description": "按关键词搜索可用的用户工具。当不确定该用哪个工具时使用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "搜索关键词或意图描述"},
-            },
-            "required": ["query"],
-        },
+SEARCH_TOOLS_SCHEMA = make_tool_schema(
+    name="search_tools",
+    description="按关键词搜索可用的用户工具。当不确定该用哪个工具时使用。",
+    properties={
+        "query": {"type": "string", "description": "搜索关键词或意图描述"},
     },
-}
+    required=["query"],
+)
 
-GET_TOOL_DETAIL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "get_tool_detail",
-        "description": "获取指定用户工具的完整参数说明。调用不熟悉的工具前，先用这个查看参数格式。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tool_name": {"type": "string", "description": "工具名称"},
-            },
-            "required": ["tool_name"],
-        },
+GET_TOOL_DETAIL_SCHEMA = make_tool_schema(
+    name="get_tool_detail",
+    description="获取指定用户工具的完整参数说明。调用不熟悉的工具前，先用这个查看参数格式。",
+    properties={
+        "tool_name": {"type": "string", "description": "工具名称"},
     },
-}
+    required=["tool_name"],
+)
 
 
 class DynamicToolManager:
@@ -189,18 +182,12 @@ class DynamicToolManager:
             if param.get("required", False):
                 required.append(param["name"])
 
-        return {
-            "type": "function",
-            "function": {
-                "name": short_id,
-                "description": tool.description or "",
-                "parameters": {
-                    "type": "object",
-                    "properties": properties,
-                    "required": required,
-                },
-            },
-        }
+        return make_tool_schema(
+            name=short_id,
+            description=tool.description or "",
+            properties=properties,
+            required=required,
+        )
 
     def _create_tool_handler(self, tool_id: str) -> Callable:
         """为指定工具创建执行 handler（闭包绑定 tool_id，创建时缓存工具信息）"""
@@ -209,10 +196,7 @@ class DynamicToolManager:
         # 创建时缓存 execution_code 和 dependencies，避免每次执行都查 DB
         if not tool or not tool.execution_code:
             def _unavailable_handler(**kwargs) -> str:
-                return json.dumps(
-                    {"success": False, "message": "工具不可用", "data": None},
-                    ensure_ascii=False,
-                )
+                return error_json("工具不可用")
             return _unavailable_handler
 
         cached_code = tool.execution_code

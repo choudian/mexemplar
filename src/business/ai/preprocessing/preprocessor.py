@@ -22,6 +22,7 @@ from src.business.ai.preprocessing.pipeline import (
 from src.business.ai.preprocessing.analyzers import (
     RequestIntelligenceAnalyzer,
 )
+from src.utils.helpers import to_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -431,11 +432,7 @@ class DataPreprocessor:
                             has_interruption = True
                             break
 
-                    time_diff = next_action.timestamp - action.timestamp
-                    if hasattr(time_diff, "total_seconds"):
-                        time_diff_seconds = time_diff.total_seconds()
-                    else:
-                        time_diff_seconds = time_diff
+                    time_diff_seconds = to_seconds(next_action.timestamp - action.timestamp)
 
                     if (
                         next_action.action_type.lower() in input_types
@@ -503,16 +500,10 @@ class DataPreprocessor:
                 if element_id not in element_history:
                     element_history[element_id] = []
 
-                def time_diff_seconds(t1, t2):
-                    diff = t1 - t2
-                    if hasattr(diff, "total_seconds"):
-                        return diff.total_seconds()
-                    return diff
-
                 element_history[element_id] = [
                     (t, a)
                     for t, a in element_history[element_id]
-                    if time_diff_seconds(timestamp, t) < time_window
+                    if to_seconds(timestamp - t) < time_window
                 ]
 
                 recent_count = len(element_history[element_id])
@@ -742,7 +733,6 @@ class DataPreprocessor:
 
         try:
             duckdb = DuckDBManager()
-            conn = duckdb.connect()
 
             updated_count = 0
 
@@ -757,7 +747,7 @@ class DataPreprocessor:
                     continue
 
                 try:
-                    conn.execute(
+                    duckdb.execute(
                         """
                         UPDATE network_requests
                         SET

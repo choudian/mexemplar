@@ -10,7 +10,17 @@ from pathlib import Path
 from typing import Optional, Any, List, Dict
 import duckdb
 
+from src.utils.helpers import get_default_data_dir
+
 logger = logging.getLogger(__name__)
+
+# 表名白名单，防止通过 f-string 拼接导致的 SQL 注入
+_VALID_TABLES = frozenset([
+    "recording_sessions",
+    "actions",
+    "network_requests",
+    "filter_decisions",
+])
 
 # 全局单例
 _duckdb_instance: Optional["DuckDBManager"] = None
@@ -31,6 +41,11 @@ class DuckDBManager:
 
         # 第一次检查（无锁）
         if _duckdb_instance is not None:
+            if db_path is not None and hasattr(_duckdb_instance, 'db_path') and _duckdb_instance.db_path != db_path:
+                logger.warning(
+                    f"DuckDBManager 单例已存在（路径: {_duckdb_instance.db_path}），"
+                    f"忽略新路径: {db_path}"
+                )
             return _duckdb_instance
 
         # 加锁创建
@@ -56,10 +71,7 @@ class DuckDBManager:
 
         if db_path is None:
             # 使用默认路径：data/mexemplar.duckdb
-            project_root = Path(__file__).parent.parent.parent
-            data_dir = project_root / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(data_dir / "mexemplar.duckdb")
+            db_path = str(get_default_data_dir() / "mexemplar.duckdb")
 
         self.db_path = db_path
         self.conn: Optional[Any] = None
@@ -361,7 +373,12 @@ class DuckDBManager:
 
         Returns:
             插入的行 ID
+
+        Raises:
+            ValueError: 表名不在白名单中
         """
+        if table not in _VALID_TABLES:
+            raise ValueError(f"非法表名 '{table}'，合法表名: {sorted(_VALID_TABLES)}")
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["?" for _ in data])
         # 使用 RETURNING 子句获取插入的 ID
@@ -391,7 +408,13 @@ class DuckDBManager:
 
         Returns:
             插入的行 ID 列表
+
+        Raises:
+            ValueError: 表名不在白名单中
         """
+        if table not in _VALID_TABLES:
+            raise ValueError(f"非法表名 '{table}'，合法表名: {sorted(_VALID_TABLES)}")
+
         if not data_list:
             return []
 

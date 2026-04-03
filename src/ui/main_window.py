@@ -20,7 +20,6 @@ from src.ui.page_ids import (
     SETTINGS,
     SKILLS,
     TEACHING,
-    TOOLS,
 )
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtWidgets import (
@@ -42,7 +41,6 @@ from src.ui.widgets.main_content_widget import MainContentWidget
 from src.ui.widgets.recording_widget import RecordingWidget
 from src.ui.widgets.settings_page import SettingsPage
 from src.ui.widgets.sidebar_widget import SidebarWidget
-from src.ui.widgets.tools_list_page import ToolsListPage
 from src.ui.resources.icons.sidebar_icons import (
     FILE_ICON,
     HELP_ICON,
@@ -68,7 +66,6 @@ class MainWindow(QMainWindow):
     _confirm_action_signal = pyqtSignal(str, str)  # (request_id, message)
 
     # 类常量
-    _POLL_INTERVAL = 0.1  # 轮询间隔（秒）
     _DEFAULT_INIT_TIMEOUT = 5.0  # 默认初始化超时（秒）
 
     # Agent 类型中文显示名
@@ -85,6 +82,7 @@ class MainWindow(QMainWindow):
     workflow_error = pyqtSignal(str, str)  # 参数：错误消息，错误类型
     _agent_start_requested = pyqtSignal(str)  # 参数：recording_id，用于跨线程安全触发 start_agent
     _switch_to_intent_page = pyqtSignal()  # 跨线程安全切换到意图确认页面
+    _ensure_bridge_requested = pyqtSignal()  # 跨线程安全创建 AgentUIBridge
 
     def __init__(self) -> None:
         """初始化主窗口"""
@@ -111,6 +109,13 @@ class MainWindow(QMainWindow):
         self._sidebar_visible = True  # 跟踪侧边栏状态（统一使用 _ 前缀）
         self._active_toast = None  # 当前活跃的 toast 通知
         self.menubar = None  # 菜单栏引用
+
+        # Agent 会话上下文
+        self._current_agent_workflow_id = None  # 当前 Agent 工作流 ID
+        self._current_agent_type = None  # 当前 Agent 类型
+
+        # 用于跨线程安全创建 AgentUIBridge 的事件通知
+        self._bridge_created_event = threading.Event()
 
         self.logger.info("[MainWindow] 开始加载样式")
         self._load_styles()
@@ -141,10 +146,6 @@ class MainWindow(QMainWindow):
                 self.logger.warning(f"样式表文件不存在: {style_path}")
         except Exception as e:
             self.logger.warning(f"加载样式表失败: {e}")
-
-    def _create_svg_icon(self, svg_string: str, color: str = "#666666", size: int = 20) -> QIcon:
-        """从 SVG 字符串创建 QIcon（委托给共享工具函数）"""
-        return create_svg_icon(svg_string, color, size)
 
     def init_ui(self) -> None:
         """初始化用户界面"""
@@ -186,10 +187,6 @@ class MainWindow(QMainWindow):
         self.recording_page.recording_stopped.connect(self._on_recording_stopped)
         self.main_content.add_page(TEACHING, self.recording_page)
 
-        # 工具列表页面
-        tools_page = ToolsListPage()
-        self.main_content.add_page(TOOLS, tools_page)
-
         # 意图确认页面
         from src.ui.intent_confirmation_ui import IntentConfirmationUI
 
@@ -213,21 +210,19 @@ class MainWindow(QMainWindow):
         self.main_content.page_changed.connect(self._on_page_changed)
 
         # ⭐ 连接 IntentConfirmationUI 的信号到 MainWindow 处理
-        if hasattr(self, "intent_confirmation_page"):
-            self.intent_confirmation_page.analyze_intent_request.connect(
-                self._on_intent_analyze_request
-            )
-            # Agent 模式信号：恢复 Agent
-            self.intent_confirmation_page.agent_resume_request.connect(
-                self._on_agent_resume_request
-            )
+        self.intent_confirmation_page.analyze_intent_request.connect(
+            self._on_intent_analyze_request
+        )
+        # Agent 模式信号：恢复 Agent
+        self.intent_confirmation_page.agent_resume_request.connect(
+            self._on_agent_resume_request
+        )
 
         # ⭐ 连接 ToolsManagementUI 的信号到 MainWindow 处理
-        if hasattr(self, "pending_tools_page"):
-            self.pending_tools_page.trial_start_request.connect(self._on_trial_start_request)
-            self.pending_tools_page.tool_delete_request.connect(self._on_tool_delete_request)
-            self.pending_tools_page.tool_update_request.connect(self._on_tool_update_request)
-            self.pending_tools_page.retry_requested.connect(self._on_retry_requested)
+        self.pending_tools_page.trial_start_request.connect(self._on_trial_start_request)
+        self.pending_tools_page.tool_delete_request.connect(self._on_tool_delete_request)
+        self.pending_tools_page.tool_update_request.connect(self._on_tool_update_request)
+        self.pending_tools_page.retry_requested.connect(self._on_retry_requested)
 
         # 侧边栏新建对话 -> AI 对话页面新建对话
         self.sidebar.new_chat_requested.connect(self._on_new_chat_requested)
@@ -238,10 +233,8 @@ class MainWindow(QMainWindow):
         self.recording_error.connect(self._on_recording_error)
         self.workflow_error.connect(self._on_workflow_error)
 
-        # ⭐ 连接工作流处理失败事件（用于显示压缩模型错误等）
-        from src.utils.events import workflow_processing_failed
-
-        workflow_processing_failed.connect(self._on_workflow_processing_failed)
+        # ⭐ 连接跨线程安全创建 AgentUIBridge 信号
+        self._ensure_bridge_requested.connect(self._on_ensure_bridge_requested)
 
         # 默认显示 AI 对话页面（新建对话欢迎页）
         # 先 switch_page 让 main_content 切到 ChatWidget（内部栈默认显示会话列表），
@@ -280,7 +273,7 @@ class MainWindow(QMainWindow):
 
         # ============ 折叠按钮 ============
         self.toggle_sidebar_btn = create_toolbar_btn(
-            self._create_svg_icon(SIDEBAR_OPEN_ICON), "折叠侧边栏"
+            create_svg_icon(SIDEBAR_OPEN_ICON), "折叠侧边栏"
         )
         self.toggle_sidebar_btn.clicked.connect(self._toggle_sidebar)
         left_layout.addWidget(self.toggle_sidebar_btn)
@@ -293,7 +286,7 @@ class MainWindow(QMainWindow):
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
 
-        btn_file = create_toolbar_btn(self._create_svg_icon(FILE_ICON), "文件")
+        btn_file = create_toolbar_btn(create_svg_icon(FILE_ICON), "文件")
         btn_file.setMenu(file_menu)
         left_layout.addWidget(btn_file)
 
@@ -304,7 +297,7 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._show_about_dialog)
         help_menu.addAction(about_action)
 
-        btn_help = create_toolbar_btn(self._create_svg_icon(HELP_ICON), "帮助")
+        btn_help = create_toolbar_btn(create_svg_icon(HELP_ICON), "帮助")
         btn_help.setMenu(help_menu)
         left_layout.addWidget(btn_help)
 
@@ -333,6 +326,7 @@ class MainWindow(QMainWindow):
 
                 with self._orchestrator_init_condition:
                     self.agent_ui_bridge = bridge
+                    self._pending_bridge = None
                     self._orchestrator_init_status = OrchestratorInitStatus.READY
                     self.logger.info("AgentUIBridge warmup completed")
                     self._orchestrator_init_condition.notify_all()
@@ -356,7 +350,6 @@ class MainWindow(QMainWindow):
 
         使用后台线程启动 WebSocket 服务器，避免阻塞 UI
         """
-        import threading
 
         def init_in_background():
             """在后台线程中初始化"""
@@ -395,7 +388,7 @@ class MainWindow(QMainWindow):
         self.logger.info("[延迟初始化] 后台初始化线程已启动")
 
     def _on_intent_analyzed(self, msg) -> dict:
-        """处理意图分析完成的消息"""
+        """处理意图分析完成的消息（WebSocket 回调，在后台线程执行）"""
         try:
             data = msg.data
             intent_id = data.get("intent_id")
@@ -403,8 +396,8 @@ class MainWindow(QMainWindow):
 
             self.logger.info(f"收到意图分析完成消息: {intent_id}, 录制ID: {recording_id}")
 
-            # 切换到意图确认页面
-            self.main_content.switch_page(INTENT_CONFIRMATION)
+            # 通过信号将页面切换投递到 UI 线程，避免在后台线程操作 Qt 控件
+            self._switch_to_intent_page.emit()
 
             return {"status": "success"}
 
@@ -424,7 +417,7 @@ class MainWindow(QMainWindow):
         """
         from src.business.ai.llm_client import LangChainLLMClient
         from src.business.orchestration.agent_orchestrator import AgentOrchestrator
-        from src.business.orchestration.agent_ui_bridge import AgentUIBridge
+        from src.ui.agent_ui_bridge import AgentUIBridge
         from src.data.unified_config import get_unified_config
         from src.utils.events import connect
 
@@ -443,6 +436,8 @@ class MainWindow(QMainWindow):
         # 注册高危工具跨线程确认机制
         from src.business.agents.tools.builtin_general_tools import register_confirm_mechanism
 
+        # 先 disconnect 再 connect，防止预热失败重建时信号重复连接
+        self._confirm_action_signal.disconnect(self._on_confirm_action_requested)
         self._confirm_action_signal.connect(self._on_confirm_action_requested)
         register_confirm_mechanism(self._confirm_action_signal)
 
@@ -464,7 +459,9 @@ class MainWindow(QMainWindow):
         # 通过 _agent_start_requested 信号 + 真实 QObject slot 保证在主线程执行。
         # 注意：必须用真实方法作为 slot，lambda 没有 QObject 归属会退化为 DirectConnection。
         self._pending_bridge = bridge  # 让 slot 能访问到 bridge
+        self._agent_start_requested.disconnect(self._on_agent_start_requested)
         self._agent_start_requested.connect(self._on_agent_start_requested)
+        self._switch_to_intent_page.disconnect(self._on_switch_to_intent_page)
         self._switch_to_intent_page.connect(self._on_switch_to_intent_page)
 
         def on_recording_completed(sender, **kwargs):
@@ -733,7 +730,7 @@ class MainWindow(QMainWindow):
         self.logger.info(f"收到 Agent 恢复请求: workflow_id={thread_id}")
 
         user_input = resume_data.get("feedback") or resume_data.get("message", "")
-        agent_type = getattr(self, "_current_agent_type", AgentType.PM)
+        agent_type = self._current_agent_type
 
         if self.agent_ui_bridge:
             try:
@@ -765,14 +762,14 @@ class MainWindow(QMainWindow):
         if self._sidebar_visible:
             # 折叠侧边栏
             self.sidebar.hide()
-            self.toggle_sidebar_btn.setIcon(self._create_svg_icon(SIDEBAR_CLOSE_ICON))
+            self.toggle_sidebar_btn.setIcon(create_svg_icon(SIDEBAR_CLOSE_ICON))
             self.toggle_sidebar_btn.setToolTip("展开侧边栏")
             self._sidebar_visible = False
             self.logger.info("Sidebar collapsed")
         else:
             # 展开侧边栏
             self.sidebar.show()
-            self.toggle_sidebar_btn.setIcon(self._create_svg_icon(SIDEBAR_OPEN_ICON))
+            self.toggle_sidebar_btn.setIcon(create_svg_icon(SIDEBAR_OPEN_ICON))
             self.toggle_sidebar_btn.setToolTip("折叠侧边栏")
             self._sidebar_visible = True
             self.logger.info("Sidebar expanded")
@@ -808,7 +805,7 @@ class MainWindow(QMainWindow):
     def _on_chat_send_message(self, session_id: str, agent_type: str, user_input: str):
         """ChatWidget 发送消息 → 通过 UIBridge 启动 Agent"""
         self.logger.info(f"Chat 发送消息: session={session_id}, input={user_input[:50]}...")
-        if hasattr(self, "agent_ui_bridge") and self.agent_ui_bridge:
+        if self.agent_ui_bridge is not None:
             self.agent_ui_bridge.start_agent(
                 agent_type=agent_type,
                 user_input=user_input,
@@ -836,9 +833,38 @@ class MainWindow(QMainWindow):
             # 重置录制界面状态
             self.recording_page.reset()
 
-    def _ensure_workflow_orchestrator(self, timeout: float = _DEFAULT_INIT_TIMEOUT) -> bool:
+    def _on_ensure_bridge_requested(self) -> None:
+        """UI 线程槽函数：在 UI 线程中创建 AgentUIBridge（由 _ensure_bridge_requested 信号触发）"""
+        try:
+            self.logger.info("Creating AgentUIBridge on UI thread (via signal)...")
+            bridge = self._create_agent_ui_bridge()
+
+            with self._orchestrator_init_condition:
+                self.agent_ui_bridge = bridge
+                self._pending_bridge = None
+                self._orchestrator_init_status = OrchestratorInitStatus.READY
+                self.logger.info("AgentUIBridge created and ready (UI thread)")
+                self._orchestrator_init_condition.notify_all()
+
+        except Exception as e:
+            with self._orchestrator_init_condition:
+                self._orchestrator_init_status = OrchestratorInitStatus.FAILED
+                self._orchestrator_init_error = str(e)
+                self.agent_ui_bridge = None
+                self._orchestrator_init_condition.notify_all()
+
+            self.logger.error(f"AgentUIBridge initialization failed (UI thread): {e}", exc_info=True)
+            self.recording_error.emit(
+                f"Agent 编排器初始化失败：\n{str(e)}\n\n录制功能仍可使用，但不会自动启动 Agent。"
+            )
+        finally:
+            self._bridge_created_event.set()
+
+    def _ensure_agent_bridge(self, timeout: float = _DEFAULT_INIT_TIMEOUT) -> bool:
         """
         智能确保 AgentUIBridge 已初始化（懒加载 + 预热支持）
+
+        如果在后台线程调用，会将 QObject 创建投递到 UI 线程执行。
         """
         with self._orchestrator_init_condition:
             if (
@@ -865,30 +891,42 @@ class MainWindow(QMainWindow):
 
             self._orchestrator_init_status = OrchestratorInitStatus.INITIALIZING
 
-        try:
-            self.logger.info("Creating AgentUIBridge immediately...")
-            bridge = self._create_agent_ui_bridge()
-
+        # 检测是否在后台线程，如果是则投递到 UI 线程创建 QObject
+        is_ui_thread = (
+            threading.current_thread() is threading.main_thread()
+        )
+        if not is_ui_thread:
+            self._bridge_created_event.clear()
+            self._ensure_bridge_requested.emit()
+            self._bridge_created_event.wait(timeout=timeout)
             with self._orchestrator_init_condition:
-                self.agent_ui_bridge = bridge
-                self._orchestrator_init_status = OrchestratorInitStatus.READY
-                self.logger.info("AgentUIBridge created and ready")
-                self._orchestrator_init_condition.notify_all()
+                return self._orchestrator_init_status == OrchestratorInitStatus.READY
+        else:
+            try:
+                self.logger.info("Creating AgentUIBridge immediately...")
+                bridge = self._create_agent_ui_bridge()
 
-            return True
+                with self._orchestrator_init_condition:
+                    self.agent_ui_bridge = bridge
+                    self._pending_bridge = None
+                    self._orchestrator_init_status = OrchestratorInitStatus.READY
+                    self.logger.info("AgentUIBridge created and ready")
+                    self._orchestrator_init_condition.notify_all()
 
-        except Exception as e:
-            with self._orchestrator_init_condition:
-                self._orchestrator_init_status = OrchestratorInitStatus.FAILED
-                self._orchestrator_init_error = str(e)
-                self.agent_ui_bridge = None
-                self._orchestrator_init_condition.notify_all()
+                return True
 
-            self.logger.error(f"AgentUIBridge initialization failed: {e}", exc_info=True)
-            self.recording_error.emit(
-                f"Agent 编排器初始化失败：\n{str(e)}\n\n录制功能仍可使用，但不会自动启动 Agent。"
-            )
-            return False
+            except Exception as e:
+                with self._orchestrator_init_condition:
+                    self._orchestrator_init_status = OrchestratorInitStatus.FAILED
+                    self._orchestrator_init_error = str(e)
+                    self.agent_ui_bridge = None
+                    self._orchestrator_init_condition.notify_all()
+
+                self.logger.error(f"AgentUIBridge initialization failed: {e}", exc_info=True)
+                self.recording_error.emit(
+                    f"Agent 编排器初始化失败：\n{str(e)}\n\n录制功能仍可使用，但不会自动启动 Agent。"
+                )
+                return False
 
     def _start_browser_recording(self, url: str) -> None:
         """
@@ -962,7 +1000,6 @@ class MainWindow(QMainWindow):
 
         if self.browser_recorder:
             try:
-                import threading
                 from src.utils.events import emit, RecordingEventData
 
                 def stop_recording():
@@ -980,7 +1017,7 @@ class MainWindow(QMainWindow):
                         self._switch_to_intent_page.emit()
 
                         # 确保 AgentUIBridge 已就绪（录制期间后台线程完成初始化）
-                        if not self._ensure_workflow_orchestrator(timeout=30.0):
+                        if not self._ensure_agent_bridge(timeout=30.0):
                             self.logger.error("AgentUIBridge 不可用，无法启动 Agent 分析")
                             return
 
@@ -1060,21 +1097,6 @@ class MainWindow(QMainWindow):
             # 其他错误：显示普通提示
             QMessageBox.warning(self, "工作流提示", error_message)
 
-    def _on_workflow_processing_failed(self, sender, **kwargs) -> None:
-        """处理工作流处理失败事件（从 blinker 信号）"""
-        error = kwargs.get("error", "未知错误")
-        error_type = kwargs.get("error_type", "unknown")
-
-        self.logger.info(f"收到工作流处理失败事件: {error}, type={error_type}")
-
-        # 如果是警告类型（如压缩模型降级），不阻断流程
-        if error and error.startswith("[警告]"):
-            # 通过信号发送到主线程显示提示
-            self.workflow_error.emit(error[5:].strip(), error_type)  # 去掉 "[警告]" 前缀
-        else:
-            # 真正的错误，显示错误提示
-            self.workflow_error.emit(error, error_type)
-
     # ===== UI 组件信号处理（替代 WebSocket 客户端）=====
 
     def _on_intent_analyze_request(self, intent_id: str, user_message: str) -> None:
@@ -1086,8 +1108,8 @@ class MainWindow(QMainWindow):
         self.logger.info(f"收到意图分析请求: {intent_id}, 消息: {user_message[:50]}...")
 
         # Agent 模式：将用户消息作为 feedback 传递给 Agent
-        workflow_id = getattr(self, "_current_agent_workflow_id", None)
-        agent_type = getattr(self, "_current_agent_type", AgentType.PM)
+        workflow_id = self._current_agent_workflow_id
+        agent_type = self._current_agent_type or AgentType.PM
         if workflow_id:
             if self.agent_ui_bridge:
                 try:
@@ -1131,7 +1153,7 @@ class MainWindow(QMainWindow):
             return
 
         # 2. 确保 AgentUIBridge 就绪
-        if not self._ensure_workflow_orchestrator():
+        if not self._ensure_agent_bridge():
             self.logger.error("AgentUIBridge 不可用，无法启动试用 Agent")
             return
 
@@ -1180,7 +1202,7 @@ class MainWindow(QMainWindow):
     def _on_retry_requested(self, workflow_id: str, failed_stage: str) -> None:
         """处理失败记录重试请求"""
         self.logger.info(f"收到重试请求: workflow={workflow_id}, stage={failed_stage}")
-        if not self._ensure_workflow_orchestrator():
+        if not self._ensure_agent_bridge():
             self.logger.warning("Orchestrator 未就绪，无法重试")
             return
         if self.agent_ui_bridge:

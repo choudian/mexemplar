@@ -43,10 +43,6 @@ class SidebarWidget(QWidget):
         self.nav_buttons = {}  # 导航按钮字典
         self.init_ui()
 
-    def _create_svg_icon(self, svg_string: str, color: str = "#666666") -> QIcon:
-        """从 SVG 字符串创建 QIcon（委托给共享工具函数）"""
-        return create_svg_icon(svg_string, color, size=16)
-
     def init_ui(self):
         """初始化用户界面"""
         # 创建主布局
@@ -120,7 +116,7 @@ class SidebarWidget(QWidget):
         user_avatar_btn = QPushButton()
         user_avatar_btn.setObjectName("user_avatar_button")
         user_avatar_btn.setFixedSize(28, 28)
-        user_avatar_btn.setIcon(self._create_svg_icon(USER_ICON, "#666666"))
+        user_avatar_btn.setIcon(create_svg_icon(USER_ICON, "#666666", size=16))
         user_avatar_btn.setIconSize(QSize(20, 20))
         user_avatar_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         footer_layout.addWidget(user_avatar_btn)
@@ -139,7 +135,7 @@ class SidebarWidget(QWidget):
         button.setObjectName("nav_button")
         button.setCheckable(True)
         button.setProperty("page_name", page_name)
-        button.setIcon(self._create_svg_icon(icon, "#666666"))
+        button.setIcon(create_svg_icon(icon, "#666666", size=16))
         button.setIconSize(QSize(20, 20))
         button.clicked.connect(lambda: self._on_nav_clicked(page_name))
 

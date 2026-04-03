@@ -12,7 +12,7 @@ import logging
 
 from src.data.unified_config import get_unified_config
 from src.recording.recorder import Action
-from src.business.ai.llm_client import create_llm_client
+from src.utils.llm_helpers import create_default_llm_client, extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -28,33 +28,13 @@ class SemanticAnalyzer:
             api_key: API 密钥（可选，优先从配置读取）
         """
         config = get_unified_config()
+        self.client = create_default_llm_client(api_key=api_key)
+        self.api_key = api_key or config.get_ai_api_key()
+        self.model = config.get_ai_model()
+        self.temperature = config.get_ai_temperature()
+        self.max_tokens = config.get_ai_max_tokens()
 
-        # 构建 LLM 客户端配置
-        client_config = {
-            "provider": config.get_ai_provider(),
-            "model": config.get_ai_model(),
-            "api_key": api_key or config.get_ai_api_key(),
-            "temperature": config.get_ai_temperature(),
-            "max_tokens": config.get_ai_max_tokens(),
-        }
-
-        # 添加 base_url（如果配置了）
-        base_url = config.get_ai_base_url()
-        if base_url:
-            client_config["base_url"] = base_url
-
-        # 验证 API 密钥
-        if not client_config["api_key"]:
-            raise ValueError("API 密钥未设置，请先配置 API 密钥")
-
-        # 创建统一的 LangChain 客户端
-        self.client = create_llm_client(client_config)
-        self.api_key = client_config["api_key"]
-        self.model = client_config["model"]
-        self.temperature = client_config["temperature"]
-        self.max_tokens = client_config["max_tokens"]
-
-        logger.info(f"[语义分析器] 已初始化: {client_config['provider']}/{self.model}")
+        logger.info(f"[语义分析器] 已初始化: model={self.model}")
 
     def analyze_intent(
         self, actions: List[Action], metadata: Optional[Dict[str, Any]] = None
@@ -278,24 +258,10 @@ class SemanticAnalyzer:
 
     def _parse_intent_response(self, response_text: str) -> Dict[str, Any]:
         """解析意图分析响应"""
-        import re
-
-        # 查找 JSON 代码块
-        json_match = re.search(r"```json\s*(.*?)\s*```", response_text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group(1))
-            except json.JSONDecodeError:
-                pass
-
-        # 尝试直接解析
         try:
-            return json.loads(response_text)
-        except json.JSONDecodeError:
-            pass
-
-        # 返回默认值
-        return self._get_default_intent()
+            return extract_json_from_response(response_text, log_prefix="语义分析")
+        except ValueError:
+            return self._get_default_intent()
 
     def _get_default_intent(self) -> Dict[str, Any]:
         """获取默认意图"""

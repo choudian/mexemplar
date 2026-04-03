@@ -11,9 +11,10 @@
 import sqlite3
 import json
 import threading
-from pathlib import Path
 from typing import Optional, Any
 import logging
+
+from src.utils.helpers import get_default_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,7 @@ class DatabaseManager:
         """
         if db_path is None:
             # 使用默认路径：data/mexemplar.db
-            project_root = Path(__file__).parent.parent.parent
-            data_dir = project_root / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(data_dir / "mexemplar.db")
+            db_path = str(get_default_data_dir() / "mexemplar.db")
 
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
@@ -85,39 +83,6 @@ class DatabaseManager:
             """
             )
 
-            # 创建 task_executions 表（任务执行记录）
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS task_executions (
-                    execution_id TEXT PRIMARY KEY,
-                    tool_id TEXT NOT NULL,
-                    parameters TEXT,           -- JSON格式
-                    status TEXT NOT NULL,      -- 'running', 'success', 'failed', 'cancelled'
-                    result TEXT,               -- JSON格式
-                    error_message TEXT,
-                    started_at TIMESTAMP,
-                    finished_at TIMESTAMP,
-                    execution_log TEXT,
-                    FOREIGN KEY (tool_id) REFERENCES tools(tool_id)
-                )
-            """
-            )
-
-            # 创建 conversations 表（对话历史）
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS conversations (
-                    conversation_id TEXT PRIMARY KEY,
-                    user_message TEXT NOT NULL,
-                    assistant_response TEXT NOT NULL,
-                    tool_used TEXT,
-                    parameters_extracted TEXT,  -- JSON格式
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (tool_used) REFERENCES tools(tool_id)
-                )
-            """
-            )
-
             # 创建 app_settings 表（全局设置）
             cursor.execute(
                 """
@@ -130,32 +95,6 @@ class DatabaseManager:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """
-            )
-
-            # 创建 user_preferences 表（用户偏好）
-            cursor.execute(
-                """
-                CREATE TABLE IF NOT EXISTS user_preferences (
-                    pref_key TEXT PRIMARY KEY,
-                    pref_value TEXT,
-                    pref_type TEXT DEFAULT 'string',
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """
-            )
-
-            # 创建索引以提高查询性能
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_task_executions_tool_id ON task_executions(tool_id)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_task_executions_status ON task_executions(status)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_conversations_tool_used ON conversations(tool_used)"
-            )
-            cursor.execute(
-                "CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(timestamp)"
             )
 
             # 创建 schema_version 表

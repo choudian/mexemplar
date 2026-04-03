@@ -25,11 +25,20 @@ import threading
 from typing import Any
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.tool_helpers import make_tool_schema
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.duckdb_manager import DuckDBManager
 from src.data.unified_config import get_unified_config
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# 常量
+# =============================================================================
+
+_EXECUTE_TIMEOUT = 30  # 代码执行超时（秒）
+_MAX_ACTION_INDICES = 5  # 单次最多分析的 action 数量
 
 
 # =============================================================================
@@ -233,32 +242,26 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
     return json.dumps({"table_details": table_details}, ensure_ascii=False)
 
 
-DESCRIBE_DATA_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "describe_data",
-        "description": (
-            "数据发现工具。了解本次录制有哪些数据可查。\n"
-            "- 不传 tables：返回所有表的概览（表名、含义、数据量）。建议任务开始时先调用一次。\n"
-            "- 传 tables：返回指定表的字段详情（字段名、类型、含义、注意事项）。"
-            "拿到字段信息后再用 query_data 写 SQL 查询。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tables": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "要查看字段详情的表名列表，如 [\"actions\", \"network_requests\"]。"
-                        "不传此参数则返回所有表的概览。"
-                    ),
-                },
-            },
-            "required": [],
+DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
+    name="describe_data",
+    description=(
+        "数据发现工具。了解本次录制有哪些数据可查。\n"
+        "- 不传 tables：返回所有表的概览（表名、含义、数据量）。建议任务开始时先调用一次。\n"
+        "- 传 tables：返回指定表的字段详情（字段名、类型、含义、注意事项）。"
+        "拿到字段信息后再用 query_data 写 SQL 查询。"
+    ),
+    properties={
+        "tables": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "要查看字段详情的表名列表，如 [\"actions\", \"network_requests\"]。"
+                "不传此参数则返回所有表的概览。"
+            ),
         },
     },
-}
+    required=[],
+)
 
 
 # =============================================================================
@@ -330,40 +333,32 @@ def _query_data(recording_id: str, sql: str) -> str:
         )
 
 
-QUERY_DATA_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "query_data",
-        "description": (
-            "执行 SQL 查询录制数据（DuckDB SQL 语法）。只允许 SELECT 语句。\n"
-            "⚠️ 注意上下文：非必要不要 SELECT *，按需查询字段；"
-            "数据量大时使用 LIMIT 分页；大字段（dom_tree_snapshot、response_body 等）"
-            "按需查询，避免撑满上下文窗口。\n"
-            "不确定字段名时，先用 describe_data 查看表结构。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "sql": {
-                    "type": "string",
-                    "description": (
-                        "SELECT 查询语句。示例：\n"
-                        "SELECT sequence_number, action_type, url FROM actions "
-                        "WHERE recording_id = 'xxx' ORDER BY sequence_number LIMIT 20"
-                    ),
-                },
-            },
-            "required": ["sql"],
+QUERY_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
+    name="query_data",
+    description=(
+        "执行 SQL 查询录制数据（DuckDB SQL 语法）。只允许 SELECT 语句。\n"
+        "⚠️ 注意上下文：非必要不要 SELECT *，按需查询字段；"
+        "数据量大时使用 LIMIT 分页；大字段（dom_tree_snapshot、response_body 等）"
+        "按需查询，避免撑满上下文窗口。\n"
+        "不确定字段名时，先用 describe_data 查看表结构。"
+    ),
+    properties={
+        "sql": {
+            "type": "string",
+            "description": (
+                "SELECT 查询语句。示例：\n"
+                "SELECT sequence_number, action_type, url FROM actions "
+                "WHERE recording_id = 'xxx' ORDER BY sequence_number LIMIT 20"
+            ),
         },
     },
-}
+    required=["sql"],
+)
 
 
 # =============================================================================
 # 工具 3：execute_code
 # =============================================================================
-
-_EXECUTE_TIMEOUT = 30  # 秒
 
 # execute_code 允许使用的内建函数白名单（数据探索够用，阻止 open/exec/eval/__import__ 等危险操作）
 _SAFE_BUILTINS: dict[str, Any] = {
@@ -455,41 +450,33 @@ def _execute_code(recording_id: str, code: str) -> str:
     )
 
 
-EXECUTE_CODE_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "execute_code",
-        "description": (
-            "临时执行 Python 代码，用于 SQL 不够用的复杂数据探索（如遍历 JSON 字段、统计计算等）。\n"
-            "这是探索工具，代码跑完即丢，不会入库。与 submit_code（交付代码）完全不同。\n"
-            "预注入变量：conn（DuckDB 连接）、recording_id（当前录制 ID）。\n"
-            "示例（注意：tag_name 是 dom_element JSON 里的键，不是 SQL 列）：\n"
-            "import json\n"
-            "rows = conn.execute(\"SELECT dom_element FROM actions WHERE recording_id = ?\" , "
-            "[recording_id]).fetchall()\n"
-            "# json.loads 解析 JSON 字符串，tag_name 是 JSON 内部的 key，不是数据库列\n"
-            "tags = [json.loads(r[0])['tag_name'] for r in rows if r[0]]\n"
-            "print(set(tags))"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string",
-                    "description": "要执行的 Python 代码。用 print() 输出结果。",
-                },
-            },
-            "required": ["code"],
+EXECUTE_CODE_SCHEMA: dict[str, Any] = make_tool_schema(
+    name="execute_code",
+    description=(
+        "临时执行 Python 代码，用于 SQL 不够用的复杂数据探索（如遍历 JSON 字段、统计计算等）。\n"
+        "这是探索工具，代码跑完即丢，不会入库。与 submit_code（交付代码）完全不同。\n"
+        "预注入变量：conn（DuckDB 连接）、recording_id（当前录制 ID）。\n"
+        "示例（注意：tag_name 是 dom_element JSON 里的键，不是 SQL 列）：\n"
+        "import json\n"
+        "rows = conn.execute(\"SELECT dom_element FROM actions WHERE recording_id = ?\" , "
+        "[recording_id]).fetchall()\n"
+        "# json.loads 解析 JSON 字符串，tag_name 是 JSON 内部的 key，不是数据库列\n"
+        "tags = [json.loads(r[0])['tag_name'] for r in rows if r[0]]\n"
+        "print(set(tags))"
+    ),
+    properties={
+        "code": {
+            "type": "string",
+            "description": "要执行的 Python 代码。用 print() 输出结果。",
         },
     },
-}
+    required=["code"],
+)
 
 
 # =============================================================================
 # 工具 4：analyze_image
 # =============================================================================
-
-_MAX_ACTION_INDICES = 5  # 单次最多分析的 action 数量
 
 # 多模态 LLM 客户端懒加载单例（基于 LangChain，支持 Anthropic / OpenAI / 各家兼容接口）
 _vision_llm_client: LangChainLLMClient | None = None
@@ -616,40 +603,34 @@ def _analyze_image(
         return json.dumps({"error": f"多模态模型调用失败: {e}"}, ensure_ascii=False)
 
 
-ANALYZE_IMAGE_SCHEMA: dict[str, Any] = {
-    "type": "function",
-    "function": {
-        "name": "analyze_image",
-        "description": (
-            "⚠️ 最后手段工具。仅当文本数据（URL、parameters、dom_element、css_selector 等）"
-            "完全不足以回答问题时才使用。调用多模态模型成本高、耗时长。\n"
-            "绝大多数情况下，查询文本字段已足够，不要把截图分析当作常规步骤。\n"
-            "适用场景举例：需要识别截图中的验证码、图片内容、无法从 DOM 推断的视觉布局。\n"
-            "单次最多传入 5 个操作序号（每个操作有操作前/后两张截图）。\n"
-            "图片不会进入对话上下文，只返回模型的文字分析结果。"
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "action_index": {
-                    "oneOf": [
-                        {"type": "integer"},
-                        {"type": "array", "items": {"type": "integer"}},
-                    ],
-                    "description": (
-                        "操作序号（从 1 开始）。单个：3；多个：[2, 3, 4]。"
-                        "最多 5 个。"
-                    ),
-                },
-                "question": {
-                    "type": "string",
-                    "description": "想了解什么，如：页面上有哪些表单元素、这几步操作页面发生了什么变化",
-                },
-            },
-            "required": ["action_index", "question"],
+ANALYZE_IMAGE_SCHEMA: dict[str, Any] = make_tool_schema(
+    name="analyze_image",
+    description=(
+        "⚠️ 最后手段工具。仅当文本数据（URL、parameters、dom_element、css_selector 等）"
+        "完全不足以回答问题时才使用。调用多模态模型成本高、耗时长。\n"
+        "绝大多数情况下，查询文本字段已足够，不要把截图分析当作常规步骤。\n"
+        "适用场景举例：需要识别截图中的验证码、图片内容、无法从 DOM 推断的视觉布局。\n"
+        f"单次最多传入 {_MAX_ACTION_INDICES} 个操作序号（每个操作有操作前/后两张截图）。\n"
+        "图片不会进入对话上下文，只返回模型的文字分析结果。"
+    ),
+    properties={
+        "action_index": {
+            "oneOf": [
+                {"type": "integer"},
+                {"type": "array", "items": {"type": "integer"}},
+            ],
+            "description": (
+                "操作序号（从 1 开始）。单个：3；多个：[2, 3, 4]。"
+                f"最多 {_MAX_ACTION_INDICES} 个。"
+            ),
+        },
+        "question": {
+            "type": "string",
+            "description": "想了解什么，如：页面上有哪些表单元素、这几步操作页面发生了什么变化",
         },
     },
-}
+    required=["action_index", "question"],
+)
 
 
 # =============================================================================

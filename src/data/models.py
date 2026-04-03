@@ -96,22 +96,3 @@ class Tool:
             ),
         )
 
-    def to_persistence_model(self):
-        """转换为持久层模型（ToolModel from models_sqlite）"""
-        from .models_sqlite import Tool as ToolModel
-
-        return ToolModel(
-            tool_id=self.tool_id,
-            tool_name=self.tool_name,
-            description=self.description,
-            parameters=self.parameters,
-            steps=self.steps,
-            execution_code=self.execution_code,
-            code_language=self.code_language,
-            code_version=self.code_version,
-            execution_strategy=self.execution_strategy,
-            source_intent_id=self.source_intent_id,
-            source=self.source,
-            trial_count=self.trial_count,
-            pending_tool_id=self.pending_tool_id,
-        )

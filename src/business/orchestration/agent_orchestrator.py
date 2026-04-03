@@ -225,24 +225,19 @@ class AgentOrchestrator:
             if published:
                 self._tool_repo.update_status(tool_id, "published")
 
-            emit(
-                "trial_success",
-                sender=self,
+            self._emit_and_log(
+                event_name="trial_success",
                 workflow_id=workflow_id,
+                transition_data={
+                    "event_type": "trial_success",
+                    "from_session_id": session_id,
+                    "to_session_id": None,
+                    "payload": json.dumps({"success_count": new_count, "published": published}),
+                },
                 session_id=session_id,
                 tool_id=tool_id,
                 success_count=new_count,
                 published=published,
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="trial_success",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps({"success_count": new_count, "published": published}),
-                )
             )
 
             if published:
@@ -271,23 +266,18 @@ class AgentOrchestrator:
         else:
             pm_session_id = self._get_or_create_session(workflow_id, "pm")
 
-            emit(
-                "trial_failed",
-                sender=self,
+            self._emit_and_log(
+                event_name="trial_failed",
                 workflow_id=workflow_id,
+                transition_data={
+                    "event_type": "trial_failed",
+                    "from_session_id": session_id,
+                    "to_session_id": pm_session_id,
+                    "payload": json.dumps({"tool_id": tool_id, "user_feedback": user_feedback}),
+                },
                 session_id=session_id,
                 tool_id=tool_id,
                 user_feedback=user_feedback,
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="trial_failed",
-                    from_session_id=session_id,
-                    to_session_id=pm_session_id,
-                    payload=json.dumps({"tool_id": tool_id, "user_feedback": user_feedback}),
-                )
             )
 
             self._start_triage(tool_id, user_feedback, workflow_id)
@@ -305,28 +295,55 @@ class AgentOrchestrator:
         error_type: str,
     ):
         """统一的 agent 错误处理：emit 事件 + 记录 transition"""
-        emit(
-            "agent_error",
-            sender=self,
+        self._emit_and_log(
+            event_name="agent_error",
             workflow_id=workflow_id,
+            transition_data={
+                "event_type": "agent_error",
+                "from_session_id": session_id,
+                "to_session_id": None,
+                "payload": json.dumps(
+                    {"agent_type": agent_type, "error": error, "error_type": error_type}
+                ),
+            },
             session_id=session_id,
             agent_type=agent_type,
             error=error,
             error_type=error_type,
         )
-        if workflow_id:
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="agent_error",
-                    from_session_id=session_id,
-                    to_session_id=None,
-                    payload=json.dumps(
-                        {"agent_type": agent_type, "error": error, "error_type": error_type}
-                    ),
-                )
+
+    def _emit_and_log(
+        self,
+        event_name: str,
+        workflow_id: str,
+        transition_data: dict,
+        **kwargs,
+    ):
+        """发送事件并记录工作流转换
+
+        统一的 emit + WorkflowTransition 双写逻辑。
+
+        Args:
+            event_name: 事件名称
+            workflow_id: 工作流 ID（同时也是 recording_id）
+            transition_data: 转换记录数据，包含以下 key：
+                - event_type: 事件类型
+                - from_session_id: 来源会话 ID
+                - to_session_id: 目标会话 ID（可为 None）
+                - payload: JSON 字符串负载（可为 None）
+            **kwargs: 额外的事件参数（sender 自动设为 self）
+        """
+        emit(event_name, sender=self, workflow_id=workflow_id, **kwargs)
+        self._transition_repo.create(
+            WorkflowTransition(
+                transition_id=str(uuid.uuid4()),
+                workflow_id=workflow_id,
+                event_type=transition_data["event_type"],
+                from_session_id=transition_data["from_session_id"],
+                to_session_id=transition_data.get("to_session_id"),
+                payload=transition_data.get("payload"),
             )
+        )
 
     def _dispatch_next(
         self,
@@ -369,22 +386,17 @@ class AgentOrchestrator:
             # 正常需求确认：结构化数据来自 signal_tool.args，由 FC schema 保证格式
             requirements = result.signal_tool.args
             programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
-            emit(
-                "requirement_confirmed",
-                sender=self,
+            self._emit_and_log(
+                event_name="requirement_confirmed",
                 workflow_id=workflow_id,
+                transition_data={
+                    "event_type": "requirement_confirmed",
+                    "from_session_id": session_id,
+                    "to_session_id": programmer_session_id,
+                    "payload": json.dumps({"requirements": requirements}),
+                },
                 session_id=session_id,
                 requirements_json=requirements,
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="requirement_confirmed",
-                    from_session_id=session_id,
-                    to_session_id=programmer_session_id,
-                    payload=json.dumps({"requirements": requirements}),
-                )
             )
             # 将需求 JSON 转给程序员
             self.run_agent("programmer", json.dumps(requirements, ensure_ascii=False), workflow_id)
@@ -393,23 +405,18 @@ class AgentOrchestrator:
             # 分诊：PM 判定为代码问题，将用户反馈转交程序员
             feedback = result.signal_tool.args.get("feedback", "")
             programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
-            emit(
-                "triage_completed",
-                sender=self,
+            self._emit_and_log(
+                event_name="triage_completed",
                 workflow_id=workflow_id,
+                transition_data={
+                    "event_type": "triage_completed",
+                    "from_session_id": session_id,
+                    "to_session_id": programmer_session_id,
+                    "payload": json.dumps({"triage_result": "code_issue", "feedback": feedback}),
+                },
                 session_id=session_id,
                 triage_result="code_issue",
                 feedback=feedback,
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="triage_completed",
-                    from_session_id=session_id,
-                    to_session_id=programmer_session_id,
-                    payload=json.dumps({"triage_result": "code_issue", "feedback": feedback}),
-                )
             )
             self.run_agent("programmer", feedback, workflow_id)
 
@@ -447,18 +454,17 @@ class AgentOrchestrator:
         code_data = result.signal_tool.args
         code = code_data["code"]
 
-        emit(
-            "code_completed", sender=self, workflow_id=workflow_id, session_id=session_id, code=code
-        )
-        self._transition_repo.create(
-            WorkflowTransition(
-                transition_id=str(uuid.uuid4()),
-                workflow_id=workflow_id,
-                event_type="code_completed",
-                from_session_id=session_id,
-                to_session_id=None,
-                payload=json.dumps({"code_length": len(code)}),
-            )
+        self._emit_and_log(
+            event_name="code_completed",
+            workflow_id=workflow_id,
+            transition_data={
+                "event_type": "code_completed",
+                "from_session_id": session_id,
+                "to_session_id": None,
+                "payload": json.dumps({"code_length": len(code)}),
+            },
+            session_id=session_id,
+            code=code,
         )
 
         self._run_review(code_data, session_id, workflow_id)
@@ -516,22 +522,17 @@ class AgentOrchestrator:
         review_result: ReviewResult = self._llm_reviewer.review(code, requirement)
 
         if review_result.passed:
-            emit(
-                "review_passed",
-                sender=self,
+            self._emit_and_log(
+                event_name="review_passed",
                 workflow_id=workflow_id,
+                transition_data={
+                    "event_type": "review_passed",
+                    "from_session_id": from_session_id,
+                    "to_session_id": None,
+                    "payload": None,
+                },
                 session_id=from_session_id,
                 code=code,
-            )
-            self._transition_repo.create(
-                WorkflowTransition(
-                    transition_id=str(uuid.uuid4()),
-                    workflow_id=workflow_id,
-                    event_type="review_passed",
-                    from_session_id=from_session_id,
-                    to_session_id=None,
-                    payload=None,
-                )
             )
             self._review_counts.pop(workflow_id, None)
             self._save_tool(code_data, workflow_id, from_session_id)
@@ -542,27 +543,22 @@ class AgentOrchestrator:
 
             if retry_count < 4:
                 programmer_session_id = self._get_or_create_session(workflow_id, "programmer")
-                emit(
-                    "review_failed",
-                    sender=self,
+                self._emit_and_log(
+                    event_name="review_failed",
                     workflow_id=workflow_id,
+                    transition_data={
+                        "event_type": "review_failed",
+                        "from_session_id": from_session_id,
+                        "to_session_id": programmer_session_id,
+                        "payload": json.dumps(
+                            {"retry_count": retry_count, "feedback": review_result.feedback}
+                        ),
+                    },
                     session_id=from_session_id,
                     code=code,
                     feedback=review_result.feedback,
                     retry_count=retry_count,
                     forced_save=False,
-                )
-                self._transition_repo.create(
-                    WorkflowTransition(
-                        transition_id=str(uuid.uuid4()),
-                        workflow_id=workflow_id,
-                        event_type="review_failed",
-                        from_session_id=from_session_id,
-                        to_session_id=programmer_session_id,
-                        payload=json.dumps(
-                            {"retry_count": retry_count, "feedback": review_result.feedback}
-                        ),
-                    )
                 )
                 self.run_agent(
                     "programmer",
@@ -571,27 +567,22 @@ class AgentOrchestrator:
                 )
             else:
                 # 超过 3 次，强制入库（pending 状态）
-                emit(
-                    "review_failed",
-                    sender=self,
+                self._emit_and_log(
+                    event_name="review_failed",
                     workflow_id=workflow_id,
+                    transition_data={
+                        "event_type": "review_failed",
+                        "from_session_id": from_session_id,
+                        "to_session_id": None,
+                        "payload": json.dumps(
+                            {"retry_count": retry_count, "forced_save": (retry_count >= 4)}
+                        ),
+                    },
                     session_id=from_session_id,
                     code=code,
                     feedback=review_result.feedback,
                     retry_count=retry_count,
                     forced_save=True,
-                )
-                self._transition_repo.create(
-                    WorkflowTransition(
-                        transition_id=str(uuid.uuid4()),
-                        workflow_id=workflow_id,
-                        event_type="review_failed",
-                        from_session_id=from_session_id,
-                        to_session_id=None,
-                        payload=json.dumps(
-                            {"retry_count": retry_count, "forced_save": (retry_count >= 4)}
-                        ),
-                    )
                 )
                 self._review_counts.pop(workflow_id, None)
                 self._save_tool(code_data, workflow_id, from_session_id)
@@ -959,27 +950,46 @@ class AgentOrchestrator:
         设计说明：纯 DB 只读查询，毫秒级，有意不走 QThread。
         不要在 orchestrator 上模仿此模式添加耗时同步调用。
         """
-        sessions = self._session_repo.get_by_workflow(
-            workflow_id, agent_type=AgentType.TRIAL, order_by="created_at_desc"
+        return self._get_agent_messages(
+            workflow_id,
+            agent_type=AgentType.TRIAL,
+            skip_first_user=False,
+            exclude_statuses=(SessionStatus.FAILED, SessionStatus.ACTIVE),
         )
-        if not sessions or sessions[0].status in (SessionStatus.FAILED, SessionStatus.ACTIVE):
-            # failed: 脏数据，不展示；active: Agent 正在运行，由事件驱动 UI
-            return []
-
-        session_id = sessions[0].session_id
-        messages = self._message_repo.get_context(session_id)
-        return self._format_messages_for_display(messages, session_id)
 
     def get_pm_messages(self, workflow_id: str) -> List[dict]:
         """获取最近一次 PM session 的用户可见消息历史（同步，主线程安全）"""
+        return self._get_agent_messages(
+            workflow_id,
+            agent_type=AgentType.PM,
+            skip_first_user=True,
+        )
+
+    def _get_agent_messages(
+        self,
+        workflow_id: str,
+        agent_type: str,
+        skip_first_user: bool = False,
+        exclude_statuses: tuple = (),
+    ) -> List[dict]:
+        """获取指定 Agent 类型最近 session 的用户可见消息历史
+
+        Args:
+            workflow_id: 工作流 ID
+            agent_type: Agent 类型
+            skip_first_user: 是否跳过第一条 user 消息（PM 场景）
+            exclude_statuses: 需要排除的 session 状态（如 trial 排除 failed/active）
+        """
         sessions = self._session_repo.get_by_workflow(
-            workflow_id, agent_type=AgentType.PM, order_by="created_at_desc"
+            workflow_id, agent_type=agent_type, order_by="created_at_desc"
         )
         if not sessions:
             return []
+        if exclude_statuses and sessions[0].status in exclude_statuses:
+            return []
         session_id = sessions[0].session_id
         messages = self._message_repo.get_context(session_id)
-        return self._format_messages_for_display(messages, session_id, skip_first_user=True)
+        return self._format_messages_for_display(messages, session_id, skip_first_user=skip_first_user)
 
     # =========================================================================
     # 辅助方法
@@ -1299,23 +1309,18 @@ class AgentOrchestrator:
         trial_sessions = self._session_repo.get_by_workflow(workflow_id, agent_type="trial")
         from_triage = bool(trial_sessions)
 
-        emit(
-            "tool_saved",
-            sender=self,
+        self._emit_and_log(
+            event_name="tool_saved",
             workflow_id=workflow_id,
+            transition_data={
+                "event_type": "tool_saved",
+                "from_session_id": session_id,
+                "to_session_id": None,
+                "payload": json.dumps({"tool_id": tool_id, "from_triage": from_triage}),
+            },
             session_id=session_id,
             tool_id=tool_id,
             from_triage=from_triage,
-        )
-        self._transition_repo.create(
-            WorkflowTransition(
-                transition_id=str(uuid.uuid4()),
-                workflow_id=workflow_id,
-                event_type="tool_saved",
-                from_session_id=session_id,
-                to_session_id=None,
-                payload=json.dumps({"tool_id": tool_id, "from_triage": from_triage}),
-            )
         )
 
         if from_triage:

@@ -184,6 +184,20 @@ class UnifiedConfigManager:
         """获取主 LLM 自定义 endpoint（用于代理）"""
         return self.get("ai.base_url", default=None)
 
+    def get_embedding_api_key(self) -> Optional[str]:
+        """获取 embedding 服务 API 密钥（用于向量搜索）"""
+        # 优先从配置文件获取
+        api_key = self.get("ai.embedding_api_key", default=None)
+        if api_key:
+            return api_key
+
+        # 从 keyring 读取
+        try:
+            import keyring
+            return keyring.get_password("Mexemplar", "openai_api_key")
+        except Exception:
+            return None
+
     def get_ai_temperature(self) -> float:
         """获取 AI 温度"""
         return self.get("ai.temperature", default=0.7)

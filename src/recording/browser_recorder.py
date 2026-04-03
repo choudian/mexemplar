@@ -403,6 +403,7 @@ class BrowserRecorder:
                     "--disable-web-security",
                     "--disable-features=VizDisplayCompositor",
                     "--disable-popup-blocking",
+                    "--disable-blink-features=AutomationControlled",
                 ],
             )
 
@@ -415,6 +416,9 @@ class BrowserRecorder:
             max_body_size = config.get_websocket_max_response_body_size()
 
             init_script = f"""
+            // 隐藏自动化特征，避免触发风控
+            Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }});
+
             // Mexemplar 配置注入（由 Python 端通过 CDP 注入）
             window.MEXEMPLAR_CONFIG = {{
                 websocketUrl: 'ws://{ws_host}:{ws_port}',

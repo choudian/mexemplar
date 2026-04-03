@@ -97,8 +97,8 @@ class LangChainLLMClient:
         # 🔧 验证 API 密钥
         if not api_key or not isinstance(api_key, str) or not api_key.strip():
             raise ValueError(
-                "API 密钥未配置或为空。请在 data/config/config.json 中设置 'ai.api_key'，"
-                "或确保在初始化时传入有效的 api_key 参数。"
+                "API 密钥未配置或为空。请通过「设置」界面配置 AI 密钥，"
+                "或在初始化时传入有效的 api_key 参数。"
             )
 
         self.provider = provider.lower()

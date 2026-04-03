@@ -172,7 +172,7 @@ class AgentLoop:
         """
         执行单个工具调用
 
-        查找工具 handler 并执行，处理 load_reference 特殊情况和未知工具。
+        查找工具 handler 并执行，处理未知工具。
         不处理 ToolSignal 判断 -- 由 _handle_tool_result 负责。
 
         Args:
@@ -183,9 +183,6 @@ class AgentLoop:
         Returns:
             工具执行结果（str 或 ToolSignal）
         """
-        if tool_call.name == "load_reference":
-            return ctx.load_reference(tool_call.args["reference_id"])
-
         handler = tool_handlers.get(tool_call.name)
         if handler is None:
             return f"错误：未知工具 '{tool_call.name}'"
@@ -304,6 +301,82 @@ class AgentLoop:
         )
         return tool_call
 
+    def _initialize_session(
+        self,
+        ctx: ContextManager,
+        session_id: str,
+        user_input: Optional[Union[str, dict]],
+        system_prompt_override: Optional[str],
+    ) -> Optional[AgentResult]:
+        """
+        会话初始化：设置 system prompt、处理用户输入、恢复会话状态。
+
+        Args:
+            ctx: 上下文管理器
+            session_id: 会话 ID
+            user_input: 用户输入
+            system_prompt_override: 系统提示覆盖
+
+        Returns:
+            AgentResult 表示应提前终止循环（如等待用户输入），None 表示继续。
+        """
+        # 初始化 system prompt
+        if not self._has_system_prompt(session_id):
+            prompt = system_prompt_override or self._config.system_prompt
+            ctx.save_message(role="system", content=prompt)
+            logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
+
+        # 无新输入时检查是否需要等待用户
+        if user_input is None:
+            last_msg = ctx.get_last_message()
+            if last_msg and last_msg.role == "assistant" and last_msg.content:
+                ctx.update_session_status("suspended")
+                logger.info(f"[Agent Loop] 最后一条是 assistant，等待用户输入: {session_id}")
+                return AgentResult(
+                    result_type=ResultType.NEEDS_USER_INPUT,
+                    question=last_msg.content,
+                )
+
+        # 恢复已完成/失败的会话
+        session_status = ctx.get_session_status()
+        if session_status in ("completed", "failed"):
+            ctx.update_session_status("active")
+            logger.debug(f"[Agent Loop] 会话恢复（{session_status} → active）: {session_id}")
+
+        # 保存用户输入
+        if user_input is not None:
+            if isinstance(user_input, dict):
+                role = user_input.get("role")
+                content = user_input.get("content")
+                if not role or not content:
+                    logger.warning(f"[Agent Loop] dict user_input 缺少 'role' 或 'content': {user_input}")
+                    return AgentResult(result_type=ResultType.ERROR, error="user_input dict 缺少 'role' 或 'content'")
+                ctx.save_message(role=role, content=content)
+                logger.debug(f"[Agent Loop] 输入({role}): {content[:50]}...")
+            else:
+                ctx.save_user_message(user_input)
+                logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
+
+        return None
+
+    def _resolve_pending_tool_call(self, pending_tc: dict) -> ToolCallInfo:
+        """
+        从会话中恢复待重试的工具调用。
+
+        Args:
+            pending_tc: 待重试的工具调用字典（包含 id/name/args）
+
+        Returns:
+            ToolCallInfo 对象
+        """
+        tool_call = ToolCallInfo(
+            id=pending_tc.get("id", ""),
+            name=pending_tc["name"],
+            args=pending_tc.get("args", {}),
+        )
+        logger.debug(f"[Agent Loop] 重试待执行工具: {tool_call.name}")
+        return tool_call
+
     def run(
         self,
         session_id: str,
@@ -333,43 +406,13 @@ class AgentLoop:
         # 使用缓存的 ContextManager
         ctx = self._get_context_manager(session_id)
 
-        # 初始化检查
-        if not self._has_system_prompt(session_id):
-            prompt = system_prompt_override or self._config.system_prompt
-            ctx.save_message(role="system", content=prompt)
-            logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
-
-        if user_input is None:
-            last_msg = ctx.get_last_message()
-            if last_msg and last_msg.role == "assistant" and last_msg.content:
-                # 最后一条是 assistant 文字消息，已经在等用户回答，不需要跑 LLM
-                ctx.update_session_status("suspended")
-                logger.info(f"[Agent Loop] 最后一条是 assistant，等待用户输入: {session_id}")
-                return AgentResult(
-                    result_type=ResultType.NEEDS_USER_INPUT,
-                    question=last_msg.content,
-                )
-
-        session_status = ctx.get_session_status()
-        if session_status in ("completed", "failed"):
-            ctx.update_session_status("active")
-            logger.debug(f"[Agent Loop] 会话恢复（{session_status} → active）: {session_id}")
-
-        if user_input is not None:
-            if isinstance(user_input, dict):
-                role = user_input.get("role")
-                content = user_input.get("content")
-                if not role or not content:
-                    logger.warning(f"[Agent Loop] dict user_input 缺少 'role' 或 'content': {user_input}")
-                    return AgentResult(result_type=ResultType.ERROR, error="user_input dict 缺少 'role' 或 'content'")
-                ctx.save_message(role=role, content=content)
-                logger.debug(f"[Agent Loop] 输入({role}): {content[:50]}...")
-            else:
-                ctx.save_user_message(user_input)
-                logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
+        # 会话初始化（设置 prompt、处理输入、恢复状态）
+        init_result = self._initialize_session(ctx, session_id, user_input, system_prompt_override)
+        if init_result is not None:
+            return init_result
 
         # 构建工具 schemas 和 handlers 的辅助函数
-        def _rebuild_tools(tool_defs: List[ToolDefinition]):
+        def _rebuild_tools(tool_defs: List[ToolDefinition], ctx: ContextManager):
             nonlocal all_tool_schemas, tool_handlers
             all_tool_schemas = [td.schema for td in tool_defs] + [
                 TALK_TO_USER_SCHEMA,
@@ -377,13 +420,14 @@ class AgentLoop:
             ]
             tool_handlers = {td.name: td.handler for td in tool_defs}
             tool_handlers["talk_to_user"] = talk_to_user
+            tool_handlers["load_reference"] = lambda reference_id: ctx.load_reference(reference_id)
 
         _tools_callable = callable(tools)
         all_tool_schemas: list = []
         tool_handlers: Dict[str, Callable] = {}
         _last_tool_names: Optional[frozenset] = None
         if not _tools_callable:
-            _rebuild_tools(tools or [])
+            _rebuild_tools(tools or [], ctx)
 
         # 检查是否有待重试的工具调用（execute_tool 失败未保存 result，session 最后是 assistant tool_call）
         _pending_tc = ctx.get_pending_tool_call()
@@ -397,19 +441,13 @@ class AgentLoop:
                 new_tools = tools()
                 new_names = frozenset(td.name for td in new_tools)
                 if new_names != _last_tool_names:
-                    _rebuild_tools(new_tools)
+                    _rebuild_tools(new_tools, ctx)
                     _last_tool_names = new_names
 
             if _pending_tc is not None:
                 # 待重试：直接使用上次的工具调用，跳过 LLM
-                tc_dict = _pending_tc
+                tool_call: ToolCallInfo = self._resolve_pending_tool_call(_pending_tc)
                 _pending_tc = None
-                tool_call: ToolCallInfo = ToolCallInfo(
-                    id=tc_dict.get("id", ""),
-                    name=tc_dict["name"],
-                    args=tc_dict.get("args", {}),
-                )
-                logger.debug(f"[Agent Loop] 重试待执行工具: {tool_call.name}")
             else:
                 # 组装上下文，调用 LLM
                 messages = ctx.assemble_context()

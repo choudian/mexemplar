@@ -14,42 +14,18 @@ from PyQt6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
-    QTextEdit,
     QSpacerItem,
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QKeyEvent
 from typing import List, Optional
 
 from src.business.intent.intent_models import Intent, IntentStatus
 from src.ui.widgets.message_option_card import (
     MultiQuestionCard,
 )
+from src.ui.widgets.message_input import MessageInputEdit
 from src.utils.logger import get_logger
-
-
-class MessageInputEdit(QTextEdit):
-    """支持 Enter 发送、Ctrl+Enter/Shift+Enter 换行的自定义输入框"""
-
-    send_requested = pyqtSignal()  # 发送请求信号
-
-    def keyPressEvent(self, event: QKeyEvent):
-        """处理按键事件"""
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            # Ctrl+Enter 或 Shift+Enter 换行
-            if event.modifiers() & (
-                Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
-            ):
-                # 插入换行
-                self.insertPlainText("\n")
-                return
-            # Enter 发送消息
-            self.send_requested.emit()
-            return
-
-        # 其他按键正常处理
-        super().keyPressEvent(event)
 
 
 class IntentConfirmationUI(QWidget):

@@ -6,10 +6,10 @@ LLM 代码质量 Reviewer
 
 import json
 import logging
-import re
 from dataclasses import dataclass
 
 from src.business.ai.llm_client import LangChainLLMClient
+from src.utils.llm_helpers import extract_json_from_response
 
 logger = logging.getLogger(__name__)
 
@@ -105,26 +105,12 @@ class LLMReviewer:
     def _parse_result(self, response: str) -> ReviewResult:
         """解析 LLM 返回的 JSON 结果"""
         try:
-            # 尝试直接解析
-            data = json.loads(response)
+            data = extract_json_from_response(response, require_dict=True, log_prefix="Review")
             return ReviewResult(
                 passed=bool(data.get("passed", True)), feedback=str(data.get("feedback", ""))
             )
-        except json.JSONDecodeError:
-            pass
-
-        # 从 markdown 代码块中提取
-        match = re.search(r"```(?:json)?\n(.*?)\n```", response, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(1))
-                return ReviewResult(
-                    passed=bool(data.get("passed", True)), feedback=str(data.get("feedback", ""))
-                )
-            except json.JSONDecodeError:
-                pass
-
-        # 解析失败，检查关键词
-        lower = response.lower()
-        passed = "passed: false" not in lower and "failed" not in lower
-        return ReviewResult(passed=passed, feedback=response[:200])
+        except ValueError:
+            # 解析失败，检查关键词
+            lower = response.lower()
+            passed = "passed: false" not in lower and "failed" not in lower
+            return ReviewResult(passed=passed, feedback=response[:200])

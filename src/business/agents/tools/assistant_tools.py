@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.tool_helpers import make_tool_schema, error_json
 from src.data.models_sqlite import PendingAssistantTask
 from src.data.repositories import PendingTaskRepository, ToolRepository
 
@@ -31,31 +32,25 @@ def _notify_task_worker():
 
 logger = logging.getLogger(__name__)
 
-REPORT_TOOL_BUG_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "report_tool_bug",
-        "description": "报告某个用户工具执行失败。系统将安排自动修复。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "tool_name": {
-                    "type": "string",
-                    "description": "出问题的工具名称",
-                },
-                "error_message": {
-                    "type": "string",
-                    "description": "错误信息或失败描述",
-                },
-                "user_input": {
-                    "type": "string",
-                    "description": "用户当时传入的参数（JSON 字符串或自然语言描述）",
-                },
-            },
-            "required": ["tool_name", "error_message"],
+REPORT_TOOL_BUG_SCHEMA = make_tool_schema(
+    name="report_tool_bug",
+    description="报告某个用户工具执行失败。系统将安排自动修复。",
+    properties={
+        "tool_name": {
+            "type": "string",
+            "description": "出问题的工具名称",
+        },
+        "error_message": {
+            "type": "string",
+            "description": "错误信息或失败描述",
+        },
+        "user_input": {
+            "type": "string",
+            "description": "用户当时传入的参数（JSON 字符串或自然语言描述）",
         },
     },
-}
+    required=["tool_name", "error_message"],
+)
 
 
 def report_tool_bug_handler(
@@ -74,10 +69,7 @@ def report_tool_bug_handler(
     tool_repo = ToolRepository()
     tool = tool_repo.get_by_name(tool_name)
     if not tool:
-        return json.dumps(
-            {"success": False, "message": f"找不到工具 '{tool_name}'"},
-            ensure_ascii=False,
-        )
+        return error_json(f"找不到工具 '{tool_name}'")
 
     task_id = str(uuid.uuid4())
     payload = json.dumps(
@@ -121,23 +113,17 @@ REPORT_TOOL_BUG = ToolDefinition(
     handler=report_tool_bug_handler,
 )
 
-CODIFY_AS_TOOL_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "codify_as_tool",
-        "description": "将最近完成的任务做成可复用工具。用户明确要求将某个任务做成工具时调用。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task_description": {
-                    "type": "string",
-                    "description": "任务的自然语言描述，如查询指定城市的天气",
-                },
-            },
-            "required": ["task_description"],
+CODIFY_AS_TOOL_SCHEMA = make_tool_schema(
+    name="codify_as_tool",
+    description="将最近完成的任务做成可复用工具。用户明确要求将某个任务做成工具时调用。",
+    properties={
+        "task_description": {
+            "type": "string",
+            "description": "任务的自然语言描述，如查询指定城市的天气",
         },
     },
-}
+    required=["task_description"],
+)
 
 
 def _extract_tool_calls_from_messages(messages: list) -> list:
@@ -148,8 +134,6 @@ def _extract_tool_calls_from_messages(messages: list) -> list:
     直到遇到 role=user 的消息为止（视为一轮对话的起点）。
     只扫描非 archived 消息。
     """
-    import json as _json
-
     active_messages = [m for m in messages if not m.is_archived]
     if not active_messages:
         return []
@@ -168,7 +152,7 @@ def _extract_tool_calls_from_messages(messages: list) -> list:
     for msg in active_messages[user_idx:]:
         if msg.role == "assistant" and msg.tool_calls:
             try:
-                calls = _json.loads(msg.tool_calls)
+                calls = json.loads(msg.tool_calls)
                 for c in calls:
                     trace.append({"type": "tool_call", "name": c.get("name", ""), "args": c.get("args", {})})
             except Exception:
@@ -190,17 +174,11 @@ def create_codify_as_tool_handler(session_id: str):
         # 提取执行记录
         messages = MessageRepository().get_by_session(session_id)
         if not messages:
-            return json.dumps(
-                {"success": False, "message": "未找到会话消息，请先执行一次该任务再要求做成工具"},
-                ensure_ascii=False,
-            )
+            return error_json("未找到会话消息，请先执行一次该任务再要求做成工具")
 
         execution_trace = _extract_tool_calls_from_messages(messages)
         if not execution_trace:
-            return json.dumps(
-                {"success": False, "message": "未找到最近的工具调用记录，请先执行一次该任务再要求做成工具"},
-                ensure_ascii=False,
-            )
+            return error_json("未找到最近的工具调用记录，请先执行一次该任务再要求做成工具")
 
         task_id = str(uuid.uuid4())
         payload = json.dumps(
@@ -239,31 +217,25 @@ def create_codify_as_tool_handler(session_id: str):
     return codify_as_tool_handler
 
 
-SAVE_PROFILE_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "save_profile",
-        "description": "保存用户的偏好设置（称呼、沟通风格、特别注意事项）。在用户告知偏好后调用一次。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "display_name": {
-                    "type": "string",
-                    "description": "用户希望被如何称呼，如小明、boss 等",
-                },
-                "style": {
-                    "type": "string",
-                    "description": "沟通风格偏好，如简洁直接、详细解释、正式等",
-                },
-                "notes": {
-                    "type": "string",
-                    "description": "其他特别注意事项",
-                },
-            },
-            "required": [],
+SAVE_PROFILE_SCHEMA = make_tool_schema(
+    name="save_profile",
+    description="保存用户的偏好设置（称呼、沟通风格、特别注意事项）。在用户告知偏好后调用一次。",
+    properties={
+        "display_name": {
+            "type": "string",
+            "description": "用户希望被如何称呼，如小明、boss 等",
+        },
+        "style": {
+            "type": "string",
+            "description": "沟通风格偏好，如简洁直接、详细解释、正式等",
+        },
+        "notes": {
+            "type": "string",
+            "description": "其他特别注意事项",
         },
     },
-}
+    required=[],
+)
 
 
 def create_save_profile_handler(session_id: str):
@@ -308,27 +280,21 @@ def create_save_profile_handler(session_id: str):
             return json.dumps({"success": True, "message": "偏好已保存"}, ensure_ascii=False)
         except Exception as e:
             logger.error(f"[save_profile] 保存失败: {e}")
-            return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+            return error_json(e)
 
     return save_profile_handler
 
-DISMISS_SUGGESTION_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "dismiss_suggestion",
-        "description": "用户拒绝了某个工具化建议时调用，记录拒绝状态以避免反复提醒。",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task_pattern": {
-                    "type": "string",
-                    "description": "被拒绝的任务类型描述",
-                },
-            },
-            "required": ["task_pattern"],
+DISMISS_SUGGESTION_SCHEMA = make_tool_schema(
+    name="dismiss_suggestion",
+    description="用户拒绝了某个工具化建议时调用，记录拒绝状态以避免反复提醒。",
+    properties={
+        "task_pattern": {
+            "type": "string",
+            "description": "被拒绝的任务类型描述",
         },
     },
-}
+    required=["task_pattern"],
+)
 
 
 def dismiss_suggestion_handler(task_pattern: str) -> str:
@@ -344,7 +310,7 @@ def dismiss_suggestion_handler(task_pattern: str) -> str:
         return json.dumps({"success": True, "message": "好的，不再建议了"}, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[dismiss_suggestion] 失败: {e}")
-        return json.dumps({"success": False, "message": str(e)}, ensure_ascii=False)
+        return error_json(e)
 
 
 DISMISS_SUGGESTION = ToolDefinition(

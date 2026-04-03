@@ -5,7 +5,6 @@ SQLAlchemy 数据库管理器 - SQLite
 """
 
 import logging
-from pathlib import Path
 from typing import Optional
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -14,6 +13,7 @@ from sqlalchemy.pool import StaticPool
 from src.data.models_sqlite import (
     Base,
 )
+from src.utils.helpers import get_default_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -33,10 +33,7 @@ class SQLAlchemyManager:
             db_path: 数据库文件路径，如果为None则使用默认路径
         """
         if db_path is None:
-            project_root = Path(__file__).parent.parent.parent
-            data_dir = project_root / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(data_dir / "mexemplar.db")
+            db_path = str(get_default_data_dir() / "mexemplar.db")
 
         self.db_path = db_path
         self.engine = None

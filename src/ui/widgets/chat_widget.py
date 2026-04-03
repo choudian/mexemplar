@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QPushButton,
     QLabel,
-    QTextEdit,
     QScrollArea,
     QFrame,
     QLineEdit,
@@ -24,26 +23,10 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QKeyEvent, QPixmap
+from PyQt6.QtGui import QPixmap
 from src.business.agents.config import AgentType
+from src.ui.widgets.message_input import MessageInputEdit
 from src.utils.logger import get_logger
-
-
-class MessageInputEdit(QTextEdit):
-    """回车发送，Shift+Enter / Ctrl+Enter 换行的输入框"""
-
-    send_requested = pyqtSignal()  # 发送请求信号
-
-    def keyPressEvent(self, event: QKeyEvent):
-        """处理按键事件：Enter 发送，Shift/Ctrl+Enter 换行"""
-        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-            if event.modifiers() in (
-                Qt.KeyboardModifier.NoModifier,
-                Qt.KeyboardModifier.KeypadModifier,
-            ):
-                self.send_requested.emit()
-                return
-        super().keyPressEvent(event)
 
 
 class SessionCard(QFrame):
