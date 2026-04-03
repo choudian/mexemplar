@@ -31,7 +31,6 @@ class ConfirmationState:
         self.current_turn = 0
         self.max_turns = 5
         self.state = "pending_confirmation"  # pending_confirmation, refining, confirmed, cancelled
-        self.last_activity = time.time()
 
     def can_continue(self) -> bool:
         """判断是否可以继续对话"""
@@ -44,7 +43,6 @@ class ConfirmationState:
         """推进到下一轮"""
         if self.can_continue():
             self.current_turn += 1
-            self.last_activity = time.time()
             return True
         return False
 
@@ -95,50 +93,6 @@ class IntentConfirmer:
     def _register_handlers(self):
         """注册 WebSocket 消息处理器"""
         self.ws_handler.register_handler(MessageType.CONFIRM_INTENT, self._handle_confirm_intent)
-
-    async def start_confirmation(self, recording_id: str) -> IntentAnalysisModel:
-        """
-        启动意图确认流程
-
-        Args:
-            recording_id: 录制 ID
-
-        Returns:
-            意图对象
-        """
-        try:
-            logger.info(f"启动意图确认流程，录制ID: {recording_id}")
-
-            # 1. 检查是否已存在意图
-            existing_intent = self.repository.get_by_recording_id(recording_id)
-            if existing_intent and existing_intent.status == IntentStatus.CONFIRMED:
-                logger.info(f"录制 {recording_id} 的意图已确认")
-                return self._db_to_business_model(existing_intent)
-
-            # 2. 从录制数据获取会话信息（这里需要从数据加载器获取）
-            # TODO: 需要从 DuckDB 加载录制数据
-            recording_session = await self._load_recording_session(recording_id)
-
-            # 3. 分析意图
-            intent = await self.analyzer.create_intent_from_recording(recording_session)
-
-            # 4. 创建数据库记录
-            db_intent = self._business_to_db_model(intent)
-            self.repository.create(db_intent)
-
-            # 5. 创建确认会话
-            self.active_sessions[intent.intent_id] = ConfirmationState(intent)
-
-            # 6. 通过 WebSocket 发送确认请求
-            await self._send_confirmation_request(intent)
-
-            logger.info(f"意图确认流程已启动，" f"置信度: {intent.analysis_result.confidence:.2f}")
-
-            return intent
-
-        except Exception as e:
-            logger.error(f"启动意图确认失败: {e}", exc_info=True)
-            raise
 
     async def process_user_feedback(self, intent_id: str, feedback: str) -> IntentAnalysisModel:
         """
@@ -362,42 +316,6 @@ class IntentConfirmer:
             logger.error(f"处理确认意图消息失败: {e}", exc_info=True)
             raise
 
-    async def _send_confirmation_request(self, intent: IntentAnalysisModel):
-        """
-        发送确认请求到客户端
-
-        Args:
-            intent: 意图对象
-        """
-        try:
-            msg = WebSocketMessage(
-                type=MessageType.CONFIRM_INTENT,
-                data={
-                    "intent_id": intent.intent_id,
-                    "recording_id": intent.recording_id,
-                    "core_operations": [
-                        op.operation for op in intent.analysis_result.core_operations
-                    ],
-                    "target": intent.analysis_result.target,
-                    "business_scenario": intent.analysis_result.business_scenario,
-                    "expected_results": intent.analysis_result.expected_results,
-                    "suggested_parameters": [
-                        param.to_dict() for param in intent.analysis_result.suggested_parameters
-                    ],
-                    "confidence": intent.analysis_result.confidence,
-                    "reasoning": intent.analysis_result.reasoning,
-                    "max_turns": intent.max_turns,
-                },
-                status="pending",
-            )
-
-            await self.ws_handler.broadcast(msg)
-            logger.info(f"已发送确认请求: {intent.intent_id}")
-
-        except Exception as e:
-            logger.error(f"发送确认请求失败: {e}", exc_info=True)
-            raise
-
     async def _send_intent_update(self, intent: IntentAnalysisModel, turn: IntentConfirmationTurn):
         """
         发送意图更新到客户端
@@ -597,123 +515,3 @@ class IntentConfirmer:
         )
 
         return intent
-
-    async def _load_recording_session(self, recording_id: str) -> Dict[str, Any]:
-        """
-        从数据库加载录制会话
-
-        Args:
-            recording_id: 录制 ID
-
-        Returns:
-            录制会话数据
-        """
-        from src.data.duckdb_manager import DuckDBManager
-
-        try:
-            # 获取 DuckDBManager 实例
-            duckdb_manager = DuckDBManager()
-
-            # 1. 查询录制会话基本信息
-            session_sql = """
-                SELECT recording_id, status, recording_mode, browser_type,
-                       start_time, end_time, metadata
-                FROM recording_sessions
-                WHERE recording_id = ?
-            """
-            session_result = duckdb_manager.fetchone(session_sql, (recording_id,))
-
-            if not session_result:
-                raise ValueError(f"未找到录制会话: {recording_id}")
-
-            # 解析会话信息
-            from datetime import datetime
-            import json
-
-            recording_session = {
-                "recording_id": session_result[0],
-                "status": session_result[1],
-                "recording_mode": session_result[2],
-                "browser_type": session_result[3],
-                "start_time": session_result[4],
-                "end_time": session_result[5],
-                "metadata": json.loads(session_result[6]) if session_result[6] else {},
-            }
-
-            # 2. 查询操作列表
-            actions_sql = """
-                SELECT action_id, recording_id, sequence_number, action_type,
-                       recording_mode, app_name, process_name, window_title,
-                       parameters, url, dom_element, dom_tree_snapshot,
-                       visual_features, screenshot_before, screenshot_after, timestamp
-                FROM actions
-                WHERE recording_id = ?
-                ORDER BY sequence_number ASC
-            """
-            action_results = duckdb_manager.fetchall(actions_sql, (recording_id,))
-
-            # 解析操作数据
-            actions = []
-            for row in action_results:
-                action = {
-                    "action_id": row[0],
-                    "recording_id": row[1],
-                    "sequence_number": row[2],
-                    "action_type": row[3],
-                    "recording_mode": row[4],
-                    "app_name": row[5],
-                    "process_name": row[6],
-                    "window_title": row[7],
-                    "parameters": json.loads(row[8]) if row[8] else {},
-                    "url": row[9],
-                    "dom_element": json.loads(row[10]) if row[10] else None,
-                    "dom_tree_snapshot": json.loads(row[11]) if row[11] else None,
-                    "visual_features": json.loads(row[12]) if row[12] else None,
-                    "screenshot_before": row[13],
-                    "screenshot_after": row[14],
-                    "timestamp": row[15],
-                }
-                actions.append(action)
-
-            recording_session["actions"] = actions
-
-            logger.info(f"成功从 DuckDB 加载录制会话: {recording_id}, 操作数量: {len(actions)}")
-
-            return recording_session
-
-        except Exception as e:
-            logger.error(f"从 DuckDB 加载录制会话失败: {recording_id}, 错误: {e}", exc_info=True)
-            # 如果加载失败，返回最小化结构（保持向后兼容）
-            logger.warning(f"返回模拟数据，录制ID: {recording_id}")
-            return {
-                "recording_id": recording_id,
-                "actions": [],
-                "metadata": {},
-                "status": "error",
-                "error": str(e),
-            }
-
-    def get_active_session_count(self) -> int:
-        """获取当前活跃的确认会话数量"""
-        return len(self.active_sessions)
-
-    def cleanup_stale_sessions(self, timeout: float = 3600):
-        """
-        清理超时的会话
-
-        Args:
-            timeout: 超时时间（秒）
-        """
-        current_time = time.time()
-        stale_ids = []
-
-        for intent_id, session in self.active_sessions.items():
-            if current_time - session.last_activity > timeout:
-                stale_ids.append(intent_id)
-
-        for intent_id in stale_ids:
-            logger.info(f"清理超时会话: {intent_id}")
-            del self.active_sessions[intent_id]
-
-        if stale_ids:
-            logger.info(f"已清理 {len(stale_ids)} 个超时会话")

@@ -29,7 +29,6 @@ class TrialStatus(str, Enum):
     SUCCESS = "success"  # 成功
     FAILED = "failed"  # 失败
     CANCELLED = "cancelled"  # 已取消
-    AWAITING_DATA = "awaiting_data"  # 等待数据
 
 
 @dataclass
@@ -249,15 +248,6 @@ class ToolTrial:
         self.error_message = error_message
         self.error_type = error_type
         self.finished_at = datetime.now()
-
-    def mark_cancelled(self):
-        """标记为已取消"""
-        self.status = TrialStatus.CANCELLED
-        self.finished_at = datetime.now()
-
-    def add_execution_step(self, step: Dict[str, Any]):
-        """添加执行步骤"""
-        self.execution_steps.append(step)
 
 
 @dataclass

@@ -43,7 +43,11 @@ class IntentRepository:
                     intent.target,
                     intent.business_scenario,
                     json.dumps(intent.expected_results, ensure_ascii=False),
-                    intent.status.value if isinstance(intent.status, IntentStatus) else intent.status,
+                    (
+                        intent.status.value
+                        if isinstance(intent.status, IntentStatus)
+                        else intent.status
+                    ),
                     json.dumps(intent.confirmed_operations, ensure_ascii=False),
                     intent.user_message,
                     intent.analysis_confidence,
@@ -73,37 +77,6 @@ class IntentRepository:
             return Intent.from_dict(dict(row))
         return None
 
-    def get_by_recording_id(self, recording_id: str) -> Optional[Intent]:
-        """根据录制ID获取意图"""
-        conn = self.db_manager.connect()
-        cursor = conn.cursor()
-
-        cursor.execute("SELECT * FROM intents WHERE recording_id = ?", (recording_id,))
-        row = cursor.fetchone()
-
-        if row:
-            return Intent.from_dict(dict(row))
-        return None
-
-    def get_by_status(self, status: IntentStatus, limit: int = 100) -> List[Intent]:
-        """根据状态获取意图列表"""
-        conn = self.db_manager.connect()
-        cursor = conn.cursor()
-
-        status_value = status.value if isinstance(status, IntentStatus) else status
-        cursor.execute(
-            """
-            SELECT * FROM intents
-            WHERE status = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-        """,
-            (status_value, limit),
-        )
-        rows = cursor.fetchall()
-
-        return [Intent.from_dict(dict(row)) for row in rows]
-
     def update(self, intent: Intent) -> Intent:
         """更新意图"""
         conn = self.db_manager.connect()
@@ -124,7 +97,11 @@ class IntentRepository:
                     intent.target,
                     intent.business_scenario,
                     json.dumps(intent.expected_results, ensure_ascii=False),
-                    intent.status.value if isinstance(intent.status, IntentStatus) else intent.status,
+                    (
+                        intent.status.value
+                        if isinstance(intent.status, IntentStatus)
+                        else intent.status
+                    ),
                     json.dumps(intent.confirmed_operations, ensure_ascii=False),
                     intent.user_message,
                     intent.analysis_confidence,

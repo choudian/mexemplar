@@ -6,7 +6,6 @@
 
 import ast
 import logging
-import subprocess
 import tempfile
 import os
 from typing import Dict, List, Any, Optional
@@ -16,7 +15,6 @@ from src.business.ai.llm_client import LangChainLLMClient
 from src.business.tool_trial.error_diagnosis_models import (
     FixVerification,
     TestCase,
-    FixedCode,
 )
 
 logger = logging.getLogger(__name__)
@@ -321,123 +319,3 @@ class FixVerifier:
         except Exception as e:
             logger.warning(f"计算改进评分失败: {e}")
             return 0.0
-
-    async def verify_with_llm(
-        self,
-        original_code: str,
-        fixed_code: str,
-        error_diagnosis: Any,
-    ) -> FixVerification:
-        """
-        使用 LLM 进行智能验证
-
-        Args:
-            original_code: 原始代码
-            fixed_code: 修复后的代码
-            error_diagnosis: 错误诊断结果
-
-        Returns:
-            验证结果
-        """
-        if not self.llm_client:
-            logger.warning("未提供 LLM 客户端，降级到基本验证")
-            return await self.verify_fix(original_code, fixed_code)
-
-        logger.info("使用 LLM 进行智能验证")
-
-        try:
-            # 构建提示词
-            prompt = self._build_verification_prompt(
-                original_code, fixed_code, error_diagnosis
-            )
-
-            # 调用 LLM
-            response = await self.llm_client.call_llm(
-                prompt=prompt,
-                response_format="json",
-                max_tokens=1500,
-                temperature=0.3,
-            )
-
-            # 解析响应
-            import json
-
-            data = json.loads(response)
-
-            verification = FixVerification(
-                is_valid=data.get("is_valid", False),
-                confidence=data.get("confidence", 0.0),
-                verification_message=data.get("verification_message", ""),
-                warnings=data.get("warnings", []),
-                improvement_score=data.get("improvement_score", 0.0),
-                regression_detected=data.get("regression_detected", False),
-                llm_model_used="claude-3.5-sonnet",
-            )
-
-            logger.info(
-                f"LLM 验证完成: is_valid={verification.is_valid}, "
-                f"confidence={verification.confidence:.2f}"
-            )
-
-            return verification
-
-        except Exception as e:
-            logger.error(f"LLM 验证失败: {e}")
-            # 降级到基本验证
-            return await self.verify_fix(original_code, fixed_code)
-
-    def _build_verification_prompt(
-        self, original_code: str, fixed_code: str, error_diagnosis: Any
-    ) -> str:
-        """
-        构建验证提示词
-
-        Args:
-            original_code: 原始代码
-            fixed_code: 修复后的代码
-            error_diagnosis: 错误诊断
-
-        Returns:
-            提示词字符串
-        """
-        prompt = f"""你是一个代码审查专家。请验证修复后的代码是否正确。
-
-## 原始错误
-错误类型: {error_diagnosis.error_type.value}
-错误消息: {error_diagnosis.error_message}
-根本原因: {error_diagnosis.root_cause}
-
-## 原始代码
-```python
-{original_code}
-```
-
-## 修复后的代码
-```python
-{fixed_code}
-```
-
-## 验证任务
-
-请检查以下方面：
-
-1. **语法正确性**：修复后的代码是否有语法错误？
-2. **错误修复**：是否成功修复了原始错误？
-3. **代码回退**：是否引入了新的问题或回退？
-4. **逻辑正确性**：修复是否保持了代码的原有逻辑？
-5. **代码质量**：修复是否合理，是否符合最佳实践？
-
-请返回以下JSON格式的验证结果（不要使用markdown代码块）：
-
-{{
-  "is_valid": true/false,
-  "confidence": 0.0-1.0,
-  "verification_message": "验证结果说明",
-  "warnings": ["警告1", "警告2"],
-  "improvement_score": -1.0到1.0,
-  "regression_detected": true/false
-}}
-
-开始验证：
-"""
-        return prompt

@@ -7,7 +7,7 @@ TrialDataTemplate Repository
 import logging
 import sqlite3
 import json
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from datetime import datetime
 
 from src.data.database import DatabaseManager
@@ -306,35 +306,6 @@ class TrialDataTemplateRepository:
             conn.rollback()
             logger.error(f"删除试用数据模板失败: {e}")
             return False
-
-    def count_by_pending_tool(self, pending_tool_id: str) -> int:
-        """
-        统计指定待试用工具的模板数量
-
-        Args:
-            pending_tool_id: 待试用工具 ID
-
-        Returns:
-            模板数量
-        """
-        conn = self.db_manager.connect()
-        cursor = conn.cursor()
-
-        try:
-            cursor.execute(
-                """
-                SELECT COUNT(*) FROM trial_data_templates
-                WHERE pending_tool_id = ?
-            """,
-                (pending_tool_id,),
-            )
-
-            row = cursor.fetchone()
-            return row[0] if row else 0
-
-        except sqlite3.Error as e:
-            logger.error(f"统计模板数量失败: {e}")
-            return 0
 
     def _row_to_template(self, row) -> TrialDataTemplate:
         """将数据库行转换为 TrialDataTemplate 对象"""

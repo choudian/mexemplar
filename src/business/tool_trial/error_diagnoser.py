@@ -6,8 +6,7 @@
 
 import logging
 import re
-import traceback
-from typing import Dict, List, Any, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime
 
 from src.business.ai.llm_client import LangChainLLMClient
@@ -72,75 +71,6 @@ class ErrorDiagnoser:
                 r"ZeroDivisionError",
             ],
         }
-
-    async def diagnose(
-        self,
-        error: Exception,
-        code: str,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> ErrorDiagnosis:
-        """
-        诊断错误
-
-        Args:
-            error: 异常对象
-            code: 出错的代码
-            context: 上下文信息（可选）
-
-        Returns:
-            错误诊断结果
-        """
-        try:
-            logger.info(f"开始诊断错误: {type(error).__name__}")
-
-            # 1. 提取错误信息
-            error_message = str(error)
-            error_traceback = traceback.format_exc()
-
-            # 2. 使用规则引擎识别错误类型
-            error_type = self._classify_error_by_rules(error, error_message)
-
-            # 3. 评估严重程度
-            severity = self._assess_severity(error, error_type)
-
-            # 4. 提取代码片段
-            code_snippet, line_number = self._extract_error_context(
-                code, error_traceback
-            )
-
-            # 5. 如果规则引擎无法确定，使用 LLM 深度分析
-            if error_type == ErrorType.UNKNOWN or severity == ErrorSeverity.HIGH:
-                logger.info("使用 LLM 进行深度分析")
-                diagnosis = await self._llm_diagnose(
-                    error, code, error_message, error_traceback, context
-                )
-            else:
-                # 基于规则生成诊断
-                diagnosis = self._generate_diagnosis_from_rules(
-                    error_type, error_message, severity, code_snippet, line_number
-                )
-
-            logger.info(
-                f"错误诊断完成: 类型={diagnosis.error_type}, "
-                f"严重度={diagnosis.error_severity}, "
-                f"置信度={diagnosis.confidence:.2f}"
-            )
-
-            return diagnosis
-
-        except Exception as e:
-            logger.error(f"诊断失败: {e}", exc_info=True)
-            # 返回默认诊断
-            return ErrorDiagnosis(
-                error_type=ErrorType.UNKNOWN,
-                error_message=str(error),
-                error_traceback=traceback.format_exc(),
-                error_severity=ErrorSeverity.MEDIUM,
-                root_cause="诊断过程出错",
-                suggested_fix="请手动检查代码",
-                fix_strategy=FixStrategy.MANUAL,
-                confidence=0.0,
-            )
 
     def _classify_error_by_rules(
         self, error: Exception, error_message: str

@@ -38,9 +38,7 @@ class IntentAnalyzer:
         """
         self.llm_client = llm_client
 
-    async def analyze_intent(
-        self, recording_session: Dict[str, Any]
-    ) -> IntentAnalysisResult:
+    async def analyze_intent(self, recording_session: Dict[str, Any]) -> IntentAnalysisResult:
         """
         分析录制数据，提取用户意图
 
@@ -94,9 +92,7 @@ class IntentAnalyzer:
                 status="failed",
             )
 
-    def _parse_intent_response(
-        self, response: str, recording_id: str
-    ) -> IntentAnalysisResult:
+    def _parse_intent_response(self, response: str, recording_id: str) -> IntentAnalysisResult:
         """
         解析 LLM 响应
 
@@ -191,9 +187,7 @@ class IntentAnalyzer:
             )
 
             # 解析响应
-            refined_result = self._parse_intent_response(
-                response, original_intent.recording_id
-            )
+            refined_result = self._parse_intent_response(response, original_intent.recording_id)
 
             logger.info(
                 f"意图优化完成，新置信度: {refined_result.confidence:.2f}, "
@@ -207,33 +201,6 @@ class IntentAnalyzer:
             # 返回原始意图
             logger.warning("优化失败，返回原始意图")
             return original_intent
-
-    async def create_intent_from_recording(
-        self, recording_session: Dict[str, Any]
-    ) -> Intent:
-        """
-        从录制会话创建意图对象
-
-        Args:
-            recording_session: 录制会话数据
-
-        Returns:
-            意图对象
-        """
-        # 分析意图
-        analysis_result = await self.analyze_intent(recording_session)
-
-        # 创建意图对象
-        intent = Intent(
-            intent_id=str(uuid.uuid4()),
-            recording_id=recording_session.get("recording_id", ""),
-            analysis_result=analysis_result,
-            status="pending_confirmation",
-            created_at=time.time(),
-            updated_at=time.time(),
-        )
-
-        return intent
 
     async def add_confirmation_turn(
         self,
@@ -271,61 +238,3 @@ class IntentAnalyzer:
         intent.analysis_result = updated_intent
 
         return turn
-
-    def validate_intent(self, intent: Intent) -> Dict[str, Any]:
-        """
-        验证意图分析结果的质量
-
-        Args:
-            intent: 意图对象
-
-        Returns:
-            验证结果字典，包含:
-            - is_valid: 是否有效
-            - issues: 问题列表
-            - suggestions: 建议列表
-        """
-        issues = []
-        suggestions = []
-
-        # 检查置信度
-        if intent.analysis_result.confidence < 0.7:
-            issues.append(f"置信度较低 ({intent.analysis_result.confidence:.2f})")
-            suggestions.append("建议与用户确认意图是否准确")
-
-        # 检查核心操作数量
-        if len(intent.analysis_result.core_operations) == 0:
-            issues.append("未提取到核心操作")
-            suggestions.append("检查录制数据是否完整")
-        elif len(intent.analysis_result.core_operations) < 2:
-            issues.append("核心操作数量过少")
-            suggestions.append("确认是否遗漏了关键步骤")
-
-        # 检查目标
-        if not intent.analysis_result.target or intent.analysis_result.target == "未知":
-            issues.append("未能识别操作目标")
-            suggestions.append("明确用户操作的网站或应用")
-
-        # 检查业务场景
-        if not intent.analysis_result.business_scenario:
-            issues.append("未识别业务场景")
-
-        # 检查预期结果
-        if len(intent.analysis_result.expected_results) == 0:
-            issues.append("未提取预期结果")
-            suggestions.append("补充用户期望达成的目标")
-
-        # 验证通过条件
-        is_valid = (
-            len(issues) == 0
-            and intent.analysis_result.confidence >= 0.7
-            and len(intent.analysis_result.core_operations) >= 2
-        )
-
-        return {
-            "is_valid": is_valid,
-            "issues": issues,
-            "suggestions": suggestions,
-            "confidence": intent.analysis_result.confidence,
-            "operation_count": len(intent.analysis_result.core_operations),
-        }
