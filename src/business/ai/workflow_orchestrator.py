@@ -19,7 +19,6 @@
 
 import logging
 from typing import Dict, Any, Optional, Callable, List
-from pathlib import Path
 from datetime import datetime
 import uuid
 
@@ -27,7 +26,6 @@ from src.recording.recorder import RecordingSession, Action
 from src.business.ai.preprocessing import (
     DataPreprocessor,
     CompressionLevel,
-    PreprocessingResult,
 )
 from src.data.models import Tool
 from src.data.repositories import ToolRepository
@@ -132,11 +130,6 @@ class WorkflowOrchestrator:
                 use_agent, compression_level.value, auto_process
             )
         )
-
-    @property
-    def agent_bridge(self):
-        """获取 AgentUIBridge 实例"""
-        return self._agent_bridge
 
     def process_recording_with_agent(
         self,

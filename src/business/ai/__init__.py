@@ -13,7 +13,6 @@ from src.business.ai.preprocessing import (
 from src.business.ai.preprocessing.models import ProcessedAction
 from src.business.ai.vision_analyzer import VisionAnalyzer
 from src.business.ai.semantic_analyzer import SemanticAnalyzer
-from src.business.ai.workflow_generator import WorkflowGenerator
 from src.business.ai.workflow_orchestrator import WorkflowOrchestrator, ProcessingProgress
 
 __all__ = [
@@ -25,8 +24,6 @@ __all__ = [
     # AI 分析器
     "VisionAnalyzer",
     "SemanticAnalyzer",
-    # 工作流生成器
-    "WorkflowGenerator",
     # 工作流编排器
     "WorkflowOrchestrator",
     "ProcessingProgress",

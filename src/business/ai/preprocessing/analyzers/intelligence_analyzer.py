@@ -6,6 +6,7 @@
 
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+import json
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 class CompressionModelError(Exception):
     """压缩模型调用错误（用于向上传递给 UI）"""
+
     def __init__(self, message: str, error_type: str = "unknown"):
         super().__init__(message)
         self.error_type = error_type  # 'token_exceeded', 'rate_limit', 'api_error', 'config_error'
@@ -26,12 +28,14 @@ class CompressionModelError(Exception):
 
 class TokenLimitExceededError(CompressionModelError):
     """Token 超量错误"""
+
     def __init__(self, message: str):
         super().__init__(message, error_type="token_exceeded")
 
 
 class RateLimitError(CompressionModelError):
     """请求频率限制错误"""
+
     def __init__(self, message: str):
         super().__init__(message, error_type="rate_limit")
 
@@ -112,14 +116,6 @@ class RequestIntelligenceAnalyzer:
             "/pick-for-you",
         ]
 
-        self.suggestion_patterns = [
-            "/sugrec",
-            "/suggest",
-            "/autocomplete",
-            "/completion",
-            "/ac",
-        ]
-
         # 规则配置
         self.static_extensions = {
             ".js",
@@ -151,6 +147,15 @@ class RequestIntelligenceAnalyzer:
             "metrics",
         ]
         self.heartbeat_patterns = ["heartbeat", "ping", "keepalive", "alive", "health"]
+        self._exclusion_patterns = self.analytics_patterns + self.heartbeat_patterns
+        self._core_keywords = [
+            "search", "query", "submit", "create",
+            "update", "delete", "login", "checkout", "order", "pay",
+        ]
+        self._datasource_keywords = [
+            "cities", "provinces", "categories", "types",
+            "options", "list", "enum", "dictionary",
+        ]
 
         # 广告网络域名配置
         self.ad_network_domains = [
@@ -215,6 +220,23 @@ class RequestIntelligenceAnalyzer:
             "320x50",
         ]
 
+        # 规则引擎：有序规则列表，每条规则返回 Optional[RequestAnalysis]
+        self._rules = [
+            self._check_datasource,
+            self._check_core_operation,
+            self._check_recommendation,
+            self._check_prefetch,
+            self._check_ad_network,
+            self._check_ad_keywords,
+            self._check_ad_size,
+            self._check_static_resource,
+            self._check_heartbeat,
+            self._check_tracking,
+            self._check_encryption,
+            self._check_dependency,
+            self._check_content_type,
+        ]
+
     def analyze_requests(
         self, actions: List[Action], use_llm: bool = False
     ) -> List[RequestAnalysis]:
@@ -236,7 +258,9 @@ class RequestIntelligenceAnalyzer:
             if self.compression_model_enabled and self.api_key:
                 logger.info("[智能过滤] 使用策略: 规则引擎 + 数据压缩模型")
             else:
-                logger.warning("[智能过滤] 要求数据压缩模型但未启用或未配置 API key，回退到规则引擎")
+                logger.warning(
+                    "[智能过滤] 要求数据压缩模型但未启用或未配置 API key，回退到规则引擎"
+                )
                 use_llm = False
         else:
             logger.info("[智能过滤] 使用策略: 仅规则引擎")
@@ -269,13 +293,19 @@ class RequestIntelligenceAnalyzer:
                 total_requests = len(all_requests)
                 if total_requests > 1000:
                     dynamic_confidence_threshold = 0.8
-                    logger.info(f"[智能过滤] 请求数量较多（{total_requests}），使用高过滤阈值: {dynamic_confidence_threshold}")
+                    logger.info(
+                        f"[智能过滤] 请求数量较多（{total_requests}），使用高过滤阈值: {dynamic_confidence_threshold}"
+                    )
                 elif total_requests > 500:
                     dynamic_confidence_threshold = 0.7
-                    logger.info(f"[智能过滤] 请求数量中等（{total_requests}），使用中等过滤阈值: {dynamic_confidence_threshold}")
+                    logger.info(
+                        f"[智能过滤] 请求数量中等（{total_requests}），使用中等过滤阈值: {dynamic_confidence_threshold}"
+                    )
                 else:
                     dynamic_confidence_threshold = 0.5
-                    logger.info(f"[智能过滤] 请求数量较少（{total_requests}），使用保守过滤阈值: {dynamic_confidence_threshold}")
+                    logger.info(
+                        f"[智能过滤] 请求数量较少（{total_requests}），使用保守过滤阈值: {dynamic_confidence_threshold}"
+                    )
 
                 llm_results = self._llm_based_analysis(all_requests, dependency_graph, actions)
 
@@ -306,16 +336,20 @@ class RequestIntelligenceAnalyzer:
                             f"[智能过滤] LLM置信度低于动态阈值（{llm_confidence:.2f} < {dynamic_confidence_threshold}），强制过滤: {req_id}"
                         )
                         llm_result.is_meaningful = False
-                        llm_result.reason = (
-                            f"LLM置信度低于动态阈值（{llm_confidence:.2f} < {dynamic_confidence_threshold}），{llm_result.reason}"
-                        )
+                        llm_result.reason = f"LLM置信度低于动态阈值（{llm_confidence:.2f} < {dynamic_confidence_threshold}），{llm_result.reason}"
 
                     # 使用LLM结果（或修改后的结果）
                     rule_based_results[req_id] = llm_result
 
                     # ⭐ 记录 LLM 的决策（反馈循环）
-                    pattern_matched = getattr(llm_result, "pattern_matched", "none") if hasattr(llm_result, "pattern_matched") else "none"
-                    scores = getattr(llm_result, "scores", {}) if hasattr(llm_result, "scores") else {}
+                    pattern_matched = (
+                        getattr(llm_result, "pattern_matched", "none")
+                        if hasattr(llm_result, "pattern_matched")
+                        else "none"
+                    )
+                    scores = (
+                        getattr(llm_result, "scores", {}) if hasattr(llm_result, "scores") else {}
+                    )
 
                     self.log_filter_decision(
                         req_id=req_id,
@@ -359,7 +393,6 @@ class RequestIntelligenceAnalyzer:
                 try:
                     response_body = req_data.get("response_body", "")
                     if response_body and isinstance(response_body, str):
-                        import json
 
                         try:
                             response_data = json.loads(response_body)
@@ -481,65 +514,6 @@ class RequestIntelligenceAnalyzer:
             logger.error(f"[反馈循环] 记录失败: {e}")
             # 不影响主流程，静默失败
 
-    def get_meaningful_requests(
-        self, actions: List[Action], use_llm: bool = False
-    ) -> List[Dict[str, Any]]:
-        """
-        获取有意义的网络请求列表
-
-        Args:
-            actions: 录制的 Action 列表
-            use_llm: 是否使用 LLM 分析
-
-        Returns:
-            过滤后的有意义请求列表
-        """
-        analyses = self.analyze_requests(actions, use_llm=use_llm)
-
-        # 构建请求 ID 到完整请求的映射
-        all_requests = self._extract_all_requests(actions)
-
-        # 分析依赖关系（用于排序）
-        dependency_graph = self._dependency_analyzer.build_dependency_graph(all_requests)
-
-        # 筛选有意义的请求
-        meaningful = []
-        for analysis in analyses:
-            if analysis.is_meaningful:
-                req_data = all_requests.get(analysis.request_id)
-                if req_data:
-                    meaningful.append(
-                        {
-                            "request_id": analysis.request_id,
-                            "url": req_data.get("url"),
-                            "method": req_data.get("method"),
-                            "analysis": analysis,
-                            "full_data": req_data,
-                        }
-                    )
-
-        # 按依赖关系排序（被依赖的优先）
-        meaningful.sort(
-            key=lambda x: dependency_graph.get(x["request_id"], {}).get("used_by_count", 0),
-            reverse=True,
-        )
-
-        return meaningful
-
-    def count_meaningful_requests(self, actions: List[Action], use_llm: bool = False) -> int:
-        """
-        统计有意义的请求数量
-
-        Args:
-            actions: 录制的 Action 列表
-            use_llm: 是否使用 LLM 分析
-
-        Returns:
-            有意义的请求数量
-        """
-        analyses = self.analyze_requests(actions, use_llm=use_llm)
-        return sum(1 for a in analyses if a.is_meaningful)
-
     # ========== 私有方法 ==========
 
     def _extract_all_requests(self, actions: List[Action]) -> Dict[str, Dict[str, Any]]:
@@ -569,6 +543,7 @@ class RequestIntelligenceAnalyzer:
                 else:
                     # 降级：生成字符串ID（兼容从队列文件加载的情况）
                     import time
+
                     req_id = f"{int(action.timestamp)}_{int(time.time() * 1000) % 10000}"
 
                 requests[req_id] = {
@@ -590,203 +565,239 @@ class RequestIntelligenceAnalyzer:
         """
         基于规则的分析（快速、低成本）
 
-        判断逻辑：
-        1. 静态资源 → 无意义
-        2. 心跳请求 → 无意义
-        3. 埋点请求 → 无意义
-        4. 加密响应 → 可能无法复现
-        5. 被 N 个请求依赖 → 有意义
-        6. JSON/HTML 响应 → 可能有意义
-        7. ⭐ 新增：表单数据源识别
-        8. ⭐ 新增：核心业务操作识别
+        按优先级遍历规则列表，第一条匹配的规则决定结果。
+        如无规则匹配，返回默认的"未识别"结果。
         """
-        req_id = req_data["request_id"]
+        for rule in self._rules:
+            result = rule(req_data, dependency_graph)
+            if result is not None:
+                return result
+
+        return RequestAnalysis(
+            request_id=req_data["request_id"],
+            is_meaningful=False,
+            reason="未识别为业务请求",
+            category="other",
+            is_replayable=False,
+            confidence=0.5,
+        )
+
+    # ========== 规则方法 ==========
+
+    def _check_datasource(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 0：表单数据源识别 — GET 请求返回选项列表"""
         url = req_data["url"].lower()
-        response_body = req_data.get("response_body", "")
-        content_type = req_data.get("headers", {}).get("content-type", "")
         method = req_data.get("method", "GET").upper()
-        action = req_data.get("action")
+        content_type = req_data.get("headers", {}).get("content-type", "")
+        response_body = req_data.get("response_body", "")
 
-        # ⭐ 新增规则 0：表单数据源识别（模式A）
-        # 特征：GET请求返回数组结构，包含 id/name 或 code/label
-        if method == "GET" and "application/json" in content_type:
-            try:
-                import json
+        if method != "GET" or "application/json" not in content_type:
+            return None
 
-                if response_body:
-                    data = json.loads(response_body)
-                    # 检查是否为数组，且包含 id/name 或 code/label 结构
-                    if isinstance(data, list) and len(data) > 0:
-                        first_item = data[0] if isinstance(data[0], dict) else {}
-                        # 检查是否为选项数据结构
-                        if any(key in first_item for key in ["id", "code"]) and any(
-                            key in first_item for key in ["name", "label", "title"]
-                        ):
-                            # 进一步验证：检查 URL 是否包含数据源关键词
-                            datasource_keywords = [
-                                "cities",
-                                "provinces",
-                                "categories",
-                                "types",
-                                "options",
-                                "list",
-                                "enum",
-                                "dictionary",
-                            ]
-                            if any(kw in url for kw in datasource_keywords):
-                                return RequestAnalysis(
-                                    request_id=req_id,
-                                    is_meaningful=True,
-                                    reason=f"表单数据源（返回{len(data)}个选项）",
-                                    category="data_fetch",
-                                    confidence=0.9,
-                                    is_replayable=True,
-                                )
-            except (json.JSONDecodeError, TypeError, IndexError):
-                pass  # JSON 解析失败，继续其他规则
+        try:
 
-        # ⭐ 新增规则 0.5：核心业务操作识别（模式B）
-        # 特征：URL 包含核心业务关键词
-        core_operation_keywords = ["search", "query", "submit", "create", "update", "delete", "login", "checkout", "order", "pay"]
-        if any(kw in url for kw in core_operation_keywords):
-            # 排除明显的统计/埋点
-            if not any(kw in url for kw in self.analytics_patterns + self.heartbeat_patterns):
+            if not response_body:
+                return None
+            data = json.loads(response_body)
+            if not isinstance(data, list) or len(data) == 0:
+                return None
+            first_item = data[0] if isinstance(data[0], dict) else {}
+            if not (
+                any(key in first_item for key in ["id", "code"])
+                and any(key in first_item for key in ["name", "label", "title"])
+            ):
+                return None
+            if any(kw in url for kw in self._datasource_keywords):
                 return RequestAnalysis(
-                    request_id=req_id,
+                    request_id=req_data["request_id"],
                     is_meaningful=True,
-                    reason=f"核心业务操作（URL包含: {[kw for kw in core_operation_keywords if kw in url][0]}）",
+                    reason=f"表单数据源（返回{len(data)}个选项）",
+                    category="data_fetch",
+                    confidence=0.9,
+                    is_replayable=True,
+                )
+        except (json.JSONDecodeError, TypeError, IndexError):
+            pass
+        return None
+
+    def _check_core_operation(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 0.5：核心业务操作 — URL 包含核心业务关键词"""
+        url = req_data["url"].lower()
+        if any(kw in url for kw in self._core_keywords):
+            if not any(kw in url for kw in self._exclusion_patterns):
+                matched = next(kw for kw in self._core_keywords if kw in url)
+                return RequestAnalysis(
+                    request_id=req_data["request_id"],
+                    is_meaningful=True,
+                    reason=f"核心业务操作（URL包含: {matched}）",
                     category="api_call",
                     confidence=0.85,
                     is_replayable=True,
                 )
+        return None
 
-        # ⭐ 新增规则 0.8：推荐内容识别（模式E）
-        # 特征：URL 包含推荐/个性化关键词
-        recommendation_patterns = [
-            "/recommend",
-            "/recomm",
-            "/suggestion",
-            "/suggest",
-            "/personalize",
-            "/for-you",
-            "/foryou",
-            "/related",
-            "/similar",
-            "/also-like",
-        ]
-        if any(pattern in url for pattern in recommendation_patterns):
+    def _check_recommendation(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 0.8：推荐内容识别 — URL 包含推荐关键词"""
+        url = req_data["url"].lower()
+        if any(pattern in url for pattern in self.recommendation_patterns):
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=False,
                 reason="推荐内容请求（与用户主动操作无关）",
                 category="analytics",
                 confidence=0.85,
-                is_recommendation=True,  # ⭐ 标记为推荐内容
+                is_recommendation=True,
                 importance_level="secondary",
             )
+        return None
 
-        # ⭐ 新增规则 0.9：资源预加载识别（模式F）
-        # 特征：URL 包含 prefetch/preload，或 Link header 包含 rel=prefetch
+    def _check_prefetch(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 0.9：资源预加载 — URL 含 prefetch/preload 且为导航操作"""
+        url = req_data["url"].lower()
         if "prefetch" in url or "preload" in url:
-            # 检查是否在用户操作之前触发（通过 action 判断）
+            action = req_data.get("action")
             if action and action.action_type in ["navigate", "page_load"]:
                 return RequestAnalysis(
-                    request_id=req_id,
+                    request_id=req_data["request_id"],
                     is_meaningful=False,
                     reason="资源预加载（用户未实际访问）",
                     category="other",
                     confidence=0.8,
                 )
+        return None
 
-        # 规则 1: 广告网络域名检测（优先级最高）
-        if any(ad_domain in url for ad_domain in self.ad_network_domains):
-            # 识别具体的广告网络
-            ad_network = "未知广告网络"
-            if "google" in url or "doubleclick" in url:
-                ad_network = "Google AdSense"
-            elif "baidu" in url:
-                ad_network = "百度联盟"
-            elif "mmstat" in url or "alimama" in url:
-                ad_network = "阿里妈妈"
-            elif "qq.com" in url:
-                ad_network = "腾讯广点通"
-            elif "360.cn" in url:
-                ad_network = "360联盟"
+    def _check_ad_network(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 1：广告网络域名检测"""
+        url = req_data["url"].lower()
+        if not any(ad_domain in url for ad_domain in self.ad_network_domains):
+            return None
+        ad_network = "未知广告网络"
+        if "google" in url or "doubleclick" in url:
+            ad_network = "Google AdSense"
+        elif "baidu" in url:
+            ad_network = "百度联盟"
+        elif "mmstat" in url or "alimama" in url:
+            ad_network = "阿里妈妈"
+        elif "qq.com" in url:
+            ad_network = "腾讯广点通"
+        elif "360.cn" in url:
+            ad_network = "360联盟"
+        return RequestAnalysis(
+            request_id=req_data["request_id"],
+            is_meaningful=False,
+            reason=f"广告请求：{ad_network}",
+            category="advertising",
+            confidence=0.95,
+        )
 
-            return RequestAnalysis(
-                request_id=req_id,
-                is_meaningful=False,
-                reason=f"广告请求：{ad_network}",
-                category="advertising",
-                confidence=0.95,  # 高置信度
-            )
-
-        # 规则 2: 广告关键词和文件检测
-        # 检查 URL 路径中是否包含广告关键词
-        url_path = url.split("?")[0]  # 移除查询参数
+    def _check_ad_keywords(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 2：广告关键词 + 静态文件"""
+        url = req_data["url"].lower()
+        url_path = url.split("?")[0]
         if any(f"/{kw}" in url_path or f"{kw}." in url_path for kw in self.ad_keywords):
-            # 检查是否是广告文件（静态资源）
             if any(url.endswith(ext) for ext in self.static_extensions):
                 return RequestAnalysis(
-                    request_id=req_id,
+                    request_id=req_data["request_id"],
                     is_meaningful=False,
                     reason=f"广告文件：包含广告关键词 {url_path}",
                     category="advertising",
                     confidence=0.9,
                 )
+        return None
 
-        # 规则 3: 广告尺寸参数检测
+    def _check_ad_size(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 3：广告尺寸参数"""
+        url = req_data["url"].lower()
         if any(size in url for size in self.ad_sizes):
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=False,
                 reason=f"广告请求：包含广告尺寸参数 {url}",
                 category="advertising",
                 confidence=0.85,
             )
+        return None
 
-        # 规则 4: 静态资源
+    def _check_static_resource(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 4：静态资源"""
+        url = req_data["url"].lower()
         if any(url.endswith(ext) for ext in self.static_extensions):
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=False,
                 reason=f"静态资源 ({url.split('.')[-1]})",
                 category="static",
-                confidence=0.95,  # 高置信度
+                confidence=0.95,
             )
+        return None
 
-        # 规则 5: 心跳请求
+    def _check_heartbeat(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 5：心跳请求"""
+        url = req_data["url"].lower()
         if any(pattern in url for pattern in self.heartbeat_patterns):
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=False,
                 reason="心跳/健康检查",
                 category="heartbeat",
-                confidence=0.95,  # 高置信度
+                confidence=0.95,
             )
+        return None
 
-        # 规则 6: 埋点请求
+    def _check_tracking(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 6：埋点请求"""
+        url = req_data["url"].lower()
         if any(pattern in url for pattern in self.analytics_patterns):
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=False,
                 reason="数据分析/埋点",
                 category="analytics",
-                confidence=0.9,  # 高置信度
+                confidence=0.9,
             )
+        return None
 
-        # 规则 7: 加密检测
+    def _check_encryption(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 7：加密检测"""
+        response_body = req_data.get("response_body", "")
         if self._encryption_detector.is_encrypted(response_body):
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=False,
                 reason="响应数据已加密，无法复现",
                 category="encrypted",
                 is_replayable=False,
-                confidence=0.9,  # 高置信度
+                confidence=0.9,
             )
+        return None
 
-        # 规则 8: 依赖关系（被其他请求依赖 → 很重要）
+    def _check_dependency(
+        self, req_data: Dict[str, Any], dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 8：依赖关系 — 被其他请求依赖"""
+        req_id = req_data["request_id"]
         dep_info = dependency_graph.get(req_id, {})
         used_by_count = dep_info.get("used_by_count", 0)
         if used_by_count > 0:
@@ -798,27 +809,23 @@ class RequestIntelligenceAnalyzer:
                 category="api_call",
                 is_replayable=True,
             )
+        return None
 
-        # 规则 9: JSON/HTML 响应 → 可能有意义
+    def _check_content_type(
+        self, req_data: Dict[str, Any], _dependency_graph: Dict[str, Dict]
+    ) -> Optional[RequestAnalysis]:
+        """规则 9：JSON/HTML 响应 — 可能有意义"""
+        content_type = req_data.get("headers", {}).get("content-type", "")
         if "application/json" in content_type or "text/html" in content_type:
             return RequestAnalysis(
-                request_id=req_id,
+                request_id=req_data["request_id"],
                 is_meaningful=True,
                 reason="返回业务数据（JSON/HTML）",
                 confidence=0.7,
                 category="data_fetch",
                 is_replayable=True,
             )
-
-        # 规则 10: 其他响应 → 可能无意义
-        return RequestAnalysis(
-            request_id=req_id,
-            is_meaningful=False,
-            reason="未识别为业务请求",
-            category="other",
-            is_replayable=False,
-            confidence=0.5,  # 低置信度，允许LLM覆盖
-        )
+        return None
 
     def _llm_based_analysis(
         self,
@@ -852,7 +859,9 @@ class RequestIntelligenceAnalyzer:
         else:
             # 多线程模式
             logger.info(f"[智能过滤] 使用多线程模式进行 LLM 分析，线程数: {num_threads}")
-            return self._llm_analysis_multi_thread(all_requests, dependency_graph, num_threads, all_actions)
+            return self._llm_analysis_multi_thread(
+                all_requests, dependency_graph, num_threads, all_actions
+            )
 
     def _llm_analysis_single_thread(
         self,
@@ -1032,8 +1041,117 @@ class RequestIntelligenceAnalyzer:
 
         return analysis
 
+    def _extract_action_context(
+        self, action: Optional[Action], all_actions: Optional[List[Action]],
+        core_actions_str: str = "未知操作",
+    ) -> Dict[str, Any]:
+        """
+        从 action 和 all_actions 中提取上下文信息。
+
+        封装最近操作、后续操作、发生时机、当前页面、核心操作的提取逻辑，
+        处理所有边界情况（无 action、找不到索引等）。
+
+        Args:
+            action: 当前关联的用户操作，可能为 None
+            all_actions: 所有操作列表，可能为 None
+
+        Returns:
+            包含以下 key 的字典：
+            - recent_action_1, recent_action_2, recent_action_3: 最近3步操作描述
+            - subsequent_operations: 后续操作描述（换行分隔）
+            - timing: 发生时机描述
+            - current_page: 当前页面描述
+            - core_actions: 核心操作描述字符串
+        """
+        if not action or not all_actions:
+            return {
+                "recent_action_1": "1. 未知操作",
+                "recent_action_2": "",
+                "recent_action_3": "",
+                "subsequent_operations": "无",
+                "timing": "未知时机",
+                "current_page": "未知页面",
+                "core_actions": core_actions_str,
+            }
+
+        try:
+            current_index = all_actions.index(action)
+
+            # 提取最近3步操作（包括当前操作）
+            recent_actions = []
+            start_idx = max(0, current_index - 2)
+            for i in range(start_idx, min(current_index + 1, len(all_actions))):
+                act = all_actions[i]
+                desc = f"{i - start_idx + 1}. {act.action_type}"
+                if act.url:
+                    desc += f" (URL: {act.url})"
+                if act.window_title:
+                    desc += f" (窗口: {act.window_title})"
+                recent_actions.append(desc)
+
+            # 提取后续操作预览（接下来1-2步）
+            subsequent_actions = []
+            for i in range(current_index + 1, min(current_index + 3, len(all_actions))):
+                act = all_actions[i]
+                desc = f"{act.action_type}"
+                if act.url:
+                    desc += f" (URL: {act.url})"
+                if act.window_title:
+                    desc += f" (窗口: {act.window_title})"
+                subsequent_actions.append(desc)
+
+            # 计算发生时机（与上一步操作的时间差）
+            if current_index > 0:
+                prev_action = all_actions[current_index - 1]
+                time_diff = action.timestamp - prev_action.timestamp
+                # 兼容处理 float 和 datetime 两种类型
+                if hasattr(time_diff, "total_seconds"):
+                    # datetime.timedelta 对象
+                    time_diff_seconds = time_diff.total_seconds()
+                else:
+                    # float 类型（秒）
+                    time_diff_seconds = time_diff
+
+                if time_diff_seconds < 1:
+                    timing = f"紧接着上一步操作（{time_diff_seconds:.2f}秒）"
+                elif time_diff_seconds < 5:
+                    timing = f"上一步操作后{time_diff_seconds:.2f}秒"
+                else:
+                    timing = f"上一步操作后{time_diff_seconds:.2f}秒（可能有延迟）"
+            else:
+                timing = "第一步操作"
+
+            # 提取当前页面
+            current_page = action.url or action.window_title or "未知页面"
+
+        except (ValueError, IndexError):
+            # 找不到当前 action，使用默认值
+            recent_actions = ["1. 未知操作"]
+            subsequent_actions = []
+            timing = "未知时机"
+            current_page = "未知页面"
+
+        # 格式化为最终字符串
+        recent_action_1 = recent_actions[0] if len(recent_actions) > 0 else ""
+        recent_action_2 = recent_actions[1] if len(recent_actions) > 1 else ""
+        recent_action_3 = recent_actions[2] if len(recent_actions) > 2 else ""
+        subsequent_operations = "\n".join(subsequent_actions) if subsequent_actions else "无"
+
+        return {
+            "recent_action_1": recent_action_1,
+            "recent_action_2": recent_action_2,
+            "recent_action_3": recent_action_3,
+            "subsequent_operations": subsequent_operations,
+            "timing": timing,
+            "current_page": current_page,
+            "core_actions": core_actions_str,
+        }
+
     def _generate_analysis_prompt(
-        self, req_data: Dict[str, Any], dependency_graph: Dict[str, Dict], all_actions: List[Action] = None
+        self,
+        req_data: Dict[str, Any],
+        dependency_graph: Dict[str, Dict],
+        all_actions: List[Action] = None,
     ) -> str:
         """
         生成 LLM 分析提示词
@@ -1065,104 +1183,31 @@ class RequestIntelligenceAnalyzer:
         # 提取关联的用户操作信息
         action = req_data.get("action")
 
-        # 提取上下文信息（用于 V2 提示词）
-        current_action = action
-        if current_action and all_actions:
-            # 找到当前 action 在列表中的位置
-            try:
-                current_index = all_actions.index(current_action)
-
-                # 提取最近3步操作（包括当前操作）
-                recent_actions = []
-                start_idx = max(0, current_index - 2)
-                for i in range(start_idx, min(current_index + 1, len(all_actions))):
-                    act = all_actions[i]
-                    desc = f"{i - start_idx + 1}. {act.action_type}"
-                    if act.url:
-                        desc += f" (URL: {act.url})"
-                    if act.window_title:
-                        desc += f" (窗口: {act.window_title})"
-                    recent_actions.append(desc)
-
-                # 提取后续操作预览（接下来1-2步）
-                subsequent_actions = []
-                for i in range(current_index + 1, min(current_index + 3, len(all_actions))):
-                    act = all_actions[i]
-                    desc = f"{act.action_type}"
-                    if act.url:
-                        desc += f" (URL: {act.url})"
-                    if act.window_title:
-                        desc += f" (窗口: {act.window_title})"
-                    subsequent_actions.append(desc)
-
-                # 计算发生时机（与上一步操作的时间差）
-                if current_index > 0:
-                    prev_action = all_actions[current_index - 1]
-                    time_diff = current_action.timestamp - prev_action.timestamp
-                    # 兼容处理 float 和 datetime 两种类型
-                    if hasattr(time_diff, "total_seconds"):
-                        # datetime.timedelta 对象
-                        time_diff_seconds = time_diff.total_seconds()
-                    else:
-                        # float 类型（秒）
-                        time_diff_seconds = time_diff
-
-                    if time_diff_seconds < 1:
-                        timing = f"紧接着上一步操作（{time_diff_seconds:.2f}秒）"
-                    elif time_diff_seconds < 5:
-                        timing = f"上一步操作后{time_diff_seconds:.2f}秒"
-                    else:
-                        timing = f"上一步操作后{time_diff_seconds:.2f}秒（可能有延迟）"
-                else:
-                    timing = "第一步操作"
-
-                # 提取当前页面
-                current_page = current_action.url or current_action.window_title or "未知页面"
-
-                # 提取核心操作
-                core_actions = [act.action_type for act in all_actions if act.action_type not in ["wait", "screenshot"]]
-                core_actions_str = ", ".join(core_actions[:5])  # 最多显示5个
-                if len(core_actions) > 5:
-                    core_actions_str += f" 等{len(core_actions)}个操作"
-
-            except (ValueError, IndexError):
-                # 找不到当前 action，使用默认值
-                recent_actions = ["1. 未知操作"]
-                subsequent_actions = []
-                timing = "未知时机"
-                current_page = "未知页面"
-                core_actions_str = "未知操作"
+        # 预计算 core_actions（只依赖 all_actions，不随请求变化）
+        if all_actions:
+            _core_types = [
+                act.action_type for act in all_actions
+                if act.action_type not in ("wait", "screenshot")
+            ]
+            _core_str = ", ".join(_core_types[:5])
+            if len(_core_types) > 5:
+                _core_str += f" 等{len(_core_types)}个操作"
         else:
-            # 没有 all_actions 或当前 action，使用默认值
-            recent_actions = ["1. 未知操作"]
-            subsequent_actions = []
-            timing = "未知时机"
-            current_page = "未知页面"
-            core_actions_str = "未知操作"
+            _core_str = "未知操作"
 
-        # 格式化为字符串
-        recent_action_1 = recent_actions[0] if len(recent_actions) > 0 else ""
-        recent_action_2 = recent_actions[1] if len(recent_actions) > 1 else ""
-        recent_action_3 = recent_actions[2] if len(recent_actions) > 2 else ""
-        subsequent_operations = "\n".join(subsequent_actions) if subsequent_actions else "无"
+        # 提取上下文信息
+        ctx = self._extract_action_context(action, all_actions, core_actions_str=_core_str)
 
         # 判断数据类型
         data_type = "xhr_request"
-        if url.endswith((".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2")):
+        if url.endswith(
+            (".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2")
+        ):
             data_type = "resource_load"
         elif action and action.action_type in ["click", "input", "submit"]:
             data_type = "xhr_request"
         elif "prefetch" in url or "preload" in url:
             data_type = "prefetch"
-
-        # 提取元素信息（用于兼容）
-        if action and action.dom_element:
-            element = action.dom_element
-            tag = element.get("tag", "")
-            text = element.get("text", "")[:30]  # 限制长度
-            element_info = f"<{tag}> text='{text}'"
-        else:
-            element_info = "N/A"
 
         # 依赖信息
         req_id = req_data["request_id"]
@@ -1173,11 +1218,11 @@ class RequestIntelligenceAnalyzer:
         try:
             prompt = JUDGMENT_PROMPT_V2_TEMPLATE.format(
                 request_id=req_id,  # ⭐ 传入数据库ID
-                current_page=current_page,
-                core_actions=core_actions_str,
-                recent_action_1=recent_action_1,
-                recent_action_2=recent_action_2,
-                recent_action_3=recent_action_3,
+                current_page=ctx["current_page"],
+                core_actions=ctx["core_actions"],
+                recent_action_1=ctx["recent_action_1"],
+                recent_action_2=ctx["recent_action_2"],
+                recent_action_3=ctx["recent_action_3"],
                 data_type=data_type,
                 url=url,
                 method=method,
@@ -1185,8 +1230,8 @@ class RequestIntelligenceAnalyzer:
                 status_code=status_code,
                 content_type=content_type,
                 response_body_preview=response_body_preview,
-                timing=timing,
-                subsequent_operations=subsequent_operations,
+                timing=ctx["timing"],
+                subsequent_operations=ctx["subsequent_operations"],
                 used_by_count=used_by_count,
             )
         except KeyError as e:
@@ -1222,7 +1267,11 @@ class RequestIntelligenceAnalyzer:
             if returned_req_id is not None:
                 # ⭐ 类型转换后再比较（我们给的是 int，LLM 返回的可能是 str）
                 try:
-                    returned_req_id_converted = int(returned_req_id) if isinstance(returned_req_id, str) else returned_req_id
+                    returned_req_id_converted = (
+                        int(returned_req_id)
+                        if isinstance(returned_req_id, str)
+                        else returned_req_id
+                    )
                     if returned_req_id_converted != req_id:
                         logger.warning(
                             f"[智能过滤] LLM 返回的 request_id ({returned_req_id}, 类型: {type(returned_req_id).__name__}) "
@@ -1240,7 +1289,9 @@ class RequestIntelligenceAnalyzer:
 
             # 兼容 V1 和 V2 格式
             # V1 使用 is_meaningful，V2 使用 is_relevant
-            is_meaningful = llm_response.get("is_meaningful", llm_response.get("is_relevant", False))
+            is_meaningful = llm_response.get(
+                "is_meaningful", llm_response.get("is_relevant", False)
+            )
 
             # V2 的 category 映射到 V1 的 category
             category_v2 = llm_response.get("category", "")
@@ -1273,7 +1324,9 @@ class RequestIntelligenceAnalyzer:
 
             # 验证字段
             if not isinstance(is_meaningful, bool):
-                logger.warning(f"[智能过滤] {req_id}: is_meaningful/is_relevant 不是布尔值，使用默认值 False")
+                logger.warning(
+                    f"[智能过滤] {req_id}: is_meaningful/is_relevant 不是布尔值，使用默认值 False"
+                )
                 is_meaningful = False
 
             if not 0.0 <= confidence <= 1.0:
@@ -1332,7 +1385,6 @@ class RequestIntelligenceAnalyzer:
         Raises:
             ValueError: 无法提取有效 JSON
         """
-        import json
         import re
 
         # 去除首尾空白
@@ -1547,13 +1599,15 @@ class RequestIntelligenceAnalyzer:
             except ValueError as e:
                 logger.error(f"[智能过滤] LLM 响应 JSON 提取失败: {e}")
                 logger.debug(f"[智能过滤] 原始响应: {response_text}")
-                raise CompressionModelError(f"LLM 响应不是有效的 JSON: {e}", error_type="parse_error") from e
+                raise CompressionModelError(
+                    f"LLM 响应不是有效的 JSON: {e}", error_type="parse_error"
+                ) from e
 
         except ImportError as e:
             logger.error(f"[智能过滤] LangChain 未安装: {e}")
             raise CompressionModelError(
                 "请安装 LangChain: uv add langchain-anthropic langchain-openai",
-                error_type="config_error"
+                error_type="config_error",
             ) from e
 
         # 捕获 Token 超量错误
@@ -1610,7 +1664,6 @@ class RequestIntelligenceAnalyzer:
             bool: 是否为推荐内容
         """
         from urllib.parse import urlparse, parse_qs
-        import json
 
         # 1. URL 模式匹配
         url_lower = url.lower()
@@ -1792,7 +1845,6 @@ class DependencyAnalyzer:
 
         # 尝试提取 ID/token（JSON 响应）
         try:
-            import json
 
             data_a = json.loads(response_a)
             ids_or_tokens = self._extract_ids(data_a)

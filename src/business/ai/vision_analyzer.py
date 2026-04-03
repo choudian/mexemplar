@@ -5,7 +5,7 @@
 """
 
 import base64
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from pathlib import Path
 import logging
 
@@ -96,48 +96,6 @@ class VisionAnalyzer:
         except Exception as e:
             logger.error(f"分析截图失败: {image_path}, 错误: {e}")
             return {}
-
-    def analyze_screenshots_sequence(
-        self, image_paths: List[str], context: Optional[str] = None
-    ) -> Dict[str, Any]:
-        """
-        分析截图序列，理解操作流程
-
-        Args:
-            image_paths: 截图文件路径列表（按时间顺序）
-            context: 额外上下文信息
-
-        Returns:
-            Dict[str, Any]: 分析结果
-        """
-        if not image_paths:
-            logger.warning("没有提供截图路径")
-            return {}
-
-        if len(image_paths) > 10:
-            logger.warning(f"截图数量过多 ({len(image_paths)})，只分析前10张")
-            image_paths = image_paths[:10]
-
-        results = []
-
-        for idx, image_path in enumerate(image_paths):
-            logger.info(f"分析截图 {idx + 1}/{len(image_paths)}: {image_path}")
-
-            task_context = f"这是操作序列中的第 {idx + 1} 步"
-            if context:
-                task_context = f"{context}\n{task_context}"
-
-            result = self.analyze_screenshot(
-                image_path=image_path, task="elements", context=task_context
-            )
-
-            if result:
-                results.append({"step": idx + 1, "image_path": image_path, "analysis": result})
-
-        # 综合分析
-        summary = self._summarize_sequence(results)
-
-        return {"individual_results": results, "summary": summary}
 
     def _encode_image(self, image_path: str) -> str:
         """将图片编码为 base64"""
@@ -233,45 +191,6 @@ class VisionAnalyzer:
                 result["parsed"] = None
 
         return result
-
-    def _summarize_sequence(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """总结截图序列的分析结果"""
-        if not results:
-            return {}
-
-        summary = {
-            "total_steps": len(results),
-            "detected_elements": [],
-            "application_types": set(),
-            "possible_workflow": [],
-        }
-
-        for result in results:
-            analysis = result.get("analysis", {})
-            parsed = analysis.get("parsed")
-
-            if parsed:
-                # 收集元素
-                elements = parsed.get("elements", [])
-                summary["detected_elements"].extend(elements)
-
-                # 收集应用类型
-                app_type = parsed.get("application_type")
-                if app_type:
-                    summary["application_types"].add(app_type)
-
-        # 转换 set 为 list
-        summary["application_types"] = list(summary["application_types"])
-
-        # 统计元素类型
-        element_types = {}
-        for element in summary["detected_elements"]:
-            elem_type = element.get("type", "unknown")
-            element_types[elem_type] = element_types.get(elem_type, 0) + 1
-
-        summary["element_type_counts"] = element_types
-
-        return summary
 
     def close(self) -> None:
         """关闭客户端"""

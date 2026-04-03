@@ -277,9 +277,3 @@ class Intent:
         self.confirmation_turns.append(turn)
         self.updated_at = turn.timestamp
 
-    def can_continue_dialogue(self) -> bool:
-        """判断是否可以继续对话"""
-        return len(self.confirmation_turns) < self.max_turns and self.status in [
-            "analyzing",
-            "pending_confirmation",
-        ]

@@ -27,14 +27,6 @@ class MatchStrategy(Enum):
     INDEX_MATCH = "index_match"  # 索引匹配
 
 
-class ExecutionStrategy(Enum):
-    """执行策略"""
-
-    API = "api"  # 纯 API
-    BROWSER = "browser"  # 纯浏览器
-    HYBRID = "hybrid"  # 混合（API 优先，浏览器降级）
-
-
 @dataclass
 class ResponseStructure:
     """响应结构分析"""
@@ -235,81 +227,3 @@ class ParameterDefinition:
             default_value=data.get("default_value"),
             source_action_index=data.get("source_action_index", -1),
         )
-
-
-@dataclass
-class CodeGenerationResult:
-    """
-    LLM 代码生成结果
-    """
-
-    # 基本信息
-    tool_name: str  # 工具名称
-    description: str  # 工具描述
-    category: str  # 工具类别
-
-    # 参数定义
-    parameters: List[ParameterDefinition] = field(default_factory=list)
-
-    # ⭐ 生成的代码
-    execution_code: str = ""  # 可执行的 Python 代码
-
-    # 元数据
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "tool_name": self.tool_name,
-            "description": self.description,
-            "category": self.category,
-            "parameters": [p.to_dict() for p in self.parameters],
-            "execution_code": self.execution_code,
-            "metadata": self.metadata,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "CodeGenerationResult":
-        """从字典创建"""
-        params = [ParameterDefinition.from_dict(p) for p in data.get("parameters", [])]
-
-        return cls(
-            tool_name=data["tool_name"],
-            description=data["description"],
-            category=data["category"],
-            parameters=params,
-            execution_code=data.get("execution_code", ""),
-            metadata=data.get("metadata", {}),
-        )
-
-
-@dataclass
-class ProcessingContext:
-    """
-    处理上下文
-
-    包含所有分析结果，用于传递给格式化器
-    """
-
-    # 原始数据
-    actions: List[Any]  # 操作列表
-    recording_id: str
-    recording_mode: str
-
-    # 分析结果
-    network_analysis: List[NetworkRequestAnalysis] = field(default_factory=list)
-    list_analysis: List[ListOperationAnalysis] = field(default_factory=list)
-
-    # 元数据
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "recording_id": self.recording_id,
-            "recording_mode": self.recording_mode,
-            "action_count": len(self.actions),
-            "network_analysis_count": len(self.network_analysis),
-            "list_analysis_count": len(self.list_analysis),
-            "metadata": self.metadata,
-        }

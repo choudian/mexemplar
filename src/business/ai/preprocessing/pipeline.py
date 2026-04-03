@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 
 # ==================== 基础类 ====================
 
+
 @dataclass
 class PipelineContext:
     """管道上下文（在阶段间传递数据）"""
@@ -45,36 +46,13 @@ class PipelineStage:
         return self.process(context)
 
 
-class Pipeline:
-    """预处理管道（编排器）"""
-
-    def __init__(self, stages: List[PipelineStage] = None):
-        self.stages = stages or []
-
-    def add_stage(self, stage: PipelineStage) -> "Pipeline":
-        """添加阶段（支持链式调用）"""
-        self.stages.append(stage)
-        return self
-
-    def process(self, initial_actions: List[Any]) -> PipelineContext:
-        """执行管道"""
-        context = PipelineContext(actions=initial_actions)
-
-        for stage in self.stages:
-            context = stage.process(context)
-
-        return context
-
-    def __or__(self, stage: PipelineStage) -> "Pipeline":
-        """支持 | 操作符（类似 Apache Beam）"""
-        return self.add_stage(stage)
-
-
 # ==================== 预处理管道专用类 ====================
+
 
 @dataclass
 class PreprocessingPipelineContext:
     """预处理管道上下文"""
+
     # 输入参数
     actions: List[Action]
     compression_level: CompressionLevel
@@ -120,7 +98,7 @@ class PreprocessingPipeline:
         preprocessor: Any,
         compression_level: CompressionLevel = CompressionLevel.MODERATE,
         enable_analysis: bool = True,
-        recording_id: str = "unknown"
+        recording_id: str = "unknown",
     ):
         """
         初始化预处理管道
@@ -213,6 +191,7 @@ class PreprocessingPipeline:
 
 # ==================== 具体阶段实现 ====================
 
+
 class CompressionStage(PipelineStage):
     """基础压缩：合并输入、过滤重复、清理 DOM"""
 
@@ -237,18 +216,44 @@ class IntelligenceFilterStage(PipelineStage):
     def __init__(self):
         super().__init__("intelligence_filter")
 
+    def _fallback_to_rule_engine(
+        self, context: PreprocessingPipelineContext,
+        error_type: str, message: str, detail: str,
+    ) -> None:
+        """压缩模型失败时回退到规则引擎"""
+        context.compression_model_error = {
+            "type": error_type,
+            "message": message,
+            "detail": detail,
+        }
+        logger.warning(f"  ⚠️ {message}")
+        intelligent_analysis = (
+            context.preprocessor.request_intelligence_analyzer.analyze_requests(
+                context.actions, use_llm=False
+            )
+        )
+        context.compressed_actions = context.preprocessor._filter_requests_by_intelligence(
+            context.compressed_actions, intelligent_analysis
+        )
+        context.intelligent_analysis = intelligent_analysis
+        context.actions = context.compressed_actions
+
     def process(self, context: PreprocessingPipelineContext) -> PreprocessingPipelineContext:
         if not context.enable_analysis:
             return context
 
-        use_compression_model = context.preprocessor._should_use_compression_level(context.compression_level)
+        use_compression_model = context.preprocessor._should_use_compression_level(
+            context.compression_level
+        )
         logger.info(
             f"步骤2: 智能网络请求过滤 (数据压缩模型: {'启用' if use_compression_model else '禁用'})..."
         )
 
         try:
-            intelligent_analysis = context.preprocessor.request_intelligence_analyzer.analyze_requests(
-                context.actions, use_llm=use_compression_model
+            intelligent_analysis = (
+                context.preprocessor.request_intelligence_analyzer.analyze_requests(
+                    context.actions, use_llm=use_compression_model
+                )
             )
 
             # 异步更新 DuckDB
@@ -264,72 +269,23 @@ class IntelligenceFilterStage(PipelineStage):
             context.actions = context.compressed_actions
 
         except TokenLimitExceededError as e:
-            context.compression_model_error = {
-                "type": "token_exceeded",
-                "message": "压缩模型 Token 超量，已回退到规则引擎",
-                "detail": str(e)
-            }
-            logger.warning(f"  ⚠️ {context.compression_model_error['message']}")
-            intelligent_analysis = context.preprocessor.request_intelligence_analyzer.analyze_requests(
-                context.actions, use_llm=False
+            self._fallback_to_rule_engine(
+                context, "token_exceeded",
+                "压缩模型 Token 超量，已回退到规则引擎", str(e),
             )
-            context.compressed_actions = context.preprocessor._filter_requests_by_intelligence(
-                context.compressed_actions, intelligent_analysis
-            )
-            context.intelligent_analysis = intelligent_analysis
-            context.actions = context.compressed_actions
 
         except RateLimitError as e:
-            context.compression_model_error = {
-                "type": "rate_limit",
-                "message": "压缩模型请求频率限制，已回退到规则引擎",
-                "detail": str(e)
-            }
-            logger.warning(f"  ⚠️ {context.compression_model_error['message']}")
-            intelligent_analysis = context.preprocessor.request_intelligence_analyzer.analyze_requests(
-                context.actions, use_llm=False
+            self._fallback_to_rule_engine(
+                context, "rate_limit",
+                "压缩模型请求频率限制，已回退到规则引擎", str(e),
             )
-            context.compressed_actions = context.preprocessor._filter_requests_by_intelligence(
-                context.compressed_actions, intelligent_analysis
-            )
-            context.intelligent_analysis = intelligent_analysis
-            context.actions = context.compressed_actions
 
         except CompressionModelError as e:
-            context.compression_model_error = {
-                "type": e.error_type,
-                "message": f"压缩模型错误，已回退到规则引擎",
-                "detail": str(e)
-            }
-            logger.warning(f"  ⚠️ {context.compression_model_error['message']}")
-            intelligent_analysis = context.preprocessor.request_intelligence_analyzer.analyze_requests(
-                context.actions, use_llm=False
+            self._fallback_to_rule_engine(
+                context, e.error_type,
+                "压缩模型错误，已回退到规则引擎", str(e),
             )
-            context.compressed_actions = context.preprocessor._filter_requests_by_intelligence(
-                context.compressed_actions, intelligent_analysis
-            )
-            context.intelligent_analysis = intelligent_analysis
-            context.actions = context.compressed_actions
 
-        return context
-
-
-class NetworkAnalysisStage(PipelineStage):
-    """网络分析：判断可复现性、提取响应结构"""
-
-    def __init__(self):
-        super().__init__("network_analysis")
-
-    def process(self, context: PreprocessingPipelineContext) -> PreprocessingPipelineContext:
-        if not context.enable_analysis:
-            context.network_analysis = None
-            return context
-
-        logger.info("步骤3: 分析网络请求...")
-        network_analysis = context.preprocessor.network_analyzer.analyze_requests(context.actions)
-        logger.info(f"  ✅ 分析了 {len(network_analysis)} 个网络请求")
-
-        context.network_analysis = network_analysis
         return context
 
 
@@ -434,7 +390,9 @@ class MetadataStage(PipelineStage):
 
             metadata["analysis_stats"] = {
                 "compression_level": context.compression_level.value,
-                "compression_model_enabled": context.preprocessor._should_use_compression_level(context.compression_level),
+                "compression_model_enabled": context.preprocessor._should_use_compression_level(
+                    context.compression_level
+                ),
                 "intelligent_filter": {
                     "total_requests": total_count,
                     "filtered_out": filtered_count,

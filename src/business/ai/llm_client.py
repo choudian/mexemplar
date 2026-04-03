@@ -248,48 +248,6 @@ class LangChainLLMClient:
             logger.error(f"[LLM客户端] 调用失败: {e}")
             raise
 
-    def chat_with_messages(self, messages: List[Dict[str, str]], **kwargs) -> str:
-        """
-        发送多轮对话请求
-
-        Args:
-            messages: 消息列表，格式 [{"role": "user", "content": "..."}]
-            **kwargs: 额外参数
-
-        Returns:
-            模型响应文本
-        """
-        try:
-            from langchain_core.messages import (
-                HumanMessage,
-                AIMessage,
-                SystemMessage,
-            )
-
-            # 转换消息格式
-            lc_messages = []
-            for msg in messages:
-                role = msg["role"]
-                content = msg["content"]
-
-                if role == "system":
-                    lc_messages.append(SystemMessage(content=content))
-                elif role == "user":
-                    lc_messages.append(HumanMessage(content=content))
-                elif role == "assistant":
-                    lc_messages.append(AIMessage(content=content))
-                else:
-                    logger.warning(f"[LLM客户端] 未知角色: {role}")
-
-            # 调用模型
-            response = self.llm.invoke(lc_messages, **kwargs)
-
-            return response.content
-
-        except Exception as e:
-            logger.error(f"[LLM客户端] 调用失败: {e}")
-            raise
-
     def chat_with_tools(
         self,
         messages: List[Dict[str, Any]],

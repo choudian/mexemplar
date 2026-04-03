@@ -5,8 +5,6 @@
 """
 
 from typing import List, Dict, Any, Optional
-from dataclasses import dataclass, field
-from enum import Enum
 import logging
 import hashlib
 import threading
@@ -20,16 +18,9 @@ from src.business.ai.preprocessing.models import (
 )
 from src.business.ai.preprocessing.pipeline import (
     PreprocessingPipeline,
-    PreprocessingPipelineContext,
 )
 from src.business.ai.preprocessing.analyzers import (
-    NetworkRequestAnalyzer,
     RequestIntelligenceAnalyzer,
-)
-from src.business.ai.preprocessing.analyzers.intelligence_analyzer import (
-    CompressionModelError,
-    TokenLimitExceededError,
-    RateLimitError,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,7 +47,6 @@ class DataPreprocessor:
         self.compression_level = compression_level
 
         # 初始化分析器
-        self.network_analyzer = NetworkRequestAnalyzer()
         self.request_intelligence_analyzer = RequestIntelligenceAnalyzer()
 
         # 操作分类
@@ -123,7 +113,7 @@ class DataPreprocessor:
 
         # 日志输出
         logger.info("=" * 80)
-        logger.info(f"[OK] 预处理完成")
+        logger.info("[OK] 预处理完成")
         logger.info(f"  压缩级别: {level.value}")
         logger.info(f"  操作数: {len(actions)} -> {len(context.compressed_actions)}")
         logger.info(f"  关键操作: {len(context.key_actions)}")
@@ -147,9 +137,7 @@ class DataPreprocessor:
 
         return result
 
-    def _apply_compression(
-        self, actions: List[Action], level: CompressionLevel
-    ) -> List[Action]:
+    def _apply_compression(self, actions: List[Action], level: CompressionLevel) -> List[Action]:
         """应用压缩逻辑"""
         if level == CompressionLevel.NONE:
             return actions
@@ -166,7 +154,7 @@ class DataPreprocessor:
 
         # 3. 清理 DOM 属性
         actions = self._clean_dom_attributes(actions, level)
-        logger.debug(f"  清理DOM属性完成")
+        logger.debug("  清理DOM属性完成")
 
         return actions
 
@@ -325,7 +313,9 @@ class DataPreprocessor:
 
         return context
 
-    def _extract_key_actions(self, processed_actions: List[ProcessedAction]) -> List[ProcessedAction]:
+    def _extract_key_actions(
+        self, processed_actions: List[ProcessedAction]
+    ) -> List[ProcessedAction]:
         """提取关键操作"""
         return [action for action in processed_actions if action.is_key_action]
 
