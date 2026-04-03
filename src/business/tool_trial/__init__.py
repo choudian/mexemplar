@@ -28,11 +28,6 @@ from .error_diagnosis_models import (
 from .trial_manager import TrialManager
 from .trial_repository import PendingToolRepository, ToolTrialRepository
 
-# 核心模块（错误诊断）
-from .error_diagnoser import ErrorDiagnoser
-from .code_fixer import CodeFixer
-from .fix_verifier import FixVerifier
-
 __all__ = [
     # 数据模型（试用）
     "PendingTool",
@@ -52,8 +47,4 @@ __all__ = [
     "TrialManager",
     "PendingToolRepository",
     "ToolTrialRepository",
-    # 核心模块（错误诊断）
-    "ErrorDiagnoser",
-    "CodeFixer",
-    "FixVerifier",
 ]

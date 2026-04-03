@@ -80,16 +80,15 @@ class AssistantMemoryManager:
     def _get_embedding_client(self):
         """
         获取 embedding 客户端（auto 降级策略）。
-        按优先级检测 keyring 中的 API Key：OpenAI → 其他 → None。
-        返回 None 时静默降级为 FTS-only。
+        通过统一配置读取 embedding API Key，失败时静默降级为 FTS-only。
         """
         if self._embedding_checked:
             return self._embedding_client
 
         self._embedding_checked = True
         try:
-            import keyring
-            openai_key = keyring.get_password("Mexemplar", "openai_api_key")
+            from src.data.unified_config import get_unified_config
+            openai_key = get_unified_config().get_embedding_api_key()
             if openai_key:
                 from openai import OpenAI
                 client = OpenAI(api_key=openai_key)
