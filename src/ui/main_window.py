@@ -437,7 +437,10 @@ class MainWindow(QMainWindow):
         from src.business.agents.tools.builtin_general_tools import register_confirm_mechanism
 
         # 先 disconnect 再 connect，防止预热失败重建时信号重复连接
-        self._confirm_action_signal.disconnect(self._on_confirm_action_requested)
+        try:
+            self._confirm_action_signal.disconnect(self._on_confirm_action_requested)
+        except TypeError:
+            pass
         self._confirm_action_signal.connect(self._on_confirm_action_requested)
         register_confirm_mechanism(self._confirm_action_signal)
 
@@ -459,10 +462,15 @@ class MainWindow(QMainWindow):
         # 通过 _agent_start_requested 信号 + 真实 QObject slot 保证在主线程执行。
         # 注意：必须用真实方法作为 slot，lambda 没有 QObject 归属会退化为 DirectConnection。
         self._pending_bridge = bridge  # 让 slot 能访问到 bridge
-        self._agent_start_requested.disconnect(self._on_agent_start_requested)
-        self._agent_start_requested.connect(self._on_agent_start_requested)
-        self._switch_to_intent_page.disconnect(self._on_switch_to_intent_page)
-        self._switch_to_intent_page.connect(self._on_switch_to_intent_page)
+        for sig, slot in [
+            (self._agent_start_requested, self._on_agent_start_requested),
+            (self._switch_to_intent_page, self._on_switch_to_intent_page),
+        ]:
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass  # 首次调用时信号尚未连接，忽略
+            sig.connect(slot)
 
         def on_recording_completed(sender, **kwargs):
             # event_data 可能是 RecordingEventData 对象（session_id 字段），也可能是 dict
