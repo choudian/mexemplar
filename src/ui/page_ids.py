@@ -2,7 +2,6 @@
 
 CONVERSATIONS = "conversations"
 TEACHING = "teaching"
-TOOLS = "tools"
 INTENT_CONFIRMATION = "intent_confirmation"
 SKILLS = "skills"
 SETTINGS = "settings"

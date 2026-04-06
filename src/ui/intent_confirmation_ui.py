@@ -25,14 +25,12 @@ from src.ui.widgets.message_option_card import (
     MultiQuestionCard,
 )
 from src.ui.widgets.message_input import MessageInputEdit
+from src.ui.widgets.layout_utils import clear_layout, scroll_to_bottom
 from src.utils.logger import get_logger
 
 
 class IntentConfirmationUI(QWidget):
     """Intent 确认 UI 组件（列表式交互）"""
-
-    # 定义信号
-    intent_cancelled = pyqtSignal(str)  # intent_id
 
     # 用于与后端通信的信号
     analyze_intent_request = pyqtSignal(str, str)  # intent_id, user_message
@@ -235,11 +233,7 @@ class IntentConfirmationUI(QWidget):
 
     def _clear_messages(self):
         """清空消息区域"""
-        while self.messages_layout.count():
-            child = self.messages_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
-
+        clear_layout(self.messages_layout)
         # 重置组件引用
         self._multi_question_card = None
 
@@ -293,10 +287,7 @@ class IntentConfirmationUI(QWidget):
 
     def _scroll_to_bottom(self):
         """滚动消息区域到底部"""
-        scroll_area = self.findChild(QScrollArea, "intent_messages_scroll")
-        if scroll_area:
-            scrollbar = scroll_area.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
+        scroll_to_bottom("intent_messages_scroll", self)
 
     def _on_input_changed(self):
         """输入框内容变化"""
@@ -330,10 +321,13 @@ class IntentConfirmationUI(QWidget):
         if self.current_intent:
             self.logger.info(f"取消意图: {self.current_intent.intent_id}")
             self.current_intent.cancel()
-            self.intent_cancelled.emit(self.current_intent.intent_id)
 
         # 关闭对话框（如果在对话框中）
         self.parent().close() if self.parent() else None
+
+    def set_status_text(self, text: str):
+        """设置状态栏文本（供外部调用，避免直接访问内部 status_label）"""
+        self.status_label.setText(text)
 
     def load_intent_from_agent(self, intent_data: dict, message: str, thread_id: str) -> None:
         """
@@ -511,6 +505,10 @@ class IntentConfirmationUI(QWidget):
             summary_layout.addWidget(tool_label)
 
         return summary_widget
+
+    def _on_all_questions_answered(self, all_answered: bool):
+        """所有确认问题已回答时的回调"""
+        self.logger.debug(f"所有确认问题已回答: {all_answered}")
 
     def cleanup(self):
         """清理资源"""

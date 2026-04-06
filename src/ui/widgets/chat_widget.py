@@ -26,6 +26,7 @@ from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap
 from src.business.agents.config import AgentType
 from src.ui.widgets.message_input import MessageInputEdit
+from src.ui.widgets.layout_utils import clear_layout, scroll_to_bottom
 from src.utils.logger import get_logger
 
 
@@ -240,6 +241,8 @@ class ChatWidget(QWidget):
 
     def _load_sessions(self):
         """从数据库加载会话列表"""
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为这些是简单的只读 CRUD 操作，业务层尚无对应服务。
         try:
             from src.data.repositories import SessionRepository, MessageRepository
 
@@ -290,10 +293,7 @@ class ChatWidget(QWidget):
     def _render_session_cards(self):
         """渲染会话卡片"""
         # 清空已有卡片
-        while self._cards_layout.count():
-            child = self._cards_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        clear_layout(self._cards_layout)
 
         filtered = self._get_filtered_sessions()
         show_count = min(
@@ -361,6 +361,8 @@ class ChatWidget(QWidget):
 
     def _load_session_messages(self, session_id: str):
         """从数据库加载会话历史消息（只加载非归档消息）"""
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为这是简单的只读操作，业务层尚无对应服务。
         try:
             from src.data.repositories import MessageRepository
 
@@ -384,10 +386,7 @@ class ChatWidget(QWidget):
         """清空消息区域"""
         self._welcome_visible = False
         self._welcome_input = None
-        while self.messages_layout.count():
-            child = self.messages_layout.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
+        clear_layout(self.messages_layout)
 
     def _add_welcome_message(self):
         """添加 Claude 风格的欢迎页面 — 居中输入框"""
@@ -518,10 +517,7 @@ class ChatWidget(QWidget):
 
     def _scroll_to_bottom(self):
         """滚动消息区域到底部"""
-        scroll_area = self.findChild(QScrollArea, "messages_scroll")
-        if scroll_area:
-            scrollbar = scroll_area.verticalScrollBar()
-            scrollbar.setValue(scrollbar.maximum())
+        scroll_to_bottom("messages_scroll", self)
 
     def _on_input_changed(self):
         """输入框内容变化"""
@@ -587,6 +583,8 @@ class ChatWidget(QWidget):
 
     def _get_display_name(self) -> str:
         """从用户偏好档案获取称呼"""
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为这是简单的只读操作，业务层尚无对应服务。
         try:
             from src.data.repositories import AssistantProfileRepository
 
@@ -622,6 +620,8 @@ class ChatWidget(QWidget):
 
     def _create_session(self, tool_ids=None) -> str:
         """创建新的助理会话。tool_ids: list[str] 或 None（全部工具）"""
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为业务层尚无 Session 创建服务。
         from src.data.models_sqlite import Session
         from src.data.repositories import SessionRepository
 

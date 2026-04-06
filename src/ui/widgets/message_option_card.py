@@ -17,8 +17,6 @@ from PyQt6.QtCore import Qt, pyqtSignal
 
 from src.utils.logger import get_logger
 
-logger = get_logger(__name__)
-
 
 class MessageOptionCard(QWidget):
     """

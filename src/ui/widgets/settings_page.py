@@ -28,6 +28,7 @@ class SettingsPage(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self.logger = get_logger(__name__)
         self.config = get_unified_config()
         self.init_ui()
         self.load_config()
@@ -188,7 +189,7 @@ class SettingsPage(QWidget):
         """从配置加载值"""
         try:
             # AI 配置
-            api_key = self.config.get("ai.api_key", default="")
+            api_key = self.config.get_ai_api_key() or ""
             if api_key:
                 self.api_key_input.setText(api_key)
 
@@ -210,7 +211,7 @@ class SettingsPage(QWidget):
             if start_url:
                 self.start_url_input.setText(start_url)
 
-            ws_port = self.config.get("recording.websocket_port", default=8765)
+            ws_port = self.config.get_websocket_port()
             self.ws_port_spin.setValue(ws_port)
 
             # 压缩配置
@@ -218,6 +219,8 @@ class SettingsPage(QWidget):
             index = self.comp_level_combo.findData(comp_level)
             if index >= 0:
                 self.comp_level_combo.setCurrentIndex(index)
+
+            self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
 
             self.logger.info("已加载配置")
 
@@ -228,14 +231,19 @@ class SettingsPage(QWidget):
         """保存配置到数据库"""
         try:
             # AI 配置
-            self.config.set("ai.api_key", self.api_key_input.text().strip())
+            api_key = self.api_key_input.text().strip()
+            current_key = self.config.get_ai_api_key() or ""
+            if api_key and api_key != current_key:
+                self.config.set_ai_api_key(api_key)
+            elif not api_key:
+                self.config.clear_ai_api_key()
             self.config.set("ai.model", self.model_combo.currentData())
             self.config.set("ai.timeout", self.timeout_spin.value())
 
             # 录制配置
             self.config.set("recording.default_recording_mode", self.rec_mode_combo.currentData())
             self.config.set("recording.browser_start_url", self.start_url_input.text().strip())
-            self.config.set("recording.websocket_port", self.ws_port_spin.value())
+            self.config.set("recording.websocket.port", self.ws_port_spin.value())
 
             # 压缩配置
             self.config.set("ai.compression_level", self.comp_level_combo.currentData())
@@ -256,8 +264,3 @@ class SettingsPage(QWidget):
         """显示错误消息"""
         from PyQt6.QtWidgets import QMessageBox
         QMessageBox.warning(self, "错误", f"保存配置失败：\n{error}")
-
-    @property
-    def logger(self):
-        """日志记录器属性"""
-        return get_logger(__name__)

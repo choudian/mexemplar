@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QLabel,
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
-from PyQt6.QtGui import QFont, QIcon
+from PyQt6.QtGui import QFont
 from src.ui.resources.icons.sidebar_icons import (
     NEW_CHAT_ICON,
     CHAT_ICON,

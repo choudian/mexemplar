@@ -35,7 +35,6 @@ from PyQt6.QtWidgets import (
 from src.ui.utils import create_svg_icon
 from src.recording.browser_recorder import BrowserRecorder
 from src.business.agents.config import AgentType
-from src.communication.websocket_manager import WebSocketServerManager
 from src.ui.widgets.chat_widget import ChatWidget
 from src.ui.widgets.main_content_widget import MainContentWidget
 from src.ui.widgets.recording_widget import RecordingWidget
@@ -47,6 +46,7 @@ from src.ui.resources.icons.sidebar_icons import (
     SIDEBAR_CLOSE_ICON,
     SIDEBAR_OPEN_ICON,
 )
+from src.data.unified_config import get_unified_config
 from src.utils.logger import get_logger
 
 
@@ -79,7 +79,6 @@ class MainWindow(QMainWindow):
     recording_start_success = pyqtSignal()
     recording_start_failed = pyqtSignal(str)  # 参数：错误消息
     recording_error = pyqtSignal(str)  # 参数：错误详情
-    workflow_error = pyqtSignal(str, str)  # 参数：错误消息，错误类型
     _agent_start_requested = pyqtSignal(str)  # 参数：recording_id，用于跨线程安全触发 start_agent
     _switch_to_intent_page = pyqtSignal()  # 跨线程安全切换到意图确认页面
     _ensure_bridge_requested = pyqtSignal()  # 跨线程安全创建 AgentUIBridge
@@ -95,9 +94,6 @@ class MainWindow(QMainWindow):
         self.main_content = None  # 主内容区
         self.browser_recorder = None  # 浏览器录制器
         self.agent_ui_bridge = None  # v2 Agent UI 桥接（懒加载）
-
-        # 意图确认相关组件
-        self.ws_manager = None  # WebSocket 服务器管理器
 
         # AgentUIBridge 异步初始化状态
         self._orchestrator_init_lock = threading.Lock()
@@ -131,8 +127,7 @@ class MainWindow(QMainWindow):
         self._warmup_orchestrator_async()
         self.logger.info("[MainWindow] __init__ 完成")
 
-        # 使用 QTimer 延迟启动 WebSocket 服务器
-        QTimer.singleShot(100, self._delayed_init_intent_confirmer)
+        # 录制用的 WebSocket 服务器在 BrowserRecorder 中按需启动
 
     def _load_styles(self) -> None:
         """加载样式表"""
@@ -231,7 +226,6 @@ class MainWindow(QMainWindow):
         self.recording_start_success.connect(self._on_recording_start_success)
         self.recording_start_failed.connect(self._on_recording_start_failed)
         self.recording_error.connect(self._on_recording_error)
-        self.workflow_error.connect(self._on_workflow_error)
 
         # ⭐ 连接跨线程安全创建 AgentUIBridge 信号
         self._ensure_bridge_requested.connect(self._on_ensure_bridge_requested)
@@ -344,67 +338,6 @@ class MainWindow(QMainWindow):
         self._orchestrator_warmup_thread.start()
         self.logger.info("AgentUIBridge warmup thread started")
 
-    def _delayed_init_intent_confirmer(self) -> None:
-        """
-        延迟初始化意图确认组件（在窗口显示后执行）
-
-        使用后台线程启动 WebSocket 服务器，避免阻塞 UI
-        """
-
-        def init_in_background():
-            """在后台线程中初始化"""
-            try:
-                self.logger.info("[延迟初始化] 开始在后台线程中初始化意图确认组件")
-
-                # 创建 WebSocket 服务器管理器（不阻塞）
-                self.ws_manager = WebSocketServerManager(
-                    host="127.0.0.1",
-                    port=8766,
-                    auto_start=False,
-                    startup_timeout=5.0,
-                )
-
-                # 启动服务器（阻塞式，但在后台线程中）
-                self.ws_manager.start()
-
-                # 获取 WebSocket 处理器
-                ws_handler = self.ws_manager.get_handler()
-                if not ws_handler:
-                    self.logger.error("无法获取 WebSocket 处理器")
-                    return
-
-                # 注册意图分析完成的消息处理器
-                from src.communication.message_types import MessageType
-
-                ws_handler.register_handler(MessageType.INTENT_ANALYZED, self._on_intent_analyzed)
-
-                self.logger.info("✅ [延迟初始化] 意图确认组件初始化成功")
-
-            except Exception as e:
-                self.logger.error(f"[延迟初始化] 初始化意图确认组件失败: {e}", exc_info=True)
-
-        thread = threading.Thread(target=init_in_background, daemon=True)
-        thread.start()
-        self.logger.info("[延迟初始化] 后台初始化线程已启动")
-
-    def _on_intent_analyzed(self, msg) -> dict:
-        """处理意图分析完成的消息（WebSocket 回调，在后台线程执行）"""
-        try:
-            data = msg.data
-            intent_id = data.get("intent_id")
-            recording_id = data.get("recording_id")
-
-            self.logger.info(f"收到意图分析完成消息: {intent_id}, 录制ID: {recording_id}")
-
-            # 通过信号将页面切换投递到 UI 线程，避免在后台线程操作 Qt 控件
-            self._switch_to_intent_page.emit()
-
-            return {"status": "success"}
-
-        except Exception as e:
-            self.logger.error(f"处理意图分析消息失败: {e}", exc_info=True)
-            return {"status": "error", "message": str(e)}
-
     def _create_agent_ui_bridge(self):
         """
         创建 v2 AgentUIBridge 实例（内部方法）
@@ -418,7 +351,6 @@ class MainWindow(QMainWindow):
         from src.business.ai.llm_client import LangChainLLMClient
         from src.business.orchestration.agent_orchestrator import AgentOrchestrator
         from src.ui.agent_ui_bridge import AgentUIBridge
-        from src.data.unified_config import get_unified_config
         from src.utils.events import connect
 
         config = get_unified_config()
@@ -753,12 +685,12 @@ class MainWindow(QMainWindow):
         """每次切换页面时触发各页面刷新"""
         if page_name == CONVERSATIONS:
             chat_page = self._get_chat_widget()
-            if chat_page and hasattr(chat_page, "show_session_list"):
+            if chat_page:
                 chat_page.show_session_list()
         elif page_name == SKILLS:
             page = self.main_content.get_page(SKILLS)
-            if page and hasattr(page, "load_tools"):
-                page.load_tools()
+            if page:
+                page.refresh()
 
     def _switch_to_pending_tools(self) -> None:
         """切换到待试用工具页面（switch_page 会触发 _on_page_changed 自动刷新）"""
@@ -947,6 +879,15 @@ class MainWindow(QMainWindow):
             """在后台线程中执行录制启动"""
             browser_recorder = None
             try:
+                # ⭐ 先清理旧的录制器（释放端口等资源）
+                if self.browser_recorder is not None:
+                    self.logger.info("清理旧的录制器...")
+                    try:
+                        self.browser_recorder.cleanup()
+                    except Exception as e:
+                        self.logger.warning(f"清理旧录制器失败: {e}")
+                    self.browser_recorder = None
+
                 self.logger.info("正在启动浏览器录制器...")
 
                 # ⭐ 优化2：捕获所有初始化错误，确保不会卡死
@@ -1089,22 +1030,6 @@ class MainWindow(QMainWindow):
         # ⭐ 在主线程中显示错误消息（线程安全）
         QMessageBox.critical(self, "教学错误", error_message)
 
-    def _on_workflow_error(self, error_message: str, error_type: str) -> None:
-        """工作流错误的槽函数（主线程中执行）"""
-        self.logger.warning(f"⚠️ 工作流错误 ({error_type}): {error_message}")
-
-        # 根据错误类型决定提示方式
-        if error_type == "compression_model_fallback":
-            # 压缩模型降级：显示警告提示（不阻断流程）
-            QMessageBox.warning(
-                self,
-                "压缩模型警告",
-                f"{error_message}\n\n已自动回退到规则引擎，工具生成将继续进行。",
-            )
-        else:
-            # 其他错误：显示普通提示
-            QMessageBox.warning(self, "工作流提示", error_message)
-
     # ===== UI 组件信号处理（替代 WebSocket 客户端）=====
 
     def _on_intent_analyze_request(self, intent_id: str, user_message: str) -> None:
@@ -1125,8 +1050,8 @@ class MainWindow(QMainWindow):
                     self.logger.info(f"已传递用户反馈给 Agent: {workflow_id}")
 
                     intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
-                    if intent_page and hasattr(intent_page, "status_label"):
-                        intent_page.status_label.setText("正在处理您的反馈...")
+                    if intent_page:
+                        intent_page.set_status_text("正在处理您的反馈...")
 
                 except Exception as e:
                     self.logger.error(f"传递用户反馈失败: {e}", exc_info=True)
@@ -1145,6 +1070,8 @@ class MainWindow(QMainWindow):
         self.logger.info(f"收到工具试用请求: {pending_tool_id}")
 
         # 1. 查出 workflow_id
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为需要从 tool_id 反查 workflow_id，业务层尚无对应服务。
         try:
             from src.data.repositories import ToolRepository
 
@@ -1255,22 +1182,18 @@ class MainWindow(QMainWindow):
         """
         self.logger.info("正在关闭应用程序...")
 
-        # 停止正在进行的录制
+        # 停止正在进行的录制并清理资源（Playwright Node.js 进程等）
         if self.browser_recorder is not None:
             try:
                 self.logger.info("停止正在进行的录制...")
                 self.browser_recorder.stop_recording()
             except Exception as e:
                 self.logger.error(f"停止录制失败: {e}")
-
-        # ⭐ 优雅关闭 WebSocket 服务器
-        if self.ws_manager is not None:
             try:
-                self.logger.info("停止 WebSocket 服务器...")
-                self.ws_manager.stop()
-                self.logger.info("WebSocket 服务器已停止")
+                self.browser_recorder.cleanup()
             except Exception as e:
-                self.logger.error(f"停止 WebSocket 服务器失败: {e}")
+                self.logger.error(f"清理录制器失败: {e}")
+            self.browser_recorder = None
 
         # 关闭 DuckDB 连接
         try:

@@ -16,9 +16,12 @@ from PyQt6.QtWidgets import (
     QFrame,
     QMessageBox,
     QWidget,
+    QSpinBox,
+    QDoubleSpinBox,
 )
 from PyQt6.QtCore import Qt
 from typing import Dict, Any, Optional, List
+import json
 
 from src.data.models import Tool
 from src.utils.logger import get_logger
@@ -84,11 +87,22 @@ class ParameterInputWidget(QFrame):
             layout.addWidget(self.input_widget)
 
         elif param_type == "number":
-            self.input_widget = QLineEdit()
-            self.input_widget.setObjectName("parameter_number_input")
-            self.input_widget.setInputMask("999999")  # 简单数字输入
-            if "default" in self.param:
-                self.input_widget.setText(str(self.param["default"]))
+            default_val = self.param.get("default")
+            if isinstance(default_val, float) or (
+                isinstance(default_val, str) and "." in default_val
+            ):
+                self.input_widget = QDoubleSpinBox()
+                self.input_widget.setObjectName("parameter_number_input")
+                self.input_widget.setRange(-999999, 999999)
+                self.input_widget.setDecimals(4)
+                if default_val is not None:
+                    self.input_widget.setValue(float(default_val))
+            else:
+                self.input_widget = QSpinBox()
+                self.input_widget.setObjectName("parameter_number_input")
+                self.input_widget.setRange(-999999, 999999)
+                if default_val is not None:
+                    self.input_widget.setValue(int(default_val))
             layout.addWidget(self.input_widget)
 
         elif param_type == "textarea":
@@ -114,6 +128,8 @@ class ParameterInputWidget(QFrame):
         if param_type in ["text", "password"]:
             return self.input_widget.text()
         elif param_type == "number":
+            if isinstance(self.input_widget, QDoubleSpinBox):
+                return self.input_widget.value()
             text = self.input_widget.text()
             return int(text) if text else None
         elif param_type == "textarea":
@@ -359,7 +375,6 @@ class ExecutionResultDialog(QDialog):
 
     def _format_result(self, result: Dict[str, Any]) -> str:
         """格式化结果"""
-        import json
 
         try:
             return json.dumps(result, indent=2, ensure_ascii=False)
@@ -368,11 +383,10 @@ class ExecutionResultDialog(QDialog):
 
 
 class ToolExecutor:
-    """工具执行器（协调执行）"""
+    """工具执行器（委托给 execution/tool_executor.py 的 venv 隔离执行）"""
 
     def __init__(self):
         self.logger = get_logger(__name__)
-        self.executor = None  # WorkflowExecutor 实例
 
     def execute_tool(
         self, tool: Tool, parameters: Dict[str, Any]
@@ -391,12 +405,14 @@ class ToolExecutor:
             self.logger.info(f"开始执行工具: {tool.tool_name}")
 
             if tool.execution_code:
-                # 使用独立进程执行脚本
-                return self._execute_standalone_script(tool, parameters)
+                from src.execution.tool_executor import run_tool_code
+
+                result = run_tool_code(tool.execution_code, parameters)
+                success = result.get("success", False)
+                error = result.get("message") if not success else None
+                return success, result, error
 
             elif tool.steps:
-                # 使用 WorkflowExecutor（如果集成）
-                # TODO: 集成 WorkflowExecutor
                 self.logger.warning(f"WorkflowExecutor 尚未集成，工具: {tool.tool_name}")
                 return False, None, "WorkflowExecutor 尚未集成"
 
@@ -407,54 +423,3 @@ class ToolExecutor:
             error_msg = f"执行工具时发生异常: {str(e)}"
             self.logger.error(error_msg, exc_info=True)
             return False, None, error_msg
-
-    def _execute_standalone_script(
-        self, tool: Tool, parameters: Dict[str, Any]
-    ) -> tuple[bool, Optional[Any], Optional[str]]:
-        """执行独立脚本（使用 subprocess 隔离执行环境）"""
-        import subprocess
-        import sys
-        import tempfile
-        import json
-        from pathlib import Path
-
-        # 创建临时脚本文件
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".py", delete=False, encoding="utf-8"
-        ) as f:
-            script_path = f.name
-            f.write(tool.execution_code)
-
-        try:
-            # 构建命令行参数
-            cmd_args = [sys.executable, script_path]
-            for key, value in parameters.items():
-                cmd_args.append(f"{key}={value}")
-
-            # 执行脚本
-            result = subprocess.run(
-                cmd_args, capture_output=True, text=True, timeout=300, encoding="utf-8"  # 5分钟超时
-            )
-
-            # 解析输出
-            if result.returncode == 0:
-                try:
-                    output = json.loads(result.stdout.strip())
-                    success = output.get("success", False)
-                    return success, output, None
-                except json.JSONDecodeError as e:
-                    return False, None, f"无法解析输出: {e}"
-            else:
-                error_msg = result.stderr or result.stdout or "未知错误"
-                return False, None, error_msg
-
-        except subprocess.TimeoutExpired:
-            return False, None, "执行超时"
-        except Exception as e:
-            return False, None, str(e)
-        finally:
-            # 清理临时文件
-            try:
-                Path(script_path).unlink()
-            except Exception:
-                pass

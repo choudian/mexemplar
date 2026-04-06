@@ -8,6 +8,7 @@ AgentUIBridge 将其放入后台 QThread，通过 PyQt 信号将结果安全传�
 """
 
 import logging
+import threading
 from typing import Dict, List, Optional, Set
 
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
@@ -126,9 +127,8 @@ class AgentUIBridge(QObject):
         connect("teaching_failure_retrying", self._on_failure_retrying)
 
         # 当前正在重试的 workflow_id 集合
-        # 线程安全说明：依赖 CPython GIL 下 set 基本操作近似原子，
-        # 竞态窗口极窄，最坏情况仅是一次 toast 重复或缺失，不影响数据正确性。
         self._retrying_workflows: Set[str] = set()
+        self._retry_lock = threading.Lock()
 
     def start_agent(
         self,
@@ -232,7 +232,9 @@ class AgentUIBridge(QObject):
         workflow_id = kwargs.get("workflow_id") or ""
         agent_type = kwargs.get("agent_type") or ""
         # 重试中的教学 workflow 出错时，走专用信号避免重复 toast
-        if workflow_id in self._retrying_workflows and agent_type in ("pm", "programmer", "trial"):
+        with self._retry_lock:
+            is_retrying = workflow_id in self._retrying_workflows
+        if is_retrying and agent_type in ("pm", "programmer", "trial"):
             self.retry_failed_signal.emit(
                 workflow_id,
                 kwargs.get("error") or "",
@@ -293,19 +295,24 @@ class AgentUIBridge(QObject):
 
     def retry_teaching(self, workflow_id: str) -> None:
         """在后台线程中执行教学重试"""
-        self._retrying_workflows.add(workflow_id)
+        with self._retry_lock:
+            self._retrying_workflows.add(workflow_id)
         worker_key = workflow_id  # 与 start_agent 共享 worker 字典，防止并发
         worker = RetryTeachingWorker(self._orchestrator, workflow_id)
 
         def _on_cleanup(wid=workflow_id):
-            self._retrying_workflows.discard(wid)
+            with self._retry_lock:
+                self._retrying_workflows.discard(wid)
 
         if not self._run_in_background(worker_key, worker, on_finished=_on_cleanup):
-            self._retrying_workflows.discard(workflow_id)
+            with self._retry_lock:
+                self._retrying_workflows.discard(workflow_id)
 
     def dismiss_failure(self, workflow_id: str) -> None:
         """忽略失败记录（主线程同步调用，仅 DB + emit，无阻塞）"""
-        if workflow_id in self._retrying_workflows:
+        with self._retry_lock:
+            is_retrying = workflow_id in self._retrying_workflows
+        if is_retrying:
             logger.warning(f"[AgentUIBridge] 正在重试中，不允许忽略: {workflow_id}")
             return
         self._orchestrator.dismiss_failure(workflow_id)

@@ -28,6 +28,7 @@ from typing import List
 from datetime import datetime
 
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
+from src.ui.widgets.layout_utils import clear_layout
 from src.utils.logger import get_logger
 from src.data.models import Tool
 from src.data.models_sqlite import TeachingFailureRecord
@@ -698,7 +699,14 @@ class ToolsManagementUI(QWidget):
 
     # ── 数据加载 ──
 
+    def refresh(self):
+        """公开刷新方法（供外部调用，如页面切换时）"""
+        self._load_tools()
+        self._load_failures()
+
     def _load_tools(self):
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为这是简单的只读 CRUD 操作，业务层尚无对应服务。
         try:
             from src.data.repositories import ToolRepository
             from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
@@ -737,77 +745,16 @@ class ToolsManagementUI(QWidget):
             )
         except Exception as e:
             self.logger.error(f"从数据库加载技能失败: {e}", exc_info=True)
-            self._load_sample_tools()
+            self.update_pending_tools([])
+            self.update_published_tools([])
 
-    def load_tools(self):
-        """公开刷新方法"""
-        self._load_tools()
-        self._load_failures()
 
-    def _load_sample_tools(self):
-        sample_pending = [
-            PendingTool(
-                tool_name="网页登录",
-                tool_description="自动登录到指定网站",
-                status=PendingToolStatus.PENDING_TRIAL,
-                trial_count=0,
-                max_trials=3,
-                created_at=datetime.now(),
-            ),
-            PendingTool(
-                tool_name="数据提取",
-                tool_description="从网页提取表格数据",
-                status=PendingToolStatus.TRIAL_SUCCESS,
-                trial_count=1,
-                max_trials=3,
-                created_at=datetime.now(),
-            ),
-            PendingTool(
-                tool_name="表单填写",
-                tool_description="自动填写并提交表单",
-                status=PendingToolStatus.TRIAL_FAILED,
-                trial_count=2,
-                max_trials=3,
-                last_error="找不到元素：#submit-button",
-                created_at=datetime.now(),
-            ),
-            PendingTool(
-                tool_name="文件下载",
-                tool_description="下载指定文件",
-                status=PendingToolStatus.AWAITING_REAL_DATA,
-                trial_count=1,
-                max_trials=3,
-                created_at=datetime.now(),
-            ),
-        ]
-        sample_published = [
-            Tool(
-                tool_name="邮件发送",
-                description="自动发送邮件通知",
-                source="intent",
-                created_at=datetime.now(),
-            ),
-            Tool(
-                tool_name="数据备份",
-                description="自动备份重要数据到云盘",
-                source="trial",
-                created_at=datetime.now(),
-            ),
-            Tool(
-                tool_name="报表生成",
-                description="自动生成周报和月报",
-                source="manual",
-                created_at=datetime.now(),
-            ),
-        ]
-        self.update_pending_tools(sample_pending)
-        self.update_published_tools(sample_published)
 
     # ── 列表更新 ──
 
     def update_pending_tools(self, pending_tools: List[PendingTool]):
         self.pending_tools = pending_tools
-        self._clear_grid(self.pending_tools_grid)
+        clear_layout(self.pending_tools_grid)
         self.pending_tool_cards.clear()
 
         # 更新 Tab 文字
@@ -829,7 +776,7 @@ class ToolsManagementUI(QWidget):
 
     def update_published_tools(self, published_tools: List[Tool]):
         self.published_tools = published_tools
-        self._clear_grid(self.published_tools_grid)
+        clear_layout(self.published_tools_grid)
         self.published_tool_cards.clear()
 
         self._published_tab_btn.setText(f"已掌握 ({len(published_tools)})")
@@ -847,13 +794,6 @@ class ToolsManagementUI(QWidget):
 
         for col in range(3):
             self.published_tools_grid.setColumnStretch(col, 1)
-
-    @staticmethod
-    def _clear_grid(grid: QGridLayout):
-        while grid.count():
-            child = grid.takeAt(0)
-            if child.widget():
-                child.widget().deleteLater()
 
     # ── 事件处理 ──
 
@@ -965,7 +905,7 @@ class ToolsManagementUI(QWidget):
 
     def update_failure_records(self, failure_records: List[TeachingFailureRecord]):
         self.failure_records = failure_records
-        self._clear_grid(self.failures_grid)
+        clear_layout(self.failures_grid)
         self.failure_cards.clear()
 
         self._failures_tab_btn.setText(f"失败记录 ({len(failure_records)})")
@@ -984,6 +924,8 @@ class ToolsManagementUI(QWidget):
             self.failures_grid.setColumnStretch(col, 1)
 
     def _load_failures(self):
+        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
+        # 当前保留是因为这是简单的只读操作，业务层尚无对应服务。
         try:
             from src.data.repositories import TeachingFailureRepository
 
