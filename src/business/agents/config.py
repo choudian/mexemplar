@@ -7,13 +7,10 @@ Agent 配置系统
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Dict, Any, Union
-import logging
 
 from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT
 from src.business.agents.prompts.programmer_prompt import PROGRAMMER_SYSTEM_PROMPT
 from src.business.agents.prompts.assistant_prompt import ASSISTANT_SYSTEM_PROMPT
-
-logger = logging.getLogger(__name__)
 
 
 class AgentType(str, Enum):
@@ -93,7 +90,6 @@ class AgentResult:
     """Agent 运行结果"""
 
     result_type: ResultType
-    final_output: Optional[str] = None
     question: Optional[str] = None
     error: Optional[str] = None
     signal_tool: Optional[Any] = None  # ToolCallInfo，信号工具触发时携带
@@ -126,6 +122,7 @@ TRIAL_CONFIG = AgentConfig(
     agent_type=AgentType.TRIAL,
     system_prompt="你是 Exemplar 的试用助手。",
     max_iterations=20,
+    text_as_user_input=True,
 )
 
 # Assistant Agent 配置
@@ -137,30 +134,6 @@ ASSISTANT_CONFIG = AgentConfig(
     max_iterations=200,
     text_as_user_input=True,
 )
-
-
-# =============================================================================
-# 便捷函数
-# =============================================================================
-
-
-def get_agent_config(agent_type: AgentType) -> AgentConfig:
-    """
-    根据 Agent 类型获取配置
-
-    Args:
-        agent_type: Agent 类型
-
-    Returns:
-        Agent 配置
-    """
-    configs = {
-        AgentType.PM: PM_CONFIG,
-        AgentType.PROGRAMMER: PROGRAMMER_CONFIG,
-        AgentType.TRIAL: TRIAL_CONFIG,
-        AgentType.ASSISTANT: ASSISTANT_CONFIG,
-    }
-    return configs.get(agent_type, TRIAL_CONFIG)
 
 
 __all__ = [
@@ -175,5 +148,4 @@ __all__ = [
     "PROGRAMMER_CONFIG",
     "TRIAL_CONFIG",
     "ASSISTANT_CONFIG",
-    "get_agent_config",
 ]

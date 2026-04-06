@@ -56,7 +56,7 @@ _COMMON_TABLES: dict[str, dict] = {
             "browser_type": ("VARCHAR", "浏览器类型（browser 模式）", None),
             "start_time": ("DATETIME", "录制开始时间", None),
             "end_time": ("DATETIME", "录制结束时间", None),
-            "session_metadata": ("JSON", "会话附加元数据", None),
+            "metadata": ("JSON", "会话附加元数据", None),
             "created_at": ("DATETIME", "记录创建时间", None),
         },
     },
@@ -121,6 +121,7 @@ _COMMON_TABLES: dict[str, dict] = {
             "filter_reason": ("JSON", "过滤原因", None),
             "is_recommendation": ("BOOLEAN", "是否为推荐使用的请求", None),
             "importance_level": ("VARCHAR", "重要程度：high / medium / low", None),
+            "filtered_at": ("DATETIME", "过滤时间", None),
         },
     },
     "sibling_snapshots": {
@@ -157,6 +158,8 @@ _COMMON_TABLES: dict[str, dict] = {
             "reason": ("TEXT", "过滤原因说明", None),
             "pattern_matched": ("VARCHAR", "匹配到的规则模式（如有）", None),
             "scores": ("JSON", "各维度评分", None),
+            "request_timestamp": ("DATETIME", "关联请求的时间戳", None),
+            "action_timestamp": ("DATETIME", "关联操作的时间戳", None),
             "timestamp": ("DATETIME", "决策时间", None),
         },
     },
@@ -179,7 +182,7 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
     db = DuckDBManager()
 
     if tables is None:
-        # 第一级：概览
+        # 第一级：概览 — 逐表查询行数（单表出错不影响其他表）
         result = {"tables": []}
         for table_name, meta in _COMMON_TABLES.items():
             try:
@@ -294,11 +297,23 @@ def _query_data(recording_id: str, sql: str) -> str:
             ensure_ascii=False,
         )
 
+    # 防止注释注入（-- 和 /* */ 可截断后续安全检查）
+    if "--" in sql or "/*" in sql:
+        return json.dumps(
+            {"error": "SQL 中不允许包含注释符号（-- 或 /* */）"},
+            ensure_ascii=False,
+        )
+
+    # 防止 SELECT INTO（可创建新表）
+    if re.search(r"\bSELECT\b.*\bINTO\b", sql, re.IGNORECASE):
+        return json.dumps(
+            {"error": "不允许 SELECT INTO 语句"},
+            ensure_ascii=False,
+        )
+
     db = DuckDBManager()
     try:
-        cursor = db.execute(sql)
-        col_names = [desc[0] for desc in cursor.description]
-        rows = cursor.fetchall()
+        col_names, rows = db.execute_and_fetchall(sql)
 
         if not rows:
             return json.dumps({"rows": [], "row_count": 0}, ensure_ascii=False)
@@ -375,8 +390,8 @@ _SAFE_BUILTINS: dict[str, Any] = {
         "any", "all", "iter", "next",
         # 字符串/repr
         "repr", "format", "chr", "ord", "hex", "oct", "bin", "ascii",
-        # 其他安全操作
-        "id", "hash", "getattr", "setattr", "hasattr", "dir", "vars",
+        # 其他安全操作（不含 getattr/setattr/hasattr/dir/vars——内省函数可绕过沙箱）
+        "id", "hash",
         "slice", "object", "super", "property", "staticmethod", "classmethod",
         "True", "False", "None",
         "Exception", "ValueError", "TypeError", "KeyError", "IndexError",

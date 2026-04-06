@@ -429,10 +429,19 @@ EXEC_SCHEMA = make_tool_schema(
 def exec_handler(command: str, timeout: int = 30) -> str:
     """执行 shell 命令"""
     try:
-        # 检查是否在白名单中
+        # 检查是否在白名单中：精确匹配命令前缀，防止 ";", "|", "&", "&&", "||" 注入
         cmd_lower = command.strip().lower()
-        is_safe = any(cmd_lower == safe or cmd_lower.startswith(safe + " ")
-                      for safe in EXEC_SAFE_COMMANDS)
+        is_safe = False
+        for safe in EXEC_SAFE_COMMANDS:
+            if cmd_lower == safe:
+                is_safe = True
+                break
+            if cmd_lower.startswith(safe + " "):
+                # 确保前缀之后不包含 shell 元字符（防止 "ls; rm -rf /" 绕过）
+                rest = cmd_lower[len(safe) + 1:]
+                if not any(c in rest for c in (";", "|", "&", "`", "$", "(", ")", "\n", "\r", ">", "<")):
+                    is_safe = True
+                    break
 
         if not is_safe:
             confirmed = _ask_user_confirm(f"将执行以下命令：\n\n{command}\n\n是否确认？")

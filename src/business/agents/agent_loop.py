@@ -13,6 +13,7 @@ from src.business.ai.llm_client import LangChainLLMClient, LLMResponse, ToolCall
 from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
 from src.data.repositories import MessageRepository
+from src.utils.helpers import safe_format_template
 
 from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
@@ -52,6 +53,9 @@ class AgentLoop:
         self._llm = llm_client
         self._unified_config = unified_config
         self._ctx_cache: Dict[str, ContextManager] = {}
+        self._max_ctx_cache = 20  # 限制缓存大小，防止内存泄漏
+        self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
+        self._msg_repo = MessageRepository()  # 复用 MessageRepository，避免每次重建
 
         logger.debug(
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
@@ -64,13 +68,10 @@ class AgentLoop:
 
         Orchestrator 在首次启动 Agent 前调用，避免直接访问 _config 私有属性。
         只替换明确传入的占位符（如 {recording_id}），其余内容原样保留。
-        使用 str.replace 而非 format_map，避免 prompt 中的代码示例（含 {…} 的 JSON/Python
+        使用 safe_format_template 而非 format_map，避免 prompt 中的代码示例（含 {…} 的 JSON/Python
         片段）触发 ValueError: Invalid format specifier。
         """
-        prompt = self._config.system_prompt
-        for key, value in kwargs.items():
-            prompt = prompt.replace("{" + key + "}", str(value))
-        return prompt
+        return safe_format_template(self._config.system_prompt, **kwargs)
 
     def _get_context_manager(self, session_id: str) -> ContextManager:
         """
@@ -83,12 +84,17 @@ class AgentLoop:
             ContextManager 实例
         """
         if session_id not in self._ctx_cache:
+            # 淘汰：超出上限时移除最早的缓存
+            if len(self._ctx_cache) >= self._max_ctx_cache:
+                oldest_key = next(iter(self._ctx_cache))
+                del self._ctx_cache[oldest_key]
+                self._system_prompt_checked.pop(oldest_key, None)  # 同步清理
             self._ctx_cache[session_id] = ContextManager(session_id, self._unified_config)
         return self._ctx_cache[session_id]
 
     def _has_system_prompt(self, session_id: str) -> bool:
         """
-        检查会话是否已有 system prompt
+        检查会话是否已有 system prompt（结果按 session_id 缓存，含 False）
 
         Args:
             session_id: 会话 ID
@@ -96,9 +102,12 @@ class AgentLoop:
         Returns:
             是否已有 system prompt
         """
-        msg_repo = MessageRepository()
-        first_msg = msg_repo.get_first(session_id)
-        return first_msg and first_msg.role == "system"
+        if session_id in self._system_prompt_checked:
+            return self._system_prompt_checked[session_id]
+        first_msg = self._msg_repo.get_first(session_id)
+        result = first_msg is not None and first_msg.role == "system"
+        self._system_prompt_checked[session_id] = result
+        return result
 
     def _is_retryable_error(self, error: Exception) -> bool:
         """
@@ -291,7 +300,6 @@ class AgentLoop:
             logger.info(f"[Agent Loop] 完成（无工具调用）: {ctx.session_id}")
             return AgentResult(
                 result_type=ResultType.COMPLETED,
-                final_output=response.content or "",
             )
 
         tool_call = response.tool_calls[0]
@@ -324,6 +332,7 @@ class AgentLoop:
         if not self._has_system_prompt(session_id):
             prompt = system_prompt_override or self._config.system_prompt
             ctx.save_message(role="system", content=prompt)
+            self._system_prompt_checked[session_id] = True
             logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
 
         # 无新输入时检查是否需要等待用户
@@ -414,13 +423,15 @@ class AgentLoop:
         # 构建工具 schemas 和 handlers 的辅助函数
         def _rebuild_tools(tool_defs: List[ToolDefinition], ctx: ContextManager):
             nonlocal all_tool_schemas, tool_handlers
-            all_tool_schemas = [td.schema for td in tool_defs] + [
-                TALK_TO_USER_SCHEMA,
-                LOAD_REFERENCE_SCHEMA,
-            ]
+            builtin_schemas = [LOAD_REFERENCE_SCHEMA]
             tool_handlers = {td.name: td.handler for td in tool_defs}
-            tool_handlers["talk_to_user"] = talk_to_user
             tool_handlers["load_reference"] = lambda reference_id: ctx.load_reference(reference_id)
+            # text_as_user_input=True 时，LLM 直接输出文本即可与用户对话，
+            # 不需要 talk_to_user 工具（避免 LLM 在该调 submit 时误调 talk_to_user）
+            if not self._config.text_as_user_input:
+                builtin_schemas.append(TALK_TO_USER_SCHEMA)
+                tool_handlers["talk_to_user"] = talk_to_user
+            all_tool_schemas = [td.schema for td in tool_defs] + builtin_schemas
 
         _tools_callable = callable(tools)
         all_tool_schemas: list = []
