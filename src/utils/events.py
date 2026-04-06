@@ -105,28 +105,9 @@ def connect(signal_name: str, callback: Callable) -> Callable:
 
     Returns:
         取消连接的函数
-
-    Example:
-        >>> def on_recording_completed(sender, **kwargs):
-        ...     print(f"Recording completed: {kwargs}")
-        >>> disconnect = connect('recording_completed', on_recording_completed)
-        >>> # 取消连接
-        ... disconnect()
     """
     signal = _signals.signal(signal_name)
     return signal.connect(callback)
-
-
-def disconnect(signal_name: str, callback: Callable) -> None:
-    """
-    断开信号和回调函数的连接
-
-    Args:
-        signal_name: 信号名称
-        callback: 回调函数
-    """
-    signal = _signals.signal(signal_name)
-    signal.disconnect(callback)
 
 
 def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
@@ -137,9 +118,6 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
         signal_name: 信号名称
         sender: 发送者对象
         **kwargs: 事件数据
-
-    Example:
-        >>> emit('recording_completed', session_id='123', action_count=5)
     """
     signal = _signals.signal(signal_name)
     if logger.isEnabledFor(logging.DEBUG):
@@ -150,39 +128,9 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
         logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}")
 
 
-def list_signals() -> dict:
-    """
-    列出所有已注册的信号及其监听器数量
-
-    Returns:
-        字典，键为信号名称，值为监听器数量
-    """
-    result = {}
-    for name in _signal_names:
-        signal = _signals.signal(name)
-        # 获取所有接收器数量（简化计算）
-        try:
-            count = len(signal.receivers_for(None))
-            result[name] = count
-        except AttributeError as e:
-            logger.warning(f"获取信号监听器数量失败: {name}, 错误: {e}")
-            result[name] = 0
-        except Exception as e:
-            logger.error(f"获取信号监听器数量时发生未预期错误: {name}, 错误: {e}")
-            result[name] = 0
-
-    return result
-
-
-def clear_all() -> None:
-    """
-    清除所有信号的监听器（主要用于测试）
-    """
-    for name in _signal_names:
-        signal = _signals.signal(name)
-        # 清空所有接收器
-        signal._clear_state()
-
+# =============================================================================
+# 测试辅助
+# =============================================================================
 
 _signal_names = [
     "recording_started",
@@ -205,30 +153,13 @@ _signal_names = [
 ]
 
 
-# =============================================================================
-# 装饰器
-# =============================================================================
-
-
-def listen_to(signal_name: str):
+def clear_all() -> None:
     """
-    监听事件的装饰器
-
-    Args:
-        signal_name: 信号名称
-
-    Example:
-        >>> @listen_to('recording_completed')
-        ... def handle_recording_completed(sender, **kwargs):
-        ...     print(f"Handling: {kwargs}")
+    清除所有信号的监听器（主要用于测试）
     """
-
-    def decorator(func: Callable):
-        signal = _signals.signal(signal_name)
-        signal.connect(func)
-        return func
-
-    return decorator
+    for name in _signal_names:
+        signal = _signals.signal(name)
+        signal._clear_state()
 
 
 # =============================================================================
@@ -258,9 +189,7 @@ __all__ = [
     "RecordingEventData",
     # 函数
     "connect",
-    "disconnect",
     "emit",
-    "list_signals",
+    # 测试辅助
     "clear_all",
-    "listen_to",
 ]

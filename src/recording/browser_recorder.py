@@ -139,6 +139,7 @@ class BrowserRecorder:
         self._use_duckdb = True  # 默认启用 DuckDB 存储
         # ⭐ 提前初始化 RecordingRepository，避免多次创建导致连接冲突
         from src.data.recording_repository import RecordingRepository
+
         self._recording_repository = RecordingRepository()
 
         # 初始化调试日志工具
@@ -174,39 +175,34 @@ class BrowserRecorder:
             # 清理 WebSocket 服务器
             if self._ws_server:
                 try:
-                    self._ws_server.stop()
+                    self._ws_server.stop_sync()
                     logger.info("WebSocket 服务器已停止")
                 except Exception as e:
                     logger.warning(f"停止 WebSocket 服务器失败: {e}")
+                self._ws_server = None
 
-            # 清理浏览器资源
-            if self._browser:
-                try:
-                    # 异步关闭浏览器
-                    if self._event_loop and not self._event_loop.is_closed():
-                        import asyncio
-                        try:
-                            asyncio.run_coroutine_threadsafe(
-                                self._browser.close(),
-                                self._event_loop
-                            ).result(timeout=5)
-                        except Exception as e:
-                            logger.warning(f"关闭浏览器失败: {e}")
-                except Exception as e:
-                    logger.warning(f"清理浏览器资源失败: {e}")
-
-            # 停止事件循环
+            # 清理浏览器资源（通过异步 _close_browser 统一处理）
             if self._event_loop and not self._event_loop.is_closed():
+                import asyncio
+
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self._close_browser(), self._event_loop
+                    ).result(timeout=10)
+                except Exception as e:
+                    logger.warning(f"关闭浏览器失败: {e}")
+
+                # 停止事件循环
                 try:
                     self._event_loop.call_soon_threadsafe(self._event_loop.stop)
                 except Exception as e:
                     logger.warning(f"停止事件循环失败: {e}")
 
             # 清理 RecordingRepository
-            if hasattr(self, '_recording_repository') and self._recording_repository:
+            if hasattr(self, "_recording_repository") and self._recording_repository:
                 try:
-                    if hasattr(self._recording_repository, 'db') and self._recording_repository.db:
-                        if hasattr(self._recording_repository.db, 'close'):
+                    if hasattr(self._recording_repository, "db") and self._recording_repository.db:
+                        if hasattr(self._recording_repository.db, "close"):
                             self._recording_repository.db.close()
                             logger.info("DuckDB 连接已关闭")
                 except Exception as e:
@@ -394,7 +390,7 @@ class BrowserRecorder:
                 user_data_dir=user_data_dir,
                 headless=False,
                 accept_downloads=True,
-                ignore_default_args=["--enable-automation"],
+                ignore_default_args=["--enable-automation", "--disable-extensions"],
                 args=[
                     f"--disable-extensions-except={extension_path_final}",
                     f"--load-extension={extension_path_final}",
@@ -504,7 +500,7 @@ class BrowserRecorder:
 
                             last_page_count = current_page_count
 
-                        time.sleep(0.5)  # 每 0.5 秒检查一次
+                        time.sleep(5)  # 兜底检查间隔（主路径由事件监听器处理）
 
                     except Exception as e:
                         logger.debug(f"[POLLED] 检查页面时出错: {e}")
@@ -758,7 +754,8 @@ class BrowserRecorder:
     def _suppress_playwright_logs():
         """临时抑制 Playwright 的关闭日志"""
         import logging
-        playwright_logger = logging.getLogger('playwright')
+
+        playwright_logger = logging.getLogger("playwright")
         original_level = playwright_logger.level
         try:
             # 设置到比CRITICAL更高的级别，只抑制Playwright日志
@@ -809,6 +806,15 @@ class BrowserRecorder:
         from .websocket_server import WebSocketServer
 
         logger.info("启动 WebSocket 服务器...")
+
+        # ⭐ 先清理旧的 WebSocket 服务器（防止端口冲突）
+        if self._ws_server:
+            logger.info("检测到旧的 WebSocket 服务器，先停止...")
+            try:
+                self._ws_server.stop_sync()
+            except Exception as e:
+                logger.warning(f"停止旧 WebSocket 服务器失败: {e}")
+            self._ws_server = None
 
         # ⭐ 创建 WebSocket 服务器（从配置读取）
         config = get_unified_config()
@@ -890,7 +896,7 @@ class BrowserRecorder:
         start_time = time.time()
 
         while time.time() - start_time < timeout:
-            if self._ws_server and self._ws_server.is_running:
+            if self._ws_server and self._ws_server.has_clients:
                 return True
             time.sleep(0.5)
 
@@ -1090,23 +1096,21 @@ class BrowserRecorder:
         logger.info("关闭浏览器...")
         await self._close_browser()
 
-        # 4. WebSocket 服务器会自动停止（后台线程会结束）
-
-        # 4. 统计队列文件中的事件数
-        action_count = 0
-        if self._action_queue_path and self._action_queue_path.exists():
+        # 4. 停止 WebSocket 服务器
+        if self._ws_server:
             try:
-                with open(self._action_queue_path, "r", encoding="utf-8") as f:
-                    action_count = sum(1 for _ in f)
-                logger.info(f"队列文件包含 {action_count} 个事件")
+                self._ws_server.stop_sync()
+                logger.info("WebSocket 服务器已停止")
             except Exception as e:
-                logger.warning(f"统计事件数量失败: {e}")
+                logger.warning(f"停止 WebSocket 服务器失败: {e}")
+            self._ws_server = None
 
-        # ⭐ 新增：Phase 4 - 保存到 DuckDB（即使没有事件也保存会话）
+        # 5. 保存到 DuckDB（同时获取实际事件数）
+        action_count = 0
         if self._use_duckdb:
             try:
                 logger.info("开始保存录制数据到 DuckDB...")
-                self._save_to_duckdb(end_time, action_count)
+                action_count = self._save_to_duckdb(end_time)
                 logger.info("DuckDB 保存完成")
             except Exception as e:
                 logger.error(f"保存到 DuckDB 失败: {e}")
@@ -1154,18 +1158,20 @@ class BrowserRecorder:
 
     # ===== DuckDB 存储方法（Phase 4）=====
 
-    def _save_to_duckdb(self, end_time: float, action_count: int):
+    def _save_to_duckdb(self, end_time: float) -> int:
         """
         保存录制数据到 DuckDB
 
         Args:
             end_time: 录制结束时间
-            action_count: 操作数量
+
+        Returns:
+            实际处理的 action 数量
         """
 
         # RecordingRepository 在 __init__ 时已初始化，直接使用
 
-        # 1. 保存录制会话
+        # 1. 保存录制会话（先不含 action_count，等解析完再更新）
         session_data = {
             "recording_id": self._recording_id,
             "status": "completed",
@@ -1175,7 +1181,6 @@ class BrowserRecorder:
             "end_time": end_time,
             "metadata": {
                 "queue_file": str(self._action_queue_path) if self._action_queue_path else None,
-                "action_count": action_count,
                 "websocket_mode": True,
             },
         }
@@ -1185,7 +1190,7 @@ class BrowserRecorder:
         # 2. 从队列文件读取事件并保存
         if not self._action_queue_path or not self._action_queue_path.exists():
             logger.warning("队列文件不存在，跳过操作保存")
-            return
+            return 0
 
         actions_list = []
         network_requests_map = {}  # line_num -> network_requests
@@ -1266,7 +1271,9 @@ class BrowserRecorder:
             # 4. 保存网络请求
             request_count = 0
 
-            logger.info(f"网络请求统计: network_requests_map={len(network_requests_map)}, standalone={len(standalone_network_requests)}")
+            logger.info(
+                f"网络请求统计: network_requests_map={len(network_requests_map)}, standalone={len(standalone_network_requests)}"
+            )
 
             # 4.1 关联到 action 的网络请求
             if network_requests_map and action_ids:
@@ -1274,12 +1281,16 @@ class BrowserRecorder:
                     if i + 1 in network_requests_map:
                         requests = network_requests_map[i + 1]
                         logger.debug(f"保存 action_id={action_id} 的 {len(requests)} 条网络请求")
-                        self._recording_repository.save_network_requests(action_id, requests, self._recording_id)
+                        self._recording_repository.save_network_requests(
+                            action_id, requests, self._recording_id
+                        )
                         request_count += len(requests)
 
             # 4.2 独立的网络请求（action_id 为 NULL），批量保存
             if standalone_network_requests:
-                logger.debug(f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)")
+                logger.debug(
+                    f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)"
+                )
                 saved = self._recording_repository.save_network_requests(
                     None, standalone_network_requests, self._recording_id
                 )
@@ -1288,9 +1299,12 @@ class BrowserRecorder:
             if request_count > 0:
                 logger.info(f"已保存 {request_count} 条网络请求到 DuckDB")
             else:
-                logger.warning(f"未找到任何网络请求保存 (network_requests_map={len(network_requests_map)}, standalone={len(standalone_network_requests)})")
+                logger.warning(
+                    f"未找到任何网络请求保存 (network_requests_map={len(network_requests_map)}, standalone={len(standalone_network_requests)})"
+                )
 
         # 注意：录制完成事件由 main_window.py 统一发送，这里不需要重复发送
+        return len(actions_list)
 
     def _convert_event_to_action_dict(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -1363,4 +1377,3 @@ class BrowserRecorder:
     def is_recording(self) -> bool:
         """检查是否正在录制"""
         return self._is_recording
-

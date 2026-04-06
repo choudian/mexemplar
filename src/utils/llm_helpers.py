@@ -1,7 +1,7 @@
 """
 LLM 辅助工具函数
 
-提供 LLM 客户端创建和响应解析的公共方法，消除各模块的重复代码。
+提供 LLM 响应解析的公共方法，消除各模块的重复代码。
 """
 
 import json
@@ -9,51 +9,7 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
-from src.data.unified_config import get_unified_config
-
 logger = logging.getLogger(__name__)
-
-
-def create_default_llm_client(
-    api_key: Optional[str] = None,
-    max_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-) -> "LangChainLLMClient":
-    """
-    从统一配置创建 LLM 客户端
-
-    Args:
-        api_key: API 密钥（可选，默认从配置/keyring 读取）
-        max_tokens: 最大 token 数（可选，默认从配置读取）
-        temperature: 温度参数（可选，默认从配置读取）
-
-    Returns:
-        LangChainLLMClient 实例
-
-    Raises:
-        ValueError: API 密钥未设置时
-    """
-    config = get_unified_config()
-
-    client_config = {
-        "provider": config.get_ai_provider(),
-        "model": config.get_ai_model(),
-        "api_key": api_key or config.get_ai_api_key(),
-        "temperature": temperature if temperature is not None else config.get_ai_temperature(),
-        "max_tokens": max_tokens if max_tokens is not None else config.get_ai_max_tokens(),
-    }
-
-    base_url = config.get_ai_base_url()
-    if base_url:
-        client_config["base_url"] = base_url
-
-    if not client_config["api_key"]:
-        raise ValueError("API 密钥未设置，请先配置 API 密钥")
-
-    # 延迟导入避免循环依赖：utils → business.ai.llm_client → business → ai → preprocessing → utils
-    from src.business.ai.llm_client import create_llm_client
-
-    return create_llm_client(client_config)
 
 
 def extract_json_from_response(

@@ -31,11 +31,11 @@ class WebSocketServer:
         config = get_unified_config()
         self.host = host or config.get_websocket_host()
         self.port = port or config.get_websocket_port()
-        self.server = None
         self.clients: Set[WebSocketServerProtocol] = set()
         self.message_handler: Optional[Callable] = None
         self._is_running = False
         self._loop = None  # 事件循环引用
+        self._serve_future = None  # 用于取消 serve 阻塞
 
         # 统计信息
         self.stats = {"connections": 0, "messages_received": 0, "messages_sent": 0, "errors": 0}
@@ -309,9 +309,25 @@ class WebSocketServer:
 
         logger.info(f"[WS] 最大消息大小: {max_size / 1024 / 1024:.1f} MB")
 
-        async with serve(self.handle_client, self.host, self.port, max_size=max_size):  # 从配置读取
-            # 服务器持续运行
-            await asyncio.Future()
+        # ⭐ 端口占用重试：如果上一次录制的 WS 服务器未正常关闭，等待端口释放
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with serve(self.handle_client, self.host, self.port, max_size=max_size):
+                    # 服务器持续运行，直到 _serve_future 被取消
+                    self._serve_future = asyncio.get_event_loop().create_future()
+                    try:
+                        await self._serve_future
+                    except asyncio.CancelledError:
+                        logger.info("[WS] 服务器收到停止信号")
+                return  # 正常退出
+            except OSError as e:
+                if e.errno == 10048 and attempt < max_retries - 1:  # WSAEADDRINUSE on Windows
+                    logger.warning(f"[WS] 端口 {self.port} 被占用，等待释放... (重试 {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(2)
+                else:
+                    self._is_running = False
+                    raise
 
     def start_in_thread(self):
         """在后台线程中启动服务器"""
@@ -326,7 +342,11 @@ class WebSocketServer:
             asyncio.set_event_loop(self._loop)
             # 通知主线程，事件循环已准备就绪
             loop_ready.set()
-            self._loop.run_until_complete(self.start())
+            try:
+                self._loop.run_until_complete(self.start())
+            except RuntimeError:
+                # stop_sync() 会先取消 Future 再停止循环，此处 RuntimeError 是预期行为
+                pass
 
         thread = threading.Thread(target=run_server, daemon=True)
         thread.start()
@@ -342,15 +362,41 @@ class WebSocketServer:
         logger.info("[WS] 正在停止服务器...")
         self._is_running = False
 
+        # 取消 serve 阻塞的 Future，使 async with serve() 退出
+        if self._serve_future and not self._serve_future.done():
+            self._serve_future.cancel()
+
         # 关闭所有客户端连接
         for client in self.clients:
-            await client.close()
+            try:
+                await client.close()
+            except Exception:
+                pass
 
         self.clients.clear()
         logger.info("[WS] 服务器已停止")
 
+    def stop_sync(self):
+        """同步停止 WebSocket 服务器（从非异步上下文调用）"""
+        self._is_running = False
+        if self._loop and not self._loop.is_closed():
+            # 在 WS 的事件循环中调度 stop
+            future = asyncio.run_coroutine_threadsafe(self.stop(), self._loop)
+            try:
+                future.result(timeout=5)
+            except Exception as e:
+                logger.warning(f"[WS] 同步停止时出错: {e}")
+            # 停止事件循环，使后台线程退出
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        else:
+            logger.debug("[WS] 无事件循环可停止")
+
     @property
     def is_running(self) -> bool:
         """检查服务器是否运行"""
-        return self._is_running and len(self.clients) > 0
+        return self._is_running
 
+    @property
+    def has_clients(self) -> bool:
+        """检查是否有客户端连接"""
+        return len(self.clients) > 0
