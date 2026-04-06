@@ -33,23 +33,6 @@ def safe_format_template(template: str, **kwargs: str) -> str:
     return _TEMPLATE_RE.sub(replacer, template)
 
 
-def to_seconds(time_diff) -> float:
-    """将 timedelta 或数值统一转为秒数。
-
-    录制数据的 timestamp 可能是 float（秒）也可能是 datetime，
-    两者相减分别得到 float 或 timedelta。此函数统一处理这两种情况。
-
-    Args:
-        time_diff: timedelta 对象或 float/int 数值
-
-    Returns:
-        秒数（float）
-    """
-    if hasattr(time_diff, "total_seconds"):
-        return time_diff.total_seconds()
-    return float(time_diff)
-
-
 def get_default_data_dir() -> Path:
     """获取默认数据目录，确保目录存在。
 

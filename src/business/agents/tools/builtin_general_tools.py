@@ -492,11 +492,4 @@ __all__ = [
     "BUILTIN_GENERAL_TOOLS",
     "register_confirm_mechanism",
     "set_confirm_result",
-    "web_search_handler",
-    "web_fetch_handler",
-    "read_file_handler",
-    "write_file_handler",
-    "edit_file_handler",
-    "list_dir_handler",
-    "exec_handler",
 ]

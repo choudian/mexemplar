@@ -109,24 +109,10 @@ class WebSocketConfig:
 
 
 @dataclass
-class EncryptionDetectionConfig:
-    """加密检测配置"""
-
-    # 熵值阈值（用于检测随机字符串/加密数据）
-    entropy_threshold_random_string: float = 4.5  # 熵值大于此值认为是随机字符串
-    # 二进制数据检测阈值
-    binary_printable_ratio_threshold: float = 0.7  # 可打印字符比例低于此值认为是二进制数据
-    # Base64检测相关
-    base64_min_length: int = 20  # Base64字符串最小长度（避免误判短字符串）
-
-
-@dataclass
 class RecordingConfig:
     """录制配置"""
 
     screenshot_quality: int = 85  # 截图质量 (1-100)
-    keyframe_interval: float = 0.5  # 关键帧间隔（秒）
-    capture_region: Optional[Dict[str, int]] = None  # 录制区域
     # 视频录制配置
     enable_video_recording: bool = True  # 是否启用视频录制
     video_fps: int = 15  # 视频帧率
@@ -145,10 +131,6 @@ class RecordingConfig:
     debug_log_enabled: bool = False  # 是否启用调试日志（写入 .cursor/debug.log）
     # WebSocket 配置
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
-    # 加密检测配置
-    encryption_detection: EncryptionDetectionConfig = field(
-        default_factory=EncryptionDetectionConfig
-    )
     # 用户数据目录配置
     persistent_user_data: bool = True  # 是否使用持久化用户数据目录（保留登录状态，默认启用）
     user_data_dir: Optional[str] = None  # 自定义用户数据目录路径（如果为 None，使用默认路径）

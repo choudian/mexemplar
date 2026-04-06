@@ -7,10 +7,3 @@
 - 请使用 src.data.unified_config.get_unified_config() 获取全局配置实例
 - 配置数据类已移动到 src.data.config_models
 """
-
-from .logger import setup_logger, get_logger
-
-__all__ = [
-    "setup_logger",
-    "get_logger",
-]

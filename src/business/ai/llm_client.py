@@ -398,27 +398,3 @@ class LangChainLLMClient:
         return LLMResponse(content=content, tool_calls=tool_calls)
 
 
-def create_llm_client(config: Dict[str, Any]) -> LangChainLLMClient:
-    """
-    工厂函数：从配置创建 LLM 客户端
-
-    Args:
-        config: 配置字典，包含：
-            - provider: 提供商类型
-            - model: 模型名称
-            - api_key: API 密钥
-            - base_url: 自定义 endpoint（可选）
-            - temperature: 温度（可选）
-            - max_tokens: 最大 tokens（可选）
-
-    Returns:
-        LLM 客户端实例
-    """
-    return LangChainLLMClient(
-        provider=config.get("provider", "anthropic"),
-        model=config.get("model", "claude-3-5-haiku-20241022"),
-        api_key=config.get("api_key"),
-        base_url=config.get("base_url"),
-        temperature=config.get("temperature", 0.5),
-        max_tokens=config.get("max_tokens", 1024),
-    )
