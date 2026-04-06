@@ -39,89 +39,101 @@ class DatabaseManager:
         self._lock = threading.RLock()  # 使用可重入锁
 
     def connect(self) -> sqlite3.Connection:
-        """建立数据库连接"""
-        if self.conn is None:
-            self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
-            # 启用外键约束
-            self.conn.execute("PRAGMA foreign_keys = ON")
-            logger.info(f"数据库连接已建立: {self.db_path}")
-        return self.conn
+        """建立数据库连接（线程安全）"""
+        with self._lock:
+            if self.conn is None:
+                self.conn = sqlite3.connect(self.db_path, check_same_thread=False)
+                # 启用外键约束
+                self.conn.execute("PRAGMA foreign_keys = ON")
+                logger.info(f"数据库连接已建立: {self.db_path}")
+            return self.conn
 
     def close(self):
-        """关闭数据库连接"""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-            logger.info("数据库连接已关闭")
+        """关闭数据库连接（线程安全）"""
+        with self._lock:
+            if self.conn:
+                self.conn.close()
+                self.conn = None
+                logger.info("数据库连接已关闭")
 
     def initialize(self):
-        """初始化数据库表结构"""
-        conn = self.connect()
-        cursor = conn.cursor()
+        """初始化数据库表结构（线程安全）
 
-        try:
-            # 创建 tools 表（工具定义）- 包含代码执行相关字段
-            cursor.execute(
+        注意：CREATE TABLE 包含完整 schema（所有版本列），确保全新安装时直接获得最新表结构。
+        migrations.py 的 ALTER TABLE 仅处理从旧版升级的场景。
+        新增列时应同时在 CREATE TABLE 和对应的迁移步骤中添加。
+        """
+        with self._lock:
+            conn = self.connect()
+            cursor = conn.cursor()
+
+            try:
+                # 创建 tools 表（工具定义）- 包含代码执行相关字段
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS tools (
+                        tool_id TEXT PRIMARY KEY,
+                        tool_name TEXT NOT NULL,
+                        description TEXT,
+                        parameters TEXT NOT NULL,  -- JSON格式
+                        steps TEXT NOT NULL,       -- JSON格式
+                        execution_code TEXT,        -- LLM生成的可执行代码
+                        code_language TEXT DEFAULT 'python',
+                        code_version TEXT DEFAULT '1.0',
+                        execution_strategy TEXT,    -- 执行策略：api, browser, hybrid
+                        source_intent_id TEXT,      -- 来源意图ID
+                        source TEXT DEFAULT 'manual', -- 来源：manual, intent, trial
+                        trial_count INTEGER DEFAULT 0,
+                        pending_tool_id TEXT,
+                        dependencies TEXT DEFAULT '[]',  -- JSON格式
+                        workflow_id TEXT,
+                        trial_success_count INTEGER DEFAULT 0,
+                        status TEXT DEFAULT 'pending',
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
                 """
-                CREATE TABLE IF NOT EXISTS tools (
-                    tool_id TEXT PRIMARY KEY,
-                    tool_name TEXT NOT NULL,
-                    description TEXT,
-                    parameters TEXT NOT NULL,  -- JSON格式
-                    steps TEXT NOT NULL,       -- JSON格式
-                    execution_code TEXT,        -- LLM生成的可执行代码
-                    code_language TEXT DEFAULT 'python',
-                    code_version TEXT DEFAULT '1.0',
-                    execution_strategy TEXT,    -- 执行策略：api, browser, hybrid
-                    source_intent_id TEXT,      -- 来源意图ID
-                    source TEXT DEFAULT 'manual', -- 来源：manual, intent, trial
-                    trial_count INTEGER DEFAULT 0,
-                    pending_tool_id TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
 
-            # 创建 app_settings 表（全局设置）
-            cursor.execute(
+                # 创建 app_settings 表（全局设置）
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app_settings (
+                        setting_key TEXT PRIMARY KEY,
+                        setting_value TEXT,
+                        setting_type TEXT DEFAULT 'string',
+                        description TEXT,
+                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
                 """
-                CREATE TABLE IF NOT EXISTS app_settings (
-                    setting_key TEXT PRIMARY KEY,
-                    setting_value TEXT,
-                    setting_type TEXT DEFAULT 'string',
-                    description TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
 
-            # 创建 schema_version 表
-            cursor.execute(
+                # 创建 schema_version 表
+                cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS schema_version (
+                        version INTEGER PRIMARY KEY
+                    )
                 """
-                CREATE TABLE IF NOT EXISTS schema_version (
-                    version INTEGER PRIMARY KEY
                 )
-                """
-            )
-            # 仅在表为空时插入初始版本（避免重复插入导致 UNIQUE 冲突）
-            cursor.execute(
-                "INSERT INTO schema_version (version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
-            )
+                # 仅在表为空时插入初始版本（避免重复插入导致 UNIQUE 冲突）
+                cursor.execute(
+                    "INSERT INTO schema_version (version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
+                )
 
-            conn.commit()
-            logger.info("数据库表结构初始化完成")
+                conn.commit()
+                logger.info("数据库表结构初始化完成")
 
-            # 在 commit 之后执行迁移（migrations.py 内部自行管理事务）
-            from src.data.migrations import run_migrations
+                # 在 commit 之后执行迁移（migrations.py 内部自行管理事务）
+                from src.data.migrations import run_migrations
 
-            run_migrations(self)
+                run_migrations(self)
 
-        except sqlite3.Error as e:
-            conn.rollback()
-            logger.error(f"数据库初始化失败: {e}")
-            raise
+            except sqlite3.Error as e:
+                conn.rollback()
+                logger.error(f"数据库初始化失败: {e}")
+                raise
 
     def get_version(self) -> int:
         """
@@ -130,33 +142,34 @@ class DatabaseManager:
         Returns:
             数据库版本号
         """
-        conn = self.connect()
-        cursor = conn.cursor()
+        with self._lock:
+            conn = self.connect()
+            cursor = conn.cursor()
 
-        # 检查是否存在版本表
-        cursor.execute(
-            """
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='schema_version'
-        """
-        )
-
-        if cursor.fetchone() is None:
-            # 创建版本表
+            # 检查是否存在版本表
             cursor.execute(
                 """
-                CREATE TABLE schema_version (
-                    version INTEGER PRIMARY KEY
-                )
+                SELECT name FROM sqlite_master
+                WHERE type='table' AND name='schema_version'
             """
             )
-            cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
-            conn.commit()
-            return 1
 
-        cursor.execute("SELECT version FROM schema_version")
-        result = cursor.fetchone()
-        return result[0] if result else 1
+            if cursor.fetchone() is None:
+                # 创建版本表
+                cursor.execute(
+                    """
+                    CREATE TABLE schema_version (
+                        version INTEGER PRIMARY KEY
+                    )
+                """
+                )
+                cursor.execute("INSERT INTO schema_version (version) VALUES (1)")
+                conn.commit()
+                return 1
+
+            cursor.execute("SELECT version FROM schema_version")
+            result = cursor.fetchone()
+            return result[0] if result else 1
 
     def __enter__(self):
         """上下文管理器入口"""

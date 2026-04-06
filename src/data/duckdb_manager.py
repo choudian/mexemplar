@@ -20,7 +20,54 @@ _VALID_TABLES = frozenset([
     "actions",
     "network_requests",
     "filter_decisions",
+    "sibling_snapshots",
 ])
+
+# 每个表的合法列名白名单，防止 data.keys() 注入
+# ⚠️ 与 recording_data_tools._COMMON_TABLES.fields 保持同步
+_VALID_COLUMNS: dict[str, frozenset] = {
+    "recording_sessions": frozenset([
+        "recording_id", "status", "recording_mode", "browser_type",
+        "start_time", "end_time", "metadata", "created_at",
+    ]),
+    "actions": frozenset([
+        "action_id", "recording_id", "sequence_number", "action_type",
+        "recording_mode", "app_name", "process_name", "window_title",
+        "parameters", "url", "dom_element", "dom_tree_snapshot",
+        "visual_features", "screenshot_before", "screenshot_after",
+        "timestamp",
+    ]),
+    "network_requests": frozenset([
+        "request_id", "action_id", "recording_id", "url", "method",
+        "request_type", "request_headers", "request_body",
+        "response_status", "response_headers", "response_body",
+        "duration", "timestamp", "filtered", "filter_reason",
+        "filtered_at", "is_recommendation", "importance_level",
+    ]),
+    "filter_decisions": frozenset([
+        "decision_id", "request_id", "action_id", "recording_id",
+        "decision", "source", "confidence", "reason",
+        "pattern_matched", "scores", "request_timestamp",
+        "action_timestamp", "timestamp",
+    ]),
+    "sibling_snapshots": frozenset([
+        "snapshot_id", "action_id", "recording_id",
+        "container_selector", "item_selector", "list_type",
+        "siblings", "structure_similarity", "is_homogeneous",
+        "clicked_index", "total_count", "timestamp",
+    ]),
+}
+
+
+def _validate_columns(table: str, data: dict) -> None:
+    """验证列名是否在白名单中，防止 SQL 注入"""
+    valid = _VALID_COLUMNS.get(table)
+    if valid is None:
+        logger.warning(f"表 '{table}' 未在列名白名单中注册，跳过列验证")
+        return
+    invalid = [k for k in data.keys() if k not in valid]
+    if invalid:
+        raise ValueError(f"表 '{table}' 包含非法列名: {invalid}")
 
 # 全局单例
 _duckdb_instance: Optional["DuckDBManager"] = None
@@ -75,12 +122,13 @@ class DuckDBManager:
 
         self.db_path = db_path
         self.conn: Optional[Any] = None
+        self._op_lock = threading.Lock()  # 保护跨线程的数据库操作
         self._initialized = True
         self._needs_queue_recovery = False  # 是否需要从 queues 恢复
 
     def connect(self, allow_wal_recovery: bool = True) -> Any:
         """
-        建立数据库连接
+        建立数据库连接（线程安全）
 
         Args:
             allow_wal_recovery: 是否允许从 WAL 恢复（默认 True）
@@ -91,10 +139,18 @@ class DuckDBManager:
         Raises:
             IOError: 如果数据库文件被占用或无法访问
         """
-        if self.conn is None:
+        if self.conn is not None:
+            return self.conn
+
+        with self._op_lock:
+            # 双重检查：其他线程可能已在等锁期间创建了连接
+            if self.conn is not None:
+                return self.conn
+
             try:
                 self.conn = duckdb.connect(self.db_path)
                 logger.info(f"DuckDB 连接已建立: {self.db_path}")
+                return self.conn
             except Exception as e:
                 error_msg = str(e)
 
@@ -148,19 +204,19 @@ class DuckDBManager:
 
                     # 标记需要从 queues 恢复
                     self._needs_queue_recovery = True
+                    return self.conn
                 else:
                     # 非 WAL 错误，直接抛出
                     logger.error(f"DuckDB 连接失败: {e}")
                     raise
 
-        return self.conn
-
     def close(self):
-        """关闭数据库连接"""
-        if self.conn:
-            self.conn.close()
-            self.conn = None
-            logger.info("DuckDB 连接已关闭")
+        """关闭数据库连接（线程安全）"""
+        with self._op_lock:
+            if self.conn is not None:
+                self.conn.close()
+                self.conn = None
+                logger.info("DuckDB 连接已关闭")
 
     def initialize(self):
         """初始化数据库表结构"""
@@ -320,7 +376,7 @@ class DuckDBManager:
 
     def execute(self, sql: str, parameters: Optional[tuple] = None) -> Any:
         """
-        执行 SQL 语句
+        执行 SQL 语句（线程安全）
 
         Args:
             sql: SQL 语句
@@ -330,13 +386,14 @@ class DuckDBManager:
             查询结果
         """
         conn = self.connect()
-        if parameters:
-            return conn.execute(sql, parameters)
-        return conn.execute(sql)
+        with self._op_lock:
+            if parameters:
+                return conn.execute(sql, parameters)
+            return conn.execute(sql)
 
     def fetchall(self, sql: str, parameters: Optional[tuple] = None) -> List[tuple]:
         """
-        执行 SQL 并返回所有结果
+        执行 SQL 并返回所有结果（线程安全，fetch 在锁内完成）
 
         Args:
             sql: SQL 语句
@@ -345,12 +402,14 @@ class DuckDBManager:
         Returns:
             查询结果列表
         """
-        result = self.execute(sql, parameters)
-        return result.fetchall()
+        conn = self.connect()
+        with self._op_lock:
+            cursor = conn.execute(sql, parameters) if parameters else conn.execute(sql)
+            return cursor.fetchall()
 
     def fetchone(self, sql: str, parameters: Optional[tuple] = None) -> Optional[tuple]:
         """
-        执行 SQL 并返回单条结果
+        执行 SQL 并返回单条结果（线程安全，fetch 在锁内完成）
 
         Args:
             sql: SQL 语句
@@ -359,8 +418,25 @@ class DuckDBManager:
         Returns:
             查询结果或 None
         """
-        result = self.execute(sql, parameters)
-        return result.fetchone()
+        conn = self.connect()
+        with self._op_lock:
+            cursor = conn.execute(sql, parameters) if parameters else conn.execute(sql)
+            return cursor.fetchone()
+
+    def execute_and_fetchall(
+        self, sql: str, parameters: Optional[tuple] = None
+    ) -> tuple[list[str], list[tuple]]:
+        """
+        在锁内执行 SQL、读取列名和所有行，返回 (columns, rows)。
+
+        避免 execute() 返回 cursor 后锁已释放的线程安全缺口。
+        """
+        conn = self.connect()
+        with self._op_lock:
+            cursor = conn.execute(sql, parameters) if parameters else conn.execute(sql)
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            rows = cursor.fetchall()
+        return columns, rows
 
     def insert(self, table: str, data: Dict[str, Any], auto_commit: bool = False) -> int:
         """
@@ -379,18 +455,20 @@ class DuckDBManager:
         """
         if table not in _VALID_TABLES:
             raise ValueError(f"非法表名 '{table}'，合法表名: {sorted(_VALID_TABLES)}")
+        _validate_columns(table, data)
         columns = ", ".join(data.keys())
         placeholders = ", ".join(["?" for _ in data])
         # 使用 RETURNING 子句获取插入的 ID
         sql = f"INSERT INTO {table} ({columns}) VALUES ({placeholders}) RETURNING *"
 
         conn = self.connect()
-        result = conn.execute(sql, list(data.values())).fetchone()
+        with self._op_lock:
+            result = conn.execute(sql, list(data.values())).fetchone()
 
-        # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
-        if auto_commit:
-            conn.execute("CHECKPOINT")
-            logger.debug(f"数据已提交到磁盘: {table}")
+            # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
+            if auto_commit:
+                conn.execute("CHECKPOINT")
+                logger.debug(f"数据已提交到磁盘: {table}")
 
         # 返回第一列（通常是主键 ID）
         return result[0] if result else 0
@@ -414,9 +492,12 @@ class DuckDBManager:
         """
         if table not in _VALID_TABLES:
             raise ValueError(f"非法表名 '{table}'，合法表名: {sorted(_VALID_TABLES)}")
-
         if not data_list:
             return []
+
+        _validate_columns(table, dict.fromkeys(
+            set().union(*(d.keys() for d in data_list))
+        ))
 
         columns = ", ".join(data_list[0].keys())
         placeholders = ", ".join(["?" for _ in data_list[0]])
@@ -426,15 +507,24 @@ class DuckDBManager:
         conn = self.connect()
         row_ids = []
 
-        for data in data_list:
-            result = conn.execute(sql, list(data.values())).fetchone()
-            if result:
-                row_ids.append(result[0])
+        with self._op_lock:
+            # 用事务包裹批量插入，减少每行单独提交的开销
+            conn.execute("BEGIN TRANSACTION")
+            try:
+                for data in data_list:
+                    result = conn.execute(sql, list(data.values())).fetchone()
+                    if result:
+                        row_ids.append(result[0])
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+            else:
+                conn.execute("COMMIT")
 
-        # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
-        if auto_commit:
-            conn.execute("CHECKPOINT")
-            logger.debug(f"批量数据已提交到磁盘: {table}, {len(row_ids)} 条")
+            # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
+            if auto_commit:
+                conn.execute("CHECKPOINT")
+                logger.debug(f"批量数据已提交到磁盘: {table}, {len(row_ids)} 条")
 
         return row_ids
 

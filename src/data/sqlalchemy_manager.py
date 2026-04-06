@@ -5,6 +5,7 @@ SQLAlchemy 数据库管理器 - SQLite
 """
 
 import logging
+import threading
 from typing import Optional
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -117,18 +118,26 @@ class SQLAlchemyManager:
 
 # 全局单例
 _sqlalchemy_instance: Optional[SQLAlchemyManager] = None
+_sa_lock = threading.Lock()
 
 
 def get_sqlalchemy_manager() -> SQLAlchemyManager:
     """
-    获取 SQLAlchemy 管理器单例
+    获取 SQLAlchemy 管理器单例（双重检查锁定，线程安全）
 
     Returns:
         SQLAlchemyManager: 全局唯一的管理器实例
     """
     global _sqlalchemy_instance
 
-    if _sqlalchemy_instance is None:
-        _sqlalchemy_instance = SQLAlchemyManager()
+    # 第一次检查：快速路径（无锁）
+    if _sqlalchemy_instance is not None:
+        return _sqlalchemy_instance
+
+    # 加锁并初始化
+    with _sa_lock:
+        # 第二次检查：防止其他线程已经初始化
+        if _sqlalchemy_instance is None:
+            _sqlalchemy_instance = SQLAlchemyManager()
 
     return _sqlalchemy_instance

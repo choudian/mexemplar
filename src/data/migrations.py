@@ -190,6 +190,10 @@ def run_migrations(db_manager):
         migrate_to_v6(db_manager)
         logger.info(f"数据库迁移完成：{max(current_version, 5)} -> 6")
 
+    if current_version < 7:
+        migrate_to_v7(db_manager)
+        logger.info(f"数据库迁移完成：{max(current_version, 6)} -> 7")
+
     logger.info(f"数据库已是最新版本：{db_manager.get_version()}")
 
 
@@ -506,4 +510,28 @@ def migrate_to_v6(db_manager):
     except sqlite3.Error as e:
         conn.rollback()
         logger.error(f"迁移到版本 6 失败: {e}")
+        raise
+
+
+def migrate_to_v7(db_manager):
+    """迁移到版本 7：tools 表补齐 dependencies、workflow_id、trial_success_count、status 列"""
+    conn = db_manager.connect()
+    cursor = conn.cursor()
+    try:
+        for col, definition in [
+            ("dependencies", "TEXT DEFAULT '[]'"),
+            ("workflow_id", "TEXT"),
+            ("trial_success_count", "INTEGER DEFAULT 0"),
+            ("status", "TEXT DEFAULT 'pending'"),
+        ]:
+            try:
+                cursor.execute(f"ALTER TABLE tools ADD COLUMN {col} {definition}")
+            except sqlite3.OperationalError:
+                pass  # 列已存在，忽略
+        cursor.execute("UPDATE schema_version SET version = 7")
+        conn.commit()
+        logger.info("数据库迁移到版本 7 完成：tools 表补齐 dependencies、workflow_id、trial_success_count、status 列")
+    except sqlite3.Error as e:
+        conn.rollback()
+        logger.error(f"迁移到版本 7 失败: {e}")
         raise

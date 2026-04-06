@@ -6,6 +6,7 @@
 
 import json
 import logging
+import threading
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
@@ -19,6 +20,7 @@ class RecordingRepository:
 
     # 标记是否已执行自动恢复（避免重复）
     _auto_recover_done = False
+    _auto_recover_lock = threading.RLock()
 
     def __init__(self, db_manager: Optional[DuckDBManager] = None):
         """
@@ -35,13 +37,14 @@ class RecordingRepository:
 
         self.db = db_manager
 
-        # ⭐ 首次初始化时，自动恢复未处理的队列文件
-        if not RecordingRepository._auto_recover_done:
-            RecordingRepository._auto_recover_done = True
-            try:
-                self._auto_recover_from_queues()
-            except Exception as e:
-                logger.warning(f"自动恢复失败: {e}")
+        # ⭐ 首次初始化时，自动恢复未处理的队列文件（线程安全）
+        with RecordingRepository._auto_recover_lock:
+            if not RecordingRepository._auto_recover_done:
+                RecordingRepository._auto_recover_done = True
+                try:
+                    self._auto_recover_from_queues()
+                except Exception as e:
+                    logger.warning(f"自动恢复失败: {e}")
 
     def _auto_recover_from_queues(self):
         """
@@ -61,7 +64,7 @@ class RecordingRepository:
                 logger.info("🔧 检测到 WAL 损坏，从 queues 恢复数据...")
             else:
                 # 即使 WAL 正常，也要检查是否有未处理的队列文件
-                #（正常关闭但数据未成功保存到 DuckDB 的情况）
+                # （正常关闭但数据未成功保存到 DuckDB 的情况）
                 logger.debug("WAL 正常，检查是否有未处理的队列文件...")
 
             recovery = RecordingRecovery(db_manager=self.db)
@@ -206,30 +209,40 @@ class RecordingRepository:
             插入的请求 ID 列表
         """
         if not network_requests:
-            logger.debug(f"save_network_requests: 网络请求列表为空 (action_id={action_id}, recording_id={recording_id})")
+            logger.debug(
+                f"save_network_requests: 网络请求列表为空 (action_id={action_id}, recording_id={recording_id})"
+            )
             return []
 
-        logger.debug(f"save_network_requests: 准备保存 {len(network_requests)} 条网络请求 (action_id={action_id}, recording_id={recording_id})")
+        logger.debug(
+            f"save_network_requests: 准备保存 {len(network_requests)} 条网络请求 (action_id={action_id}, recording_id={recording_id})"
+        )
 
         rows = []
         for request in network_requests:
-            rows.append({
-                "action_id": action_id,
-                "recording_id": recording_id,
-                "url": request.get("url"),
-                "method": request.get("method"),
-                "request_type": request.get("request_type"),
-                "request_headers": json.dumps(request.get("request_headers", {}), ensure_ascii=False),
-                "request_body": request.get("request_body"),
-                "response_status": request.get("response_status"),
-                "response_headers": json.dumps(request.get("response_headers", {}), ensure_ascii=False),
-                "response_body": request.get("response_body"),
-                "duration": request.get("duration"),
-                "timestamp": datetime.fromtimestamp(request.get("timestamp", 0)),
-                "filtered": False,
-                "filter_reason": None,
-                "filtered_at": None,
-            })
+            rows.append(
+                {
+                    "action_id": action_id,
+                    "recording_id": recording_id,
+                    "url": request.get("url"),
+                    "method": request.get("method"),
+                    "request_type": request.get("request_type"),
+                    "request_headers": json.dumps(
+                        request.get("request_headers", {}), ensure_ascii=False
+                    ),
+                    "request_body": request.get("request_body"),
+                    "response_status": request.get("response_status"),
+                    "response_headers": json.dumps(
+                        request.get("response_headers", {}), ensure_ascii=False
+                    ),
+                    "response_body": request.get("response_body"),
+                    "duration": request.get("duration"),
+                    "timestamp": datetime.fromtimestamp(ts) if (ts := request.get("timestamp")) is not None else datetime.now(),
+                    "filtered": False,
+                    "filter_reason": None,
+                    "filtered_at": None,
+                }
+            )
 
         try:
             request_ids = self.db.insert_many("network_requests", rows)
@@ -237,7 +250,9 @@ class RecordingRepository:
             logger.error(f"批量保存网络请求失败: {e}", exc_info=True)
             return []
 
-        logger.info(f"save_network_requests: 成功保存 {len(request_ids)}/{len(network_requests)} 条网络请求")
+        logger.info(
+            f"save_network_requests: 成功保存 {len(request_ids)}/{len(network_requests)} 条网络请求"
+        )
         return request_ids
 
     def save_sibling_snapshot(
@@ -282,130 +297,4 @@ class RecordingRepository:
         )
 
         return snapshot_id
-
-    def get_recording_session(self, recording_id: str) -> Optional[Dict[str, Any]]:
-        """
-        获取录制会话
-
-        Args:
-            recording_id: 录制会话 ID
-
-        Returns:
-            录制会话字典或 None
-        """
-        result = self.db.fetchone(
-            "SELECT * FROM recording_sessions WHERE recording_id = ?", (recording_id,)
-        )
-
-        if not result:
-            return None
-
-        columns = [
-            "recording_id",
-            "status",
-            "recording_mode",
-            "browser_type",
-            "start_time",
-            "end_time",
-            "metadata",
-            "created_at",
-        ]
-
-        session = dict(zip(columns, result))
-        # 反序列化 metadata
-        if session.get("metadata"):
-            session["metadata"] = json.loads(session["metadata"])
-
-        return session
-
-    def get_actions(self, recording_id: str) -> List[Dict[str, Any]]:
-        """
-        获取录制会话的所有操作
-
-        Args:
-            recording_id: 录制会话 ID
-
-        Returns:
-            操作列表
-        """
-        results = self.db.fetchall(
-            "SELECT * FROM actions WHERE recording_id = ? ORDER BY sequence_number", (recording_id,)
-        )
-
-        columns = [
-            "action_id",
-            "recording_id",
-            "sequence_number",
-            "action_type",
-            "recording_mode",
-            "app_name",
-            "process_name",
-            "window_title",
-            "parameters",
-            "url",
-            "dom_element",
-            "dom_tree_snapshot",
-            "visual_features",
-            "screenshot_before",
-            "screenshot_after",
-            "timestamp",
-        ]
-
-        actions = []
-        for result in results:
-            action = dict(zip(columns, result))
-            # 反序列化 JSON 字段
-            for field in ["parameters", "dom_element", "dom_tree_snapshot", "visual_features"]:
-                if action.get(field):
-                    action[field] = json.loads(action[field])
-            actions.append(action)
-
-        return actions
-
-    def get_network_requests(self, action_id: int) -> List[Dict[str, Any]]:
-        """
-        获取操作关联的网络请求
-
-        Args:
-            action_id: 操作 ID
-
-        Returns:
-            网络请求列表
-        """
-        results = self.db.fetchall(
-            "SELECT * FROM network_requests WHERE action_id = ?", (action_id,)
-        )
-
-        columns = [
-            "request_id",
-            "action_id",
-            "recording_id",
-            "url",
-            "method",
-            "request_type",
-            "request_headers",
-            "request_body",
-            "response_status",
-            "response_headers",
-            "response_body",
-            "duration",
-            "timestamp",
-            "filtered",
-            "filter_reason",
-            "filtered_at",
-            "is_recommendation",
-            "importance_level",
-        ]
-
-        requests = []
-        for result in results:
-            request = dict(zip(columns, result))
-            # 反序列化 JSON 字段
-            for field in ["request_headers", "response_headers", "filter_reason"]:
-                if request.get(field):
-                    request[field] = json.loads(request[field])
-            requests.append(request)
-
-        return requests
-
 

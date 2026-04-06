@@ -21,21 +21,13 @@ class Base(DeclarativeBase):
 # ===== 枚举类型 =====
 
 
-class AgentType(str, Enum):
-    """Agent 类型枚举"""
-
-    PM = "pm"
-    PROGRAMMER = "programmer"
-    TRIAL = "trial"
-    ASSISTANT = "assistant"
-
-
 class SessionStatus(str, Enum):
     """会话状态枚举"""
 
     ACTIVE = "active"
     COMPLETED = "completed"
     FAILED = "failed"
+    SUSPENDED = "suspended"
 
 
 class Tool(Base):
@@ -91,6 +83,9 @@ class Tool(Base):
             source=data.get("source", "manual"),
             trial_count=data.get("trial_count", 0),
             pending_tool_id=data.get("pending_tool_id"),
+            workflow_id=data.get("workflow_id"),
+            trial_success_count=data.get("trial_success_count", 0),
+            status=data.get("status", "pending"),
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
         )

@@ -46,11 +46,13 @@ class UnifiedConfigManager:
         self.file_config: AppConfig = self.file_loader.load()
 
         # 2. 初始化数据库（用户自定义配置）
+        # TODO: [架构] 应注入共享 DatabaseManager 实例，而非每次创建新的
         self.db: DatabaseManager = DatabaseManager(db_path)
         self.db.initialize()
 
         # 缓存运行时配置
         self._runtime_cache: Dict[str, Any] = {}
+        self._cache_lock = threading.RLock()
 
         # ⭐ 配置变化观察者列表
         self._observers: List[Callable[[str, Any, Any], None]] = []
@@ -76,19 +78,24 @@ class UnifiedConfigManager:
             4. 默认值
         """
         # 1. 检查运行时缓存
-        if key in self._runtime_cache:
-            logger.debug(f"[配置] 从缓存读取: {key} = {self._runtime_cache[key]}")
-            return self._runtime_cache[key]
+        with self._cache_lock:
+            if key in self._runtime_cache:
+                logger.debug(f"[配置] 从缓存读取: {key} = {self._runtime_cache[key]}")
+                return self._runtime_cache[key]
 
         # 2. 检查数据库配置
         db_value = self.db.get_setting(key)
         if db_value is not None:
+            with self._cache_lock:
+                self._runtime_cache[key] = db_value
             logger.debug(f"[配置] 从数据库读取: {key} = {db_value}")
             return db_value
 
         # 3. 从配置文件读取（支持点分隔路径）
         file_value = self._get_from_file_config(key)
         if file_value is not None:
+            with self._cache_lock:
+                self._runtime_cache[key] = file_value
             return file_value
 
         # 4. 返回默认值
@@ -104,27 +111,26 @@ class UnifiedConfigManager:
             persist: 存储位置
                 - 'database': 保存到数据库（运行时修改，立即生效）
                 - 'runtime': 仅缓存（重启后失效）
-                - 'file': 保存到配置文件（永久，需要重启）
             value_type: 值类型（用于数据库存储）
         """
         # ⭐ 保存旧值（用于通知观察者）
-        old_value = self._runtime_cache.get(key)
+        with self._cache_lock:
+            old_value = self._runtime_cache.get(key)
 
         if persist == "runtime":
             # 仅缓存
-            self._runtime_cache[key] = value
+            with self._cache_lock:
+                self._runtime_cache[key] = value
             logger.info(f"[配置] 已缓存: {key} = {value}")
         elif persist == "database":
             # 保存到数据库
             self.db.set_setting(key, value, value_type)
             # 同时更新缓存
-            self._runtime_cache[key] = value
+            with self._cache_lock:
+                self._runtime_cache[key] = value
             logger.info(f"[配置] 已保存到数据库: {key} = {value}")
-        elif persist == "file":
-            # 保存到配置文件（需要修改 ConfigManager）
-            # 更新配置文件
-            self._update_file_config(key, value)
-            logger.info(f"[配置] 已保存到配置文件: {key} = {value}（需要重启生效）")
+        else:
+            raise ValueError(f"未知的 persist 类型: {persist!r}，可选 'database' 或 'runtime'")
 
         # ⭐ 触发观察者（如果值发生变化）
         if old_value != value:
@@ -157,28 +163,55 @@ class UnifiedConfigManager:
         return self.get("ai.provider", default="anthropic")
 
     def get_ai_api_key(self) -> Optional[str]:
-        """获取 Anthropic API 密钥"""
-        # 优先从配置文件获取
-        api_key = self.get("ai.api_key", default=None)
-
-        if api_key:
-            return api_key
-
-        # 从 keyring 读取
+        """获取 Anthropic API 密钥（优先 keyring，回退数据库）"""
+        # 优先从 keyring 读取
         try:
             import keyring
-        except ImportError:
-            logger.warning("[配置] keyring 模块未安装，无法读取加密存储的 API 密钥")
-            return None
 
-        try:
             api_key = keyring.get_password("Mexemplar", "anthropic_api_key")
             if api_key:
                 logger.debug("[配置] 从 keyring 读取 API 密钥")
-            return api_key
+                return api_key
+        except ImportError:
+            logger.warning("[配置] keyring 模块未安装，无法读取加密存储的 API 密钥")
         except Exception as e:
             logger.warning(f"[配置] 从 keyring 读取 API 密钥失败: {e}")
-            return None
+
+        # 回退到数据库（兼容未迁移的旧数据）
+        api_key = self.get("ai.api_key", default=None)
+        return api_key or None
+
+    def set_ai_api_key(self, api_key: str) -> None:
+        """安全写入 API 密钥到 keyring，并清除数据库中的明文副本"""
+        try:
+            import keyring
+
+            keyring.set_password("Mexemplar", "anthropic_api_key", api_key)
+            logger.info("[配置] API 密钥已安全写入 keyring")
+        except Exception as e:
+            logger.warning(
+                "[配置] keyring 写入失败，无法安全存储 API 密钥。"
+                "请检查 keyring 模块是否正确安装（pip install keyring）。"
+                "API 密钥不会被存储到数据库中以避免明文泄露。"
+            )
+            raise RuntimeError(
+                f"无法安全存储 API 密钥: {e}。" "请确保 keyring 模块已安装且可用。"
+            ) from e
+        # 成功写入 keyring 后，清除数据库中的明文密钥
+        try:
+            self.set("ai.api_key", "")
+        except Exception as e:
+            logger.warning(f"[配置] 清除数据库明文密钥失败: {e}")
+
+    def clear_ai_api_key(self) -> None:
+        """清除 API 密钥（keyring + 数据库）"""
+        try:
+            import keyring
+
+            keyring.delete_password("Mexemplar", "anthropic_api_key")
+        except Exception:
+            pass
+        self.set("ai.api_key", "")
 
     def get_ai_base_url(self) -> Optional[str]:
         """获取主 LLM 自定义 endpoint（用于代理）"""
@@ -194,17 +227,10 @@ class UnifiedConfigManager:
         # 从 keyring 读取
         try:
             import keyring
+
             return keyring.get_password("Mexemplar", "openai_api_key")
         except Exception:
             return None
-
-    def get_ai_temperature(self) -> float:
-        """获取 AI 温度"""
-        return self.get("ai.temperature", default=0.7)
-
-    def get_ai_max_tokens(self) -> int:
-        """获取最大 tokens"""
-        return self.get("ai.max_tokens", default=4096)
 
     # ===== 便捷方法：数据压缩模型配置（网络请求智能过滤）=====
 
@@ -282,14 +308,6 @@ class UnifiedConfigManager:
 
     # ===== 便捷方法：录制配置 =====
 
-    def get_recording_browser_type(self) -> str:
-        """获取浏览器类型"""
-        return self.get("recording.browser_type", default="chromium")
-
-    def get_recording_screenshot_quality(self) -> int:
-        """获取截图质量"""
-        return self.get("recording.screenshot_quality", default=85)
-
     def get_websocket_host(self) -> str:
         """获取 WebSocket 主机"""
         return self.get("recording.websocket.host", default="127.0.0.1")
@@ -315,16 +333,6 @@ class UnifiedConfigManager:
     def get_debug_log_enabled(self) -> bool:
         """是否启用调试日志"""
         return self.get("recording.debug_log_enabled", default=False)
-
-    # ===== 便捷方法：UI 配置 =====
-
-    def get_ui_theme(self) -> str:
-        """获取 UI 主题"""
-        return self.get("ui.theme", default="light")
-
-    def get_ui_language(self) -> str:
-        """获取 UI 语言"""
-        return self.get("ui.language", default="zh_CN")
 
     # ===== 内部方法 =====
 
@@ -352,39 +360,6 @@ class UnifiedConfigManager:
             return value
         except (AttributeError, KeyError, TypeError):
             return None
-
-    def _update_file_config(self, key: str, value: Any):
-        """
-        更新配置文件
-
-        Args:
-            key: 配置键
-            value: 配置值
-        """
-        parts = key.split(".")
-        config = self.file_config
-
-        # 更新配置对象
-        if len(parts) == 1:
-            setattr(config, parts[0], value)
-        else:
-            # 嵌套对象（如 'ai.model'）
-            obj = config
-            for part in parts[:-1]:
-                if hasattr(obj, part):
-                    obj = getattr(obj, part)
-                else:
-                    logger.error(f"[配置] 配置路径无效: {key}")
-                    return
-
-            last_part = parts[-1]
-            if hasattr(obj, last_part):
-                setattr(obj, last_part, value)
-            elif isinstance(obj, dict):
-                obj[last_part] = value
-
-        # 保存配置文件
-        self.file_loader.save(self.file_config)
 
     # ===== 观察者模式（配置变化通知）=====
 
