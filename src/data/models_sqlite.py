@@ -65,31 +65,6 @@ class Tool(Base):
     def __repr__(self) -> str:
         return f"<Tool(tool_id={self.tool_id!r}, tool_name={self.tool_name!r})>"
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Tool":
-        """从字典创建 Tool 对象（兼容旧代码）"""
-        return cls(
-            tool_id=data.get("tool_id"),
-            tool_name=data.get("tool_name"),
-            description=data.get("description"),
-            parameters=data.get("parameters"),
-            steps=data.get("steps"),
-            execution_code=data.get("execution_code"),
-            code_language=data.get("code_language", "python"),
-            code_version=data.get("code_version", "1.0"),
-            execution_strategy=data.get("execution_strategy"),
-            dependencies=data.get("dependencies", []),
-            source_intent_id=data.get("source_intent_id"),
-            source=data.get("source", "manual"),
-            trial_count=data.get("trial_count", 0),
-            pending_tool_id=data.get("pending_tool_id"),
-            workflow_id=data.get("workflow_id"),
-            trial_success_count=data.get("trial_success_count", 0),
-            status=data.get("status", "pending"),
-            created_at=data.get("created_at"),
-            updated_at=data.get("updated_at"),
-        )
-
 
 # ===== Agent 会话相关模型 =====
 

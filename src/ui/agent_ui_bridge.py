@@ -307,12 +307,3 @@ class AgentUIBridge(QObject):
         if not self._run_in_background(worker_key, worker, on_finished=_on_cleanup):
             with self._retry_lock:
                 self._retrying_workflows.discard(workflow_id)
-
-    def dismiss_failure(self, workflow_id: str) -> None:
-        """忽略失败记录（主线程同步调用，仅 DB + emit，无阻塞）"""
-        with self._retry_lock:
-            is_retrying = workflow_id in self._retrying_workflows
-        if is_retrying:
-            logger.warning(f"[AgentUIBridge] 正在重试中，不允许忽略: {workflow_id}")
-            return
-        self._orchestrator.dismiss_failure(workflow_id)

@@ -49,34 +49,6 @@ class ToolRepository(BaseRepository):
             logger.error(f"更新工具失败: {e}")
             raise
 
-    def delete(self, tool_id: str) -> bool:
-        """删除工具"""
-        try:
-            tool = self.get_by_id(tool_id)
-            if tool:
-                self.session.delete(tool)
-                self.session.commit()
-                logger.info(f"工具已删除: {tool_id}")
-                return True
-            return False
-        except Exception as e:
-            self.session.rollback()
-            logger.error(f"删除工具失败: {e}")
-            raise
-
-    def search(self, keyword: str) -> List[Tool]:
-        """搜索工具（按名称或描述）"""
-        escaped = keyword.replace("%", "\\%").replace("_", "\\_")
-        return (
-            self.session.query(Tool)
-            .filter(
-                (Tool.tool_name.contains(escaped, escape="\\"))
-                | (Tool.description.contains(escaped, escape="\\"))
-            )
-            .order_by(Tool.created_at.desc())
-            .all()
-        )
-
     def get_by_workflow_id(self, workflow_id: str) -> Optional[Tool]:
         """按 workflow_id 查找工具（一个 workflow 对应一个工具）"""
         return self.session.query(Tool).filter(Tool.workflow_id == workflow_id).first()

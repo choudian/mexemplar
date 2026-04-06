@@ -234,10 +234,6 @@ class UnifiedConfigManager:
 
     # ===== 便捷方法：数据压缩模型配置（网络请求智能过滤）=====
 
-    def get_compression_model_enabled(self) -> bool:
-        """是否启用数据压缩模型"""
-        return self.get("ai.compression_model_enabled", default=False)
-
     def get_compression_model_provider(self) -> str:
         """获取压缩模型提供商"""
         return self.get("ai.compression_model_provider", default="anthropic")
@@ -275,10 +271,6 @@ class UnifiedConfigManager:
     def get_compression_model_max_tokens(self) -> int:
         """获取压缩模型最大 tokens"""
         return self.get("ai.compression_model_max_tokens", default=1024)
-
-    def get_compression_model_threads(self) -> int:
-        """获取压缩模型线程数"""
-        return self.get("ai.compression_model_threads", default=1)
 
     # ===== 便捷方法：记忆机制配置 =====
 

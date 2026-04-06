@@ -678,11 +678,6 @@ class AgentOrchestrator:
         if record and record.status == "retrying":
             self._resolve_failure_record(workflow_id)
 
-    def dismiss_failure(self, workflow_id: str):
-        """忽略失败记录"""
-        self._set_failure_status(workflow_id, "dismissed", "teaching_failure_updated")
-        # dismissed 需要额外触发 UI 刷新，teaching_failure_updated 会处理
-
     def reset_retrying_status(self, workflow_id: str):
         """重试异常时将 retrying 恢复为 active，并累加 retry_count"""
         record = self._failure_repo.get_by_workflow_id(workflow_id)
