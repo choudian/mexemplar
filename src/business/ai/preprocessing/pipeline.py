@@ -63,8 +63,6 @@ class PreprocessingPipelineContext:
     # 中间结果
     compressed_actions: List[Action] = field(default_factory=list)
     intelligent_analysis: List[Any] = field(default_factory=list)
-    # network_analysis: List[Any] = field(default_factory=list)  # 已移至 Agent
-    # list_analysis: List[Any] = field(default_factory=list)       # 已移至 Agent
     filter_result: Dict[str, Any] = field(default_factory=dict)
 
     # 压缩模型错误
@@ -128,8 +126,6 @@ class PreprocessingPipeline:
         stages = [
             CompressionStage(),
             IntelligenceFilterStage(),
-            # NetworkAnalysisStage(),      # 已移至 Agent（待实现）
-            # ListOperationStage(),       # 已移至 Agent（待实现）
             RecommendationFilterStage(),
             ActionProcessingStage(),
             KeyActionsStage(),
@@ -143,50 +139,6 @@ class PreprocessingPipeline:
                 raise RuntimeError(f"Stage {stage.name} 返回了 None")
 
         return context
-
-
-# ==================== 已移至 Agent 的阶段（待实现） ====================
-# 以下阶段已从 Pipeline 移除，计划在 Agent 节点中实现
-# 原因：分析结果应该在 Agent 中生成和使用，而不是在预处理阶段
-
-# class NetworkAnalysisStage(PipelineStage):
-#     """网络分析：判断可复现性、提取响应结构"""
-#
-#     def __init__(self):
-#         super().__init__("network_analysis")
-#
-#     def process(self, context: PreprocessingPipelineContext) -> PreprocessingPipelineContext:
-#         if not context.enable_analysis:
-#             context.network_analysis = None
-#             return context
-#
-#         logger.info("步骤3: 分析网络请求...")
-#         network_analysis = context.preprocessor.network_analyzer.analyze_requests(context.actions)
-#         logger.info(f"  ✅ 分析了 {len(network_analysis)} 个网络请求")
-#
-#         context.network_analysis = network_analysis
-#         return context
-
-
-# class ListOperationStage(PipelineStage):
-#     """列表分析：识别列表、关联 API、生成策略建议"""
-#
-#     def __init__(self):
-#         super().__init__("list_operation")
-#
-#     def process(self, context: PreprocessingPipelineContext) -> PreprocessingPipelineContext:
-#         if not context.enable_analysis:
-#             context.list_analysis = None
-#             return context
-#
-#         logger.info("步骤4: 分析列表操作...")
-#         list_analysis = context.preprocessor.list_analyzer.analyze_list_operations(
-#             context.actions, context.network_analysis or []
-#         )
-#         logger.info(f"  ✅ 识别了 {len(list_analysis)} 个列表操作")
-#
-#         context.list_analysis = list_analysis
-#         return context
 
 
 # ==================== 具体阶段实现 ====================

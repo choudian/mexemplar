@@ -9,12 +9,28 @@ import logging
 import re
 import uuid
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional
+from typing import List, NamedTuple, Tuple, Optional
 
 from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
 
 logger = logging.getLogger(__name__)
+
+
+class ParsedToolCall(NamedTuple):
+    tool_id: str
+    func_name: str
+    args: str
+
+
+def _parse_tool_call(tc: dict) -> ParsedToolCall:
+    """从 tool_call dict 中提取 (id, func_name, args_str)，兼容内部格式和 OpenAI 格式"""
+    tool_id = tc.get("id", "")
+    func_name = tc.get("name") or tc.get("function", {}).get("name", "")
+    args = tc.get("args") or tc.get("function", {}).get("arguments", "")
+    if isinstance(args, dict):
+        args = json.dumps(args, ensure_ascii=False)
+    return ParsedToolCall(tool_id, func_name, args)
 
 
 class CompressionTrigger(ABC):
@@ -322,9 +338,7 @@ class CompressionHandler:
                 # 解析 tool_calls
                 tool_calls = json.loads(msg.tool_calls)
                 for tc in tool_calls:
-                    tool_id = tc.get("id", "")
-                    func_name = tc.get("function", {}).get("name", "")
-                    args = tc.get("function", {}).get("arguments", "")
+                    tool_id, func_name, args = _parse_tool_call(tc)
                     # 格式: [Tool 调用]: {tool_name}({参数}) → {tool_call_id}
                     lines.append(f"[Tool 调用]: {func_name}({args}) → {tool_id}")
             elif msg.role == "tool":
@@ -375,12 +389,10 @@ class CompressionHandler:
             if msg.role == "assistant" and msg.tool_calls:
                 tool_calls = json.loads(msg.tool_calls)
                 for tc in tool_calls:
-                    tool_call_id = tc.get("id", "")
-                    func_name = tc.get("function", {}).get("name", "")
-                    args = tc.get("function", {}).get("arguments", "")
+                    tool_call_id, func_name, args = _parse_tool_call(tc)
                     tool_call_info[tool_call_id] = f"{func_name}({args})"
             elif msg.role == "tool" and msg.tool_call_id:
-                tool_result_refs[msg.tool_call_id] = f"[REF::{msg.message_id}]({len(msg.content or 0)}字符)"
+                tool_result_refs[msg.tool_call_id] = f"[REF::{msg.message_id}]({len(msg.content or '')}字符)"
 
         # 检查匹配情况
         matched_count = sum(1 for tc_id in tool_call_info if tc_id in summary)

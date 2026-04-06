@@ -3,9 +3,3 @@
 
 包含核心业务逻辑，包括 AI 处理和工作流管理
 """
-
-from src.business import ai
-
-__all__ = [
-    "ai",
-]

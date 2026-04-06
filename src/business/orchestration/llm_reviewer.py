@@ -4,12 +4,13 @@ LLM 代码质量 Reviewer
 调用 LLM 对程序员生成的代码进行质量评审，返回通过/失败和反馈。
 """
 
-import json
 import logging
 from dataclasses import dataclass
 
 from src.business.ai.llm_client import LangChainLLMClient
+from src.business.agents.prompts.trial_prompt import format_parameters_text
 from src.utils.llm_helpers import extract_json_from_response
+from src.utils.helpers import safe_format_template
 
 logger = logging.getLogger(__name__)
 
@@ -69,15 +70,6 @@ class LLMReviewer:
     def __init__(self, llm_client: LangChainLLMClient):
         self._llm = llm_client
 
-    def _format_parameters_text(self, parameters: list[dict]) -> str:
-        if not parameters:
-            return "（无参数）"
-        lines = []
-        for p in parameters:
-            required = "必填" if p.get("required", True) else "选填"
-            lines.append(f"- {p['name']}（{required}）：{p.get('description', '')}")
-        return "\n".join(lines)
-
     def review(self, code: str, requirement: dict) -> ReviewResult:
         """
         审查代码质量
@@ -90,11 +82,11 @@ class LLMReviewer:
             ReviewResult（passed + feedback）
         """
         try:
-            prompt = (
-                REVIEW_PROMPT_TEMPLATE
-                .replace("{description}", requirement.get("description", ""))
-                .replace("{parameters_text}", self._format_parameters_text(requirement.get("parameters", [])))
-                .replace("{code}", code)
+            prompt = safe_format_template(
+                REVIEW_PROMPT_TEMPLATE,
+                description=requirement.get("description", ""),
+                parameters_text=format_parameters_text(requirement.get("parameters", [])),
+                code=code,
             )
             response = self._llm.chat(prompt)
             return self._parse_result(response)

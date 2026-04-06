@@ -15,7 +15,7 @@ Agent Loop 的记忆管理系统，负责：
 
 使用示例：
     from src.data.unified_config import get_unified_config
-    from src.business.memory import ContextManager
+    from src.business.memory.context_manager import ContextManager
 
     config = get_unified_config()
     ctx = ContextManager(session_id, config)
@@ -30,7 +30,3 @@ Agent Loop 的记忆管理系统，负责：
     # 加载引用
     ctx.load_reference(message_id)
 """
-
-from .context_manager import ContextManager
-
-__all__ = ["ContextManager"]

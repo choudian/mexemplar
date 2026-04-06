@@ -1,50 +1,5 @@
 """
-工具试用模块 - 错误诊断和自动修复
+工具试用模块
 
-包含错误诊断、代码修复和修复验证功能
+提供工具试用相关的数据模型
 """
-
-# 数据模型（试用）
-from .trial_models import (
-    PendingTool,
-    PendingToolStatus,
-    ToolTrial,
-    TrialStatus,
-)
-
-# 数据模型（错误诊断）
-from .error_diagnosis_models import (
-    ErrorDiagnosis,
-    ErrorType,
-    ErrorSeverity,
-    FixStrategy,
-    CodeChange,
-    FixedCode,
-    TestCase,
-    FixVerification,
-)
-
-# 核心模块（试用）
-from .trial_manager import TrialManager
-from .trial_repository import PendingToolRepository, ToolTrialRepository
-
-__all__ = [
-    # 数据模型（试用）
-    "PendingTool",
-    "PendingToolStatus",
-    "ToolTrial",
-    "TrialStatus",
-    # 数据模型（错误诊断）
-    "ErrorDiagnosis",
-    "ErrorType",
-    "ErrorSeverity",
-    "FixStrategy",
-    "CodeChange",
-    "FixedCode",
-    "TestCase",
-    "FixVerification",
-    # 核心模块（试用）
-    "TrialManager",
-    "PendingToolRepository",
-    "ToolTrialRepository",
-]

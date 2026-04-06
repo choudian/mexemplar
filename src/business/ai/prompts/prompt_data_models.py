@@ -18,15 +18,6 @@ class ResponseStructureType(Enum):
     UNKNOWN = "unknown"  # 未知类型
 
 
-class MatchStrategy(Enum):
-    """列表匹配策略"""
-
-    API_MATCH = "api_match"  # API 数据匹配
-    DOM_MATCH = "dom_match"  # DOM 属性匹配
-    FUZZY_MATCH = "fuzzy_match"  # 模糊匹配
-    INDEX_MATCH = "index_match"  # 索引匹配
-
-
 @dataclass
 class ResponseStructure:
     """响应结构分析"""
@@ -127,103 +118,4 @@ class NetworkRequestAnalysis:
         )
 
 
-@dataclass
-class ListOperationAnalysis:
-    """
-    列表操作分析结果
 
-    用于 LLM 判断如何智能选择列表项
-    """
-
-    # 基本信息
-    action_id: str  # 关联的操作 ID
-    is_list_operation: bool = False  # 是否是列表操作
-
-    # 列表结构
-    container_selector: Optional[str] = None  # 列表容器选择器
-    item_selector: Optional[str] = None  # 列表项选择器
-    total_count: int = 0  # 列表总数量
-    clicked_index: int = -1  # 点击位置
-
-    # ⭐ 关键字段：数据来源
-    associated_api_request: Optional[NetworkRequestAnalysis] = None  # 关联的网络请求
-
-    # 匹配策略
-    suggested_strategy: MatchStrategy = MatchStrategy.DOM_MATCH
-    reasoning: str = ""  # 策略选择理由
-
-    # 兄弟元素样本（用于 DOM 匹配）
-    sample_siblings: List[Dict[str, Any]] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "action_id": self.action_id,
-            "is_list_operation": self.is_list_operation,
-            "container_selector": self.container_selector,
-            "item_selector": self.item_selector,
-            "total_count": self.total_count,
-            "clicked_index": self.clicked_index,
-            "associated_api_request": (
-                self.associated_api_request.to_dict() if self.associated_api_request else None
-            ),
-            "suggested_strategy": self.suggested_strategy.value,
-            "reasoning": self.reasoning,
-            "sample_siblings": self.sample_siblings,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ListOperationAnalysis":
-        """从字典创建"""
-        api_data = data.get("associated_api_request")
-        associated_api = NetworkRequestAnalysis.from_dict(api_data) if api_data else None
-
-        return cls(
-            action_id=data["action_id"],
-            is_list_operation=data.get("is_list_operation", False),
-            container_selector=data.get("container_selector"),
-            item_selector=data.get("item_selector"),
-            total_count=data.get("total_count", 0),
-            clicked_index=data.get("clicked_index", -1),
-            associated_api_request=associated_api,
-            suggested_strategy=MatchStrategy(data.get("suggested_strategy", "dom_match")),
-            reasoning=data.get("reasoning", ""),
-            sample_siblings=data.get("sample_siblings", []),
-        )
-
-
-@dataclass
-class ParameterDefinition:
-    """
-    参数定义
-    """
-
-    name: str  # 参数名（英文，snake_case）
-    type: str  # 参数类型（text, number, url, date等）
-    description: str  # 参数说明
-    required: bool = True  # 是否必填
-    default_value: Any = None  # 默认值
-    source_action_index: int = -1  # 来源操作索引
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "name": self.name,
-            "type": self.type,
-            "description": self.description,
-            "required": self.required,
-            "default_value": self.default_value,
-            "source_action_index": self.source_action_index,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ParameterDefinition":
-        """从字典创建"""
-        return cls(
-            name=data["name"],
-            type=data["type"],
-            description=data["description"],
-            required=data.get("required", True),
-            default_value=data.get("default_value"),
-            source_action_index=data.get("source_action_index", -1),
-        )

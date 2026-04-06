@@ -27,14 +27,10 @@ from src.business.agents.config import (
     PROGRAMMER_CONFIG,
     ASSISTANT_CONFIG,
 )
-from src.business.agents.tools import (
-    create_recording_tools,
-    create_trial_tools,
-    submit_requirements,
-    report_code_issue,
-    syntax_check,
-    submit_code,
-)
+from src.business.agents.tools.recording_data_tools import create_recording_tools
+from src.business.agents.tools.trial_tools import create_trial_tools
+from src.business.agents.tools.pm_output_tools import submit_requirements, report_code_issue
+from src.business.agents.tools.programmer_tools import syntax_check, submit_code
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.models_sqlite import Session, SessionStatus, WorkflowTransition
 from src.data.repositories import (
@@ -46,6 +42,7 @@ from src.data.repositories import (
 )
 from src.data.unified_config import UnifiedConfigManager
 from src.utils.events import connect, emit
+from src.utils.helpers import safe_format_template
 from .llm_reviewer import LLMReviewer, ReviewResult
 
 logger = logging.getLogger(__name__)
@@ -1194,13 +1191,13 @@ class AgentOrchestrator:
         # 获取用户工具列表（用于 system prompt 简表）
         session = self._session_repo.get_by_id(session_id)
         allowed_tool_ids = session.get_tool_id_set() if session else None
-        all_published = self._tool_repo.get_published()
+        all_published = self._tool_repo.get_published_summaries()
         if allowed_tool_ids is not None:
-            tools = [t for t in all_published if t.tool_id in allowed_tool_ids]
+            tools = [t for t in all_published if t["tool_id"] in allowed_tool_ids]
         else:
             tools = all_published
 
-        tool_list = [{"name": t.tool_name, "description": t.description or ""} for t in tools]
+        tool_list = [{"name": t["tool_name"], "description": t["description"]} for t in tools]
 
         # 获取全局摘要
         try:
@@ -1247,10 +1244,11 @@ class AgentOrchestrator:
 
         parameters_text = format_parameters_text(tool.parameters or [])
         # 用手动替换而非 str.format()，防止 tool_name/description 内容含花括号时触发 KeyError
-        system_prompt = (
-            TRIAL_SYSTEM_PROMPT_TEMPLATE.replace("{tool_name}", tool.tool_name)
-            .replace("{description}", tool.description or "（无描述）")
-            .replace("{parameters_text}", parameters_text)
+        system_prompt = safe_format_template(
+            TRIAL_SYSTEM_PROMPT_TEMPLATE,
+            tool_name=tool.tool_name,
+            description=tool.description or "（无描述）",
+            parameters_text=parameters_text,
         )
         return AgentConfig(
             agent_type=AgentType.TRIAL,
