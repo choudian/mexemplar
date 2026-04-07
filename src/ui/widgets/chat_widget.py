@@ -6,8 +6,6 @@ AI 助手对话界面组件 (Claude Chats 风格)
 - 对话视图：消息展示 + 输入框（通过侧边栏导航返回列表）
 """
 
-import json
-import uuid
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -25,6 +23,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QPixmap
 from src.business.agents.config import AgentType
+from src.business.services import ChatService
 from src.ui.widgets.message_input import MessageInputEdit
 from src.ui.widgets.layout_utils import clear_layout, scroll_to_bottom
 from src.utils.logger import get_logger
@@ -241,37 +240,8 @@ class ChatWidget(QWidget):
 
     def _load_sessions(self):
         """从数据库加载会话列表"""
-        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
-        # 当前保留是因为这些是简单的只读 CRUD 操作，业务层尚无对应服务。
         try:
-            from src.data.repositories import SessionRepository, MessageRepository
-
-            session_repo = SessionRepository()
-            msg_repo = MessageRepository()
-            sessions = session_repo.get_by_agent_type(AgentType.ASSISTANT, limit=200)
-
-            self._all_sessions = []
-            for s in sessions:
-                # 获取第一条用户消息作为预览
-                messages = msg_repo.get_context(s.session_id)
-                first_user_msg = ""
-                for m in messages:
-                    if m.role == "user" and m.content:
-                        first_user_msg = m.content
-                        break
-
-                title = first_user_msg[:50] if first_user_msg else "新对话"
-                preview_text = first_user_msg[:120] if first_user_msg else ""
-
-                self._all_sessions.append(
-                    {
-                        "session_id": s.session_id,
-                        "title": title,
-                        "preview": preview_text,
-                        "date": s.created_at,
-                        "date_str": s.created_at.strftime("%m/%d %H:%M") if s.created_at else "",
-                    }
-                )
+            self._all_sessions = ChatService().get_sessions_with_preview()
         except Exception as e:
             self.logger.error(f"加载会话列表失败: {e}")
             self._all_sessions = []
@@ -361,13 +331,8 @@ class ChatWidget(QWidget):
 
     def _load_session_messages(self, session_id: str):
         """从数据库加载会话历史消息（只加载非归档消息）"""
-        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
-        # 当前保留是因为这是简单的只读操作，业务层尚无对应服务。
         try:
-            from src.data.repositories import MessageRepository
-
-            repo = MessageRepository()
-            messages = repo.get_context(session_id)  # 只返回非 archived 消息
+            messages = ChatService().get_session_messages(session_id)
             if not messages:
                 self._add_welcome_message()
                 return
@@ -583,15 +548,7 @@ class ChatWidget(QWidget):
 
     def _get_display_name(self) -> str:
         """从用户偏好档案获取称呼"""
-        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
-        # 当前保留是因为这是简单的只读操作，业务层尚无对应服务。
-        try:
-            from src.data.repositories import AssistantProfileRepository
-
-            profile = AssistantProfileRepository().get_default()
-            return profile.display_name if profile and profile.display_name else ""
-        except Exception:
-            return ""
+        return ChatService().get_display_name()
 
     def _on_welcome_send(self):
         """从欢迎页输入框发送"""
@@ -620,25 +577,8 @@ class ChatWidget(QWidget):
 
     def _create_session(self, tool_ids=None) -> str:
         """创建新的助理会话。tool_ids: list[str] 或 None（全部工具）"""
-        # TODO: [架构] UI 层直接访问数据层。应通过业务层服务调用。
-        # 当前保留是因为业务层尚无 Session 创建服务。
-        from src.data.models_sqlite import Session
-        from src.data.repositories import SessionRepository
-
-        session_id = f"ast_{uuid.uuid4().hex[:12]}"
         try:
-            repo = SessionRepository()
-            tool_ids_str = json.dumps(tool_ids) if tool_ids is not None else None
-            repo.create(
-                Session(
-                    session_id=session_id,
-                    workflow_id=None,
-                    agent_type=AgentType.ASSISTANT,
-                    status="active",
-                    tool_ids=tool_ids_str,
-                )
-            )
-            self.logger.info(f"创建助理会话: {session_id}, tool_ids={tool_ids}")
+            return ChatService().create_session(tool_ids)
         except Exception as e:
             self.logger.error(f"创建会话失败: {e}")
-        return session_id
+            return ChatService.generate_session_id()

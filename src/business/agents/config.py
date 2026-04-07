@@ -21,6 +21,18 @@ class AgentType(str, Enum):
     TRIAL = "trial"
     ASSISTANT = "assistant"
 
+    @property
+    def display_name(self) -> str:
+        return _AGENT_TYPE_DISPLAY_NAMES[self]
+
+
+_AGENT_TYPE_DISPLAY_NAMES = {
+    AgentType.PM: "需求分析",
+    AgentType.PROGRAMMER: "技能学习",
+    AgentType.TRIAL: "技能试用",
+    AgentType.ASSISTANT: "AI 助手",
+}
+
 
 class ResultType(str, Enum):
     """Agent 运行结果类型"""
