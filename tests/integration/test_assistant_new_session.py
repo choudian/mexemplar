@@ -165,11 +165,11 @@ class TestAssistantNewSession:
     # -------------------------------------------------------------------------
 
     def test_talk_to_user_triggers_needs_input(self, in_memory_db, mock_config, events_collector):
-        """assistant 调用 talk_to_user 应触发 NEEDS_USER_INPUT"""
+        """assistant 直接文字回复（text_as_user_input=True）应触发 NEEDS_USER_INPUT"""
         session_id = _create_assistant_session()
 
         mock_llm = MockLLMClient([
-            _assistant_talk_to_user("请问你需要什么帮助？"),
+            _assistant_text_reply("请问你需要什么帮助？"),
         ])
         orchestrator = AgentOrchestrator(mock_llm, mock_config)
         orchestrator.run_agent(

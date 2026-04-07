@@ -198,11 +198,38 @@ PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），t
 
 办公助理不需要 `_dispatch_next`（没有下游 Agent），Loop 完成后不调度。助理触发的修复流程（`report_tool_bug`）和工具沉淀（`codify_as_tool`）通过异步任务队列投递，由后台 worker 消费后调用现有 PM 分诊流程。
 
-### Agent 之间的衔接：事件驱动
+### Agent 之间的衔接：两层通信机制
 
-Agent 之间通过 blinker 事件通信，流程编排由 AgentOrchestrator 统一负责（不单独拆文件）。
+流程编排由 AgentOrchestrator 统一负责（不单独拆文件）。通信分两层：
 
-**事件列表**：requirement_confirmed、code_completed、review_passed/failed、tool_saved、trial_failed、triage_completed、tool_published、agent_needs_user_input、agent_error。各事件的携带数据和触发时机详见 [event_system_design.md](design/event_system_design.md) 第三节。
+| 通信方向 | 机制 | 说明 |
+|---------|------|------|
+| Loop → Orchestrator | return AgentResult | 函数调用返回值，同步 |
+| Orchestrator → 外部 | blinker 事件 | 跨模块解耦通知，UI/日志/持久化各自监听 |
+
+**事件不用于 Agent 间调度**。Orchestrator 收到 AgentResult 后通过 `_dispatch_next` 显式调用下一个 Agent，blinker 事件只发给 UI / 日志 / WorkflowTransition，不通过事件监听器触发下一步。
+
+**完整事件列表**（均由 Orchestrator 发出，定义在 `src/utils/events.py`）：
+
+| 类别 | 事件名 | 触发时机 |
+|------|--------|---------|
+| 录制 | `recording_started` / `recording_stopped` | 录制开始/停止 |
+| 录制 | `recording_completed` | 录制数据准备就绪 |
+| 交互 | `agent_needs_user_input` | Agent 需要用户回复 |
+| 交互 | `agent_error` | Agent 执行失败 |
+| 协作 | `requirement_confirmed` | PM 完成需求确认 |
+| 协作 | `code_completed` | 程序员提交代码 |
+| 协作 | `review_passed` / `review_failed` | LLM Review 结果 |
+| 协作 | `tool_saved` | 工具入库（pending 状态） |
+| 协作 | `trial_success` | 单次试用成功（含当前累计次数） |
+| 协作 | `trial_failed` | 试用失败，触发 PM 分诊 |
+| 协作 | `triage_completed` | PM 分诊判定为代码问题 |
+| 协作 | `tool_published` | 工具发布（试用成功满 3 次） |
+| 失败追踪 | `teaching_failure_updated` | 教学失败记录新增或更新 |
+| 失败追踪 | `teaching_failure_resolved` | 失败记录已解决 |
+| 失败追踪 | `teaching_failure_retrying` | 开始重试失败流程 |
+
+各协作事件的数据格式详见 [event_system_design.md](design/event_system_design.md) 第三节。
 
 PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应 UI，办公助理通过 `session_id` 路由到对应 ChatWidget 实例。
 
@@ -211,6 +238,20 @@ PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应 UI，办公助理
 - **AgentOrchestrator** — 根据 loop.run() 的返回值发出业务事件、通过 `_dispatch_next` 显式调度下一个 Agent
 
 改流程只改 Orchestrator，改 Agent 不影响流程。
+
+### Trial Agent Config：动态构建
+
+PM/程序员/助理三个 Agent 有预定义的固定 Config（`PM_CONFIG`、`PROGRAMMER_CONFIG`、`ASSISTANT_CONFIG`）。试用 Agent 例外：其 system prompt 需要注入当前工具的参数定义，因此 Config 在每次启动试用时由 `_build_trial_config(workflow_id)` 动态构建，不缓存复用。
+
+### 教学失败追踪
+
+每次 agent_error 事件自动触发 Orchestrator 记录教学失败（TeachingFailureRepository）。UI 展示失败列表，用户可手动重试。重试采用三级策略：
+
+1. **复用旧 session** — 旧 session 存在，直接恢复（user_input=None，复用消息历史）
+2. **从 transition 记录恢复** — 旧 session 不存在，但上阶段留有 transition payload，新建 session 用上阶段结果当输入
+3. **降级到上一阶段** — 都没有时，从上游阶段（pm / programmer）重新触发
+
+失败记录状态：active → retrying → resolved / dismissed。
 
 ---
 
@@ -328,20 +369,26 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 **用技能流程（优先级 9-20）：**
 
-| 优先级 | 模块 | 说明 |
-|--------|------|------|
-| 9 | **助理 AgentConfig + Prompt** | 助理 Agent 配置、system prompt 模板 |
-| 10 | **动态工具懒加载** | DynamicToolManager + search_tools / get_tool_detail |
-| 11 | **Orchestrator 适配** | assistant 类型的会话管理、工具构建、签名变更 |
-| 12 | **ChatWidget 接通** | 去掉模拟回复，接通 AgentUIBridge |
-| 13 | **report_tool_bug** | 工具 bug 报告 → PM 分诊流程 |
-| 14 | **首次引导流程** | profile 收集、存储、注入 |
-| 15 | **内置通用工具** | web_search、web_fetch、exec 等内置工具实现 |
-| 16 | **侧边栏会话列表** | 多会话管理 UI |
-| 17 | **新建会话工具选择** | 手动选择工具子集 |
-| 18 | **工具沉淀路径 2** | codify_as_tool + PM 适配执行记录输入 |
-| 19 | **工具沉淀路径 3** | 重复模式检测 + 自动建议 + 拒绝冷却 |
-| 20 | **跨会话记忆** | 层级摘要 + memory_search + load_reference 扩展 |
+| 优先级 | 模块 | 说明 | 状态 |
+|--------|------|------|------|
+| 9 | **助理 AgentConfig + Prompt** | 助理 Agent 配置、system prompt 模板 | ✅ 完成 |
+| 10 | **动态工具懒加载** | DynamicToolManager + search_tools / get_tool_detail | ✅ 完成 |
+| 11 | **Orchestrator 适配** | assistant 类型的会话管理、工具构建、签名变更 | ✅ 完成 |
+| 12 | **ChatWidget 接通** | 去掉模拟回复，接通 AgentUIBridge | ✅ 完成 |
+| 13 | **report_tool_bug** | 工具 bug 报告 → PM 分诊流程 | ✅ 完成 |
+| 14 | **首次引导流程** | profile 收集、存储、注入 | ✅ 完成 |
+| 15 | **内置通用工具** | web_search、web_fetch、exec 等内置工具实现 | ✅ 完成 |
+| 16 | **侧边栏会话列表** | 多会话管理 UI | 待开发 |
+| 17 | **新建会话工具选择** | 手动选择工具子集 | ✅ 完成（allowed_tool_ids 机制） |
+| 18 | **工具沉淀路径 2** | codify_as_tool + PM 适配执行记录输入 | ✅ 完成 |
+| 19 | **工具沉淀路径 3** | 重复模式检测 + 自动建议 + 拒绝冷却 | ✅ 完成 |
+| 20 | **跨会话记忆** | 层级摘要 + memory_search + load_reference 扩展 | ✅ 完成 |
+
+**额外实现（原计划外）：**
+
+| 模块 | 说明 |
+|------|------|
+| **教学失败追踪** | agent_error 自动记录、UI 展示失败列表、三级策略重试（见第五节） |
 
 每个模块单独细化为独立的设计文档，细化到可直接开发的程度。
 
@@ -363,16 +410,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 ---
 
-## 十、待讨论事项
-
-- [x] ~~Agent 之间的衔接机制~~（已确定，事件驱动 + 集中编排，见第五节）
-- [x] ~~办公助理 Agent 设计~~（已确定，详见 [assistant_agent_design.md](design/assistant_agent_design.md)）
-- [ ] 测试策略
-- [ ] 文档规范化
-- [ ] UI 术语优化
-- [ ] README 重写
-
----
 
 *基于 v1 讨论精炼，记录时间：2026-03-11*
 *更新：2026-03-27 — 精简文档：删除与设计文档重复的差异决策、办公助理详细设计和工具沉淀章节（已收入 assistant_agent_design.md），工具沉淀三条路径概述移至第一节*
+*更新：2026-04-07 — 同步代码现状：精确化 Agent 两层通信机制描述；补全事件列表（teaching_failure 系列、trial_success、recording_started/stopped）；补充 Trial Agent Config 动态构建说明；新增教学失败追踪系统说明；更新优先级表完成状态*

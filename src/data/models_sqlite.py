@@ -219,3 +219,30 @@ class AssistantSummary(Base):
 
     def __repr__(self) -> str:
         return f"<AssistantSummary(summary_id={self.summary_id!r}, level={self.level!r})>"
+
+
+class AppSettings(Base):
+    """全局配置键值表（替代 DatabaseManager.get_setting/set_setting）"""
+
+    __tablename__ = "app_settings"
+
+    setting_key: Mapped[str] = mapped_column(String(200), primary_key=True)
+    setting_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    setting_type: Mapped[str] = mapped_column(String(20), default="string")
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<AppSettings(setting_key={self.setting_key!r}, setting_type={self.setting_type!r})>"
+
+
+class SchemaVersion(Base):
+    """Schema 版本追踪表"""
+
+    __tablename__ = "schema_version"
+
+    version: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    def __repr__(self) -> str:
+        return f"<SchemaVersion(version={self.version!r})>"

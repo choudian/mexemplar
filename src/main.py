@@ -20,14 +20,12 @@ from questionary import select, confirm
 
 from src.utils.logger import get_logger, setup_logger
 from src.data.unified_config import get_unified_config
-from src.data.database import DatabaseManager
 
 logger = get_logger(__name__)
 console = Console()
 
 # 全局资源
 _resources = {
-    "db_manager": None,
     "config": None,
 }
 
@@ -299,12 +297,6 @@ def _handle_list_tools(use_rich):
 def cleanup():
     """清理资源"""
     logger.info("正在清理资源...")
-    if _resources["db_manager"]:
-        try:
-            _resources["db_manager"].close()
-            logger.info("[OK] 数据库已关闭")
-        except Exception as e:
-            logger.error(f"[ERROR] 关闭数据库失败: {e}")
     logger.info("Mexemplar 已退出")
 
 
@@ -447,28 +439,15 @@ def main():
     logger.info("Mexemplar 启动中...")
     logger.info("=" * 60)
 
-    config = None
-    db_manager = None
-
     try:
-        # 初始化配置系统
+        # 初始化配置系统（内部同时完成数据库初始化和迁移）
         config = get_unified_config()
-        logger.info("[OK] 配置系统初始化成功")
+        logger.info("[OK] 配置系统及数据库初始化成功")
 
-        # 初始化数据库
-        db_path = config.get("database.db_path")
-        db_manager = DatabaseManager(db_path)
-        db_manager.initialize()
-        logger.info("[OK] 数据库初始化成功")
-
-        # 保存到全局变量供清理使用
         _resources["config"] = config
-        _resources["db_manager"] = db_manager
 
     except Exception as e:
         logger.error(f"[ERROR] 初始化失败: {e}", exc_info=True)
-        if db_manager:
-            db_manager.close()
         sys.exit(1)
 
     # GUI 模式优先处理

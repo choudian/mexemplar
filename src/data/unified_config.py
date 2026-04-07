@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any, Callable, List
 from dataclasses import dataclass
 
 from src.data.config_models import AppConfig, ConfigFileLoader
-from src.data.database import DatabaseManager
+from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manager
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +46,8 @@ class UnifiedConfigManager:
         self.file_config: AppConfig = self.file_loader.load()
 
         # 2. 初始化数据库（用户自定义配置）
-        # TODO: [架构] 应注入共享 DatabaseManager 实例，而非每次创建新的
-        self.db: DatabaseManager = DatabaseManager(db_path)
-        self.db.initialize()
+        self._sa: SQLAlchemyManager = get_sqlalchemy_manager(db_path)
+        self._sa.initialize()
 
         # 缓存运行时配置
         self._runtime_cache: Dict[str, Any] = {}
@@ -84,7 +83,7 @@ class UnifiedConfigManager:
                 return self._runtime_cache[key]
 
         # 2. 检查数据库配置
-        db_value = self.db.get_setting(key)
+        db_value = self._sa.get_setting(key)
         if db_value is not None:
             with self._cache_lock:
                 self._runtime_cache[key] = db_value
@@ -124,7 +123,7 @@ class UnifiedConfigManager:
             logger.info(f"[配置] 已缓存: {key} = {value}")
         elif persist == "database":
             # 保存到数据库
-            self.db.set_setting(key, value, value_type)
+            self._sa.set_setting(key, value, value_type)
             # 同时更新缓存
             with self._cache_lock:
                 self._runtime_cache[key] = value
@@ -400,8 +399,7 @@ class UnifiedConfigManager:
                         )
 
     def close(self):
-        """关闭数据库连接"""
-        self.db.close()
+        """SQLAlchemyManager 是全局单例，此处不关闭"""
 
 
 # ===== 全局单例（线程安全）=====
