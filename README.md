@@ -93,10 +93,38 @@ cd mexemplar
 uv sync
 ```
 
-配置 API Key（支持 Anthropic Claude、DeepSeek 等）：
+配置文件配置（当前阶段）：
+
+1. 复制示例配置为根目录 `config.json`：
 
 ```bash
-uv run python -m src.main
+cp config.example.json config.json
+```
+
+2. 修改 `config.json` 里的关键配置（当前阶段重点）：
+
+- `provider`
+- `model`
+- `api_key`
+- `base_url`
+
+示例：
+
+```json
+{
+  "ai": {
+    "provider": "openai",
+    "model": "gpt-4o-mini",
+    "api_key": "your_api_key_here",
+    "base_url": "https://api.openai.com/v1"
+  }
+}
+```
+
+3. 启动应用：
+
+```bash
+uv run python -m src.main --gui
 ```
 
 ---
