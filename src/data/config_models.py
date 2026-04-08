@@ -25,6 +25,7 @@ config = AIConfig()  # 不要这样做！
 import json
 import logging
 import dataclasses
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field, asdict
@@ -100,6 +101,14 @@ class WebSocketConfig:
 
 
 @dataclass
+class ProxyConfig:
+    """录制代理配置"""
+
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
+@dataclass
 class RecordingConfig:
     """录制配置"""
 
@@ -122,6 +131,7 @@ class RecordingConfig:
     debug_log_enabled: bool = False  # 是否启用调试日志（写入 .cursor/debug.log）
     # WebSocket 配置
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
+    proxy: ProxyConfig = field(default_factory=ProxyConfig)
     # 用户数据目录配置
     persistent_user_data: bool = True  # 是否使用持久化用户数据目录（保留登录状态，默认启用）
     user_data_dir: Optional[str] = None  # 自定义用户数据目录路径（如果为 None，使用默认路径）
@@ -205,13 +215,62 @@ class ConfigFileLoader:
             config_path: 配置文件路径
         """
         if config_path is None:
-            # 使用默认路径：data/config.json
+            # 使用默认路径：data/config/config.json
             project_root = Path(__file__).parent.parent.parent
             config_dir = project_root / "data" / "config"
             config_dir.mkdir(parents=True, exist_ok=True)
-            config_path = str(config_dir / "config.json")
+            target_config_path = config_dir / "config.json"
+            self._sync_startup_config(target_config_path)
+            config_path = str(target_config_path)
 
         self.config_path = Path(config_path)
+
+    @staticmethod
+    def _sync_startup_config(target_config_path: Path, working_dir: Optional[Path] = None) -> None:
+        """
+        启动时同步配置文件到 data/config/config.json。
+
+        规则：
+        1. 如果当前目录存在 config.json，优先复制它
+        2. 否则如果存在 config.example.json，复制它
+        3. 两者都不存在则跳过
+        """
+        current_dir = working_dir or Path.cwd()
+        config_source = current_dir / "config.json"
+        example_source = current_dir / "config.example.json"
+
+        if config_source.exists():
+            source_path = config_source
+        elif example_source.exists():
+            source_path = example_source
+        else:
+            logger.info(
+                "[配置文件] 当前目录未找到 config.json 或 config.example.json，跳过启动同步"
+            )
+            return
+
+        target_config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        try:
+            if source_path.resolve() == target_config_path.resolve():
+                logger.debug("[配置文件] 启动同步跳过：源文件与目标文件相同")
+                return
+        except Exception:
+            # resolve 失败时继续尝试复制
+            pass
+
+        try:
+            if target_config_path.exists():
+                source_content = source_path.read_bytes()
+                target_content = target_config_path.read_bytes()
+                if source_content == target_content:
+                    logger.debug("[配置文件] 启动同步跳过：源文件与目标文件内容一致")
+                    return
+
+            shutil.copy2(source_path, target_config_path)
+            logger.info(f"[配置文件] 启动同步成功: {source_path} -> {target_config_path}")
+        except Exception as e:
+            logger.warning(f"[配置文件] 启动同步失败: {e}")
 
     def load(self) -> AppConfig:
         """
@@ -254,4 +313,3 @@ class ConfigFileLoader:
         except Exception as e:
             logger.error(f"[配置文件] 保存失败: {e}")
             raise
-
