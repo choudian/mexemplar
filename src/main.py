@@ -204,9 +204,6 @@ def _handle_view_config(config, use_rich):
             "  持久化用户数据", str(config.get("recording.persistent_user_data", default="N/A"))
         )
 
-        table.add_row("[bold]数据库配置[/bold]", "")
-        table.add_row("  路径", config.get("database.db_path", default="N/A") or "默认路径")
-
         console.print(table)
         input("\n按 Enter 返回...")
     else:
@@ -220,9 +217,6 @@ def _handle_view_config(config, use_rich):
         print(f"  默认模式: {config.get('recording.default_recording_mode', default='N/A')}")
         print(f"  浏览器类型: {config.get('recording.browser_type', default='N/A')}")
         print(f"  持久化用户数据: {config.get('recording.persistent_user_data', default='N/A')}")
-
-        print("\n[数据库配置]")
-        print(f"  路径: {config.get('database.db_path', default='N/A') or '默认路径'}")
 
 
 def _handle_set_config(config, use_rich):
@@ -536,3 +530,4 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+

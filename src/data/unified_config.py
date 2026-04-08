@@ -33,20 +33,19 @@ class UnifiedConfigManager:
     3. 代码默认值（fallback）
     """
 
-    def __init__(self, config_path: Optional[str] = None, db_path: Optional[str] = None):
+    def __init__(self, config_path: Optional[str] = None):
         """
         初始化统一配置管理器
 
         Args:
             config_path: 配置文件路径
-            db_path: SQLite 数据库路径
         """
         # 1. 加载配置文件（默认值）
         self.file_loader = ConfigFileLoader(config_path)
         self.file_config: AppConfig = self.file_loader.load()
 
-        # 2. 初始化数据库（用户自定义配置）
-        self._sa: SQLAlchemyManager = get_sqlalchemy_manager(db_path)
+        # 2. 初始化数据库（固定默认路径）
+        self._sa: SQLAlchemyManager = get_sqlalchemy_manager()
         self._sa.initialize()
 
         # 缓存运行时配置
@@ -438,3 +437,4 @@ def get_unified_config() -> UnifiedConfigManager:
             logger.info("[配置] 统一配置管理器已初始化（线程安全）")
 
     return _unified_config_manager
+

@@ -84,8 +84,10 @@
 |---|---|---|---|
 | 定位 | 教技能（内部流程） | 教技能（验证阶段） | 用技能（面向用户的日常入口） |
 | 生命周期 | 任务完成即结束 | 任务完成即结束 | 长期存在，随时可对话 |
-| 工具集 | 录制数据工具 + 信号工具（固定） | execute_tool + submit_trial_result（固定） | 已发布的用户工具（动态）+ 内置通用工具 |
+| 工具集 | 录制数据工具 + 信号工具（固定） | execute_tool + submit_trial_result + run_command（固定） | 已发布的用户工具（动态）+ 内置通用工具 |
 | 会话绑定 | 绑定 workflow_id | 绑定 workflow_id | 不绑定 workflow_id，独立存在 |
+
+试用 Agent 的 `create_trial_tools()` 固定返回三个工具：`execute_tool`、`submit_trial_result`、`run_command`。其中 `run_command` 用于在工具执行环境中运行命令，支持试用阶段的自修复。
 
 ### 为什么拆分
 
@@ -209,7 +211,7 @@ PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），t
 
 **事件不用于 Agent 间调度**。Orchestrator 收到 AgentResult 后通过 `_dispatch_next` 显式调用下一个 Agent，blinker 事件只发给 UI / 日志 / WorkflowTransition，不通过事件监听器触发下一步。
 
-**完整事件列表**（均由 Orchestrator 发出，定义在 `src/utils/events.py`）：
+**完整事件列表**（定义在 `src/utils/events.py`）。其中 workflow/agent 事件由 AgentOrchestrator 发出；录制生命周期事件（`recording_started`、`recording_stopped`、`recording_completed`）由 Recorder 层发出：
 
 | 类别 | 事件名 | 触发时机 |
 |------|--------|---------|
@@ -307,11 +309,12 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 ## 七、录制数据与采集通道
 
-### 采集通道：扩展路线，不需要 CDP
+### 采集通道：Playwright + Extension + CDP 混合设计
 
-- Chrome 扩展（content_script + background service worker）
+- Playwright + Chrome 扩展（content_script + background service worker）+ CDP
 - 覆盖所有 Chromium 系浏览器（Chrome、Edge、Brave、Arc、Opera）
-- 早期曾用 CDP + Native Host，后切换到纯扩展，没有能力退化
+- CDP 用于在页面加载前注入 `MEXEMPLAR_CONFIG` 配置（`browser_recorder.py` `_inject_config_via_cdp`）
+- Extension 负责事件采集并通过 WebSocket 上报
 
 ### 扩展能力边界
 
@@ -378,7 +381,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | 13 | **report_tool_bug** | 工具 bug 报告 → PM 分诊流程 | ✅ 完成 |
 | 14 | **首次引导流程** | profile 收集、存储、注入 | ✅ 完成 |
 | 15 | **内置通用工具** | web_search、web_fetch、exec 等内置工具实现 | ✅ 完成 |
-| 16 | **侧边栏会话列表** | 多会话管理 UI | 待开发 |
+| 16 | **侧边栏会话列表** | 多会话管理 UI | 已完成（`chat_widget.py`） |
 | 17 | **新建会话工具选择** | 手动选择工具子集 | ✅ 完成（allowed_tool_ids 机制） |
 | 18 | **工具沉淀路径 2** | codify_as_tool + PM 适配执行记录输入 | ✅ 完成 |
 | 19 | **工具沉淀路径 3** | 重复模式检测 + 自动建议 + 拒绝冷却 | ✅ 完成 |

@@ -52,13 +52,6 @@ def _filter_dataclass_fields(data: Dict[str, Any], dataclass_type: type) -> Dict
     return {k: v for k, v in data.items() if k in fields}
 
 
-@dataclass
-class DatabaseConfig:
-    """数据库配置"""
-
-    db_path: Optional[str] = None
-    auto_init: bool = True
-
 
 @dataclass
 class AIConfig:
@@ -151,7 +144,6 @@ class AppConfig:
     app_name: str = "Mexemplar"
     version: str = "0.1.0"
     debug: bool = False
-    database: DatabaseConfig = field(default_factory=DatabaseConfig)
     ai: AIConfig = field(default_factory=AIConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
@@ -168,10 +160,6 @@ class AppConfig:
     def from_dict(cls, data: Dict[str, Any]) -> "AppConfig":
         """从字典创建配置对象"""
         config = cls()
-
-        if "database" in data:
-            config.database = DatabaseConfig(**_filter_dataclass_fields(data["database"], DatabaseConfig))
-
         if "ai" in data:
             config.ai = AIConfig(**_filter_dataclass_fields(data["ai"], AIConfig))
 
@@ -266,3 +254,4 @@ class ConfigFileLoader:
         except Exception as e:
             logger.error(f"[配置文件] 保存失败: {e}")
             raise
+
