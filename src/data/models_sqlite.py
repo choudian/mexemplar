@@ -5,7 +5,7 @@ SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 """
 
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional
 from enum import Enum
 from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, LargeBinary
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column

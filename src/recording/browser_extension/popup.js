@@ -2,26 +2,41 @@
 let isRecording = false;
 let recordingId = null;
 let actionCount = 0;
+let isAppConnected = false;
+let recordingSource = null;
+let replyTimeout = null;
+let replyPending = false;
+
+const REPLY_TIMEOUT_MS = 10000;
 
 // 更新UI状态
 function updateUI() {
   const statusEl = document.getElementById('status');
+  const appStatusEl = document.getElementById('app-status');
   const btnStart = document.getElementById('btnStart');
   const btnStop = document.getElementById('btnStop');
   const btnExport = document.getElementById('btnExport');
   const infoEl = document.getElementById('info');
+
+  if (appStatusEl) {
+    appStatusEl.style.display = isAppConnected ? 'none' : 'block';
+  }
   
   if (isRecording) {
     statusEl.textContent = `录制中... (${actionCount} 个操作)`;
     statusEl.className = 'status recording';
     btnStart.disabled = true;
-    btnStop.disabled = false;
+    btnStop.disabled = recordingSource === 'playwright' || replyPending;
     btnExport.disabled = true;
-    infoEl.innerHTML = '<span class="action-count">' + actionCount + '</span> 个操作已记录';
+    if (recordingSource === 'playwright') {
+      infoEl.innerHTML = '当前录制由 Mexemplar App 控制，请在 App 中停止';
+    } else {
+      infoEl.innerHTML = '<span class="action-count">' + actionCount + '</span> 个操作已记录';
+    }
   } else {
     statusEl.textContent = '未录制';
     statusEl.className = 'status idle';
-    btnStart.disabled = false;
+    btnStart.disabled = !isAppConnected || replyPending;
     btnStop.disabled = true;
     btnExport.disabled = actionCount === 0;
     if (actionCount > 0) {
@@ -34,52 +49,71 @@ function updateUI() {
 
 // 获取录制状态
 function getRecordingState() {
-  chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATE' }, (response) => {
+  chrome.runtime.sendMessage({ type: 'GET_WS_STATUS' }, (wsResp) => {
     if (chrome.runtime.lastError) {
-      console.error('Error:', chrome.runtime.lastError);
+      isAppConnected = false;
+    } else {
+      isAppConnected = Boolean(wsResp && wsResp.connected);
+    }
+
+    chrome.runtime.sendMessage({ type: 'GET_RECORDING_STATE' }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error:', chrome.runtime.lastError);
+        updateUI();
+        return;
+      }
+      if (response) {
+        isRecording = Boolean(response.isRecording);
+        recordingId = response.recordingId;
+        recordingSource = response.recordingSource || null;
+        actionCount = response.actionCount || 0;
+      }
+      updateUI();
+    });
+  });
+}
+
+function startReplyTimeout(actionName) {
+  replyPending = true;
+  clearTimeout(replyTimeout);
+  updateUI();
+  replyTimeout = setTimeout(() => {
+    if (!replyPending) {
       return;
     }
-    if (response) {
-      isRecording = response.isRecording;
-      recordingId = response.recordingId;
-      actionCount = response.actionCount || 0;
-      updateUI();
-    }
-  });
+    replyPending = false;
+    alert(actionName + '超时，App 未响应，请检查 Mexemplar 是否在运行');
+    getRecordingState();
+  }, REPLY_TIMEOUT_MS);
 }
 
 // 开始录制
 document.getElementById('btnStart').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'START_RECORDING' }, (response) => {
+  chrome.runtime.sendMessage({ type: 'EXTENSION_START_RECORDING' }, (response) => {
     if (chrome.runtime.lastError) {
       alert('开始录制失败: ' + chrome.runtime.lastError.message);
       return;
     }
-    if (response && response.success) {
-      isRecording = true;
-      recordingId = response.recordingId;
-      actionCount = 0;
-      updateUI();
-    } else {
-      alert('开始录制失败');
+    if (!response || !response.success) {
+      alert('开始录制失败: ' + (response ? response.error : '未知错误'));
+      return;
     }
+    startReplyTimeout('开始录制');
   });
 });
 
 // 停止录制
 document.getElementById('btnStop').addEventListener('click', () => {
-  chrome.runtime.sendMessage({ type: 'STOP_RECORDING' }, (response) => {
+  chrome.runtime.sendMessage({ type: 'EXTENSION_STOP_RECORDING' }, (response) => {
     if (chrome.runtime.lastError) {
       alert('停止录制失败: ' + chrome.runtime.lastError.message);
       return;
     }
-    if (response && response.success) {
-      isRecording = false;
-      // 获取最终的操作数量
-      setTimeout(getRecordingState, 100);
-    } else {
-      alert('停止录制失败');
+    if (!response || !response.success) {
+      alert('停止录制失败: ' + (response ? response.error : '未知错误'));
+      return;
     }
+    startReplyTimeout('停止录制');
   });
 });
 
@@ -118,8 +152,38 @@ document.getElementById('btnExport').addEventListener('click', () => {
   });
 });
 
+chrome.runtime.onMessage.addListener((message) => {
+  if (message.type !== 'RECORDING_CONTROL_REPLY') {
+    return;
+  }
+
+  clearTimeout(replyTimeout);
+  replyPending = false;
+
+  if (message.status === 'started') {
+    isRecording = true;
+    recordingId = message.recording_id;
+    recordingSource = 'extension_triggered';
+    actionCount = 0;
+    updateUI();
+    return;
+  }
+
+  if (message.status === 'stopped') {
+    isRecording = false;
+    recordingId = null;
+    recordingSource = null;
+    getRecordingState();
+    return;
+  }
+
+  if (message.status === 'error') {
+    alert('录制失败: ' + (message.error || '未知错误'));
+    getRecordingState();
+  }
+});
+
 // 初始化
 getRecordingState();
 // 定期更新操作数量（每秒）
 setInterval(getRecordingState, 1000);
-

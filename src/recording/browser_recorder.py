@@ -12,15 +12,36 @@ import logging
 import json
 import time
 import os
-import asyncio  # ⭐ 新增：异步支持
-from contextlib import contextmanager  # ⭐ 新增：上下文管理器支持
-from typing import Optional, List, Dict, Any, Callable
+import asyncio
+import threading
+import shutil
+import uuid
+from contextlib import contextmanager
+from typing import Optional, List, Dict, Any, Callable, Set
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from src.data.unified_config import get_unified_config
+from src.utils.events import emit
+
+from .accessibility_recorder import AccessibilityRecorder
+from .proxy_recorder import ProxyRecorder
 
 logger = logging.getLogger(__name__)
+
+_ws_server_lock = threading.Lock()
+
+
+class RecordingMode:
+    BROWSER = "browser"
+    EXTENSION_TRIGGERED = "extension_triggered"
+
+    @classmethod
+    def display_defaults(cls, mode: str) -> dict:
+        """返回给定录制模式的显示默认值。"""
+        if mode == cls.EXTENSION_TRIGGERED:
+            return {"browser_type": "chrome", "app_name": "Chrome", "process_name": "chrome"}
+        return {"browser_type": "chromium", "app_name": "Browser", "process_name": "browser"}
 
 # 导入调试日志工具
 try:
@@ -79,6 +100,8 @@ class BrowserRecorder:
     3. 事件写入队列文件（主要存储）
     """
 
+    _shared_ws_server = None
+
     def __init__(self, config=None, storage_path: Optional[Path] = None):
         """
         初始化浏览器录制器
@@ -120,6 +143,14 @@ class BrowserRecorder:
 
         # ⭐ WebSocket 服务器（替代 Native Messaging）
         self._ws_server = None
+        self._playwright_ws_client = None
+        self._playwright_launch_token: Optional[str] = None
+        self._playwright_extension_bundle_path: Optional[Path] = None
+        self._proxy_recorder = ProxyRecorder()
+        self._accessibility_recorder = AccessibilityRecorder()
+        self._queue_write_lock = threading.Lock()
+        self._active_recording_mode = RecordingMode.BROWSER
+        self._recording_startup_in_progress = False
 
         # 事件回调（用于实时处理）
         self.on_action: Optional[Callable[[BrowserAction], None]] = None
@@ -163,6 +194,39 @@ class BrowserRecorder:
         """
         return self._page
 
+    @staticmethod
+    def _classify_extension_targets(
+        all_targets: List[Dict[str, Any]],
+    ) -> Dict[str, List[Dict[str, Any]]]:
+        """从 CDP targets 中筛选扩展相关目标。"""
+        extension_targets: List[Dict[str, Any]] = []
+        extension_service_workers: List[Dict[str, Any]] = []
+
+        for target in all_targets:
+            target_url = target.get("url")
+            if not (isinstance(target_url, str) and target_url.startswith("chrome-extension://")):
+                continue
+
+            extension_targets.append(target)
+            if target.get("type") == "service_worker":
+                extension_service_workers.append(target)
+
+        return {
+            "extension_targets": extension_targets,
+            "extension_service_workers": extension_service_workers,
+        }
+
+    def _stop_sub_recorders(self) -> None:
+        """停止代理和辅助功能录制器，忽略失败。"""
+        for recorder, name in [
+            (self._proxy_recorder, "代理"),
+            (self._accessibility_recorder, "Accessibility"),
+        ]:
+            try:
+                recorder.stop()
+            except Exception as e:
+                logger.warning(f"停止{name}录制器失败: {e}")
+
     def cleanup(self):
         """
         清理资源（用于初始化失败时的资源释放）
@@ -172,18 +236,25 @@ class BrowserRecorder:
             - 不会抛出异常，确保安全调用
         """
         try:
+            if self._is_extension_recording:
+                self._stop_sub_recorders()
+                self._reset_recording_state()
+
             # 清理 WebSocket 服务器
             if self._ws_server:
                 try:
-                    self._ws_server.stop_sync()
-                    logger.info("WebSocket 服务器已停止")
+                    with _ws_server_lock:
+                        if BrowserRecorder._shared_ws_server is self._ws_server:
+                            self._ws_server.stop_sync()
+                            BrowserRecorder._shared_ws_server = None
+                            logger.info("WebSocket 服务器已停止")
                 except Exception as e:
                     logger.warning(f"停止 WebSocket 服务器失败: {e}")
                 self._ws_server = None
+                self._playwright_ws_client = None
 
             # 清理浏览器资源（通过异步 _close_browser 统一处理）
             if self._event_loop and not self._event_loop.is_closed():
-                import asyncio
 
                 try:
                     asyncio.run_coroutine_threadsafe(
@@ -208,15 +279,16 @@ class BrowserRecorder:
                 except Exception as e:
                     logger.warning(f"关闭数据库连接失败: {e}")
 
+            self._cleanup_playwright_extension_bundle()
             logger.info("资源清理完成")
         except Exception as e:
             logger.error(f"清理资源时出错: {e}", exc_info=True)
 
     def _get_queue_paths(self, recording_id: str):
         """获取队列文件路径（WebSocket 模式只需要 action_queue）"""
-        # 固定队列文件目录：data/queues/
-        project_root = Path(__file__).parent.parent.parent
-        queue_dir = project_root / "data" / "queues"
+        from src.utils.helpers import get_default_data_dir
+
+        queue_dir = get_default_data_dir() / "queues"
         queue_dir.mkdir(parents=True, exist_ok=True)
 
         action_queue = queue_dir / f"{recording_id}_actions.jsonl"
@@ -227,8 +299,6 @@ class BrowserRecorder:
         """确保事件循环正在后台线程中运行"""
         if self._event_loop is None or self._event_loop.is_closed():
             # 创建新的事件循环
-            import threading
-
             def run_loop():
                 """在后台线程中运行事件循环"""
                 loop = asyncio.new_event_loop()
@@ -236,14 +306,11 @@ class BrowserRecorder:
                 self._event_loop = loop
                 loop.run_forever()
 
-            # 启动后台线程
             self._loop_thread = threading.Thread(target=run_loop, daemon=True)
             self._loop_thread.start()
 
             # 等待事件循环创建完成
             while self._event_loop is None:
-                import time
-
                 time.sleep(0.01)
 
     def _run_async(self, coro):
@@ -256,22 +323,21 @@ class BrowserRecorder:
     async def _launch_browser_with_subprocess(self, start_url: Optional[str] = None) -> bool:
         """
         使用 subprocess 启动系统 Chrome 并加载插件
-        这种方式避免了 Playwright 的兼容性问题（新标签页卡住）
         """
-        """使用Playwright启动浏览器并加载插件"""
         if not PLAYWRIGHT_AVAILABLE:
             logger.error("Playwright未安装，无法启动浏览器")
             return False
 
         try:
             # 获取插件路径
-            extension_path = Path(__file__).parent / "browser_extension"
-            extension_path = extension_path.resolve()
+            extension_source_path = Path(__file__).parent / "browser_extension"
+            extension_source_path = extension_source_path.resolve()
 
             # 🔒 安全验证：扩展路径
-            extension_path_str = self._validate_extension_path(str(extension_path))
+            extension_path_str = self._validate_extension_path(str(extension_source_path))
+            extension_path = self._prepare_playwright_extension_bundle(Path(extension_path_str))
 
-            logger.info(f"启动浏览器，加载插件: {extension_path_str}")
+            logger.info(f"启动浏览器，加载插件: {extension_path}")
 
             # ⭐ 启动 Playwright（使用异步 API）
             self._playwright_context = async_playwright()
@@ -296,7 +362,6 @@ class BrowserRecorder:
                     logger.info(f"使用默认持久化 user_data_dir: {user_data_dir} (保留登录状态)")
             else:
                 # 临时模式：每次录制都使用新的临时目录
-                import uuid
 
                 unique_id = str(uuid.uuid4())[:8]
                 user_data_dir = self.storage_path.parent / f"playwright_user_data_{unique_id}"
@@ -315,8 +380,6 @@ class BrowserRecorder:
                             manifest_file = ext_dir / "manifest.json"
                             if manifest_file.exists():
                                 try:
-                                    import json
-
                                     with open(manifest_file, "r", encoding="utf-8") as f:
                                         manifest = json.load(f)
                                     if manifest.get("name") == "Mexemplar Recorder":
@@ -331,7 +394,6 @@ class BrowserRecorder:
                     # 如果没有找到我们的扩展，清理并重建
                     if not has_our_extension:
                         logger.warning(f"持久化目录中未找到扩展，清理重建: {user_data_dir}")
-                        import shutil
 
                         shutil.rmtree(user_data_dir)
                         user_data_dir.mkdir(parents=True, exist_ok=True)
@@ -362,7 +424,7 @@ class BrowserRecorder:
                 hypothesis_id="H8",
             )
             # 确保使用绝对路径
-            extension_path_absolute = Path(extension_path_str).resolve()
+            extension_path_absolute = Path(extension_path).resolve()
             # 使用正斜杠路径（Chrome 在 Windows 上更倾向于正斜杠）
             extension_path_final = extension_path_absolute.as_posix()
             logger.info(f"扩展路径: {extension_path_final}")
@@ -462,8 +524,6 @@ class BrowserRecorder:
             logger.info("已注册新页面监听器（支持 target='_blank' popup 页面，异步 API）")
 
             # ⭐ 添加定期检查机制（兜底方案：主动发现新标签页）
-            import threading
-
             def check_new_pages():
                 """定期检查是否有新页面未被跟踪"""
                 last_page_count = len(self._pages)
@@ -582,6 +642,7 @@ class BrowserRecorder:
             )
 
             extension_loaded = False
+            extension_signals: List[str] = []
             try:
                 # 尝试获取扩展ID（通过检查扩展的background page）
                 # 注意：Manifest V3使用service worker，可能无法通过background_pages访问
@@ -593,45 +654,90 @@ class BrowserRecorder:
                             f"  扩展 {i+1}: {ext.url if hasattr(ext, 'url') else 'unknown'}"
                         )
                     extension_loaded = True
+                    extension_signals.append("background_page")
                 else:
-                    logger.warning(
+                    logger.info(
                         "未检测到扩展的background page（Manifest V3使用service worker，这是正常的）"
                     )
 
                 # 尝试通过CDP检查扩展
+                cdp_session = None
                 try:
                     cdp_session = await self._context.new_cdp_session(self._page)
-                    # 获取所有targets
-                    targets_result = await cdp_session.send("Target.getTargets")
-                    all_targets = targets_result.get("targetInfos", [])
-                    logger.info(f"通过CDP检测到 {len(all_targets)} 个targets")
+                    all_targets: List[Dict[str, Any]] = []
+                    target_types: Dict[str, int] = {}
+                    extension_targets: List[Dict[str, Any]] = []
+                    extension_service_workers: List[Dict[str, Any]] = []
 
-                    debug_log(
-                        location="browser_recorder.py:307",
-                        message="CDP targets count",
-                        data={"total_targets": len(all_targets)},
-                        session_id="debug-session",
-                        run_id="run1",
-                        hypothesis_id="A",
-                    )
+                    # Manifest V3 service worker 可能延迟激活，做短暂重试
+                    for attempt in range(1, 4):
+                        targets_result = await cdp_session.send("Target.getTargets")
+                        all_targets = targets_result.get("targetInfos", [])
+                        logger.info(f"通过CDP检测到 {len(all_targets)} 个targets（第{attempt}/3次）")
 
-                    # 检查service worker
-                    extension_targets = [
-                        t for t in all_targets if t.get("type") == "service_worker"
-                    ]
-                    if extension_targets:
-                        logger.info(
-                            f"通过CDP检测到 {len(extension_targets)} 个service worker（扩展background script）"
+                        debug_log(
+                            location="browser_recorder.py:307",
+                            message="CDP targets count",
+                            data={"total_targets": len(all_targets), "attempt": attempt},
+                            session_id="debug-session",
+                            run_id="run1",
+                            hypothesis_id="A",
                         )
-                        for i, target in enumerate(extension_targets):
+
+                        target_types = {}
+                        for target in all_targets:
+                            t_type = target.get("type", "unknown")
+                            target_types[t_type] = target_types.get(t_type, 0) + 1
+
+                        classified_targets = self._classify_extension_targets(all_targets)
+                        extension_targets = classified_targets["extension_targets"]
+                        extension_service_workers = classified_targets["extension_service_workers"]
+
+                        if extension_targets:
+                            break
+
+                        if attempt < 3:
+                            await asyncio.sleep(0.5)
+
+                    if extension_service_workers:
+                        logger.info(
+                            f"通过CDP检测到 {len(extension_service_workers)} 个扩展service worker（扩展background script）"
+                        )
+                        for i, target in enumerate(extension_service_workers):
                             logger.info(f"  Service Worker {i+1}: {target.get('url', 'unknown')}")
                         extension_loaded = True
+                        extension_signals.append("cdp_extension_service_worker")
 
                         debug_log(
                             location="browser_recorder.py:312",
                             message="service workers found",
                             data={
+                                "count": len(extension_service_workers),
+                                "urls": [
+                                    t.get("url", "unknown") for t in extension_service_workers
+                                ],
+                            },
+                            session_id="debug-session",
+                            run_id="run1",
+                            hypothesis_id="A",
+                        )
+                    elif extension_targets:
+                        logger.info(
+                            f"通过CDP检测到 {len(extension_targets)} 个chrome-extension targets（未发现service worker，可能处于空闲）"
+                        )
+                        for i, target in enumerate(extension_targets):
+                            logger.info(
+                                f"  Extension Target {i+1}: type={target.get('type', 'unknown')}, url={target.get('url', 'unknown')}"
+                            )
+                        extension_loaded = True
+                        extension_signals.append("cdp_extension_target")
+
+                        debug_log(
+                            location="browser_recorder.py:317",
+                            message="extension targets found",
+                            data={
                                 "count": len(extension_targets),
+                                "types": [t.get("type", "unknown") for t in extension_targets],
                                 "urls": [t.get("url", "unknown") for t in extension_targets],
                             },
                             session_id="debug-session",
@@ -639,22 +745,21 @@ class BrowserRecorder:
                             hypothesis_id="A",
                         )
                     else:
-                        logger.warning("⚠ 未通过CDP检测到service worker（扩展可能未加载）")
+                        logger.warning(
+                            "启动阶段未通过CDP检测到 chrome-extension:// targets（Manifest V3 service worker 可能延迟激活）"
+                        )
+                        logger.warning("将继续等待 WebSocket 连接确认扩展状态")
 
                         debug_log(
                             location="browser_recorder.py:317",
-                            message="no service workers found",
-                            data={},
+                            message="no extension targets found",
+                            data={"attempts": 3},
                             session_id="debug-session",
                             run_id="run1",
                             hypothesis_id="A",
                         )
 
                     # 列出所有target类型用于调试
-                    target_types = {}
-                    for target in all_targets:
-                        t_type = target.get("type", "unknown")
-                        target_types[t_type] = target_types.get(t_type, 0) + 1
                     logger.debug(f"Target类型统计: {target_types}")
 
                     debug_log(
@@ -665,8 +770,6 @@ class BrowserRecorder:
                         run_id="run1",
                         hypothesis_id="A",
                     )
-
-                    await cdp_session.detach()
                 except Exception as cdp_e:
                     logger.warning(f"通过CDP检查扩展失败: {cdp_e}")
 
@@ -678,6 +781,12 @@ class BrowserRecorder:
                         run_id="run1",
                         hypothesis_id="A",
                     )
+                finally:
+                    if cdp_session is not None:
+                        try:
+                            await cdp_session.detach()
+                        except Exception as detach_error:
+                            logger.debug(f"关闭CDP会话失败: {detach_error}")
 
             except Exception as e:
                 logger.warning(f"检查扩展加载状态失败: {e}")
@@ -692,31 +801,73 @@ class BrowserRecorder:
                 )
 
             if not extension_loaded:
-                logger.error("⚠ 警告：未检测到扩展已加载！")
-                logger.error("  可能原因：")
-                logger.error("  1. 扩展路径不正确")
-                logger.error("  2. manifest.json配置错误")
-                logger.error("  3. 扩展文件缺失或损坏")
-                logger.error(f"  扩展路径: {extension_path}")
-                logger.error("  请检查浏览器开发者工具中的扩展错误信息")
+                logger.warning("⚠ 启动阶段暂未确认扩展已加载")
+                logger.warning("  Manifest V3 service worker 可能延迟激活，这是常见现象")
+                logger.warning(f"  扩展路径: {extension_path}")
+                logger.warning("  后续将以 WebSocket 握手结果作为最终确认")
 
                 debug_log(
                     location="browser_recorder.py:334",
-                    message="extension not loaded warning",
-                    data={"extension_path": str(extension_path)},
+                    message="extension load not confirmed yet",
+                    data={
+                        "extension_path": str(extension_path),
+                        "signals": extension_signals,
+                    },
                     session_id="debug-session",
                     run_id="run1",
                     hypothesis_id="A",
                 )
             else:
-                logger.info("扩展加载检查完成")
+                logger.info(f"扩展加载检查完成（检测信号: {', '.join(extension_signals)}）")
 
             logger.info("浏览器启动成功")
             return True
 
         except Exception as e:
             logger.error(f"启动浏览器失败: {e}", exc_info=True)
+            if self._context is None:
+                self._cleanup_playwright_extension_bundle()
             return False
+
+    def _prepare_playwright_extension_bundle(self, extension_source_path: Path) -> Path:
+        """为 Playwright 浏览器生成带唯一握手 token 的扩展副本。"""
+
+        self._cleanup_playwright_extension_bundle()
+
+        launch_token = str(uuid.uuid4())
+        bundle_root = self.storage_path.parent / "playwright_extension_bundles"
+        bundle_root.mkdir(parents=True, exist_ok=True)
+
+        bundle_path = bundle_root / launch_token
+        shutil.copytree(extension_source_path, bundle_path)
+
+        launch_context = {
+            "client_kind": "playwright_background",
+            "launch_token": launch_token,
+            "recording_id": self._recording_id,
+        }
+        (bundle_path / "launch_context.js").write_text(
+            "self.MEXEMPLAR_LAUNCH_CONTEXT = "
+            + json.dumps(launch_context, ensure_ascii=True, indent=2)
+            + ";\n",
+            encoding="utf-8",
+        )
+
+        self._playwright_launch_token = launch_token
+        self._playwright_extension_bundle_path = bundle_path
+        logger.info(f"[BrowserRecorder] 已生成 Playwright 扩展副本: {bundle_path}")
+        return bundle_path
+
+    def _cleanup_playwright_extension_bundle(self) -> None:
+        """清理上次 Playwright 录制生成的临时扩展副本。"""
+        if self._playwright_extension_bundle_path and self._playwright_extension_bundle_path.exists():
+            try:
+                shutil.rmtree(self._playwright_extension_bundle_path)
+            except Exception as exc:
+                logger.warning(f"清理 Playwright 扩展副本失败: {exc}")
+
+        self._playwright_extension_bundle_path = None
+        self._playwright_launch_token = None
 
     @staticmethod
     def _validate_extension_path(extension_path: str) -> str:
@@ -801,34 +952,56 @@ class BrowserRecorder:
 
     # ===== WebSocket 相关方法 =====
 
-    def _start_websocket_server(self):
-        """启动 WebSocket 服务器（后台线程）"""
+    def _ensure_ws_server(self):
+        """确保 WebSocket 服务器在运行（App 生命周期级别）。"""
         from .websocket_server import WebSocketServer
 
-        logger.info("启动 WebSocket 服务器...")
+        with _ws_server_lock:
+            server = BrowserRecorder._shared_ws_server
+            should_start = server is None or not server.is_running
+            if should_start:
+                config = get_unified_config()
+                server = WebSocketServer(
+                    host=config.get_websocket_host(),
+                    port=config.get_websocket_port(),
+                )
+                BrowserRecorder._shared_ws_server = server
 
-        # ⭐ 先清理旧的 WebSocket 服务器（防止端口冲突）
-        if self._ws_server:
-            logger.info("检测到旧的 WebSocket 服务器，先停止...")
-            try:
-                self._ws_server.stop_sync()
-            except Exception as e:
-                logger.warning(f"停止旧 WebSocket 服务器失败: {e}")
-            self._ws_server = None
+            self._ws_server = server
+            self._ws_server.set_message_handler(self._handle_ws_message)
+            self._ws_server.set_control_handler(self._submit_control_message)
 
-        # ⭐ 创建 WebSocket 服务器（从配置读取）
-        config = get_unified_config()
-        self._ws_server = WebSocketServer(
-            host=config.get_websocket_host(), port=config.get_websocket_port()
+            if should_start:
+                self._ws_server.start_in_thread()
+                logger.info("[BrowserRecorder] WS 服务器已启动（App 生命周期级别）")
+
+    def arm_extension_triggered_mode(self) -> None:
+        """显式准备扩展触发模式所需的 WebSocket 服务器。"""
+        self._ensure_ws_server()
+
+    @property
+    def _is_extension_recording(self) -> bool:
+        return self._is_recording and self._active_recording_mode == RecordingMode.EXTENSION_TRIGGERED
+
+    def _reset_recording_state(self) -> None:
+        """重置录制状态到空闲。"""
+        self._recording_id = None
+        self._recording_start_time = None
+        self._action_queue_path = None
+        self._is_recording = False
+        self._playwright_ws_client = None
+        self._active_recording_mode = RecordingMode.BROWSER
+
+    def _submit_control_message(self, data: Dict[str, Any], websocket) -> None:
+        """将 control 消息提交到 WebSocket 事件循环。"""
+        if not self._ws_server or not self._ws_server._loop:
+            logger.warning("[BrowserRecorder] WS 事件循环未就绪，忽略 control 消息")
+            return
+
+        asyncio.run_coroutine_threadsafe(
+            self._handle_control_message(data, websocket),
+            self._ws_server._loop,
         )
-
-        # 注册消息处理器（用于写入队列文件）
-        self._ws_server.set_message_handler(self._handle_ws_message)
-
-        # 使用内置方法在后台线程中启动（会正确设置 _loop）
-        self._ws_server.start_in_thread()
-
-        logger.info("WebSocket 服务器已启动（后台线程）")
 
     def _handle_ws_message(self, message: Dict[str, Any]):
         """
@@ -874,82 +1047,224 @@ class BrowserRecorder:
                 "timestamp": time.time(),
             }
 
-            # 写入队列文件（JSONL 格式）
-            with open(self._action_queue_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(wrapped_message, ensure_ascii=False) + "\n")
+            # 写入队列文件（JSONL 格式，加锁防止并发写入交错）
+            with self._queue_write_lock:
+                with open(self._action_queue_path, "a", encoding="utf-8") as f:
+                    f.write(json.dumps(wrapped_message, ensure_ascii=False) + "\n")
 
             logger.debug(f"[WS] 事件已写入队列文件: {message['action'].get('action_type')}")
 
         except Exception as e:
             logger.error(f"写入队列文件失败: {e}")
 
-    def _wait_for_ws_connection(self, timeout: int = 20) -> bool:
-        """
-        等待 WebSocket 连接
+    async def _handle_control_message(self, data: Dict[str, Any], websocket) -> None:
+        """处理来自扩展的录制控制消息。"""
+        action = data.get("action")
 
-        Args:
-            timeout: 超时时间（秒）
+        if action == "start":
+            error_message = None
+            if self._recording_startup_in_progress:
+                error_message = "浏览器录制正在启动中，请稍后重试"
+            elif self._is_recording:
+                error_message = "已有录制进行中，请先停止当前录制"
 
-        Returns:
-            是否连接成功
-        """
-        start_time = time.time()
+            if error_message:
+                if self._ws_server:
+                    await self._ws_server.send_to_client(
+                        websocket,
+                        {
+                            "type": "recording_control_reply",
+                            "status": "error",
+                            "error": error_message,
+                        },
+                    )
+                return
 
-        while time.time() - start_time < timeout:
-            if self._ws_server and self._ws_server.has_clients:
-                return True
-            time.sleep(0.5)
+            recording_id = str(uuid.uuid4())
+            queue_file = self._get_queue_paths(recording_id)
+            queue_file.parent.mkdir(parents=True, exist_ok=True)
 
-        return False
+            self._accessibility_recorder.start(recording_id, queue_file, queue_write_lock=self._queue_write_lock)
 
-    def _send_start_command_via_ws(self, recording_id: str):
-        """
-        通过 WebSocket 发送开始录制命令
+            self._recording_id = recording_id
+            self._recording_start_time = time.time()
+            self._action_queue_path = queue_file
+            self._is_recording = True
+            self._active_recording_mode = RecordingMode.EXTENSION_TRIGGERED
 
-        Args:
-            recording_id: 录制 ID
-        """
-        import asyncio
+            if self._ws_server:
+                await self._ws_server.send_to_client(
+                    websocket,
+                    {
+                        "type": "recording_control_reply",
+                        "status": "started",
+                        "recording_id": recording_id,
+                    },
+                )
 
-        message = {"type": "control_start", "recording_id": recording_id, "timestamp": time.time()}
-
-        # 使用 run_coroutine_threadsafe 从其他线程安全地调用异步函数
-        if self._ws_server and self._ws_server._loop:
-            future = asyncio.run_coroutine_threadsafe(
-                self._ws_server.broadcast(message), self._ws_server._loop
+            emit(
+                "recording_started",
+                event_data={
+                    "session_id": recording_id,
+                    "recording_mode": RecordingMode.EXTENSION_TRIGGERED,
+                    "start_time": self._recording_start_time,
+                },
             )
-            # 等待发送完成（最多 5 秒）
+            logger.info(f"[BrowserRecorder] 扩展触发录制已开始: {recording_id}")
+
+            def _start_proxy_bg() -> None:
+                proxy_ok = self._proxy_recorder.start(recording_id, queue_file, queue_write_lock=self._queue_write_lock)
+                if not proxy_ok:
+                    logger.warning("[Proxy] 代理录制启动失败，将不记录网络请求")
+
+            threading.Thread(target=_start_proxy_bg, daemon=True).start()
+            return
+
+        if action == "stop":
+            if not self._is_extension_recording:
+                if self._ws_server:
+                    reply = {"type": "recording_control_reply", "status": "stopped"}
+                    if self._recording_startup_in_progress or self._is_recording:
+                        reply = {
+                            "type": "recording_control_reply",
+                            "status": "error",
+                            "error": "当前录制由 Mexemplar App 控制，请在 App 中停止",
+                        }
+                    await self._ws_server.send_to_client(websocket, reply)
+                return
+            await self._stop_extension_triggered_recording(websocket)
+            return
+
+        if self._ws_server:
+            await self._ws_server.send_to_client(
+                websocket,
+                {
+                    "type": "recording_control_reply",
+                    "status": "error",
+                    "error": f"未知 action: {action}",
+                },
+            )
+
+    async def _stop_extension_triggered_recording(self, websocket=None) -> Dict[str, Any]:
+        """停止扩展触发模式的录制。"""
+        if not self._is_extension_recording:
+            return {
+                "recording_id": self._recording_id,
+                "queue_file": str(self._action_queue_path) if self._action_queue_path else None,
+                "action_count": 0,
+                "start_time": self._recording_start_time,
+                "end_time": time.time(),
+                "recording_mode": RecordingMode.EXTENSION_TRIGGERED,
+            }
+
+        start_time = self._recording_start_time
+        recording_id = self._recording_id
+        queue_file = self._action_queue_path or self._get_queue_paths(recording_id)
+        end_time = time.time()
+
+        self._stop_sub_recorders()
+
+        if websocket is None and self._ws_server:
+            self._send_stop_command_via_ws()
+        elif websocket and self._ws_server:
+            await self._ws_server.send_to_client(
+                websocket,
+                {"type": "recording_control_reply", "status": "stopped"},
+            )
+
+        action_count = 0
+        if self._use_duckdb:
             try:
-                future.result(timeout=5)
-                logger.info(f"已通过 WebSocket 发送开始录制命令: {recording_id}")
-            except asyncio.TimeoutError:
-                logger.error(f"[WS] 发送开始录制命令超时: {recording_id}")
+                action_count = self._save_to_duckdb(end_time) or 0
             except Exception as e:
-                logger.error(f"[WS] 发送开始录制命令失败: {e}")
+                logger.error(f"保存扩展触发录制到 DuckDB 失败: {e}")
 
-    def _send_stop_command_via_ws(self):
-        """通过 WebSocket 发送停止录制命令"""
-        import asyncio
+        emit(
+            "recording_stopped",
+            event_data={
+                "recording_id": recording_id,
+                "recording_mode": RecordingMode.EXTENSION_TRIGGERED,
+            },
+        )
+        emit(
+            "recording_completed",
+            event_data={
+                "recording_id": recording_id,
+                "recording_mode": RecordingMode.EXTENSION_TRIGGERED,
+                "start_time": start_time,
+                "end_time": end_time,
+                "queue_file": str(queue_file),
+                "action_count": action_count,
+                "metadata": {},
+            },
+        )
 
-        message = {
-            "type": "control_stop",
-            "recording_id": self._recording_id,
-            "timestamp": time.time(),
+        self._reset_recording_state()
+
+        logger.info(f"[BrowserRecorder] 扩展触发录制已停止: {recording_id}")
+        return {
+            "recording_id": recording_id,
+            "queue_file": str(queue_file),
+            "action_count": action_count,
+            "start_time": start_time,
+            "end_time": end_time,
+            "recording_mode": RecordingMode.EXTENSION_TRIGGERED,
         }
 
-        # 使用 run_coroutine_threadsafe 从其他线程安全地调用异步函数
+    def _wait_for_target_ws_client(
+        self,
+        timeout: int = 20,
+        existing_clients: Optional[Set[Any]] = None,
+        expected_metadata: Optional[Dict[str, Any]] = None,
+    ):
+        """等待目标浏览器扩展连接并返回对应 WebSocket 客户端。"""
+        start_time = time.time()
+        existing_clients = existing_clients or set()
+
+        while time.time() - start_time < timeout:
+            if self._ws_server:
+                client = None
+                if expected_metadata:
+                    client = self._ws_server.get_client_by_metadata(
+                        expected_metadata,
+                        exclude=existing_clients,
+                    )
+                if client is None and expected_metadata is None:
+                    client = self._ws_server.get_latest_client(exclude=existing_clients)
+                if client is not None:
+                    return client
+            time.sleep(0.5)
+
+        return None
+
+    def _send_ws_command(self, message: dict, websocket=None, description: str = "命令"):
+        """通过 WebSocket 发送命令（支持定向发送或广播）。"""
+
         if self._ws_server and self._ws_server._loop:
-            future = asyncio.run_coroutine_threadsafe(
-                self._ws_server.broadcast(message), self._ws_server._loop
+            send_coro = (
+                self._ws_server.send_to_client(websocket, message)
+                if websocket is not None
+                else self._ws_server.broadcast(message)
             )
-            # 等待发送完成（最多 5 秒）
+            future = asyncio.run_coroutine_threadsafe(send_coro, self._ws_server._loop)
             try:
                 future.result(timeout=5)
-                logger.info("已通过 WebSocket 发送停止录制命令")
+                target = "向目标客户端" if websocket else "广播"
+                logger.info(f"已通过 WebSocket {target}发送{description}")
             except asyncio.TimeoutError:
-                logger.error("[WS] 发送停止录制命令超时")
+                logger.error(f"[WS] 发送{description}超时")
             except Exception as e:
-                logger.error(f"[WS] 发送停止录制命令失败: {e}")
+                logger.error(f"[WS] 发送{description}失败: {e}")
+
+    def _send_start_command_via_ws(self, recording_id: str, websocket=None):
+        """通过 WebSocket 发送开始录制命令"""
+        message = {"type": "control_start", "recording_id": recording_id, "timestamp": time.time()}
+        self._send_ws_command(message, websocket=websocket, description="开始录制命令")
+
+    def _send_stop_command_via_ws(self, websocket=None):
+        """通过 WebSocket 发送停止录制命令"""
+        message = {"type": "control_stop", "recording_id": self._recording_id, "timestamp": time.time()}
+        self._send_ws_command(message, websocket=websocket, description="停止录制命令")
 
     def start_recording(
         self, start_url: Optional[str] = None, recording_id: Optional[str] = None
@@ -979,65 +1294,90 @@ class BrowserRecorder:
         Returns:
             是否成功
         """
-        if self._is_recording:
-            logger.warning("录制已在进行中")
+        if self._is_recording or self._recording_startup_in_progress:
+            logger.warning("录制已在进行中或正在启动")
             return False
 
-        import uuid
+        self._recording_startup_in_progress = True
+        startup_succeeded = False
+        try:
+            # 使用提供的 recording_id 或生成新的
+            self._recording_id = recording_id or str(uuid.uuid4())
+            self._recording_start_time = time.time()
 
-        # 使用提供的 recording_id 或生成新的
-        self._recording_id = recording_id or str(uuid.uuid4())
-        self._recording_start_time = time.time()
+            logger.info(f"开始浏览器录制，会话ID: {self._recording_id}")
+            self._playwright_ws_client = None
 
-        logger.info(f"开始浏览器录制，会话ID: {self._recording_id}")
+            # 1. 获取队列路径（WebSocket 模式使用）
+            self._action_queue_path = self._get_queue_paths(self._recording_id)
+            self._action_queue_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # 1. 获取队列路径（WebSocket 模式使用）
-        self._action_queue_path = self._get_queue_paths(self._recording_id)
-        self._action_queue_path.parent.mkdir(parents=True, exist_ok=True)
+            # 2. 启动 WebSocket 服务器
+            if not self._ws_server or not self._ws_server.is_running:
+                logger.warning("[BrowserRecorder] WS 服务器未运行，尝试启动...")
+            self._ensure_ws_server()
+            existing_clients = set(self._ws_server.clients) if self._ws_server else set()
 
-        # 2. 启动 WebSocket 服务器
-        logger.info("启动 WebSocket 服务器...")
-        self._start_websocket_server()
+            # 3. 启动浏览器（加载扩展）
+            logger.info("启动浏览器并加载扩展...")
+            if not await self._launch_browser_with_subprocess(start_url):
+                logger.error("启动浏览器失败")
+                return False
 
-        # 3. 启动浏览器（加载扩展）
-        logger.info("启动浏览器并加载扩展...")
-        if not await self._launch_browser_with_subprocess(start_url):
-            logger.error("启动浏览器失败")
-            return False
+            # 4. 等待 WebSocket 连接（扩展自动连接）
+            logger.info("等待浏览器扩展连接 WebSocket...")
+            target_ws_client = self._wait_for_target_ws_client(
+                timeout=20,
+                existing_clients=existing_clients,
+                expected_metadata=(
+                    {"launch_token": self._playwright_launch_token}
+                    if self._playwright_launch_token
+                    else None
+                ),
+            )
+            if not target_ws_client:
+                self._playwright_ws_client = None
+                logger.error("WebSocket 连接超时")
+                logger.error("请检查：")
+                logger.error("  1. Python WebSocket 服务器是否正常运行")
+                logger.error("  2. 浏览器扩展是否正确加载")
+                logger.error("  3. 防火墙是否阻止了连接")
+                return False
 
-        # 4. 等待 WebSocket 连接（扩展自动连接）
-        logger.info("等待浏览器扩展连接 WebSocket...")
-        if not self._wait_for_ws_connection(timeout=20):
-            logger.error("WebSocket 连接超时")
-            logger.error("请检查：")
-            logger.error("  1. Python WebSocket 服务器是否正常运行")
-            logger.error("  2. 浏览器扩展是否正确加载")
-            logger.error("  3. 防火墙是否阻止了连接")
-            return False
+            self._playwright_ws_client = target_ws_client
+            logger.info("WebSocket 连接成功")
 
-        logger.info("WebSocket 连接成功")
+            # 5. 等待标签页加载完成（确保 content_script 已注入）
+            logger.info("等待标签页加载完成...")
+            await asyncio.sleep(2)  # 给标签页 2 秒时间加载
 
-        # 5. 等待标签页加载完成（确保 content_script 已注入）
-        logger.info("等待标签页加载完成...")
-        await asyncio.sleep(2)  # 给标签页 2 秒时间加载
+            # 6. 通过 WebSocket 发送开始录制命令
+            logger.info(f"发送开始录制命令: {self._recording_id}")
+            self._send_start_command_via_ws(
+                self._recording_id,
+                websocket=self._playwright_ws_client,
+            )
 
-        # 6. 通过 WebSocket 发送开始录制命令
-        logger.info(f"发送开始录制命令: {self._recording_id}")
-        self._send_start_command_via_ws(self._recording_id)
+            # 7. 设置录制状态
+            self._is_recording = True
+            self._active_recording_mode = RecordingMode.BROWSER
+            startup_succeeded = True
 
-        # 7. 设置录制状态
-        self._is_recording = True
+            logger.info("浏览器录制已启动 (WebSocket 模式)")
+            logger.info(f"   - recording_id: {self._recording_id}")
+            logger.info(f"   - 队列文件: {self._action_queue_path}")
+            config = get_unified_config()
+            logger.info(
+                f"   - WebSocket: ws://{config.get_websocket_host()}:{config.get_websocket_port()}"
+            )
 
-        logger.info("浏览器录制已启动 (WebSocket 模式)")
-        logger.info(f"   - recording_id: {self._recording_id}")
-        logger.info(f"   - 队列文件: {self._action_queue_path}")
-        # ⭐ 从配置读取 WebSocket 地址
-        config = get_unified_config()
-        logger.info(
-            f"   - WebSocket: ws://{config.get_websocket_host()}:{config.get_websocket_port()}"
-        )
-
-        return True
+            return True
+        finally:
+            self._recording_startup_in_progress = False
+            if not startup_succeeded and not self._is_recording:
+                self._reset_recording_state()
+                if self._context is None:
+                    self._cleanup_playwright_extension_bundle()
 
     def stop_recording(self) -> Dict[str, Any]:
         """
@@ -1071,6 +1411,9 @@ class BrowserRecorder:
                 "recording_mode": str
             }
         """
+        if self._is_extension_recording:
+            return await self._stop_extension_triggered_recording()
+
         if not self._is_recording:
             return {
                 "recording_id": self._recording_id,
@@ -1078,7 +1421,7 @@ class BrowserRecorder:
                 "action_count": 0,
                 "start_time": self._recording_start_time,
                 "end_time": time.time(),
-                "recording_mode": "websocket",
+                "recording_mode": self._active_recording_mode,
             }
 
         logger.info("停止浏览器录制")
@@ -1090,22 +1433,14 @@ class BrowserRecorder:
 
         # 2. 通过 WebSocket 发送停止命令
         logger.info("发送停止录制命令...")
-        self._send_stop_command_via_ws()
+        self._send_stop_command_via_ws(websocket=self._playwright_ws_client)
 
         # 3. 关闭浏览器
         logger.info("关闭浏览器...")
         await self._close_browser()
+        self._cleanup_playwright_extension_bundle()
 
-        # 4. 停止 WebSocket 服务器
-        if self._ws_server:
-            try:
-                self._ws_server.stop_sync()
-                logger.info("WebSocket 服务器已停止")
-            except Exception as e:
-                logger.warning(f"停止 WebSocket 服务器失败: {e}")
-            self._ws_server = None
-
-        # 5. 保存到 DuckDB（同时获取实际事件数）
+        # 4. 保存到 DuckDB（同时获取实际事件数）
         action_count = 0
         if self._use_duckdb:
             try:
@@ -1127,7 +1462,6 @@ class BrowserRecorder:
 
             if not persistent_user_data and is_temp_dir and self._user_data_dir.exists():
                 try:
-                    import shutil
 
                     shutil.rmtree(self._user_data_dir)
                     logger.info(f"已清理临时用户数据目录: {self._user_data_dir}")
@@ -1135,25 +1469,29 @@ class BrowserRecorder:
                     logger.warning(f"清理临时目录失败: {e}")
 
         # 6. 重置状态
-        self._is_recording = False
+        result_recording_id = self._recording_id
+        result_queue_path = self._action_queue_path
+        result_start_time = self._recording_start_time
+        result_recording_mode = self._active_recording_mode
+        self._reset_recording_state()
         self._browser = None
         self._context = None
         self._page = None
         self._playwright = None
 
         logger.info("浏览器录制已停止 (WebSocket 模式)")
-        logger.info(f"   - recording_id: {self._recording_id}")
-        logger.info(f"   - 队列文件: {self._action_queue_path}")
+        logger.info(f"   - recording_id: {result_recording_id}")
+        logger.info(f"   - 队列文件: {result_queue_path}")
         logger.info(f"   - 事件数量: {action_count}")
 
         # 7. 返回录制结果
         return {
-            "recording_id": self._recording_id,
-            "queue_file": str(self._action_queue_path) if self._action_queue_path else None,
+            "recording_id": result_recording_id,
+            "queue_file": str(result_queue_path) if result_queue_path else None,
             "action_count": action_count,
-            "start_time": self._recording_start_time,
+            "start_time": result_start_time,
             "end_time": end_time,
-            "recording_mode": "websocket",
+            "recording_mode": result_recording_mode,
         }
 
     # ===== DuckDB 存储方法（Phase 4）=====
@@ -1172,16 +1510,18 @@ class BrowserRecorder:
         # RecordingRepository 在 __init__ 时已初始化，直接使用
 
         # 1. 保存录制会话（先不含 action_count，等解析完再更新）
+        mode_display = RecordingMode.display_defaults(self._active_recording_mode)
         session_data = {
             "recording_id": self._recording_id,
             "status": "completed",
-            "recording_mode": "browser",
-            "browser_type": "chromium",
+            "recording_mode": self._active_recording_mode,
+            "browser_type": mode_display["browser_type"],
             "start_time": self._recording_start_time,
             "end_time": end_time,
             "metadata": {
                 "queue_file": str(self._action_queue_path) if self._action_queue_path else None,
-                "websocket_mode": True,
+                "websocket_mode": self._active_recording_mode == RecordingMode.BROWSER,
+                "extension_triggered": self._active_recording_mode == RecordingMode.EXTENSION_TRIGGERED,
             },
         }
         self._recording_repository.save_recording_session(session_data)
@@ -1204,7 +1544,7 @@ class BrowserRecorder:
 
                     try:
                         event_data = json.loads(line)
-                        action_dict = self._convert_event_to_action_dict(event_data)
+                        action_dict = self._convert_event_to_action_dict(event_data, mode_display=mode_display)
 
                         # ⭐ 过滤掉独立的 network_request action（只保存在 network_requests 表）
                         if action_dict.get("action_type") == "network_request":
@@ -1241,7 +1581,7 @@ class BrowserRecorder:
 
         except Exception as e:
             logger.error(f"读取队列文件失败: {e}")
-            return
+            return 0
 
         # 3. 批量保存操作
         if actions_list:
@@ -1268,45 +1608,34 @@ class BrowserRecorder:
             if snapshot_count > 0:
                 logger.info(f"已保存 {snapshot_count} 条兄弟元素快照到 DuckDB")
 
-            # 4. 保存网络请求
-            request_count = 0
-
-            logger.info(
-                f"网络请求统计: network_requests_map={len(network_requests_map)}, standalone={len(standalone_network_requests)}"
-            )
-
             # 4.1 关联到 action 的网络请求
+            request_count = 0
             if network_requests_map and action_ids:
                 for i, action_id in enumerate(action_ids):
                     if i + 1 in network_requests_map:
                         requests = network_requests_map[i + 1]
-                        logger.debug(f"保存 action_id={action_id} 的 {len(requests)} 条网络请求")
                         self._recording_repository.save_network_requests(
                             action_id, requests, self._recording_id
                         )
                         request_count += len(requests)
 
-            # 4.2 独立的网络请求（action_id 为 NULL），批量保存
-            if standalone_network_requests:
-                logger.debug(
-                    f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)"
-                )
-                saved = self._recording_repository.save_network_requests(
-                    None, standalone_network_requests, self._recording_id
-                )
-                request_count += len(saved)
-
             if request_count > 0:
-                logger.info(f"已保存 {request_count} 条网络请求到 DuckDB")
-            else:
-                logger.warning(
-                    f"未找到任何网络请求保存 (network_requests_map={len(network_requests_map)}, standalone={len(standalone_network_requests)})"
-                )
+                logger.info(f"已保存 {request_count} 条关联网络请求到 DuckDB")
+
+        # 4.2 独立的网络请求（action_id 为 NULL）—— 始终保存，不受 actions_list 是否为空影响
+        if standalone_network_requests:
+            logger.debug(
+                f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)"
+            )
+            saved = self._recording_repository.save_network_requests(
+                None, standalone_network_requests, self._recording_id
+            )
+            logger.info(f"已保存 {len(saved)} 条独立网络请求到 DuckDB")
 
         # 注意：录制完成事件由 main_window.py 统一发送，这里不需要重复发送
         return len(actions_list)
 
-    def _convert_event_to_action_dict(self, event_data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_event_to_action_dict(self, event_data: Dict[str, Any], mode_display: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
         """
         将扩展事件数据转换为 Action 字典格式
 
@@ -1314,6 +1643,7 @@ class BrowserRecorder:
             event_data: 扩展发送的事件数据
                        格式1: { action: { action_type, url, ... } } (DOM 事件)
                        格式2: { action_type, url, parameters, ... } (网络请求，扁平结构)
+            mode_display: 预计算的录制模式显示信息，避免循环内重复计算
 
         Returns:
             Action 字典
@@ -1327,12 +1657,14 @@ class BrowserRecorder:
         if not action and event_data.get("action_type"):
             action = event_data
 
+        if mode_display is None:
+            mode_display = RecordingMode.display_defaults(self._active_recording_mode)
         action_dict = {
             "action_type": action.get("action_type"),
-            "recording_mode": "browser",
-            "app_name": "Browser",
-            "process_name": "browser",
-            "window_title": action.get("page_title"),  # 使用页面标题
+            "recording_mode": self._active_recording_mode,
+            "app_name": mode_display["app_name"],
+            "process_name": mode_display["process_name"],
+            "window_title": action.get("page_title"),
             "parameters": action.get("parameters", {}),
             "url": action.get("url"),
             "dom_element": action.get("dom_element"),

@@ -54,6 +54,8 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
     recording_start_success = pyqtSignal()
     recording_start_failed = pyqtSignal(str)
     recording_error = pyqtSignal(str)
+    extension_recording_started = pyqtSignal(str)
+    extension_recording_stopped = pyqtSignal()
     _agent_start_requested = pyqtSignal(str)       # recording_id，跨线程触发 start_agent
     _switch_to_intent_page = pyqtSignal()           # 跨线程切换到意图确认页
     _ensure_bridge_requested = pyqtSignal()         # 跨线程创建 AgentUIBridge
@@ -92,6 +94,10 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         self.logger.info("[MainWindow] 样式加载完成，开始初始化 UI")
         self.init_ui()
         self.logger.info("[MainWindow] UI 初始化完成")
+        self._bind_recording_ui_events()
+
+        if not self._initialize_browser_recorder():
+            self.logger.warning("App 启动时 BrowserRecorder 初始化失败，后续将按需重试")
 
         self.logger.info("[MainWindow] 开始预热线程")
         self._warmup_orchestrator_async()
@@ -146,6 +152,8 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         self.recording_page = RecordingWidget()
         self.recording_page.recording_started.connect(self._on_recording_started)
         self.recording_page.recording_stopped.connect(self._on_recording_stopped)
+        self.extension_recording_started.connect(self.recording_page.on_extension_recording_started)
+        self.extension_recording_stopped.connect(self.recording_page.on_extension_recording_stopped)
         self.main_content.add_page(TEACHING, self.recording_page)
 
         from src.ui.intent_confirmation_ui import IntentConfirmationUI
@@ -186,6 +194,29 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
             chat_page.on_new_chat()
 
         self.create_menu_bar()
+
+    def _bind_recording_ui_events(self) -> None:
+        """监听录制事件并转发到主线程 UI。"""
+        from src.utils.events import connect, event_value
+        from src.recording.browser_recorder import RecordingMode
+
+        def on_recording_started(sender, **kwargs):
+            event_data = kwargs.get("event_data")
+            if event_value(event_data, "recording_mode") != RecordingMode.EXTENSION_TRIGGERED:
+                return
+            recording_id = event_value(event_data, "recording_id", "session_id") or ""
+            self.extension_recording_started.emit(str(recording_id))
+
+        def on_recording_stopped(sender, **kwargs):
+            event_data = kwargs.get("event_data")
+            if event_value(event_data, "recording_mode") != RecordingMode.EXTENSION_TRIGGERED:
+                return
+            self.extension_recording_stopped.emit()
+
+        self._on_extension_recording_started_handler = on_recording_started
+        self._on_extension_recording_stopped_handler = on_recording_stopped
+        connect("recording_started", self._on_extension_recording_started_handler)
+        connect("recording_stopped", self._on_extension_recording_stopped_handler)
 
     def create_menu_bar(self) -> None:
         """创建菜单栏"""

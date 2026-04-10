@@ -320,6 +320,14 @@ class UnifiedConfigManager:
             "recording.websocket.max_response_body_size", default=5 * 1024 * 1024
         )  # 默认 5 MB
 
+    def get_proxy_host(self) -> str:
+        """获取录制代理主机"""
+        return self.get("recording.proxy.host", default="127.0.0.1")
+
+    def get_proxy_port(self) -> int:
+        """获取录制代理端口"""
+        return self.get("recording.proxy.port", default=8080)
+
     def get_debug_log_enabled(self) -> bool:
         """是否启用调试日志"""
         return self.get("recording.debug_log_enabled", default=False)

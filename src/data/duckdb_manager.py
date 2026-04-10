@@ -541,15 +541,6 @@ class DuckDBManager:
         """清除队列恢复标志"""
         self._needs_queue_recovery = False
 
-    def __enter__(self):
-        """上下文管理器入口"""
-        self.connect()
-        return self
-
-    def __exit__(self, _exc_type, _exc_val, _exc_tb):
-        """上下文管理器出口"""
-        self.close()
-
     def _migrate_add_recording_id(
         self, table_name: str, reference_column: str = "action_id"
     ) -> bool:

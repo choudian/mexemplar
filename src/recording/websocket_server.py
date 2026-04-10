@@ -7,6 +7,7 @@ WebSocket 服务器模块
 import asyncio
 import json
 import logging
+import threading
 import time
 from typing import Callable, Optional, Set, Dict, Any
 from websockets.server import WebSocketServerProtocol, serve
@@ -32,7 +33,12 @@ class WebSocketServer:
         self.host = host or config.get_websocket_host()
         self.port = port or config.get_websocket_port()
         self.clients: Set[WebSocketServerProtocol] = set()
+        self._client_connected_at: Dict[WebSocketServerProtocol, float] = {}
+        self._client_metadata: Dict[WebSocketServerProtocol, Dict[str, Any]] = {}
         self.message_handler: Optional[Callable] = None
+        self.control_handler: Optional[
+            Callable[[Dict[str, Any], WebSocketServerProtocol], None]
+        ] = None
         self._is_running = False
         self._loop = None  # 事件循环引用
         self._serve_future = None  # 用于取消 serve 阻塞
@@ -54,6 +60,8 @@ class WebSocketServer:
             websocket: WebSocket 客户端连接
         """
         self.clients.add(websocket)
+        self._client_connected_at[websocket] = time.time()
+        self._client_metadata[websocket] = {}
         self.stats["connections"] += 1
 
         client_addr = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
@@ -100,7 +108,9 @@ class WebSocketServer:
             logger.warning(f"[WS] 客户端连接异常: {e}")
 
         finally:
-            self.clients.remove(websocket)
+            self.clients.discard(websocket)
+            self._client_connected_at.pop(websocket, None)
+            self._client_metadata.pop(websocket, None)
             logger.info(f"[WS] 客户端断开: {client_addr} (剩余: {len(self.clients)})")
 
     async def process_message(self, message: Dict[str, Any], websocket: WebSocketServerProtocol):
@@ -125,8 +135,40 @@ class WebSocketServer:
             # 浏览器事件（已由 message_handler 处理）
             pass
 
+        elif msg_type == "recording_control":
+            if self.control_handler:
+                self.control_handler(message, websocket)
+            else:
+                logger.warning("[WS] 收到 recording_control 但未注册 control_handler")
+                await self.send_to_client(
+                    websocket,
+                    {
+                        "type": "recording_control_reply",
+                        "status": "error",
+                        "error": "App 未注册录制控制处理器",
+                    },
+                )
+
+        elif msg_type == "client_hello":
+            self._register_client_metadata(websocket, message.get("metadata", {}))
+
         else:
             logger.debug(f"[WS] 未知消息类型: {msg_type}")
+
+    def _register_client_metadata(
+        self,
+        websocket: WebSocketServerProtocol,
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        """记录客户端上报的握手元数据，用于后续精准路由。"""
+        if websocket not in self.clients:
+            return
+
+        current_metadata = self._client_metadata.get(websocket, {})
+        next_metadata = dict(current_metadata)
+        next_metadata.update(metadata or {})
+        self._client_metadata[websocket] = next_metadata
+        logger.info(f"[WS] 客户端已上报元数据: {next_metadata}")
 
     async def send_to_client(self, websocket: WebSocketServerProtocol, message: Dict[str, Any]):
         """
@@ -223,15 +265,14 @@ class WebSocketServer:
             new_url = f"ws://{new_host}:{new_port}"
             self._notify_config_change(new_url)
 
-            # 给客户端一点时间处理通知（1 秒）
-            import time
-
-            time.sleep(1)
-
-            # 在事件循环中调度重启任务
+            # 在事件循环中延迟 1 秒后重启，不阻塞当前线程
             if self._loop and self._loop.is_running():
+                async def _delayed_restart():
+                    await asyncio.sleep(1)
+                    await self._restart_server(new_host, new_port)
+
                 asyncio.run_coroutine_threadsafe(
-                    self._restart_server(new_host, new_port), self._loop
+                    _delayed_restart(), self._loop
                 )
             else:
                 logger.warning("[WS] 事件循环未运行，无法自动重启服务器")
@@ -288,7 +329,7 @@ class WebSocketServer:
         except Exception as e:
             logger.error(f"[WS] 重启服务器失败: {e}")
 
-    def set_message_handler(self, handler: Callable[[Dict[str, Any]], None]):
+    def set_message_handler(self, handler: Optional[Callable[[Dict[str, Any]], None]]):
         """
         设置消息处理器（用于写入队列文件等）
 
@@ -296,6 +337,17 @@ class WebSocketServer:
             handler: 消息处理函数
         """
         self.message_handler = handler
+
+    def set_control_handler(
+        self,
+        handler: Optional[Callable[[Dict[str, Any], WebSocketServerProtocol], None]],
+    ) -> None:
+        """
+        设置控制消息处理器（recording_control 类型消息）。
+
+        handler 是同步函数，注册者负责在内部调度协程。
+        """
+        self.control_handler = handler
 
     async def start(self):
         """启动 WebSocket 服务器（阻塞）"""
@@ -331,8 +383,6 @@ class WebSocketServer:
 
     def start_in_thread(self):
         """在后台线程中启动服务器"""
-        import threading
-
         # 使用事件同步，确保 _loop 已经设置
         loop_ready = threading.Event()
 
@@ -374,6 +424,8 @@ class WebSocketServer:
                 pass
 
         self.clients.clear()
+        self._client_connected_at.clear()
+        self._client_metadata.clear()
         logger.info("[WS] 服务器已停止")
 
     def stop_sync(self):
@@ -396,7 +448,39 @@ class WebSocketServer:
         """检查服务器是否运行"""
         return self._is_running
 
-    @property
-    def has_clients(self) -> bool:
-        """检查是否有客户端连接"""
-        return len(self.clients) > 0
+    def _find_client(
+        self,
+        predicate,
+        exclude: Optional[Set[WebSocketServerProtocol]] = None,
+    ) -> Optional[WebSocketServerProtocol]:
+        """按条件查找最新连接的客户端。"""
+        exclude = exclude or set()
+        candidates = [
+            (client, connected_at)
+            for client, connected_at in self._client_connected_at.items()
+            if client in self.clients and client not in exclude and predicate(client)
+        ]
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: item[1])[0]
+
+    def get_latest_client(
+        self,
+        exclude: Optional[Set[WebSocketServerProtocol]] = None,
+    ) -> Optional[WebSocketServerProtocol]:
+        """返回最新连接的客户端，可排除已存在客户端。"""
+        return self._find_client(lambda _: True, exclude)
+
+    def get_client_by_metadata(
+        self,
+        expected_metadata: Dict[str, Any],
+        exclude: Optional[Set[WebSocketServerProtocol]] = None,
+    ) -> Optional[WebSocketServerProtocol]:
+        """按握手元数据查找客户端，返回最新匹配连接。"""
+        return self._find_client(
+            lambda client: all(
+                self._client_metadata.get(client, {}).get(key) == value
+                for key, value in expected_metadata.items()
+            ),
+            exclude,
+        )

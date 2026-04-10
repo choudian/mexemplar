@@ -24,11 +24,6 @@ from src.data.unified_config import get_unified_config
 logger = get_logger(__name__)
 console = Console()
 
-# 全局资源
-_resources = {
-    "config": None,
-}
-
 
 def check_terminal_compatibility():
     """检测终端是否支持 questionary"""
@@ -437,8 +432,6 @@ def main():
         # 初始化配置系统（内部同时完成数据库初始化和迁移）
         config = get_unified_config()
         logger.info("[OK] 配置系统及数据库初始化成功")
-
-        _resources["config"] = config
 
     except Exception as e:
         logger.error(f"[ERROR] 初始化失败: {e}", exc_info=True)

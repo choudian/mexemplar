@@ -6,15 +6,10 @@
 
 import time
 import logging
-from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
+from typing import List, Dict, Any, Optional, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 import mss
-import mss.tools
-
-# 延迟导入 pynput 以避免在无图形界面环境导入失败
-if TYPE_CHECKING:
-    pass
 from PIL import Image
 import io
 import base64

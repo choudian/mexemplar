@@ -107,4 +107,4 @@ def get_logger(name: Optional[str] = None) -> logging.Logger:
 
 
 # 初始化根日志记录器
-_root_logger = setup_logger("mexemplar")
+setup_logger("mexemplar")

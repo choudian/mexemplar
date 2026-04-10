@@ -125,3 +125,6 @@ scripts/
 # Browser extension private key (DO NOT COMMIT)
 extension_key.txt
 *.pem
+agent.md
+playwright_extension_bundles/
+=*

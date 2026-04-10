@@ -1,5 +1,6 @@
 // WebSocket 客户端（替代 Native Messaging）
 // 必须在所有其他代码之前 importScripts
+importScripts('launch_context.js');
 importScripts('websocket_client.js');
 
 // console.log('[BACKGROUND] Service Worker 已启动');
@@ -7,6 +8,22 @@ importScripts('websocket_client.js');
 let wsClient = null;
 let isRecording = false;
 let recordingId = null;
+let recordingSource = null;
+let hasLoadedPersistedState = false;
+const launchContext = self.MEXEMPLAR_LAUNCH_CONTEXT || {};
+
+const RECORDING_SOURCE = Object.freeze({
+  PLAYWRIGHT: 'playwright',
+  EXTENSION_TRIGGERED: 'extension_triggered',
+});
+
+const STORAGE_KEYS = [
+  'isRecording',
+  'recordingId',
+  'recordingSource',
+  'extensionTriggeredRecording',
+  'extensionTriggeredRecordingId',
+];
 
 // ⭐ 新增：网络请求存储（按 origin 分组）
 const networkRequests = new Map(); // origin -> []Array
@@ -14,8 +31,178 @@ const networkRequests = new Map(); // origin -> []Array
 // ⭐ 动态 WebSocket URL（可通过 CDP 注入更新）
 let WEBSOCKET_URL = 'ws://localhost:8765';  // 默认值
 
+function isWsConnected() {
+  return Boolean(wsClient && wsClient.connected && wsClient.ws && wsClient.ws.readyState === WebSocket.OPEN);
+}
+
+function sendControlAction(action, notConnectedError, sendResponse) {
+  if (wsClient) wsClient.ensureConnected();
+  if (!isWsConnected()) {
+    sendResponse({ success: false, error: notConnectedError });
+    return;
+  }
+  const ok = wsClient.send({ type: 'recording_control', action, source: 'extension' });
+  sendResponse({ success: ok, pending: ok, error: ok ? null : '发送控制消息失败' });
+}
+
+function ensureNetworkRequestsCapacity() {
+  if (networkRequests.size > 200) {
+    const firstKey = networkRequests.keys().next().value;
+    networkRequests.delete(firstKey);
+  }
+}
+
+function storeNetworkRequest(origin, request) {
+  if (!isRecording) return;
+  if (!networkRequests.has(origin)) {
+    ensureNetworkRequestsCapacity();
+    networkRequests.set(origin, []);
+  }
+  const requests = networkRequests.get(origin);
+  requests.push(request);
+  if (requests.length > 10) {
+    requests.shift();
+  }
+}
+
+function getCurrentRecordingState() {
+  return {
+    isRecording: isRecording,
+    recordingId: recordingId,
+    recordingSource: recordingSource
+  };
+}
+
+function resolvePersistedRecordingState(state = {}) {
+  if (hasLoadedPersistedState || isRecording || recordingId !== null || recordingSource !== null) {
+    return getCurrentRecordingState();
+  }
+
+  if (state.isRecording) {
+    return {
+      isRecording: true,
+      recordingId: state.recordingId || null,
+      recordingSource: state.recordingSource || RECORDING_SOURCE.PLAYWRIGHT
+    };
+  }
+
+  if (state.extensionTriggeredRecording) {
+    return {
+      isRecording: true,
+      recordingId: state.extensionTriggeredRecordingId || null,
+      recordingSource: RECORDING_SOURCE.EXTENSION_TRIGGERED
+    };
+  }
+
+  return {
+    isRecording: false,
+    recordingId: null,
+    recordingSource: null
+  };
+}
+
+function setRecordingState(nextIsRecording, nextRecordingId, nextRecordingSource) {
+  isRecording = nextIsRecording;
+  recordingId = nextRecordingId;
+  recordingSource = nextRecordingSource;
+  hasLoadedPersistedState = true;
+  persistRecordingState();
+}
+
+function persistRecordingState() {
+  const playwrightRecording = isRecording && recordingSource === RECORDING_SOURCE.PLAYWRIGHT;
+  const extensionTriggeredRecording = isRecording && recordingSource === RECORDING_SOURCE.EXTENSION_TRIGGERED;
+
+  chrome.storage.local.set({
+    isRecording: playwrightRecording,
+    recordingId: playwrightRecording ? recordingId : null,
+    recordingSource: isRecording ? recordingSource : null,
+    extensionTriggeredRecording: extensionTriggeredRecording,
+    extensionTriggeredRecordingId: extensionTriggeredRecording ? recordingId : null
+  });
+}
+
+function restoreRecordingState() {
+  chrome.storage.local.get(STORAGE_KEYS, (state) => {
+    const restoredState = resolvePersistedRecordingState(state);
+    isRecording = restoredState.isRecording;
+    recordingId = restoredState.recordingId;
+    recordingSource = restoredState.recordingSource;
+    hasLoadedPersistedState = true;
+  });
+}
+
 // 立即初始化并连接（使用默认 URL，稍后可通过 CDP 注入更新）
 wsClient = new WebSocketClient(WEBSOCKET_URL);
+attachWsClientHandlers();
+restoreRecordingState();
+applyWsClientMetadata();
+
+function buildWsClientMetadata(overrides = {}) {
+  return {
+    client_kind: launchContext.client_kind || 'extension_background',
+    launch_token: launchContext.launch_token || null,
+    recording_id: launchContext.recording_id || null,
+    ...overrides,
+  };
+}
+
+function applyWsClientMetadata(overrides = {}) {
+  if (!wsClient || typeof wsClient.setClientMetadata !== 'function') {
+    return;
+  }
+
+  wsClient.setClientMetadata(buildWsClientMetadata(overrides));
+}
+
+function handleAppReply(data) {
+  if (data.type !== 'recording_control_reply') {
+    return;
+  }
+
+  chrome.runtime.sendMessage({
+    type: 'RECORDING_CONTROL_REPLY',
+    status: data.status,
+    recording_id: data.recording_id,
+    error: data.error,
+  }).catch(() => {});
+
+  if (data.status === 'started') {
+    setRecordingState(true, data.recording_id, RECORDING_SOURCE.EXTENSION_TRIGGERED);
+    // 通知所有标签页开始录制
+    notifyAllTabs({ type: 'START_RECORDING', recording_id: data.recording_id });
+  } else if (data.status === 'stopped') {
+    setRecordingState(false, null, null);
+    networkRequests.clear();
+    notifyAllTabs({ type: 'STOP_RECORDING' });
+  }
+}
+
+function isRecordableTab(tab) {
+  const tabUrl = tab && typeof tab.url === 'string' ? tab.url : '';
+  return Boolean(tabUrl)
+    && !tabUrl.startsWith('chrome://')
+    && !tabUrl.startsWith('chrome-extension://')
+    && tabUrl !== 'about:blank';
+}
+
+function notifyAllTabs(message) {
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach(tab => {
+      if (!isRecordableTab(tab)) return;
+      chrome.tabs.sendMessage(tab.id, message).catch(() => {});
+    });
+  });
+}
+
+function attachWsClientHandlers() {
+  if (!wsClient) {
+    return;
+  }
+  wsClient.onControlStart = handleControlStart;
+  wsClient.onControlStop = handleControlStop;
+  wsClient.onControlReply = handleAppReply;
+}
 
 // ⭐ 监听来自 Content Script 的配置消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -23,6 +210,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const config = message.config;
     if (config && config.websocketUrl) {
       console.log('[BACKGROUND] 收到 CDP 注入的配置:', config);
+      const metadataOverrides = {
+        recording_id: config.recordingId || launchContext.recording_id || null,
+      };
 
       // 更新 WebSocket URL
       const newUrl = config.websocketUrl;
@@ -37,10 +227,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // 创建新连接
         WEBSOCKET_URL = newUrl;
         wsClient = new WebSocketClient(WEBSOCKET_URL);
+        attachWsClientHandlers();
+        applyWsClientMetadata(metadataOverrides);
         wsClient.connect();
 
         sendResponse({ success: true, message: 'WebSocket URL 已更新' });
       } else {
+        applyWsClientMetadata(metadataOverrides);
         console.log('[BACKGROUND] WebSocket URL 未变化，无需更新');
         sendResponse({ success: true, message: 'WebSocket URL 相同' });
       }
@@ -50,24 +243,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // 设置回调
-wsClient.onControlStart = (message) => {
-  recordingId = message.recording_id;
-  isRecording = true;
+function handleControlStart(message) {
+  setRecordingState(true, message.recording_id, RECORDING_SOURCE.PLAYWRIGHT);
   console.log('[BACKGROUND] ⭐️ 开始录制:', recordingId);  // 保留：关键日志
-
-  // ⭐ 关键修复：立即保存到 chrome.storage，让新标签页能够立即读取
-  chrome.storage.local.set({
-    isRecording: true,
-    recordingId: recordingId
-  }, () => {
-    console.log('[BACKGROUND] ✅ 录制状态已保存到 chrome.storage');
-  });
 
   // 查询所有标签页
   chrome.tabs.query({}, (tabs) => {
     tabs.forEach(tab => {
-      // 跳过特殊页面
-      if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://') || tab.url === 'about:blank') {
+      if (!isRecordableTab(tab)) {
         return;
       }
 
@@ -100,31 +283,16 @@ wsClient.onControlStart = (message) => {
       });
     });
   });
-};
+}
 
-wsClient.onControlStop = (message) => {
-  isRecording = false;
+function handleControlStop(message) {
+  setRecordingState(false, null, null);
   console.log('[BACKGROUND] ⏹️ 停止录制');  // 保留：关键日志
-
-  // ⭐ 关键修复：立即保存到 chrome.storage
-  chrome.storage.local.set({
-    isRecording: false,
-    recordingId: null
-  }, () => {
-    console.log('[BACKGROUND] ✅ 录制状态已保存到 chrome.storage (停止)');
-  });
 
   // 清理网络请求缓存
   networkRequests.clear();
-
-  chrome.tabs.query({}, (tabs) => {
-    tabs.forEach(tab => {
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'STOP_RECORDING'
-      }).catch(() => {});
-    });
-  });
-};
+  notifyAllTabs({ type: 'STOP_RECORDING' });
+}
 
 // 连接
 wsClient.connect();
@@ -144,16 +312,7 @@ chrome.webRequest.onBeforeRequest.addListener(
 
       try {
         const origin = new URL(details.url).origin;
-        if (!networkRequests.has(origin)) {
-          networkRequests.set(origin, []);
-        }
-        const requests = networkRequests.get(origin);
-        requests.push(request);
-
-        // 限制每个origin最多保留10个请求
-        if (requests.length > 10) {
-          requests.shift();
-        }
+        storeNetworkRequest(origin, request);
       } catch (e) {
         console.error('[BACKGROUND] URL解析失败:', e);
       }
@@ -222,8 +381,7 @@ chrome.tabs.onCreated.addListener((tab) => {
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   // ⭐ 关键修复：在 loading 状态就开始注入，而不是等到 complete
   if (changeInfo.status === 'loading' && tab.url) {
-    // 跳过特殊页面
-    if (tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+    if (!isRecordableTab(tab)) {
       console.log('[BACKGROUND] ⏭️  跳过特殊页面:', tab.url);
       return;
     }
@@ -309,6 +467,11 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 // 监听来自 content script 的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'RECORDING_EVENT') {
+    if (!isRecording) {
+      sendResponse({ success: false, ignored: true });
+      return true;
+    }
+
     let event = message.event;
 
 
@@ -334,12 +497,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             duration: req.duration || null
           }));
 
-        } else {
         }
       } catch (e) {
         console.error('[BACKGROUND] ❌ URL解析失败:', e);
       }
-    } else {
     }
 
     // 通过 WebSocket 发送到 Python
@@ -390,21 +551,69 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // 同时也存储到缓存（用于关联到 DOM 事件）
       const urlObj = new URL(request.url);
       const origin = urlObj.origin;
-
-      if (!networkRequests.has(origin)) {
-        networkRequests.set(origin, []);
-      }
-
-      const requests = networkRequests.get(origin);
-      requests.push(request);
-
-      // 限制数量
-      if (requests.length > 10) {
-        requests.shift();
-      }
+      storeNetworkRequest(origin, request);
     }
 
     sendResponse({ success: true });
+    return true;
   }
-  return true;
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'GET_RECORDING_STATE') {
+    if (hasLoadedPersistedState) {
+      sendResponse({
+        isRecording: isRecording,
+        recordingId: recordingId,
+        recordingSource: recordingSource,
+        actionCount: 0,
+      });
+      return true;
+    }
+    chrome.storage.local.get(STORAGE_KEYS, (state) => {
+      const resolvedState = resolvePersistedRecordingState(state);
+      sendResponse({
+        isRecording: resolvedState.isRecording,
+        recordingId: resolvedState.recordingId,
+        recordingSource: resolvedState.recordingSource,
+        actionCount: 0,
+      });
+    });
+    return true;
+  }
+
+  if (message.type === 'GET_WS_STATUS') {
+    if (wsClient) {
+      wsClient.ensureConnected();
+    }
+    sendResponse({ connected: isWsConnected() });
+    return true;
+  }
+
+  if (message.type === 'EXTENSION_START_RECORDING') {
+    sendControlAction('start', 'App 未连接，请先启动 Mexemplar', sendResponse);
+    return true;
+  }
+
+  if (message.type === 'EXTENSION_STOP_RECORDING') {
+    sendControlAction('stop', 'App 未连接', sendResponse);
+    return true;
+  }
+
+  if (message.type === 'START_RECORDING') {
+    sendResponse({ success: false, error: '请从 Mexemplar App 中启动 Playwright 录制' });
+    return true;
+  }
+
+  if (message.type === 'STOP_RECORDING') {
+    sendResponse({ success: false, error: 'Playwright 录制请从 Mexemplar App 中停止' });
+    return true;
+  }
+
+  if (message.type === 'EXPORT_RECORDING') {
+    sendResponse({ success: false, error: '当前版本不支持从扩展弹窗导出录制' });
+    return true;
+  }
+
+  return false;
 });

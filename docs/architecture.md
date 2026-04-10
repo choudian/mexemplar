@@ -35,6 +35,21 @@
         → 需求问题 → 恢复 PM Agent Loop → 重新确认 → 再派程序员
 ```
 
+### 录制层：双模式并存
+
+录制模式一：Playwright 驱动（原有）
+- App 启动 Chromium + 扩展
+- 扩展经 WebSocket 向 App 发送 `browser_action`
+- App 写入 `data/queues/*.jsonl`
+
+录制模式二：扩展触发（新增）
+- 用户自己的 Chrome + 扩展弹窗
+- 扩展经 WebSocket 向 App 发送 `recording_control`
+- App 启动 `ProxyRecorder` + `AccessibilityRecorder`
+- mitmproxy 网络事件和 Windows UIA 交互事件共同写入同一 JSONL 队列
+
+新增录制驱动模块：`ProxyRecorder`、`AccessibilityRecorder`、`SystemProxyManager`、`CertManager`
+
 ### 用技能：办公助理日常入口
 
 ```

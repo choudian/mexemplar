@@ -16,10 +16,16 @@ class WebSocketClient {
         this.heartbeatInterval = null;
         this.isRecording = false;
         this.recordingId = null;  // 保存当前录制 ID
+        this.clientMetadata = {
+            client_kind: 'extension_background',
+            launch_token: null,
+            recording_id: null
+        };
 
         // 消息回调（用于 background.js）
         this.onControlStart = null;
         this.onControlStop = null;
+        this.onControlReply = null;
 
         // 绑定方法
         this.connect = this.connect.bind(this);
@@ -57,6 +63,8 @@ class WebSocketClient {
         this.connected = true;
         this.reconnectAttempts = 0;
         this.reconnectDelay = 1000;
+
+        this.sendClientHello();
 
         // 发送离线消息队列
         this.flushMessageQueue();
@@ -101,6 +109,12 @@ class WebSocketClient {
                     // ⭐ 处理配置变化通知
                     console.log('[WebSocket] 配置变化通知:', message);
                     this.handleConfigChange(message);
+                    break;
+
+                case 'recording_control_reply':
+                    if (this.onControlReply) {
+                        this.onControlReply(message);
+                    }
                     break;
 
                 default:
@@ -164,6 +178,57 @@ class WebSocketClient {
             console.log(`[WebSocket] Offline, queued message (${this.messageQueue.length}/1000)`);
             return false;
         }
+    }
+
+    /**
+     * 确保连接流程已启动。
+     */
+    ensureConnected() {
+        if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            return true;
+        }
+
+        if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+            return false;
+        }
+
+        const now = Date.now();
+        if (this._lastConnectAttempt && now - this._lastConnectAttempt < 5000) {
+            return false;
+        }
+        this._lastConnectAttempt = now;
+
+        this.connect();
+        return false;
+    }
+
+    /**
+     * 更新当前客户端元数据，并在已连接时重新上报。
+     */
+    setClientMetadata(metadata = {}) {
+        this.clientMetadata = {
+            ...this.clientMetadata,
+            ...metadata
+        };
+
+        if (this.connected && this.ws && this.ws.readyState === WebSocket.OPEN) {
+            this.sendClientHello();
+        }
+    }
+
+    /**
+     * 向 Python 端上报当前客户端身份，便于精准路由控制消息。
+     */
+    sendClientHello() {
+        if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            return false;
+        }
+
+        return this.send({
+            type: 'client_hello',
+            metadata: this.clientMetadata,
+            timestamp: Date.now() / 1000.0
+        });
     }
 
     /**
@@ -337,4 +402,3 @@ class WebSocketClient {
         console.log('[WebSocket] Disconnected');
     }
 }
-

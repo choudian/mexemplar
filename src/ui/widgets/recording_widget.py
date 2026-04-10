@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QFrame,
     QTextEdit,
+    QMessageBox,
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from src.data.unified_config import get_unified_config
@@ -129,6 +130,7 @@ class RecordingWidget(QWidget):
         self.config = get_unified_config()
         self.is_recording = False
         self._current_mode = "browser"
+        self._awaiting_extension_start = False
         self.init_ui()
         self.load_config()
 
@@ -196,6 +198,14 @@ class RecordingWidget(QWidget):
         self.desktop_card.clicked.connect(lambda: self._select_mode("desktop"))
         cards_layout.addWidget(self.desktop_card)
 
+        self.extension_card = _ModeCard(
+            "🧩",
+            "扩展触发",
+            "在你自己的 Chrome 中通过扩展弹窗开始/停止录制",
+        )
+        self.extension_card.clicked.connect(lambda: self._select_mode("extension_triggered"))
+        cards_layout.addWidget(self.extension_card)
+
         body_layout.addLayout(cards_layout)
 
         # URL 输入区
@@ -230,6 +240,61 @@ class RecordingWidget(QWidget):
         url_layout.addWidget(self.url_input)
 
         body_layout.addWidget(self.url_container)
+
+        self.extension_container = QWidget()
+        self.extension_container.setVisible(False)
+        self.extension_container.setStyleSheet(
+            """
+            QWidget {
+                background-color: #fffaf0;
+                border: 1px solid #f3d8a6;
+                border-radius: 10px;
+            }
+        """
+        )
+        extension_layout = QVBoxLayout(self.extension_container)
+        extension_layout.setContentsMargins(16, 14, 16, 14)
+        extension_layout.setSpacing(10)
+
+        extension_hint = QLabel("请保持 Mexemplar 运行，然后在 Chrome 扩展弹窗中点击开始/停止录制。")
+        extension_hint.setWordWrap(True)
+        extension_hint.setStyleSheet("font-size: 13px; color: #8a6d3b; background: transparent;")
+        extension_layout.addWidget(extension_hint)
+
+        self.cert_status = QLabel("")
+        self.cert_status.setWordWrap(True)
+        self.cert_status.setStyleSheet("font-size: 12px; color: #8a6d3b; background: transparent;")
+        extension_layout.addWidget(self.cert_status)
+
+        cert_actions = QHBoxLayout()
+        cert_actions.setContentsMargins(0, 0, 0, 0)
+        cert_actions.setSpacing(8)
+
+        self.install_cert_btn = QPushButton("安装证书")
+        self.install_cert_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.install_cert_btn.setFixedHeight(34)
+        self.install_cert_btn.setStyleSheet(
+            """
+            QPushButton {
+                padding: 0 16px;
+                border-radius: 6px;
+                border: 1px solid #d6a34f;
+                background-color: #fff3d9;
+                color: #8a5a00;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #ffedc0;
+            }
+        """
+        )
+        self.install_cert_btn.clicked.connect(self._install_certificate)
+        cert_actions.addWidget(self.install_cert_btn)
+        cert_actions.addStretch()
+
+        extension_layout.addLayout(cert_actions)
+        body_layout.addWidget(self.extension_container)
 
         # ── 操作按钮 ──
         btn_layout = QHBoxLayout()
@@ -377,9 +442,13 @@ class RecordingWidget(QWidget):
         self._current_mode = mode
         self.browser_card.set_selected(mode == "browser")
         self.desktop_card.set_selected(mode == "desktop")
+        self.extension_card.set_selected(mode == "extension_triggered")
         self.url_container.setVisible(mode == "browser")
+        self.extension_container.setVisible(mode == "extension_triggered")
         if mode == "desktop":
             self.url_input.clear()
+        if mode == "extension_triggered":
+            self.refresh_certificate_status()
 
     # ── 配置加载 ──
 
@@ -395,27 +464,79 @@ class RecordingWidget(QWidget):
         except Exception as e:
             self.append_status(f"⚠️ 加载配置失败: {str(e)}")
 
-    # ── 按钮事件 ──
+    def refresh_certificate_status(self):
+        """刷新 mitmproxy CA 证书状态。"""
+        try:
+            from src.recording.cert_manager import CertManager
+
+            installed = CertManager().is_installed()
+        except Exception as e:
+            installed = False
+            self.append_status(f"⚠️ 检查证书状态失败: {str(e)}")
+
+        if installed:
+            self.cert_status.setText("CA 证书状态：已安装。HTTPS 请求可被 mitmproxy 捕获。")
+            self.cert_status.setStyleSheet("font-size: 12px; color: #2e7d32; background: transparent;")
+            self.install_cert_btn.setEnabled(False)
+            self.install_cert_btn.setText("已安装")
+        else:
+            self.cert_status.setText("CA 证书状态：未安装。未安装时 HTTPS 请求无法被代理录制。")
+            self.cert_status.setStyleSheet("font-size: 12px; color: #b26a00; background: transparent;")
+            self.install_cert_btn.setEnabled(True)
+            self.install_cert_btn.setText("安装证书")
+
+    def _install_certificate(self):
+        """安装 mitmproxy CA 证书。"""
+        try:
+            from src.recording.cert_manager import CertManager
+
+            ok = CertManager().ensure_installed()
+        except Exception as e:
+            ok = False
+            self.append_status(f"⚠️ 安装证书失败: {str(e)}")
+
+        self.refresh_certificate_status()
+        if ok:
+            QMessageBox.information(self, "证书安装", "mitmproxy CA 证书已安装或已存在。")
+        else:
+            QMessageBox.warning(
+                self,
+                "证书安装失败",
+                "证书安装失败。请确认 mitmproxy 已生成证书，并以管理员权限运行安装。",
+            )
+
+    def _set_ui_state(self, *, recording: bool = False, awaiting: bool = False, show_log: bool = False):
+        """统一设置录制相关的 UI 控件启用/可见状态。"""
+        locked = recording or awaiting
+        self.record_btn.setEnabled(not locked)
+        self.stop_btn.setEnabled(locked)
+        self.url_input.setEnabled(not locked)
+        for card in (self.browser_card, self.desktop_card, self.extension_card):
+            card.setEnabled(not locked)
+        self.recording_indicator.setVisible(recording)
+        self.status_section.setVisible(show_log or recording)
 
     def on_record_clicked(self):
         """开始教学"""
         mode = self._current_mode
         url = self.url_input.text().strip()
 
-        self.is_recording = True
-        self.record_btn.setEnabled(False)
-        self.stop_btn.setEnabled(True)
-        self.url_input.setEnabled(False)
-        self.browser_card.setEnabled(False)
-        self.desktop_card.setEnabled(False)
+        if mode == "extension_triggered":
+            self._awaiting_extension_start = True
+            self.is_recording = False
+            self._set_ui_state(awaiting=True, show_log=True)
+            self.append_status(
+                "扩展触发模式已就绪，请在 Chrome 扩展弹窗中点击开始录制。开始前可点击「结束教学」取消等待。"
+            )
+            self.recording_started.emit(mode, url)
+            return
 
-        # 显示进行中状态
-        self.recording_indicator.setVisible(True)
-        self.status_section.setVisible(True)
+        self.is_recording = True
+        self._set_ui_state(recording=True, show_log=True)
 
         self.recording_started.emit(mode, url)
 
-        mode_name = "浏览器" if mode == "browser" else "桌面"
+        mode_name = {"browser": "浏览器", "desktop": "桌面", "extension_triggered": "扩展触发"}.get(mode, mode)
         self.append_status(f"开始{mode_name}教学")
         if mode == "browser":
             display_url = url if url else "about:blank（空白页）"
@@ -423,17 +544,39 @@ class RecordingWidget(QWidget):
 
     def on_stop_clicked(self):
         """结束教学"""
-        self.is_recording = False
-        self.record_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.url_input.setEnabled(True)
-        self.browser_card.setEnabled(True)
-        self.desktop_card.setEnabled(True)
+        if self._awaiting_extension_start and not self.is_recording:
+            self._awaiting_extension_start = False
+            self._set_ui_state()
+            self.append_status("已取消等待扩展开始录制")
+            return
 
-        self.recording_indicator.setVisible(False)
+        self.is_recording = False
+        self._awaiting_extension_start = False
+        self._set_ui_state()
 
         self.recording_stopped.emit()
         self.append_status("教学已结束")
+
+    def on_extension_recording_started(self, recording_id: str = ""):
+        """扩展实际开始录制后，同步更新界面状态。"""
+        self._awaiting_extension_start = False
+        self.is_recording = True
+        self._set_ui_state(recording=True, show_log=True)
+
+        if recording_id:
+            self.append_status(f"扩展录制已开始：{recording_id}")
+        else:
+            self.append_status("扩展录制已开始")
+
+    def on_extension_recording_stopped(self):
+        """扩展实际停止录制后，同步恢复界面可操作状态。"""
+        if not self._awaiting_extension_start and not self.is_recording:
+            return
+
+        self._awaiting_extension_start = False
+        self.is_recording = False
+        self._set_ui_state(show_log=True)
+        self.append_status("扩展录制已结束")
 
     # ── 公共方法（保持兼容）──
 
@@ -450,15 +593,10 @@ class RecordingWidget(QWidget):
     def reset(self):
         """重置界面状态"""
         self.is_recording = False
-        self.record_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
-        self.url_input.setEnabled(True)
-        self.browser_card.setEnabled(True)
-        self.desktop_card.setEnabled(True)
-
-        self.recording_indicator.setVisible(False)
-        self.status_section.setVisible(False)
+        self._awaiting_extension_start = False
+        self._set_ui_state()
         self.status_text.clear()
 
         # 恢复 URL 区域可见性
         self.url_container.setVisible(self._current_mode == "browser")
+        self.extension_container.setVisible(self._current_mode == "extension_triggered")

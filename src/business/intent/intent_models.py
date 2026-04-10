@@ -5,9 +5,8 @@ Intent 数据模型
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional
+from typing import List, Optional
 from datetime import datetime
-import json
 import uuid
 from enum import Enum
 
@@ -50,77 +49,6 @@ class Intent:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     confirmed_at: Optional[datetime] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
-        return {
-            "intent_id": self.intent_id,
-            "recording_id": self.recording_id,
-            "core_operations": self.core_operations,
-            "target": self.target,
-            "business_scenario": self.business_scenario,
-            "expected_results": self.expected_results,
-            "status": self.status.value if isinstance(self.status, IntentStatus) else self.status,
-            "confirmed_operations": self.confirmed_operations,
-            "user_message": self.user_message,
-            "analysis_confidence": self.analysis_confidence,
-            "llm_model_used": self.llm_model_used,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-            "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
-        }
-
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "Intent":
-        """从字典创建"""
-        # 解析 JSON 字符串
-        core_operations = data.get("core_operations", [])
-        if isinstance(core_operations, str):
-            core_operations = json.loads(core_operations)
-
-        expected_results = data.get("expected_results", [])
-        if isinstance(expected_results, str):
-            expected_results = json.loads(expected_results)
-
-        confirmed_operations = data.get("confirmed_operations", [])
-        if isinstance(confirmed_operations, str):
-            confirmed_operations = json.loads(confirmed_operations)
-
-        # 解析状态
-        status = data.get("status", IntentStatus.ANALYZING)
-        if isinstance(status, str):
-            status = IntentStatus(status)
-
-        return cls(
-            intent_id=data["intent_id"],
-            recording_id=data["recording_id"],
-            core_operations=core_operations,
-            target=data.get("target"),
-            business_scenario=data.get("business_scenario"),
-            expected_results=expected_results,
-            status=status,
-            confirmed_operations=confirmed_operations,
-            user_message=data.get("user_message"),
-            analysis_confidence=data.get("analysis_confidence", 0.0),
-            llm_model_used=data.get("llm_model_used"),
-            created_at=datetime.fromisoformat(data["created_at"]) if data.get("created_at") else None,
-            updated_at=datetime.fromisoformat(data["updated_at"]) if data.get("updated_at") else None,
-            confirmed_at=datetime.fromisoformat(data["confirmed_at"]) if data.get("confirmed_at") else None,
-        )
-
-    def confirm(self, confirmed_operations: List[str], user_message: Optional[str] = None):
-        """
-        确认意图
-
-        Args:
-            confirmed_operations: 用户确认的操作列表
-            user_message: 用户补充说明
-        """
-        self.status = IntentStatus.CONFIRMED
-        self.confirmed_operations = confirmed_operations
-        self.user_message = user_message
-        self.updated_at = datetime.now()
-        self.confirmed_at = datetime.now()
 
     def cancel(self):
         """取消意图"""

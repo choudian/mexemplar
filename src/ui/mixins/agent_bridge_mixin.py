@@ -74,7 +74,7 @@ class AgentBridgeMixin:
         from src.business.orchestration.agent_orchestrator import AgentOrchestrator
         from src.data.unified_config import get_unified_config
         from src.ui.agent_ui_bridge import AgentUIBridge
-        from src.utils.events import connect
+        from src.utils.events import connect, event_value
 
         config = get_unified_config()
         llm_client = LangChainLLMClient(
@@ -120,14 +120,7 @@ class AgentBridgeMixin:
 
         def on_recording_completed(sender, **kwargs):
             event_data = kwargs.get("event_data")
-            if event_data is not None:
-                recording_id = (
-                    event_data.get("recording_id")
-                    if isinstance(event_data, dict)
-                    else getattr(event_data, "session_id", None)
-                )
-            else:
-                recording_id = kwargs.get("recording_id")
+            recording_id = event_value(event_data, "recording_id", "session_id") or kwargs.get("recording_id")
             if not recording_id:
                 return
             self.logger.info(f"[录制完成] 通过主线程信号启动 PM Agent 分析: {recording_id}")
@@ -142,6 +135,7 @@ class AgentBridgeMixin:
     def _on_switch_to_intent_page(self) -> None:
         """在主线程中重置意图确认页面并切换（由 _switch_to_intent_page 信号触发）"""
         self.intent_confirmation_page.reset()
+        self.recording_page.reset()
         self.main_content.switch_page(INTENT_CONFIRMATION)
 
     def _on_agent_start_requested(self, recording_id: str) -> None:

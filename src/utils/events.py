@@ -95,6 +95,30 @@ class RecordingEventData:
 # =============================================================================
 
 
+def event_value(event_data, *keys):
+    """从 blinker 事件数据中提取值，兼容 dict 和 dataclass/对象两种格式。
+
+    Args:
+        event_data: 事件数据（dict 或对象）
+        *keys: 按优先级尝试的键名列表
+
+    Returns:
+        第一个非 None 的值，或 None
+    """
+    if event_data is None:
+        return None
+    if isinstance(event_data, dict):
+        for key in keys:
+            if key in event_data:
+                return event_data.get(key)
+        return None
+    for key in keys:
+        value = getattr(event_data, key, None)
+        if value is not None:
+            return value
+    return None
+
+
 def connect(signal_name: str, callback: Callable) -> Callable:
     """
     连接信号和回调函数
@@ -188,6 +212,7 @@ __all__ = [
     # 数据类
     "RecordingEventData",
     # 函数
+    "event_value",
     "connect",
     "emit",
     # 测试辅助
