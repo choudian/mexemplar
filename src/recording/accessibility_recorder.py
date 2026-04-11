@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from src.utils.helpers import append_jsonl
+
 logger = logging.getLogger(__name__)
 
 # comtypes 默认 DEBUG 级别会疯狂刷日志（每个 COM Release 一行），直接关掉
@@ -27,12 +29,15 @@ EVENT_OBJECT_VALUECHANGE = 0x800E
 EVENT_OBJECT_INVOKED = 0x8013
 WINEVENT_OUTOFCONTEXT = 0x0000
 
-
-def _get_ctypes():
+if PLATFORM_SUPPORTED:
     import ctypes
     import ctypes.wintypes
 
-    return ctypes
+    try:
+        import uiautomation as auto
+    except ImportError:
+        auto = None
+        logger.warning("uiautomation 未安装，Accessibility 录制功能不可用")
 
 
 class AccessibilityRecorder:
@@ -46,7 +51,6 @@ class AccessibilityRecorder:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._current_url: str = ""
-        self.is_recording: bool = False
         self._callback_ref = None
 
     def start(self, recording_id: str, queue_file: Path, queue_write_lock: Optional[threading.Lock] = None) -> None:
@@ -60,14 +64,12 @@ class AccessibilityRecorder:
         self._queue_write_lock = queue_write_lock
         self._queue_file.parent.mkdir(parents=True, exist_ok=True)
         self._stop_event.clear()
-        self.is_recording = True
         self._install_hooks()
         logger.info(f"[Accessibility] 已启动: {recording_id}")
 
     def stop(self) -> None:
         """停止 UIA 事件监听。"""
         if not PLATFORM_SUPPORTED:
-            self.is_recording = False
             return
 
         self._remove_hooks()
@@ -75,12 +77,10 @@ class AccessibilityRecorder:
         if self._thread:
             self._thread.join(timeout=3)
         self._thread = None
-        self.is_recording = False
         logger.info("[Accessibility] 已停止")
 
     def _install_hooks(self) -> None:
         """安装 WinEvent hook 并启动消息泵。"""
-        ctypes = _get_ctypes()
         user32 = ctypes.windll.user32
         ole32 = ctypes.windll.ole32
 
@@ -142,7 +142,8 @@ class AccessibilityRecorder:
     def _on_win_event(self, event: int, hwnd: int, id_object: int, id_child: int) -> None:
         del id_object, id_child
         try:
-            import uiautomation as auto
+            if auto is None:
+                return
 
             control = auto.ControlFromHandle(hwnd)
             if not control:
@@ -231,13 +232,14 @@ class AccessibilityRecorder:
         if not self._queue_file or not self._recording_id:
             return
 
+        now = time.time()
         record = {
             "type": "browser_action",
             "recording_id": self._recording_id,
             "action": {
                 "action_type": action_type,
                 "url": url,
-                "timestamp": time.time(),
+                "timestamp": now,
                 "dom_element": {
                     "text_content": element_name,
                     "role": element_role,
@@ -246,16 +248,10 @@ class AccessibilityRecorder:
                 "parameters": {"value": value} if value else {},
                 "network_requests": [],
             },
-            "timestamp": time.time(),
+            "timestamp": now,
         }
 
         try:
-            if self._queue_write_lock:
-                with self._queue_write_lock:
-                    with open(self._queue_file, "a", encoding="utf-8") as handle:
-                        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            else:
-                with open(self._queue_file, "a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            append_jsonl(self._queue_file, record, self._queue_write_lock)
         except Exception as exc:
             logger.error(f"[Accessibility] 写入失败: {exc}")

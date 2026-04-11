@@ -23,6 +23,7 @@ from pathlib import Path
 
 from src.data.unified_config import get_unified_config
 from src.utils.events import emit
+from src.utils.helpers import get_default_data_dir, append_jsonl
 
 from .accessibility_recorder import AccessibilityRecorder
 from .proxy_recorder import ProxyRecorder
@@ -34,6 +35,7 @@ _ws_server_lock = threading.Lock()
 
 class RecordingMode:
     BROWSER = "browser"
+    DESKTOP = "desktop"
     EXTENSION_TRIGGERED = "extension_triggered"
 
     @classmethod
@@ -43,32 +45,13 @@ class RecordingMode:
             return {"browser_type": "chrome", "app_name": "Chrome", "process_name": "chrome"}
         return {"browser_type": "chromium", "app_name": "Browser", "process_name": "browser"}
 
-# 导入调试日志工具
-try:
-    from src.utils.debug_log import debug_log, set_debug_log_enabled, set_project_root
-
-    _DEBUG_LOG_AVAILABLE = True
-except ImportError:
-    # 如果导入失败（某些环境可能没有 utils），定义一个空函数
-    _DEBUG_LOG_AVAILABLE = False
-
-    def debug_log(*args, **kwargs):
-        pass
-
-    def set_debug_log_enabled(enabled):
-        pass
-
-    def set_project_root(root):
-        pass
-
-
 try:
     from playwright.async_api import (
         async_playwright,
         Browser,
         BrowserContext,
         Page,
-    )  # ⭐ 改为异步 API
+    )
 
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
@@ -114,15 +97,11 @@ class BrowserRecorder:
             - config 参数已废弃，仅保留向后兼容
             - 所有配置现在通过 get_unified_config() 访问
         """
-        # ⭐ 重构：不再直接实例化 RecordingConfig
-        # 保留 config 参数以保持向后兼容，但不使用它
-        # 所有配置访问都通过 get_unified_config()
         if config is not None:
             logger.warning(
                 "[BrowserRecorder] config 参数已废弃，所有配置现在通过 get_unified_config() 访问"
             )
 
-        # 使用统一配置管理器
         self._unified_config = get_unified_config()
 
         self._is_recording = False
@@ -160,29 +139,14 @@ class BrowserRecorder:
 
         # 存储路径
         if storage_path is None:
-            # 默认路径：项目根目录/data/recordings
-            project_root = Path(__file__).parent.parent.parent
-            storage_path = project_root / "data" / "recordings"
+            storage_path = get_default_data_dir() / "recordings"
         self.storage_path = Path(storage_path)
         self.storage_path.mkdir(parents=True, exist_ok=True)
 
-        # ⭐ 新增：DuckDB 支持（Phase 4）
-        self._use_duckdb = True  # 默认启用 DuckDB 存储
-        # ⭐ 提前初始化 RecordingRepository，避免多次创建导致连接冲突
+        self._use_duckdb = True
         from src.data.recording_repository import RecordingRepository
 
         self._recording_repository = RecordingRepository()
-
-        # 初始化调试日志工具
-        if _DEBUG_LOG_AVAILABLE:
-            project_root = Path(__file__).parent.parent.parent
-            set_project_root(project_root)
-            # 从配置中读取调试日志开关，或从环境变量读取
-            debug_enabled = (
-                self._unified_config.get_debug_log_enabled()
-                or os.getenv("MEXEMPLAR_DEBUG_LOG", "false").lower() == "true"
-            )
-            set_debug_log_enabled(debug_enabled)
 
     @property
     def page(self) -> Optional[Page]:
@@ -286,8 +250,6 @@ class BrowserRecorder:
 
     def _get_queue_paths(self, recording_id: str):
         """获取队列文件路径（WebSocket 模式只需要 action_queue）"""
-        from src.utils.helpers import get_default_data_dir
-
         queue_dir = get_default_data_dir() / "queues"
         queue_dir.mkdir(parents=True, exist_ok=True)
 
@@ -402,44 +364,16 @@ class BrowserRecorder:
             # 保存 user_data_dir 到实例变量，用于后续清理
             self._user_data_dir = user_data_dir
 
-            debug_log(
-                location="browser_recorder.py:282",
-                message="准备启动浏览器",
-                data={"user_data_dir": str(user_data_dir), "extension_path": str(extension_path)},
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H6",
-            )
             # 注意：Chrome 和 Edge 移除了侧载扩展所需的命令行标志
             # 因此 Chrome 通道不支持通过 --load-extension 加载扩展
             # 我们必须使用 Chromium（Playwright 捆绑的版本）来加载扩展
             # Chromium 可能不支持 Native Messaging，但我们可以尝试
             logger.info("使用 Chromium 启动浏览器（Chrome 通道不支持通过命令行加载扩展）")
-            debug_log(
-                location="browser_recorder.py:290",
-                message="使用 Chromium 启动（Chrome 通道不支持扩展加载）",
-                data={"extension_path": str(extension_path)},
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H8",
-            )
             # 确保使用绝对路径
             extension_path_absolute = Path(extension_path).resolve()
             # 使用正斜杠路径（Chrome 在 Windows 上更倾向于正斜杠）
             extension_path_final = extension_path_absolute.as_posix()
             logger.info(f"扩展路径: {extension_path_final}")
-            debug_log(
-                location="browser_recorder.py:298",
-                message="准备启动 Chromium",
-                data={
-                    "extension_path": extension_path_final,
-                    "extension_path_exists": extension_path_absolute.exists(),
-                    "manifest_exists": (extension_path_absolute / "manifest.json").exists(),
-                },
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H8",
-            )
             # 注意：系统 Chrome 不支持通过命令行加载扩展（Chrome 88+ 移除了此功能）
             # 必须使用 Playwright Chromium 才能通过 --load-extension 加载扩展
             # 因此我们不查找系统 Chrome，直接使用 Playwright Chromium
@@ -523,14 +457,11 @@ class BrowserRecorder:
             self._context.on("page", handle_new_page)
             logger.info("已注册新页面监听器（支持 target='_blank' popup 页面，异步 API）")
 
-            # ⭐ 添加定期检查机制（兜底方案：主动发现新标签页）
+            # 兜底机制：定期检查是否有新页面未被事件监听器捕获
             def check_new_pages():
                 """定期检查是否有新页面未被跟踪"""
                 last_page_count = len(self._pages)
-                while self._browser and not self._browser.is_connected():
-                    time.sleep(1)
-
-                while self._browser and self._browser.is_connected():
+                while self._context is not None:
                     try:
                         current_pages = self._context.pages
                         current_page_count = len(current_pages)
@@ -572,26 +503,6 @@ class BrowserRecorder:
             logger.info("已启动页面定期检查线程（兜底方案）")
 
             logger.info("Chromium 启动成功（支持扩展加载）")
-            debug_log(
-                location="browser_recorder.py:310",
-                message="Chromium 启动成功",
-                data={},
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H8",
-            )
-
-            debug_log(
-                location="browser_recorder.py:347",
-                message="浏览器启动完成，准备创建页面",
-                data={
-                    "extension_path": str(extension_path),
-                    "extension_path_exists": Path(extension_path).exists(),
-                },
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H7",
-            )
 
             # ⭐ 使用浏览器启动时的默认页面，不再创建新页面
             # Playwright 启动时会自动创建一个标签页
@@ -605,15 +516,6 @@ class BrowserRecorder:
                 self._page = await self._context.new_page()
                 self._pages.append(self._page)
                 logger.info(f"创建新页面，URL: {self._page.url}")
-
-            debug_log(
-                location="browser_recorder.py:351",
-                message="页面已准备就绪",
-                data={},
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="H7",
-            )
 
             # 导航到起始URL（如果提供）
             if start_url:
@@ -632,15 +534,6 @@ class BrowserRecorder:
 
             # 检查扩展是否加载
             logger.info("正在检查扩展加载状态...")
-            debug_log(
-                location="browser_recorder.py:287",
-                message="checking extension loading status",
-                data={"extension_path": str(extension_path)},
-                session_id="debug-session",
-                run_id="run1",
-                hypothesis_id="A",
-            )
-
             extension_loaded = False
             extension_signals: List[str] = []
             try:
@@ -675,15 +568,6 @@ class BrowserRecorder:
                         all_targets = targets_result.get("targetInfos", [])
                         logger.info(f"通过CDP检测到 {len(all_targets)} 个targets（第{attempt}/3次）")
 
-                        debug_log(
-                            location="browser_recorder.py:307",
-                            message="CDP targets count",
-                            data={"total_targets": len(all_targets), "attempt": attempt},
-                            session_id="debug-session",
-                            run_id="run1",
-                            hypothesis_id="A",
-                        )
-
                         target_types = {}
                         for target in all_targets:
                             t_type = target.get("type", "unknown")
@@ -707,20 +591,6 @@ class BrowserRecorder:
                             logger.info(f"  Service Worker {i+1}: {target.get('url', 'unknown')}")
                         extension_loaded = True
                         extension_signals.append("cdp_extension_service_worker")
-
-                        debug_log(
-                            location="browser_recorder.py:312",
-                            message="service workers found",
-                            data={
-                                "count": len(extension_service_workers),
-                                "urls": [
-                                    t.get("url", "unknown") for t in extension_service_workers
-                                ],
-                            },
-                            session_id="debug-session",
-                            run_id="run1",
-                            hypothesis_id="A",
-                        )
                     elif extension_targets:
                         logger.info(
                             f"通过CDP检测到 {len(extension_targets)} 个chrome-extension targets（未发现service worker，可能处于空闲）"
@@ -731,56 +601,16 @@ class BrowserRecorder:
                             )
                         extension_loaded = True
                         extension_signals.append("cdp_extension_target")
-
-                        debug_log(
-                            location="browser_recorder.py:317",
-                            message="extension targets found",
-                            data={
-                                "count": len(extension_targets),
-                                "types": [t.get("type", "unknown") for t in extension_targets],
-                                "urls": [t.get("url", "unknown") for t in extension_targets],
-                            },
-                            session_id="debug-session",
-                            run_id="run1",
-                            hypothesis_id="A",
-                        )
                     else:
                         logger.warning(
                             "启动阶段未通过CDP检测到 chrome-extension:// targets（Manifest V3 service worker 可能延迟激活）"
                         )
                         logger.warning("将继续等待 WebSocket 连接确认扩展状态")
 
-                        debug_log(
-                            location="browser_recorder.py:317",
-                            message="no extension targets found",
-                            data={"attempts": 3},
-                            session_id="debug-session",
-                            run_id="run1",
-                            hypothesis_id="A",
-                        )
-
                     # 列出所有target类型用于调试
                     logger.debug(f"Target类型统计: {target_types}")
-
-                    debug_log(
-                        location="browser_recorder.py:324",
-                        message="target types statistics",
-                        data={"target_types": target_types},
-                        session_id="debug-session",
-                        run_id="run1",
-                        hypothesis_id="A",
-                    )
                 except Exception as cdp_e:
                     logger.warning(f"通过CDP检查扩展失败: {cdp_e}")
-
-                    debug_log(
-                        location="browser_recorder.py:328",
-                        message="CDP extension check failed",
-                        data={"error": str(cdp_e)},
-                        session_id="debug-session",
-                        run_id="run1",
-                        hypothesis_id="A",
-                    )
                 finally:
                     if cdp_session is not None:
                         try:
@@ -791,32 +621,11 @@ class BrowserRecorder:
             except Exception as e:
                 logger.warning(f"检查扩展加载状态失败: {e}")
 
-                debug_log(
-                    location="browser_recorder.py:331",
-                    message="extension loading check exception",
-                    data={"error": str(e)},
-                    session_id="debug-session",
-                    run_id="run1",
-                    hypothesis_id="A",
-                )
-
             if not extension_loaded:
                 logger.warning("⚠ 启动阶段暂未确认扩展已加载")
                 logger.warning("  Manifest V3 service worker 可能延迟激活，这是常见现象")
                 logger.warning(f"  扩展路径: {extension_path}")
                 logger.warning("  后续将以 WebSocket 握手结果作为最终确认")
-
-                debug_log(
-                    location="browser_recorder.py:334",
-                    message="extension load not confirmed yet",
-                    data={
-                        "extension_path": str(extension_path),
-                        "signals": extension_signals,
-                    },
-                    session_id="debug-session",
-                    run_id="run1",
-                    hypothesis_id="A",
-                )
             else:
                 logger.info(f"扩展加载检查完成（检测信号: {', '.join(extension_signals)}）")
 
@@ -904,8 +713,6 @@ class BrowserRecorder:
     @contextmanager
     def _suppress_playwright_logs():
         """临时抑制 Playwright 的关闭日志"""
-        import logging
-
         playwright_logger = logging.getLogger("playwright")
         original_level = playwright_logger.level
         try:
@@ -930,12 +737,7 @@ class BrowserRecorder:
                         pass  # 静默忽略所有关闭时的错误
                 self._pages.clear()
 
-            if self._page:
-                try:
-                    if not self._page.is_closed():
-                        await self._page.close()
-                except Exception:
-                    pass  # 静默忽略所有关闭时的错误
+            self._page = None
 
             if self._context:
                 try:
@@ -1048,9 +850,7 @@ class BrowserRecorder:
             }
 
             # 写入队列文件（JSONL 格式，加锁防止并发写入交错）
-            with self._queue_write_lock:
-                with open(self._action_queue_path, "a", encoding="utf-8") as f:
-                    f.write(json.dumps(wrapped_message, ensure_ascii=False) + "\n")
+            append_jsonl(self._action_queue_path, wrapped_message, self._queue_write_lock)
 
             logger.debug(f"[WS] 事件已写入队列文件: {message['action'].get('action_type')}")
 
@@ -1533,8 +1333,8 @@ class BrowserRecorder:
             return 0
 
         actions_list = []
-        network_requests_map = {}  # line_num -> network_requests
-        standalone_network_requests = []  # ⭐ 新增：独立的网络请求（action_id 为 NULL）
+        network_requests_map = {}  # list_index -> network_requests
+        standalone_network_requests = []
 
         try:
             with open(self._action_queue_path, "r", encoding="utf-8") as f:
@@ -1546,7 +1346,7 @@ class BrowserRecorder:
                         event_data = json.loads(line)
                         action_dict = self._convert_event_to_action_dict(event_data, mode_display=mode_display)
 
-                        # ⭐ 过滤掉独立的 network_request action（只保存在 network_requests 表）
+                        # 独立的 network_request 只保存到 network_requests 表，不进 actions_list
                         if action_dict.get("action_type") == "network_request":
                             # 提取网络请求，不添加到 actions_list
                             if action_dict.get("_extracted_network_request"):
@@ -1557,20 +1357,13 @@ class BrowserRecorder:
                                 "跳过独立的 network_request action，直接保存到 network_requests 表"
                             )
                         else:
+                            list_index = len(actions_list)
                             actions_list.append(action_dict)
 
-                        # ⭐ 收集网络请求（两种来源）
-                        action = event_data.get("action", {})
-
-                        # 来源1: 关联到 DOM 事件的网络请求
-                        if action.get("network_requests"):
-                            network_requests_map[line_num] = action["network_requests"]
-
-                        # 来源2: 独立的 network_request 类型的 action
-                        if action_dict.get("_extracted_network_request"):
-                            network_requests_map[line_num] = [
-                                action_dict["_extracted_network_request"]
-                            ]
+                            # 收集关联到 DOM 事件的网络请求
+                            action = event_data.get("action", {})
+                            if action.get("network_requests"):
+                                network_requests_map[list_index] = action["network_requests"]
 
                     except json.JSONDecodeError as e:
                         logger.warning(f"解析事件 {line_num} 失败: {e}")
@@ -1585,7 +1378,7 @@ class BrowserRecorder:
 
         # 3. 批量保存操作
         if actions_list:
-            # ⭐ 清理临时字段（避免保存到数据库）
+            # 清理临时字段
             for action_dict in actions_list:
                 action_dict.pop("_extracted_network_request", None)
 
@@ -1612,8 +1405,8 @@ class BrowserRecorder:
             request_count = 0
             if network_requests_map and action_ids:
                 for i, action_id in enumerate(action_ids):
-                    if i + 1 in network_requests_map:
-                        requests = network_requests_map[i + 1]
+                    if i in network_requests_map:
+                        requests = network_requests_map[i]
                         self._recording_repository.save_network_requests(
                             action_id, requests, self._recording_id
                         )
@@ -1648,7 +1441,7 @@ class BrowserRecorder:
         Returns:
             Action 字典
         """
-        # ⭐ 修复：支持两种事件格式
+        # 支持两种事件格式：
         # 格式1: action 数据在 event_data['action'] 里面（DOM 事件）
         # 格式2: action_type 在顶层（网络请求事件，扁平结构）
         action = event_data.get("action", {})
@@ -1681,17 +1474,16 @@ class BrowserRecorder:
         if action.get("dom_tree_snapshot"):
             action_dict["dom_tree_snapshot"] = action["dom_tree_snapshot"]
 
-        # ⭐ 新增：网络请求数据（Phase 4）
         if action.get("network_requests"):
             action_dict["network_requests"] = action["network_requests"]
 
-        # ⭐ 修复：如果是 network_request 类型的 action，提取网络请求详细信息
+        # network_request 类型：提取请求详细信息用于独立存储
         if action.get("action_type") == "network_request":
             params = action.get("parameters", {})
             action_dict["_extracted_network_request"] = {
                 "url": action.get("url"),
                 "method": params.get("method"),
-                "request_type": params.get("request_type", "xhr"),  # ⭐ 新增：请求类型
+                "request_type": params.get("request_type", "xhr"),
                 "request_headers": params.get("request_headers", {}),
                 "request_body": params.get("request_body"),
                 "response_status": params.get("response_status"),

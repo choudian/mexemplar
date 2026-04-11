@@ -4,8 +4,12 @@
 提供项目级别的通用工具函数，避免在多处重复相同逻辑。
 """
 
+import json
 import re
+import threading
+from contextlib import nullcontext
 from pathlib import Path
+from typing import Optional
 
 
 _TEMPLATE_RE = re.compile(r'\{(\w+)\}')
@@ -45,3 +49,12 @@ def get_default_data_dir() -> Path:
     data_dir = project_root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+def append_jsonl(filepath: Path, record: dict, lock: Optional[threading.Lock] = None) -> None:
+    """线程安全地追加一行 JSONL 到队列文件。"""
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    ctx = lock or nullcontext()
+    with ctx:
+        with open(filepath, "a", encoding="utf-8") as f:
+            f.write(line)

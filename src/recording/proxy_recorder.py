@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from src.data.unified_config import get_unified_config
+from src.utils.helpers import append_jsonl
 
 from .system_proxy import SystemProxyManager
 
@@ -79,13 +80,7 @@ class RecordingAddon:
                 "timestamp": time.time(),
             }
 
-            if self.queue_write_lock:
-                with self.queue_write_lock:
-                    with open(self.queue_file, "a", encoding="utf-8") as handle:
-                        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-            else:
-                with open(self.queue_file, "a", encoding="utf-8") as handle:
-                    handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            append_jsonl(self.queue_file, record, self.queue_write_lock)
         except Exception as exc:
             logger.error(f"[Proxy] 写入队列文件失败: {exc}")
 

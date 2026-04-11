@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal
 from src.data.unified_config import get_unified_config
+from src.recording.browser_recorder import RecordingMode
 from src.ui.style_constants import (
     PRIMARY_COLOR,
     TITLE_COLOR,
@@ -129,7 +130,7 @@ class RecordingWidget(QWidget):
         super().__init__(parent)
         self.config = get_unified_config()
         self.is_recording = False
-        self._current_mode = "browser"
+        self._current_mode = RecordingMode.BROWSER
         self._awaiting_extension_start = False
         self.init_ui()
         self.load_config()
@@ -191,11 +192,11 @@ class RecordingWidget(QWidget):
         cards_layout.setSpacing(12)
 
         self.browser_card = _ModeCard("🌐", "浏览器操作", "在浏览器中演示网页操作流程")
-        self.browser_card.clicked.connect(lambda: self._select_mode("browser"))
+        self.browser_card.clicked.connect(lambda: self._select_mode(RecordingMode.BROWSER))
         cards_layout.addWidget(self.browser_card)
 
         self.desktop_card = _ModeCard("🖥️", "桌面操作", "演示桌面应用的操作流程")
-        self.desktop_card.clicked.connect(lambda: self._select_mode("desktop"))
+        self.desktop_card.clicked.connect(lambda: self._select_mode(RecordingMode.DESKTOP))
         cards_layout.addWidget(self.desktop_card)
 
         self.extension_card = _ModeCard(
@@ -203,7 +204,7 @@ class RecordingWidget(QWidget):
             "扩展触发",
             "在你自己的 Chrome 中通过扩展弹窗开始/停止录制",
         )
-        self.extension_card.clicked.connect(lambda: self._select_mode("extension_triggered"))
+        self.extension_card.clicked.connect(lambda: self._select_mode(RecordingMode.EXTENSION_TRIGGERED))
         cards_layout.addWidget(self.extension_card)
 
         body_layout.addLayout(cards_layout)
@@ -440,14 +441,14 @@ class RecordingWidget(QWidget):
         if self.is_recording:
             return
         self._current_mode = mode
-        self.browser_card.set_selected(mode == "browser")
-        self.desktop_card.set_selected(mode == "desktop")
-        self.extension_card.set_selected(mode == "extension_triggered")
-        self.url_container.setVisible(mode == "browser")
-        self.extension_container.setVisible(mode == "extension_triggered")
-        if mode == "desktop":
+        self.browser_card.set_selected(mode == RecordingMode.BROWSER)
+        self.desktop_card.set_selected(mode == RecordingMode.DESKTOP)
+        self.extension_card.set_selected(mode == RecordingMode.EXTENSION_TRIGGERED)
+        self.url_container.setVisible(mode == RecordingMode.BROWSER)
+        self.extension_container.setVisible(mode == RecordingMode.EXTENSION_TRIGGERED)
+        if mode == RecordingMode.DESKTOP:
             self.url_input.clear()
-        if mode == "extension_triggered":
+        if mode == RecordingMode.EXTENSION_TRIGGERED:
             self.refresh_certificate_status()
 
     # ── 配置加载 ──
@@ -455,7 +456,7 @@ class RecordingWidget(QWidget):
     def load_config(self):
         """从配置加载初始值"""
         try:
-            default_mode = self.config.get("recording.default_recording_mode", default="browser")
+            default_mode = self.config.get("recording.default_recording_mode", default=RecordingMode.BROWSER)
             self._select_mode(default_mode)
 
             default_url = self.config.get("recording.browser_start_url", default="")
@@ -521,7 +522,7 @@ class RecordingWidget(QWidget):
         mode = self._current_mode
         url = self.url_input.text().strip()
 
-        if mode == "extension_triggered":
+        if mode == RecordingMode.EXTENSION_TRIGGERED:
             self._awaiting_extension_start = True
             self.is_recording = False
             self._set_ui_state(awaiting=True, show_log=True)
@@ -536,9 +537,9 @@ class RecordingWidget(QWidget):
 
         self.recording_started.emit(mode, url)
 
-        mode_name = {"browser": "浏览器", "desktop": "桌面", "extension_triggered": "扩展触发"}.get(mode, mode)
+        mode_name = {RecordingMode.BROWSER: "浏览器", RecordingMode.DESKTOP: "桌面", RecordingMode.EXTENSION_TRIGGERED: "扩展触发"}.get(mode, mode)
         self.append_status(f"开始{mode_name}教学")
-        if mode == "browser":
+        if mode == RecordingMode.BROWSER:
             display_url = url if url else "about:blank（空白页）"
             self.append_status(f"起始 URL: {display_url}")
 
@@ -598,5 +599,5 @@ class RecordingWidget(QWidget):
         self.status_text.clear()
 
         # 恢复 URL 区域可见性
-        self.url_container.setVisible(self._current_mode == "browser")
-        self.extension_container.setVisible(self._current_mode == "extension_triggered")
+        self.url_container.setVisible(self._current_mode == RecordingMode.BROWSER)
+        self.extension_container.setVisible(self._current_mode == RecordingMode.EXTENSION_TRIGGERED)
