@@ -85,12 +85,22 @@ class AgentOrchestrator:
         self._dynamic_managers_lock = threading.Lock()
         self._MAX_DYNAMIC_MANAGERS = 20
 
+        # 延迟初始化 SkillCompositionService
+        self._composition_service = None
+
         # 后台队列 Worker：轮询 pending_assistant_tasks 表
         self._task_queue_event = threading.Event()  # 入队时唤醒
         self._task_worker_running = False
 
         # 监听 agent_error 事件自动记录教学失败
         connect("agent_error", self._on_agent_error_for_failure)
+
+    @property
+    def composition_service(self):
+        from src.business.services import SkillCompositionService
+        if self._composition_service is None:
+            self._composition_service = SkillCompositionService()
+        return self._composition_service
 
     # =========================================================================
     # 核心公共 API
@@ -1183,16 +1193,33 @@ class AgentOrchestrator:
         # 获取 profile
         profile = self._get_assistant_profile()
 
-        # 获取用户工具列表（用于 system prompt 简表）
+        # 获取用户技能/技能组合列表（用于 system prompt 简表）
         session = self._session_repo.get_by_id(session_id)
         allowed_tool_ids = session.get_tool_id_set() if session else None
         all_published = self._tool_repo.get_published_summaries()
+        all_compositions = self.composition_service.get_assistant_published_summaries()
         if allowed_tool_ids is not None:
             tools = [t for t in all_published if t["tool_id"] in allowed_tool_ids]
+            compositions = [
+                c
+                for c in all_compositions
+                if set(c["member_tool_ids"]).issubset(allowed_tool_ids)
+            ]
         else:
             tools = all_published
+            compositions = all_compositions
 
-        tool_list = [{"name": t["tool_name"], "description": t["description"]} for t in tools]
+        tool_list = [
+            {"name": f"[技能] {t['tool_name']}", "description": t["description"]}
+            for t in tools
+        ]
+        tool_list.extend(
+            {
+                "name": f"[技能组合/{'顺序型' if c['mode'] == 'ordered' else '范围型'}] {c['composition_name']}",
+                "description": c["description"] or c["applicability"],
+            }
+            for c in compositions
+        )
 
         # 获取全局摘要
         try:
@@ -1269,18 +1296,30 @@ class AgentOrchestrator:
 
         code = code_data["code"]
         existing = self._tool_repo.get_by_workflow_id(workflow_id)
+        needs_review_update = False
 
         if existing:
             tool_id = existing.tool_id
+            old_code = existing.execution_code
+            old_parameters = existing.parameters or []
+            old_strategy = existing.execution_strategy
+            old_status = existing.status
             existing.execution_code = code
             existing.tool_name = code_data["tool_name"]
             existing.description = code_data["description"]
             existing.parameters = code_data.get("parameters", [])
+            existing.execution_strategy = code_data.get("execution_strategy")
             existing.dependencies = []
             existing.trial_success_count = 0
             existing.source = "intent"
             existing.status = status
             self._tool_repo.update(existing)
+            needs_review_update = (
+                old_code != existing.execution_code
+                or old_parameters != (existing.parameters or [])
+                or old_strategy != existing.execution_strategy
+                or old_status != existing.status
+            )
         else:
             new_tool = Tool(
                 tool_id=str(uuid.uuid4()),
@@ -1294,9 +1333,16 @@ class AgentOrchestrator:
                 source="intent",
                 status=status,
                 trial_success_count=0,
+                execution_strategy=code_data.get("execution_strategy"),
             )
             created = self._tool_repo.create(new_tool)
             tool_id = created.tool_id
+
+        if needs_review_update:
+            try:
+                self.composition_service.mark_needs_review_by_tool(tool_id)
+            except Exception as e:
+                logger.warning(f"[Orchestrator] 标记技能组合待复核失败: tool_id={tool_id}, error={e}")
 
         # 判断是否从分诊修复而来（存在 trial session 说明工具已经被试用过）
         trial_sessions = self._session_repo.get_by_workflow(workflow_id, agent_type="trial")

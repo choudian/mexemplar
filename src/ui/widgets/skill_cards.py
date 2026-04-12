@@ -5,6 +5,7 @@
 - _SkillCardBase    — 公共基类（样式、菜单、通用构建块）
 - PendingToolCard   — 待考核技能卡片
 - PublishedToolCard — 已掌握技能卡片
+- SkillCompositionCard — 技能组合卡片
 - FailureCard       — 失败记录卡片
 """
 
@@ -24,7 +25,7 @@ from PyQt6.QtWidgets import (
 
 from src.business.agents.config import AgentType
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
-from src.data.models import Tool
+from src.data.models import SkillComposition, Tool
 from src.data.models_sqlite import TeachingFailureRecord
 from src.ui.style_constants import HERO_BG_COLOR, PRIMARY_COLOR, SUBTITLE_COLOR, TITLE_COLOR
 
@@ -347,6 +348,123 @@ class PublishedToolCard(_SkillCardBase):
                 )
             )
             layout.addWidget(btn)
+
+
+class SkillCompositionCard(_SkillCardBase):
+    """技能组合卡片"""
+
+    test_requested = pyqtSignal(str)
+    publish_requested = pyqtSignal(str)
+    offline_requested = pyqtSignal(str)
+
+    _STATUS_STYLE_MAP = {
+        "draft": {"text": "草稿", "fg": "#856404", "bg": "#fff3cd"},
+        "published": {"text": "已发布", "fg": "#155724", "bg": "#d4edda"},
+        "offline": {"text": "已下线", "fg": "#495057", "bg": "#e9ecef"},
+    }
+
+    def __init__(self, composition: SkillComposition, parent=None):
+        super().__init__(
+            card_id=composition.composition_id,
+            name=composition.composition_name,
+            desc=composition.description or composition.applicability,
+            parent=parent,
+        )
+        self.composition = composition
+        self._init_ui()
+
+    def _init_ui(self):
+        border = "#d8dee9" if self.composition.status != "published" else "#b7e4c7"
+        hover_border = "#4c6ef5" if self.composition.status != "published" else "#2f9e44"
+        self.setStyleSheet(_CARD_STYLE.format(border=border, hover_border=hover_border))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 14)
+        layout.setSpacing(8)
+
+        top_left = QWidget()
+        top_left_layout = QHBoxLayout(top_left)
+        top_left_layout.setContentsMargins(0, 0, 0, 0)
+        top_left_layout.setSpacing(6)
+
+        status_cfg = self._STATUS_STYLE_MAP.get(
+            self.composition.status,
+            {"text": self.composition.status, "fg": SUBTITLE_COLOR, "bg": "#f1f3f5"},
+        )
+        status_lbl = QLabel(status_cfg["text"])
+        status_lbl.setStyleSheet(
+            _STATUS_PILL_STYLE.format(fg=status_cfg["fg"], bg=status_cfg["bg"])
+        )
+        top_left_layout.addWidget(status_lbl)
+
+        mode_text = "顺序型" if self.composition.mode == "ordered" else "范围型"
+        mode_lbl = QLabel(mode_text)
+        mode_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg=PRIMARY_COLOR, bg="#f0f1ff"))
+        top_left_layout.addWidget(mode_lbl)
+
+        if self.composition.needs_review:
+            review_lbl = QLabel("待复核")
+            review_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg="#c92a2a", bg="#fff5f5"))
+            top_left_layout.addWidget(review_lbl)
+
+        top_left_layout.addStretch()
+        layout.addLayout(self._build_top_row(top_left))
+
+        layout.addWidget(self._build_name_label())
+        layout.addWidget(self._build_desc_label(), 1)
+
+        meta_row = QHBoxLayout()
+        member_lbl = QLabel(f"成员: {len(self.composition.members)}")
+        member_lbl.setStyleSheet(_META_STYLE)
+        meta_row.addWidget(member_lbl)
+        meta_row.addStretch()
+        if self.composition.updated_at:
+            time_lbl = QLabel(_SkillCardBase._format_time(self.composition.updated_at))
+            time_lbl.setStyleSheet(_META_STYLE)
+            meta_row.addWidget(time_lbl)
+        layout.addLayout(meta_row)
+
+        btn = QPushButton("试一下")
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setFixedHeight(34)
+        btn.setStyleSheet(
+            _ACTION_BTN_STYLE.format(
+                fg="white", bg=PRIMARY_COLOR, border="none", hover_bg="#4a58a8"
+            )
+        )
+        btn.clicked.connect(lambda: self.test_requested.emit(self.composition.composition_id))
+        layout.addWidget(btn)
+
+    def _show_menu(self):
+        menu = QMenu(self)
+        menu.setStyleSheet(_MENU_STYLE.format(selected_color="#f0f1ff"))
+
+        edit_action = QAction("编辑", self)
+        edit_action.triggered.connect(lambda: self.edit_requested.emit(self._card_id))
+        menu.addAction(edit_action)
+
+        if self.composition.status == "draft":
+            publish_action = QAction("发布", self)
+            publish_action.triggered.connect(lambda: self.publish_requested.emit(self._card_id))
+            menu.addAction(publish_action)
+
+            delete_action = QAction("删除", self)
+            delete_action.triggered.connect(lambda: self.delete_requested.emit(self._card_id))
+            menu.addAction(delete_action)
+        elif self.composition.status == "published":
+            offline_action = QAction("下线", self)
+            offline_action.triggered.connect(lambda: self.offline_requested.emit(self._card_id))
+            menu.addAction(offline_action)
+        elif self.composition.status == "offline":
+            publish_action = QAction("重新发布", self)
+            publish_action.triggered.connect(lambda: self.publish_requested.emit(self._card_id))
+            menu.addAction(publish_action)
+
+            delete_action = QAction("删除", self)
+            delete_action.triggered.connect(lambda: self.delete_requested.emit(self._card_id))
+            menu.addAction(delete_action)
+
+        menu.exec(self._more_btn.mapToGlobal(self._more_btn.rect().bottomLeft()))
 
 
 # ── 失败记录卡片 ──

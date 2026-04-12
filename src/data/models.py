@@ -43,3 +43,34 @@ class Tool:
 
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+@dataclass
+class SkillCompositionMember:
+    """技能组合成员模型"""
+
+    member_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    composition_id: str = ""
+    tool_id: str = ""
+    selected_order: int = 0
+    execution_order: Optional[int] = None
+    tool: Optional[Tool] = None
+    created_at: Optional[datetime] = None
+
+
+@dataclass
+class SkillComposition:
+    """技能组合模型"""
+
+    composition_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    composition_name: str = ""
+    description: Optional[str] = None
+    applicability: str = ""
+    mode: str = "range"
+    status: str = "draft"
+    assistant_enabled: bool = True
+    recommend_order: bool = False
+    needs_review: bool = False
+    members: List[SkillCompositionMember] = field(default_factory=list)
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None

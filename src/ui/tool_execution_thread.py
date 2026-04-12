@@ -142,7 +142,7 @@ class ToolExecutionProgressDialog:
     显示工具执行的进度和状态
     """
 
-    def __init__(self, tool_name: str, parent=None):
+    def __init__(self, tool_name: str, parent=None, entity_label: str = "工具"):
         """
         初始化进度对话框
 
@@ -160,18 +160,19 @@ class ToolExecutionProgressDialog:
         )
 
         self.tool_name = tool_name
+        self.entity_label = entity_label
         self.logger = get_logger(__name__)
 
         # 创建对话框
         self.dialog = QDialog(parent)
-        self.dialog.setWindowTitle(f"执行工具: {tool_name}")
+        self.dialog.setWindowTitle(f"执行{entity_label}: {tool_name}")
         self.dialog.setMinimumWidth(500)
 
         # 布局
         layout = QVBoxLayout()
 
         # 标题
-        title_label = QLabel(f"正在执行工具: <b>{tool_name}</b>")
+        title_label = QLabel(f"正在执行{entity_label}: <b>{tool_name}</b>")
         title_label.setStyleSheet("font-size: 14px; margin-bottom: 10px;")
         layout.addWidget(title_label)
 
@@ -244,6 +245,7 @@ class ToolExecutionProgressDialog:
 
         # 延迟关闭对话框
         QApplication.processEvents()
+        self.dialog.accept()
 
     def _on_error(self, error: str):
         """执行出错"""

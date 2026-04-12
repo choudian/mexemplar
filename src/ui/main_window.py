@@ -86,6 +86,8 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         # Agent 会话上下文
         self._current_agent_workflow_id = None
         self._current_agent_type = None
+        self._current_composition_trial_session_id = None
+        self._composition_trial_thread = None
 
         self._bridge_created_event = threading.Event()
 
@@ -175,8 +177,10 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
             self._on_intent_analyze_request
         )
         self.intent_confirmation_page.agent_resume_request.connect(self._on_agent_resume_request)
+        self.intent_confirmation_page.cancel_requested.connect(self._on_intent_cancel_requested)
 
         self.pending_tools_page.trial_start_request.connect(self._on_trial_start_request)
+        self.pending_tools_page.composition_trial_request.connect(self._on_composition_trial_request)
         self.pending_tools_page.tool_delete_request.connect(self._on_tool_delete_request)
         self.pending_tools_page.tool_update_request.connect(self._on_tool_update_request)
         self.pending_tools_page.retry_requested.connect(self._on_retry_requested)

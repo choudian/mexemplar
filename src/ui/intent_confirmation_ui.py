@@ -37,6 +37,7 @@ class IntentConfirmationUI(QWidget):
 
     # Agent 模式信号
     agent_resume_request = pyqtSignal(str, dict)  # thread_id, resume_data
+    cancel_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -207,6 +208,35 @@ class IntentConfirmationUI(QWidget):
         self._setup_trial_input_state(workflow_id)
         self._add_message("assistant", question)
 
+    def set_trial_processing_state(self, status_text: str = "正在处理您的反馈...") -> None:
+        """设置 trial 会话处理中状态，暂时禁用输入。"""
+        self._remove_loading_label()
+        self.status_label.setText(status_text)
+        self.status_icon.setText("🤖")
+        self.progress_indicator.setText("")
+        self.message_input.setEnabled(False)
+        self.message_input.clear()
+        self.send_button.setEnabled(False)
+
+    def append_trial_message(self, role: str, content: str) -> None:
+        """追加一条 trial 会话消息，不改变输入状态。"""
+        if content:
+            self._add_message(role, content)
+
+    def complete_trial(self, workflow_id: str, message: str, success: bool) -> None:
+        """结束一场 trial 会话并停用输入。"""
+        self._agent_thread_id = workflow_id
+        self.current_intent = None
+        self._remove_loading_label()
+        self.status_label.setText("试用完成" if success else "试用结束")
+        self.status_icon.setText("✅" if success else "⚠️")
+        self.progress_indicator.setText("")
+        self.message_input.setEnabled(False)
+        self.message_input.clear()
+        self.send_button.setEnabled(False)
+        if message:
+            self._add_message("assistant", message)
+
     def _set_analyzing_state(self):
         """设置分析中状态"""
         self.status_label.setText("正在分析您的操作...")
@@ -322,8 +352,7 @@ class IntentConfirmationUI(QWidget):
             self.logger.info(f"取消意图: {self.current_intent.intent_id}")
             self.current_intent.cancel()
 
-        # 关闭对话框（如果在对话框中）
-        self.parent().close() if self.parent() else None
+        self.cancel_requested.emit()
 
     def set_status_text(self, text: str):
         """设置状态栏文本（供外部调用，避免直接访问内部 status_label）"""

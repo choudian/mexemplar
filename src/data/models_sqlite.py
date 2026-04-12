@@ -7,7 +7,7 @@ SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 from datetime import datetime
 from typing import Optional
 from enum import Enum
-from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, LargeBinary
+from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, LargeBinary, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -66,6 +66,52 @@ class Tool(Base):
         return f"<Tool(tool_id={self.tool_id!r}, tool_name={self.tool_name!r})>"
 
 
+class SkillComposition(Base):
+    """技能组合定义表"""
+
+    __tablename__ = "skill_compositions"
+
+    composition_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    composition_name: Mapped[str] = mapped_column(String(200))
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    applicability: Mapped[str] = mapped_column(Text, nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), default="range")
+    status: Mapped[str] = mapped_column(String(20), default="draft")
+    assistant_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    recommend_order: Mapped[bool] = mapped_column(Boolean, default=False)
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<SkillComposition(composition_id={self.composition_id!r}, "
+            f"composition_name={self.composition_name!r}, status={self.status!r})>"
+        )
+
+
+class SkillCompositionMember(Base):
+    """技能组合成员关系表"""
+
+    __tablename__ = "skill_composition_members"
+    __table_args__ = (
+        UniqueConstraint("composition_id", "tool_id", name="uq_skill_composition_member_tool"),
+    )
+
+    member_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    composition_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    tool_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    selected_order: Mapped[int] = mapped_column(Integer, default=0)
+    execution_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<SkillCompositionMember(member_id={self.member_id!r}, "
+            f"composition_id={self.composition_id!r}, tool_id={self.tool_id!r})>"
+        )
+
+
 # ===== Agent 会话相关模型 =====
 
 
@@ -88,7 +134,11 @@ class Session(Base):
             return None
         import json
 
-        return set(json.loads(self.tool_ids))
+        parsed = json.loads(self.tool_ids)
+        if isinstance(parsed, dict):
+            tool_ids = parsed.get("member_tool_ids") or parsed.get("tool_ids") or []
+            return set(tool_ids)
+        return set(parsed)
 
     def __repr__(self) -> str:
         return f"<Session(session_id={self.session_id!r}, agent_type={self.agent_type!r}, status={self.status!r})>"

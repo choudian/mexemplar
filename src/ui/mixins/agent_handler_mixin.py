@@ -11,9 +11,12 @@ AgentHandlerMixin — Agent 事件处理
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 
-from src.business.agents.config import AgentType
-from src.business.services import SkillsService
-from src.ui.page_ids import INTENT_CONFIRMATION, SKILLS
+from src.business.agents.config import AgentType, ResultType
+from src.business.services import SkillCompositionError, SkillCompositionService, SkillsService
+from src.ui.page_ids import CONVERSATIONS, INTENT_CONFIRMATION, SKILLS
+
+
+COMPOSITION_TRIAL_AGENT_TYPE = "composition_trial"
 
 
 class AgentHandlerMixin:
@@ -133,6 +136,10 @@ class AgentHandlerMixin:
         user_input = resume_data.get("feedback") or resume_data.get("message", "")
         agent_type = self._current_agent_type
 
+        if agent_type == COMPOSITION_TRIAL_AGENT_TYPE:
+            self._continue_composition_trial(thread_id, user_input)
+            return
+
         if self.agent_ui_bridge:
             try:
                 self.agent_ui_bridge.reply_to_agent(agent_type, user_input, thread_id)
@@ -164,6 +171,28 @@ class AgentHandlerMixin:
                 intent_page.set_status_text("正在处理您的反馈...")
         except Exception as e:
             self.logger.error(f"传递用户反馈失败: {e}", exc_info=True)
+
+    def _on_intent_cancel_requested(self) -> None:
+        """处理统一对话页的取消请求。"""
+        self.logger.info("收到统一对话页取消请求")
+
+        if self._composition_trial_thread and self._composition_trial_thread.isRunning():
+            try:
+                self._composition_trial_thread.cancel()
+            except Exception as e:
+                self.logger.warning(f"取消技能组合试用线程失败: {e}")
+
+        current_type = self._current_agent_type
+        self._composition_trial_thread = None
+        self._current_composition_trial_session_id = None
+        self._current_agent_workflow_id = None
+        self._current_agent_type = None
+
+        if current_type in {AgentType.TRIAL, COMPOSITION_TRIAL_AGENT_TYPE}:
+            self.main_content.switch_page(SKILLS)
+            return
+
+        self.main_content.switch_page(CONVERSATIONS)
 
     # ------------------------------------------------------------------
     # Chat 发送消息 / 确认弹框
@@ -241,6 +270,109 @@ class AgentHandlerMixin:
         self.logger.info(f"启动 trial Agent: workflow_id={workflow_id}")
         user_input = None if messages else "开始试用"
         self.agent_ui_bridge.start_agent(AgentType.TRIAL, user_input, workflow_id)
+
+    def _on_composition_trial_request(self, composition_id: str) -> None:
+        """处理技能组合试一下请求，切到统一对话页。"""
+        self.logger.info(f"收到技能组合试用请求: {composition_id}")
+
+        service = SkillCompositionService()
+        try:
+            session = service.start_trial_session(composition_id)
+        except SkillCompositionError as e:
+            QMessageBox.warning(self, "技能组合试用失败", str(e))
+            return
+        except Exception as e:
+            self.logger.error(f"初始化技能组合试用失败: {e}", exc_info=True)
+            QMessageBox.warning(self, "技能组合试用失败", str(e))
+            return
+
+        self._current_agent_workflow_id = session.composition_id
+        self._current_agent_type = COMPOSITION_TRIAL_AGENT_TYPE
+        self._current_composition_trial_session_id = session.session_id
+
+        self.main_content.switch_page(INTENT_CONFIRMATION)
+        self.intent_confirmation_page.preload_trial_history([])
+        self.intent_confirmation_page.set_trial_processing_state("正在启动技能组合试用...")
+        self._continue_composition_trial(
+            session.session_id,
+            service.build_trial_bootstrap_input(),
+            status_text="正在启动技能组合试用...",
+        )
+        self.logger.info(
+            f"已启动技能组合对话式试用: composition={composition_id}, session={session.session_id}"
+        )
+
+    def _continue_composition_trial(
+        self,
+        session_id: str,
+        user_input: object,
+        status_text: str = "正在试用技能组合...",
+    ) -> None:
+        """继续技能组合对话式试用。"""
+        composition_id = self._current_agent_workflow_id
+        if not composition_id or not session_id.strip():
+            self.logger.warning("技能组合试用上下文丢失，无法继续")
+            return
+        if self._current_composition_trial_session_id and session_id != self._current_composition_trial_session_id:
+            self.logger.warning(
+                f"忽略过期技能组合试用会话: current={self._current_composition_trial_session_id}, got={session_id}"
+            )
+            return
+
+        from src.ui.skill_composition_dialogs import SkillCompositionExecutionThread
+
+        intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
+        if intent_page:
+            intent_page.set_trial_processing_state(status_text)
+
+        execution_thread = SkillCompositionExecutionThread(
+            composition_id=composition_id,
+            session_id=session_id,
+            user_input=user_input.strip() if isinstance(user_input, str) else user_input,
+        )
+        self._composition_trial_thread = execution_thread
+        execution_thread.finished_signal.connect(self._on_composition_trial_finished)
+        execution_thread.finished.connect(execution_thread.deleteLater)
+        execution_thread.finished.connect(self._clear_composition_trial_thread)
+        execution_thread.start()
+
+    def _on_composition_trial_finished(self, success: bool, payload: object, error: str) -> None:
+        """消费技能组合试用线程结果并更新对话页。"""
+        active_session_id = self._current_composition_trial_session_id
+        if not active_session_id:
+            self.logger.info("技能组合试用结果已忽略：会话已取消或已结束")
+            return
+
+        intent_page = self.main_content.get_page(INTENT_CONFIRMATION)
+        if not intent_page:
+            return
+
+        result = payload if isinstance(payload, dict) else {}
+        reply = str(result.get("reply") or "").strip()
+        result_type = result.get("result_type") or ""
+        session_id = str(result.get("session_id") or active_session_id)
+        if session_id != active_session_id:
+            self.logger.warning(
+                f"忽略不匹配的技能组合试用结果: active={active_session_id}, got={session_id}"
+            )
+            return
+
+        if result_type == ResultType.NEEDS_USER_INPUT.value and session_id:
+            intent_page.add_trial_question(
+                reply or "还缺少一些信息，请继续告诉我。",
+                session_id,
+            )
+            return
+
+        final_message = reply or error or ("技能组合试用完成。" if success else "技能组合试用失败。")
+        intent_page.complete_trial(session_id, final_message, success=success)
+        self._current_composition_trial_session_id = None
+        self._current_agent_workflow_id = None
+        self._current_agent_type = None
+
+    def _clear_composition_trial_thread(self) -> None:
+        """清理当前技能组合试用线程引用。"""
+        self._composition_trial_thread = None
 
     def _on_tool_delete_request(self, pending_tool_id: str) -> None:
         """处理工具删除请求"""
