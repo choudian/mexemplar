@@ -50,6 +50,10 @@ def run_migrations(engine):
         migrate_to_v7(engine)
         logger.info(f"数据库迁移完成：{max(current_version, 6)} -> 7")
 
+    if current_version < 8:
+        migrate_to_v8(engine)
+        logger.info(f"数据库迁移完成：{max(current_version, 7)} -> 8")
+
     logger.info(f"数据库已是最新版本：{get_schema_version(engine)}")
 
 
@@ -433,4 +437,62 @@ def migrate_to_v7(engine):
         except Exception as e:
             conn.rollback()
             logger.error(f"迁移到版本 7 失败: {e}")
+            raise
+
+
+def migrate_to_v8(engine):
+    """迁移到版本 8：新增 skill_compositions 与 skill_composition_members 表"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS skill_compositions (
+                    composition_id TEXT PRIMARY KEY,
+                    composition_name TEXT NOT NULL,
+                    description TEXT,
+                    applicability TEXT NOT NULL,
+                    mode TEXT DEFAULT 'range',
+                    status TEXT DEFAULT 'draft',
+                    assistant_enabled INTEGER DEFAULT 1,
+                    recommend_order INTEGER DEFAULT 0,
+                    needs_review INTEGER DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS skill_composition_members (
+                    member_id TEXT PRIMARY KEY,
+                    composition_id TEXT NOT NULL REFERENCES skill_compositions(composition_id),
+                    tool_id TEXT NOT NULL REFERENCES tools(tool_id),
+                    selected_order INTEGER DEFAULT 0,
+                    execution_order INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_composition_tool "
+                "ON skill_composition_members (composition_id, tool_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_skill_compositions_status "
+                "ON skill_compositions (status)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_skill_compositions_updated_at "
+                "ON skill_compositions (updated_at DESC)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_scm_composition_id "
+                "ON skill_composition_members (composition_id)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_scm_tool_id "
+                "ON skill_composition_members (tool_id)"
+            ))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 8})
+            conn.commit()
+            logger.info("数据库迁移到版本 8 完成：新增技能组合表与成员关系表")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 8 失败: {e}")
             raise

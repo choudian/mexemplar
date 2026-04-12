@@ -26,9 +26,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.business.services import SkillsService
+from src.business.services import SkillCompositionError, SkillCompositionService, SkillsService
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
-from src.data.models import Tool
+from src.data.models import SkillComposition, Tool
 from src.data.models_sqlite import TeachingFailureRecord
 from src.ui.style_constants import (
     DIVIDER_COLOR,
@@ -38,7 +38,12 @@ from src.ui.style_constants import (
     TITLE_COLOR,
 )
 from src.ui.widgets.layout_utils import clear_layout
-from src.ui.widgets.skill_cards import FailureCard, PendingToolCard, PublishedToolCard
+from src.ui.widgets.skill_cards import (
+    FailureCard,
+    PendingToolCard,
+    PublishedToolCard,
+    SkillCompositionCard,
+)
 from src.utils.logger import get_logger
 
 
@@ -46,6 +51,7 @@ class ToolsManagementUI(QWidget):
     """技能列表 UI 组件（带 Tab 切换）"""
 
     trial_start_request = pyqtSignal(str)
+    composition_trial_request = pyqtSignal(str)
     tool_delete_request = pyqtSignal(str)
     tool_update_request = pyqtSignal(str, str, str)
     retry_requested = pyqtSignal(str, str)       # workflow_id, failed_stage
@@ -54,10 +60,13 @@ class ToolsManagementUI(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.logger = get_logger(__name__)
+        self._composition_service = SkillCompositionService()
         self.pending_tools: List[PendingTool] = []
         self.pending_tool_cards: List[PendingToolCard] = []
         self.published_tools: List[Tool] = []
         self.published_tool_cards: List[PublishedToolCard] = []
+        self.skill_compositions: List[SkillComposition] = []
+        self.skill_composition_cards: List[SkillCompositionCard] = []
         self.failure_records: List[TeachingFailureRecord] = []
         self.failure_cards: List[FailureCard] = []
         self.init_ui()
@@ -91,6 +100,7 @@ class ToolsManagementUI(QWidget):
 
         self._current_tab = "pending"
         self._load_tools()
+        self._load_compositions()
 
     def _build_hero(self) -> QWidget:
         hero = QWidget()
@@ -118,9 +128,9 @@ class ToolsManagementUI(QWidget):
         return hero
 
     def _build_tab_bar(self) -> QWidget:
-        tab_bar = QWidget()
-        tab_bar.setStyleSheet("background-color: #ffffff;")
-        tab_bar_layout = QHBoxLayout(tab_bar)
+        self._tab_bar = QWidget()
+        self._tab_bar.setStyleSheet("background-color: #ffffff;")
+        tab_bar_layout = QHBoxLayout(self._tab_bar)
         tab_bar_layout.setContentsMargins(40, 0, 40, 0)
         tab_bar_layout.setSpacing(0)
 
@@ -132,6 +142,10 @@ class ToolsManagementUI(QWidget):
         self._published_tab_btn.clicked.connect(lambda: self._switch_tab("published"))
         tab_bar_layout.addWidget(self._published_tab_btn)
 
+        self._compositions_tab_btn = self._create_tab_btn("技能组合", False)
+        self._compositions_tab_btn.clicked.connect(lambda: self._switch_tab("compositions"))
+        tab_bar_layout.addWidget(self._compositions_tab_btn)
+
         tab_bar_layout.addSpacing(8)
 
         self._failures_tab_btn = self._create_tab_btn("失败记录", False)
@@ -139,7 +153,30 @@ class ToolsManagementUI(QWidget):
         tab_bar_layout.addWidget(self._failures_tab_btn)
 
         tab_bar_layout.addStretch()
-        return tab_bar
+
+        self._create_composition_btn = QPushButton("新建技能组合")
+        self._create_composition_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._create_composition_btn.setVisible(False)
+        self._create_composition_btn.clicked.connect(self._on_create_composition_clicked)
+        self._create_composition_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                min-height: 34px;
+                padding: 0 16px;
+                font-size: 13px;
+                font-weight: 600;
+                color: #ffffff;
+                background-color: {PRIMARY_COLOR};
+                border: none;
+                border-radius: 17px;
+            }}
+            QPushButton:hover {{
+                background-color: #4d5bb0;
+            }}
+            """
+        )
+        tab_bar_layout.addWidget(self._create_composition_btn)
+        return self._tab_bar
 
     def _build_cards_area(self) -> QWidget:
         self._cards_area = QWidget()
@@ -177,6 +214,20 @@ class ToolsManagementUI(QWidget):
         )
         self.published_empty_label.setVisible(False)
         cards_layout.addWidget(self.published_empty_label)
+
+        self._compositions_scroll = self._create_scroll_area()
+        self._compositions_scroll.setVisible(False)
+        self._compositions_scroll_content = QWidget()
+        self.skill_compositions_grid = QGridLayout(self._compositions_scroll_content)
+        self.skill_compositions_grid.setSpacing(14)
+        self.skill_compositions_grid.setContentsMargins(0, 0, 0, 0)
+        self.skill_compositions_grid.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._compositions_scroll.setWidget(self._compositions_scroll_content)
+        cards_layout.addWidget(self._compositions_scroll)
+
+        self.compositions_empty_state = self._create_compositions_empty_state()
+        self.compositions_empty_state.setVisible(False)
+        cards_layout.addWidget(self.compositions_empty_state)
 
         self._failures_scroll = self._create_scroll_area()
         self._failures_scroll.setVisible(False)
@@ -245,6 +296,12 @@ class ToolsManagementUI(QWidget):
             tab == "published" and len(self.published_tools) == 0
         )
 
+        self._create_composition_btn.setVisible(tab == "compositions")
+        self._compositions_scroll.setVisible(tab == "compositions")
+        self.compositions_empty_state.setVisible(
+            tab == "compositions" and len(self.skill_compositions) == 0
+        )
+
         self._failures_scroll.setVisible(tab == "failures")
         self.failures_empty_label.setVisible(
             tab == "failures" and len(self.failure_records) == 0
@@ -252,6 +309,7 @@ class ToolsManagementUI(QWidget):
 
         self._apply_tab_style(self._pending_tab_btn, tab == "pending")
         self._apply_tab_style(self._published_tab_btn, tab == "published")
+        self._apply_tab_style(self._compositions_tab_btn, tab == "compositions")
         self._apply_tab_style(self._failures_tab_btn, tab == "failures")
 
         if tab == "failures":
@@ -280,6 +338,40 @@ class ToolsManagementUI(QWidget):
         lbl.setVisible(False)
         return lbl
 
+    def _create_compositions_empty_state(self) -> QWidget:
+        state = QWidget()
+        layout = QVBoxLayout(state)
+        layout.setContentsMargins(0, 60, 0, 60)
+        layout.setSpacing(14)
+
+        label = QLabel("暂无技能组合\n\n创建后可以把多个技能组织成更大的能力单元")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setStyleSheet("font-size: 14px; color: #adb5bd; background: transparent;")
+        layout.addWidget(label)
+
+        self._empty_create_composition_btn = QPushButton("新建技能组合")
+        self._empty_create_composition_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._empty_create_composition_btn.clicked.connect(self._on_create_composition_clicked)
+        self._empty_create_composition_btn.setStyleSheet(
+            f"""
+            QPushButton {{
+                min-height: 38px;
+                padding: 0 18px;
+                font-size: 13px;
+                font-weight: 600;
+                color: #ffffff;
+                background-color: {PRIMARY_COLOR};
+                border: none;
+                border-radius: 19px;
+            }}
+            QPushButton:hover {{
+                background-color: #4d5bb0;
+            }}
+            """
+        )
+        layout.addWidget(self._empty_create_composition_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        return state
+
     # =========================================================================
     # 数据加载
     # =========================================================================
@@ -287,6 +379,7 @@ class ToolsManagementUI(QWidget):
     def refresh(self):
         """公开刷新方法（供外部调用，如页面切换时）"""
         self._load_tools()
+        self._load_compositions()
         self._load_failures()
 
     def refresh_failures(self):
@@ -306,6 +399,14 @@ class ToolsManagementUI(QWidget):
             self.logger.error(f"从数据库加载技能失败: {e}", exc_info=True)
             self.update_pending_tools([])
             self.update_published_tools([])
+
+    def _load_compositions(self):
+        try:
+            compositions = self._composition_service.list_compositions()
+            self.update_skill_compositions(compositions)
+        except Exception as e:
+            self.logger.error(f"加载技能组合失败: {e}", exc_info=True)
+            self.update_skill_compositions([])
 
     def _load_failures(self):
         try:
@@ -361,6 +462,29 @@ class ToolsManagementUI(QWidget):
         for col in range(3):
             self.published_tools_grid.setColumnStretch(col, 1)
 
+    def update_skill_compositions(self, compositions: List[SkillComposition]):
+        self.skill_compositions = compositions
+        clear_layout(self.skill_compositions_grid)
+        self.skill_composition_cards.clear()
+
+        self._compositions_tab_btn.setText(f"技能组合 ({len(compositions)})")
+        self.compositions_empty_state.setVisible(
+            len(compositions) == 0 and self._current_tab == "compositions"
+        )
+
+        for i, composition in enumerate(compositions):
+            card = SkillCompositionCard(composition)
+            card.test_requested.connect(self._on_composition_test_requested)
+            card.publish_requested.connect(self._on_composition_publish_requested)
+            card.offline_requested.connect(self._on_composition_offline_requested)
+            card.delete_requested.connect(self._on_composition_delete_requested)
+            card.edit_requested.connect(self._on_composition_edit_requested)
+            self.skill_compositions_grid.addWidget(card, i // 3, i % 3)
+            self.skill_composition_cards.append(card)
+
+        for col in range(3):
+            self.skill_compositions_grid.setColumnStretch(col, 1)
+
     def update_failure_records(self, failure_records: List[TeachingFailureRecord]):
         self.failure_records = failure_records
         clear_layout(self.failures_grid)
@@ -404,11 +528,15 @@ class ToolsManagementUI(QWidget):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.tool_delete_request.emit(pending_tool_id)
-            self.pending_tools = [
-                t for t in self.pending_tools if t.pending_tool_id != pending_tool_id
-            ]
-            self._refresh_pending_cards()
+            try:
+                SkillsService().delete_tool(pending_tool_id)
+                self.pending_tools = [
+                    t for t in self.pending_tools if t.pending_tool_id != pending_tool_id
+                ]
+                self._refresh_pending_cards()
+                self._load_compositions()
+            except Exception as e:
+                QMessageBox.warning(self, "删除失败", str(e))
 
     def _on_edit_requested(self, pending_tool_id: str):
         self.logger.info(f"编辑待考核技能: {pending_tool_id}")
@@ -423,10 +551,20 @@ class ToolsManagementUI(QWidget):
                 self, "编辑技能描述", "技能描述:", text=tool.tool_description or ""
             )
             if ok:
-                tool.tool_name = name
-                tool.tool_description = desc
-                self.tool_update_request.emit(pending_tool_id, name, desc)
-                self._refresh_pending_cards()
+                try:
+                    referenced = SkillsService().update_tool_metadata(pending_tool_id, name, desc)
+                    tool.tool_name = name
+                    tool.tool_description = desc
+                    self._refresh_pending_cards()
+                    self._load_compositions()
+                    if referenced:
+                        QMessageBox.information(
+                            self,
+                            "已更新技能",
+                            "该技能已同步改名，引用它的技能组合：\n" + "\n".join(referenced),
+                        )
+                except Exception as e:
+                    QMessageBox.warning(self, "更新失败", str(e))
 
     def _refresh_pending_cards(self):
         self.update_pending_tools(self.pending_tools)
@@ -473,8 +611,13 @@ class ToolsManagementUI(QWidget):
             QMessageBox.StandardButton.No,
         )
         if reply == QMessageBox.StandardButton.Yes:
-            self.published_tools = [t for t in self.published_tools if t.tool_id != tool_id]
-            self._refresh_published_cards()
+            try:
+                SkillsService().delete_tool(tool_id)
+                self.published_tools = [t for t in self.published_tools if t.tool_id != tool_id]
+                self._refresh_published_cards()
+                self._load_compositions()
+            except Exception as e:
+                QMessageBox.warning(self, "删除失败", str(e))
 
     def _on_published_edit_requested(self, tool_id: str):
         self.logger.info(f"编辑已掌握技能: {tool_id}")
@@ -487,9 +630,119 @@ class ToolsManagementUI(QWidget):
                 self, "编辑技能描述", "技能描述:", text=tool.description or ""
             )
             if ok:
-                tool.tool_name = name
-                tool.description = desc
-                self._refresh_published_cards()
+                try:
+                    referenced = SkillsService().update_tool_metadata(tool_id, name, desc)
+                    tool.tool_name = name
+                    tool.description = desc
+                    self._refresh_published_cards()
+                    self._load_compositions()
+                    if referenced:
+                        QMessageBox.information(
+                            self,
+                            "已更新技能",
+                            "该技能已同步改名，引用它的技能组合：\n" + "\n".join(referenced),
+                        )
+                except Exception as e:
+                    QMessageBox.warning(self, "更新失败", str(e))
 
     def _refresh_published_cards(self):
         self.update_published_tools(self.published_tools)
+
+    # =========================================================================
+    # 事件处理 — 技能组合
+    # =========================================================================
+
+    def _on_create_composition_clicked(self):
+        from src.ui.skill_composition_dialogs import SkillCompositionEditDialog
+
+        dialog = SkillCompositionEditDialog(parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        payload = dialog.get_payload()
+        try:
+            self._composition_service.create_composition(**payload)
+            self._load_compositions()
+        except SkillCompositionError as e:
+            QMessageBox.warning(self, "创建失败", str(e))
+        except Exception as e:
+            self.logger.error(f"创建技能组合失败: {e}", exc_info=True)
+            QMessageBox.warning(self, "创建失败", str(e))
+
+    def _on_composition_edit_requested(self, composition_id: str):
+        from src.ui.skill_composition_dialogs import SkillCompositionEditDialog
+
+        composition = next(
+            (item for item in self.skill_compositions if item.composition_id == composition_id),
+            None,
+        )
+        if composition is None:
+            QMessageBox.warning(self, "技能组合未找到", "请刷新后重试")
+            return
+
+        dialog = SkillCompositionEditDialog(composition=composition, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        payload = dialog.get_payload()
+        try:
+            self._composition_service.update_composition(composition_id=composition_id, **payload)
+            self._load_compositions()
+        except SkillCompositionError as e:
+            QMessageBox.warning(self, "保存失败", str(e))
+        except Exception as e:
+            self.logger.error(f"更新技能组合失败: {e}", exc_info=True)
+            QMessageBox.warning(self, "保存失败", str(e))
+
+    def _on_composition_test_requested(self, composition_id: str):
+        self.composition_trial_request.emit(composition_id)
+
+    def _on_composition_publish_requested(self, composition_id: str):
+        try:
+            self._composition_service.publish_composition(composition_id)
+            self._load_compositions()
+        except SkillCompositionError as e:
+            QMessageBox.warning(self, "发布失败", str(e))
+        except Exception as e:
+            self.logger.error(f"发布技能组合失败: {e}", exc_info=True)
+            QMessageBox.warning(self, "发布失败", str(e))
+
+    def _on_composition_offline_requested(self, composition_id: str):
+        reply = QMessageBox.question(
+            self,
+            "确认下线",
+            "下线后组合将不再对 Assistant 可用，但仍可试一下和重新发布。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self._composition_service.offline_composition(composition_id)
+            self._load_compositions()
+        except SkillCompositionError as e:
+            QMessageBox.warning(self, "下线失败", str(e))
+        except Exception as e:
+            self.logger.error(f"下线技能组合失败: {e}", exc_info=True)
+            QMessageBox.warning(self, "下线失败", str(e))
+
+    def _on_composition_delete_requested(self, composition_id: str):
+        reply = QMessageBox.question(
+            self,
+            "确认删除",
+            "确定要删除这个技能组合吗？\n\n此操作不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            self._composition_service.delete_composition(composition_id)
+            self._load_compositions()
+        except SkillCompositionError as e:
+            QMessageBox.warning(self, "删除失败", str(e))
+        except Exception as e:
+            self.logger.error(f"删除技能组合失败: {e}", exc_info=True)
+            QMessageBox.warning(self, "删除失败", str(e))

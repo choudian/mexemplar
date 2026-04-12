@@ -73,3 +73,38 @@ class SkillsService:
             logger.error(f"工具 {tool_id} 没有 workflow_id")
             return None
         return tool.workflow_id
+
+    def delete_tool(self, tool_id: str) -> None:
+        """删除技能。被任意技能组合引用时不允许删除。"""
+        from src.business.services.skill_composition_service import SkillCompositionService
+
+        tool = ToolRepository().get_by_id(tool_id)
+        if tool is None:
+            raise ValueError("技能不存在")
+
+        referenced = SkillCompositionService().get_referencing_compositions(tool_id)
+        if referenced:
+            names = "、".join(comp.composition_name for comp in referenced[:5])
+            raise ValueError(f"该技能正在被技能组合引用，无法删除：{names}")
+
+        ToolRepository().delete(tool_id)
+
+    def update_tool_metadata(self, tool_id: str, name: str, description: str) -> list[str]:
+        """更新技能名称与描述，返回引用它的组合名称列表。"""
+        from src.business.services.skill_composition_service import SkillCompositionService
+
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError("技能名称不能为空")
+
+        with ToolRepository() as repo:
+            tool = repo.get_by_id(tool_id)
+            if tool is None:
+                raise ValueError("技能不存在")
+
+            tool.tool_name = clean_name
+            tool.description = (description or "").strip() or None
+            repo.update(tool)
+
+        referenced = SkillCompositionService().get_referencing_compositions(tool_id)
+        return [comp.composition_name for comp in referenced]

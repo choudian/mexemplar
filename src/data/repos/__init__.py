@@ -15,6 +15,7 @@ from .assistant_profile_repository import AssistantProfileRepository
 from .assistant_summary_repository import AssistantSummaryRepository
 from .tool_suggestion_repository import ToolSuggestionRepository
 from .teaching_failure_repository import TeachingFailureRepository
+from .skill_composition_repository import SkillCompositionRepository
 
 __all__ = [
     "BaseRepository",
@@ -27,4 +28,5 @@ __all__ = [
     "AssistantSummaryRepository",
     "ToolSuggestionRepository",
     "TeachingFailureRepository",
+    "SkillCompositionRepository",
 ]

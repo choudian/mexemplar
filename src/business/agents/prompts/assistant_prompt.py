@@ -109,8 +109,8 @@ def format_assistant_prompt(
         tools_section = (
             "### 内置工具\n\n"
             "内置工具可直接调用，无需额外操作。\n\n"
-            "### 用户工具\n\n"
-            "以下是你可以使用的用户自定义工具。使用前先调用 get_tool_detail 查看参数格式。\n\n"
+            "### 用户技能与技能组合\n\n"
+            "以下是你可以使用的用户自定义技能和技能组合。使用前先调用 get_tool_detail 查看说明与参数格式。\n\n"
             + "\n".join(tool_lines)
             + "\n\n如果不确定该用哪个，可以用 search_tools 搜索。"
         )

@@ -1,19 +1,21 @@
 """
 动态工具管理器
 
-管理用户工具的懒加载 FC 注入：
-- search_tools: 搜索匹配的用户工具
-- get_tool_detail: 查看工具参数详情，同时激活该工具的 FC schema
-- LRU 淘汰机制：最多同时激活 MAX_ACTIVATED 个用户工具
+管理用户技能与技能组合的懒加载 FC 注入：
+- search_tools: 搜索匹配的用户技能 / 技能组合
+- get_tool_detail: 查看详情，同时激活对应的 FC schema
+- 技能组合调用后，可动态激活其成员技能
+- LRU 淘汰机制：最多同时激活 MAX_ACTIVATED 个用户能力
 """
 
 import json
 import logging
 from collections import OrderedDict
-from typing import Callable, List, Optional, Set
+from typing import Callable, List, Optional, Set, Tuple
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, error_json
+from src.business.services.skill_composition_service import SkillCompositionService
 from src.data.repositories import ToolRepository
 from src.execution.tool_executor import run_tool_code
 
@@ -24,17 +26,14 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 # 重复模式检测参数
-SUGGESTION_THRESHOLD = 3   # 执行 N 次后建议工具化
-SUGGESTION_COOLDOWN = 5    # 拒绝后冷却 N 次才再次建议
+SUGGESTION_THRESHOLD = 3
+SUGGESTION_COOLDOWN = 5
 
 
 def _check_tool_suggestion(tool_name: str) -> Optional[str]:
     """
     检测重复模式：工具执行成功时更新计数，达到阈值时返回建议文本。
     纯代码逻辑，不走 LLM。
-
-    Returns:
-        建议文本（如有），或 None
     """
     try:
         from src.data.repositories import ToolSuggestionRepository, ToolRepository
@@ -48,19 +47,15 @@ def _check_tool_suggestion(tool_name: str) -> Optional[str]:
 
         repo.increment(record)
 
-        # 已有对应已发布工具则不建议
         tool = ToolRepository().get_by_name(tool_name)
         if tool and tool.status == "published":
             return None
 
-        # 冷却期检查：如果最近已被拒绝，等待 SUGGESTION_COOLDOWN 次执行后再建议
         if record.accepted is False:
             if record.times_seen < SUGGESTION_COOLDOWN:
                 return None
-            # 冷却期结束，重置拒绝状态，允许再次建议
             repo.reset_accepted(record)
 
-        # 是否达到阈值
         if record.times_seen < SUGGESTION_THRESHOLD:
             return None
 
@@ -75,10 +70,9 @@ def _check_tool_suggestion(tool_name: str) -> Optional[str]:
         return None
 
 
-# FC schema 定义
 SEARCH_TOOLS_SCHEMA = make_tool_schema(
     name="search_tools",
-    description="按关键词搜索可用的用户工具。当不确定该用哪个工具时使用。",
+    description="按关键词搜索可用的用户技能或技能组合。当不确定该用哪个时使用。",
     properties={
         "query": {"type": "string", "description": "搜索关键词或意图描述"},
     },
@@ -87,91 +81,196 @@ SEARCH_TOOLS_SCHEMA = make_tool_schema(
 
 GET_TOOL_DETAIL_SCHEMA = make_tool_schema(
     name="get_tool_detail",
-    description="获取指定用户工具的完整参数说明。调用不熟悉的工具前，先用这个查看参数格式。",
+    description="获取指定用户技能或技能组合的完整说明，并激活其可调用定义。",
     properties={
-        "tool_name": {"type": "string", "description": "工具名称"},
+        "tool_name": {
+            "type": "string",
+            "description": "技能名称，或使用“技能:名称”/“技能组合:名称”来消除歧义",
+        },
     },
     required=["tool_name"],
 )
 
 
 class DynamicToolManager:
-    """管理用户工具的懒加载 FC 注入"""
+    """管理用户技能与技能组合的懒加载 FC 注入"""
 
     MAX_ACTIVATED = 10
 
-    def __init__(self, allowed_tool_ids: Optional[Set[str]] = None):
+    def __init__(
+        self,
+        allowed_tool_ids: Optional[Set[str]] = None,
+        allowed_composition_ids: Optional[Set[str]] = None,
+        revalidate_activated: bool = True,
+    ):
         """
         Args:
-            allowed_tool_ids: 允许使用的工具 ID 集合。None 表示全部已发布工具。
+            allowed_tool_ids: 允许使用的技能 ID 集合。None 表示全部已发布技能。
+            allowed_composition_ids: 允许使用的技能组合 ID 集合。None 表示全部已发布组合。
         """
         self._activated_tools: OrderedDict[str, ToolDefinition] = OrderedDict()
-        self._short_id_to_tool_id: dict[str, str] = {}  # utool_xxx → tool_id
-        self._tool_id_to_short_id: dict[str, str] = {}  # tool_id → utool_xxx
+        self._short_id_to_entity_id: dict[str, str] = {}
+        self._entity_id_to_short_id: dict[str, str] = {}
         self._allowed_tool_ids = allowed_tool_ids
+        self._allowed_composition_ids = allowed_composition_ids
+        self._revalidate_activated = revalidate_activated
+        self._tool_repo = ToolRepository()
+        self._composition_service: Optional[SkillCompositionService] = None
 
-    def _is_allowed(self, tool) -> bool:
-        """检查工具是否在允许范围内"""
+    @property
+    def composition_service(self) -> SkillCompositionService:
+        if self._composition_service is None:
+            self._composition_service = SkillCompositionService()
+        return self._composition_service
+
+    def _is_allowed_tool(self, tool) -> bool:
         if self._allowed_tool_ids is None:
             return tool.status == "published"
         return tool.tool_id in self._allowed_tool_ids and tool.status == "published"
 
-    def _make_short_id(self, tool_id: str) -> str:
-        """生成规范化短名称，碰撞时取更长前缀"""
-        short = f"utool_{tool_id[:8]}"
-        if short in self._short_id_to_tool_id and self._short_id_to_tool_id[short] != tool_id:
-            short = f"utool_{tool_id[:12]}"
+    def _is_allowed_composition(self, composition) -> bool:
+        if (
+            composition.status != "published"
+            or not composition.assistant_enabled
+            or composition.needs_review
+        ):
+            return False
+        if (
+            self._allowed_composition_ids is not None
+            and composition.composition_id not in self._allowed_composition_ids
+        ):
+            return False
+        if self._allowed_tool_ids is None:
+            return True
+        member_tool_ids = {member.tool_id for member in composition.members}
+        return member_tool_ids.issubset(self._allowed_tool_ids)
+
+    def _make_short_id(self, entity_id: str, prefix: str) -> str:
+        short = f"{prefix}_{entity_id[:8]}"
+        if (
+            short in self._short_id_to_entity_id
+            and self._short_id_to_entity_id[short] != entity_id
+        ):
+            short = f"{prefix}_{entity_id[:12]}"
         return short
 
     def search_tools(self, query: str) -> str:
-        """按关键词搜索已发布的用户工具"""
-        repo = ToolRepository()
-        tools = repo.search_published(query)
-        if self._allowed_tool_ids is not None:
-            tools = [t for t in tools if t.tool_id in self._allowed_tool_ids]
-        if not tools:
-            return "没有找到匹配的工具。"
-        lines = [f"- {t.tool_name}：{t.description or '（无描述）'}" for t in tools[:10]]
-        return "找到以下工具：\n" + "\n".join(lines)
+        """按关键词搜索已发布的用户技能与技能组合"""
+        query = (query or "").strip()
+        if not query:
+            return "请输入要搜索的关键词。"
+
+        tools = [tool for tool in self._tool_repo.search_published(query) if self._is_allowed_tool(tool)]
+        compositions = [
+            composition
+            for composition in self.composition_service.search_published_compositions(query)
+            if self._is_allowed_composition(composition)
+        ]
+
+        if not tools and not compositions:
+            return "没有找到匹配的技能或技能组合。"
+
+        lines = []
+        for composition in compositions[:5]:
+            mode_text = "顺序型" if composition.mode == "ordered" else "范围型"
+            desc = composition.description or composition.applicability
+            lines.append(f"- [技能组合/{mode_text}] {composition.composition_name}：{desc}")
+        for tool in tools[:5]:
+            lines.append(f"- [技能] {tool.tool_name}：{tool.description or '（无描述）'}")
+        return "找到以下能力：\n" + "\n".join(lines[:10])
 
     def get_tool_detail(self, tool_name: str) -> str:
-        """查看工具详情，同时激活该工具的 FC schema"""
-        repo = ToolRepository()
-        tool = repo.get_by_name(tool_name)
-        if not tool or not self._is_allowed(tool):
-            return f"工具 '{tool_name}' 不存在或未发布"
+        """查看技能或技能组合详情，同时激活对应的 FC schema"""
+        kind, normalized_name = self._parse_requested_name(tool_name)
+        tool = self._tool_repo.get_by_name(normalized_name)
+        composition = self.composition_service.get_composition_by_name(
+            normalized_name,
+            require_published=True,
+        )
 
-        # 构建 FC schema 并标记为已激活
+        if tool is not None and not self._is_allowed_tool(tool):
+            tool = None
+        if composition is not None and not self._is_allowed_composition(composition):
+            composition = None
+
+        if kind == "tool":
+            if tool is None:
+                return f"技能 '{normalized_name}' 不存在或当前不可用"
+            return self._activate_tool_and_format_detail(tool)
+
+        if kind == "composition":
+            if composition is None:
+                return f"技能组合 '{normalized_name}' 不存在或当前不可用"
+            return self._activate_composition_and_format_detail(composition)
+
+        if tool and composition:
+            return (
+                f"名称 '{normalized_name}' 同时匹配技能和技能组合。"
+                "请改用“技能:名称”或“技能组合:名称”重新调用 get_tool_detail。"
+            )
+        if composition:
+            return self._activate_composition_and_format_detail(composition)
+        if tool:
+            return self._activate_tool_and_format_detail(tool)
+        return f"'{normalized_name}' 不存在或当前不可用"
+
+    def get_activated_tools(self) -> List[ToolDefinition]:
+        """获取已激活的用户能力列表，供 AgentLoop 在下一轮注入 FC schema"""
+        if self._revalidate_activated:
+            self._refresh_activated_definitions()
+        return list(self._activated_tools.values())
+
+    def _activate_tool_and_format_detail(self, tool) -> str:
         tool_def = self._build_tool_definition(tool)
-        short_id = self._make_short_id(tool.tool_id)
+        self._register_activated_definition(
+            short_id=self._make_short_id(tool.tool_id, "utool"),
+            entity_id=tool.tool_id,
+            tool_def=tool_def,
+        )
+        return self._format_tool_detail(tool)
+
+    def _activate_composition_and_format_detail(self, composition) -> str:
+        self.activate_composition_snapshot(composition)
+        return self._format_composition_detail(composition)
+
+    def activate_composition_snapshot(self, composition, include_members: bool = False) -> None:
+        """直接激活传入的组合快照，可选同时激活成员技能。"""
+        tool_def = self._build_composition_definition(composition)
+        self._register_activated_definition(
+            short_id=self._make_short_id(composition.composition_id, "comp"),
+            entity_id=composition.composition_id,
+            tool_def=tool_def,
+        )
+        if include_members:
+            self._activate_composition_members(composition)
+
+    def _register_activated_definition(
+        self,
+        short_id: str,
+        entity_id: str,
+        tool_def: ToolDefinition,
+        max_activated: Optional[int] = None,
+    ) -> None:
         if short_id in self._activated_tools:
             self._activated_tools.move_to_end(short_id)
         self._activated_tools[short_id] = tool_def
-        self._short_id_to_tool_id[short_id] = tool.tool_id
-        self._tool_id_to_short_id[tool.tool_id] = short_id
+        self._short_id_to_entity_id[short_id] = entity_id
+        self._entity_id_to_short_id[entity_id] = short_id
 
-        # 超出上限时淘汰最久未使用的工具
-        while len(self._activated_tools) > self.MAX_ACTIVATED:
+        activation_limit = max_activated or self.MAX_ACTIVATED
+        while len(self._activated_tools) > activation_limit:
             oldest, _ = self._activated_tools.popitem(last=False)
-            old_tool_id = self._short_id_to_tool_id.pop(oldest, None)
-            if old_tool_id:
-                self._tool_id_to_short_id.pop(old_tool_id, None)
-
-        return self._format_detail(tool)
-
-    def get_activated_tools(self) -> List[ToolDefinition]:
-        """获取已激活的用户工具列表，供 AgentLoop 在下一轮注入 FC schema"""
-        return list(self._activated_tools.values())
+            old_entity_id = self._short_id_to_entity_id.pop(oldest, None)
+            if old_entity_id:
+                self._entity_id_to_short_id.pop(old_entity_id, None)
 
     def _build_tool_definition(self, tool) -> ToolDefinition:
-        """从 Tool 模型构建 ToolDefinition"""
-        short_id = self._make_short_id(tool.tool_id)
+        short_id = self._make_short_id(tool.tool_id, "utool")
         schema = self._build_tool_schema(tool, short_id)
-        handler = self._create_tool_handler(tool.tool_id)
+        handler = self._create_tool_handler(tool)
         return ToolDefinition(name=short_id, schema=schema, handler=handler)
 
     def _build_tool_schema(self, tool, short_id: str) -> dict:
-        """从 Tool 模型构建 FC schema"""
         properties = {}
         required = []
         for param in (tool.parameters or []):
@@ -189,14 +288,11 @@ class DynamicToolManager:
             required=required,
         )
 
-    def _create_tool_handler(self, tool_id: str) -> Callable:
-        """为指定工具创建执行 handler（闭包绑定 tool_id，创建时缓存工具信息）"""
-        repo = ToolRepository()
-        tool = repo.get_by_id(tool_id)
-        # 创建时缓存 execution_code 和 dependencies，避免每次执行都查 DB
+    def _create_tool_handler(self, tool) -> Callable:
         if not tool or not tool.execution_code:
             def _unavailable_handler(**kwargs) -> str:
-                return error_json("工具不可用")
+                return error_json("技能不可用")
+
             return _unavailable_handler
 
         cached_code = tool.execution_code
@@ -205,20 +301,155 @@ class DynamicToolManager:
 
         def handler(**kwargs) -> str:
             result = run_tool_code(cached_code, kwargs, cached_deps)
-
-            # 执行成功时检测重复模式，可能追加工具化建议
             if result.get("success"):
                 suggestion = _check_tool_suggestion(cached_name)
                 if suggestion:
                     result["_suggestion"] = suggestion
-
             return json.dumps(result, ensure_ascii=False, default=str)
 
         return handler
 
-    def _format_detail(self, tool) -> str:
-        """格式化工具详情供 LLM 阅读"""
-        lines = [f"工具名称：{tool.tool_name}"]
+    def _build_composition_definition(self, composition) -> ToolDefinition:
+        short_id = self._make_short_id(composition.composition_id, "comp")
+        schema = make_tool_schema(
+            name=short_id,
+            description=(
+                composition.description
+                or composition.applicability
+                or f"技能组合：{composition.composition_name}"
+            ),
+            properties={
+                "task": {"type": "string", "description": "要完成的任务描述"},
+                "context": {"type": "string", "description": "补充上下文（可选）"},
+            },
+            required=["task"],
+        )
+        handler = self._create_composition_handler(composition)
+        return ToolDefinition(name=short_id, schema=schema, handler=handler)
+
+    def _create_composition_handler(self, composition) -> Callable:
+        frozen_composition = composition
+
+        def handler(task: str, context: str = "") -> str:
+            self._activate_composition_members(frozen_composition)
+
+            return self._format_composition_call_result(
+                frozen_composition,
+                task=task,
+                context=context or "",
+            )
+
+        return handler
+
+    def _activate_composition_members(self, composition) -> None:
+        ordered_members = self._get_ordered_members(composition)
+        activatable_members = [
+            member
+            for member in ordered_members
+            if member.tool and self._is_allowed_tool(member.tool)
+        ]
+        member_activation_limit = max(
+            self.MAX_ACTIVATED,
+            len(activatable_members) + 1,
+        )
+        for member in activatable_members:
+            tool_def = self._build_tool_definition(member.tool)
+            self._register_activated_definition(
+                short_id=self._make_short_id(member.tool.tool_id, "utool"),
+                entity_id=member.tool.tool_id,
+                tool_def=tool_def,
+                max_activated=member_activation_limit,
+            )
+
+    @staticmethod
+    def _parse_requested_name(name: str) -> Tuple[Optional[str], str]:
+        raw = (name or "").strip()
+        raw = raw.lstrip("-* ").strip().strip("*").strip()
+
+        if raw.startswith("[") and "]" in raw:
+            closing = raw.index("]")
+            label = raw[1:closing].strip()
+            normalized_name = DynamicToolManager._strip_display_description(
+                raw[closing + 1 :].strip()
+            )
+            if label.startswith("技能组合"):
+                return "composition", normalized_name
+            if label == "技能":
+                return "tool", normalized_name
+
+        for prefix in ("技能组合:", "技能组合："):
+            if raw.startswith(prefix):
+                return "composition", raw.split(prefix, 1)[1].strip().strip("*")
+        for prefix in ("组合:", "组合："):
+            if raw.startswith(prefix):
+                return "composition", raw.split(prefix, 1)[1].strip().strip("*")
+        for prefix in ("技能:", "技能："):
+            if raw.startswith(prefix):
+                return "tool", raw.split(prefix, 1)[1].strip().strip("*")
+        return None, raw
+
+    @staticmethod
+    def _strip_display_description(raw_name: str) -> str:
+        candidate = (raw_name or "").replace("**", "").strip()
+        for separator in ("：", ":"):
+            if separator in candidate:
+                candidate = candidate.split(separator, 1)[0].strip()
+                break
+        return candidate.strip().strip("*").strip()
+
+    def _refresh_activated_definitions(self) -> None:
+        stale_short_ids = []
+        for short_id in list(self._activated_tools.keys()):
+            entity_id = self._short_id_to_entity_id.get(short_id)
+            if not entity_id:
+                stale_short_ids.append(short_id)
+                continue
+
+            if short_id.startswith("comp_"):
+                composition = self.composition_service.get_execution_snapshot(
+                    entity_id,
+                    require_published=True,
+                    require_assistant_enabled=True,
+                )
+                if composition is None or not self._is_allowed_composition(composition):
+                    stale_short_ids.append(short_id)
+                    continue
+                self._activated_tools[short_id] = self._build_composition_definition(
+                    composition
+                )
+                continue
+
+            if short_id.startswith("utool_"):
+                tool = self._tool_repo.get_by_id(entity_id)
+                if tool is None or not self._is_allowed_tool(tool):
+                    stale_short_ids.append(short_id)
+                    continue
+                self._activated_tools[short_id] = self._build_tool_definition(tool)
+
+        for short_id in stale_short_ids:
+            self._remove_activated_definition(short_id)
+
+    def _remove_activated_definition(self, short_id: str) -> None:
+        self._activated_tools.pop(short_id, None)
+        entity_id = self._short_id_to_entity_id.pop(short_id, None)
+        if entity_id:
+            self._entity_id_to_short_id.pop(entity_id, None)
+
+    @staticmethod
+    def _get_ordered_members(composition):
+        if composition.mode == "ordered":
+            return sorted(
+                composition.members,
+                key=lambda member: (
+                    member.execution_order if member.execution_order is not None else 10**9,
+                    member.selected_order,
+                ),
+            )
+        return sorted(composition.members, key=lambda member: member.selected_order)
+
+    @staticmethod
+    def _format_tool_detail(tool) -> str:
+        lines = [f"技能名称：{tool.tool_name}"]
         if tool.description:
             lines.append(f"描述：{tool.description}")
         lines.append("参数列表：")
@@ -230,7 +461,88 @@ class DynamicToolManager:
             )
         if not tool.parameters:
             lines.append("  （无参数）")
-        lines.append("\n工具已激活，你现在可以直接调用它了。")
+        lines.append("\n技能已激活，你现在可以直接调用它了。")
+        return "\n".join(lines)
+
+    def _format_composition_detail(self, composition) -> str:
+        mode_text = "顺序型" if composition.mode == "ordered" else "范围型"
+        lines = [
+            f"技能组合名称：{composition.composition_name}",
+            f"类型：{mode_text}",
+        ]
+        if composition.description:
+            lines.append(f"描述：{composition.description}")
+        lines.append(f"适用场景：{composition.applicability}")
+        lines.append("成员技能：")
+        for member in self._get_ordered_members(composition):
+            tool_name = member.tool.tool_name if member.tool else member.tool_id
+            if composition.mode == "ordered":
+                order_text = member.execution_order or member.selected_order
+                lines.append(f"  - 第 {order_text} 步：{tool_name}")
+            else:
+                lines.append(f"  - {tool_name}")
+
+        if composition.mode == "ordered":
+            lines.extend(
+                [
+                    "",
+                    "使用方式：先调用这个技能组合，再严格按推荐顺序依次调用激活后的成员技能。",
+                    "如果某一步没有可消费输出，仍可尝试继续；无论成功与否，都要告知用户该组合设计可能不合适。",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "",
+                    "使用方式：先调用这个技能组合，再从激活后的成员技能中自主选择一个或多个去完成任务。",
+                    "如成员技能不足以完成任务，可以把内置工具作为最低优先级兜底。",
+                ]
+            )
+
+        lines.append("\n技能组合已激活，你现在可以直接调用它了。")
+        return "\n".join(lines)
+
+    def _format_composition_call_result(self, composition, task: str, context: str) -> str:
+        lines = [
+            f"技能组合“{composition.composition_name}”已启动。",
+            f"任务：{task}",
+        ]
+        if context.strip():
+            lines.append(f"上下文：{context.strip()}")
+
+        ordered_members = self._get_ordered_members(composition)
+        member_names = [
+            member.tool.tool_name if member.tool else member.tool_id for member in ordered_members
+        ]
+
+        if composition.mode == "ordered":
+            lines.extend(
+                [
+                    "执行规则：",
+                    "- 按下面的顺序依次调用成员技能，并把上一步结果整理成下一步参数。",
+                ]
+            )
+            for index, member_name in enumerate(member_names, start=1):
+                lines.append(f"  {index}. {member_name}")
+            lines.extend(
+                [
+                    "- 如果某一步没有可直接消费的输出，仍可基于已有上下文尝试继续完成任务。",
+                    "- 如果最终能完成任务，也要明确告诉用户这个技能组合设计存在衔接问题。",
+                    "- 如果无法继续，就明确说明是这个技能组合不合适，而不是静默失败。",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "执行规则：",
+                    "- 从已激活的成员技能中自主选择最合适的一个或多个来完成任务。",
+                    "- 这些成员技能只是优先范围，不是硬约束；如果不需要它们也可以不用。",
+                    "- 如果成员技能不足以完成任务，可以把内置工具作为最低优先级兜底。",
+                    f"- 当前可优先考虑的成员技能：{', '.join(member_names) if member_names else '无'}",
+                ]
+            )
+
+        lines.append("继续执行，直到给用户明确结果。")
         return "\n".join(lines)
 
 

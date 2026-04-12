@@ -36,6 +36,12 @@ class ToolRepository(BaseRepository):
         """获取所有工具"""
         return self.session.query(Tool).order_by(Tool.created_at.desc()).all()
 
+    def get_by_ids(self, tool_ids: List[str]) -> List[Tool]:
+        """批量获取工具"""
+        if not tool_ids:
+            return []
+        return self.session.query(Tool).filter(Tool.tool_id.in_(tool_ids)).all()
+
     def update(self, tool: Tool) -> Tool:
         """更新工具"""
         try:
@@ -95,3 +101,18 @@ class ToolRepository(BaseRepository):
     def get_by_name(self, name: str) -> Optional[Tool]:
         """按工具名称精确查询"""
         return self.session.query(Tool).filter(Tool.tool_name == name).first()
+
+    def delete(self, tool_id: str) -> bool:
+        """删除工具"""
+        tool = self.get_by_id(tool_id)
+        if tool is None:
+            return False
+        try:
+            self.session.delete(tool)
+            self.session.commit()
+            logger.info(f"工具已删除: {tool.tool_name} ({tool.tool_id})")
+            return True
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"删除工具失败: {e}")
+            raise
