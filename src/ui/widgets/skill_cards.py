@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 
 from src.business.agents.config import AgentType
 from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
-from src.data.models import SkillComposition, Tool
+from src.data.models import MODE_DISPLAY_TEXT, SkillComposition, Tool
 from src.data.models_sqlite import TeachingFailureRecord
 from src.ui.style_constants import HERO_BG_COLOR, PRIMARY_COLOR, SUBTITLE_COLOR, TITLE_COLOR
 
@@ -397,7 +397,7 @@ class SkillCompositionCard(_SkillCardBase):
         )
         top_left_layout.addWidget(status_lbl)
 
-        mode_text = "顺序型" if self.composition.mode == "ordered" else "范围型"
+        mode_text = MODE_DISPLAY_TEXT.get(self.composition.mode, self.composition.mode)
         mode_lbl = QLabel(mode_text)
         mode_lbl.setStyleSheet(_STATUS_PILL_STYLE.format(fg=PRIMARY_COLOR, bg="#f0f1ff"))
         top_left_layout.addWidget(mode_lbl)

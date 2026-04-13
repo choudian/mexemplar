@@ -7,7 +7,7 @@
 字段应与 ORM 版本保持同步。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import uuid
@@ -74,3 +74,39 @@ class SkillComposition:
     members: List[SkillCompositionMember] = field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+
+
+# =============================================================================
+# 共享工具函数
+# =============================================================================
+
+MODE_DISPLAY_TEXT = {"ordered": "顺序型", "range": "范围型"}
+"""组合模式到中文显示名的映射"""
+
+
+def sort_composition_members(
+    members: List[SkillCompositionMember],
+    mode: str,
+) -> List[SkillCompositionMember]:
+    """按 mode 排序组合成员。ordered 模式按 execution_order 优先，其余按 selected_order。"""
+    if mode == "ordered":
+        return sorted(
+            members,
+            key=lambda m: (
+                m.execution_order if m.execution_order is not None else 10**9,
+                m.selected_order,
+            ),
+        )
+    return sorted(members, key=lambda m: m.selected_order)
+
+
+def serialize_tool(tool: Optional[Tool]) -> Optional[dict]:
+    """将 Tool dataclass 序列化为 JSON 安全的 dict（datetime 转 ISO 字符串）"""
+    if tool is None:
+        return None
+    d = asdict(tool)
+    for key in ("created_at", "updated_at"):
+        val = d.get(key)
+        if isinstance(val, datetime):
+            d[key] = val.isoformat()
+    return d

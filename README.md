@@ -135,6 +135,16 @@ uv run python -m src.main --gui
 
 ---
 
+## 功能清单
+
+详见 [FEATURES.md](docs/FEATURES.md)。
+
+## 架构设计
+
+详见 [ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
+---
+
 ## 参与贡献
 
 提 Issue、发 PR，或者就是来聊聊这个"师徒"思路，都行。详见 [CONTRIBUTING.md](CONTRIBUTING.md)。

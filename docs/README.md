@@ -8,7 +8,7 @@
 
 | 文件 | 内容 | 更新触发条件 |
 |------|------|------------|
-| `architecture.md` | 整体架构、Agent 分工、数据流、设计原则 | 架构变更时必须同步更新 |
+| `ARCHITECTURE.md` | 整体架构、Agent 分工、数据流、设计原则 | 架构变更时必须同步更新 |
 | `PROJECT_CONSTRAINTS.md` | 开发约束、规范、禁止模式 | 引入新约束或发现新反模式时更新 |
 | `../CLAUDE.md` | AI 开发指南（核心约束摘要） | 与 PROJECT_CONSTRAINTS.md 同步 |
 
@@ -49,5 +49,5 @@
 ## 架构重大变更时的操作流程
 
 1. 先在 `design/` 下写设计文档，说明原架构的问题和新方案
-2. 再更新 `architecture.md` 到新状态
+2. 再更新 `ARCHITECTURE.md` 到新状态
 3. 同步更新 `PROJECT_CONSTRAINTS.md` 中受影响的约束

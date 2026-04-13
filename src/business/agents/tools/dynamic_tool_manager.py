@@ -16,6 +16,7 @@ from typing import Callable, List, Optional, Set, Tuple
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, error_json
 from src.business.services.skill_composition_service import SkillCompositionService
+from src.data.models import MODE_DISPLAY_TEXT, sort_composition_members
 from src.data.repositories import ToolRepository
 from src.execution.tool_executor import run_tool_code
 
@@ -29,6 +30,19 @@ logger = logging.getLogger(__name__)
 SUGGESTION_THRESHOLD = 3
 SUGGESTION_COOLDOWN = 5
 
+# Module-level cached repos for _check_tool_suggestion (avoids 2 new instances per tool call)
+_suggestion_repo = None
+_suggestion_tool_repo = None
+
+
+def _get_suggestion_repos():
+    global _suggestion_repo, _suggestion_tool_repo
+    if _suggestion_repo is None:
+        from src.data.repositories import ToolSuggestionRepository, ToolRepository
+        _suggestion_repo = ToolSuggestionRepository()
+        _suggestion_tool_repo = ToolRepository()
+    return _suggestion_repo, _suggestion_tool_repo
+
 
 def _check_tool_suggestion(tool_name: str) -> Optional[str]:
     """
@@ -36,9 +50,8 @@ def _check_tool_suggestion(tool_name: str) -> Optional[str]:
     纯代码逻辑，不走 LLM。
     """
     try:
-        from src.data.repositories import ToolSuggestionRepository, ToolRepository
+        repo, tool_repo = _get_suggestion_repos()
 
-        repo = ToolSuggestionRepository()
         record = repo.get_by_pattern(tool_name)
 
         if record is None:
@@ -47,7 +60,7 @@ def _check_tool_suggestion(tool_name: str) -> Optional[str]:
 
         repo.increment(record)
 
-        tool = ToolRepository().get_by_name(tool_name)
+        tool = tool_repo.get_by_name(tool_name)
         if tool and tool.status == "published":
             return None
 
@@ -152,6 +165,11 @@ class DynamicToolManager:
             and self._short_id_to_entity_id[short] != entity_id
         ):
             short = f"{prefix}_{entity_id[:12]}"
+        if (
+            short in self._short_id_to_entity_id
+            and self._short_id_to_entity_id[short] != entity_id
+        ):
+            short = f"{prefix}_{entity_id}"
         return short
 
     def search_tools(self, query: str) -> str:
@@ -172,7 +190,7 @@ class DynamicToolManager:
 
         lines = []
         for composition in compositions[:5]:
-            mode_text = "顺序型" if composition.mode == "ordered" else "范围型"
+            mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
             desc = composition.description or composition.applicability
             lines.append(f"- [技能组合/{mode_text}] {composition.composition_name}：{desc}")
         for tool in tools[:5]:
@@ -328,13 +346,12 @@ class DynamicToolManager:
         return ToolDefinition(name=short_id, schema=schema, handler=handler)
 
     def _create_composition_handler(self, composition) -> Callable:
-        frozen_composition = composition
 
         def handler(task: str, context: str = "") -> str:
-            self._activate_composition_members(frozen_composition)
+            self._activate_composition_members(composition)
 
             return self._format_composition_call_result(
-                frozen_composition,
+                composition,
                 task=task,
                 context=context or "",
             )
@@ -347,7 +364,10 @@ class DynamicToolManager:
             member
             for member in ordered_members
             if member.tool and self._is_allowed_tool(member.tool)
+            and member.tool.tool_id not in self._entity_id_to_short_id
         ]
+        if not activatable_members:
+            return
         member_activation_limit = max(
             self.MAX_ACTIVATED,
             len(activatable_members) + 1,
@@ -437,15 +457,7 @@ class DynamicToolManager:
 
     @staticmethod
     def _get_ordered_members(composition):
-        if composition.mode == "ordered":
-            return sorted(
-                composition.members,
-                key=lambda member: (
-                    member.execution_order if member.execution_order is not None else 10**9,
-                    member.selected_order,
-                ),
-            )
-        return sorted(composition.members, key=lambda member: member.selected_order)
+        return sort_composition_members(composition.members, composition.mode)
 
     @staticmethod
     def _format_tool_detail(tool) -> str:
@@ -465,7 +477,7 @@ class DynamicToolManager:
         return "\n".join(lines)
 
     def _format_composition_detail(self, composition) -> str:
-        mode_text = "顺序型" if composition.mode == "ordered" else "范围型"
+        mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
         lines = [
             f"技能组合名称：{composition.composition_name}",
             f"类型：{mode_text}",

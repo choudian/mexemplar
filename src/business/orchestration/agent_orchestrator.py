@@ -32,6 +32,7 @@ from src.business.agents.tools.trial_tools import create_trial_tools
 from src.business.agents.tools.pm_output_tools import submit_requirements, report_code_issue
 from src.business.agents.tools.programmer_tools import syntax_check, submit_code
 from src.business.ai.llm_client import LangChainLLMClient
+from src.data.models import MODE_DISPLAY_TEXT
 from src.data.models_sqlite import Session, SessionStatus, WorkflowTransition
 from src.data.repositories import (
     MessageRepository,
@@ -1215,7 +1216,7 @@ class AgentOrchestrator:
         ]
         tool_list.extend(
             {
-                "name": f"[技能组合/{'顺序型' if c['mode'] == 'ordered' else '范围型'}] {c['composition_name']}",
+                "name": f"[技能组合/{MODE_DISPLAY_TEXT.get(c['mode'], c['mode'])}] {c['composition_name']}",
                 "description": c["description"] or c["applicability"],
             }
             for c in compositions

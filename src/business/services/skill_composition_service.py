@@ -13,8 +13,16 @@ from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import ASSISTANT_CONFIG, ResultType
 from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
 from src.business.ai.llm_client import LangChainLLMClient
-from src.data.models import SkillComposition, SkillCompositionMember, Tool
+from src.data.models import (
+    MODE_DISPLAY_TEXT,
+    SkillComposition,
+    SkillCompositionMember,
+    Tool,
+    serialize_tool,
+    sort_composition_members,
+)
 from src.data.models_sqlite import Session
+from src.utils.llm_helpers import extract_json_from_response
 from src.data.repositories import (
     MessageRepository,
     SessionRepository,
@@ -65,6 +73,41 @@ class SkillCompositionService:
     ):
         self._composition_repo = composition_repo or SkillCompositionRepository()
         self._tool_repo = tool_repo or ToolRepository()
+        self._session_repo = None
+        self._message_repo = None
+
+    def _create_llm(
+        self,
+        config=None,
+        temperature: float = 0.4,
+        max_tokens: int = 800,
+    ) -> LangChainLLMClient:
+        """创建 LLM 客户端，统一配置读取和 Key 校验"""
+        if config is None:
+            config = get_unified_config()
+        api_key = config.get_ai_api_key()
+        if not api_key:
+            raise SkillCompositionError("未配置 AI Key")
+        return LangChainLLMClient(
+            provider=config.get_ai_provider(),
+            model=config.get_ai_model(),
+            api_key=api_key,
+            base_url=config.get_ai_base_url(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    @property
+    def _session_repository(self):
+        if self._session_repo is None:
+            self._session_repo = SessionRepository()
+        return self._session_repo
+
+    @property
+    def _message_repository(self):
+        if self._message_repo is None:
+            self._message_repo = MessageRepository()
+        return self._message_repo
 
     # ------------------------------------------------------------------
     # 查询
@@ -86,8 +129,7 @@ class SkillCompositionService:
 
     def get_published_tool_choices(self) -> List[Tool]:
         """获取可供组合选择的已发布技能"""
-        tools = [tool for tool in self._tool_repo.get_all() if tool.status == "published"]
-        return [self._to_tool_model(tool) for tool in tools]
+        return [self._to_tool_model(tool) for tool in self._tool_repo.get_all_published()]
 
     def get_composition(self, composition_id: str) -> Optional[SkillComposition]:
         """按 ID 读取技能组合"""
@@ -246,10 +288,15 @@ class SkillCompositionService:
 
         normalized_members = self._normalize_members(mode, members)
         normalized_name = composition_name.strip()
+        if not normalized_name:
+            raise SkillCompositionError("名称不能为空")
+        normalized_applicability = applicability.strip()
+        if not normalized_applicability:
+            raise SkillCompositionError("适用场景不能为空")
         self._ensure_unique_name(normalized_name, composition_id=composition_id)
         composition.composition_name = normalized_name
         composition.description = (description or "").strip() or None
-        composition.applicability = applicability.strip()
+        composition.applicability = normalized_applicability
         composition.mode = mode
         composition.assistant_enabled = assistant_enabled
         composition.recommend_order = recommend_order
@@ -323,19 +370,7 @@ class SkillCompositionService:
         if len(tools) != len(tool_ids):
             raise SkillCompositionError("推荐顺序失败：存在无效技能")
 
-        config = get_unified_config()
-        api_key = config.get_ai_api_key()
-        if not api_key:
-            raise SkillCompositionError("未配置 AI Key，无法生成推荐顺序")
-
-        llm = LangChainLLMClient(
-            provider=config.get_ai_provider(),
-            model=config.get_ai_model(),
-            api_key=api_key,
-            base_url=config.get_ai_base_url(),
-            temperature=0.2,
-            max_tokens=800,
-        )
+        llm = self._create_llm(temperature=0.2, max_tokens=800)
 
         tool_lines = []
         for index, member in enumerate(normalized_members, start=1):
@@ -362,7 +397,7 @@ class SkillCompositionService:
             f"{chr(10).join(tool_lines)}"
         )
         response = llm.chat(prompt)
-        parsed = self._extract_json(response)
+        parsed = extract_json_from_response(response, log_prefix="recommend_execution_order")
         ordered_tool_ids = parsed.get("ordered_tool_ids")
         if not isinstance(ordered_tool_ids, list):
             raise SkillCompositionError("推荐顺序失败：模型返回格式不正确")
@@ -396,21 +431,9 @@ class SkillCompositionService:
         if len(tools) != len(tool_ids):
             raise SkillCompositionError("生成适用场景失败：存在无效技能")
 
-        config = get_unified_config()
-        api_key = config.get_ai_api_key()
-        if not api_key:
-            raise SkillCompositionError("未配置 AI Key，无法生成适用场景")
+        llm = self._create_llm(temperature=0.4, max_tokens=280)
 
-        llm = LangChainLLMClient(
-            provider=config.get_ai_provider(),
-            model=config.get_ai_model(),
-            api_key=api_key,
-            base_url=config.get_ai_base_url(),
-            temperature=0.4,
-            max_tokens=280,
-        )
-
-        mode_text = "顺序型" if mode == "ordered" else "范围型"
+        mode_text = MODE_DISPLAY_TEXT.get(mode, mode)
         tool_lines = []
         for index, member in enumerate(normalized_members, start=1):
             tool = tools[member["tool_id"]]
@@ -517,7 +540,7 @@ class SkillCompositionService:
             raise SkillCompositionError("试用会话不存在")
         normalized_input = self._normalize_trial_dialog_input(user_input)
 
-        existing_session = SessionRepository().get_by_id(session_id)
+        existing_session = self._session_repository.get_by_id(session_id)
         if existing_session is None or existing_session.agent_type != "composition_trial":
             raise SkillCompositionError("试用会话不存在")
         if existing_session.workflow_id != composition_id:
@@ -567,18 +590,7 @@ class SkillCompositionService:
         include_member_tools: bool = False,
     ) -> SkillCompositionTrialResult:
         config = get_unified_config()
-        api_key = config.get_ai_api_key()
-        if not api_key:
-            raise SkillCompositionError("未配置 AI Key，无法试用技能组合")
-
-        llm = LangChainLLMClient(
-            provider=config.get_ai_provider(),
-            model=config.get_ai_model(),
-            api_key=api_key,
-            base_url=config.get_ai_base_url(),
-            temperature=0.4,
-            max_tokens=1200,
-        )
+        llm = self._create_llm(config=config, temperature=0.4, max_tokens=1200)
         loop = AgentLoop(ASSISTANT_CONFIG, llm, config)
 
         manager = self._build_trial_manager(
@@ -622,17 +634,16 @@ class SkillCompositionService:
         )
         return manager
 
-    @staticmethod
-    def _create_trial_session(composition: SkillComposition) -> str:
+    def _create_trial_session(self, composition: SkillComposition) -> str:
         session_id = f"comptrial_{uuid.uuid4().hex[:12]}"
-        SessionRepository().create(
+        self._session_repository.create(
             Session(
                 session_id=session_id,
                 workflow_id=composition.composition_id,
                 agent_type="composition_trial",
                 status="active",
                 tool_ids=json.dumps(
-                    SkillCompositionService._build_trial_session_snapshot_payload(composition),
+                    self._build_trial_session_snapshot_payload(composition),
                     ensure_ascii=False,
                 ),
             )
@@ -643,15 +654,10 @@ class SkillCompositionService:
     def _get_first_member_tool(composition: SkillComposition) -> Optional[Tool]:
         if not composition.members:
             return None
-        ordered_members = sorted(
-            composition.members,
-            key=lambda member: (
-                member.execution_order if member.execution_order is not None else 10**9,
-                member.selected_order,
-            ),
+        ordered_members = sort_composition_members(
+            composition.members, composition.mode
         )
-        first_member = ordered_members[0] if ordered_members else None
-        return first_member.tool if first_member else None
+        return ordered_members[0].tool
 
     @classmethod
     def _build_trial_user_input(
@@ -740,13 +746,9 @@ class SkillCompositionService:
 
     @classmethod
     def _build_trial_system_prompt(cls, composition: SkillComposition) -> str:
-        mode_text = "顺序型" if composition.mode == "ordered" else "范围型"
-        ordered_members = sorted(
-            composition.members,
-            key=lambda member: (
-                member.execution_order if member.execution_order is not None else 10**9,
-                member.selected_order,
-            ),
+        mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
+        ordered_members = sort_composition_members(
+            composition.members, composition.mode
         )
         member_names = [
             member.tool.tool_name if member.tool else member.tool_id for member in ordered_members
@@ -829,11 +831,15 @@ class SkillCompositionService:
         session_id: str,
         composition_id: str,
     ) -> bool:
-        short_id = f"comp_{composition_id[:8]}"
-        longer_short_id = f"comp_{composition_id[:12]}"
-        messages = MessageRepository().get_context(session_id)
+        # DynamicToolManager._make_short_id(entity_id, prefix="comp_")
+        # produces "comp_{entity_id[:8]}" with collision fallback to 12 chars.
+        # composition_id itself is "comp_{hex[:12]}", so the short_id
+        # becomes "comp_comp_{hex[:8]}" or "comp_comp_{hex[:12]}".
+        entity_id = composition_id
+        candidates = {f"comp_{entity_id[:8]}", f"comp_{entity_id[:12]}"}
+        messages = self._message_repository.get_context(session_id)
         return any(
-            message.tool_name in (short_id, longer_short_id)
+            message.tool_name in candidates
             for message in messages
         )
 
@@ -995,15 +1001,7 @@ class SkillCompositionService:
             )
             for member in members_orm
         ]
-        if composition.mode == "ordered":
-            member_models.sort(
-                key=lambda item: (
-                    item.execution_order if item.execution_order is not None else 10**9,
-                    item.selected_order,
-                )
-            )
-        else:
-            member_models.sort(key=lambda item: item.selected_order)
+        member_models = sort_composition_members(member_models, composition.mode)
 
         return SkillComposition(
             composition_id=composition.composition_id,
@@ -1045,16 +1043,6 @@ class SkillCompositionService:
         )
 
     @staticmethod
-    def _extract_json(content: str) -> dict:
-        match = re.search(r"\{.*\}", content or "", re.DOTALL)
-        if not match:
-            raise SkillCompositionError("模型没有返回有效 JSON")
-        try:
-            return json.loads(match.group(0))
-        except json.JSONDecodeError as exc:
-            raise SkillCompositionError("模型返回的 JSON 无法解析") from exc
-
-    @staticmethod
     def _member_to_payload(member) -> dict:
         return {
             "tool_id": member.tool_id,
@@ -1062,9 +1050,8 @@ class SkillCompositionService:
             "execution_order": member.execution_order,
         }
 
-    @staticmethod
-    def _get_last_assistant_reply(session_id: str) -> str:
-        messages = MessageRepository().get_context(session_id)
+    def _get_last_assistant_reply(self, session_id: str) -> str:
+        messages = self._message_repository.get_context(session_id)
         for message in reversed(messages):
             if message.role == "assistant" and message.content:
                 return message.content
@@ -1084,30 +1071,6 @@ class SkillCompositionService:
             return int(value)
         except (TypeError, ValueError):
             return default
-
-    @staticmethod
-    def _serialize_trial_session_tool(tool: Optional[Tool]) -> Optional[dict]:
-        if tool is None:
-            return None
-        return {
-            "tool_id": tool.tool_id,
-            "tool_name": tool.tool_name,
-            "description": tool.description,
-            "parameters": list(tool.parameters or []),
-            "steps": list(tool.steps or []),
-            "execution_code": tool.execution_code,
-            "code_language": tool.code_language,
-            "code_version": tool.code_version,
-            "execution_strategy": tool.execution_strategy,
-            "dependencies": list(tool.dependencies or []),
-            "source_intent_id": tool.source_intent_id,
-            "source": tool.source,
-            "trial_count": tool.trial_count,
-            "pending_tool_id": tool.pending_tool_id,
-            "workflow_id": tool.workflow_id,
-            "trial_success_count": tool.trial_success_count,
-            "status": tool.status,
-        }
 
     @classmethod
     def _deserialize_trial_session_tool(cls, payload: Any) -> Optional[Tool]:
@@ -1187,7 +1150,7 @@ class SkillCompositionService:
                     "tool_id": member.tool_id,
                     "selected_order": member.selected_order,
                     "execution_order": member.execution_order,
-                    "tool": SkillCompositionService._serialize_trial_session_tool(member.tool),
+                    "tool": serialize_tool(member.tool),
                 }
                 for member in composition.members
             ],
@@ -1288,15 +1251,7 @@ class SkillCompositionService:
                 for index, tool_id in enumerate(member_tool_ids, start=1)
             ]
 
-        if mode == "ordered":
-            member_models.sort(
-                key=lambda item: (
-                    item.execution_order if item.execution_order is not None else 10**9,
-                    item.selected_order,
-                )
-            )
-        else:
-            member_models.sort(key=lambda item: item.selected_order)
+        member_models = sort_composition_members(member_models, mode)
 
         return SkillComposition(
             composition_id=composition_id,

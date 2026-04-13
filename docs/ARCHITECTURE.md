@@ -67,6 +67,8 @@
 
 工具不只从录制产生，共有三条路径：**录制浏览器操作**（路径 1）、**用户主动要求助理"做成工具"**（路径 2）、**助理检测到重复模式主动建议**（路径 3）。三条路径共享后半段管线（PM → 程序员 → 试用 → 发布）。
 
+用户还可以将多个已发布技能组合成**技能组合**——一个更大的可调用能力。技能组合支持两种模式：**范围型**（LLM 在选定技能范围内自主选择调用）和**顺序型**（按固定顺序执行，LLM 负责衔接参数）。技能组合作为虚拟 Tool 暴露给办公助理，与原子技能统一调度。详见第九节。
+
 ### 关键设计决策
 
 1. **各阶段不是连续的** — 代码生成后工具进入列表，用户随时试用，中间可能隔很久
@@ -89,7 +91,7 @@
 | **产品经理 Agent** | 需求分析、跟用户确认、试用失败时分诊 | 需求确认、分诊 | 录制完成自动触发 |
 | **程序员 Agent** | 分析录制数据、决定技术方案、写代码 | 代码开发 | PM 确认需求后自动触发 |
 | **试用 Agent** | 引导用户、提取参数、执行工具、展示结果 | 工具试用 | 用户主动试用 |
-| **办公助理 Agent** | 调用已发布工具执行日常任务、闲聊、触发修复/工具沉淀 | 日常使用 | 用户主动发起对话 |
+| **办公助理 Agent** | 调用已发布工具和技能组合执行日常任务、闲聊、触发修复/工具沉淀 | 日常使用 | 用户主动发起对话 |
 
 四个 Agent 用**同一套 Loop 代码**，只是配置不同（prompt、工具集）。
 
@@ -99,7 +101,7 @@
 |---|---|---|---|
 | 定位 | 教技能（内部流程） | 教技能（验证阶段） | 用技能（面向用户的日常入口） |
 | 生命周期 | 任务完成即结束 | 任务完成即结束 | 长期存在，随时可对话 |
-| 工具集 | 录制数据工具 + 信号工具（固定） | execute_tool + submit_trial_result + run_command（固定） | 已发布的用户工具（动态）+ 内置通用工具 |
+| 工具集 | 录制数据工具 + 信号工具（固定） | execute_tool + submit_trial_result + run_command（固定） | 已发布的用户工具（动态）+ 技能组合（虚拟 Tool）+ 内置通用工具 |
 | 会话绑定 | 绑定 workflow_id | 绑定 workflow_id | 不绑定 workflow_id，独立存在 |
 
 试用 Agent 的 `create_trial_tools()` 固定返回三个工具：`execute_tool`、`submit_trial_result`、`run_command`。其中 `run_command` 用于在工具执行环境中运行命令，支持试用阶段的自修复。
@@ -203,7 +205,7 @@ while not done and iteration < max_iterations:
 
 PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），token 开销可忽略。
 
-办公助理 Agent 采用 **FC + 懒加载**——内置工具全量 FC 注入，用户动态工具按需注入。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 4.1-4.4 节。
+办公助理 Agent 采用 **FC + 懒加载**——内置工具全量 FC 注入，用户动态工具和技能组合按需注入。技能组合作为虚拟 ToolDefinition 注册，固定 schema（`task` + `context`），内部按模式分发到成员技能。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 4.1-4.4 节和第九节。
 
 ### 用户交互
 
@@ -368,67 +370,85 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 ---
 
-## 九、实现优先级
+## 九、技能组合
 
-数据先行，基础设施先于业务角色。
+技能组合是由多个已发布技能组成的、更大的可调用能力。对用户来说像普通技能一样可以命名、描述、保存、被 Assistant 调用。
 
-**教技能流程（优先级 1-8）：**
+### 双模执行
 
-| 优先级 | 模块 | 说明 |
-|--------|------|------|
-| 1 | **数据层设计** | 消息存储结构、消息类型系统、会话管理表结构 |
-| 2 | **记忆机制** | 基于数据层实现引用替换、会话保存恢复、上下文加载 |
-| 3 | **Agent Loop 核心** | 基于记忆机制管理消息历史 |
-| 4 | **事件系统 + 流程编排** | Agent 之间的衔接 |
-| 5 | **PM Agent** | prompt + 工具集 |
-| 6 | **程序员 Agent** | prompt + 工具集（依赖数据存储层稳定） |
-| 7 | **试用 Agent** | prompt + 工具集 |
-| 8 | **LLM Review** | 代码质量检查 |
+| 模式 | 执行语义 | 适用场景 |
+|------|---------|---------|
+| **范围型（range）** | LLM 在选定技能范围内自主选择调用哪些、是否调用 | 围绕同一任务域的能力包，每次执行未必用全 |
+| **顺序型（ordered）** | 按固定顺序执行，LLM 负责衔接每步结果到下一步参数 | 查数据→生成内容→执行动作等有明显先后依赖 |
 
-**用技能流程（优先级 9-20）：**
+默认创建为范围型，创建时可直接切换为顺序型。顺序型支持 LLM 生成推荐顺序，用户可手动调整。
 
-| 优先级 | 模块 | 说明 | 状态 |
-|--------|------|------|------|
-| 9 | **助理 AgentConfig + Prompt** | 助理 Agent 配置、system prompt 模板 | ✅ 完成 |
-| 10 | **动态工具懒加载** | DynamicToolManager + search_tools / get_tool_detail | ✅ 完成 |
-| 11 | **Orchestrator 适配** | assistant 类型的会话管理、工具构建、签名变更 | ✅ 完成 |
-| 12 | **ChatWidget 接通** | 去掉模拟回复，接通 AgentUIBridge | ✅ 完成 |
-| 13 | **report_tool_bug** | 工具 bug 报告 → PM 分诊流程 | ✅ 完成 |
-| 14 | **首次引导流程** | profile 收集、存储、注入 | ✅ 完成 |
-| 15 | **内置通用工具** | web_search、web_fetch、exec 等内置工具实现 | ✅ 完成 |
-| 16 | **侧边栏会话列表** | 多会话管理 UI | 已完成（`chat_widget.py`） |
-| 17 | **新建会话工具选择** | 手动选择工具子集 | ✅ 完成（allowed_tool_ids 机制） |
-| 18 | **工具沉淀路径 2** | codify_as_tool + PM 适配执行记录输入 | ✅ 完成 |
-| 19 | **工具沉淀路径 3** | 重复模式检测 + 自动建议 + 拒绝冷却 | ✅ 完成 |
-| 20 | **跨会话记忆** | 层级摘要 + memory_search + load_reference 扩展 | ✅ 完成 |
+### 数据模型
 
-**额外实现（原计划外）：**
+两张表独立于原子技能：
 
-| 模块 | 说明 |
-|------|------|
-| **教学失败追踪** | agent_error 自动记录、UI 展示失败列表、三级策略重试（见第五节） |
+- **skill_compositions** — 组合元数据（名称、描述、适用场景、模式、状态、assistant_enabled、recommend_order、needs_review）
+- **skill_composition_members** — 成员关系（多对多），含 selected_order（用户选择顺序）和 execution_order（顺序型执行顺序）
 
-每个模块单独细化为独立的设计文档，细化到可直接开发的程度。
+成员关系走独立关系表而非 JSON 字段，便于反向查询和约束维护。V1 同一技能在同一组合中只能出现一次。
 
-### 已完成的细化设计
+状态流转：draft → published → offline（可重新发布）。
 
-| 优先级 | 模块 | 设计文档 |
-|--------|------|----------|
-| 1 | 数据层设计 | [data_layer_design.md](design/data_layer_design.md) |
-| 2 | 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) |
-| 3 | Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) |
-| 4 | 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) |
-| 5 | PM Agent | [pm_agent_design.md](design/pm_agent_design.md) |
-| 6 | 程序员 Agent | [programmer_agent_design.md](design/programmer_agent_design.md) |
-| 7 | 试用 Agent | [trial_agent_design.md](design/trial_agent_design.md) |
-| 8 | LLM Review | [llm_review_design.md](design/llm_review_design.md) |
-| 新增 | 办公助理 Agent | [assistant_agent_design.md](design/assistant_agent_design.md) |
+### Assistant 集成
 
-细化设计文档在架构 v2 基础上做了进一步决策，**以各设计文档为准**。
+技能组合作为虚拟 ToolDefinition 暴露给办公助理：
+
+- 固定 function calling schema：`task`（必填，任务描述）+ `context`（选填，补充上下文）
+- 内部 function name 使用 `comp_<short_id>` 前缀，与原子技能规避冲突
+- Assistant 调用时把"任务描述"传给组合，由内部执行器分发到成员技能
+- 搜索/激活与原子技能统一走 DynamicToolManager 的懒加载机制
+
+### 试用机制
+
+采用对话式试用，基于 AgentLoop 独立运行：
+
+- 试用 system prompt 区分范围型和顺序型的引导策略
+- **执行快照**：试用启动时冻结组合定义和成员技能信息，中途组合变更不影响已运行的试用会话
+- 成员技能在组合启动后才暴露给 Agent（先只暴露组合工具，启动后再暴露成员）
+- 默认真执行，不额外触发发布和状态迁移
+
+### needs_review 标记
+
+成员技能状态回退（如试用失败导致 pending）时，Orchestrator 自动标记引用该技能的组合为 `needs_review`。标记后：
+
+- 该组合对 Assistant 隐藏（不参与搜索和激活）
+- 用户打开组合并保存一次后自动清除
+
+### 关键设计决策
+
+1. **技能组合独立于原子技能** — 不复用 Tool 模型，有独立的表、仓库、服务
+2. **不嵌套** — V1 不支持组合嵌套组合
+3. **发布后可直接编辑** — 不做草稿覆盖发布版
+4. **无副作用试用** — 组合层不提供额外的副作用屏蔽，成员技能本身决定是否支持 sandbox
+5. **会话边界** — 只允许调用用户选中的技能/技能组合，内置工具低优先级兜底
 
 ---
 
+## 十、细化设计文档索引
+
+各模块的详细设计文档，在架构 v2 基础上做了进一步决策，**以各设计文档为准**。
+
+| 模块 | 设计文档 |
+|------|----------|
+| 数据层设计 | [data_layer_design.md](design/data_layer_design.md) |
+| 记忆机制 | [memory_mechanism_design.md](design/memory_mechanism_design.md) |
+| Agent Loop 核心 | [agent_loop_design.md](design/agent_loop_design.md) |
+| 事件系统 + 流程编排 | [event_system_design.md](design/event_system_design.md) |
+| PM Agent | [pm_agent_design.md](design/pm_agent_design.md) |
+| 程序员 Agent | [programmer_agent_design.md](design/programmer_agent_design.md) |
+| 试用 Agent | [trial_agent_design.md](design/trial_agent_design.md) |
+| LLM Review | [llm_review_design.md](design/llm_review_design.md) |
+| 办公助理 Agent | [assistant_agent_design.md](design/assistant_agent_design.md) |
+| 技能组合 | [skill_composition_design.md](design/skill_composition_design.md) |
+
+---
 
 *基于 v1 讨论精炼，记录时间：2026-03-11*
 *更新：2026-03-27 — 精简文档：删除与设计文档重复的差异决策、办公助理详细设计和工具沉淀章节（已收入 assistant_agent_design.md），工具沉淀三条路径概述移至第一节*
 *更新：2026-04-07 — 同步代码现状：精确化 Agent 两层通信机制描述；补全事件列表（teaching_failure 系列、trial_success、recording_started/stopped）；补充 Trial Agent Config 动态构建说明；新增教学失败追踪系统说明；更新优先级表完成状态*
+*更新：2026-04-13 — 新增技能组合架构（第九节）：双模执行、数据模型、Assistant 集成、试用机制、needs_review 标记；删除已完成的优先级跟踪表，保留细化设计文档索引*

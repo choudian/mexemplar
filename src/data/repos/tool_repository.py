@@ -83,6 +83,15 @@ class ToolRepository(BaseRepository):
         )
         return [{"tool_id": r[0], "tool_name": r[1], "description": r[2] or ""} for r in rows]
 
+    def get_all_published(self) -> list:
+        """获取所有已发布工具的完整 ORM 对象"""
+        return (
+            self.session.query(Tool)
+            .filter(Tool.status == "published")
+            .order_by(Tool.created_at.desc())
+            .all()
+        )
+
     def search_published(self, query: str) -> List[Tool]:
         """搜索已发布的工具（参数化 LIKE 查询，防注入）"""
         escaped = query.replace("%", "\\%").replace("_", "\\_")

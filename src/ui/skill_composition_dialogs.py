@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 
 from src.business.agents.config import ResultType
 from src.business.services import SkillCompositionError, SkillCompositionService
-from src.data.models import SkillComposition, Tool
+from src.data.models import SkillComposition, Tool, sort_composition_members
 from src.ui.tool_execution_dialog import ParameterInputWidget
 from src.ui.style_constants import DIVIDER_COLOR, HERO_BG_COLOR, PRIMARY_COLOR, SUBTITLE_COLOR, TITLE_COLOR
 from src.utils.logger import get_logger
@@ -272,12 +272,8 @@ class SkillCompositionEditDialog(QDialog):
             return
         for member in self.composition.members:
             self.selection_order_map[member.tool_id] = member.selected_order
-        ordered_members = sorted(
-            self.composition.members,
-            key=lambda member: (
-                member.execution_order if member.execution_order is not None else 10**9,
-                member.selected_order,
-            ),
+        ordered_members = sort_composition_members(
+            self.composition.members, self.composition.mode
         )
         self.selected_tool_ids = [member.tool_id for member in ordered_members]
 
@@ -630,19 +626,10 @@ class SkillCompositionEditDialog(QDialog):
             return
 
         if self.recommend_now_button.isVisible():
-            self.available_list.setViewportMargins(0, 0, 0, 0)
+            self.available_list.setViewportMargins(0, 0, 0, 42)
             self._recommend_dragger.update_overlay()
         else:
             self.available_list.setViewportMargins(0, 0, 0, 0)
-
-    def _recommend_button_bounds(self) -> tuple[int, int, int, int]:
-        if self._recommend_dragger is None:
-            return 0, 0, 0, 0
-        return self._recommend_dragger.bounds()
-
-    def _set_recommend_button_position(self, pos: QPoint) -> None:
-        if self._recommend_dragger is not None:
-            self._recommend_dragger.set_position(pos)
 
     def eventFilter(self, watched, event) -> bool:
         if watched is getattr(self, "available_list", None) and event.type() in {
@@ -885,199 +872,6 @@ class SkillCompositionEditDialog(QDialog):
         return payload
 
 
-class SkillCompositionTrialDialog(QDialog):
-    """技能组合试用引导对话框"""
-
-    def __init__(self, composition: SkillComposition, parent=None):
-        super().__init__(parent)
-        self.composition = composition
-        self.parameter_widgets: List[ParameterInputWidget] = []
-        self.first_member_tool = self._get_first_member_tool()
-        self.setWindowTitle(f"试用技能组合：{composition.composition_name}")
-        self.setMinimumSize(640, 500)
-
-        layout = QVBoxLayout(self)
-        layout.setSpacing(14)
-        layout.setContentsMargins(20, 20, 20, 20)
-
-        title = QLabel(composition.composition_name)
-        title.setStyleSheet("font-size: 16px; font-weight: 700;")
-        layout.addWidget(title)
-
-        meta = QLabel(
-            f"{'顺序型' if composition.mode == 'ordered' else '范围型'} · "
-            f"{composition.description or composition.applicability}"
-        )
-        meta.setWordWrap(True)
-        meta.setStyleSheet("color: #6c757d;")
-        layout.addWidget(meta)
-
-        intro = QLabel(self._build_intro_text())
-        intro.setWordWrap(True)
-        intro.setStyleSheet("color: #495057; line-height: 1.5;")
-        layout.addWidget(intro)
-
-        task_label = QLabel("任务描述")
-        task_label.setStyleSheet("font-weight: 600;")
-        layout.addWidget(task_label)
-
-        self.task_input = QTextEdit()
-        self.task_input.setPlaceholderText("必填。描述这次想让组合完成什么任务、想得到什么结果。")
-        self.task_input.setTabChangesFocus(True)
-        self.task_input.setMaximumHeight(130)
-        layout.addWidget(self.task_input)
-
-        self.parameter_area = self._build_parameter_area()
-        if self.parameter_area is not None:
-            layout.addWidget(self.parameter_area, 1)
-        else:
-            layout.addStretch(1)
-
-        button_row = QHBoxLayout()
-        button_row.addStretch()
-        cancel_btn = QPushButton("取消")
-        cancel_btn.clicked.connect(self.reject)
-        button_row.addWidget(cancel_btn)
-        run_btn = QPushButton("开始试用")
-        run_btn.setDefault(True)
-        run_btn.clicked.connect(self._on_run_clicked)
-        button_row.addWidget(run_btn)
-        layout.addLayout(button_row)
-
-        self._configure_tab_order(cancel_btn, run_btn)
-
-    def _ordered_members(self):
-        if self.composition.mode == "ordered":
-            return sorted(
-                self.composition.members,
-                key=lambda member: (
-                    member.execution_order if member.execution_order is not None else 10**9,
-                    member.selected_order,
-                ),
-            )
-        return sorted(self.composition.members, key=lambda member: member.selected_order)
-
-    def _get_first_member_tool(self) -> Optional[Tool]:
-        members = self._ordered_members()
-        if not members:
-            return None
-        return members[0].tool
-
-    def _build_intro_text(self) -> str:
-        if self.composition.mode == "ordered":
-            first_tool_name = self.first_member_tool.tool_name if self.first_member_tool else "第 1 步技能"
-            return (
-                "先告诉我这次要完成的具体任务。"
-                f"因为这是顺序型组合，我还会提前收集“{first_tool_name}”的入参，"
-                "让组合启动后可以直接进入第一步。"
-            )
-        return "先告诉我这次要完成的具体任务。范围型组合会根据任务在成员技能之间自行选择。"
-
-    def _build_parameter_area(self) -> Optional[QWidget]:
-        if self.composition.mode != "ordered" or self.first_member_tool is None:
-            return None
-
-        container = QWidget()
-        container_layout = QVBoxLayout(container)
-        container_layout.setContentsMargins(0, 0, 0, 0)
-        container_layout.setSpacing(10)
-
-        step_title = QLabel(f"第 1 步技能：{self.first_member_tool.tool_name}")
-        step_title.setStyleSheet("font-weight: 600;")
-        container_layout.addWidget(step_title)
-
-        if self.first_member_tool.description:
-            step_desc = QLabel(self.first_member_tool.description)
-            step_desc.setWordWrap(True)
-            step_desc.setStyleSheet("color: #6c757d;")
-            container_layout.addWidget(step_desc)
-
-        if not self.first_member_tool.parameters:
-            no_params = QLabel("这个技能没有额外参数，开始试用后会直接按任务目标推进。")
-            no_params.setWordWrap(True)
-            no_params.setStyleSheet("color: #6c757d;")
-            container_layout.addWidget(no_params)
-            return container
-
-        params_label = QLabel("请补充第 1 步技能需要的参数")
-        params_label.setStyleSheet("font-weight: 600;")
-        container_layout.addWidget(params_label)
-
-        scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-
-        params_container = QWidget()
-        params_layout = QVBoxLayout(params_container)
-        params_layout.setSpacing(12)
-        params_layout.setContentsMargins(0, 0, 0, 0)
-
-        for param in self.first_member_tool.parameters:
-            widget = ParameterInputWidget(param)
-            params_layout.addWidget(widget)
-            self.parameter_widgets.append(widget)
-
-        params_layout.addStretch()
-        scroll_area.setWidget(params_container)
-        container_layout.addWidget(scroll_area, 1)
-        return container
-
-    def _configure_tab_order(self, cancel_btn: QPushButton, run_btn: QPushButton) -> None:
-        previous = self.task_input
-        for widget in self.parameter_widgets:
-            input_widget = getattr(widget, "input_widget", None)
-            if input_widget is None:
-                continue
-            self.setTabOrder(previous, input_widget)
-            previous = input_widget
-        self.setTabOrder(previous, cancel_btn)
-        self.setTabOrder(cancel_btn, run_btn)
-
-    def _on_run_clicked(self) -> None:
-        if not self.task_input.toPlainText().strip():
-            QMessageBox.warning(self, "试用失败", "请先填写任务描述")
-            return
-
-        for widget in self.parameter_widgets:
-            if not widget.is_valid():
-                param_name = widget.param.get("name", "参数")
-                QMessageBox.warning(self, "试用失败", f"请先填写第 1 步技能的必填参数：{param_name}")
-                return
-        self.accept()
-
-    @staticmethod
-    def _is_meaningful_value(value) -> bool:
-        if value is None:
-            return False
-        if isinstance(value, str):
-            return bool(value.strip())
-        return True
-
-    def _collect_first_member_parameters(self) -> Dict[str, object]:
-        parameters = {}
-        for widget in self.parameter_widgets:
-            param_name = widget.param.get("name")
-            value = widget.get_value()
-            if param_name and self._is_meaningful_value(value):
-                parameters[param_name] = value
-        return parameters
-
-    def get_payload(self) -> dict:
-        if self.composition.mode == "ordered" and self.first_member_tool is not None:
-            first_member_tool_name = self.first_member_tool.tool_name
-            first_member_parameters = self._collect_first_member_parameters()
-        else:
-            first_member_tool_name = ""
-            first_member_parameters = {}
-        return {
-            "task": self.task_input.toPlainText().strip(),
-            "context": "",
-            "first_member_tool_name": first_member_tool_name,
-            "first_member_parameters": first_member_parameters,
-        }
-
-
 class SkillCompositionExecutionThread(QThread):
     """技能组合执行线程"""
 
@@ -1165,7 +959,3 @@ class SkillCompositionExecutionThread(QThread):
     def cancel(self):
         with QMutexLocker(self._mutex):
             self._is_cancelled = True
-
-    def get_result(self):
-        with QMutexLocker(self._mutex):
-            return self._success, self._result, self._error

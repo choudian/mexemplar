@@ -160,5 +160,4 @@ uv run python -m src.main
 
 如有问题，请查看：
 - 项目 README: `README.md`
-- 架构文档: `docs/architecture.md`
-- 开发路线图: `docs/local/development/development_roadmap.md`
+- 架构文档: `docs/ARCHITECTURE.md`
