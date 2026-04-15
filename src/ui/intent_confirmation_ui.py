@@ -218,11 +218,6 @@ class IntentConfirmationUI(QWidget):
         self.message_input.clear()
         self.send_button.setEnabled(False)
 
-    def append_trial_message(self, role: str, content: str) -> None:
-        """追加一条 trial 会话消息，不改变输入状态。"""
-        if content:
-            self._add_message(role, content)
-
     def complete_trial(self, workflow_id: str, message: str, success: bool) -> None:
         """结束一场 trial 会话并停用输入。"""
         self._agent_thread_id = workflow_id

@@ -66,11 +66,11 @@ class RetryTeachingWorker(QObject):
 
     def run(self):
         try:
-            self._orchestrator.retry_teaching(self._workflow_id)
+            self._orchestrator.retry_coordinator.retry_teaching(self._workflow_id)
         except Exception as e:
             logger.error(f"[RetryTeachingWorker] 执行失败: {e}", exc_info=True)
             try:
-                self._orchestrator.reset_retrying_status(self._workflow_id)
+                self._orchestrator.failure_tracker.reset_retrying_status(self._workflow_id)
             except Exception:
                 logger.error("[RetryTeachingWorker] 重置 retrying 状态失败", exc_info=True)
         finally:
@@ -153,7 +153,7 @@ class AgentUIBridge(QObject):
 
     def get_pm_messages(self, workflow_id: str) -> List[dict]:
         """同步获取 PM session 历史消息，可在主线程调用"""
-        return self._orchestrator.get_pm_messages(workflow_id)
+        return self._orchestrator.session_store.get_pm_messages(workflow_id)
 
     def get_trial_messages(self, workflow_id: str) -> List[dict]:
         """同步获取 trial 历史消息，可在主线程调用
@@ -161,7 +161,7 @@ class AgentUIBridge(QObject):
         设计说明：打破本类"所有 orchestrator 调用都走后台线程"的模式。
         纯 DB 只读查询，毫秒级，有意为之。不要将此模式用于耗时操作。
         """
-        return self._orchestrator.get_trial_messages(workflow_id)
+        return self._orchestrator.session_store.get_trial_messages(workflow_id)
 
     def reply_to_agent(
         self,

@@ -96,7 +96,7 @@ class AgentBridgeMixin:
         self._confirm_action_signal.connect(self._on_confirm_action_requested)
         register_confirm_mechanism(self._confirm_action_signal)
 
-        orchestrator.start_task_worker()
+        orchestrator.task_worker.start()
 
         bridge.question_received.connect(self._on_agent_question)
         bridge.error_occurred.connect(self._on_agent_error)

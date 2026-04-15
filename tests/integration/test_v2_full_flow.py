@@ -11,8 +11,6 @@ Mock 策略：
 - 数据库使用 in-memory SQLite（通过 conftest.in_memory_db 替换全局 singleton）
 """
 
-import pytest
-
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.orchestration.agent_orchestrator import AgentOrchestrator
 from src.data.repositories import ToolRepository, WorkflowTransitionRepository
