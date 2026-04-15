@@ -2,13 +2,10 @@
 AssistantProfileRepository -- 助理用户偏好档案仓库
 """
 
-import logging
 from typing import Optional
 
 from ..models_sqlite import AssistantProfile
 from .base_repository import BaseRepository
-
-logger = logging.getLogger(__name__)
 
 
 class AssistantProfileRepository(BaseRepository):

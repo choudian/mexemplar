@@ -296,7 +296,9 @@ class ToolsManagementUI(QWidget):
             tab == "published" and len(self.published_tools) == 0
         )
 
-        self._create_composition_btn.setVisible(tab == "compositions")
+        self._create_composition_btn.setVisible(
+            tab == "compositions" and len(self.skill_compositions) > 0
+        )
         self._compositions_scroll.setVisible(tab == "compositions")
         self.compositions_empty_state.setVisible(
             tab == "compositions" and len(self.skill_compositions) == 0

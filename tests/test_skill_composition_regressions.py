@@ -11,7 +11,7 @@ from src.business.agents.config import ResultType
 from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 from src.business.orchestration.agent_orchestrator import AgentOrchestrator
 from src.business.services import SkillCompositionError, SkillCompositionService, SkillsService
-import src.business.services.skill_composition_service as skill_composition_service_module
+import src.business.services.skill_composition.service as skill_composition_service_module
 from src.data.models import SkillComposition, SkillCompositionMember, Tool
 from src.data.models_sqlite import (
     Message as MessageOrm,

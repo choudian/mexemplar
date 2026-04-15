@@ -1,11 +1,11 @@
 from .chat_service import ChatService
-from .skills_service import SkillsService
-from .skill_composition_service import (
+from .skill_composition.service import SkillCompositionService
+from .skill_composition.types import (
     SkillCompositionError,
-    SkillCompositionService,
     SkillCompositionTrialResult,
     SkillCompositionTrialSessionStart,
 )
+from .skills_service import SkillsService
 
 __all__ = [
     "ChatService",

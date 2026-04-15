@@ -19,7 +19,6 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMessageBox,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
     QTextEdit,
     QVBoxLayout,
@@ -28,8 +27,7 @@ from PyQt6.QtWidgets import (
 
 from src.business.agents.config import ResultType
 from src.business.services import SkillCompositionError, SkillCompositionService
-from src.data.models import SkillComposition, Tool, sort_composition_members
-from src.ui.tool_execution_dialog import ParameterInputWidget
+from src.data.models import SkillComposition, sort_composition_members
 from src.ui.style_constants import DIVIDER_COLOR, HERO_BG_COLOR, PRIMARY_COLOR, SUBTITLE_COLOR, TITLE_COLOR
 from src.utils.logger import get_logger
 
@@ -144,15 +142,6 @@ class _FloatingCornerField(QWidget):
         if self._dragger is not None:
             self._dragger.update_overlay()
 
-    def _button_bounds(self) -> tuple[int, int, int, int]:
-        if self._dragger is None:
-            return 0, 0, 0, 0
-        return self._dragger.bounds()
-
-    def _set_button_position(self, pos: QPoint) -> None:
-        if self._dragger is not None:
-            self._dragger.set_position(pos)
-
     def eventFilter(self, watched, event) -> bool:
         if self._dragger is None:
             return super().eventFilter(watched, event)
@@ -166,6 +155,17 @@ class _FloatingCornerField(QWidget):
 
     def minimumSizeHint(self) -> QSize:
         return self.panel.minimumSizeHint()
+
+    # Compatibility wrappers kept for existing UI regression tests.
+    def _button_bounds(self) -> tuple[int, int, int, int]:
+        if self._dragger is None:
+            return (0, 0, 0, 0)
+        return self._dragger.bounds()
+
+    def _set_button_position(self, pos: QPoint) -> None:
+        if self._dragger is None:
+            return
+        self._dragger.set_position(pos)
 
 
 class ApplicabilityGenerationThread(QThread):
@@ -631,6 +631,17 @@ class SkillCompositionEditDialog(QDialog):
         else:
             self.available_list.setViewportMargins(0, 0, 0, 0)
 
+    # Compatibility wrappers kept for existing UI regression tests.
+    def _recommend_button_bounds(self) -> tuple[int, int, int, int]:
+        if self._recommend_dragger is None:
+            return (0, 0, 0, 0)
+        return self._recommend_dragger.bounds()
+
+    def _set_recommend_button_position(self, pos: QPoint) -> None:
+        if self._recommend_dragger is None:
+            return
+        self._recommend_dragger.set_position(pos)
+
     def eventFilter(self, watched, event) -> bool:
         if watched is getattr(self, "available_list", None) and event.type() in {
             QEvent.Type.Resize,
@@ -831,6 +842,26 @@ class SkillCompositionEditDialog(QDialog):
 
     def _clear_applicability_generation_thread(self) -> None:
         self._applicability_generation_thread = None
+
+    def reject(self) -> None:
+        """关闭对话框前断开后台线程信号，防止回调访问已销毁对象。"""
+        for thread_attr, clear_attr in [
+            ("_applicability_generation_thread", "_clear_applicability_generation_thread"),
+            ("_recommendation_generation_thread", "_clear_recommendation_generation_thread"),
+        ]:
+            thread = getattr(self, thread_attr, None)
+            if thread is not None and thread.isRunning():
+                clear_handler = getattr(self, clear_attr)
+                try:
+                    thread.finished_signal.disconnect()
+                except (TypeError, RuntimeError):
+                    pass
+                try:
+                    thread.finished.disconnect(clear_handler)
+                except (TypeError, RuntimeError):
+                    pass
+                clear_handler()
+        super().reject()
 
     def _on_save_clicked(self) -> None:
         try:

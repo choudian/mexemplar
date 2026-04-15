@@ -8,14 +8,11 @@
 """
 
 import json
-import logging
 from typing import Any, Dict
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler, error_json
 from src.execution.tool_executor import run_command_in_venv, run_tool_code
-
-logger = logging.getLogger(__name__)
 
 
 # =============================================================================

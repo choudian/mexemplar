@@ -2,13 +2,10 @@
 ToolSuggestionRepository -- 工具化建议历史仓库（重复模式检测）
 """
 
-import logging
 from typing import Optional
 
 from ..models_sqlite import ToolSuggestionHistory
 from .base_repository import BaseRepository
-
-logger = logging.getLogger(__name__)
 
 
 class ToolSuggestionRepository(BaseRepository):
