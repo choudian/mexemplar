@@ -12,7 +12,7 @@ v2 集成测试配置
 import pytest
 from unittest.mock import MagicMock
 
-from src.business.ai.llm_client import LLMResponse, ToolCallInfo
+from src.business.ai.llm_client import LLMResponse
 from src.data.unified_config import UnifiedConfigManager
 
 

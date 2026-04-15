@@ -14,7 +14,7 @@ import threading
 from typing import Any, Optional
 from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from src.data.models_sqlite import AppSettings, Base
 from src.utils.helpers import get_default_data_dir
@@ -56,11 +56,13 @@ class SQLAlchemyManager:
         try:
             # 创建 SQLite 引擎
             # check_same_thread=False 允许多线程访问
-            # StaticPool 避免连接被关闭
+            # :memory: 数据库必须用 StaticPool（否则每次新连接创建空数据库）
+            # 文件数据库用 NullPool 避免多线程共享同一连接导致 InterfaceError
+            is_memory = self.db_path == ":memory:"
             self.engine = create_engine(
                 f"sqlite:///{self.db_path}",
                 connect_args={"check_same_thread": False},
-                poolclass=StaticPool,
+                poolclass=StaticPool if is_memory else NullPool,
                 echo=False,  # 设置为 True 可以查看 SQL 语句
             )
 
