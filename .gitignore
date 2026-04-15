@@ -101,6 +101,7 @@ Thumbs.db
 demo_*.py
 test_*.py
 !tests/**/*.py
+tests/_tmp_*/
 *_SUMMARY.md
 FILE_CHECKLIST.md
 SKIP_LLM_USAGE.md

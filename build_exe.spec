@@ -23,9 +23,6 @@ datas = [
     ('src/ui/resources', 'src/ui/resources'),  # UI 资源文件（样式、图标等）
     ('src/recording/browser_extension', 'src/recording/browser_extension'),  # 浏览器扩展
 ]
-# 收集 rich 库的数据文件
-datas += collect_data_files('rich', include_py_files=True)
-
 # 收集隐藏导入
 hiddenimports = [
     'PyQt6.QtCore',
@@ -43,9 +40,6 @@ hiddenimports = [
     'playwright',
     'pywinauto',
     'websockets',
-    'rich',
-    'rich._unicode_data',
-    'rich.console',
     'src.data.config_models',
     'src.data.unified_config',
     'src.data.database',

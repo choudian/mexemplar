@@ -399,19 +399,3 @@ class RecordingRecovery:
         else:
             logger.error(f"❌ 从队列文件恢复失败: {results['failed']} 个失败")
             return False
-
-
-
-def recover_from_queues(overwrite: bool = False, delete_after: bool = False) -> Dict[str, Any]:
-    """
-    从队列文件恢复录制数据的便捷函数
-
-    Args:
-        overwrite: 是否覆盖已存在的数据
-        delete_after: 恢复成功后是否删除队列文件
-
-    Returns:
-        恢复结果统计
-    """
-    recovery = RecordingRecovery()
-    return recovery.recover_all(overwrite=overwrite, delete_after=delete_after)

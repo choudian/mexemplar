@@ -12,7 +12,7 @@
 from datetime import datetime
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor, QPainter
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -74,33 +74,70 @@ _ACTION_BTN_STYLE = """
     }}
 """
 
-_MORE_BTN_STYLE = f"""
-    QPushButton {{
-        background: transparent;
-        border: none;
-        color: #adb5bd;
-        font-size: 18px;
-        font-weight: bold;
-        border-radius: 4px;
-    }}
-    QPushButton:hover {{
-        background-color: #f0f1ff;
-        color: {PRIMARY_COLOR};
-    }}
-"""
-
 _META_STYLE = "font-size: 11px; color: #adb5bd; background: transparent;"
 
 _MENU_STYLE = """
-    QMenu {
+    QMenu {{
         background-color: #ffffff;
         border: 1px solid #e9ecef;
         border-radius: 6px;
         padding: 4px;
-    }
-    QMenu::item { padding: 8px 16px; border-radius: 4px; }
-    QMenu::item:selected { background-color: {selected_color}; }
+    }}
+    QMenu::item {{ padding: 8px 16px; border-radius: 4px; }}
+    QMenu::item:selected {{ background-color: {selected_color}; }}
 """
+
+
+# ── 可点击标签（手绘三个圆点的更多按钮）──
+
+
+class _MoreButton(QLabel):
+    """手绘三点"更多"按钮，不依赖字体渲染"""
+
+    clicked = pyqtSignal()
+
+    _DOT_RADIUS = 2
+    _DOT_SPACING = 7
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(30, 30)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._hovered = False
+
+    def enterEvent(self, event):
+        self._hovered = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hovered = False
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        color = QColor(PRIMARY_COLOR) if self._hovered else QColor(SUBTITLE_COLOR)
+        painter.setBrush(color)
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        cx = self.width() // 2
+        cy = self.height() // 2
+
+        for dy in (-self._DOT_SPACING, 0, self._DOT_SPACING):
+            painter.drawEllipse(
+                cx - self._DOT_RADIUS, cy + dy - self._DOT_RADIUS,
+                self._DOT_RADIUS * 2, self._DOT_RADIUS * 2,
+            )
+
+        painter.end()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
 
 # ── 基类 ──
@@ -137,10 +174,7 @@ class _SkillCardBase(QFrame):
         row = QHBoxLayout()
         row.addWidget(left_widget)
         row.addStretch()
-        more_btn = QPushButton("...")
-        more_btn.setFixedSize(26, 26)
-        more_btn.setStyleSheet(_MORE_BTN_STYLE)
-        more_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        more_btn = _MoreButton()
         more_btn.clicked.connect(self._show_menu)
         row.addWidget(more_btn)
         self._more_btn = more_btn
@@ -298,6 +332,15 @@ class PublishedToolCard(_SkillCardBase):
         self.tool = tool
         self._init_ui()
 
+    def _show_menu(self):
+        """已掌握技能只提供删除操作，不允许编辑"""
+        menu = QMenu(self)
+        menu.setStyleSheet(_MENU_STYLE.format(selected_color="#f0f1ff"))
+        delete_action = QAction("删除", self)
+        delete_action.triggered.connect(lambda: self.delete_requested.emit(self._card_id))
+        menu.addAction(delete_action)
+        menu.exec(self._more_btn.mapToGlobal(self._more_btn.rect().bottomLeft()))
+
     def _init_ui(self):
         self.setStyleSheet(_CARD_STYLE.format(border="#c3e6cb", hover_border="#28a745"))
 
@@ -336,17 +379,6 @@ class PublishedToolCard(_SkillCardBase):
                 )
             )
             btn.clicked.connect(lambda: self.execute_requested.emit(self.tool.tool_id))
-            layout.addWidget(btn)
-        else:
-            btn = QPushButton("配置")
-            btn.setFixedHeight(34)
-            btn.setEnabled(False)
-            btn.setToolTip(f"该技能需要 {param_count} 个参数\n参数配置功能开发中")
-            btn.setStyleSheet(
-                _ACTION_BTN_STYLE.format(
-                    fg=SUBTITLE_COLOR, bg="#f8f9fa", border="1px solid #e0e0e0", hover_bg="#e9ecef"
-                )
-            )
             layout.addWidget(btn)
 
 
@@ -444,10 +476,6 @@ class SkillCompositionCard(_SkillCardBase):
         menu.addAction(edit_action)
 
         if self.composition.status == "draft":
-            publish_action = QAction("发布", self)
-            publish_action.triggered.connect(lambda: self.publish_requested.emit(self._card_id))
-            menu.addAction(publish_action)
-
             delete_action = QAction("删除", self)
             delete_action.triggered.connect(lambda: self.delete_requested.emit(self._card_id))
             menu.addAction(delete_action)
@@ -456,9 +484,10 @@ class SkillCompositionCard(_SkillCardBase):
             offline_action.triggered.connect(lambda: self.offline_requested.emit(self._card_id))
             menu.addAction(offline_action)
         elif self.composition.status == "offline":
-            publish_action = QAction("重新发布", self)
-            publish_action.triggered.connect(lambda: self.publish_requested.emit(self._card_id))
-            menu.addAction(publish_action)
+            if not self.composition.needs_review:
+                publish_action = QAction("重新发布", self)
+                publish_action.triggered.connect(lambda: self.publish_requested.emit(self._card_id))
+                menu.addAction(publish_action)
 
             delete_action = QAction("删除", self)
             delete_action.triggered.connect(lambda: self.delete_requested.emit(self._card_id))

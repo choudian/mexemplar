@@ -457,7 +457,6 @@ class ToolsManagementUI(QWidget):
             card = PublishedToolCard(tool)
             card.execute_requested.connect(self._on_execute_requested)
             card.delete_requested.connect(self._on_published_delete_requested)
-            card.edit_requested.connect(self._on_published_edit_requested)
             self.published_tools_grid.addWidget(card, i // 3, i % 3)
             self.published_tool_cards.append(card)
 
@@ -470,6 +469,9 @@ class ToolsManagementUI(QWidget):
         self.skill_composition_cards.clear()
 
         self._compositions_tab_btn.setText(f"技能组合 ({len(compositions)})")
+        self._create_composition_btn.setVisible(
+            len(compositions) > 0 and self._current_tab == "compositions"
+        )
         self.compositions_empty_state.setVisible(
             len(compositions) == 0 and self._current_tab == "compositions"
         )
@@ -620,32 +622,6 @@ class ToolsManagementUI(QWidget):
                 self._load_compositions()
             except Exception as e:
                 QMessageBox.warning(self, "删除失败", str(e))
-
-    def _on_published_edit_requested(self, tool_id: str):
-        self.logger.info(f"编辑已掌握技能: {tool_id}")
-        tool = next((t for t in self.published_tools if t.tool_id == tool_id), None)
-        if not tool:
-            return
-        name, ok = QInputDialog.getText(self, "编辑技能名称", "技能名称:", text=tool.tool_name)
-        if ok and name:
-            desc, ok = QInputDialog.getText(
-                self, "编辑技能描述", "技能描述:", text=tool.description or ""
-            )
-            if ok:
-                try:
-                    referenced = SkillsService().update_tool_metadata(tool_id, name, desc)
-                    tool.tool_name = name
-                    tool.description = desc
-                    self._refresh_published_cards()
-                    self._load_compositions()
-                    if referenced:
-                        QMessageBox.information(
-                            self,
-                            "已更新技能",
-                            "该技能已同步改名，引用它的技能组合：\n" + "\n".join(referenced),
-                        )
-                except Exception as e:
-                    QMessageBox.warning(self, "更新失败", str(e))
 
     def _refresh_published_cards(self):
         self.update_published_tools(self.published_tools)
