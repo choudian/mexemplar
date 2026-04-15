@@ -28,7 +28,6 @@ class WebSocketServer:
             host: 监听地址（如果为 None 则从配置读取）
             port: 监听端口（如果为 None 则从配置读取）
         """
-        # ⭐ 从统一配置读取默认值
         config = get_unified_config()
         self.host = host or config.get_websocket_host()
         self.port = port or config.get_websocket_port()
@@ -46,7 +45,6 @@ class WebSocketServer:
         # 统计信息
         self.stats = {"connections": 0, "messages_received": 0, "messages_sent": 0, "errors": 0}
 
-        # ⭐ 注册配置变化观察者
         config.register_observer(
             self._on_config_changed, keys=["recording.websocket.host", "recording.websocket.port"]
         )
@@ -74,7 +72,6 @@ class WebSocketServer:
                     data = json.loads(message)
                     self.stats["messages_received"] += 1
 
-                    # ⭐ 调试日志：打印所有收到的消息
                     msg_type = data.get("type")
                     logger.debug(f"[WS] 🔔 收到消息: {msg_type} from {client_addr}")
 
@@ -261,7 +258,7 @@ class WebSocketServer:
             )
             logger.info("[WS] 正在重启服务器...")
 
-            # ⭐ 关键：在重启前先通知所有客户端
+            # 重启前先通知客户端，让它们有机会连接新地址
             new_url = f"ws://{new_host}:{new_port}"
             self._notify_config_change(new_url)
 
@@ -355,13 +352,12 @@ class WebSocketServer:
 
         logger.info(f"[WS] 服务器已启动: ws://{self.host}:{self.port}")
 
-        # ⭐ 从配置读取最大消息大小（默认 50 MB）
         config = get_unified_config()
         max_size = config.get_websocket_max_message_size()
 
         logger.info(f"[WS] 最大消息大小: {max_size / 1024 / 1024:.1f} MB")
 
-        # ⭐ 端口占用重试：如果上一次录制的 WS 服务器未正常关闭，等待端口释放
+        # 端口可能被上一次未正常关闭的录制占用，重试等待释放
         max_retries = 3
         for attempt in range(max_retries):
             try:
@@ -447,6 +443,11 @@ class WebSocketServer:
     def is_running(self) -> bool:
         """检查服务器是否运行"""
         return self._is_running
+
+    @property
+    def loop(self) -> Optional[asyncio.AbstractEventLoop]:
+        """返回内部事件循环引用。"""
+        return self._loop
 
     def _find_client(
         self,

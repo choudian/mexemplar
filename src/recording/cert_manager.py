@@ -14,8 +14,6 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.utils.helpers import get_default_data_dir
-
 logger = logging.getLogger(__name__)
 
 MITMPROXY_CERT_SUBJECT = "mitmproxy"
@@ -23,16 +21,20 @@ MITMPROXY_CERT_SUBJECT = "mitmproxy"
 MITMPROXY_DEFAULT_CERT = Path.home() / ".mitmproxy" / "mitmproxy-ca-cert.cer"
 
 
-def _get_data_cert_path() -> Path:
-    """返回 data/ 目录下的证书路径。"""
-    return get_default_data_dir() / "mitmproxy-ca-cert.cer"
+def _get_default_cert_path() -> Path:
+    """返回默认证书路径，不触发目录创建。"""
+    project_root = Path(__file__).parent.parent.parent
+    return project_root / "data" / "mitmproxy-ca-cert.cer"
+
+
+DEFAULT_CERT_PATH = _get_default_cert_path()
 
 
 class CertManager:
     """检测并安装 mitmproxy CA 证书。"""
 
     def __init__(self, cert_path: Optional[Path] = None) -> None:
-        self.cert_path = cert_path or _get_data_cert_path()
+        self.cert_path = cert_path or DEFAULT_CERT_PATH
 
     def is_installed(self) -> bool:
         """检查 mitmproxy CA 证书是否已在系统信任区。"""
@@ -52,6 +54,7 @@ class CertManager:
         """确保证书文件存在。先检查 data 目录，再检查 ~/.mitmproxy，都没有则生成。"""
         if self.cert_path.exists():
             return True
+        self.cert_path.parent.mkdir(parents=True, exist_ok=True)
 
         # ~/.mitmproxy 已有证书，直接复制到 data 目录
         if MITMPROXY_DEFAULT_CERT.exists():
@@ -74,8 +77,14 @@ class CertManager:
                 if MITMPROXY_DEFAULT_CERT.exists():
                     break
 
-            proc.kill()
-            proc.wait(timeout=5)
+            try:
+                proc.kill()
+            except OSError:
+                pass
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
 
             if MITMPROXY_DEFAULT_CERT.exists():
                 shutil.copy2(MITMPROXY_DEFAULT_CERT, self.cert_path)

@@ -7,7 +7,6 @@ Accessibility 录制器模块。
 
 from __future__ import annotations
 
-import json
 import logging
 import platform
 import threading
@@ -58,6 +57,10 @@ class AccessibilityRecorder:
         if not PLATFORM_SUPPORTED:
             logger.warning("[Accessibility] 非 Windows 平台，跳过 UIA 录制")
             return
+
+        if self._thread and self._thread.is_alive():
+            logger.warning("[Accessibility] 仍在运行，先停止旧会话")
+            self.stop()
 
         self._recording_id = recording_id
         self._queue_file = Path(queue_file)
@@ -211,11 +214,24 @@ class AccessibilityRecorder:
     def _update_url_from_chrome(self, control) -> bool:
         """尝试从 Chrome 地址栏提取当前 URL。"""
         try:
+            # Fast path: try the original control first
             url = self._get_control_value(control)
             if url and url.startswith(("http://", "https://")):
                 previous_url = self._current_url
                 self._current_url = url
                 return url != previous_url
+
+            # Fallback: try EditControl descendant for address bar
+            try:
+                edit_control = control.EditControl()
+                if edit_control and getattr(edit_control, "Exists", lambda: True)():
+                    url = self._get_control_value(edit_control)
+                    if url and url.startswith(("http://", "https://")):
+                        previous_url = self._current_url
+                        self._current_url = url
+                        return url != previous_url
+            except Exception:
+                pass
         except Exception as exc:
             logger.debug(f"[Accessibility] 获取 Chrome URL 失败: {exc}")
         return False

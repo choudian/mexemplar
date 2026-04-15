@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import threading
 import time
@@ -123,6 +122,10 @@ class ProxyRecorder:
         if not MITMPROXY_AVAILABLE:
             logger.error("[Proxy] mitmproxy 未安装")
             return False
+
+        if self._master is not None or (self._thread and self._thread.is_alive()):
+            logger.warning("[Proxy] 仍在运行，先停止旧会话")
+            self.stop()
 
         self._addon = RecordingAddon(recording_id=recording_id, queue_file=queue_file, queue_write_lock=queue_write_lock)
         ready = threading.Event()

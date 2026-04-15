@@ -61,6 +61,35 @@ class TestGatekeeperTests:
         source = Path("src/recording/recorder.py").read_text(encoding="utf-8")
         assert "workflow_orchestrator" not in source.lower()
 
+    def test_browser_phase2_split_modules_exist(self):
+        from src.recording.browser.async_event_loop_runner import AsyncEventLoopRunner
+        from src.recording.browser.duckdb_recording_persister import DuckDBRecordingPersister
+        from src.recording.browser.playwright_recording_driver import PlaywrightRecordingDriver
+        from src.recording.browser.recording_websocket_coordinator import (
+            RecordingWebSocketCoordinator,
+        )
+
+        assert AsyncEventLoopRunner is not None
+        assert PlaywrightRecordingDriver is not None
+        assert RecordingWebSocketCoordinator is not None
+        assert DuckDBRecordingPersister is not None
+
+    def test_browser_recorder_init_is_lazy_for_duckdb(self):
+        with patch("src.data.recording_repository.RecordingRepository") as mock_repo_cls:
+            with patch.object(BrowserRecorder, "_ensure_ws_server", return_value=None):
+                BrowserRecorder()
+
+        mock_repo_cls.assert_not_called()
+
+    def test_browser_recorder_facade_delegates_to_new_persister(self):
+        recorder = build_recorder()
+
+        with patch.object(recorder._duckdb_persister, "save_to_duckdb", return_value=3) as mock_save:
+            result = recorder._save_to_duckdb(123.0)
+
+        assert result == 3
+        mock_save.assert_called_once()
+
     def test_proxy_recorder_exists(self):
         from src.recording.proxy_recorder import ProxyRecorder, RecordingAddon
 
