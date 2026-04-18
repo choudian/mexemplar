@@ -17,6 +17,7 @@ import logging
 import threading
 import uuid
 from datetime import datetime
+from src.utils.timezone import utc_now_naive, to_naive_utc, format_local
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -439,7 +440,10 @@ class AssistantMemoryManager:
             if not created_at_str:
                 return 0.5
             dt = datetime.fromisoformat(created_at_str) if isinstance(created_at_str, str) else created_at_str
-            days_ago = (datetime.now() - dt).total_seconds() / 86400.0
+            # dt 可能是 naive（旧数据）或 aware（新数据），统一转 naive UTC 后比较
+            if dt.tzinfo is not None:
+                dt = to_naive_utc(dt)
+            days_ago = (utc_now_naive() - dt).total_seconds() / 86400.0
             return math.exp(-0.693 * days_ago / 30.0)  # ln(2)/半衰期
         except Exception:
             return 0.5
@@ -514,9 +518,9 @@ class AssistantMemoryManager:
                 start = messages[0].created_at
                 end = messages[-1].created_at
                 if start and end:
-                    return f"{start.strftime('%Y-%m-%d %H:%M')} ~ {end.strftime('%H:%M')}"
+                    return f"{format_local(start, '%Y-%m-%d %H:%M')} ~ {format_local(end, '%H:%M')}"
             if session.created_at:
-                return session.created_at.strftime('%Y-%m-%d %H:%M')
+                return format_local(session.created_at, '%Y-%m-%d %H:%M')
         except Exception:
             pass
         return "未知时间"

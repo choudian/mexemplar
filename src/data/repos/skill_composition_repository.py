@@ -3,11 +3,11 @@ SkillCompositionRepository -- 技能组合定义与成员关系仓库
 """
 
 import logging
-from datetime import datetime
 from typing import Dict, Iterable, List, Optional
 
 from ..models_sqlite import SkillComposition, SkillCompositionMember
 from .base_repository import BaseRepository
+from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class SkillCompositionRepository(BaseRepository):
     def update(self, composition: SkillComposition) -> SkillComposition:
         """更新技能组合"""
         try:
-            composition.updated_at = datetime.now()
+            composition.updated_at = utc_now_naive()
             self.session.commit()
             self.session.refresh(composition)
             logger.info(
@@ -202,7 +202,7 @@ class SkillCompositionRepository(BaseRepository):
             return
         try:
             composition.status = status
-            composition.updated_at = datetime.now()
+            composition.updated_at = utc_now_naive()
             self.session.commit()
         except Exception as e:
             self.session.rollback()
@@ -216,7 +216,7 @@ class SkillCompositionRepository(BaseRepository):
             return
         try:
             composition.needs_review = False
-            composition.updated_at = datetime.now()
+            composition.updated_at = utc_now_naive()
             self.session.commit()
         except Exception as e:
             self.session.rollback()
@@ -229,9 +229,10 @@ class SkillCompositionRepository(BaseRepository):
         if not compositions:
             return []
         try:
+            now = utc_now_naive()
             for composition in compositions:
                 composition.needs_review = True
-                composition.updated_at = datetime.now()
+                composition.updated_at = now
             self.session.commit()
         except Exception as e:
             self.session.rollback()
@@ -258,11 +259,3 @@ class SkillCompositionRepository(BaseRepository):
         if statuses:
             query = query.filter(SkillComposition.status.in_(list(statuses)))
         return query.all()
-
-    def is_tool_referenced(
-        self,
-        tool_id: str,
-        statuses: Optional[Iterable[str]] = None,
-    ) -> bool:
-        """判断技能是否被组合引用"""
-        return bool(self.get_referencing_compositions(tool_id, statuses=statuses))

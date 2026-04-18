@@ -33,7 +33,6 @@ class ParameterInputWidget(QFrame):
     def __init__(self, param: Dict[str, Any], parent=None):
         super().__init__(parent)
         self.param = param
-        self.value = None
         self.init_ui()
 
     def init_ui(self):

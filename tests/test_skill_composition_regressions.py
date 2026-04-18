@@ -1305,7 +1305,7 @@ def test_duplicate_composition_name_is_rejected_on_create():
 def test_duplicate_composition_name_is_rejected_on_update():
     _seed_published_tool("tool_duplicate_update", "更新重名成员")
     service = SkillCompositionService()
-    first = service.create_composition(
+    service.create_composition(
         composition_name="组合甲",
         description="第一个组合",
         applicability="更新测试1",

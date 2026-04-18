@@ -8,7 +8,7 @@
 import json
 import logging
 import uuid
-from datetime import datetime
+from src.utils.timezone import utc_now
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, error_json
@@ -78,7 +78,7 @@ def report_tool_bug_handler(
             "tool_name": tool_name,
             "error_message": error_message,
             "user_input": user_input,
-            "reported_at": datetime.now().isoformat(),
+            "reported_at": utc_now().isoformat(),
         },
         ensure_ascii=False,
     )
@@ -197,7 +197,7 @@ def create_codify_as_tool_handler(session_id: str):
                 "task_description": task_description,
                 "execution_trace": execution_trace,
                 "session_id": session_id,
-                "requested_at": datetime.now().isoformat(),
+                "requested_at": utc_now().isoformat(),
             },
             ensure_ascii=False,
         )

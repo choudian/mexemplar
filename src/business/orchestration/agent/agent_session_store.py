@@ -25,9 +25,6 @@ class AgentSessionStore:
     def get_session(self, session_id: str):
         return self._session_repo.get_by_id(session_id)
 
-    def get_context_messages(self, session_id: str):
-        return self._message_repo.get_context(session_id)
-
     def get_sessions_by_workflow(
         self,
         workflow_id: str,

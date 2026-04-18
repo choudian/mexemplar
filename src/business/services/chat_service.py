@@ -12,6 +12,7 @@ from typing import Optional
 from src.business.agents.config import AgentType
 from src.data.models_sqlite import Message, Session
 from src.data.repositories import AssistantProfileRepository, MessageRepository, SessionRepository
+from src.utils.timezone import format_local
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ class ChatService:
                     "title": first_user_msg[:50] if first_user_msg else "新对话",
                     "preview": first_user_msg[:120] if first_user_msg else "",
                     "date": s.created_at,
-                    "date_str": s.created_at.strftime("%m/%d %H:%M") if s.created_at else "",
+                    "date_str": format_local(s.created_at),
                 }
             )
         return result

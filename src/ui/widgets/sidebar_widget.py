@@ -39,7 +39,6 @@ class SidebarWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.logger = get_logger(__name__)
-        self.current_page = None  # 启动时不选中任何页面
         self.nav_buttons = {}  # 导航按钮字典
         self.init_ui()
 
@@ -160,8 +159,6 @@ class SidebarWidget(QWidget):
 
     def _set_active_page(self, page_name: str):
         """设置当前活动页面"""
-        self.current_page = page_name
-
         # 更新按钮状态（不包括"新建对话"按钮）
         for name, button in self.nav_buttons.items():
             if name != "new_chat":  # "新建对话"不是页面导航按钮

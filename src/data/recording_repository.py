@@ -8,7 +8,7 @@ import json
 import logging
 import threading
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from src.utils.timezone import from_timestamp_utc_naive, utc_now_naive
 
 from .duckdb_manager import DuckDBManager
 
@@ -97,9 +97,11 @@ class RecordingRepository:
 
         # 转换时间戳
         start_time = (
-            datetime.fromtimestamp(session["start_time"]) if session.get("start_time") else None
+            from_timestamp_utc_naive(session["start_time"]) if session.get("start_time") else None
         )
-        end_time = datetime.fromtimestamp(session["end_time"]) if session.get("end_time") else None
+        end_time = (
+            from_timestamp_utc_naive(session["end_time"]) if session.get("end_time") else None
+        )
 
         # 序列化 metadata
         metadata = json.dumps(session.get("metadata", {}), ensure_ascii=False)
@@ -144,7 +146,7 @@ class RecordingRepository:
 
             for seq_num, action in enumerate(batch, start=i + 1):
                 # 转换时间戳
-                timestamp = datetime.fromtimestamp(action.get("timestamp", 0))
+                timestamp = from_timestamp_utc_naive(action.get("timestamp", 0))
 
                 # 序列化 JSON 字段
                 parameters = json.dumps(action.get("parameters", {}), ensure_ascii=False)
@@ -237,7 +239,11 @@ class RecordingRepository:
                     ),
                     "response_body": request.get("response_body"),
                     "duration": request.get("duration"),
-                    "timestamp": datetime.fromtimestamp(ts) if (ts := request.get("timestamp")) is not None else datetime.now(),
+                    "timestamp": (
+                        from_timestamp_utc_naive(ts)
+                        if (ts := request.get("timestamp")) is not None
+                        else utc_now_naive()
+                    ),
                     "filtered": False,
                     "filter_reason": None,
                     "filtered_at": None,
@@ -275,8 +281,10 @@ class RecordingRepository:
         # 序列化 JSON 字段
         siblings = json.dumps(siblings_snapshot.get("siblings", []), ensure_ascii=False)
 
-        timestamp = datetime.fromtimestamp(
-            siblings_snapshot.get("timestamp", datetime.now().timestamp())
+        timestamp = (
+            from_timestamp_utc_naive(ts)
+            if (ts := siblings_snapshot.get("timestamp")) is not None
+            else utc_now_naive()
         )
 
         snapshot_id = self.db.insert(
@@ -297,4 +305,3 @@ class RecordingRepository:
         )
 
         return snapshot_id
-

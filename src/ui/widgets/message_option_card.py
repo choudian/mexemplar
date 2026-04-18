@@ -157,7 +157,7 @@ class MessageOptionCard(QWidget):
         btn.setMinimumHeight(36)
 
         # 设置基础样式
-        self._set_button_style(btn, "normal", is_recommended)
+        self._set_button_style(btn, "normal")
 
         # 连接点击事件
         btn.clicked.connect(lambda checked, v=value, b=btn: self._on_option_clicked(v, b))
@@ -175,13 +175,12 @@ class MessageOptionCard(QWidget):
 
         self.options_layout.addWidget(option_widget)
 
-    def _set_button_style(self, btn: QPushButton, state: str, is_recommended: bool = False):
+    def _set_button_style(self, btn: QPushButton, state: str):
         """设置按钮样式
 
         Args:
             btn: 按钮对象
             state: 状态 ("normal" | "selected")
-            is_recommended: 是否是推荐选项
         """
         if state == "selected":
             # 用户选中状态：浅绿色
@@ -217,13 +216,12 @@ class MessageOptionCard(QWidget):
         """处理选项点击"""
         # 更新所有按钮样式
         for b in self._option_buttons:
-            recommended = b.property("recommended")
             if b == btn:
                 # 当前选中：蓝色高亮
-                self._set_button_style(b, "selected", recommended)
+                self._set_button_style(b, "selected")
             else:
                 # 取消选中
-                self._set_button_style(b, "normal", recommended)
+                self._set_button_style(b, "normal")
 
         if self._question_data:
             question_id = self._question_data.get("id", "")

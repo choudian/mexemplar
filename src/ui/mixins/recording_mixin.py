@@ -67,13 +67,13 @@ class RecordingMixin:
                 if not self._initialize_browser_recorder():
                     error_msg = (
                         "浏览器录制器初始化失败。\n\n可能的原因：\n"
-                        f"1. DuckDB 数据库文件被其他程序占用（如 PyCharm）\n"
-                        f"2. 数据库文件损坏\n"
-                        f"3. 磁盘空间不足\n\n"
-                        f"解决方案：\n"
-                        f"1. 关闭 PyCharm 或其他可能占用数据库的程序\n"
-                        f"2. 检查 data/mexemplar.duckdb 文件是否存在\n"
-                        f"3. 查看日志获取详细信息"
+                        "1. DuckDB 数据库文件被其他程序占用（如 PyCharm）\n"
+                        "2. 数据库文件损坏\n"
+                        "3. 磁盘空间不足\n\n"
+                        "解决方案：\n"
+                        "1. 关闭 PyCharm 或其他可能占用数据库的程序\n"
+                        "2. 检查 data/mexemplar.duckdb 文件是否存在\n"
+                        "3. 查看日志获取详细信息"
                     )
                     self.recording_start_failed.emit(error_msg)
                     return

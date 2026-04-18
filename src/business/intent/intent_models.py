@@ -5,8 +5,9 @@ Intent 数据模型
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
 from datetime import datetime
+from typing import List, Optional
+from src.utils.timezone import utc_now_naive
 import uuid
 from enum import Enum
 
@@ -53,4 +54,4 @@ class Intent:
     def cancel(self):
         """取消意图"""
         self.status = IntentStatus.CANCELLED
-        self.updated_at = datetime.now()
+        self.updated_at = utc_now_naive()

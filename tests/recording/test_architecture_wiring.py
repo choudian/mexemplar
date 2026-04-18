@@ -57,9 +57,9 @@ class TestExtensionTriggerSmokeTests:
 
 
 class TestGatekeeperTests:
-    def test_recorder_does_not_import_removed_modules(self):
-        source = Path("src/recording/recorder.py").read_text(encoding="utf-8")
-        assert "workflow_orchestrator" not in source.lower()
+    def test_recorder_module_removed(self):
+        """src/recording/recorder.py was dead code and has been removed."""
+        assert not Path("src/recording/recorder.py").exists()
 
     def test_browser_phase2_split_modules_exist(self):
         from src.recording.browser.async_event_loop_runner import AsyncEventLoopRunner

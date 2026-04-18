@@ -102,7 +102,7 @@ def test_real_llm_teaching_smoke(
     _inject_real_api_key(isolated_runtime)
 
     robot.ui.click_sidebar_page(TEACHING)
-    recording_id = simulate_recording_completion(action_count=5)
+    simulate_recording_completion(action_count=5)
 
     # 验证跳转到意图确认页
     assert robot.wait.wait_until(

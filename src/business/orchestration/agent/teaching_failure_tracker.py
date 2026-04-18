@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from src.utils.timezone import utc_now_naive
 from typing import Optional
 
 from src.business.agents.config import AgentType
@@ -22,9 +22,6 @@ class TeachingFailureTracker:
 
     def connect_signals(self) -> None:
         self._event_bus.connect("agent_error", self.on_agent_error_for_failure)
-
-    def get_failure_record(self, workflow_id: str):
-        return self._failure_repo.get_by_workflow_id(workflow_id)
 
     def on_agent_error_for_failure(self, sender, **kwargs):
         del sender
@@ -90,7 +87,7 @@ class TeachingFailureTracker:
 
         record.status = new_status
         if new_status == "resolved":
-            record.resolved_at = datetime.now()
+            record.resolved_at = utc_now_naive()
         self._failure_repo.update(record)
         self._event_bus.emit(event_name, workflow_id=workflow_id)
 

@@ -9,7 +9,10 @@
 - FailureCard       — 失败记录卡片
 """
 
-from datetime import datetime
+from src.utils.timezone import (
+    format_relative,
+    normalize_legacy_local_naive_for_display,
+)
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QPainter
@@ -157,19 +160,6 @@ class _SkillCardBase(QFrame):
         self.setMinimumHeight(160)
         self.setMaximumHeight(200)
 
-    @staticmethod
-    def _format_time(dt: datetime) -> str:
-        if dt is None:
-            return ""
-        delta = datetime.now() - dt
-        if delta.days > 0:
-            return f"{delta.days}天前"
-        elif delta.seconds >= 3600:
-            return f"{delta.seconds // 3600}小时前"
-        elif delta.seconds >= 60:
-            return f"{delta.seconds // 60}分钟前"
-        return "刚刚"
-
     def _build_top_row(self, left_widget: QWidget) -> QHBoxLayout:
         row = QHBoxLayout()
         row.addWidget(left_widget)
@@ -265,7 +255,7 @@ class PendingToolCard(_SkillCardBase):
         meta_row.addWidget(trial_lbl)
         meta_row.addStretch()
         if self.pending_tool.created_at:
-            time_lbl = QLabel(self._format_time(self.pending_tool.created_at))
+            time_lbl = QLabel(format_relative(self.pending_tool.created_at))
             time_lbl.setStyleSheet(_META_STYLE)
             meta_row.addWidget(time_lbl)
         layout.addLayout(meta_row)
@@ -364,7 +354,7 @@ class PublishedToolCard(_SkillCardBase):
             meta_row.addWidget(param_lbl)
         meta_row.addStretch()
         if self.tool.created_at:
-            time_lbl = QLabel(_SkillCardBase._format_time(self.tool.created_at))
+            time_lbl = QLabel(format_relative(self.tool.created_at))
             time_lbl.setStyleSheet(_META_STYLE)
             meta_row.addWidget(time_lbl)
         layout.addLayout(meta_row)
@@ -451,7 +441,11 @@ class SkillCompositionCard(_SkillCardBase):
         meta_row.addWidget(member_lbl)
         meta_row.addStretch()
         if self.composition.updated_at:
-            time_lbl = QLabel(_SkillCardBase._format_time(self.composition.updated_at))
+            time_lbl = QLabel(
+                format_relative(
+                    normalize_legacy_local_naive_for_display(self.composition.updated_at)
+                )
+            )
             time_lbl.setStyleSheet(_META_STYLE)
             meta_row.addWidget(time_lbl)
         layout.addLayout(meta_row)
@@ -534,7 +528,7 @@ class FailureCard(_SkillCardBase):
 
         meta_row = QHBoxLayout()
         if self._record.created_at:
-            time_lbl = QLabel(_SkillCardBase._format_time(self._record.created_at))
+            time_lbl = QLabel(format_relative(self._record.created_at))
             time_lbl.setStyleSheet(_META_STYLE)
             meta_row.addWidget(time_lbl)
         retry_lbl = QLabel(f"已失败 {self._record.retry_count} 次")

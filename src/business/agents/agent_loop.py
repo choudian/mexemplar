@@ -176,7 +176,6 @@ class AgentLoop:
         self,
         tool_call: ToolCallInfo,
         tool_handlers: Dict[str, Callable],
-        ctx: ContextManager,
     ) -> Union[str, ToolSignal]:
         """
         执行单个工具调用
@@ -187,7 +186,6 @@ class AgentLoop:
         Args:
             tool_call: 工具调用信息
             tool_handlers: 工具名称到 handler 的映射
-            ctx: 上下文管理器
 
         Returns:
             工具执行结果（str 或 ToolSignal）
@@ -476,7 +474,7 @@ class AgentLoop:
 
             # 执行工具（统一路径，不区分内置/注册）
             try:
-                result = self._execute_tool_call(tool_call, tool_handlers, ctx)
+                result = self._execute_tool_call(tool_call, tool_handlers)
                 signal = self._handle_tool_result(result, tool_call, ctx)
                 if signal is not None:
                     return signal

@@ -583,9 +583,9 @@ class RecordingWidget(QWidget):
 
     def append_status(self, message: str):
         """追加状态消息"""
-        from datetime import datetime
+        from src.utils.timezone import format_local, utc_now_naive
 
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = format_local(utc_now_naive(), "%H:%M:%S")
         self.status_text.append(f"[{timestamp}] {message}")
         # 有日志时自动显示日志区
         if not self.status_section.isVisible():

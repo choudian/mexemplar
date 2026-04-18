@@ -4,10 +4,9 @@ ToolRepository -- 工具定义仓库
 
 import logging
 from typing import List, Optional
-from datetime import datetime
-
 from ..models_sqlite import Tool
 from .base_repository import BaseRepository
+from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ class ToolRepository(BaseRepository):
     def update(self, tool: Tool) -> Tool:
         """更新工具"""
         try:
-            tool.updated_at = datetime.now()
+            tool.updated_at = utc_now_naive()
             self.session.commit()
             self.session.refresh(tool)
             logger.info(f"工具已更新: {tool.tool_name} ({tool.tool_id})")

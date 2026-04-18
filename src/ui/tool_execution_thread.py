@@ -151,17 +151,12 @@ class ToolExecutionProgressDialog:
             parent: 父窗口
         """
         from PyQt6.QtWidgets import (
-            QDialog,
             QVBoxLayout,
             QHBoxLayout,
             QLabel,
             QProgressBar,
             QPushButton,
         )
-
-        self.tool_name = tool_name
-        self.entity_label = entity_label
-        self.logger = get_logger(__name__)
 
         # 创建对话框
         self.dialog = QDialog(parent)

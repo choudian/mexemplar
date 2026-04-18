@@ -6,9 +6,26 @@
 """
 
 import logging
+from datetime import datetime
+
 from sqlalchemy import text
+from src.utils.timezone import local_naive_to_utc_naive
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_datetime(value) -> datetime | None:
+    """兼容 SQLite 原生字符串与 SQLAlchemy DateTime 返回值。"""
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            logger.warning(f"无法解析 datetime 值，跳过迁移: {value!r}")
+            return None
+    logger.warning(f"不支持的 datetime 值类型，跳过迁移: {type(value)!r}")
+    return None
 
 
 def get_schema_version(engine) -> int:
@@ -53,6 +70,10 @@ def run_migrations(engine):
     if current_version < 8:
         migrate_to_v8(engine)
         logger.info(f"数据库迁移完成：{max(current_version, 7)} -> 8")
+
+    if current_version < 9:
+        migrate_to_v9(engine)
+        logger.info(f"数据库迁移完成：{max(current_version, 8)} -> 9")
 
     logger.info(f"数据库已是最新版本：{get_schema_version(engine)}")
 
@@ -495,4 +516,51 @@ def migrate_to_v8(engine):
         except Exception as e:
             conn.rollback()
             logger.error(f"迁移到版本 8 失败: {e}")
+            raise
+
+
+def migrate_to_v9(engine):
+    """迁移到版本 9：归一化旧版技能组合 updated_at 的 local naive 时间。"""
+    with engine.connect() as conn:
+        try:
+            rows = conn.execute(
+                text("SELECT composition_id, updated_at FROM skill_compositions")
+            ).mappings()
+
+            migrated_count = 0
+            for row in rows:
+                updated_at = _coerce_datetime(row["updated_at"])
+                # Python 端 datetime.now() 带微秒，SQL CURRENT_TIMESTAMP 不带；
+                # 只迁移带微秒的行（来自旧 Python 代码），跳过 SQL 生成的（已是 UTC）
+                if updated_at is None or updated_at.microsecond == 0:
+                    continue
+
+                normalized = local_naive_to_utc_naive(updated_at)
+                if normalized == updated_at:
+                    continue
+
+                conn.execute(
+                    text(
+                        """
+                        UPDATE skill_compositions
+                        SET updated_at = :updated_at
+                        WHERE composition_id = :composition_id
+                        """
+                    ),
+                    {
+                        "composition_id": row["composition_id"],
+                        "updated_at": normalized,
+                    },
+                )
+                migrated_count += 1
+
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 9})
+            conn.commit()
+            logger.info(
+                "数据库迁移到版本 9 完成：已归一化 %s 条技能组合 updated_at",
+                migrated_count,
+            )
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 9 失败: {e}")
             raise

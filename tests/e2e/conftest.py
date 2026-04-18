@@ -8,7 +8,7 @@ import socket
 import sys
 import threading
 import uuid
-from datetime import datetime
+from src.utils.timezone import from_timestamp_utc_naive
 from collections import deque
 from dataclasses import dataclass
 from functools import partial
@@ -493,8 +493,8 @@ def simulate_recording_completion(main_window):
                 "status": "completed",
                 "recording_mode": "browser",
                 "browser_type": "chromium",
-                "start_time": datetime.fromtimestamp(now - 10),
-                "end_time": datetime.fromtimestamp(now),
+                "start_time": from_timestamp_utc_naive(now - 10),
+                "end_time": from_timestamp_utc_naive(now),
                 "metadata": json.dumps({"url": "https://www.baidu.com"}, ensure_ascii=False),
             },
             auto_commit=True,
@@ -508,7 +508,7 @@ def simulate_recording_completion(main_window):
                 "recording_mode": "browser",
                 "url": "https://www.baidu.com",
                 "parameters": json.dumps({"url": "https://www.baidu.com"}, ensure_ascii=False),
-                "timestamp": datetime.fromtimestamp(now - 9),
+                "timestamp": from_timestamp_utc_naive(now - 9),
             },
             {
                 "recording_id": recording_id,
@@ -523,7 +523,7 @@ def simulate_recording_completion(main_window):
                     "placeholder": "请输入搜索关键词",
                 }, ensure_ascii=False),
                 "parameters": json.dumps({"selector": "#kw"}, ensure_ascii=False),
-                "timestamp": datetime.fromtimestamp(now - 7),
+                "timestamp": from_timestamp_utc_naive(now - 7),
             },
             {
                 "recording_id": recording_id,
@@ -537,7 +537,7 @@ def simulate_recording_completion(main_window):
                     "name": "wd",
                 }, ensure_ascii=False),
                 "parameters": json.dumps({"text": "Python教程", "selector": "#kw"}, ensure_ascii=False),
-                "timestamp": datetime.fromtimestamp(now - 5),
+                "timestamp": from_timestamp_utc_naive(now - 5),
             },
             {
                 "recording_id": recording_id,
@@ -551,7 +551,7 @@ def simulate_recording_completion(main_window):
                     "value": "百度一下",
                 }, ensure_ascii=False),
                 "parameters": json.dumps({"selector": "#su"}, ensure_ascii=False),
-                "timestamp": datetime.fromtimestamp(now - 3),
+                "timestamp": from_timestamp_utc_naive(now - 3),
             },
         ]
         for action in actions[:action_count]:

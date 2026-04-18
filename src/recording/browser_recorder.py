@@ -259,9 +259,6 @@ class BrowserRecorder:
         except Exception as exc:
             logger.error(f"清理资源时出错: {exc}", exc_info=True)
 
-    def _ensure_event_loop(self):
-        self._loop_runner.ensure_started()
-
     def _run_async(self, coro, timeout: float = 120):
         return self._loop_runner.run(coro, timeout=timeout)
 
@@ -486,9 +483,6 @@ class BrowserRecorder:
             time_fn=time.time,
             sleep_fn=time.sleep,
         )
-
-    def _send_ws_command(self, message: dict, websocket=None, description: str = "命令"):
-        self._ws_coordinator.send_ws_command(message, websocket=websocket, description=description)
 
     def _send_start_command_via_ws(self, recording_id: str, websocket=None):
         self._ws_coordinator.send_start_command_via_ws(

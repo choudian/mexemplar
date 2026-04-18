@@ -12,12 +12,11 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import sys
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
+import src.utils.timezone as timezone_utils
 
 from src.data.models import SkillComposition, SkillCompositionMember, Tool
 from src.ui.widgets.skill_cards import PublishedToolCard, SkillCompositionCard
@@ -84,15 +83,9 @@ class TestPublishedToolCardMenu:
         # 拦截 QMenu.exec 使其不弹出
         from PyQt6.QtWidgets import QMenu
 
-        actions = []
         with patch.object(QMenu, "exec"):
             card._show_menu()
-            # 手动收集 menu 中的 actions
-            # 由于 exec 被 mock，需要在 show_menu 中捕获 menu
-        # 改用另一种方式：直接检查信号连接
-        # edit_requested 不应被任何内部逻辑触发
-        # 更可靠的方式：检查菜单构建逻辑
-        # 通过检查类方法覆盖来验证
+        # 直接检查类方法覆盖来验证菜单逻辑已定制
         assert card._show_menu.__func__ is not PublishedToolCard.__bases__[0]._show_menu
 
     def test_no_edit_signal_connection(self, qt_app):
@@ -138,7 +131,6 @@ class TestSkillCompositionCardActions:
 
         actions_text = []
 
-        original_exec = QMenu.exec
         captured_menus = []
 
         def capture_exec(self_menu, *args, **kwargs):
@@ -215,6 +207,22 @@ class TestSkillCompositionCardActions:
         assert "编辑" in actions2
         assert "删除" in actions2
         assert "重新发布" not in actions2
+
+
+class TestSkillCompositionCardTimeFormatting:
+    def test_recent_legacy_local_updated_at_is_rendered_correctly(self, qt_app, monkeypatch):
+        fixed_local_now = datetime(2026, 4, 18, 16, 0, tzinfo=timezone(timedelta(hours=8)))
+        monkeypatch.setattr(timezone_utils, "local_now", lambda: fixed_local_now)
+
+        comp = _make_composition(status="draft", composition_id="c-time")
+        comp.updated_at = datetime(2026, 4, 18, 15, 55)
+        card = SkillCompositionCard(comp)
+        card.show()
+
+        from PyQt6.QtWidgets import QLabel
+
+        label_texts = [label.text() for label in card.findChildren(QLabel)]
+        assert "5分钟前" in label_texts
 
 
 # ---------------------------------------------------------------------------

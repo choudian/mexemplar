@@ -249,7 +249,6 @@ class SkillCompositionEditDialog(QDialog):
 
     def __init__(self, composition: Optional[SkillComposition] = None, parent=None):
         super().__init__(parent)
-        self.logger = get_logger(__name__)
         self.service = SkillCompositionService()
         self.composition = composition
         self.available_tools = self.service.get_published_tool_choices()
