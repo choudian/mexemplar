@@ -126,30 +126,41 @@ CODIFY_AS_TOOL_SCHEMA = make_tool_schema(
 )
 
 
+def _rfind_role(messages: list, role: str, start: int | None = None) -> int:
+    """从后向前查找最后一条指定 role 的消息索引，未找到返回 -1。"""
+    begin = len(messages) - 1 if start is None else start
+    if begin < 0:
+        return -1
+    for i in range(begin, -1, -1):
+        if messages[i].role == role:
+            return i
+    return -1
+
+
 def _extract_tool_calls_from_messages(messages: list) -> list:
     """
-    从会话消息历史中提取最近一轮的工具调用链。
+    从会话消息历史中提取倒数第二条 user 消息到最后一条 user 消息之间的工具调用链。
 
-    从末尾向前扫描，收集最近连续的 tool/tool_result 消息对，
-    直到遇到 role=user 的消息为止（视为一轮对话的起点）。
-    只扫描非 archived 消息。
+    若只有一条 user 消息，则取该 user 消息之后的所有工具调用。只扫描非 archived 消息。
     """
     active_messages = [m for m in messages if not m.is_archived]
     if not active_messages:
         return []
 
-    # 从末尾向前找最近的 user 消息位置
-    user_idx = -1
-    for i in range(len(active_messages) - 1, -1, -1):
-        if active_messages[i].role == "user":
-            user_idx = i
-            break
-
-    if user_idx < 0:
+    last_user_idx = _rfind_role(active_messages, "user")
+    if last_user_idx < 0:
         return []
 
+    previous_user_idx = _rfind_role(active_messages, "user", start=last_user_idx - 1)
+
     trace = []
-    for msg in active_messages[user_idx:]:
+    if previous_user_idx >= 0:
+        # 多轮对话：取前一条 user 和最后一条 user 之间的工具调用
+        trace_window = active_messages[previous_user_idx + 1 : last_user_idx]
+    else:
+        # 单条 user 消息：取该 user 消息之后的所有工具调用
+        trace_window = active_messages[last_user_idx + 1 :]
+    for msg in trace_window:
         if msg.role == "assistant" and msg.tool_calls:
             try:
                 calls = json.loads(msg.tool_calls)

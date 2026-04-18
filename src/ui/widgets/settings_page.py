@@ -198,7 +198,7 @@ class SettingsPage(QWidget):
             if index >= 0:
                 self.model_combo.setCurrentIndex(index)
 
-            timeout = self.config.get("ai.timeout", default=60)
+            timeout = int(self.config.get("ai.timeout", default=60) or 60)
             self.timeout_spin.setValue(timeout)
 
             # 录制配置
@@ -211,7 +211,7 @@ class SettingsPage(QWidget):
             if start_url:
                 self.start_url_input.setText(start_url)
 
-            ws_port = self.config.get_websocket_port()
+            ws_port = int(self.config.get_websocket_port())
             self.ws_port_spin.setValue(ws_port)
 
             # 压缩配置
@@ -238,12 +238,16 @@ class SettingsPage(QWidget):
             elif not api_key:
                 self.config.clear_ai_api_key()
             self.config.set("ai.model", self.model_combo.currentData())
-            self.config.set("ai.timeout", self.timeout_spin.value())
+            self.config.set("ai.timeout", self.timeout_spin.value(), value_type="int")
 
             # 录制配置
             self.config.set("recording.default_recording_mode", self.rec_mode_combo.currentData())
             self.config.set("recording.browser_start_url", self.start_url_input.text().strip())
-            self.config.set("recording.websocket.port", self.ws_port_spin.value())
+            self.config.set(
+                "recording.websocket.port",
+                self.ws_port_spin.value(),
+                value_type="int",
+            )
 
             # 压缩配置
             self.config.set("ai.compression_level", self.comp_level_combo.currentData())

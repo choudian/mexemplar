@@ -41,6 +41,7 @@ class WebSocketServer:
         self._is_running = False
         self._loop = None  # 事件循环引用
         self._serve_future = None  # 用于取消 serve 阻塞
+        self._pending_restart_future = None  # 配置变化触发的延迟重启任务
 
         # 统计信息
         self.stats = {"connections": 0, "messages_received": 0, "messages_sent": 0, "errors": 0}
@@ -49,6 +50,15 @@ class WebSocketServer:
             self._on_config_changed, keys=["recording.websocket.host", "recording.websocket.port"]
         )
         logger.info("[WS] 已注册配置变化观察者")
+
+    @staticmethod
+    def _cancel_future(future):
+        """安全取消一个 Future（如已完成则跳过）。
+
+        适用于 ``concurrent.futures.Future`` 和 ``asyncio.Future``。
+        """
+        if future and not future.done():
+            future.cancel()
 
     async def handle_client(self, websocket: WebSocketServerProtocol):
         """
@@ -268,7 +278,8 @@ class WebSocketServer:
                     await asyncio.sleep(1)
                     await self._restart_server(new_host, new_port)
 
-                asyncio.run_coroutine_threadsafe(
+                self._cancel_future(self._pending_restart_future)
+                self._pending_restart_future = asyncio.run_coroutine_threadsafe(
                     _delayed_restart(), self._loop
                 )
             else:
@@ -408,9 +419,11 @@ class WebSocketServer:
         logger.info("[WS] 正在停止服务器...")
         self._is_running = False
 
+        self._cancel_future(self._pending_restart_future)
+        self._pending_restart_future = None
+
         # 取消 serve 阻塞的 Future，使 async with serve() 退出
-        if self._serve_future and not self._serve_future.done():
-            self._serve_future.cancel()
+        self._cancel_future(self._serve_future)
 
         # 关闭所有客户端连接
         for client in self.clients:

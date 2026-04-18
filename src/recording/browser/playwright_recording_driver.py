@@ -35,6 +35,7 @@ class PlaywrightRecordingDriver:
         self._playwright_launch_token: Optional[str] = None
         self._playwright_extension_bundle_path: Optional[Path] = None
         self._user_data_dir: Optional[Path] = None
+        self.on_browser_ready: Optional[Callable[[Any, asyncio.AbstractEventLoop], Any]] = None
 
     @property
     def playwright(self):
@@ -218,6 +219,11 @@ class PlaywrightRecordingDriver:
             self._browser = getattr(self._context, "browser", None)
 
             self._logger.info("浏览器已启动（持久化模式，扩展已加载）")
+            if self.on_browser_ready is not None:
+                try:
+                    await self.on_browser_ready(self._context, asyncio.get_running_loop())
+                except Exception as exc:
+                    self._logger.warning(f"on_browser_ready 回调失败: {exc}")
 
             ws_host = self._unified_config.get_websocket_host()
             ws_port = self._unified_config.get_websocket_port()

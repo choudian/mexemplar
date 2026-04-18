@@ -5,6 +5,7 @@
 """
 
 import json
+import os
 import re
 import threading
 from contextlib import nullcontext
@@ -40,13 +41,18 @@ def safe_format_template(template: str, **kwargs: str) -> str:
 def get_default_data_dir() -> Path:
     """获取默认数据目录，确保目录存在。
 
-    返回项目根目录下的 data/ 目录，如不存在则自动创建。
+    优先使用 `EXEMPLAR_DATA_DIR` 指定的运行时根目录；未设置时回退到
+    项目根目录下的 `data/` 目录。如不存在则自动创建。
 
     Returns:
         data 目录的 Path 对象
     """
-    project_root = Path(__file__).parent.parent.parent
-    data_dir = project_root / "data"
+    configured_dir = os.environ.get("EXEMPLAR_DATA_DIR", "").strip()
+    if configured_dir:
+        data_dir = Path(configured_dir).expanduser()
+    else:
+        project_root = Path(__file__).parent.parent.parent
+        data_dir = project_root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
 

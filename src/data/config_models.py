@@ -53,7 +53,6 @@ def _filter_dataclass_fields(data: Dict[str, Any], dataclass_type: type) -> Dict
     return {k: v for k, v in data.items() if k in fields}
 
 
-
 @dataclass
 class AIConfig:
     """AI配置"""
@@ -128,7 +127,6 @@ class RecordingConfig:
     capture_network_requests: bool = True  # 是否捕获网络请求（浏览器模式）
     network_request_filter: str = "xhr_fetch"  # 网络请求过滤类型（'all', 'xhr_fetch', 'api_only'）
     network_request_timeout: float = 5.0  # 关联操作和请求的时间窗口（秒）
-    debug_log_enabled: bool = False  # 是否启用调试日志（写入 .cursor/debug.log）
     # WebSocket 配置
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
@@ -175,9 +173,6 @@ class AppConfig:
 
         if "recording" in data:
             recording_data = _filter_dataclass_fields(data["recording"], RecordingConfig)
-            # 如果配置中没有 debug_log_enabled，默认使用 False
-            if "debug_log_enabled" not in recording_data:
-                recording_data["debug_log_enabled"] = False
             config.recording = RecordingConfig(**recording_data)
 
         if "ui" in data:

@@ -41,7 +41,6 @@
     "capture_network_requests": true,
     "network_request_filter": "xhr_fetch",
     "network_request_timeout": 5.0,
-    "debug_log_enabled": false,
     "persistent_user_data": true,
     "user_data_dir": null,
     "websocket": {

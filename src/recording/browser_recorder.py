@@ -176,6 +176,11 @@ class BrowserRecorder:
         return self._page
 
     @property
+    def playwright_driver(self) -> PlaywrightRecordingDriver:
+        """暴露底层 Playwright 录制驱动。"""
+        return self._playwright_driver
+
+    @property
     def _is_extension_recording(self) -> bool:
         return self._is_recording and self._active_recording_mode == RecordingMode.EXTENSION_TRIGGERED
 

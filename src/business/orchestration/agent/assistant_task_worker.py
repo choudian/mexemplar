@@ -28,10 +28,6 @@ class AssistantTaskWorker:
         self._task_worker_running = False
 
     @property
-    def task_queue_event(self) -> threading.Event:
-        return self._task_queue_event
-
-    @property
     def is_running(self) -> bool:
         return self._task_worker_running
 

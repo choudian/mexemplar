@@ -119,19 +119,20 @@ def event_value(event_data, *keys):
     return None
 
 
-def connect(signal_name: str, callback: Callable) -> Callable:
+def connect(signal_name: str, callback: Callable, *, weak: bool = True) -> Callable:
     """
     连接信号和回调函数
 
     Args:
         signal_name: 信号名称
         callback: 回调函数
+        weak: 是否使用 blinker 默认的弱引用绑定
 
     Returns:
         取消连接的函数
     """
     signal = _signals.signal(signal_name)
-    return signal.connect(callback)
+    return signal.connect(callback, weak=weak)
 
 
 def emit(signal_name: str, sender: Any = None, **kwargs) -> None:

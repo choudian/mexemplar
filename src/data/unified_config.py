@@ -12,6 +12,7 @@
 """
 
 import logging
+import os
 import threading
 from typing import Optional, Dict, Any, Callable, List
 from dataclasses import dataclass
@@ -20,6 +21,11 @@ from src.data.config_models import AppConfig, ConfigFileLoader
 from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _get_keyring_service_name() -> str:
+    """返回当前运行时使用的 keyring service name。"""
+    return os.environ.get("EXEMPLAR_KEYRING_SERVICE_NAME", "Mexemplar").strip() or "Mexemplar"
 
 
 @dataclass
@@ -166,7 +172,7 @@ class UnifiedConfigManager:
         try:
             import keyring
 
-            api_key = keyring.get_password("Mexemplar", "anthropic_api_key")
+            api_key = keyring.get_password(_get_keyring_service_name(), "anthropic_api_key")
             if api_key:
                 logger.debug("[配置] 从 keyring 读取 API 密钥")
                 return api_key
@@ -184,7 +190,7 @@ class UnifiedConfigManager:
         try:
             import keyring
 
-            keyring.set_password("Mexemplar", "anthropic_api_key", api_key)
+            keyring.set_password(_get_keyring_service_name(), "anthropic_api_key", api_key)
             logger.info("[配置] API 密钥已安全写入 keyring")
         except Exception as e:
             logger.warning(
@@ -206,7 +212,7 @@ class UnifiedConfigManager:
         try:
             import keyring
 
-            keyring.delete_password("Mexemplar", "anthropic_api_key")
+            keyring.delete_password(_get_keyring_service_name(), "anthropic_api_key")
         except Exception:
             pass
         self.set("ai.api_key", "")
@@ -226,7 +232,7 @@ class UnifiedConfigManager:
         try:
             import keyring
 
-            return keyring.get_password("Mexemplar", "openai_api_key")
+            return keyring.get_password(_get_keyring_service_name(), "openai_api_key")
         except Exception:
             return None
 
@@ -327,10 +333,6 @@ class UnifiedConfigManager:
     def get_proxy_port(self) -> int:
         """获取录制代理端口"""
         return self.get("recording.proxy.port", default=8080)
-
-    def get_debug_log_enabled(self) -> bool:
-        """是否启用调试日志"""
-        return self.get("recording.debug_log_enabled", default=False)
 
     # ===== 内部方法 =====
 

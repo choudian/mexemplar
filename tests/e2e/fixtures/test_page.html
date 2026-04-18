@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Mexemplar E2E Test Page</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f7f4ec;
+      --card: #fffdf8;
+      --ink: #233142;
+      --muted: #6b7280;
+      --line: #d9ccb7;
+      --accent: #0f766e;
+      --accent-strong: #115e59;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(15, 118, 110, 0.08), transparent 32%),
+        linear-gradient(135deg, #f4efe3 0%, var(--bg) 100%);
+    }
+
+    main {
+      width: min(560px, calc(100vw - 32px));
+      padding: 32px;
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--card);
+      box-shadow: 0 24px 80px rgba(35, 49, 66, 0.08);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+    }
+
+    p {
+      margin: 0 0 20px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    form {
+      display: grid;
+      gap: 12px;
+    }
+
+    label {
+      font-weight: 600;
+    }
+
+    input,
+    button {
+      min-height: 44px;
+      border-radius: 12px;
+      font-size: 16px;
+    }
+
+    input {
+      width: 100%;
+      padding: 0 14px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    button {
+      border: none;
+      color: #fff;
+      background: var(--accent);
+      cursor: pointer;
+      transition: background-color 120ms ease;
+    }
+
+    button:hover {
+      background: var(--accent-strong);
+    }
+
+    #result {
+      margin-top: 18px;
+      padding: 14px 16px;
+      min-height: 52px;
+      border-radius: 14px;
+      border: 1px dashed var(--line);
+      background: #faf6ee;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>搜索表单</h1>
+    <p>这个页面只用于 GUI E2E 录制测试，会在提交后把结果写回当前页面。</p>
+    <form id="search-form">
+      <label for="search-box">关键词</label>
+      <input id="search-box" name="q" type="text" placeholder="输入搜索关键词" />
+      <button type="submit">提交</button>
+    </form>
+    <div id="result" aria-live="polite">等待提交</div>
+  </main>
+
+  <script>
+    document.getElementById("search-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = document.querySelector('input[name="q"]').value.trim();
+      const result = value || "(空)";
+      document.getElementById("result").textContent = `已提交: ${result}`;
+    });
+  </script>
+</body>
+</html>

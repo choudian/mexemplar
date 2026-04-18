@@ -89,6 +89,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "e2e: headful GUI end-to-end tests that require explicit opt-in",
+    "real_llm: run the test against a real LLM instead of the scripted mock client",
+]
 addopts = [
     "--strict-markers",
     "--strict-config",
