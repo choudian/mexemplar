@@ -102,6 +102,7 @@ class AgentHandlerMixin:
         self.logger.info(
             f"工具已入库: workflow={workflow_id}, tool_id={tool_id}, from_triage={from_triage}"
         )
+        self._schedule_skills_refresh(full=True)
         if from_triage:
             self.main_content.switch_page(INTENT_CONFIRMATION)
             return
@@ -110,6 +111,7 @@ class AgentHandlerMixin:
     def _on_tool_published(self, workflow_id: str, tool_id: str) -> None:
         """工具发布后切换到工具列表页"""
         self.logger.info(f"工具已发布: workflow={workflow_id}, tool_id={tool_id}")
+        self._schedule_skills_refresh(full=True)
         QTimer.singleShot(1500, self._switch_to_pending_tools)
 
     def _notify_skill_learned(self) -> None:
@@ -415,15 +417,32 @@ class AgentHandlerMixin:
     def _on_failure_updated(
         self, workflow_id: str, failed_stage: str, event_type: str, is_new: bool
     ) -> None:
-        """失败记录状态变化：防抖刷新技能列表页的失败 tab"""
-        if not hasattr(self, "_failure_refresh_timer"):
-            self._failure_refresh_timer = QTimer(self)
-            self._failure_refresh_timer.setSingleShot(True)
-            self._failure_refresh_timer.timeout.connect(self._do_refresh_failures)
-        self._failure_refresh_timer.start(200)
+        """失败记录状态变化：防抖刷新技能列表页。"""
+        del workflow_id, failed_stage, is_new
+        self._schedule_skills_refresh(full=(event_type == "resolved"))
 
-    def _do_refresh_failures(self) -> None:
-        """实际刷新失败列表（由防抖 timer 触发）"""
+    def _schedule_skills_refresh(self, *, full: bool) -> None:
+        """防抖刷新技能页；全量刷新优先级高于仅失败记录刷新。"""
+        if not hasattr(self, "_skills_refresh_timer"):
+            self._skills_refresh_timer = QTimer(self)
+            self._skills_refresh_timer.setSingleShot(True)
+            self._skills_refresh_timer.timeout.connect(self._flush_skills_refresh)
+            self._skills_refresh_full = False
+
+        self._skills_refresh_full = self._skills_refresh_full or full
+        self._skills_refresh_timer.start(200)
+
+    def _flush_skills_refresh(self) -> None:
+        """实际刷新技能页（由防抖 timer 触发）。"""
         skills_page = self.main_content.get_page(SKILLS)
-        if skills_page and hasattr(skills_page, "refresh_failures"):
-            skills_page.refresh_failures()
+        if not skills_page:
+            self._skills_refresh_full = False
+            return
+
+        try:
+            if self._skills_refresh_full and hasattr(skills_page, "refresh"):
+                skills_page.refresh()
+            elif hasattr(skills_page, "refresh_failures"):
+                skills_page.refresh_failures()
+        finally:
+            self._skills_refresh_full = False
