@@ -236,44 +236,31 @@ class UnifiedConfigManager:
         except Exception:
             return None
 
-    # ===== 便捷方法：数据压缩模型配置（网络请求智能过滤）=====
+    # ===== 便捷方法：会话压缩调用配置 =====
 
     def get_compression_model_provider(self) -> str:
-        """获取压缩模型提供商"""
-        return self.get("ai.compression_model_provider", default="anthropic")
+        """获取会话压缩使用的模型提供商（跟随主对话模型）"""
+        return self.get_ai_provider()
 
     def get_compression_model_name(self) -> str:
-        """获取压缩模型名称"""
-        return self.get("ai.compression_model_name", default="claude-3-5-haiku-20241022")
+        """获取会话压缩使用的模型名称（跟随主对话模型）"""
+        return self.get_ai_model()
 
     def get_compression_model_api_key(
         self,
     ) -> Optional[str]:
-        """
-        获取压缩模型 API key
-
-        优先级：
-        1. 专用的压缩模型 API key
-        2. 主 API key（fallback）
-        """
-        # 先尝试获取专用的压缩模型 API key
-        compression_key = self.get("ai.compression_model_api_key", default=None)
-        if compression_key:
-            return compression_key
-
-        # fallback 到主 API key
         return self.get_ai_api_key()
 
     def get_compression_model_base_url(self) -> Optional[str]:
-        """获取压缩模型自定义 endpoint（用于代理）"""
-        return self.get("ai.compression_model_base_url", default=None)
+        """获取会话压缩使用的 endpoint（跟随主对话模型）"""
+        return self.get_ai_base_url()
 
     def get_compression_model_temperature(self) -> float:
-        """获取压缩模型温度"""
+        """获取会话压缩调用温度"""
         return self.get("ai.compression_model_temperature", default=0.5)
 
     def get_compression_model_max_tokens(self) -> int:
-        """获取压缩模型最大 tokens"""
+        """获取会话压缩调用最大 tokens"""
         return self.get("ai.compression_model_max_tokens", default=1024)
 
     # ===== 便捷方法：记忆机制配置 =====
@@ -447,4 +434,3 @@ def get_unified_config() -> UnifiedConfigManager:
             logger.info("[配置] 统一配置管理器已初始化（线程安全）")
 
     return _unified_config_manager
-

@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional
 
 from .duckdb_manager import DuckDBManager
 from .recording_repository import RecordingRepository
+from src.recording.browser.duckdb_recording_persister import DuckDBRecordingPersister
+from src.recording.browser.recorder import RecordingMode
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +35,8 @@ class RecordingRecovery:
 
         self.queues_dir = Path(queues_dir)
         self.db_manager = db_manager or DuckDBManager()
-        self.repository = RecordingRepository(self.db_manager)
+        self.repository = RecordingRepository(self.db_manager, auto_recover=False)
+        self._event_converter = DuckDBRecordingPersister(logger=logger)
 
     def list_queue_files(self) -> List[Path]:
         """
@@ -57,15 +60,14 @@ class RecordingRecovery:
 
         Returns:
             解析后的录制数据
-            {
-                "recording_id": str,
-                "actions": List[Dict],
-                "action_count": int,
-                "queue_file": Path
-            }
         """
         actions = []
+        action_network_requests: Dict[int, List[Dict[str, Any]]] = {}
+        sibling_snapshots: Dict[int, Dict[str, Any]] = {}
+        standalone_network_requests = []
+        timestamps = []
         recording_id = None
+        recording_mode = RecordingMode.BROWSER
 
         try:
             with open(queue_file, "r", encoding="utf-8") as f:
@@ -81,10 +83,32 @@ class RecordingRecovery:
                         if recording_id is None:
                             recording_id = event.get("recording_id")
 
-                        # 提取 action 数据
-                        action_data = event.get("action", {})
-                        action_data["recording_id"] = recording_id
+                        raw_action = event.get("action", {})
+                        event_mode = raw_action.get("recording_mode") or RecordingMode.BROWSER
+                        if event_mode:
+                            recording_mode = event_mode
+
+                        action_data = self._event_converter.convert_event_to_action_dict(
+                            event,
+                            active_recording_mode=event_mode,
+                        )
+
+                        if (timestamp := action_data.get("timestamp")) is not None:
+                            timestamps.append(timestamp)
+
+                        if action_data.get("action_type") == "network_request":
+                            extracted_request = action_data.get("_extracted_network_request")
+                            if extracted_request:
+                                standalone_network_requests.append(extracted_request)
+                            continue
+
+                        action_index = len(actions)
                         actions.append(action_data)
+
+                        if action_data.get("network_requests"):
+                            action_network_requests[action_index] = action_data["network_requests"]
+                        if action_data.get("siblings_snapshot"):
+                            sibling_snapshots[action_index] = action_data["siblings_snapshot"]
 
                     except json.JSONDecodeError as e:
                         logger.warning(f"解析 {queue_file.name} 第 {line_num} 行失败: {e}")
@@ -93,6 +117,11 @@ class RecordingRecovery:
             return {
                 "recording_id": recording_id,
                 "actions": actions,
+                "action_network_requests": action_network_requests,
+                "sibling_snapshots": sibling_snapshots,
+                "standalone_network_requests": standalone_network_requests,
+                "timestamps": timestamps,
+                "recording_mode": recording_mode,
                 "action_count": len(actions),
                 "queue_file": queue_file,
             }
@@ -102,6 +131,11 @@ class RecordingRecovery:
             return {
                 "recording_id": None,
                 "actions": [],
+                "action_network_requests": {},
+                "sibling_snapshots": {},
+                "standalone_network_requests": [],
+                "timestamps": [],
+                "recording_mode": RecordingMode.BROWSER,
                 "action_count": 0,
                 "queue_file": queue_file,
             }
@@ -149,8 +183,13 @@ class RecordingRecovery:
             # 解析队列文件
             data = self.parse_queue_file(queue_file)
             actions = data["actions"]
+            action_network_requests = data["action_network_requests"]
+            sibling_snapshots = data["sibling_snapshots"]
+            standalone_network_requests = data["standalone_network_requests"]
+            timestamps = data["timestamps"]
+            recording_mode = data["recording_mode"]
 
-            if not actions:
+            if not actions and not standalone_network_requests:
                 logger.warning(f"队列文件中没有有效数据: {queue_file.name}")
                 return False
 
@@ -158,7 +197,11 @@ class RecordingRecovery:
             if overwrite:
                 logger.info(f"删除旧数据: {recording_id}")
                 self.db_manager.execute(
-                    "DELETE FROM network_requests WHERE action_id IN (SELECT action_id FROM actions WHERE recording_id = ?)",
+                    "DELETE FROM network_requests WHERE recording_id = ?",
+                    (recording_id,)
+                )
+                self.db_manager.execute(
+                    "DELETE FROM sibling_snapshots WHERE recording_id = ?",
                     (recording_id,)
                 )
                 self.db_manager.execute(
@@ -171,16 +214,16 @@ class RecordingRecovery:
                 )
 
             # 提取时间范围
-            timestamps = [a.get("timestamp", 0) for a in actions if a.get("timestamp")]
             start_time = min(timestamps) if timestamps else 0
             end_time = max(timestamps) if timestamps else 0
+            browser_type = RecordingMode.display_defaults(recording_mode)["browser_type"]
 
             # 保存录制会话
             session_data = {
                 "recording_id": recording_id,
                 "status": "completed",
-                "recording_mode": actions[0].get("recording_mode", "browser") if actions else "browser",
-                "browser_type": "chromium",
+                "recording_mode": recording_mode,
+                "browser_type": browser_type,
                 "start_time": start_time,
                 "end_time": end_time,
                 "metadata": json.dumps({"recovered": True, "queue_file": str(queue_file)}, ensure_ascii=False),
@@ -189,17 +232,36 @@ class RecordingRecovery:
             logger.info(f"✅ 录制会话已恢复: {recording_id}")
 
             # 保存操作记录
-            action_ids = self.repository.save_actions(recording_id, actions)
-            logger.info(f"✅ 已恢复 {len(action_ids)} 条操作记录")
+            action_ids = []
+            if actions:
+                action_ids = self.repository.save_actions(recording_id, actions)
+                logger.info(f"✅ 已恢复 {len(action_ids)} 条操作记录")
+
+            snapshot_count = 0
+            for index, action_id in enumerate(action_ids):
+                siblings_snapshot = sibling_snapshots.get(index)
+                if siblings_snapshot:
+                    self.repository.save_sibling_snapshot(action_id, siblings_snapshot, recording_id)
+                    snapshot_count += 1
+
+            if snapshot_count > 0:
+                logger.info(f"✅ 已恢复 {snapshot_count} 条兄弟元素快照")
 
             # 保存网络请求
             request_count = 0
-            for i, action in enumerate(actions):
-                action_id = action_ids[i] if i < len(action_ids) else None
-                network_requests = action.get("network_requests", [])
+            for index, action_id in enumerate(action_ids):
+                network_requests = action_network_requests.get(index)
                 if network_requests:
-                    self.repository.save_network_requests(action_id, network_requests, recording_id)
-                    request_count += len(network_requests)
+                    saved = self.repository.save_network_requests(
+                        action_id, network_requests, recording_id
+                    )
+                    request_count += len(saved)
+
+            if standalone_network_requests:
+                saved = self.repository.save_network_requests(
+                    None, standalone_network_requests, recording_id
+                )
+                request_count += len(saved)
 
             if request_count > 0:
                 logger.info(f"✅ 已恢复 {request_count} 条网络请求")
@@ -226,35 +288,30 @@ class RecordingRecovery:
         Returns:
             是否执行了恢复
         """
-        # 第一步：检查是否有 WAL 文件
-        wal_path = Path(self.db_manager.db_path).with_suffix(".duckdb.wal")
-
-        if not wal_path.exists():
-            logger.debug("没有 WAL 文件，无需恢复")
-            return False
-
-        logger.info(f"📋 发现 WAL 文件: {wal_path.name}")
-        logger.info("🔄 连接数据库（DuckDB 将自动恢复 WAL）...")
-
-        # 第二步：连接数据库（DuckDB 自动恢复 WAL）
+        recovered = False
         try:
-            self.db_manager.connect()
-            logger.info("✅ 数据库连接成功，WAL 已自动恢复")
-            return False  # WAL 恢复成功，不需要进一步处理
-
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"数据库连接失败: {e}")
-
-            # 检查是否为 WAL 相关错误
-            if "WAL" in error_msg or "Failure while replaying" in error_msg:
-                logger.warning("⚠️ WAL 文件可能损坏")
+            wal_path = Path(self.db_manager.db_path).with_suffix(".duckdb.wal")
+            if wal_path.exists():
+                logger.info(f"📋 发现 WAL 文件: {wal_path.name}")
+                logger.info("🔄 连接数据库（DuckDB 将自动恢复 WAL）...")
+                try:
+                    self.db_manager.connect()
+                    logger.info("✅ 数据库连接成功，WAL 已自动恢复")
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"数据库连接失败: {e}")
+                    if "WAL" in error_msg or "Failure while replaying" in error_msg:
+                        logger.warning("⚠️ WAL 文件可能损坏，将继续检查队列文件")
+                    else:
+                        logger.error("❌ 数据库连接失败（非 WAL 错误）")
+                        return False
             else:
-                logger.error("❌ 数据库连接失败（非 WAL 错误）")
-                return False  # 非 WAL 错误，无法通过队列恢复
+                logger.debug("未发现 WAL 文件，直接检查队列目录")
 
-        # 第三步：连接失败，尝试从队列文件恢复（保底方案）
-        return self._recover_from_queues()
+            recovered = self._recover_from_queues()
+            return recovered
+        finally:
+            self._cleanup_orphan_screenshots()
 
     def _recover_from_queues(self) -> bool:
         """
@@ -266,7 +323,7 @@ class RecordingRecovery:
         queue_files = self.list_queue_files()
 
         if not queue_files:
-            logger.error("❌ 无法恢复：数据库连接失败，也没有队列文件作为保底")
+            logger.debug("未发现待恢复的 actions queue 文件")
             return False
 
         logger.info("🔄 尝试从队列文件恢复（保底方案）...")
@@ -319,3 +376,15 @@ class RecordingRecovery:
         else:
             logger.error(f"❌ 从队列文件恢复失败: {results['failed']} 个失败")
             return False
+
+    def _cleanup_orphan_screenshots(self) -> None:
+        """清理孤儿 screenshots queue 文件（不入库、不重放）。"""
+        if not self.queues_dir.exists():
+            return
+
+        for sq_file in self.queues_dir.glob("*_screenshots.jsonl"):
+            logger.warning(f"发现孤儿截图队列文件: {sq_file.name}，已删除")
+            try:
+                sq_file.unlink()
+            except Exception as exc:
+                logger.warning(f"删除孤儿截图队列失败: {exc}")

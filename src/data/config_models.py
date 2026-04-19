@@ -69,13 +69,13 @@ class AIConfig:
     timeout: int = 60
     base_url: Optional[str] = None  # 自定义 API endpoint（用于代理或兼容 API）
 
-    # 数据压缩模型配置（用于网络请求智能过滤）
-    compression_model_provider: str = "anthropic"  # 压缩模型提供商
-    compression_model_name: str = "claude-3-5-haiku-20241022"  # 压缩模型名称
-    compression_model_api_key: Optional[str] = None  # 压缩模型专用 API key（可选）
-    compression_model_base_url: Optional[str] = None  # 自定义 API endpoint（用于代理或兼容 API）
-    compression_model_temperature: float = 0.5  # 压缩模型温度（较低以获得更确定的输出）
-    compression_model_max_tokens: int = 1024  # 压缩模型最大 tokens（轻量级任务）
+    # 会话压缩调用配置
+    compression_model_provider: str = "anthropic"  # 兼容保留；运行时跟随主对话模型 provider
+    compression_model_name: str = "claude-3-5-haiku-20241022"  # 兼容保留；运行时跟随主对话模型名称
+    compression_model_api_key: Optional[str] = None  # 兼容保留；运行时跟随主对话模型 API key
+    compression_model_base_url: Optional[str] = None  # 兼容保留；运行时跟随主对话模型 endpoint
+    compression_model_temperature: float = 0.5  # 会话压缩调用温度
+    compression_model_max_tokens: int = 1024  # 会话压缩调用最大 tokens
 
     # 记忆机制配置
     memory_reference_steps_threshold: int = 3  # tool result 被引用替换前需要的 assistant 消息数

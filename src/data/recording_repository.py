@@ -22,29 +22,51 @@ class RecordingRepository:
     _auto_recover_done = False
     _auto_recover_lock = threading.RLock()
 
-    def __init__(self, db_manager: Optional[DuckDBManager] = None):
+    @staticmethod
+    def _resolve_db_manager(db_manager: Optional[DuckDBManager] = None) -> DuckDBManager:
+        """标准化 DuckDB 管理器，必要时初始化连接。"""
+        if db_manager is None:
+            db_manager = DuckDBManager()
+            if db_manager.conn is None:
+                db_manager.initialize()
+        return db_manager
+
+    def __init__(
+        self,
+        db_manager: Optional[DuckDBManager] = None,
+        *,
+        auto_recover: bool = False,
+    ):
         """
         初始化录制数据仓库
 
         Args:
             db_manager: DuckDB 管理器，如果为None则使用全局单例
+            auto_recover: 是否在初始化时执行一次启动恢复
         """
-        if db_manager is None:
-            db_manager = DuckDBManager()
-            # 仅首次初始化
-            if db_manager.conn is None:
-                db_manager.initialize()
+        self.db = self._resolve_db_manager(db_manager)
 
-        self.db = db_manager
+        if auto_recover:
+            self.ensure_startup_recovery(self.db)
 
-        # ⭐ 首次初始化时，自动恢复未处理的队列文件（线程安全）
-        with RecordingRepository._auto_recover_lock:
-            if not RecordingRepository._auto_recover_done:
-                RecordingRepository._auto_recover_done = True
-                try:
-                    self._auto_recover_from_queues()
-                except Exception as e:
-                    logger.warning(f"自动恢复失败: {e}")
+    @classmethod
+    def ensure_startup_recovery(cls, db_manager: Optional[DuckDBManager] = None) -> None:
+        """
+        显式执行一次启动恢复。
+
+        只应在应用启动阶段调用，避免在正常落库路径中扫描 queues。
+        """
+        db_manager = cls._resolve_db_manager(db_manager)
+
+        with cls._auto_recover_lock:
+            if cls._auto_recover_done:
+                return
+
+            cls._auto_recover_done = True
+            try:
+                cls(db_manager=db_manager, auto_recover=False)._auto_recover_from_queues()
+            except Exception as e:
+                logger.warning(f"自动恢复失败: {e}")
 
     def _auto_recover_from_queues(self):
         """

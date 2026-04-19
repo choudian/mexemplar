@@ -13,6 +13,7 @@ import logging
 import signal
 import sys
 
+from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import get_unified_config
 from src.utils.logger import get_logger, setup_logger
 
@@ -112,7 +113,8 @@ def main() -> int:
 
     try:
         get_unified_config()  # 数据库迁移必须在 GUI 启动前完成
-        logger.info("[OK] 配置系统及数据库初始化成功")
+        RecordingRepository.ensure_startup_recovery()
+        logger.info("[OK] 配置系统、数据库与录制恢复检查初始化成功")
     except Exception as e:
         logger.error(f"[ERROR] 初始化失败: {e}", exc_info=True)
         return 1

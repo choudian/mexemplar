@@ -11,7 +11,7 @@ from .recorder import RecordingMode
 def _default_repo_factory():
     from src.data.recording_repository import RecordingRepository
 
-    return RecordingRepository()
+    return RecordingRepository(auto_recover=False)
 
 
 class DuckDBRecordingPersister:
