@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import threading
+from datetime import timedelta
 from typing import Any
 
 from src.business.agents.config import ToolDefinition
@@ -29,6 +30,7 @@ from src.business.agents.tool_helpers import make_tool_schema
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.duckdb_manager import DuckDBManager
 from src.data.unified_config import get_unified_config
+from src.utils.llm_helpers import sanitize_text_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +41,7 @@ logger = logging.getLogger(__name__)
 
 _EXECUTE_TIMEOUT = 30  # 代码执行超时（秒）
 _MAX_ACTION_INDICES = 5  # 单次最多分析的 action 数量
+_MAX_QUERY_CELL_CHARS = 12_000  # query_data 单字段最大长度，避免超大上下文
 
 
 # =============================================================================
@@ -80,16 +83,6 @@ _COMMON_TABLES: dict[str, dict] = {
                 "⚠️ 大字段，可能几十~几百 KB，按需查询",
             ),
             "visual_features": ("JSON", "视觉特征信息", None),
-            "screenshot_before": (
-                "BLOB",
-                "操作前截图（二进制）",
-                "⚠️ 二进制数据，SQL 无法直接查看。仅在文本字段不足以回答问题时才用 analyze_image 查看",
-            ),
-            "screenshot_after": (
-                "BLOB",
-                "操作后截图（二进制）",
-                "⚠️ 二进制数据，SQL 无法直接查看。仅在文本字段不足以回答问题时才用 analyze_image 查看",
-            ),
             "timestamp": ("DATETIME", "操作发生时间", None),
         },
     },
@@ -163,6 +156,21 @@ _COMMON_TABLES: dict[str, dict] = {
             "timestamp": ("DATETIME", "决策时间", None),
         },
     },
+    "recording_screenshots": {
+        "description": "浏览器截图时序数据（按时间窗与 action 关联）",
+        "fields": {
+            "screenshot_id": ("INTEGER", "截图记录 ID（主键）", None),
+            "recording_id": ("VARCHAR", "所属录制会话 ID", None),
+            "moment": ("VARCHAR", "截图时机：before / after", None),
+            "timestamp": ("DATETIME", "截图实际完成时间（查询主键）", None),
+            "capture_id": ("VARCHAR", "诊断用：同一次物理输入的 before/after 共享 ID", None),
+            "source_trigger": ("VARCHAR", "诊断用：触发输入类型 mouse_left / enter", None),
+            "input_started_at": ("DATETIME", "诊断用：输入开始时间", None),
+            "input_completed_at": ("DATETIME", "诊断用：输入完成时间", None),
+            "media_type": ("VARCHAR", "图片 MIME 类型 image/jpeg", None),
+            "data": ("BLOB", "JPEG 图片二进制数据", None),
+        },
+    },
 }
 
 _ALL_TABLE_NAMES = list(_COMMON_TABLES.keys())   # 保持插入顺序，用于展示
@@ -181,23 +189,24 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
     """
     db = DuckDBManager()
 
+    def _get_row_count(tn: str) -> int:
+        try:
+            row = db.fetchone(
+                f"SELECT COUNT(*) FROM {tn} WHERE recording_id = ?",
+                (recording_id,),
+            )
+            return row[0] if row else 0
+        except Exception:
+            return 0
+
     if tables is None:
-        # 第一级：概览 — 逐表查询行数（单表出错不影响其他表）
         result = {"tables": []}
         for table_name, meta in _COMMON_TABLES.items():
-            try:
-                row = db.fetchone(
-                    f"SELECT COUNT(*) FROM {table_name} WHERE recording_id = ?",
-                    (recording_id,),
-                )
-                row_count = row[0] if row else 0
-            except Exception:
-                row_count = 0
             result["tables"].append(
                 {
                     "name": table_name,
                     "description": meta["description"],
-                    "row_count": row_count,
+                    "row_count": _get_row_count(table_name),
                 }
             )
         return json.dumps(result, ensure_ascii=False)
@@ -216,14 +225,7 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
     table_details: dict[str, Any] = {}
     for table_name in tables:
         meta = _COMMON_TABLES[table_name]
-        try:
-            row = db.fetchone(
-                f"SELECT COUNT(*) FROM {table_name} WHERE recording_id = ?",
-                (recording_id,),
-            )
-            row_count = row[0] if row else 0
-        except Exception:
-            row_count = 0
+        row_count = _get_row_count(table_name)
 
         fields = []
         for field_name, (field_type, description, warning) in meta["fields"].items():
@@ -272,6 +274,13 @@ DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
 # =============================================================================
 
 _SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
+
+
+def _sanitize_query_value(value: Any) -> Any:
+    """query_data 返回值清洗：去除控制字符，截断超长字符串。"""
+    if not isinstance(value, str):
+        return value
+    return sanitize_text_for_llm(value, max_chars=_MAX_QUERY_CELL_CHARS)
 
 
 def _query_data(recording_id: str, sql: str) -> str:
@@ -326,7 +335,7 @@ def _query_data(recording_id: str, sql: str) -> str:
                 if isinstance(val, (bytes, bytearray)):
                     record[col] = "[截图（二进制）]"
                 else:
-                    record[col] = val
+                    record[col] = _sanitize_query_value(val)
             result_rows.append(record)
 
         return json.dumps(
@@ -555,33 +564,42 @@ def _analyze_image(
 
     db = DuckDBManager()
 
-    # 拉取截图
+    _WINDOW_SPECS = {
+        "before": (1.0, 0.25),   # (backward_seconds, forward_seconds)
+        "after":  (0.0, 1.5),    # (backward_seconds, forward_seconds)
+    }
+
+    _SCREENSHOT_SQL = """
+        SELECT data, media_type FROM recording_screenshots
+        WHERE recording_id = ?
+          AND moment = ?
+          AND timestamp BETWEEN ? AND ?
+        ORDER BY abs(epoch(timestamp) - epoch(?))
+        LIMIT 1
+    """
+
     images: list[dict[str, str]] = []
     for idx in sorted(indices):
         row = db.fetchone(
-            "SELECT screenshot_before, screenshot_after FROM actions "
-            "WHERE recording_id = ? AND sequence_number = ?",
+            "SELECT timestamp FROM actions WHERE recording_id = ? AND sequence_number = ?",
             (recording_id, idx),
         )
-        if not row:
+        if not row or row[0] is None:
             continue
-        before, after = row
-        if before:
-            images.append(
-                {
-                    "label": f"操作{idx}前",
-                    "data": base64.standard_b64encode(before).decode(),
-                    "media_type": _detect_image_type(before),
-                }
+        t = row[0]
+
+        for moment, (back, fwd) in _WINDOW_SPECS.items():
+            match = db.fetchone(
+                _SCREENSHOT_SQL,
+                (recording_id, moment, t - timedelta(seconds=back), t + timedelta(seconds=fwd), t),
             )
-        if after:
-            images.append(
-                {
-                    "label": f"操作{idx}后",
-                    "data": base64.standard_b64encode(after).decode(),
-                    "media_type": _detect_image_type(after),
-                }
-            )
+            if match:
+                label = f"操作{idx}{'前' if moment == 'before' else '后'}"
+                images.append({
+                    "label": label,
+                    "data": base64.standard_b64encode(match[0]).decode(),
+                    "media_type": match[1] or _detect_image_type(match[0]),
+                })
 
     if not images:
         return json.dumps(

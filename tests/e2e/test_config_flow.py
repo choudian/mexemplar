@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import pytest
 from PyQt6.QtCore import QTimer
 from PyQt6.QtTest import QTest

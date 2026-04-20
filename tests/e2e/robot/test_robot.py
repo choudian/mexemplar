@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from .browser_robot import BrowserRobot
 from .ui_robot import UIRobot
 from .wait_helper import WaitHelper

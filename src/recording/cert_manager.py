@@ -5,7 +5,6 @@ mitmproxy CA 证书管理工具。
 证书文件统一存放在 data/ 目录下。
 """
 
-from __future__ import annotations
 
 import logging
 import shutil

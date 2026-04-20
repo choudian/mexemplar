@@ -6,6 +6,7 @@ DuckDB 管理模块
 
 import logging
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Optional, Any, List, Dict
 import duckdb
@@ -21,6 +22,7 @@ _VALID_TABLES = frozenset([
     "network_requests",
     "filter_decisions",
     "sibling_snapshots",
+    "recording_screenshots",
 ])
 
 # 每个表的合法列名白名单，防止 data.keys() 注入
@@ -34,7 +36,7 @@ _VALID_COLUMNS: dict[str, frozenset] = {
         "action_id", "recording_id", "sequence_number", "action_type",
         "recording_mode", "app_name", "process_name", "window_title",
         "parameters", "url", "dom_element", "dom_tree_snapshot",
-        "visual_features", "screenshot_before", "screenshot_after",
+        "visual_features",
         "timestamp",
     ]),
     "network_requests": frozenset([
@@ -55,6 +57,11 @@ _VALID_COLUMNS: dict[str, frozenset] = {
         "container_selector", "item_selector", "list_type",
         "siblings", "structure_similarity", "is_homogeneous",
         "clicked_index", "total_count", "timestamp",
+    ]),
+    "recording_screenshots": frozenset([
+        "screenshot_id", "recording_id", "moment", "timestamp",
+        "capture_id", "source_trigger", "input_started_at",
+        "input_completed_at", "media_type", "data",
     ]),
 }
 
@@ -122,9 +129,37 @@ class DuckDBManager:
 
         self.db_path = db_path
         self.conn: Optional[Any] = None
-        self._op_lock = threading.Lock()  # 保护跨线程的数据库操作
+        self._op_lock = threading.RLock()  # 保护跨线程的数据库操作
+        self._transaction_state = threading.local()
         self._initialized = True
         self._needs_queue_recovery = False  # 是否需要从 queues 恢复
+
+    def _transaction_depth(self) -> int:
+        return getattr(self._transaction_state, "depth", 0)
+
+    @contextmanager
+    def transaction(self):
+        """Execute a group of DB operations in one DuckDB transaction."""
+        conn = self.connect()
+        with self._op_lock:
+            depth = self._transaction_depth()
+            outermost = depth == 0
+            self._transaction_state.depth = depth + 1
+
+            if outermost:
+                conn.execute("BEGIN TRANSACTION")
+
+            try:
+                yield conn
+            except Exception:
+                self._transaction_state.depth = depth
+                if outermost:
+                    conn.execute("ROLLBACK")
+                raise
+            else:
+                self._transaction_state.depth = depth
+                if outermost:
+                    conn.execute("COMMIT")
 
     def connect(self, allow_wal_recovery: bool = True) -> Any:
         """
@@ -265,8 +300,6 @@ class DuckDBManager:
                     dom_element JSON,
                     dom_tree_snapshot JSON,
                     visual_features JSON,
-                    screenshot_before TEXT,
-                    screenshot_after TEXT,
                     timestamp TIMESTAMP
                 )
             """
@@ -354,7 +387,34 @@ class DuckDBManager:
             """
             )
 
+            # 创建截图时序表
+            conn.execute(
+                """
+                CREATE SEQUENCE IF NOT EXISTS recording_screenshot_id_seq START 1
+            """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS recording_screenshots (
+                    screenshot_id INTEGER PRIMARY KEY DEFAULT nextval('recording_screenshot_id_seq'),
+                    recording_id VARCHAR NOT NULL,
+                    moment VARCHAR NOT NULL,
+                    timestamp TIMESTAMP NOT NULL,
+                    capture_id VARCHAR,
+                    source_trigger VARCHAR,
+                    input_started_at TIMESTAMP,
+                    input_completed_at TIMESTAMP,
+                    media_type VARCHAR,
+                    data BLOB
+                )
+            """
+            )
+
             # 创建索引
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_screenshots_recording_moment_time "
+                "ON recording_screenshots(recording_id, moment, timestamp)"
+            )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_actions_recording_time ON actions(recording_id, timestamp)"
             )
@@ -466,7 +526,7 @@ class DuckDBManager:
             result = conn.execute(sql, list(data.values())).fetchone()
 
             # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
-            if auto_commit:
+            if auto_commit and self._transaction_depth() == 0:
                 conn.execute("CHECKPOINT")
                 logger.debug(f"数据已提交到磁盘: {table}")
 
@@ -508,21 +568,24 @@ class DuckDBManager:
         row_ids = []
 
         with self._op_lock:
-            # 用事务包裹批量插入，减少每行单独提交的开销
-            conn.execute("BEGIN TRANSACTION")
+            in_outer_transaction = self._transaction_depth() > 0
+            if not in_outer_transaction:
+                conn.execute("BEGIN TRANSACTION")
             try:
                 for data in data_list:
                     result = conn.execute(sql, list(data.values())).fetchone()
                     if result:
                         row_ids.append(result[0])
             except Exception:
-                conn.execute("ROLLBACK")
+                if not in_outer_transaction:
+                    conn.execute("ROLLBACK")
                 raise
             else:
-                conn.execute("COMMIT")
+                if not in_outer_transaction:
+                    conn.execute("COMMIT")
 
             # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
-            if auto_commit:
+            if auto_commit and not in_outer_transaction:
                 conn.execute("CHECKPOINT")
                 logger.debug(f"批量数据已提交到磁盘: {table}, {len(row_ids)} 条")
 

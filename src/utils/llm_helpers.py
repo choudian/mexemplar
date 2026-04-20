@@ -11,6 +11,24 @@ from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# 控制字符清洗正则：保留 \t(0x09) \n(0x0A) \r(0x0D)
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def sanitize_text_for_llm(text: str, *, max_chars: int = 0) -> str:
+    """
+    清洗发往 LLM 的文本：移除非法控制字符，可选截断超长内容。
+
+    Args:
+        text: 待清洗文本
+        max_chars: 最大字符数，0 表示不截断
+    """
+    cleaned = _CONTROL_CHAR_RE.sub("", text)
+    if max_chars > 0 and len(cleaned) > max_chars:
+        remain = len(cleaned) - max_chars
+        return cleaned[:max_chars] + f"\n...[TRUNCATED {remain} chars]"
+    return cleaned
+
 
 def extract_json_from_response(
     response_text: str,

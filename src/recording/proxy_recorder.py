@@ -4,7 +4,6 @@
 用 mitmproxy 拦截 HTTP/HTTPS 请求，转成 browser_action JSONL 写入队列文件。
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging

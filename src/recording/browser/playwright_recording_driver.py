@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -116,6 +114,84 @@ class PlaywrightRecordingDriver:
     @user_data_dir.setter
     def user_data_dir(self, value: Optional[Path]) -> None:
         self._user_data_dir = value
+
+    def resolve_browser_pid(self) -> Optional[int]:
+        """
+        解析当前 Playwright 启动的 Chromium 主进程 PID。
+
+        通过 psutil 扫描进程命令行，匹配当前会话的扩展 bundle path。
+        只返回主 browser process（排除 --type= 子进程）。
+
+        Returns:
+            Chromium 主进程 PID，或 None（无法确定时降级）
+        """
+        if not self._playwright_extension_bundle_path or not self._playwright_extension_bundle_path.exists():
+            self._logger.debug("扩展 bundle path 不存在，无法解析 browser PID")
+            return None
+
+        bundle_path_str = str(self._playwright_extension_bundle_path)
+
+        try:
+            import psutil
+        except ImportError:
+            self._logger.debug("psutil 未安装，无法解析 browser PID")
+            return None
+
+        chromium_names = {"chrome.exe", "chromium.exe", "msedge.exe"}
+        candidates: list[int] = []
+
+        try:
+            for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+                try:
+                    name = (proc.info.get("name") or "").lower()
+                    if name not in chromium_names:
+                        continue
+
+                    cmdline = proc.info.get("cmdline") or []
+
+                    # 排除子进程（renderer, gpu-process, utility 等）
+                    if any(str(arg).startswith("--type=") for arg in cmdline):
+                        continue
+
+                    # 匹配当前会话的扩展 bundle path
+                    if self._cmdline_matches_bundle_path(cmdline, bundle_path_str):
+                        candidates.append(proc.info["pid"])
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception as exc:
+            self._logger.warning(f"扫描进程失败: {exc}")
+            return None
+
+        if len(candidates) == 1:
+            self._logger.info(f"解析到 browser PID: {candidates[0]}")
+            return candidates[0]
+        elif len(candidates) > 1:
+            self._logger.warning(
+                f"匹配到多个候选 browser 进程 ({len(candidates)})，降级为不采集截图"
+            )
+            return None
+        else:
+            self._logger.debug("未找到匹配的 browser 进程")
+            return None
+
+    @staticmethod
+    def _normalize_path_for_cmdline_match(path_value: str) -> str:
+        """Normalize path-like strings from different OS/path styles for matching."""
+        value = str(path_value).strip().strip('"').strip("'").replace("\\", "/").lower()
+        while "//" in value:
+            value = value.replace("//", "/")
+        return value
+
+    @classmethod
+    def _cmdline_matches_bundle_path(cls, cmdline: List[str], bundle_path: str) -> bool:
+        """Match bundle path against command line arguments with separator/case normalization."""
+        normalized_bundle = cls._normalize_path_for_cmdline_match(bundle_path)
+        if not normalized_bundle:
+            return False
+        return any(
+            normalized_bundle in cls._normalize_path_for_cmdline_match(arg)
+            for arg in cmdline
+        )
 
     async def launch_browser_with_subprocess(
         self,

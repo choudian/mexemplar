@@ -8,7 +8,6 @@
   pytest.mark.real_llm — 需要 config.json 中有有效的 API Key
 """
 
-from __future__ import annotations
 
 import json
 from pathlib import Path

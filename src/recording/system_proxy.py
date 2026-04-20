@@ -4,7 +4,6 @@ Windows 系统代理管理器。
 通过修改当前用户注册表设置和还原系统代理，使浏览器流量经过本地 mitmproxy。
 """
 
-from __future__ import annotations
 
 import ctypes
 import logging

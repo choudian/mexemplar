@@ -1,9 +1,10 @@
-from __future__ import annotations
-
 import json
 import logging
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
+
+from src.data.duckdb_manager import DuckDBManager
 
 from .recorder import RecordingMode
 
@@ -23,10 +24,6 @@ class DuckDBRecordingPersister:
         self._repo_factory = repo_factory or _default_repo_factory
         self._logger = logger or logging.getLogger(__name__)
         self._recording_repository = None
-
-    @property
-    def recording_repository(self):
-        return self._recording_repository
 
     def _get_repository(self):
         if self._recording_repository is None:
@@ -71,12 +68,15 @@ class DuckDBRecordingPersister:
                 "extension_triggered": active_recording_mode == RecordingMode.EXTENSION_TRIGGERED,
             },
         }
+
         repository.save_recording_session(session_data)
         self._logger.info(f"录制会话已保存到 DuckDB: {recording_id}")
 
         if not action_queue_path or not action_queue_path.exists():
             self._logger.warning("队列文件不存在，跳过操作保存")
             return 0
+
+        screenshots_path = self._resolve_screenshots_queue_path(recording_id)
 
         actions_list = []
         network_requests_map = {}
@@ -118,48 +118,94 @@ class DuckDBRecordingPersister:
             self._logger.error(f"读取队列文件失败: {exc}")
             return 0
 
-        if actions_list:
-            action_ids = repository.save_actions(recording_id, actions_list)
-            self._logger.info(f"已保存 {len(action_ids)} 条操作到 DuckDB")
+        db = getattr(repository, "db", None)
+        transaction_ctx = (
+            db.transaction()
+            if isinstance(db, DuckDBManager)
+            else nullcontext()
+        )
 
-            snapshot_count = 0
-            for index, action_id in enumerate(action_ids):
-                if index < len(actions_list) and actions_list[index].get("siblings_snapshot"):
-                    try:
-                        repository.save_sibling_snapshot(
-                            action_id,
-                            actions_list[index]["siblings_snapshot"],
-                            recording_id,
-                        )
-                        snapshot_count += 1
-                    except Exception as exc:
-                        self._logger.warning(
-                            f"保存兄弟元素快照失败 (action_id={action_id}): {exc}"
-                        )
-            if snapshot_count > 0:
-                self._logger.info(f"已保存 {snapshot_count} 条兄弟元素快照到 DuckDB")
+        screenshot_count = 0
+        try:
+            with transaction_ctx:
+                if actions_list:
+                    action_ids = repository.save_actions(recording_id, actions_list)
+                    self._logger.info(f"已保存 {len(action_ids)} 条操作到 DuckDB")
 
-            request_count = 0
-            if network_requests_map and action_ids:
-                for index, action_id in enumerate(action_ids):
-                    if index in network_requests_map:
-                        requests = network_requests_map[index]
-                        repository.save_network_requests(action_id, requests, recording_id)
-                        request_count += len(requests)
+                    snapshot_count = 0
+                    for index, action_id in enumerate(action_ids):
+                        if index < len(actions_list) and actions_list[index].get("siblings_snapshot"):
+                            try:
+                                repository.save_sibling_snapshot(
+                                    action_id,
+                                    actions_list[index]["siblings_snapshot"],
+                                    recording_id,
+                                )
+                                snapshot_count += 1
+                            except Exception as exc:
+                                self._logger.warning(
+                                    f"保存兄弟元素快照失败 (action_id={action_id}): {exc}"
+                                )
+                    if snapshot_count > 0:
+                        self._logger.info(f"已保存 {snapshot_count} 条兄弟元素快照到 DuckDB")
 
-            if request_count > 0:
-                self._logger.info(f"已保存 {request_count} 条关联网络请求到 DuckDB")
+                    request_count = 0
+                    if network_requests_map and action_ids:
+                        for index, action_id in enumerate(action_ids):
+                            if index in network_requests_map:
+                                requests = network_requests_map[index]
+                                repository.save_network_requests(action_id, requests, recording_id)
+                                request_count += len(requests)
 
-        if standalone_network_requests:
-            self._logger.debug(
-                f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)"
-            )
-            saved = repository.save_network_requests(
-                None, standalone_network_requests, recording_id
-            )
-            self._logger.info(f"已保存 {len(saved)} 条独立网络请求到 DuckDB")
+                    if request_count > 0:
+                        self._logger.info(f"已保存 {request_count} 条关联网络请求到 DuckDB")
+
+                if standalone_network_requests:
+                    self._logger.debug(
+                        f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)"
+                    )
+                    saved = repository.save_network_requests(
+                        None, standalone_network_requests, recording_id
+                    )
+                    self._logger.info(f"已保存 {len(saved)} 条独立网络请求到 DuckDB")
+
+                screenshot_count = self._save_screenshots(repository, screenshots_path)
+                if screenshot_count > 0:
+                    self._logger.info(f"已保存 {screenshot_count} 条截图到 DuckDB")
+        except Exception:
+            self._logger.error("保存录制数据到 DuckDB 失败，已保留 queue 文件", exc_info=True)
+            raise
+
+        from src.recording.queue_paths import delete_queue_file
+        delete_queue_file(action_queue_path)
+        delete_queue_file(screenshots_path)
 
         return len(actions_list)
+
+    def _save_screenshots(self, repository, screenshots_path: Optional[Path]):
+        """读取 screenshots queue 并批量入库。"""
+        if not screenshots_path:
+            return 0
+
+        from src.recording.browser.screenshot_queue_parser import (
+            iter_screenshots_queue,
+            batch_insert_screenshots,
+        )
+
+        if not screenshots_path.exists():
+            return 0
+
+        rows = iter_screenshots_queue(screenshots_path)
+        return batch_insert_screenshots(repository, rows)
+
+    def _resolve_screenshots_queue_path(
+        self,
+        recording_id: Optional[str],
+    ) -> Optional[Path]:
+        if not recording_id:
+            return None
+        from src.recording.queue_paths import get_recording_screenshots_queue_path
+        return get_recording_screenshots_queue_path(recording_id)
 
     def convert_event_to_action_dict(
         self,

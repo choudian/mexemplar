@@ -202,8 +202,6 @@ class RecordingRepository:
                         "dom_element": dom_element,
                         "dom_tree_snapshot": dom_tree_snapshot,
                         "visual_features": visual_features,
-                        "screenshot_before": action.get("screenshot_before"),
-                        "screenshot_after": action.get("screenshot_after"),
                         "timestamp": timestamp,
                     }
                 )
@@ -327,3 +325,39 @@ class RecordingRepository:
         )
 
         return snapshot_id
+
+    def insert_screenshot_batch(
+        self, batch: list[dict[str, Any]], *, auto_commit: bool = True
+    ) -> list[int]:
+        """
+        批量插入截图记录到 recording_screenshots 表。
+
+        Args:
+            batch: 数据字典列表，每个字典包含 recording_screenshots 表的列。
+                   timestamp 字段应为已转换的 datetime 对象。
+            auto_commit: 是否自动提交事务（最终批次设为 True）。
+
+        Returns:
+            插入的行 ID 列表
+        """
+        if not batch:
+            return []
+
+        normalized_batch: list[dict[str, Any]] = []
+        for row in batch:
+            normalized = dict(row)
+
+            for key in ("timestamp", "input_started_at", "input_completed_at"):
+                value = normalized.get(key)
+                if isinstance(value, (int, float)):
+                    normalized[key] = from_timestamp_utc_naive(value)
+
+            normalized_batch.append(normalized)
+
+        row_ids = self.db.insert_many(
+            "recording_screenshots",
+            normalized_batch,
+            auto_commit=auto_commit,
+        )
+        logger.info(f"已保存 {len(row_ids)} 条截图记录")
+        return row_ids

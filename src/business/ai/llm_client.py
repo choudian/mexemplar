@@ -17,7 +17,11 @@ import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
+from src.utils.llm_helpers import sanitize_text_for_llm
+
 logger = logging.getLogger(__name__)
+
+_LLM_MESSAGE_MAX_CHARS = 120_000
 
 
 @dataclass
@@ -221,6 +225,14 @@ class LangChainLLMClient:
             )
             return ChatOpenAI(**kwargs)
 
+    @staticmethod
+    def _sanitize_message_content(content: Any) -> Any:
+        """统一清洗发往 provider 的 message content。"""
+        if isinstance(content, list):
+            return content  # multimodal blocks — pass through
+        text = "" if content is None else str(content)
+        return sanitize_text_for_llm(text, max_chars=_LLM_MESSAGE_MAX_CHARS)
+
     def chat(self, prompt: str, **kwargs) -> str:
         """
         发送聊天请求
@@ -327,7 +339,7 @@ class LangChainLLMClient:
         lc_messages = []
         for msg in messages:
             role = msg.get("role")
-            content = msg.get("content")
+            content = self._sanitize_message_content(msg.get("content"))
 
             if role == "system":
                 lc_messages.append(SystemMessage(content=content or ""))
@@ -396,5 +408,4 @@ class LangChainLLMClient:
                 )
 
         return LLMResponse(content=content, tool_calls=tool_calls)
-
 

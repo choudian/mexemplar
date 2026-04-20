@@ -4,7 +4,6 @@
 实现通过浏览器扩展与 Mexemplar 实时通信，并通过 Playwright 启动浏览器。
 """
 
-from __future__ import annotations
 
 import asyncio
 import logging
@@ -86,6 +85,9 @@ class BrowserRecorder:
         self.on_action: Optional[Callable[[BrowserAction], None]] = None
         self._action_queue_path: Optional[Path] = None
         self._use_duckdb = True
+        self._screenshot_hook = None
+        self._last_browser_action_ts: float = 0.0
+        self._screenshot_queue_path: Optional[Path] = None
 
         if storage_path is None:
             storage_path = get_default_data_dir() / "recordings"
@@ -182,7 +184,9 @@ class BrowserRecorder:
 
     @property
     def _is_extension_recording(self) -> bool:
-        return self._is_recording and self._active_recording_mode == RecordingMode.EXTENSION_TRIGGERED
+        return (
+            self._is_recording and self._active_recording_mode == RecordingMode.EXTENSION_TRIGGERED
+        )
 
     def _get_runtime_state(self) -> RecordingRuntimeState:
         return RecordingRuntimeState(
@@ -195,9 +199,14 @@ class BrowserRecorder:
         )
 
     def _get_queue_paths(self, recording_id: str):
-        queue_dir = get_default_data_dir() / "queues"
-        queue_dir.mkdir(parents=True, exist_ok=True)
-        return queue_dir / f"{recording_id}_actions.jsonl"
+        from .queue_paths import (
+            get_recording_actions_queue_path,
+            get_recording_screenshots_queue_path,
+        )
+
+        return get_recording_actions_queue_path(recording_id), get_recording_screenshots_queue_path(
+            recording_id
+        )
 
     def _stop_sub_recorders(self) -> None:
         for recorder, name in [
@@ -213,6 +222,9 @@ class BrowserRecorder:
         self._recording_id = None
         self._recording_start_time = None
         self._action_queue_path = None
+        self._screenshot_queue_path = None
+        self._screenshot_hook = None
+        self._last_browser_action_ts = 0.0
         self._is_recording = False
         self._playwright_ws_client = None
         self._active_recording_mode = RecordingMode.BROWSER
@@ -220,6 +232,13 @@ class BrowserRecorder:
     def cleanup(self):
         try:
             self._ws_coordinator.stop_ingress()
+
+            if self._screenshot_hook:
+                try:
+                    self._screenshot_hook.stop()
+                except Exception as exc:
+                    logger.warning(f"停止截图钩子失败: {exc}")
+                self._screenshot_hook = None
 
             if self._is_extension_recording:
                 try:
@@ -327,6 +346,7 @@ class BrowserRecorder:
         self._ws_coordinator.handle_ws_message(message)
 
     def _emit_browser_action(self, message: Dict[str, Any]) -> None:
+        self._last_browser_action_ts = time.time()
         if not self.on_action:
             return
 
@@ -357,8 +377,7 @@ class BrowserRecorder:
             )
 
         recording_id = str(uuid.uuid4())
-        queue_file = self._get_queue_paths(recording_id)
-        queue_file.parent.mkdir(parents=True, exist_ok=True)
+        queue_file, self._screenshot_queue_path = self._get_queue_paths(recording_id)
         start_time = time.time()
 
         try:
@@ -416,7 +435,7 @@ class BrowserRecorder:
 
         start_time = self._recording_start_time
         recording_id = self._recording_id
-        queue_file = self._action_queue_path or self._get_queue_paths(recording_id)
+        queue_file = self._action_queue_path or self._get_queue_paths(recording_id)[0]
         end_time = time.time()
 
         self._stop_sub_recorders()
@@ -430,11 +449,18 @@ class BrowserRecorder:
             )
 
         action_count = 0
+        save_ok = True
         if self._use_duckdb:
             try:
                 action_count = self._save_to_duckdb(end_time) or 0
             except Exception as exc:
                 logger.error(f"保存扩展触发录制到 DuckDB 失败: {exc}")
+                save_ok = False
+
+        if save_ok:
+            from src.recording.queue_paths import delete_queue_file
+            for qpath in [queue_file, self._screenshot_queue_path]:
+                delete_queue_file(qpath)
 
         emit(
             "recording_stopped",
@@ -515,12 +541,12 @@ class BrowserRecorder:
         try:
             self._recording_id = recording_id or str(uuid.uuid4())
             self._recording_start_time = time.time()
+            self._last_browser_action_ts = time.time()
             self._playwright_ws_client = None
 
             logger.info(f"开始浏览器录制，会话ID: {self._recording_id}")
 
-            self._action_queue_path = self._get_queue_paths(self._recording_id)
-            self._action_queue_path.parent.mkdir(parents=True, exist_ok=True)
+            self._action_queue_path, self._screenshot_queue_path = self._get_queue_paths(self._recording_id)
 
             if not self._ws_server or not self._ws_server.is_running:
                 logger.warning("[BrowserRecorder] WS 服务器未运行，尝试启动...")
@@ -567,6 +593,21 @@ class BrowserRecorder:
             self._active_recording_mode = RecordingMode.BROWSER
             startup_succeeded = True
 
+            # 启动截图钩子
+            browser_pid = self._playwright_driver.resolve_browser_pid()
+            from .browser_screenshot_hook import BrowserScreenshotHook
+            self._screenshot_hook = BrowserScreenshotHook(
+                recording_id=self._recording_id,
+                screenshots_queue_file=self._screenshot_queue_path,
+                browser_pid=browser_pid,
+                jpeg_quality=self._unified_config.get("recording.screenshot_quality", 85),
+                after_delay=self._unified_config.get("recording.screenshot_delay_after_action", 0.2),
+                logger=logger,
+            )
+            if not self._screenshot_hook.start():
+                self._screenshot_hook = None
+                logger.warning("截图钩子未启动（非 Windows 或依赖缺失），录制继续但不采集截图")
+
             logger.info("浏览器录制已启动 (WebSocket 模式)")
             logger.info(f"   - recording_id: {self._recording_id}")
             logger.info(f"   - 队列文件: {self._action_queue_path}")
@@ -605,10 +646,20 @@ class BrowserRecorder:
         # 保存结果字段（在 reset 之前读取）
         result_recording_id = self._recording_id
         result_queue_path = self._action_queue_path
+        result_screenshot_path = self._screenshot_queue_path
         result_start_time = self._recording_start_time
         result_recording_mode = self._active_recording_mode
 
-        # Step 1: 阻止新的 WS/control ingress
+        # 发送停止录制命令 → drain → 停止截图钩子 → 关闭浏览器 → 保存 → 清理
+
+        try:
+            logger.info("发送停止录制命令...")
+            self._send_stop_command_via_ws(websocket=self._playwright_ws_client)
+        except Exception as exc:
+            logger.warning(f"发送停止命令失败: {exc}")
+
+        await self._wait_for_stop_drain()
+
         try:
             if self._ws_server:
                 self._ws_server.set_message_handler(None)
@@ -616,28 +667,26 @@ class BrowserRecorder:
         except Exception as exc:
             logger.warning(f"停止 WS ingress 失败: {exc}")
 
-        # Step 2: 发送停止录制命令
-        try:
-            logger.info("发送停止录制命令...")
-            self._send_stop_command_via_ws(websocket=self._playwright_ws_client)
-        except Exception as exc:
-            logger.warning(f"发送停止命令失败: {exc}")
+        if self._screenshot_hook:
+            try:
+                self._screenshot_hook.stop()
+            except Exception as exc:
+                logger.warning(f"停止截图钩子失败: {exc}")
+            self._screenshot_hook = None
 
-        # Step 3: 关闭浏览器
         try:
             logger.info("关闭浏览器...")
             await self._close_browser()
         except Exception as exc:
             logger.warning(f"关闭浏览器失败: {exc}")
 
-        # Step 4: 清理扩展目录
         try:
             self._cleanup_playwright_extension_bundle()
         except Exception as exc:
             logger.warning(f"清理扩展目录失败: {exc}")
 
-        # Step 5: DuckDB flush
         action_count = 0
+        save_ok = True
         if self._use_duckdb:
             try:
                 logger.info("开始保存录制数据到 DuckDB...")
@@ -645,14 +694,18 @@ class BrowserRecorder:
                 logger.info("DuckDB 保存完成")
             except Exception as exc:
                 logger.error(f"保存到 DuckDB 失败: {exc}")
+                save_ok = False
 
-        # Step 6: 清理用户数据目录
+        if save_ok:
+            from src.recording.queue_paths import delete_queue_file
+            for qpath in [result_queue_path, result_screenshot_path]:
+                delete_queue_file(qpath)
+
         try:
             self._playwright_driver.cleanup_user_data_dir()
         except Exception as exc:
             logger.warning(f"清理用户数据目录失败: {exc}")
 
-        # Step 7: 重置状态
         self._reset_recording_state()
 
         logger.info("浏览器录制已停止 (WebSocket 模式)")
@@ -668,6 +721,17 @@ class BrowserRecorder:
             "end_time": end_time,
             "recording_mode": result_recording_mode,
         }
+
+    async def _wait_for_stop_drain(self) -> None:
+        """等待最后一拍 action 到达（WS ingress 仍开启）。"""
+        drain_timeout = 1.0
+        quiet_window = 0.25
+        start = time.time()
+        while time.time() - start < drain_timeout:
+            if time.time() - self._last_browser_action_ts >= quiet_window:
+                return
+            await asyncio.sleep(0.05)
+        logger.warning("stop drain 超时（1s），可能有晚到的 action 未入队")
 
     def _save_to_duckdb(self, end_time: float) -> int:
         return self._duckdb_persister.save_to_duckdb(

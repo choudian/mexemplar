@@ -13,7 +13,6 @@
   EXEMPLAR_RUN_E2E_GUI=1 pytest tests/e2e/test_real_llm_teaching.py -xvs
 """
 
-from __future__ import annotations
 
 import json
 from pathlib import Path

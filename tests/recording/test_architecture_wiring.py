@@ -107,3 +107,96 @@ class TestGatekeeperTests:
 
         assert SystemProxyManager is not None
         assert CertManager is not None
+
+
+class TestScreenshotFeatureGatekeeper:
+    """Gatekeeper tests from design doc §5.2 — screenshot feature wiring."""
+
+    def test_analyze_image_no_legacy_screenshot_columns(self):
+        """_analyze_image should not reference screenshot_before/screenshot_after from actions."""
+        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
+        func_start = source.find("def _analyze_image(")
+        func_end = source.find("\ndef ", func_start + 1)
+        func_body = source[func_start:func_end]
+
+        assert "screenshot_before" not in func_body, "_analyze_image still references screenshot_before"
+        assert "screenshot_after" not in func_body, "_analyze_image still references screenshot_after"
+
+    def test_analyze_image_sql_no_source_trigger_where(self):
+        """_analyze_image SQL must not use source_trigger in WHERE clause."""
+        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
+        func_start = source.find("def _analyze_image(")
+        func_end = source.find("\ndef ", func_start + 1)
+        func_body = source[func_start:func_end]
+
+        assert "source_trigger" not in func_body, "_analyze_image SQL references source_trigger"
+
+    def test_common_tables_has_recording_screenshots(self):
+        """_COMMON_TABLES must include recording_screenshots."""
+        from src.business.agents.tools.recording_data_tools import _COMMON_TABLES
+
+        assert "recording_screenshots" in _COMMON_TABLES
+
+    def test_duckdb_manager_valid_tables_has_screenshots(self):
+        """DuckDBManager._VALID_TABLES must include recording_screenshots."""
+        from src.data.duckdb_manager import _VALID_TABLES
+
+        assert "recording_screenshots" in _VALID_TABLES
+
+    def test_duckdb_manager_valid_columns_has_screenshots(self):
+        """DuckDBManager._VALID_COLUMNS must include recording_screenshots with correct columns."""
+        from src.data.duckdb_manager import _VALID_COLUMNS
+
+        assert "recording_screenshots" in _VALID_COLUMNS
+        cols = _VALID_COLUMNS["recording_screenshots"]
+        for required in ["screenshot_id", "recording_id", "moment", "timestamp", "data"]:
+            assert required in cols, f"Missing column {required} in _VALID_COLUMNS"
+
+    def test_persister_no_pair_matching(self):
+        """duckdb_recording_persister.py must not contain screenshot pairing/matching logic."""
+        source = Path("src/recording/browser/duckdb_recording_persister.py").read_text(encoding="utf-8")
+        for forbidden in ["pair_screenshot", "match_anchor", "match_window", "screenshot_pair"]:
+            assert forbidden not in source, f"Persister contains forbidden term: {forbidden}"
+
+    def test_websocket_coordinator_unchanged(self):
+        """recording_websocket_coordinator.py should not contain browser_context."""
+        source = Path("src/recording/browser/recording_websocket_coordinator.py").read_text(encoding="utf-8")
+        assert "browser_context" not in source
+
+    def test_playwright_driver_no_framenavigated(self):
+        """playwright_recording_driver.py must not subscribe to framenavigated or URL tracking."""
+        source = Path("src/recording/browser/playwright_recording_driver.py").read_text(encoding="utf-8")
+        assert "framenavigated" not in source
+        assert "update_current_url" not in source
+
+    def test_recorder_uses_queue_paths(self):
+        """browser_recorder.py should not hardcode get_default_data_dir / 'queues'."""
+        source = Path("src/recording/browser_recorder.py").read_text(encoding="utf-8")
+        assert 'get_default_data_dir()' not in source or "queue_paths" in source
+
+    def test_browser_stop_order_keeps_hook_flush_before_close_and_save(self):
+        source = Path("src/recording/browser_recorder.py").read_text(encoding="utf-8")
+        func_start = source.find("async def _async_stop_recording(self)")
+        func_end = source.find("\n    async def _wait_for_stop_drain", func_start)
+        func_body = source[func_start:func_end]
+
+        assert func_body.find("_send_stop_command_via_ws") < func_body.find("_wait_for_stop_drain")
+        assert func_body.find("_wait_for_stop_drain") < func_body.find("self._screenshot_hook.stop")
+        assert func_body.find("self._screenshot_hook.stop") < func_body.find("await self._close_browser()")
+        assert func_body.find("await self._close_browser()") < func_body.find("self._save_to_duckdb")
+
+    def test_recovery_no_screenshot_replay(self):
+        """recording_recovery.py should not contain screenshot replay/restore logic."""
+        source = Path("src/data/recording_recovery.py").read_text(encoding="utf-8")
+        # "replay" or "restore" combined with "screenshot" is forbidden
+        lines = source.lower().split("\n")
+        for line in lines:
+            if "screenshot" in line:
+                assert "replay" not in line and "restore" not in line, \
+                    f"Found forbidden screenshot replay/restore: {line.strip()}"
+
+    def test_screenshot_modules_exist(self):
+        """New screenshot modules should exist."""
+        assert Path("src/recording/browser_screenshot_hook.py").exists()
+        assert Path("src/recording/queue_paths.py").exists()
+        assert Path("src/recording/browser/screenshot_queue_parser.py").exists()

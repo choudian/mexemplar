@@ -5,7 +5,6 @@ Accessibility 录制器模块。
 写入 browser_action JSONL 队列文件。
 """
 
-from __future__ import annotations
 
 import logging
 import platform

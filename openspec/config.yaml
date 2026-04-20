@@ -1,0 +1,16 @@
+schema: spec-driven
+
+context: |
+  所有生成的文档必须使用简体中文撰写，包括标题、描述、场景说明等。
+  仅在以下情况保留英文：代码标识符、SQL、文件路径、技术专有名词（如 DuckDB、pynput、HWND）。
+  Requirement / Scenario 的英文关键字（WHEN/THEN/SHALL/MUST）保持不变，但描述文字用中文。
+
+rules:
+  proposal:
+    - 所有标题和描述文字使用简体中文
+  design:
+    - 所有标题、决策说明、风险描述使用简体中文
+  specs:
+    - 所有 Requirement 描述和 Scenario 描述使用简体中文
+  tasks:
+    - 所有任务描述使用简体中文

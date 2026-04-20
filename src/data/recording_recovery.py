@@ -30,8 +30,8 @@ class RecordingRecovery:
             db_manager: DuckDB 管理器，默认为全局单例
         """
         if queues_dir is None:
-            project_root = Path(__file__).parent.parent.parent
-            queues_dir = project_root / "data" / "queues"
+            from src.recording.queue_paths import get_recording_queue_dir
+            queues_dir = get_recording_queue_dir()
 
         self.queues_dir = Path(queues_dir)
         self.db_manager = db_manager or DuckDBManager()

@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 
 SAMPLE_CODE = (

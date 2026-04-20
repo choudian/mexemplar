@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import logging
 from src.utils.timezone import utc_now_naive
 from typing import Optional

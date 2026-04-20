@@ -48,6 +48,26 @@ def _init_logging(log_level: str = "INFO") -> None:
 
 def _launch_gui() -> int:
     """启动 PyQt6 图形界面。"""
+    # Windows DPI awareness: must be set before QApplication construction
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            # Try Per-Monitor V2 (best quality)
+            DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = ctypes.c_void_p(-4)
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(
+                DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            )
+        except Exception:
+            try:
+                # Fallback: Per-Monitor V1
+                ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            except Exception:
+                try:
+                    # Last resort: System DPI aware
+                    ctypes.windll.user32.SetProcessDPIAware()
+                except Exception:
+                    pass  # Give up silently
+
     try:
         from PyQt6.QtGui import QFont
         from PyQt6.QtWidgets import QApplication, QMessageBox
