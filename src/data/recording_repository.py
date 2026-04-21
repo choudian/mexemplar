@@ -8,7 +8,8 @@ import json
 import logging
 import threading
 from typing import Optional, List, Dict, Any
-from src.utils.timezone import from_timestamp_utc_naive, utc_now_naive
+from src.utils.timezone import coerce_timestamp, from_timestamp_utc_naive, utc_now_naive
+from src.recording.filtering.decision import FilterDecision
 
 from .duckdb_manager import DuckDBManager
 
@@ -215,36 +216,35 @@ class RecordingRepository:
 
     def save_network_requests(
         self,
-        action_id: Optional[int],
         network_requests: List[Dict[str, Any]],
         recording_id: Optional[str] = None,
-    ) -> List[int]:
+    ) -> Dict[int, int]:
         """
         保存网络请求
 
         Args:
-            action_id: 关联的操作 ID（可以是 None，表示独立的网络请求）
-            network_requests: 网络请求列表
+            network_requests: 网络请求列表；每条记录自带 action_id / filtered / filter_reason / filtered_at
             recording_id: 录制会话 ID（用于直接关联，提高查询性能）
 
         Returns:
-            插入的请求 ID 列表
+            batch_index 到 request_id 的映射
         """
         if not network_requests:
             logger.debug(
-                f"save_network_requests: 网络请求列表为空 (action_id={action_id}, recording_id={recording_id})"
+                f"save_network_requests: 网络请求列表为空 (recording_id={recording_id})"
             )
-            return []
+            return {}
 
         logger.debug(
-            f"save_network_requests: 准备保存 {len(network_requests)} 条网络请求 (action_id={action_id}, recording_id={recording_id})"
+            f"save_network_requests: 准备保存 {len(network_requests)} 条网络请求 (recording_id={recording_id})"
         )
 
         rows = []
         for request in network_requests:
+            filter_reason = request.get("filter_reason")
             rows.append(
                 {
-                    "action_id": action_id,
+                    "action_id": request.get("action_id"),
                     "recording_id": recording_id,
                     "url": request.get("url"),
                     "method": request.get("method"),
@@ -260,26 +260,59 @@ class RecordingRepository:
                     "response_body": request.get("response_body"),
                     "duration": request.get("duration"),
                     "timestamp": (
-                        from_timestamp_utc_naive(ts)
+                        coerce_timestamp(ts)
                         if (ts := request.get("timestamp")) is not None
                         else utc_now_naive()
                     ),
-                    "filtered": False,
-                    "filter_reason": None,
-                    "filtered_at": None,
+                    "filtered": bool(request.get("filtered", False)),
+                    "filter_reason": (
+                        json.dumps(filter_reason, ensure_ascii=False)
+                        if filter_reason is not None
+                        else None
+                    ),
+                    "filtered_at": coerce_timestamp(request.get("filtered_at")),
                 }
             )
 
-        try:
-            request_ids = self.db.insert_many("network_requests", rows)
-        except Exception as e:
-            logger.error(f"批量保存网络请求失败: {e}", exc_info=True)
-            return []
+        request_ids = self.db.insert_many("network_requests", rows)
+        request_id_map = {batch_index: request_id for batch_index, request_id in enumerate(request_ids)}
 
         logger.info(
             f"save_network_requests: 成功保存 {len(request_ids)}/{len(network_requests)} 条网络请求"
         )
-        return request_ids
+        return request_id_map
+
+    def save_filter_decisions(self, decisions: List[FilterDecision]) -> List[int]:
+        """批量保存过滤决策。"""
+        if not decisions:
+            return []
+
+        rows = []
+        for decision in decisions:
+            rows.append(
+                {
+                    "request_id": decision.request_id,
+                    "action_id": decision.action_id,
+                    "recording_id": decision.recording_id,
+                    "decision": decision.decision,
+                    "source": decision.source,
+                    "confidence": decision.confidence,
+                    "reason": decision.reason,
+                    "pattern_matched": decision.pattern_matched,
+                    "scores": (
+                        json.dumps(decision.scores, ensure_ascii=False)
+                        if decision.scores is not None
+                        else None
+                    ),
+                    "request_timestamp": coerce_timestamp(decision.request_timestamp),
+                    "action_timestamp": coerce_timestamp(decision.action_timestamp),
+                    "timestamp": coerce_timestamp(decision.timestamp) if decision.timestamp is not None else utc_now_naive(),
+                }
+            )
+
+        decision_ids = self.db.insert_many("filter_decisions", rows)
+        logger.info(f"已保存 {len(decision_ids)} 条过滤决策")
+        return decision_ids
 
     def save_sibling_snapshot(
         self,

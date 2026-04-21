@@ -41,3 +41,38 @@ def test_compression_model_follows_primary_chat_model(tmp_path, monkeypatch):
     assert config.get_compression_model_base_url() == "https://chat.example/v1"
     assert config.get_compression_model_temperature() == 0.25
     assert config.get_compression_model_max_tokens() == 321
+
+
+def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "recording": {
+                    "noise_filter": {
+                        "enabled": False,
+                        "blacklist_domains": ["example-tracker"],
+                        "first_party_whitelist": ["static.example.com"],
+                        "static_extensions": [".png", ".css"],
+                        "static_content_type_prefixes": ["image/", "text/css"],
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "keyring",
+        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
+    )
+
+    config = UnifiedConfigManager(config_path=str(config_path))
+    noise_filter = config.get_recording_noise_filter_config()
+
+    assert noise_filter.enabled is False
+    assert noise_filter.blacklist_domains == ["example-tracker"]
+    assert noise_filter.first_party_whitelist == ["static.example.com"]
+    assert noise_filter.static_extensions == [".png", ".css"]
+    assert noise_filter.static_content_type_prefixes == ["image/", "text/css"]

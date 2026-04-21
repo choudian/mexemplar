@@ -154,6 +154,8 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 | 5 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
 
 - **PM 和程序员共用同一套 4 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）。试用 Agent 和办公助理不使用录制数据工具
+- `query_data` 与 `execute_code` 查询 `network_requests` 时默认只暴露 `filtered=false` 的可见行，并隐藏 `filtered / filter_reason / filtered_at / is_recommendation / importance_level` 以及 `filter_decisions` 表；这一约束由 `src/recording/filtering/` 中的 SQL 改写器和 DuckDB 代理统一实现，`recording_data_tools.py` 只负责装配
+- `describe_data` 中的 `network_requests.row_count` 也只统计 Agent 可见行，避免通过概览计数反推出被隐藏的噪声请求数量
 - 列表操作通过元素上下文启发式识别，不确定就直接问用户
 - 详见 [recording_tools_redesign_todo.md](design/recording_tools_redesign_todo.md)
 

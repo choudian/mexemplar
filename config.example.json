@@ -41,6 +41,40 @@
     "capture_network_requests": true,
     "network_request_filter": "xhr_fetch",
     "network_request_timeout": 5.0,
+    "noise_filter": {
+      "enabled": true,
+      "blacklist_domains": [
+        "doubleclick",
+        "googletagmanager",
+        "google-analytics",
+        "sentry",
+        "hotjar",
+        "baidu-tongji"
+      ],
+      "first_party_whitelist": [],
+      "static_extensions": [
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".svg",
+        ".webp",
+        ".ico",
+        ".css",
+        ".woff",
+        ".woff2",
+        ".ttf",
+        ".otf",
+        ".eot"
+      ],
+      "static_content_type_prefixes": [
+        "image/",
+        "font/",
+        "text/css",
+        "application/font-woff",
+        "application/octet-stream"
+      ]
+    },
     "persistent_user_data": true,
     "user_data_dir": null,
     "websocket": {

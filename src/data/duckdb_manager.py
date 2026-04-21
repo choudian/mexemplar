@@ -331,7 +331,7 @@ class DuckDBManager:
                     filter_reason JSON,
                     filtered_at TIMESTAMP,
                     is_recommendation BOOLEAN DEFAULT FALSE,
-                    importance_level TEXT
+                    importance_level VARCHAR DEFAULT 'unknown'
                 )
             """
             )

@@ -15,9 +15,9 @@ import logging
 import os
 import threading
 from typing import Optional, Dict, Any, Callable, List
-from dataclasses import dataclass
+import dataclasses
 
-from src.data.config_models import AppConfig, ConfigFileLoader
+from src.data.config_models import AppConfig, ConfigFileLoader, RecordingNoiseFilterConfig
 from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manager
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ def _get_keyring_service_name() -> str:
     return os.environ.get("EXEMPLAR_KEYRING_SERVICE_NAME", "Mexemplar").strip() or "Mexemplar"
 
 
-@dataclass
+@dataclasses.dataclass
 class UnifiedConfigManager:
     """
     统一配置管理器
@@ -320,6 +320,17 @@ class UnifiedConfigManager:
     def get_proxy_port(self) -> int:
         """获取录制代理端口"""
         return self.get("recording.proxy.port", default=8080)
+
+    def get_recording_noise_filter_config(self) -> RecordingNoiseFilterConfig:
+        """获取录制噪声过滤配置。"""
+        defaults = RecordingNoiseFilterConfig()
+        kwargs = {}
+        for f in dataclasses.fields(RecordingNoiseFilterConfig):
+            val = self.get(f"recording.noise_filter.{f.name}", default=getattr(defaults, f.name))
+            if isinstance(val, list):
+                val = list(val)
+            kwargs[f.name] = val
+        return RecordingNoiseFilterConfig(**kwargs)
 
     # ===== 内部方法 =====
 

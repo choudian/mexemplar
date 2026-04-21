@@ -17,10 +17,10 @@
 
 import base64
 import builtins as _builtins_module
+import duckdb
 import io
 import json
 import logging
-import re
 import threading
 from datetime import timedelta
 from typing import Any
@@ -30,6 +30,13 @@ from src.business.agents.tool_helpers import make_tool_schema
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.duckdb_manager import DuckDBManager
 from src.data.unified_config import get_unified_config
+from src.recording.filtering.filtered_conn import (
+    DATA_ACCESS_RESTRICTED_MESSAGE,
+    SQL_PARSE_FAILED_MESSAGE,
+    DataAccessRestrictedError,
+    FilteredDuckDBConnection,
+)
+from src.recording.filtering.sql_rewriter import SqlRewriteError, rewrite
 from src.utils.llm_helpers import sanitize_text_for_llm
 
 logger = logging.getLogger(__name__)
@@ -110,11 +117,6 @@ _COMMON_TABLES: dict[str, dict] = {
             ),
             "duration": ("FLOAT", "请求耗时（毫秒）", None),
             "timestamp": ("DATETIME", "请求发生时间", None),
-            "filtered": ("BOOLEAN", "是否被过滤（True = 被过滤，不推荐用于分析）", None),
-            "filter_reason": ("JSON", "过滤原因", None),
-            "is_recommendation": ("BOOLEAN", "是否为推荐使用的请求", None),
-            "importance_level": ("VARCHAR", "重要程度：high / medium / low", None),
-            "filtered_at": ("DATETIME", "过滤时间", None),
         },
     },
     "sibling_snapshots": {
@@ -136,24 +138,6 @@ _COMMON_TABLES: dict[str, dict] = {
             "clicked_index": ("INTEGER", "被点击的元素序号", None),
             "total_count": ("INTEGER", "兄弟元素总数", None),
             "timestamp": ("DATETIME", "快照时间", None),
-        },
-    },
-    "filter_decisions": {
-        "description": "网络请求过滤决策记录（系统标记哪些请求被过滤及原因）",
-        "fields": {
-            "decision_id": ("INTEGER", "决策 ID（主键）", None),
-            "request_id": ("VARCHAR", "关联的请求 ID", None),
-            "action_id": ("INTEGER", "关联的操作 ID（可为空）", None),
-            "recording_id": ("VARCHAR", "所属录制会话 ID", None),
-            "decision": ("VARCHAR", "决策结果：keep / filter", None),
-            "source": ("VARCHAR", "决策来源：rule / llm", None),
-            "confidence": ("FLOAT", "置信度（0~1）", None),
-            "reason": ("TEXT", "过滤原因说明", None),
-            "pattern_matched": ("VARCHAR", "匹配到的规则模式（如有）", None),
-            "scores": ("JSON", "各维度评分", None),
-            "request_timestamp": ("DATETIME", "关联请求的时间戳", None),
-            "action_timestamp": ("DATETIME", "关联操作的时间戳", None),
-            "timestamp": ("DATETIME", "决策时间", None),
         },
     },
     "recording_screenshots": {
@@ -191,6 +175,12 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
 
     def _get_row_count(tn: str) -> int:
         try:
+            if tn == "network_requests":
+                row = db.fetchone(
+                    "SELECT COUNT(*) FROM network_requests WHERE recording_id = ? AND filtered = FALSE",
+                    (recording_id,),
+                )
+                return row[0] if row else 0
             row = db.fetchone(
                 f"SELECT COUNT(*) FROM {tn} WHERE recording_id = ?",
                 (recording_id,),
@@ -247,6 +237,23 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
     return json.dumps({"table_details": table_details}, ensure_ascii=False)
 
 
+def _classify_error(exc: Exception) -> str | None:
+    if isinstance(exc, DataAccessRestrictedError):
+        return DATA_ACCESS_RESTRICTED_MESSAGE
+    if isinstance(exc, SqlRewriteError):
+        return SQL_PARSE_FAILED_MESSAGE
+    return None
+
+
+def _mask_recording_data_error(exc: Exception) -> str:
+    masked = _classify_error(exc)
+    if masked is not None:
+        return masked
+    if isinstance(exc, duckdb.Error):
+        return f"SQL 执行失败: {exc}。可用表: {', '.join(_ALL_TABLE_NAMES)}。"
+    return SQL_PARSE_FAILED_MESSAGE
+
+
 DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
     name="describe_data",
     description=(
@@ -273,8 +280,6 @@ DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
 # 工具 2：query_data
 # =============================================================================
 
-_SELECT_RE = re.compile(r"^\s*SELECT\b", re.IGNORECASE)
-
 
 def _sanitize_query_value(value: Any) -> Any:
     """query_data 返回值清洗：去除控制字符，截断超长字符串。"""
@@ -288,41 +293,10 @@ def _query_data(recording_id: str, sql: str) -> str:
     执行 SQL 查询。只允许 SELECT 语句。
     recording_id 通过闭包绑定，agent 写 SQL 时需自己在 WHERE 中加过滤条件。
     """
-    if not _SELECT_RE.match(sql):
-        return json.dumps(
-            {
-                "error": "只允许 SELECT 查询",
-                "hint": f"你的 SQL 不是 SELECT 语句。当前 recording_id = {recording_id!r}",
-            },
-            ensure_ascii=False,
-        )
-
-    # 防止多语句注入（SELECT ...; DROP TABLE ...）
-    if ";" in sql:
-        return json.dumps(
-            {
-                "error": "SQL 中不允许包含分号（;），每次只能执行单条 SELECT 语句",
-            },
-            ensure_ascii=False,
-        )
-
-    # 防止注释注入（-- 和 /* */ 可截断后续安全检查）
-    if "--" in sql or "/*" in sql:
-        return json.dumps(
-            {"error": "SQL 中不允许包含注释符号（-- 或 /* */）"},
-            ensure_ascii=False,
-        )
-
-    # 防止 SELECT INTO（可创建新表）
-    if re.search(r"\bSELECT\b.*\bINTO\b", sql, re.IGNORECASE):
-        return json.dumps(
-            {"error": "不允许 SELECT INTO 语句"},
-            ensure_ascii=False,
-        )
-
     db = DuckDBManager()
     try:
-        col_names, rows = db.execute_and_fetchall(sql)
+        rewritten_sql = rewrite(sql)
+        col_names, rows = db.execute_and_fetchall(rewritten_sql)
 
         if not rows:
             return json.dumps({"rows": [], "row_count": 0}, ensure_ascii=False)
@@ -345,13 +319,10 @@ def _query_data(recording_id: str, sql: str) -> str:
         )
 
     except Exception as e:
+        logger.error("[query_data] SQL failed: %s", sql, exc_info=True)
         return json.dumps(
             {
-                "error": str(e),
-                "hint": (
-                    f"SQL 执行失败。可用表: {', '.join(_ALL_TABLE_NAMES)}。"
-                    "如不确定字段名，请先调用 describe_data 查看表结构。"
-                ),
+                "error": _mask_recording_data_error(e),
             },
             ensure_ascii=False,
         )
@@ -441,7 +412,7 @@ def _execute_code(recording_id: str, code: str) -> str:
     safe_builtins = {**_SAFE_BUILTINS, "__import__": _safe_import}
     exec_globals: dict[str, Any] = {
         "__builtins__": safe_builtins,
-        "conn": db.conn,
+        "conn": FilteredDuckDBConnection(db.connect()),
         "recording_id": recording_id,
         "print": lambda *args, **kwargs: print(*args, **{**kwargs, "file": stdout_buf}),
     }
@@ -453,7 +424,9 @@ def _execute_code(recording_id: str, code: str) -> str:
             exec(code, exec_globals)  # noqa: S102
             result_holder["output"] = stdout_buf.getvalue()
         except Exception as e:
-            result_holder["error"] = f"{type(e).__name__}: {e}"
+            logger.error("[execute_code] execution failed", exc_info=True)
+            masked_error = _classify_error(e)
+            result_holder["error"] = masked_error or f"{type(e).__name__}: {e}"
 
     thread = threading.Thread(target=_run, daemon=True)
     thread.start()

@@ -42,6 +42,15 @@ def local_now() -> datetime:
     return datetime.now(_LOCAL_TZ)
 
 
+def coerce_timestamp(value) -> datetime | None:
+    """如果 value 是数值型时间戳则转为 naive UTC datetime，否则原样返回。"""
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return from_timestamp_utc_naive(value)
+    return value
+
+
 def local_naive_to_utc_naive(dt: datetime) -> datetime:
     """将 legacy local naive datetime 归一化为 naive UTC。"""
     if dt is None:

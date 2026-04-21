@@ -51,12 +51,15 @@ def test_recording_repository_persists_naive_utc_for_duckdb_timestamps(monkeypat
         ],
     )
     repo.save_network_requests(
-        action_id=1,
         recording_id="rec-1",
         network_requests=[
             {
+                "action_id": 1,
                 "url": "https://example.com",
                 "timestamp": 181,
+                "filtered": False,
+                "filter_reason": None,
+                "filtered_at": None,
             }
         ],
     )
@@ -97,9 +100,16 @@ def test_recording_repository_uses_naive_utc_now_when_timestamp_missing(monkeypa
     repo = RecordingRepository(db_manager=db)
 
     repo.save_network_requests(
-        action_id=1,
         recording_id="rec-1",
-        network_requests=[{"url": "https://example.com"}],
+        network_requests=[
+            {
+                "action_id": 1,
+                "url": "https://example.com",
+                "filtered": False,
+                "filter_reason": None,
+                "filtered_at": None,
+            }
+        ],
     )
     repo.save_sibling_snapshot(
         action_id=1,

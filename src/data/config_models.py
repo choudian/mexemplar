@@ -108,6 +108,50 @@ class ProxyConfig:
 
 
 @dataclass
+class RecordingNoiseFilterConfig:
+    """录制噪声过滤配置"""
+
+    enabled: bool = True
+    blacklist_domains: list[str] = field(
+        default_factory=lambda: [
+            "doubleclick",
+            "googletagmanager",
+            "google-analytics",
+            "sentry",
+            "hotjar",
+            "baidu-tongji",
+        ]
+    )
+    first_party_whitelist: list[str] = field(default_factory=list)
+    static_extensions: list[str] = field(
+        default_factory=lambda: [
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".svg",
+            ".webp",
+            ".ico",
+            ".css",
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".otf",
+            ".eot",
+        ]
+    )
+    static_content_type_prefixes: list[str] = field(
+        default_factory=lambda: [
+            "image/",
+            "font/",
+            "text/css",
+            "application/font-woff",
+            "application/octet-stream",
+        ]
+    )
+
+
+@dataclass
 class RecordingConfig:
     """录制配置"""
 
@@ -130,6 +174,7 @@ class RecordingConfig:
     # WebSocket 配置
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
+    noise_filter: RecordingNoiseFilterConfig = field(default_factory=RecordingNoiseFilterConfig)
     # 用户数据目录配置
     persistent_user_data: bool = True  # 是否使用持久化用户数据目录（保留登录状态，默认启用）
     user_data_dir: Optional[str] = None  # 自定义用户数据目录路径（如果为 None，使用默认路径）
@@ -173,6 +218,14 @@ class AppConfig:
 
         if "recording" in data:
             recording_data = _filter_dataclass_fields(data["recording"], RecordingConfig)
+            for key, cls in (
+                ("websocket", WebSocketConfig),
+                ("proxy", ProxyConfig),
+                ("noise_filter", RecordingNoiseFilterConfig),
+            ):
+                val = recording_data.get(key)
+                if isinstance(val, dict):
+                    recording_data[key] = cls(**_filter_dataclass_fields(val, cls))
             config.recording = RecordingConfig(**recording_data)
 
         if "ui" in data:

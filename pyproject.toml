@@ -37,6 +37,8 @@ dependencies = [
     "pynput>=1.8.1",
     "pyqt6>=6.10.1",
     "pywinauto>=0.6.9",
+    "sqlglot>=23.0.0,<30.0.0",
+    "tldextract>=5.0.0,<6.0.0",
     "uiautomation>=2.0.29; platform_system == 'Windows'",
     "websockets>=14.0.0",
     "pyqt6-qt6>=6.10.1",

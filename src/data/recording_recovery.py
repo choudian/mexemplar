@@ -14,6 +14,7 @@ from .duckdb_manager import DuckDBManager
 from .recording_repository import RecordingRepository
 from src.recording.browser.duckdb_recording_persister import DuckDBRecordingPersister
 from src.recording.browser.recorder import RecordingMode
+from src.recording.filtering.ingest_hook import persist_filtered_network_requests
 
 logger = logging.getLogger(__name__)
 
@@ -193,26 +194,6 @@ class RecordingRecovery:
                 logger.warning(f"队列文件中没有有效数据: {queue_file.name}")
                 return False
 
-            # 如果是覆盖模式，先删除旧数据
-            if overwrite:
-                logger.info(f"删除旧数据: {recording_id}")
-                self.db_manager.execute(
-                    "DELETE FROM network_requests WHERE recording_id = ?",
-                    (recording_id,)
-                )
-                self.db_manager.execute(
-                    "DELETE FROM sibling_snapshots WHERE recording_id = ?",
-                    (recording_id,)
-                )
-                self.db_manager.execute(
-                    "DELETE FROM actions WHERE recording_id = ?",
-                    (recording_id,)
-                )
-                self.db_manager.execute(
-                    "DELETE FROM recording_sessions WHERE recording_id = ?",
-                    (recording_id,)
-                )
-
             # 提取时间范围
             start_time = min(timestamps) if timestamps else 0
             end_time = max(timestamps) if timestamps else 0
@@ -228,43 +209,46 @@ class RecordingRecovery:
                 "end_time": end_time,
                 "metadata": json.dumps({"recovered": True, "queue_file": str(queue_file)}, ensure_ascii=False),
             }
-            self.repository.save_recording_session(session_data)
-            logger.info(f"✅ 录制会话已恢复: {recording_id}")
 
-            # 保存操作记录
-            action_ids = []
-            if actions:
-                action_ids = self.repository.save_actions(recording_id, actions)
-                logger.info(f"✅ 已恢复 {len(action_ids)} 条操作记录")
+            with self.db_manager.transaction():
+                if overwrite:
+                    logger.info(f"删除旧数据: {recording_id}")
+                    for table in (
+                        "filter_decisions", "network_requests",
+                        "sibling_snapshots", "actions", "recording_sessions",
+                    ):
+                        self.db_manager.execute(
+                            f"DELETE FROM {table} WHERE recording_id = ?",
+                            (recording_id,),
+                        )
 
-            snapshot_count = 0
-            for index, action_id in enumerate(action_ids):
-                siblings_snapshot = sibling_snapshots.get(index)
-                if siblings_snapshot:
-                    self.repository.save_sibling_snapshot(action_id, siblings_snapshot, recording_id)
-                    snapshot_count += 1
+                self.repository.save_recording_session(session_data)
+                logger.info(f"✅ 录制会话已恢复: {recording_id}")
 
-            if snapshot_count > 0:
-                logger.info(f"✅ 已恢复 {snapshot_count} 条兄弟元素快照")
+                action_ids = []
+                if actions:
+                    action_ids = self.repository.save_actions(recording_id, actions)
+                    logger.info(f"✅ 已恢复 {len(action_ids)} 条操作记录")
 
-            # 保存网络请求
-            request_count = 0
-            for index, action_id in enumerate(action_ids):
-                network_requests = action_network_requests.get(index)
-                if network_requests:
-                    saved = self.repository.save_network_requests(
-                        action_id, network_requests, recording_id
-                    )
-                    request_count += len(saved)
+                snapshot_count = 0
+                for index, action_id in enumerate(action_ids):
+                    siblings_snapshot = sibling_snapshots.get(index)
+                    if siblings_snapshot:
+                        self.repository.save_sibling_snapshot(action_id, siblings_snapshot, recording_id)
+                        snapshot_count += 1
 
-            if standalone_network_requests:
-                saved = self.repository.save_network_requests(
-                    None, standalone_network_requests, recording_id
+                if snapshot_count > 0:
+                    logger.info(f"✅ 已恢复 {snapshot_count} 条兄弟元素快照")
+
+                persist_filtered_network_requests(
+                    self.repository,
+                    recording_id,
+                    actions,
+                    action_ids,
+                    action_network_requests,
+                    standalone_network_requests,
+                    log_prefix="✅ 已恢复",
                 )
-                request_count += len(saved)
-
-            if request_count > 0:
-                logger.info(f"✅ 已恢复 {request_count} 条网络请求")
 
             return True
 
@@ -329,7 +313,7 @@ class RecordingRecovery:
         logger.info("🔄 尝试从队列文件恢复（保底方案）...")
 
         # 统计队列文件对应的录制，哪些已在 DuckDB 中，哪些缺失
-        missing_recordings = []
+        missing_recordings = set()
 
         for queue_file in queue_files:
             data = self.parse_queue_file(queue_file)
@@ -340,7 +324,7 @@ class RecordingRecovery:
                 continue
 
             if not self.check_recording_exists(recording_id):
-                missing_recordings.append(recording_id)
+                missing_recordings.add(recording_id)
 
         if not missing_recordings:
             logger.info("✅ 队列文件中的录制都已在数据库中")

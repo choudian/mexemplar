@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 from src.data.duckdb_manager import DuckDBManager
+from src.recording.filtering.ingest_hook import persist_filtered_network_requests
 
 from .recorder import RecordingMode
 
@@ -69,14 +70,13 @@ class DuckDBRecordingPersister:
             },
         }
 
-        repository.save_recording_session(session_data)
-        self._logger.info(f"录制会话已保存到 DuckDB: {recording_id}")
-
         if not action_queue_path or not action_queue_path.exists():
+            repository.save_recording_session(session_data)
+            self._logger.info(f"录制会话已保存到 DuckDB: {recording_id}")
             self._logger.warning("队列文件不存在，跳过操作保存")
             return 0
 
-        screenshots_path = self._resolve_screenshots_queue_path(recording_id)
+        screenshots_path = self._resolve_screenshots_queue_path(recording_id, action_queue_path)
 
         actions_list = []
         network_requests_map = {}
@@ -128,6 +128,10 @@ class DuckDBRecordingPersister:
         screenshot_count = 0
         try:
             with transaction_ctx:
+                repository.save_recording_session(session_data)
+                self._logger.info(f"录制会话已保存到 DuckDB: {recording_id}")
+
+                action_ids = []
                 if actions_list:
                     action_ids = repository.save_actions(recording_id, actions_list)
                     self._logger.info(f"已保存 {len(action_ids)} 条操作到 DuckDB")
@@ -149,25 +153,14 @@ class DuckDBRecordingPersister:
                     if snapshot_count > 0:
                         self._logger.info(f"已保存 {snapshot_count} 条兄弟元素快照到 DuckDB")
 
-                    request_count = 0
-                    if network_requests_map and action_ids:
-                        for index, action_id in enumerate(action_ids):
-                            if index in network_requests_map:
-                                requests = network_requests_map[index]
-                                repository.save_network_requests(action_id, requests, recording_id)
-                                request_count += len(requests)
-
-                    if request_count > 0:
-                        self._logger.info(f"已保存 {request_count} 条关联网络请求到 DuckDB")
-
-                if standalone_network_requests:
-                    self._logger.debug(
-                        f"保存 {len(standalone_network_requests)} 条独立网络请求 (action_id=NULL)"
-                    )
-                    saved = repository.save_network_requests(
-                        None, standalone_network_requests, recording_id
-                    )
-                    self._logger.info(f"已保存 {len(saved)} 条独立网络请求到 DuckDB")
+                persist_filtered_network_requests(
+                    repository,
+                    recording_id,
+                    actions_list,
+                    action_ids,
+                    network_requests_map,
+                    standalone_network_requests,
+                )
 
                 screenshot_count = self._save_screenshots(repository, screenshots_path)
                 if screenshot_count > 0:
@@ -201,9 +194,12 @@ class DuckDBRecordingPersister:
     def _resolve_screenshots_queue_path(
         self,
         recording_id: Optional[str],
+        action_queue_path: Optional[Path] = None,
     ) -> Optional[Path]:
         if not recording_id:
             return None
+        if action_queue_path:
+            return action_queue_path.with_name(f"{recording_id}_screenshots.jsonl")
         from src.recording.queue_paths import get_recording_screenshots_queue_path
         return get_recording_screenshots_queue_path(recording_id)
 
