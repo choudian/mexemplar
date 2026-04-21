@@ -38,9 +38,12 @@
 
 2. **创建分支**
    ```bash
-   git checkout -b feature/your-feature-name
-   # 或
-   git checkout -b fix/your-bug-fix
+   git checkout -b 001-short-name
+   ```
+
+   如果你使用 Speckit 工作流，也可以用仓库内置脚本生成兼容分支和规格目录：
+   ```bash
+   pwsh .specify/scripts/powershell/create-new-feature.ps1 "Add your feature description" -ShortName "short-name"
    ```
 
 3. **安装开发依赖**
@@ -50,6 +53,8 @@
    ```
 
 4. **编写代码**
+   - 非琐碎功能建议先补齐对应的 `spec.md / plan.md / tasks.md`
+   - 遵守 `.specify/memory/constitution.md` 与 `docs/PROJECT_CONSTRAINTS.md`
    - 遵循项目的代码风格
    - 添加必要的测试
    - 更新相关文档
@@ -91,7 +96,7 @@
 
 8. **推送到你的 Fork**
    ```bash
-   git push origin feature/your-feature-name
+   git push origin <your-branch-name>
    ```
 
 9. **创建 Pull Request**
@@ -120,8 +125,9 @@
 
 - 更新 README（如果需要）
 - 更新或添加相关文档到 `docs/` 目录
+- 原则或流程变更时同步更新 `.specify/memory/constitution.md`
 - 添加代码注释（特别是复杂逻辑）
-- 更新 CLAUDE.md（如果涉及架构变更）
+- 架构/约束变更时同步更新活文档（如 `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、`agent.md`、`CLAUDE.md`）
 
 ## 📋 Pull Request 检查清单
 
@@ -131,6 +137,7 @@
 - [ ] 代码已格式化（black）
 - [ ] 代码通过检查（flake8）
 - [ ] 添加了必要的测试
+- [ ] 宪法与活文档已同步更新（如适用）
 - [ ] 更新了相关文档
 - [ ] PR 描述清晰，说明了更改的内容和原因
 - [ ] 提交信息符合规范

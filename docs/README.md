@@ -8,9 +8,10 @@
 
 | 文件 | 内容 | 更新触发条件 |
 |------|------|------------|
+| `../.specify/memory/constitution.md` | 项目治理、不可协商原则、Speckit 门禁 | 原则、门禁或交付流程变化时更新 |
 | `ARCHITECTURE.md` | 整体架构、Agent 分工、数据流、设计原则 | 架构变更时必须同步更新 |
 | `PROJECT_CONSTRAINTS.md` | 开发约束、规范、禁止模式 | 引入新约束或发现新反模式时更新 |
-| `../CLAUDE.md` | AI 开发指南（核心约束摘要） | 与 PROJECT_CONSTRAINTS.md 同步 |
+| `../agent.md` / `../CLAUDE.md` | AI 开发指南（核心约束摘要） | 与 constitution / PROJECT_CONSTRAINTS.md 同步 |
 
 **更新规则**：直接改，不留旧内容，不写"原来是X，现在是Y"。历史在 git 里。
 
