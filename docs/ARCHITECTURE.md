@@ -151,9 +151,10 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 | 2 | query_data | agent 写 SQL 直接查询 DuckDB | 主力数据获取，~90% 的查询 |
 | 3 | execute_code | 临时 Python 代码执行 | SQL 不够用时的补充（~10%） |
 | 4 | analyze_image | 多模态模型分析截图 | **非常规手段**，兜底用。图片不进 agent 主上下文，只返回文字分析结果 |
-| 5 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
+| 5 | read_field_chunk | 分段读取大字段原始内容 | 当 query_data 返回 `__large_field__` 占位对象时，按 locator+offset+length 分段续读 |
+| 6 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
 
-- **PM 和程序员共用同一套 4 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）。试用 Agent 和办公助理不使用录制数据工具
+- **PM 和程序员共用同一套 5 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）。试用 Agent 和办公助理不使用录制数据工具
 - `query_data` 与 `execute_code` 查询 `network_requests` 时默认只暴露 `filtered=false` 的可见行，并隐藏 `filtered / filter_reason / filtered_at / is_recommendation / importance_level` 以及 `filter_decisions` 表；这一约束由 `src/recording/filtering/` 中的 SQL 改写器和 DuckDB 代理统一实现，`recording_data_tools.py` 只负责装配
 - `describe_data` 中的 `network_requests.row_count` 也只统计 Agent 可见行，避免通过概览计数反推出被隐藏的噪声请求数量
 - 列表操作通过元素上下文启发式识别，不确定就直接问用户
@@ -167,7 +168,7 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 
 | # | 工具 | 用途 |
 |---|------|------|
-| 1~4 | 录制数据工具 | 与 PM 共用同一套 4 个工具（describe_data、query_data、execute_code、analyze_image） |
+| 1~5 | 录制数据工具 | 与 PM 共用同一套 5 个工具（describe_data、query_data、read_field_chunk、execute_code、analyze_image） |
 | 5 | 语法校验 | 验证语法错误和导入问题（不是真正执行） |
 
 ### 关键设计
@@ -217,11 +218,11 @@ PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），t
 
 不加额外的协调层。各 Agent 在各自阶段独立运行。以后加新 Agent 角色，通过通用的 Agent 注册/派发机制扩展。
 
-办公助理不需要 `_dispatch_next`（没有下游 Agent），Loop 完成后不调度。助理触发的修复流程（`report_tool_bug`）和工具沉淀（`codify_as_tool`）通过异步任务队列投递，由后台 worker 消费后调用现有 PM 分诊流程。
+办公助理不需要 `_dispatch_next`（没有下游 Agent），Loop 完成后不调度。助理触发的修复流程（`report_tool_bug`）和工具沉淀（`codify_as_tool`）通过异步任务队列投递，由后台 worker 消费后调用现有 PM 分诊流程。入队后通过 `threading.Event` 立即唤醒 worker；这条链路是对 blinker 的受控例外，因为 blinker `send()` 是同步的，不适合在助理 worker 线程中嵌套启动 PM。
 
 ### Agent 之间的衔接：两层通信机制
 
-流程编排由 AgentOrchestrator 统一负责（不单独拆文件）。通信分两层：
+流程编排对外仍由 `AgentOrchestrator` 统一负责；公开 import 入口保持在 `src/business/orchestration/agent_orchestrator.py`，内部实现已拆到 `src/business/orchestration/agent/` 子模块。通信分两层：
 
 | 通信方向 | 机制 | 说明 |
 |---------|------|------|
@@ -454,3 +455,4 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 *更新：2026-03-27 — 精简文档：删除与设计文档重复的差异决策、办公助理详细设计和工具沉淀章节（已收入 assistant_agent_design.md），工具沉淀三条路径概述移至第一节*
 *更新：2026-04-07 — 同步代码现状：精确化 Agent 两层通信机制描述；补全事件列表（teaching_failure 系列、trial_success、recording_started/stopped）；补充 Trial Agent Config 动态构建说明；新增教学失败追踪系统说明；更新优先级表完成状态*
 *更新：2026-04-13 — 新增技能组合架构（第九节）：双模执行、数据模型、Assistant 集成、试用机制、needs_review 标记；删除已完成的优先级跟踪表，保留细化设计文档索引*
+*更新：2026-04-21 — 同步当前实现形态：补充 assistant 后台任务队列为何不走 blinker；更正 AgentOrchestrator 为“对外单一入口 + 内部拆分子模块”的现状*

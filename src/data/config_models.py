@@ -108,6 +108,15 @@ class ProxyConfig:
 
 
 @dataclass
+class LargeFieldConfig:
+    """录制数据大字段占位与分段读取配置"""
+
+    threshold_chars: int = 1000  # 占位触发阈值（字符数）
+    preview_chars: int = 1000  # 占位预览最大长度（字符数）
+    max_chunk_chars: int = 1000  # 单次分段读取 content 最大长度（字符数）
+
+
+@dataclass
 class RecordingNoiseFilterConfig:
     """录制噪声过滤配置"""
 
@@ -175,6 +184,7 @@ class RecordingConfig:
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     noise_filter: RecordingNoiseFilterConfig = field(default_factory=RecordingNoiseFilterConfig)
+    large_field: LargeFieldConfig = field(default_factory=LargeFieldConfig)
     # 用户数据目录配置
     persistent_user_data: bool = True  # 是否使用持久化用户数据目录（保留登录状态，默认启用）
     user_data_dir: Optional[str] = None  # 自定义用户数据目录路径（如果为 None，使用默认路径）
@@ -218,14 +228,15 @@ class AppConfig:
 
         if "recording" in data:
             recording_data = _filter_dataclass_fields(data["recording"], RecordingConfig)
-            for key, cls in (
+            for key, sub_cls in (
                 ("websocket", WebSocketConfig),
                 ("proxy", ProxyConfig),
                 ("noise_filter", RecordingNoiseFilterConfig),
+                ("large_field", LargeFieldConfig),
             ):
                 val = recording_data.get(key)
                 if isinstance(val, dict):
-                    recording_data[key] = cls(**_filter_dataclass_fields(val, cls))
+                    recording_data[key] = sub_cls(**_filter_dataclass_fields(val, sub_cls))
             config.recording = RecordingConfig(**recording_data)
 
         if "ui" in data:

@@ -2,15 +2,14 @@ from pathlib import PurePosixPath
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlparse
 
-from .primary_host import normalize_host_to_site
+from .primary_host import coerce_host, normalize_host_to_site
 
 
 def _request_host(request: Mapping[str, Any]) -> str | None:
     url = request.get("url")
     if not isinstance(url, str):
         return None
-    parsed = urlparse(url)
-    return (parsed.hostname or "").lower().rstrip(".") or None
+    return coerce_host(url)
 
 
 def _response_content_type(request: Mapping[str, Any]) -> str | None:

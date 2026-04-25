@@ -32,6 +32,176 @@
       },
       "registered_skills": [],
       "installed_at": "2026-04-21T07:51:09.197207+00:00"
+    },
+    "brownfield": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:671babc47c752bf18868d0aeeef66f0fc4f37c6cf52622cfa07e8715fb5ac4a6",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.brownfield.scan",
+          "speckit.brownfield.bootstrap",
+          "speckit.brownfield.validate",
+          "speckit.brownfield.migrate"
+        ],
+        "claude": [
+          "speckit.brownfield.scan",
+          "speckit.brownfield.bootstrap",
+          "speckit.brownfield.validate",
+          "speckit.brownfield.migrate"
+        ],
+        "codex": [
+          "speckit.brownfield.scan",
+          "speckit.brownfield.bootstrap",
+          "speckit.brownfield.validate",
+          "speckit.brownfield.migrate"
+        ],
+        "cursor-agent": [
+          "speckit.brownfield.scan",
+          "speckit.brownfield.bootstrap",
+          "speckit.brownfield.validate",
+          "speckit.brownfield.migrate"
+        ],
+        "gemini": [
+          "speckit.brownfield.scan",
+          "speckit.brownfield.bootstrap",
+          "speckit.brownfield.validate",
+          "speckit.brownfield.migrate"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-25T01:17:22.569942+00:00"
+    },
+    "archive": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:ffa3831c0dd8aceeadad88efe4411676142d654dfbc1987e6e030ba6cdceb83e",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.archive.run"
+        ],
+        "claude": [
+          "speckit.archive.run"
+        ],
+        "codex": [
+          "speckit.archive.run"
+        ],
+        "cursor-agent": [
+          "speckit.archive.run"
+        ],
+        "gemini": [
+          "speckit.archive.run"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-25T01:20:45.989627+00:00"
+    },
+    "blueprint": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:c0c5bf7b0ac6236d660693ff792a3658f5cc0b1742a7cf3cb69e1675e1811ada",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.blueprint.generate",
+          "speckit.blueprint.validate"
+        ],
+        "claude": [
+          "speckit.blueprint.generate",
+          "speckit.blueprint.validate"
+        ],
+        "codex": [
+          "speckit.blueprint.generate",
+          "speckit.blueprint.validate"
+        ],
+        "cursor-agent": [
+          "speckit.blueprint.generate",
+          "speckit.blueprint.validate"
+        ],
+        "gemini": [
+          "speckit.blueprint.generate",
+          "speckit.blueprint.validate"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-25T01:21:39.134523+00:00"
+    },
+    "bugfix": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:52d11bc3b1912949516c4cfdd730acc138c362699aa6eb1357c7343e85d37f6c",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.bugfix.report",
+          "speckit.bugfix.patch",
+          "speckit.bugfix.verify"
+        ],
+        "claude": [
+          "speckit.bugfix.report",
+          "speckit.bugfix.patch",
+          "speckit.bugfix.verify"
+        ],
+        "codex": [
+          "speckit.bugfix.report",
+          "speckit.bugfix.patch",
+          "speckit.bugfix.verify"
+        ],
+        "cursor-agent": [
+          "speckit.bugfix.report",
+          "speckit.bugfix.patch",
+          "speckit.bugfix.verify"
+        ],
+        "gemini": [
+          "speckit.bugfix.report",
+          "speckit.bugfix.patch",
+          "speckit.bugfix.verify"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-25T01:23:12.282710+00:00"
+    },
+    "worktree": {
+      "version": "1.0.0",
+      "source": "local",
+      "manifest_hash": "sha256:7b5d0963fcc6b0f13a38e81448be0604186ab699388b75adbe536387fdd9cf27",
+      "enabled": true,
+      "priority": 10,
+      "registered_commands": {
+        "agy": [
+          "speckit.worktree.create",
+          "speckit.worktree.list",
+          "speckit.worktree.clean"
+        ],
+        "claude": [
+          "speckit.worktree.create",
+          "speckit.worktree.list",
+          "speckit.worktree.clean"
+        ],
+        "codex": [
+          "speckit.worktree.create",
+          "speckit.worktree.list",
+          "speckit.worktree.clean"
+        ],
+        "cursor-agent": [
+          "speckit.worktree.create",
+          "speckit.worktree.list",
+          "speckit.worktree.clean"
+        ],
+        "gemini": [
+          "speckit.worktree.create",
+          "speckit.worktree.list",
+          "speckit.worktree.clean"
+        ]
+      },
+      "registered_skills": [],
+      "installed_at": "2026-04-25T04:37:24.963358+00:00"
     }
   }
 }

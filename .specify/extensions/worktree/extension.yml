@@ -1,0 +1,39 @@
+schema_version: "1.0"
+
+extension:
+  id: worktree
+  name: "Worktree Isolation"
+  version: "1.0.0"
+  description: "Spawn isolated git worktrees for parallel feature development without checkout switching"
+  author: "Quratulain-bilal"
+  repository: "https://github.com/Quratulain-bilal/spec-kit-worktree"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=0.4.0"
+
+provides:
+  commands:
+    - name: speckit.worktree.create
+      file: commands/speckit.worktree.create.md
+      description: "Spawn an isolated git worktree for a new or existing feature branch"
+    - name: speckit.worktree.list
+      file: commands/speckit.worktree.list.md
+      description: "Show all active worktrees with feature status and spec artifact summary"
+    - name: speckit.worktree.clean
+      file: commands/speckit.worktree.clean.md
+      description: "Remove stale or merged worktrees and reclaim disk space"
+
+hooks:
+  after_specify:
+    command: speckit.worktree.create
+    optional: true
+    prompt: "Create an isolated worktree for this new feature?"
+    description: "Auto-spawn a worktree after a new feature is specified"
+
+tags:
+  - "worktree"
+  - "git"
+  - "parallel"
+  - "isolation"
+  - "workflow"

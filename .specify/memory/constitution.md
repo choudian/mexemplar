@@ -1,6 +1,6 @@
 <!--
 Sync Impact Report
-Version change: template -> 1.0.0
+Version change: template -> 1.0.1
 Modified principles:
 - Principle slot 1 -> I. 分层边界与事件协调
 - Principle slot 2 -> II. 数据边界与持久化纪律
@@ -29,7 +29,8 @@ Follow-up TODOs:
 ## Core Principles
 
 ### I. 分层边界与事件协调
-Mexemplar 的实现 MUST 保持清晰的依赖方向：`UI -> business -> data/driver`。下层代码 MUST
+Mexemplar 的实现 MUST 保持清晰的依赖方向：`UI -> business -> execution -> data/driver`。
+`execution` 层负责代码执行沙箱等运行时能力，与业务编排层同级但在 data 之上。下层代码 MUST
 NOT 反向依赖上层；跨模块通知 MUST 使用 `src/utils/events.py` 中定义的 `blinker`
 事件；仅在同一模块内或需要同步返回值时才允许直接方法调用。事件监听器 MUST 快速返回，
 不得承担长时间阻塞任务；耗时逻辑 MUST 交给后台任务、worker 或后续编排阶段。Rationale:
@@ -69,8 +70,9 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
 
 ## Engineering Guardrails
 
-- 当前主实现栈为 Python 3.11+、PyQt6、SQLite、DuckDB、Playwright、blinker 与自研
-  AgentLoop；涉及这些基础设施的改动 MUST 先说明兼容性影响。
+- 当前主实现栈为 Python 3.11+（运行时 3.12）、PyQt6、SQLite（SQLAlchemy / Alembic 迁移）、DuckDB、
+  Playwright、blinker、sqlglot、LangChain、mitmproxy 与自研 AgentLoop；浏览器扩展使用
+  JavaScript（`src/recording/browser_extension/`）；涉及这些基础设施的改动 MUST 先说明兼容性影响。
 - 受 Speckit 管理的功能分支 SHOULD 使用 `NNN-short-name` 或时间戳前缀命名，并将特性
   文档放在对应的 `specs/<branch-prefix>-<short-name>/` 目录。
 - 新事件 MUST 在 `src/utils/events.py` 统一定义；新配置 MUST 走统一配置管理；新增敏感
@@ -100,4 +102,4 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
 MINOR；文字澄清与非语义修订使用 PATCH。每次计划评审和合并评审都 MUST 做合规检查；
 如存在例外，必须在计划或 PR 中明示，而不是默默绕过。
 
-**Version**: 1.0.0 | **Ratified**: 2026-04-21 | **Last Amended**: 2026-04-21
+**Version**: 1.0.1 | **Ratified**: 2026-04-21 | **Last Amended**: 2026-04-25

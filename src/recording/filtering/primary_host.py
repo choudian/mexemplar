@@ -7,7 +7,7 @@ import tldextract
 _TLD_EXTRACT = tldextract.TLDExtract(suffix_list_urls=(), fallback_to_snapshot=True)
 
 
-def _coerce_host(value: str | None) -> str | None:
+def coerce_host(value: str | None) -> str | None:
     if not value or not isinstance(value, str):
         return None
 
@@ -23,7 +23,7 @@ def _coerce_host(value: str | None) -> str | None:
 
 
 def normalize_host_to_site(host: str | None) -> str | None:
-    normalized_host = _coerce_host(host)
+    normalized_host = coerce_host(host)
     if not normalized_host:
         return None
 
@@ -37,10 +37,6 @@ def normalize_host_to_site(host: str | None) -> str | None:
     if not extracted.domain or not extracted.suffix:
         return None
     return f"{extracted.domain}.{extracted.suffix}".lower()
-
-
-def normalize_url_to_site(url: str | None) -> str | None:
-    return normalize_host_to_site(url)
 
 
 def derive_primary_host(actions: Sequence[Mapping[str, Any]]) -> str | None:

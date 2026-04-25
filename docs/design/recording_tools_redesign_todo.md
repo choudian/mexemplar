@@ -190,7 +190,7 @@ def create_tools(recording_id: str) -> list[ToolDefinition]:
 **已决策**：
 - [x] SQL 安全策略——**只允许 SELECT，正则检查** `^\s*SELECT\b`（忽略大小写）。agent 是我们控制的 LLM，正则防御够用，不需要 SQL AST 解析。已知限制：挡不住 DuckDB 的 `read_csv_auto()` 等文件读取函数，但 agent 是受控 LLM，风险可接受。
 - [x] 返回格式——**行数组** `[{col1: val1, col2: val2}, ...]`。LLM 更容易理解，行格式比列式更直观。
-- [x] 大字段保护——**工具层不截断**。describe_data 已警告大字段，agent 看到警告后仍要查说明确实需要，不替 agent 做决策（核心原则第 4 条）。二进制字段（screenshot）仍替换为 `[二进制数据，请使用 analyze_image 工具]`（SQL 本身无法返回有意义的二进制内容）。上下文保护依赖 ContextManager 的引用替换机制。
+- [x] 大字段保护——**结构化占位替换**。达到阈值的文本字段以 `__large_field__` 占位对象交付（含预览和定位信息），Agent 可通过 `read_field_chunk` 分段续读原文。取代原 12KB 无差别截断。二进制字段（screenshot）仍替换为 `[截图（二进制）]`。
 - [x] 行数/大小上限——**工具层不限制**，agent 自己写 LIMIT。但需在两处提醒上下文意识：
   - **agent prompt**：提醒 agent 查询大字段或大量数据时注意控制返回量，避免撑满上下文窗口。
   - **query_data 的 FC schema description**：提示"非必要不要 SELECT *，按需查询字段；数据量大时使用 LIMIT 分页"。
@@ -257,10 +257,10 @@ handler 内部按序号拉出 before/after 截图，按时间顺序排列传给�
 - 每个字段都描述，硬编码在 handler 中
 - 暂不提供 DuckDB 视图
 
-### 2. SQL 安全与大字段 → 轻量防御 + 不截断
+### 2. SQL 安全与大字段 → 轻量防御 + 结构化占位
 - 只允许 SELECT，正则检查 `^\s*SELECT\b`
-- 工具层不截断大字段，describe_data 警告 + agent prompt 提醒上下文意识 + FC schema 提示按需查询
-- 二进制字段替换为 `[二进制数据，请使用 analyze_image 工具]`
+- 大字段以 `__large_field__` 结构化占位对象交付（含预览和定位信息），Agent 可通过 `read_field_chunk` 分段续读
+- 二进制字段替换为 `[截图（二进制）]`
 - ContextManager 引用替换机制兜底
 
 ### 3. 衍生数据 / 视图 → 暂不提供
@@ -340,13 +340,23 @@ handler 内部按序号拉出 before/after 截图，按时间顺序排列传给�
 14. ✅ 用户配置的多模态模型，图片不进 agent 主上下文，handler 内部调用
 
 ### 通用
-15. ✅ PM 和程序员用完全相同的 4 个工具
+15. ✅ PM 和程序员用完全相同的 5 个工具
 16. ✅ 新增表只改 describe_data 的硬编码描述
 17. ✅ 衍生数据由 agent 自己 SQL 拼，暂不提供预定义视图
 18. 🔲 Function Calling Schema 待实现时产出
 
 ---
 
+### read_field_chunk（已实现）
+- 实现文件：`src/business/agents/tools/recording_data_tools.py`
+- 占位对象带 `__large_field__` 标记，含 `locator`（定位信息）、`preview`（预览文本）、`size_chars`
+- Agent 按 locator + field + offset + length 调用 read_field_chunk 分段读取原文
+- network_requests 走 filtered SQL rewrite path，其他 StableLocatorRule 覆盖表走参数化直读
+- 配置项：`recording.large_field.{threshold_chars, preview_chars, max_chunk_chars}`
+- 详见 `specs/001-recording-field-layering/`
+
+---
+
 *创建时间：2026-03-18*
-*最后更新：2026-03-19（4 个工具全部决策完毕）*
+*最后更新：2026-04-24（5 个工具全部落地，新增 read_field_chunk）*
 *前置讨论：programmer_agent_design.md 审阅过程中产生*

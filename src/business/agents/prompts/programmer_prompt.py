@@ -213,6 +213,7 @@ import lxml                      → dependencies: ["lxml"]
 - 代码质量比速度重要——Review 通不过会被打回
 - 采集大量数据时注意翻页和去重
 - 需求 JSON 是你的任务定义，始终以它为准
+- query_data 返回的大字段（response_body、dom_tree_snapshot 等）会以占位对象形式交付（带 `__large_field__` 标记），包含预览文本和定位信息；如需查看完整内容来分析技术细节，用 `read_field_chunk` 工具按定位信息分段读取
 """
 
 __all__ = ["PROGRAMMER_SYSTEM_PROMPT"]

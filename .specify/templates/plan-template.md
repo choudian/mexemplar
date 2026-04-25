@@ -33,7 +33,7 @@
 
 | Principle | Gate question | Evidence required |
 |-----------|---------------|-------------------|
-| I. Layered Boundaries & Event Coordination | Does the design preserve `UI -> business -> data/driver` direction, and are all cross-module notifications routed through `src/utils/events.py`? | List touched layers, new/changed events, and any justified exception |
+| I. Layered Boundaries & Event Coordination | Does the design preserve `UI -> business -> execution -> data/driver` direction, and are all cross-module notifications routed through `src/utils/events.py`? | List touched layers, new/changed events, and any justified exception |
 | II. Data Boundary & Persistence Discipline | Are SQLite and DuckDB responsibilities explicit, are Repository boundaries preserved, and do `network_requests` reads keep filtering/desensitization contracts? | Name touched stores, repositories, migrations, and any approved raw-SQL entry point |
 | III. Unified Config & Secret Handling | Do all new settings flow through `UnifiedConfigManager`, and do all secrets stay out of code/config files? | List config keys, template/UI/doc updates, keyring impact, or `N/A` |
 | IV. Verifiable Delivery | Does the plan include automated coverage for deterministic logic plus wiring smoke/guard tests for architecture rewires? | Name unit, integration, wiring, and guard tests, or justify omissions |
@@ -64,39 +64,36 @@ specs/[###-feature]/
 -->
 
 ```text
-# [REMOVE IF UNUSED] Option 1: Single project (DEFAULT)
 src/
-├── models/
-├── services/
-├── cli/
-└── lib/
+├── business/          # 业务层：编排、Agent、AI、意图、记忆、服务
+│   ├── agents/        # Agent 循环、工具、Prompt
+│   ├── ai/            # LLM 客户端
+│   ├── intent/        # 意图识别
+│   ├── memory/        # 会话记忆
+│   ├── orchestration/ # 编排引擎（兼容入口 + agent/ 子组件拆分）
+│   ├── services/      # 业务 Service
+│   └── tool_trial/    # 工具试用
+├── data/              # 数据层：配置、Repository、DuckDB/SQLite 管理
+│   └── repos/         # 业务数据 Repository
+├── execution/         # 执行层：代码执行沙箱等运行时能力
+├── recording/         # 录制层：浏览器/桌面录制、过滤、浏览器扩展
+│   ├── browser/       # Playwright 录制子组件
+│   ├── browser_extension/  # JS 浏览器扩展
+│   └── filtering/     # SQL 重写、过滤连接、投影分析
+├── ui/                # UI 层：PyQt6 界面
+│   ├── mixins/
+│   ├── resources/
+│   └── widgets/
+└── utils/             # 公共工具：事件、AST 辅助等
 
 tests/
-├── contract/
-├── integration/
-└── unit/
-
-# [REMOVE IF UNUSED] Option 2: Web application (when "frontend" + "backend" detected)
-backend/
-├── src/
-│   ├── models/
-│   ├── services/
-│   └── api/
-└── tests/
-
-frontend/
-├── src/
-│   ├── components/
-│   ├── pages/
-│   └── services/
-└── tests/
-
-# [REMOVE IF UNUSED] Option 3: Mobile + API (when "iOS/Android" detected)
-api/
-└── [same as backend above]
-
-ios/ or android/
-└── [platform-specific structure: feature modules, UI flows, platform tests]
+├── data/              # 数据层测试
+├── e2e/               # 端到端测试
+├── fixtures/          # 测试 fixture
+├── integration/       # 集成测试
+├── recording/         # 录制层测试
+│   └── filtering/     # 过滤/分析器测试
+└── ui/                # UI 测试
 ```
 
 **Structure Decision**: [Document the selected structure and reference the real

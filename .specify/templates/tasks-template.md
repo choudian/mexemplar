@@ -14,11 +14,11 @@ description: "Task list template for feature implementation"
 
 ## Constitution-Driven Minimums
 
-- Include Repository or migration tasks for SQLite/business-data changes.
-- Include filtered DuckDB boundary tasks for recording-analysis changes; never bypass hidden-field or hidden-table contracts.
-- Include configuration, keyring, template, and UI/doc tasks for any new setting or secret-handling change.
+- Include Repository or migration tasks (`src/data/repos/`, `src/data/migrations.py`) for SQLite/business-data changes.
+- Include filtered DuckDB boundary tasks (`src/recording/filtering/`) for recording-analysis changes; never bypass hidden-field or hidden-table contracts.
+- Include configuration (`src/data/unified_config.py`), keyring, template, and UI/doc tasks for any new setting or secret-handling change.
 - Include wiring smoke tests and guard tests whenever modules, events, or orchestration paths are replaced.
-- Include active-document updates (`docs/ARCHITECTURE.md`, `docs/PROJECT_CONSTRAINTS.md`, README, contributor/agent guides as applicable) whenever behavior or constraints change.
+- Include active-document updates (`docs/ARCHITECTURE.md`, `docs/PROJECT_CONSTRAINTS.md`, `AGENTS.md`, `CLAUDE.md`) whenever behavior or constraints change.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -26,12 +26,13 @@ description: "Task list template for feature implementation"
 - **[Story]**: Which user story this task belongs to (e.g., US1, US2, US3)
 - Include exact file paths in descriptions
 
-## Path Conventions
+## Project Paths
 
-- **Single project**: `src/`, `tests/` at repository root
-- **Web app**: `backend/src/`, `frontend/src/`
-- **Mobile**: `api/src/`, `ios/src/` or `android/src/`
-- Paths shown below assume single project - adjust based on plan.md structure
+- **Source**: `src/` at repository root (business, data, recording, execution, ui, utils)
+- **Tests**: `tests/` at repository root (mirrors src/ structure)
+- **Test runner**: `uv run pytest tests/`
+- **Formatter**: `uv run black src/ tests/`
+- **Linter**: `uv run flake8 src/ tests/`
 
 <!-- 
   ============================================================================

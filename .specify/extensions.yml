@@ -90,6 +90,13 @@ hooks:
     prompt: Commit specification changes?
     description: Auto-commit after specification
     condition: null
+  - extension: worktree
+    command: speckit.worktree.create
+    enabled: true
+    optional: true
+    prompt: Create an isolated worktree for this new feature?
+    description: Auto-spawn a worktree after a new feature is specified
+    condition: null
   after_clarify:
   - extension: git
     command: speckit.git.commit
@@ -114,6 +121,13 @@ hooks:
     prompt: Commit task changes?
     description: Auto-commit after task generation
     condition: null
+  - extension: blueprint
+    command: speckit.blueprint.generate
+    enabled: true
+    optional: true
+    prompt: Generate blueprint from tasks?
+    description: Auto-generate blueprint.md after task generation
+    condition: null
   after_implement:
   - extension: git
     command: speckit.git.commit
@@ -121,6 +135,13 @@ hooks:
     optional: true
     prompt: Commit implementation changes?
     description: Auto-commit after implementation
+    condition: null
+  - extension: bugfix
+    command: speckit.bugfix.verify
+    enabled: true
+    optional: true
+    prompt: Run bugfix consistency check after implementation?
+    description: Verify spec artifact consistency after implementation completes
     condition: null
   after_checklist:
   - extension: git
@@ -145,4 +166,12 @@ hooks:
     optional: true
     prompt: Commit after syncing issues?
     description: Auto-commit after tasks-to-issues conversion
+    condition: null
+  after_init:
+  - extension: brownfield
+    command: speckit.brownfield.scan
+    enabled: true
+    optional: true
+    prompt: Scan this existing project to customize spec-kit configuration?
+    description: Auto-scan project after spec-kit init to detect tech stack and conventions
     condition: null

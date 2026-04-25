@@ -17,7 +17,7 @@ import threading
 from typing import Optional, Dict, Any, Callable, List
 import dataclasses
 
-from src.data.config_models import AppConfig, ConfigFileLoader, RecordingNoiseFilterConfig
+from src.data.config_models import AppConfig, ConfigFileLoader, RecordingNoiseFilterConfig, LargeFieldConfig
 from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manager
 
 logger = logging.getLogger(__name__)
@@ -321,16 +321,24 @@ class UnifiedConfigManager:
         """获取录制代理端口"""
         return self.get("recording.proxy.port", default=8080)
 
-    def get_recording_noise_filter_config(self) -> RecordingNoiseFilterConfig:
-        """获取录制噪声过滤配置。"""
-        defaults = RecordingNoiseFilterConfig()
+    def _load_dataclass_config(self, prefix: str, config_cls: type) -> Any:
+        """通用 dataclass 配置加载：从 prefix.field_name 读取，回退到类默认值。"""
+        defaults = config_cls()
         kwargs = {}
-        for f in dataclasses.fields(RecordingNoiseFilterConfig):
-            val = self.get(f"recording.noise_filter.{f.name}", default=getattr(defaults, f.name))
+        for f in dataclasses.fields(config_cls):
+            val = self.get(f"{prefix}.{f.name}", default=getattr(defaults, f.name))
             if isinstance(val, list):
                 val = list(val)
             kwargs[f.name] = val
-        return RecordingNoiseFilterConfig(**kwargs)
+        return config_cls(**kwargs)
+
+    def get_recording_noise_filter_config(self) -> RecordingNoiseFilterConfig:
+        """获取录制噪声过滤配置。"""
+        return self._load_dataclass_config("recording.noise_filter", RecordingNoiseFilterConfig)
+
+    def get_recording_large_field_config(self) -> LargeFieldConfig:
+        """获取录制数据大字段占位与分段读取配置。"""
+        return self._load_dataclass_config("recording.large_field", LargeFieldConfig)
 
     # ===== 内部方法 =====
 

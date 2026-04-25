@@ -127,7 +127,7 @@
 - 更新或添加相关文档到 `docs/` 目录
 - 原则或流程变更时同步更新 `.specify/memory/constitution.md`
 - 添加代码注释（特别是复杂逻辑）
-- 架构/约束变更时同步更新活文档（如 `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、`agent.md`、`CLAUDE.md`）
+- 架构/约束变更时同步更新活文档（如 `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、`AGENTS.md`、`CLAUDE.md`）
 
 ## 📋 Pull Request 检查清单
 

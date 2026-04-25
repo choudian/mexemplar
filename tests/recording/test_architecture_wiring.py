@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.recording.browser_recorder import BrowserRecorder
 from src.recording.websocket_server import WebSocketServer
+from src.business.agents.tools import recording_data_tools
 
 
 class StubWSServer:
@@ -200,3 +201,27 @@ class TestScreenshotFeatureGatekeeper:
         assert Path("src/recording/browser_screenshot_hook.py").exists()
         assert Path("src/recording/queue_paths.py").exists()
         assert Path("src/recording/browser/screenshot_queue_parser.py").exists()
+
+
+class TestLargeFieldToolWiring:
+    """T029: read_field_chunk 注册为第 5 个工具的 wiring smoke test。"""
+
+    def test_create_recording_tools_returns_five_tools(self):
+        tools = recording_data_tools.create_recording_tools("test-rec")
+        assert len(tools) == 5
+
+    def test_read_field_chunk_is_registered(self):
+        tools = recording_data_tools.create_recording_tools("test-rec")
+        names = [t.name for t in tools]
+        assert "read_field_chunk" in names
+
+    def test_tool_order_is_correct(self):
+        tools = recording_data_tools.create_recording_tools("test-rec")
+        names = [t.name for t in tools]
+        assert names == [
+            "describe_data",
+            "query_data",
+            "read_field_chunk",
+            "execute_code",
+            "analyze_image",
+        ]

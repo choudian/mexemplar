@@ -1,0 +1,36 @@
+schema_version: "1.0"
+
+extension:
+  id: "blueprint"
+  name: "Blueprint"
+  version: "1.0.0"
+  description: "Stay code-literate in AI-driven development: review a complete code blueprint for every task from spec artifacts before /implement runs"
+  author: "chordpli"
+  repository: "https://github.com/chordpli/spec-kit-blueprint"
+  license: "MIT"
+  homepage: "https://github.com/chordpli/spec-kit-blueprint"
+
+requires:
+  speckit_version: ">=0.2.0"
+
+provides:
+  commands:
+    - name: "speckit.blueprint.generate"
+      file: "commands/speckit.blueprint.generate.md"
+      description: "Generate a pre-implementation blueprint from spec artifacts with optional file scaffolding"
+    - name: "speckit.blueprint.validate"
+      file: "commands/speckit.blueprint.validate.md"
+      description: "Validate scaffold files against the blueprint"
+
+hooks:
+  after_tasks:
+    command: "speckit.blueprint.generate"
+    optional: true
+    prompt: "Generate blueprint from tasks?"
+    description: "Auto-generate blueprint.md after task generation"
+tags:
+  - "blueprint"
+  - "pre-implementation"
+  - "review"
+  - "scaffolding"
+  - "code-literacy"

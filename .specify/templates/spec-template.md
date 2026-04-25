@@ -1,8 +1,8 @@
 # Feature Specification: [FEATURE NAME]
 
-**Feature Branch**: `[###-feature-name]`  
-**Created**: [DATE]  
-**Status**: Draft  
+**Feature Branch**: `[###-feature-name]`
+**Created**: [DATE]
+**Status**: Draft
 **Input**: User description: "$ARGUMENTS"
 
 ## User Scenarios & Testing *(mandatory)*
@@ -11,7 +11,7 @@
   IMPORTANT: User stories should be PRIORITIZED as user journeys ordered by importance.
   Each user story/journey must be INDEPENDENTLY TESTABLE - meaning if you implement just ONE of them,
   you should still have a viable MVP (Minimum Viable Product) that delivers value.
-  
+
   Assign priorities (P1, P2, P3, etc.) to each story, where P1 is the most critical.
   Think of each story as a standalone slice of functionality that can be:
   - Developed independently
@@ -49,27 +49,16 @@
 
 ---
 
-### User Story 3 - [Brief Title] (Priority: P3)
-
-[Describe this user journey in plain language]
-
-**Why this priority**: [Explain the value and why it has this priority level]
-
-**Independent Test**: [Describe how this can be tested independently]
-
-**Acceptance Scenarios**:
-
-1. **Given** [initial state], **When** [action], **Then** [expected outcome]
-
----
-
-[Add more user stories as needed, each with an assigned priority]
+[Add more user stories as needed, following the same pattern]
 
 ### Edge Cases
 
 <!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right edge cases.
+  Consider Mexemplar-specific scenarios:
+  - Agent session suspension/resume across user interactions
+  - Recording data filtering boundary changes
+  - Config hot-update without restart
+  - Concurrent access to SQLite/DuckDB
 -->
 
 - What happens when [boundary condition]?
@@ -77,23 +66,15 @@
 
 ## Requirements *(mandatory)*
 
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right functional requirements.
--->
-
 ### Functional Requirements
 
-- **FR-001**: System MUST [specific capability, e.g., "allow users to create accounts"]
-- **FR-002**: System MUST [specific capability, e.g., "validate email addresses"]  
-- **FR-003**: Users MUST be able to [key interaction, e.g., "reset their password"]
-- **FR-004**: System MUST [data requirement, e.g., "persist user preferences"]
-- **FR-005**: System MUST [behavior, e.g., "log all security events"]
+- **FR-001**: System MUST [specific capability]
+- **FR-002**: System MUST [specific capability]
+- **FR-003**: Users MUST be able to [key interaction]
 
 *Example of marking unclear requirements:*
 
-- **FR-006**: System MUST authenticate users via [NEEDS CLARIFICATION: auth method not specified - email/password, SSO, OAuth?]
-- **FR-007**: System MUST retain user data for [NEEDS CLARIFICATION: retention period not specified]
+- **FR-004**: System MUST [NEEDS CLARIFICATION: detail not specified]
 
 ### Key Entities *(include if feature involves data)*
 
@@ -105,32 +86,55 @@
 - **CC-001**: [Policy, compatibility, or migration constraint the feature MUST preserve]
 - **CC-002**: [Security, privacy, configuration, or operational constraint that affects acceptance]
 
-## Success Criteria *(mandatory)*
+## Architecture Impact *(Mexemplar-specific)*
 
 <!--
-  ACTION REQUIRED: Define measurable success criteria.
-  These must be technology-agnostic and measurable.
+  Fill this section if the feature touches any of the following boundaries.
+  Delete subsections that don't apply.
 -->
+
+### Layer Impact
+
+Which layers are affected? Check all that apply:
+
+- [ ] **UI** (`src/ui/`) — new widgets, signals, or bridge changes
+- [ ] **Business** (`src/business/`) — agents, orchestration, services, memory
+- [ ] **Execution** (`src/execution/`) — tool execution sandbox
+- [ ] **Data** (`src/data/`) — models, repositories, migrations, config
+- [ ] **Recording** (`src/recording/`) — recorder, filtering, browser extension
+- [ ] **Utils** (`src/utils/`) — events, helpers
+
+### Agent Impact *(if touching Agent system)*
+
+- Which Agent(s) are affected: [PM / Programmer / Trial / Assistant / None]
+- New tools or modified tool handlers? [describe]
+- System prompt changes needed? [describe]
+- Orchestrator dispatch changes? [describe]
+
+### Data Store Impact *(if touching data layer)*
+
+- **SQLite** (`src/data/repos/`): [new/modified tables, repositories, migrations]
+- **DuckDB** (`src/recording/filtering/`): [query/filtering changes, hidden field contracts]
+- **Config** (`src/data/unified_config.py`): [new config keys, three-location sync plan]
+- **Secrets** (keyring): [new sensitive fields]
+
+### Event Impact *(if adding/changing events)*
+
+- New events to define in `src/utils/events.py`: [list]
+- Modified event payloads: [list]
+- New event listeners: [list]
+
+## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: [Measurable metric, e.g., "Users can complete account creation in under 2 minutes"]
-- **SC-002**: [Measurable metric, e.g., "System handles 1000 concurrent users without degradation"]
-- **SC-003**: [User satisfaction metric, e.g., "90% of users successfully complete primary task on first attempt"]
-- **SC-004**: [Business metric, e.g., "Reduce support tickets related to [X] by 50%"]
+- **SC-001**: [Measurable metric, e.g., "Agent can complete X in under N iterations"]
+- **SC-002**: [Measurable metric, e.g., "Recording data query returns filtered results within N seconds"]
+- **SC-003**: [Acceptance metric, e.g., "Tool trial succeeds 3 consecutive times with real user"]
 
 ## Assumptions
 
-<!--
-  ACTION REQUIRED: The content in this section represents placeholders.
-  Fill them out with the right assumptions based on reasonable defaults
-  chosen when the feature description did not specify certain details.
-  Document architecture or policy assumptions only when they materially
-  affect user-visible behavior or acceptance; implementation detail belongs
-  in plan.md rather than here.
--->
-
-- [Assumption about target users, e.g., "Users have stable internet connectivity"]
+- [Assumption about target users, e.g., "Users have a Chromium-based browser installed"]
 - [Assumption about scope boundaries, e.g., "Mobile support is out of scope for v1"]
-- [Assumption about data/environment, e.g., "Existing authentication system will be reused"]
-- [Dependency on existing system/service, e.g., "Requires access to the existing user profile API"]
+- [Assumption about data/environment, e.g., "Existing Agent session lifecycle is preserved"]
+- [Dependency on existing system/service, e.g., "Requires the current DuckDB filtering pipeline to be stable"]

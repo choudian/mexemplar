@@ -91,6 +91,11 @@
     "proxy": {
       "host": "127.0.0.1",
       "port": 8080
+    },
+    "large_field": {
+      "threshold_chars": 1000,
+      "preview_chars": 1000,
+      "max_chunk_chars": 1000
     }
   },
   "ui": {

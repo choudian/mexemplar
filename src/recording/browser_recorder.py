@@ -38,8 +38,6 @@ _ws_server_lock = threading.Lock()
 
 try:
     from playwright.async_api import (
-        Browser,
-        BrowserContext,
         Page,
         async_playwright,
     )
@@ -47,7 +45,7 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
-    Browser = BrowserContext = Page = Any
+    Page = Any
     async_playwright = None
     logger.warning("Playwright未安装，浏览器录制功能将不可用")
 

@@ -279,3 +279,65 @@ def test_describe_data_masks_duckdb_errors_without_leaking_details(tmp_path):
         payload = json.loads(recording_data_tools._describe_data("rec"))
         assert payload["tables"]
         assert "xyz" not in json.dumps(payload, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
+# T018: read_field_chunk filtered-access tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_field_chunk_cannot_reveal_filtered_network_request(tmp_path):
+    """read_field_chunk 对 network_requests 走 filtered path，无法读取被过滤记录。"""
+    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    try:
+        with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
+            # 获取被过滤记录的 request_id（直接查 raw 表获取）
+            filtered_row = db.fetchone(
+                "SELECT request_id FROM network_requests WHERE url = ?",
+                ("https://hidden.example/api",),
+            )
+            assert filtered_row is not None
+            filtered_rid = filtered_row[0]
+
+            # 尝试用被过滤的 request_id 做 chunk read → record_unavailable
+            result = json.loads(
+                recording_data_tools._read_field_chunk(
+                    "rec",
+                    locator={"table": "network_requests", "id_field": "request_id", "id_value": filtered_rid},
+                    field="response_body",
+                    offset=0,
+                    length=None,
+                )
+            )
+            assert result["error"] is not None
+            assert result["error"]["code"] == "record_unavailable"
+            assert result["content"] == ""
+    finally:
+        _restore_tool_db(db, old_instance, old_auto_recover)
+
+
+def test_read_field_chunk_reads_visible_network_request(tmp_path):
+    """read_field_chunk 可以读取未被过滤的 network_request。"""
+    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    try:
+        with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
+            visible_row = db.fetchone(
+                "SELECT request_id FROM network_requests WHERE url = ? AND filtered = FALSE",
+                ("https://visible.example/api",),
+            )
+            assert visible_row is not None
+            visible_rid = visible_row[0]
+
+            result = json.loads(
+                recording_data_tools._read_field_chunk(
+                    "rec",
+                    locator={"table": "network_requests", "id_field": "request_id", "id_value": visible_rid},
+                    field="response_body",
+                    offset=0,
+                    length=100,
+                )
+            )
+            assert result["error"] is None
+            assert result["content"] == "visible"
+    finally:
+        _restore_tool_db(db, old_instance, old_auto_recover)

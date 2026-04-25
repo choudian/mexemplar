@@ -1,11 +1,12 @@
 """
 通用录制数据访问工具
 
-提供 4 个工具供所有 Agent（PM、程序员等）共用：
-  1. describe_data   — 数据发现（渐进式：无参返回表概览，传表名返回字段详情）
-  2. query_data      — agent 写 SQL 直接查询 DuckDB
-  3. execute_code    — 临时 Python 代码执行（SQL 不够用时的补充）
-  4. analyze_image   — 多模态模型分析截图
+提供 5 个工具供所有 Agent（PM、程序员等）共用：
+  1. describe_data      — 数据发现（渐进式：无参返回表概览，传表名返回字段详情）
+  2. query_data         — agent 写 SQL 直接查询 DuckDB
+  3. execute_code       — 临时 Python 代码执行（SQL 不够用时的补充）
+  4. analyze_image      — 多模态模型分析截图
+  5. read_field_chunk   — 分段读取大字段原始内容
 
 所有工具都不接受 recording_id 参数——通过 create_recording_tools() 工厂函数
 在注册时用闭包绑定，对 agent 透明。
@@ -18,6 +19,7 @@
 import base64
 import builtins as _builtins_module
 import duckdb
+import functools
 import io
 import json
 import logging
@@ -37,6 +39,12 @@ from src.recording.filtering.filtered_conn import (
     FilteredDuckDBConnection,
 )
 from src.recording.filtering.sql_rewriter import SqlRewriteError, rewrite
+from src.recording.filtering.query_projection_analyzer import (
+    STABLE_LOCATOR_RULES,
+    QueryProjectionAnalyzer,
+    ProjectionBinding,
+    find_stable_locator_in_row,
+)
 from src.utils.llm_helpers import sanitize_text_for_llm
 
 logger = logging.getLogger(__name__)
@@ -48,7 +56,7 @@ logger = logging.getLogger(__name__)
 
 _EXECUTE_TIMEOUT = 30  # 代码执行超时（秒）
 _MAX_ACTION_INDICES = 5  # 单次最多分析的 action 数量
-_MAX_QUERY_CELL_CHARS = 12_000  # query_data 单字段最大长度，避免超大上下文
+_READABLE_TEXT_TYPES = frozenset({"TEXT", "VARCHAR", "JSON"})
 
 
 # =============================================================================
@@ -157,8 +165,86 @@ _COMMON_TABLES: dict[str, dict] = {
     },
 }
 
-_ALL_TABLE_NAMES = list(_COMMON_TABLES.keys())   # 保持插入顺序，用于展示
-_ALL_TABLE_NAME_SET = set(_COMMON_TABLES.keys()) # 用于 O(1) 查找
+_ALL_TABLE_NAMES = list(_COMMON_TABLES.keys())
+_ALL_TABLE_NAME_SET = set(_COMMON_TABLES.keys())
+
+
+# =============================================================================
+# 大字段占位替换
+# =============================================================================
+
+
+@functools.lru_cache(maxsize=1)
+def _get_analyzer() -> QueryProjectionAnalyzer:
+    return QueryProjectionAnalyzer()
+
+
+def _build_large_field_placeholder(
+    value: str,
+    col_name: str,
+    row: dict[str, Any],
+    bindings: list[ProjectionBinding],
+    bindings_map: dict[str, ProjectionBinding],
+    preview_chars: int,
+) -> dict[str, Any]:
+    """为达到阈值的文本字段构建占位对象。"""
+    binding = bindings_map.get(col_name)
+
+    placeholder: dict[str, Any] = {
+        "__large_field__": True,
+        "field": col_name,
+        "size_chars": len(value),
+        "preview": None,
+        "locator": None,
+        "read_hint": "read_field_chunk",
+    }
+
+    def _blocked(reason: str, message: str, field: str = col_name) -> dict[str, Any]:
+        placeholder["field"] = field
+        placeholder["read_blocked_reason"] = reason
+        placeholder["read_blocked_message"] = message
+        return placeholder
+
+    if binding is None or not binding.is_direct_column or not binding.source_table:
+        logger.info("[large_field] blocked: computed_or_aggregated_column, col=%s", col_name)
+        return _blocked(
+            "computed_or_aggregated_column",
+            f"结果列 '{col_name}' 为计算列或无法追溯到单条源记录，不支持继续读取。",
+        )
+
+    source_table = binding.source_table
+    source_field = binding.source_field or col_name
+
+    rule = STABLE_LOCATOR_RULES.get(source_table)
+    if rule is None:
+        logger.info("[large_field] blocked: unsupported_source_table, table=%s, field=%s", source_table, source_field)
+        return _blocked(
+            "unsupported_source_table",
+            f"源表 '{source_table}' 未由内置定位规则覆盖，不支持继续读取。",
+            field=source_field,
+        )
+
+    loc_binding = find_stable_locator_in_row(bindings, source_table, row)
+    if loc_binding is None:
+        logger.info(
+            "[large_field] blocked: missing_locator_field, table=%s, field=%s, need=%s",
+            source_table, source_field, rule.recommended_id_field,
+        )
+        return _blocked(
+            "missing_locator_field",
+            f"当前结果缺少继续读取所需的稳定定位字段 {rule.recommended_id_field}，请补查直接列。",
+            field=source_field,
+        )
+
+    id_value = row.get(loc_binding.output_name)
+    placeholder["preview"] = value[:preview_chars]
+    placeholder["field"] = source_field
+    placeholder["locator"] = {
+        "table": source_table,
+        "id_field": rule.recommended_id_field,
+        "id_value": id_value,
+    }
+    return placeholder
 
 
 # =============================================================================
@@ -218,6 +304,7 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
         row_count = _get_row_count(table_name)
 
         fields = []
+        locator_rule = STABLE_LOCATOR_RULES.get(table_name)
         for field_name, (field_type, description, warning) in meta["fields"].items():
             entry: dict[str, Any] = {
                 "name": field_name,
@@ -226,6 +313,13 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
             }
             if warning:
                 entry["warning"] = warning
+            if (
+                locator_rule is not None
+                and field_type.upper() in _READABLE_TEXT_TYPES
+            ):
+                entry["large_field"] = True
+                entry["read_via"] = "read_field_chunk"
+                entry["locator_fields"] = locator_rule.describe_locator_fields
             fields.append(entry)
 
         table_details[table_name] = {
@@ -281,13 +375,6 @@ DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
 # =============================================================================
 
 
-def _sanitize_query_value(value: Any) -> Any:
-    """query_data 返回值清洗：去除控制字符，截断超长字符串。"""
-    if not isinstance(value, str):
-        return value
-    return sanitize_text_for_llm(value, max_chars=_MAX_QUERY_CELL_CHARS)
-
-
 def _query_data(recording_id: str, sql: str) -> str:
     """
     执行 SQL 查询。只允许 SELECT 语句。
@@ -301,15 +388,37 @@ def _query_data(recording_id: str, sql: str) -> str:
         if not rows:
             return json.dumps({"rows": [], "row_count": 0}, ensure_ascii=False)
 
+        config = get_unified_config().get_recording_large_field_config()
+        threshold = config.threshold_chars
+        preview_chars = config.preview_chars
+
+        bindings: list[ProjectionBinding] | None = None
+        bindings_map: dict[str, ProjectionBinding] = {}
+
         result_rows = []
         for row in rows:
+            row_dict = dict(zip(col_names, row))
             record: dict[str, Any] = {}
-            for col, val in zip(col_names, row):
-                # 二进制字段替换为占位提示
+            for col, val in row_dict.items():
                 if isinstance(val, (bytes, bytearray)):
                     record[col] = "[截图（二进制）]"
+                elif isinstance(val, str):
+                    if len(val) >= threshold:
+                        if bindings is None:
+                            bindings = _get_analyzer().analyze(sql)
+                            bindings_map = {b.output_name: b for b in bindings}
+                        record[col] = _build_large_field_placeholder(
+                            value=val,
+                            col_name=col,
+                            row=row_dict,
+                            bindings=bindings,
+                            bindings_map=bindings_map,
+                            preview_chars=preview_chars,
+                        )
+                    else:
+                        record[col] = sanitize_text_for_llm(val)
                 else:
-                    record[col] = _sanitize_query_value(val)
+                    record[col] = val
             result_rows.append(record)
 
         return json.dumps(
@@ -396,6 +505,9 @@ def _safe_import(name: str, globals_=None, locals_=None, fromlist=(), level=0):
     return __import__(name, globals_, locals_, fromlist, level)
 
 
+_SAFE_BUILTINS_WITH_IMPORT: dict[str, Any] = {**_SAFE_BUILTINS, "__import__": _safe_import}
+
+
 def _execute_code(recording_id: str, code: str) -> str:
     """
     临时执行 Python 代码。用于 SQL 搞不定的复杂数据探索。
@@ -409,7 +521,7 @@ def _execute_code(recording_id: str, code: str) -> str:
 
     # 预注入环境。用自定义 print 捕获输出，避免修改 sys.stdout（进程全局，线程不安全）。
     # 用字典合并强制覆盖 file=，防止用户代码显式传 file= 时出现 "多值关键字参数" TypeError。
-    safe_builtins = {**_SAFE_BUILTINS, "__import__": _safe_import}
+    safe_builtins = _SAFE_BUILTINS_WITH_IMPORT
     exec_globals: dict[str, Any] = {
         "__builtins__": safe_builtins,
         "conn": FilteredDuckDBConnection(db.connect()),
@@ -605,7 +717,7 @@ def _analyze_image(
         return json.dumps({"analysis": answer}, ensure_ascii=False)
 
     except Exception as e:
-        logger.error(f"[analyze_image] 调用多模态模型失败: {e}", exc_info=True)
+        logger.error("[analyze_image] 调用多模态模型失败: %s", e, exc_info=True)
         return json.dumps({"error": f"多模态模型调用失败: {e}"}, ensure_ascii=False)
 
 
@@ -640,6 +752,212 @@ ANALYZE_IMAGE_SCHEMA: dict[str, Any] = make_tool_schema(
 
 
 # =============================================================================
+# 工具 5：read_field_chunk
+# =============================================================================
+
+
+def _make_chunk_response(
+    *,
+    content: str = "",
+    field: str = "",
+    locator: dict[str, Any] | None = None,
+    offset: int = 0,
+    returned_length: int = 0,
+    total_length: int | None = None,
+    has_more: bool = False,
+    next_offset: int | None = None,
+    error: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """构造统一的 ChunkReadResponse。"""
+    return {
+        "content": content,
+        "field": field,
+        "locator": locator,
+        "offset": offset,
+        "returned_length": returned_length,
+        "total_length": total_length,
+        "has_more": has_more,
+        "next_offset": next_offset,
+        "error": error,
+    }
+
+
+def _make_chunk_error(
+    code: str, message: str, *, field: str = "", locator: Any = None,
+    offset: int = 0, total_length: int | None = None,
+) -> dict[str, Any]:
+    return _make_chunk_response(
+        field=field,
+        locator=locator,
+        offset=offset,
+        total_length=total_length,
+        error={"code": code, "message": message},
+    )
+
+
+def _read_field_chunk(
+    recording_id: str,
+    locator: dict[str, Any],
+    field: str,
+    offset: int,
+    length: int | None = None,
+) -> str:
+    """
+    分段读取大字段原始内容。按 locator 定位源记录，Python str 切片返回。
+    network_requests 走 filtered SQL rewrite path。
+    """
+    config = get_unified_config().get_recording_large_field_config()
+    max_chunk = config.max_chunk_chars
+
+    def _err(code: str, msg: str, *, _locator=locator, _offset=offset, **kw) -> str:
+        return json.dumps(
+            _make_chunk_error(code, msg, field=field, locator=_locator, offset=_offset, **kw),
+            ensure_ascii=False,
+        )
+
+    # 参数校验
+    if offset < 0:
+        return _err("invalid_offset", f"offset 不能为负数: {offset}")
+
+    if length is not None and length <= 0:
+        return _err("invalid_length", f"length 必须为正数: {length}")
+
+    effective_length = min(length or max_chunk, max_chunk)
+
+    # 定位器校验
+    table = locator.get("table", "")
+    id_field = locator.get("id_field", "")
+    id_value = locator.get("id_value")
+
+    if table not in _ALL_TABLE_NAME_SET:
+        return _err("unknown_table", f"表 '{table}' 不存在", _locator=None)
+
+    rule = STABLE_LOCATOR_RULES.get(table)
+    if rule is None:
+        return _err("unsupported_continuation", f"表 '{table}' 未由内置定位规则覆盖，不支持分段读取")
+
+    if id_field != rule.recommended_id_field:
+        logger.info(
+            "[read_field_chunk] unknown_id_field: table=%s, id_field=%s, expected=%s",
+            table, id_field, rule.recommended_id_field,
+        )
+        return _err(
+            "unknown_id_field",
+            f"定位字段 '{id_field}' 不是表 '{table}' 的稳定定位字段（期望: {rule.recommended_id_field}）",
+        )
+
+    table_meta = _COMMON_TABLES[table]
+    field_meta = table_meta["fields"].get(field)
+    if field_meta is None:
+        return _err("field_not_found", f"字段 '{field}' 不存在于表 '{table}'")
+    field_type = field_meta[0].upper()
+    if field_type not in _READABLE_TEXT_TYPES:
+        return _err("non_text_field", f"字段 '{field}' 类型为 {field_type}，不是文本字段")
+
+    # 数据读取
+    db = DuckDBManager()
+    try:
+        raw_sql = (
+            f"SELECT {field} FROM {table} "
+            f"WHERE {id_field} = ? AND recording_id = ?"
+        )
+        effective_sql = rewrite(raw_sql) if rule.requires_filter_rewrite else raw_sql
+        row = db.fetchone(effective_sql, (id_value, recording_id))
+        raw_value = row[0] if row is not None else None
+
+        if raw_value is None:
+            logger.info(
+                "[read_field_chunk] record_unavailable: table=%s, %s=%s",
+                table, id_field, id_value,
+            )
+            return _err("record_unavailable", f"{table} 记录 {id_field}={id_value} 未找到或已被过滤。")
+
+        if not isinstance(raw_value, str):
+            return _err("non_text_field", f"字段 '{field}' 的值不是文本类型")
+
+        total_length = len(raw_value)
+
+        if offset >= total_length:
+            return json.dumps(
+                _make_chunk_response(
+                    content="",
+                    field=field,
+                    locator=locator,
+                    offset=offset,
+                    total_length=total_length,
+                ),
+                ensure_ascii=False,
+            )
+
+        end = min(offset + effective_length, total_length)
+        content = raw_value[offset:end]
+        returned_length = len(content)
+        has_more = end < total_length
+        next_offset = offset + returned_length if has_more else None
+
+        return json.dumps(
+            _make_chunk_response(
+                content=content,
+                field=field,
+                locator=locator,
+                offset=offset,
+                returned_length=returned_length,
+                total_length=total_length,
+                has_more=has_more,
+                next_offset=next_offset,
+            ),
+            ensure_ascii=False,
+        )
+
+    except Exception as e:
+        logger.error(
+            "[read_field_chunk] internal_error: table=%s, field=%s, %s=%s",
+            table, field, id_field, id_value,
+            exc_info=True,
+        )
+        return _err("internal_error", "内部错误，请稍后重试。")
+
+
+READ_FIELD_CHUNK_SCHEMA: dict[str, Any] = make_tool_schema(
+    name="read_field_chunk",
+    description=(
+        "分段读取大字段原始内容。当 query_data 返回带 __large_field__ 标记的占位对象时，"
+        "使用本工具按 locator + offset + length 分段读取原文。\n"
+        "使用方法：\n"
+        "1. 从占位对象的 locator 字段获取定位信息\n"
+        "2. 使用 field（字段名）、offset（起始偏移，默认0）、length（读取长度，可选）调用\n"
+        "3. 根据 has_more 和 next_offset 继续读取剩余内容\n"
+        "4. 返回 content=\"\" 且 has_more=false 表示已到末尾"
+    ),
+    properties={
+        "locator": {
+            "type": "object",
+            "description": "从占位对象获取的定位信息，包含 table、id_field、id_value",
+            "properties": {
+                "table": {"type": "string", "description": "源表名"},
+                "id_field": {"type": "string", "description": "稳定定位字段名"},
+                "id_value": {"description": "定位字段值（整数或字符串）"},
+            },
+            "required": ["table", "id_field", "id_value"],
+        },
+        "field": {
+            "type": "string",
+            "description": "要读取的字段名（如 response_body、dom_tree_snapshot）",
+        },
+        "offset": {
+            "type": "integer",
+            "description": "起始字符偏移（从0开始），默认 0",
+        },
+        "length": {
+            "type": "integer",
+            "description": "本次读取的字符长度。不传则使用默认值（1000字符）。",
+        },
+    },
+    required=["locator", "field", "offset"],
+)
+
+
+# =============================================================================
 # 工厂函数：创建绑定了 recording_id 的工具列表
 # =============================================================================
 
@@ -651,7 +969,7 @@ def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
         recording_id: 当前录制会话 ID
 
     Returns:
-        4 个 ToolDefinition，可直接传给 AgentLoop
+        5 个 ToolDefinition，可直接传给 AgentLoop
     """
     return [
         ToolDefinition(
@@ -663,6 +981,13 @@ def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
             name="query_data",
             schema=QUERY_DATA_SCHEMA,
             handler=lambda sql: _query_data(recording_id, sql),
+        ),
+        ToolDefinition(
+            name="read_field_chunk",
+            schema=READ_FIELD_CHUNK_SCHEMA,
+            handler=lambda locator, field, offset, length=None: _read_field_chunk(
+                recording_id, locator, field, offset, length
+            ),
         ),
         ToolDefinition(
             name="execute_code",
@@ -683,6 +1008,7 @@ __all__ = [
     "create_recording_tools",
     "DESCRIBE_DATA_SCHEMA",
     "QUERY_DATA_SCHEMA",
+    "READ_FIELD_CHUNK_SCHEMA",
     "EXECUTE_CODE_SCHEMA",
     "ANALYZE_IMAGE_SCHEMA",
 ]
