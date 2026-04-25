@@ -1,5 +1,3 @@
-跟用户对话时使用中文。
-
 # Exemplar 项目 AI 开发入口
 
 > 项目治理以 `.specify/memory/constitution.md` 为准；本文给 AI coding agent 提供可直接执行的最小规则集、代码现实和文档导航。

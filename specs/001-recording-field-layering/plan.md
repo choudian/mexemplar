@@ -2,6 +2,7 @@
 
 **Branch**: `001-recording-field-layering` | **Date**: 2026-04-23 | **Spec**: `./spec.md`
 **Input**: Feature specification from `/specs/001-recording-field-layering/spec.md`
+**Status**: Completed
 
 ## Summary
 

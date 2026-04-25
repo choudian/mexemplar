@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-recording-field-layering`
 **Created**: 2026-04-21
-**Status**: Draft
+**Status**: Completed
 **Input**: 录制数据中单个字段（如 response_body、dom_tree_snapshot、siblings 等）可能非常大（实测单条 HTML 响应达 1.2MB），当前 query_data 工具对所有字段统一截断 12KB。这样做既会浪费上下文，又会让 Agent 误以为自己拿到了完整值。需要在保留 query_data 行数据查询体验的前提下，对大字段做占位替换，并提供分段读取能力，让 Agent 在不撑爆上下文的情况下逐步查看原始内容。
 
 ## Clarifications
