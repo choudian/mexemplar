@@ -6,7 +6,7 @@ from src.recording.filtering.query_projection_analyzer import (
     STABLE_LOCATOR_RULES,
     ProjectionBinding,
     QueryProjectionAnalyzer,
-    find_stable_locator_in_bindings,
+    _find_stable_locator_in_bindings,
     find_stable_locator_in_row,
 )
 
@@ -79,7 +79,7 @@ class TestJoinLocator:
         bindings = analyzer.analyze(
             "SELECT nr.request_id, nr.response_body FROM network_requests nr"
         )
-        loc = find_stable_locator_in_bindings(bindings, "network_requests")
+        loc = _find_stable_locator_in_bindings(bindings, "network_requests")
         assert loc is not None
         assert loc.source_field == "request_id"
 
@@ -87,7 +87,7 @@ class TestJoinLocator:
         bindings = analyzer.analyze(
             "SELECT nr.response_body FROM network_requests nr"
         )
-        loc = find_stable_locator_in_bindings(bindings, "network_requests")
+        loc = _find_stable_locator_in_bindings(bindings, "network_requests")
         assert loc is None
 
 

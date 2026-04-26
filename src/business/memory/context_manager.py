@@ -152,31 +152,54 @@ class ContextManager:
 
     def get_pending_tool_call(self) -> Optional[dict]:
         """
-        检测 session 是否有待重试的工具调用。
-
-        当 execute_tool 失败且 save_result=False 时，最后一条消息是 assistant 的
-        tool_calls（无对应 tool result）。重启后 AgentLoop 可直接重执行，无需再问 LLM。
+        检测 session 是否有待重试的工具调用（兼容旧路径，返回第一个）。
 
         Returns:
             {"id": ..., "name": ..., "args": {...}} 或 None
         """
-        last = self._msg_repo.get_last(self.session_id)
-        if last and last.role == "assistant" and last.tool_calls:
+        pending = self.get_pending_tool_calls()
+        return pending[0] if pending else None
+
+    def get_pending_tool_calls(self) -> List[dict]:
+        """
+        检测 session 中所有未配对的工具调用。
+
+        遍历全部消息做完整匹配。损坏的 tool call（缺少 name）以占位名称保留，
+        以便调用方生成配对错误结果，避免未配对的 tool call 遗留在历史中。
+
+        Returns:
+            [{"id": ..., "name": ..., "args": {...}}, ...] 或 []
+        """
+        messages = self._msg_repo.get_context(self.session_id)
+        tool_result_ids = set()
+        pending_assistant_msgs = []
+
+        for msg in messages:
+            if msg.role == "tool" and msg.tool_call_id:
+                tool_result_ids.add(msg.tool_call_id)
+            if msg.role == "assistant" and msg.tool_calls:
+                pending_assistant_msgs.append(msg)
+
+        if not pending_assistant_msgs:
+            return []
+
+        pending_calls = []
+        for msg in pending_assistant_msgs:
             try:
-                tcs = json.loads(last.tool_calls)
-                if tcs:
-                    if len(tcs) > 1:
-                        logger.warning(
-                            f"[上下文] session {self.session_id} 有多个待重试 tool call，只取第一个"
-                        )
-                    tc = tcs[0]
-                    if "name" not in tc:
-                        logger.warning(f"[上下文] 待重试 tool call 缺少 name 字段: {tc}")
-                        return None
-                    return tc
+                tcs = json.loads(msg.tool_calls)
             except Exception:
-                logger.debug(f"[上下文] 解析 tool_calls 失败: {last.tool_calls!r}")
-        return None
+                logger.debug(f"[上下文] 解析 tool_calls 失败: {msg.tool_calls!r}")
+                continue
+            for tc in tcs:
+                tc_id = tc.get("id", "")
+                if not tc_id or tc_id in tool_result_ids:
+                    continue
+                if "name" not in tc:
+                    logger.warning(f"[上下文] tool call 缺少 name 字段: {tc}")
+                    tc = {**tc, "name": "__corrupted_tool_call__"}
+                pending_calls.append(tc)
+
+        return pending_calls
 
     # --- 引用加载 ---
 

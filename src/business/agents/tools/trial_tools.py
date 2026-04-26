@@ -14,7 +14,6 @@ from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler, error_json
 from src.execution.tool_executor import run_command_in_venv, run_tool_code
 
-
 # =============================================================================
 # execute_tool schema
 # =============================================================================
@@ -116,7 +115,9 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
         nonlocal _command_attempts
         _command_attempts += 1
         if _command_attempts > _MAX_COMMAND_ATTEMPTS:
-            return error_json(f"命令执行总次数已达上限（{_MAX_COMMAND_ATTEMPTS}次），请直接报告失败")
+            return error_json(
+                f"命令执行总次数已达上限（{_MAX_COMMAND_ATTEMPTS}次），请直接报告失败"
+            )
         result = run_command_in_venv(command)
         return json.dumps(result, ensure_ascii=False)
 
@@ -130,6 +131,7 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
             name="submit_trial_result",
             schema=SUBMIT_TRIAL_RESULT_SCHEMA,
             handler=make_signal_handler("[试用结果已提交]"),
+            is_interrupting=True,
         ),
         ToolDefinition(
             name="run_command",

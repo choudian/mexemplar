@@ -40,8 +40,41 @@ def error_json(message: str) -> str:
     return json.dumps({"success": False, "message": str(message), "data": None}, ensure_ascii=False)
 
 
+def make_error_result(error_code: str, message: str, **extra) -> str:
+    """Return a JSON string conforming to the StandardizedErrorStructure."""
+    obj = {"error": error_code, "message": message}
+    obj.update(extra)
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def is_standardized_error(result: str) -> bool:
+    """检查工具结果是否为标准化错误结构。
+
+    两种格式：
+    - error_json 生成的 ``{"success": false, ...}``
+    - make_error_result 生成的 ``{"error": "code", "message": ...}``
+    """
+    if not isinstance(result, str):
+        return False
+    # 廉价前缀预检，避免对非错误结果做 json.loads
+    if not (result.startswith('{"error"') or result.startswith('{"success"')):
+        return False
+    try:
+        obj = json.loads(result)
+        if isinstance(obj, dict):
+            if obj.get("success") is False and "message" in obj:
+                return True
+            if "error" in obj and isinstance(obj["error"], str) and obj["error"]:
+                return True
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return False
+
+
 __all__ = [
     "make_tool_schema",
     "make_signal_handler",
     "error_json",
+    "make_error_result",
+    "is_standardized_error",
 ]

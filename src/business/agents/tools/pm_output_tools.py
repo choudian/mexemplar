@@ -102,12 +102,14 @@ submit_requirements = ToolDefinition(
     name="submit_requirements",
     schema=SUBMIT_REQUIREMENTS_SCHEMA,
     handler=make_signal_handler("[需求已提交]"),
+    is_interrupting=True,
 )
 
 report_code_issue = ToolDefinition(
     name="report_code_issue",
     schema=REPORT_CODE_ISSUE_SCHEMA,
     handler=make_signal_handler("[代码问题已报告]"),
+    is_interrupting=True,
 )
 
 __all__ = [
