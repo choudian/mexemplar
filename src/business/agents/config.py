@@ -79,6 +79,7 @@ class ToolDefinition:
     name: str
     schema: Dict[str, Any]
     handler: Callable[..., Union[str, ToolSignal]]
+    is_interrupting: bool = False
 
 
 @dataclass

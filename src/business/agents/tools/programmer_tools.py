@@ -13,7 +13,6 @@ from typing import Any, Dict, List
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler
 
-
 # =============================================================================
 # syntax_check
 # =============================================================================
@@ -192,6 +191,7 @@ submit_code = ToolDefinition(
     name="submit_code",
     schema=SUBMIT_CODE_SCHEMA,
     handler=make_signal_handler("[代码已提交]"),
+    is_interrupting=True,
 )
 
 __all__ = [

@@ -17,8 +17,32 @@ from src.utils.helpers import safe_format_template
 
 from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
+from .tool_helpers import is_standardized_error, make_error_result
 
 logger = logging.getLogger(__name__)
+
+
+def classify_tool_calls(
+    tool_calls: List,
+    tool_registry: Dict[str, ToolDefinition],
+) -> List[tuple]:
+    """
+    Classify each tool call by looking up its name in the tool registry.
+
+    Returns a list of (ToolCallInfo, kind, ToolDefinition|None) tuples
+    where kind is one of 'ordinary', 'interrupting', or 'unknown'.
+    """
+    result = []
+    for tc in tool_calls:
+        td = tool_registry.get(tc.name)
+        if td is None:
+            kind = "unknown"
+        elif td.is_interrupting:
+            kind = "interrupting"
+        else:
+            kind = "ordinary"
+        result.append((tc, kind, td))
+    return result
 
 
 class AgentLoop:
@@ -52,6 +76,7 @@ class AgentLoop:
         self._config = config
         self._llm = llm_client
         self._unified_config = unified_config
+        self._current_tool_defs: Dict[str, ToolDefinition] = {}
         self._ctx_cache: Dict[str, ContextManager] = {}
         self._max_ctx_cache = 20  # 限制缓存大小，防止内存泄漏
         self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
@@ -217,7 +242,9 @@ class AgentLoop:
             AgentResult 表示应终止循环并返回，None 表示继续循环
         """
         if isinstance(result, ToolSignal):
-            content = result.display_text if result.save_result else "[工具执行失败，已提交分诊处理]"
+            content = (
+                result.display_text if result.save_result else "[工具执行失败，已提交分诊处理]"
+            )
             ctx.save_tool_result(
                 tool_call_id=tool_call.id,
                 tool_name=tool_call.name,
@@ -255,25 +282,143 @@ class AgentLoop:
         logger.debug(f"[Agent Loop] 工具结果: {tool_call.name} -> {result}")
         return None
 
+    def _execute_tool_batch(
+        self,
+        tool_calls: List,
+        tool_handlers: Dict[str, Callable],
+        ctx: ContextManager,
+    ) -> Optional[AgentResult]:
+        """
+        Execute a batch of tool calls with multi-tool semantics.
+
+        - Classify all calls before execution
+        - Reject mixed/interrupt batches as invalid output
+        - Execute ordinary tools in order; cascade on failure
+        - Handle solo interrupting tools with contract validation
+
+        Returns AgentResult only if a solo interrupting tool succeeds;
+        None otherwise (loop continues).
+        """
+        classified = classify_tool_calls(tool_calls, self._current_tool_defs)
+        batch_size = len(classified)
+        interrupting_count = sum(1 for _, k, _ in classified if k == "interrupting")
+
+        logger.info(
+            f"[Agent Loop] 工具批次: {batch_size} 个调用 "
+            f"(中断型={interrupting_count}, 普通={batch_size - interrupting_count})"
+        )
+
+        # T007: Invalid-output batch check
+        if batch_size > 1 and interrupting_count > 0:
+            logger.info(
+                f"[Agent Loop] 非法混合工具调用: {batch_size} 个调用中有 "
+                f"{interrupting_count} 个中断型，拒绝执行"
+            )
+            for tc, _, _ in classified:
+                self._save_error(tc, ctx, "invalid_model_output",
+                                 "同轮响应包含中断型工具与其他工具调用，不执行任何工具。请重新输出合法工具调用。")
+            return None
+
+        # Solo interrupting tool
+        if batch_size == 1 and interrupting_count == 1:
+            tc, _, _ = classified[0]
+            return self._execute_solo_interrupt(tc, tool_handlers, ctx)
+
+        # Ordinary batch (all ordinary or unknown)
+        first_failure = None
+        for i, (tc, kind, _) in enumerate(classified):
+            if first_failure is not None:
+                self._save_error(tc, ctx, "not_executed",
+                                 "前序工具失败，跳过执行。请基于已有结果重新规划。",
+                                 upstream_tool_call_id=classified[i - 1][0].id if i > 0 else None)
+                continue
+
+            # Unknown tool
+            if kind == "unknown":
+                self._save_error(tc, ctx, "unknown_tool", f"未知工具 '{tc.name}'，无法执行。")
+                first_failure = i + 1
+                continue
+
+            # Execute ordinary tool
+            try:
+                result = self._execute_tool_call(tc, tool_handlers)
+            except Exception as e:
+                self._save_error(tc, ctx, "handler_exception", f"工具 '{tc.name}' 执行异常: {e}")
+                logger.warning(f"[Agent Loop] 工具执行异常: {tc.name} -> {e}")
+                first_failure = i + 1
+                continue
+
+            # Contract validation: any ToolSignal in ordinary batch is a violation
+            if isinstance(result, ToolSignal):
+                self._save_error(tc, ctx, "handler_contract_violation",
+                                 f"工具 '{tc.name}' 声明为普通工具但返回了 ToolSignal。")
+                first_failure = i + 1
+                continue
+
+            # Persist result (standardized error or success)
+            ctx.save_tool_result(tool_call_id=tc.id, tool_name=tc.name, content=result)
+            if is_standardized_error(result):
+                first_failure = i + 1
+            else:
+                logger.debug(f"[Agent Loop] 工具结果: {tc.name} -> {str(result)[:100]}")
+
+        if first_failure is not None:
+            logger.info(f"[Agent Loop] 批次执行中断: 在第 {first_failure} 个调用处失败")
+        else:
+            logger.info(f"[Agent Loop] 批次执行完成: {batch_size} 个调用全部处理")
+
+        return None
+
+    def _save_error(self, tc: ToolCallInfo, ctx: ContextManager, error_code: str, message: str, **extra):
+        """Save a standardized error result for a tool call."""
+        ctx.save_tool_result(
+            tool_call_id=tc.id,
+            tool_name=tc.name,
+            content=make_error_result(error_code, message, **extra),
+        )
+
+    def _execute_solo_interrupt(
+        self,
+        tc,
+        tool_handlers: Dict[str, Callable],
+        ctx: ContextManager,
+    ) -> Optional[AgentResult]:
+        """Execute a solo interrupting tool with contract validation."""
+        try:
+            result = self._execute_tool_call(tc, tool_handlers)
+        except Exception as e:
+            self._save_error(tc, ctx, "handler_exception", f"中断型工具 '{tc.name}' 执行异常: {e}")
+            logger.warning(f"[Agent Loop] 中断型工具异常: {tc.name} -> {e}")
+            return None
+
+        # Contract validation: is_interrupting=True must return ToolSignal
+        if not isinstance(result, ToolSignal):
+            self._save_error(tc, ctx, "handler_contract_violation",
+                             f"中断型工具 '{tc.name}' 返回了 str 而非 ToolSignal。")
+            return None
+
+        # Valid interrupt: use existing _handle_tool_result path
+        return self._handle_tool_result(result, tc, ctx)
+
     def _process_llm_response(
         self,
         response: LLMResponse,
         ctx: ContextManager,
-    ) -> Union[AgentResult, ToolCallInfo]:
+    ) -> Union[AgentResult, List[ToolCallInfo]]:
         """
         处理 LLM 响应
 
         保存 assistant 消息，处理文本响应（转为用户输入或完成），
         解析工具调用。调用方根据返回类型判断下一步：
         - AgentResult: 终止循环并返回该结果
-        - ToolCallInfo: 进入工具执行阶段
+        - list[ToolCallInfo]: 完整的工具调用列表（可能包含多个）
 
         Args:
             response: LLM 响应对象
             ctx: 上下文管理器
 
         Returns:
-            AgentResult 表示终止循环，ToolCallInfo 表示需要执行的工具
+            AgentResult 表示终止循环，list[ToolCallInfo] 表示需要执行的工具调用列表
         """
         ctx.save_assistant_message(
             content=response.content or "",
@@ -300,12 +445,12 @@ class AgentLoop:
                 result_type=ResultType.COMPLETED,
             )
 
-        tool_call = response.tool_calls[0]
+        tool_call_list = list(response.tool_calls)
         logger.debug(
-            f"[Agent Loop] 工具调用: {tool_call.name} "
-            f"args={json.dumps(tool_call.args, ensure_ascii=False)}"
+            f"[Agent Loop] 工具调用 ({len(tool_call_list)} 个): "
+            + ", ".join(tc.name for tc in tool_call_list)
         )
-        return tool_call
+        return tool_call_list
 
     def _initialize_session(
         self,
@@ -356,8 +501,13 @@ class AgentLoop:
                 role = user_input.get("role")
                 content = user_input.get("content")
                 if not role or not content:
-                    logger.warning(f"[Agent Loop] dict user_input 缺少 'role' 或 'content': {user_input}")
-                    return AgentResult(result_type=ResultType.ERROR, error="user_input dict 缺少 'role' 或 'content'")
+                    logger.warning(
+                        f"[Agent Loop] dict user_input 缺少 'role' 或 'content': {user_input}"
+                    )
+                    return AgentResult(
+                        result_type=ResultType.ERROR,
+                        error="user_input dict 缺少 'role' 或 'content'",
+                    )
                 ctx.save_message(role=role, content=content)
                 logger.debug(f"[Agent Loop] 输入({role}): {content[:50]}...")
             else:
@@ -421,15 +571,30 @@ class AgentLoop:
         # 构建工具 schemas 和 handlers 的辅助函数
         def _rebuild_tools(tool_defs: List[ToolDefinition], ctx: ContextManager):
             nonlocal all_tool_schemas, tool_handlers
-            builtin_schemas = [LOAD_REFERENCE_SCHEMA]
-            tool_handlers = {td.name: td.handler for td in tool_defs}
-            tool_handlers["load_reference"] = lambda reference_id: ctx.load_reference(reference_id)
+            # Build unified tool definitions (single source of truth)
+            self._current_tool_defs = {td.name: td for td in tool_defs}
+            self._current_tool_defs["load_reference"] = ToolDefinition(
+                name="load_reference",
+                schema=LOAD_REFERENCE_SCHEMA,
+                handler=lambda reference_id: ctx.load_reference(reference_id),
+                is_interrupting=False,
+            )
             # text_as_user_input=True 时，LLM 直接输出文本即可与用户对话，
             # 不需要 talk_to_user 工具（避免 LLM 在该调 submit 时误调 talk_to_user）
             if not self._config.text_as_user_input:
-                builtin_schemas.append(TALK_TO_USER_SCHEMA)
-                tool_handlers["talk_to_user"] = talk_to_user
-            all_tool_schemas = [td.schema for td in tool_defs] + builtin_schemas
+                self._current_tool_defs["talk_to_user"] = ToolDefinition(
+                    name="talk_to_user",
+                    schema=TALK_TO_USER_SCHEMA,
+                    handler=talk_to_user,
+                    is_interrupting=True,
+                )
+            # Derive handlers and schemas from unified definitions
+            tool_handlers = {name: td.handler for name, td in self._current_tool_defs.items()}
+            all_tool_schemas = [td.schema for td in tool_defs] + [
+                self._current_tool_defs[k].schema
+                for k in ("load_reference", "talk_to_user")
+                if k in self._current_tool_defs
+            ]
 
         _tools_callable = callable(tools)
         all_tool_schemas: list = []
@@ -438,8 +603,13 @@ class AgentLoop:
         if not _tools_callable:
             _rebuild_tools(tools or [], ctx)
 
-        # 检查是否有待重试的工具调用（execute_tool 失败未保存 result，session 最后是 assistant tool_call）
-        _pending_tc = ctx.get_pending_tool_call()
+        # 检查是否有待重试的工具调用（多工具恢复）
+        _pending_tcs = ctx.get_pending_tool_calls()
+        if _pending_tcs:
+            logger.info(
+                f"[Agent Loop] 恢复待执行工具: {len(_pending_tcs)} 个未配对调用 "
+                f"({', '.join(tc.get('name', '?') for tc in _pending_tcs)})"
+            )
 
         # 主循环
         iteration = 0
@@ -453,10 +623,16 @@ class AgentLoop:
                     _rebuild_tools(new_tools, ctx)
                     _last_tool_names = new_names
 
-            if _pending_tc is not None:
-                # 待重试：直接使用上次的工具调用，跳过 LLM
-                tool_call: ToolCallInfo = self._resolve_pending_tool_call(_pending_tc)
-                _pending_tc = None
+            if _pending_tcs:
+                # 恢复：将所有待重试的工具调用作为单个批次处理
+                tool_call_list = [
+                    self._resolve_pending_tool_call(tc_dict) for tc_dict in _pending_tcs
+                ]
+                _pending_tcs = None
+                signal = self._execute_tool_batch(tool_call_list, tool_handlers, ctx)
+                if signal is not None:
+                    return signal
+                continue
             else:
                 # 组装上下文，调用 LLM
                 messages = ctx.assemble_context()
@@ -470,24 +646,12 @@ class AgentLoop:
                 llm_outcome = self._process_llm_response(response, ctx)
                 if isinstance(llm_outcome, AgentResult):
                     return llm_outcome
-                tool_call = llm_outcome
+                tool_call_list = llm_outcome
 
-            # 执行工具（统一路径，不区分内置/注册）
-            try:
-                result = self._execute_tool_call(tool_call, tool_handlers)
-                signal = self._handle_tool_result(result, tool_call, ctx)
-                if signal is not None:
-                    return signal
-
-            except Exception as e:
-                error_msg = f"工具执行错误: {str(e)}"
-                ctx.save_tool_result(
-                    tool_call_id=tool_call.id,
-                    tool_name=tool_call.name,
-                    content=error_msg,
-                )
-                logger.warning(f"[Agent Loop] {error_msg}")
-                # 不终止循环，让 LLM 决定下一步
+            # 多工具调用：执行列表中的所有工具调用
+            signal = self._execute_tool_batch(tool_call_list, tool_handlers, ctx)
+            if signal is not None:
+                return signal
 
         # 超过最大迭代次数
         if self._config.text_as_user_input:

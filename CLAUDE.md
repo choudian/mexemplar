@@ -37,6 +37,11 @@
 - 录制数据工具现为 **5 工具模型**：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`；大字段（≥1000 字符）自动占位替换，Agent 按需分段读取
 - SQL 列血缘分析在 `src/recording/filtering/query_projection_analyzer.py`（用 sqlglot）；`recording_data_tools.py` 不直接 import sqlglot（guard test 约束）
 - 大字段配置走 `recording.large_field.*`（`threshold_chars` / `preview_chars` / `max_chunk_chars`，默认均 1000）
+- `AgentLoop.run()` 支持**多工具批次处理**：同一轮 LLM 响应的多个 tool_calls 按顺序执行并逐一保存结果；普通工具失败时停止后续真实执行并写入 `not_executed` 级联
+- 中断型工具通过 `ToolDefinition.is_interrupting: bool` 声明式分类；与任何其他工具同轮出现时判定为 `invalid_model_output`，不执行任何 handler
+- `is_interrupting` 与 handler 返回类型必须强一致（`True` → `ToolSignal`，`False` → `str`）；运行时不一致写入 `handler_contract_violation`
+- 会话恢复走 `get_pending_tool_calls()`，只补齐最近 assistant 消息中未配对的调用，按原始顺序
+- AgentLoop 发出的配对错误统一为标准化 JSON 结构：`{"error": "<code>", "message": "...", ...}`，错误码：`unknown_tool` / `handler_exception` / `handler_contract_violation` / `not_executed` / `invalid_model_output`
 
 ---
 
@@ -46,6 +51,7 @@
 - 业务数据通过 Repository 访问；录制分析层对 DuckDB 的例外边界看 `docs/PROJECT_CONSTRAINTS.md`
 - 所有配置都走 `get_unified_config()`；密钥走 keyring
 - 改编排、事件、Repository、恢复逻辑时，补行为契约测试
+- 改 AgentLoop 工具处理或中断型工具时，确保多工具批次配对完整（14 场景集成测试在 `tests/integration/test_agent_loop_multi_tool_calls.py`）
 - 架构切换时，补两类接线测试：
   - 链路冒烟测试：新路径真的被调用
   - 门卫测试：旧路径不再被导入
@@ -63,4 +69,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
+at `specs/003-fix-agentloop-tool-calls/plan.md`
 <!-- SPECKIT END -->

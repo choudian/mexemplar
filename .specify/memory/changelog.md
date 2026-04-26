@@ -26,3 +26,27 @@
 - `docs/ARCHITECTURE.md` / `docs/design/*.md` — 文档同步
 
 **Tasks Completed:** 44/44 tasks
+
+## AgentLoop 多工具调用结果配对修复 — 2026-04-26
+
+**Branch:** `003-fix-agentloop-tool-calls`
+**Spec:** `specs/003-fix-agentloop-tool-calls`
+
+**What was added:**
+- US-005 (P1): 多工具调用完整配对 — 同轮多个普通工具按顺序执行并逐一保存结果
+- US-006 (P1): 中断型工具行为可预期 — 混合批次拒绝、solo 中断保留既有语义、handler 契约校验
+- US-007 (P2): 会话恢复按原始顺序补齐缺失结果，不重复已完成调用
+
+**New Components:**
+- `ToolDefinition.is_interrupting` — 声明式中断型分类字段
+- `classify_tool_calls()` — 批次分类 helper
+- `make_error_result()` / `ERROR_CODES` — 标准化错误结构生成
+- `tests/integration/test_agent_loop_multi_tool_calls.py` — 14 场景集成测试
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` — 多工具批次处理、失败级联、中断校验、契约校验、恢复
+- `src/business/agents/config.py` — ToolDefinition 新增 `is_interrupting` 字段
+- `src/business/agents/tools/*.py` — 中断型工具注册添加 `is_interrupting=True`
+- `src/business/memory/context_manager.py` — `get_pending_tool_calls()` 多工具恢复
+
+**Tasks Completed:** 34/34 tasks
