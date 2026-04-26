@@ -5,10 +5,6 @@ from .sql_rewriter import rewrite
 SQL_PARSE_FAILED_MESSAGE = "SQL 解析失败，请简化查询后重试"
 DATA_ACCESS_RESTRICTED_MESSAGE = "数据访问受限"
 
-_CONNECTION_RELATION_METHODS = frozenset({"sql", "from_query", "query"})
-_CONNECTION_DENIED_METHODS = frozenset(
-    {"view", "create_view", "read_csv", "read_parquet", "from_df", "from_arrow", "register"}
-)
 _RELATION_FETCH_METHODS = frozenset({"fetchall", "fetchone", "fetchmany"})
 _RELATION_WRAP_METHODS = frozenset(
     {
@@ -108,8 +104,6 @@ class FilteredDuckDBConnection:
         return self._fetch("fetchmany", size)
 
     def __getattr__(self, name: str):
-        if name in _CONNECTION_DENIED_METHODS:
-            raise DataAccessRestrictedError()
         raise DataAccessRestrictedError()
 
     def _call_relation_method(self, method_name: str, sql: str, *args, **kwargs):

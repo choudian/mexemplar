@@ -8,12 +8,12 @@ def test_derive_primary_host_uses_first_http_or_https_action():
         {"url": "https://other.example.net"},
     ]
 
-    assert primary_host.derive_primary_host(actions) == "www.example.com"
+    assert primary_host._derive_primary_host(actions) == "www.example.com"
 
 
 def test_derive_primary_host_returns_none_for_empty_or_non_http_actions():
-    assert primary_host.derive_primary_host([]) is None
-    assert primary_host.derive_primary_host([{"url": "file:///tmp/demo.html"}]) is None
+    assert primary_host._derive_primary_host([]) is None
+    assert primary_host._derive_primary_host([{"url": "file:///tmp/demo.html"}]) is None
 
 
 def test_normalize_host_to_site_collapses_same_site_subdomains():

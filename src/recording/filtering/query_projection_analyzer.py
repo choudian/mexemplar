@@ -138,11 +138,10 @@ class QueryProjectionAnalyzer:
         return ProjectionBinding(output_name=output_name)
 
 
-def find_stable_locator_in_bindings(
+def _find_stable_locator_in_bindings(
     bindings: list[ProjectionBinding],
     source_table: str,
 ) -> Optional[ProjectionBinding]:
-    """在 bindings 中查找某张源表的稳定定位字段直接投影。"""
     rule = STABLE_LOCATOR_RULES.get(source_table)
     if not rule:
         return None
@@ -164,7 +163,7 @@ def find_stable_locator_in_row(
 ) -> Optional[ProjectionBinding]:
     """在 bindings + 实际行数据中查找稳定定位字段（处理无表前缀的列名）。"""
     # Phase 1: 带表前缀的直接投影
-    direct = find_stable_locator_in_bindings(bindings, source_table)
+    direct = _find_stable_locator_in_bindings(bindings, source_table)
     if direct is not None:
         if direct.output_name in row and row[direct.output_name] is not None:
             return direct

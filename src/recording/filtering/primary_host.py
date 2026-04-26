@@ -39,7 +39,7 @@ def normalize_host_to_site(host: str | None) -> str | None:
     return f"{extracted.domain}.{extracted.suffix}".lower()
 
 
-def derive_primary_host(actions: Sequence[Mapping[str, Any]]) -> str | None:
+def _derive_primary_host(actions: Sequence[Mapping[str, Any]]) -> str | None:
     for action in actions:
         if not isinstance(action, Mapping):
             continue
@@ -56,4 +56,4 @@ def derive_primary_host(actions: Sequence[Mapping[str, Any]]) -> str | None:
 
 
 def derive_primary_site(actions: Sequence[Mapping[str, Any]]) -> str | None:
-    return normalize_host_to_site(derive_primary_host(actions))
+    return normalize_host_to_site(_derive_primary_host(actions))
