@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
 **Last Updated**: 2026-04-27
-**Revision**: 2026-04-27 — Merged `specs/002-tool-hook-system`
+**Revision**: 2026-04-27 — Merged `specs/005-fix-compression-tool-pairing`
 
 ---
 
@@ -47,6 +47,18 @@ Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefin
 ### US-010: AgentConfig 级全局 Hook (Priority: P3)
 
 当前 `AgentConfig` 可以挂载 `global_pre_hooks` / `global_post_hooks`，对该配置实例下所有参与 hook 管线的 `ToolDefinition` 工具生效。 [Source: specs/002-tool-hook-system]
+
+### US-011: 长会话压缩后 Agent 不再崩溃 (Priority: P1)
+
+用户与 assistant 进行长时间对话涉及大量工具调用，当会话消息数达到压缩阈值时，系统自动触发上下文压缩。压缩完成后 Agent 能继续正常工作，不再出现 400 错误导致会话不可恢复。 [Source: specs/005-fix-compression-tool-pairing]
+
+### US-012: 多次压缩不累积残留 (Priority: P2)
+
+会话经历多次上下文压缩时，前一次压缩时被保留的边界 tool 组在第二次压缩时若已完全落在压缩区内部，会被正常压缩掉，不会无限累积。 [Source: specs/005-fix-compression-tool-pairing]
+
+### US-013: 压缩后"继续"能正常恢复 (Priority: P3)
+
+当因边缘 case 导致孤立 tool result 残留时，用户点击"继续"恢复会话，系统能自动检测并清理孤立消息，会话能正常运行。 [Source: specs/005-fix-compression-tool-pairing]
 
 ---
 
@@ -109,6 +121,14 @@ Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefin
 - **FR-045**: `programmer_tools.syntax_check`、`recording_data_tools.execute_code` 沙箱、`tool_executor` venv 隔离/命令白名单、`dynamic_tool_manager` 发布状态与允许列表不得迁移到 hook。
 - **FR-046**: hook 系统必须保留 AgentLoop 003 多工具批处理语义：执行前分类、混合中断批次不执行 hook/handler、普通批次失败级联 `not_executed`、合法单中断成功 `ToolSignal` 直接返回既有 AgentResult。
 
+### 上下文压缩 tool_call/tool_result 配对修复 [Source: specs/005-fix-compression-tool-pairing]
+
+- **FR-047**: 压缩切分时，必须识别跨越压缩/保留边界的 tool 组（assistant 消息含 tool_calls 在压缩区，但其部分或全部 tool result 在保留区）
+- **FR-048**: 跨越边界的 tool 组必须整体移入保留区——包括 assistant(tool_calls) 消息及其所有 tool result 消息，保证配对完整
+- **FR-049**: 完全在压缩区内部的 tool 组正常压缩，不做特殊处理——它们内部配对完整，压缩后通过摘要中的 tool_call_id 后处理保留信息
+- **FR-050**: 保留区调整后若压缩区为空，必须跳过 LLM 压缩调用，直接构建 `system | [保留区消息]` 的消息列表
+- **FR-051**: `assemble_context` 返回前必须校验消息列表中不存在孤立的 tool result（有 tool_call_id 但无对应 tool_call 的 tool 消息），发现时剔除该孤立消息并记录 warning 日志
+
 ---
 
 ## Key Entities
@@ -161,6 +181,12 @@ post_hook 返回值。字段：`result: str | None = None`。只用于替换普�
 ### AgentConfig global hooks [Source: specs/002-tool-hook-system]
 `AgentConfig.global_pre_hooks` / `global_post_hooks` 是当前配置实例范围内的列表，不跨 AgentConfig 共享，也不作用于 `talk_to_user` / `load_reference`。
 
+### Tool Group [Source: specs/005-fix-compression-tool-pairing]
+由一条 assistant 消息（含 tool_calls 字段）和紧跟其后的所有 tool result 消息组成的原子单元。识别规则：assistant 消息的 tool_calls 中每个 id 必须在后续连续的 tool 消息中找到对应 tool_call_id。
+
+### Boundary Tool Group [Source: specs/005-fix-compression-tool-pairing]
+tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 tool result 消息位于保留区的 tool 组。
+
 ---
 
 ## Constraints & Compatibility
@@ -191,6 +217,14 @@ post_hook 返回值。字段：`result: str | None = None`。只用于替换普�
 - **CC-015**: hook 协议保持同步契约，不把现有同步 handler 改造成异步。
 - **CC-016**: pre_hook 不做参数流水线，post_hook 不做结果流水线；不得重新引入 `PreHookResult.args`、`ToolCallContext.result` 或确认回调字段。
 - **CC-017**: 被迁移的 gate 判断必须从 handler 中删除，不保留作为备用路径；执行必需的解析、规范化、查询准备和结果转换可保留。
+
+### 上下文压缩配对修复约束 [Source: specs/005-fix-compression-tool-pairing]
+
+- **CC-018**: 修改后 `compress` 方法的返回值（List[Message]）结构必须保持兼容——调用方 `context_manager.assemble_context` 不需要修改其对压缩结果的处理方式
+- **CC-019**: 当边界调整后压缩区仍非空时，持久化行为保持不变；若压缩区为空，则跳过 compressed 消息创建和归档
+- **CC-020**: `_post_process_summary` 的 tool_call_id 替换逻辑保持不变——完全在压缩区内部的 tool 组仍需要此逻辑来保留 tool 信息
+- **CC-021**: reference_handler 对大内容 tool result 的替换不受影响——移入保留区的是 DB 中的原始 Message 对象，引用替换在 `assemble_context` 中统一执行
+- **CC-022**: 不影响 `get_pending_tool_calls` 的现有行为——它检测的是 assistant 消息中有 tool_calls 但无对应 tool result 的场景，与本次修复方向互补
 
 ---
 
@@ -226,6 +260,12 @@ post_hook 返回值。字段：`result: str | None = None`。只用于替换普�
 - **SC-020**: callable 动态工具同名替换 hook 或 `is_interrupting` 后，下一轮工具调用使用最新定义。
 - **SC-021**: 协议测试覆盖 `ToolCallContext.args` 顶层和嵌套只读隔离，误写不会影响 handler 入参且本次 post_hook 被跳过。
 - **SC-022**: 多工具批处理语义保持 003 行为：hook 拒绝/handler 失败级联 `not_executed`，混合中断批次不执行 hook/handler，合法单中断 `ToolSignal` 直接返回既有 AgentResult。
+
+### 上下文压缩配对修复验收标准 [Source: specs/005-fix-compression-tool-pairing]
+
+- **SC-023**: 任何会话经历上下文压缩后，消息列表中不存在孤立的 tool result（100% 无 400 错误）
+- **SC-024**: 多次压缩后上下文大小可控——每次压缩只额外保留边界处跨越的 tool 组，不随压缩次数累积
+- **SC-025**: 会话恢复（failed → active）后，assemble_context 的兜底校验能检测并清理孤立 tool result，不阻塞恢复流程
 
 ---
 
@@ -270,3 +310,11 @@ post_hook 返回值。字段：`result: str | None = None`。只用于替换普�
 - handler 抛异常：转换为标准化 error 字符串并进入 post_hook，批处理失败级联仍按原始异常状态判定
 - 合法 `ToolSignal`：跳过 post_hook；普通工具返回 `ToolSignal` 或中断工具返回字符串均为 handler 契约违规
 - `talk_to_user` / `load_reference`：作为 AgentLoop 注入工具参与既有批处理控制，但不进入 hook 管线
+
+### 上下文压缩配对修复 [Source: specs/005-fix-compression-tool-pairing]
+
+- 压缩区末尾可以连续存在多个 tool 组，但真正跨越压缩/保留边界的只会是最后一个；仅将该边界 tool 组（含其所有 tool results）移入保留区
+- 压缩区调整边界后压缩区为空（只有边界 tool 组和保留区）——跳过 LLM 压缩调用
+- 保留区首条消息是 tool result，其对应的 assistant(tool_calls) 在压缩区中——核心修复场景
+- tool 组中 tool_result 内容已被 reference_handler 替换为指针，移入保留区后指针仍然有效
+- 会话恢复（`get_pending_tool_calls`）检测到的未配对 tool_call 与孤立 tool_result 同时存在的场景

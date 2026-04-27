@@ -33,6 +33,8 @@
 - 记忆分两层：
   - `ContextManager` 负责会话内上下文组装、压缩、引用替换
   - `assistant_memory.py` 负责 assistant 的跨会话分层摘要和 `memory_search`
+- 压缩边界调整：`CompressionHandler._adjust_boundary_for_tool_pairs` 检测跨越压缩/保留边界的 tool 组（assistant(tool_calls) + tool result），整体移入保留区，避免配对断裂；边界调整后压缩区为空时跳过 LLM 调用和持久化
+- `assemble_context` 在压缩后、引用替换前执行 `_cleanup_orphan_tool_results` 兜底校验，剔除孤立 tool result
 - 启动入口在 `src/main.py`：GUI 启动前会先跑 `get_unified_config()` 和 `RecordingRepository.ensure_startup_recovery()`
 - 录制数据工具现为 **5 工具模型**：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`；大字段（≥1000 字符）自动占位替换，Agent 按需分段读取
 - SQL 列血缘分析在 `src/recording/filtering/query_projection_analyzer.py`（用 sqlglot）；`recording_data_tools.py` 不直接 import sqlglot（guard test 约束）

@@ -74,3 +74,28 @@
 - `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` — hook 运行结构与边界文档
 
 **Tasks Completed:** 34/37 tasks
+
+## 上下文压缩 tool_call/tool_result 配对修复 — 2026-04-27
+
+**Branch:** `005-fix-compression-tool-pairing`
+**Spec:** `specs/005-fix-compression-tool-pairing`
+
+**What was added:**
+- US-011 (P1): 压缩切分时检测跨越边界的 tool 组并整体移入保留区，修复 400 错误
+- US-012 (P2): 多次压缩后边界 tool 组不累积——已完全在压缩区内部的被正常压缩
+- US-013 (P3): assemble_context 兜底校验检测并剔除孤立 tool result，恢复路径自愈
+
+**New Components:**
+- `src/business/memory/compression_handler._adjust_boundary_for_tool_pairs` — 边界 tool 组检测与移入
+- `src/business/memory/context_manager._cleanup_orphan_tool_results` — 孤立 tool result 兜底校验
+- `tests/business/memory/test_compression_tool_pairing.py` — 边界调整 7 场景
+- `tests/business/memory/test_context_orphan_cleanup.py` — 孤立校验与兼容性 6 场景
+- `tests/business/memory/conftest.py` — mock Message 工厂与 mock MessageRepository
+
+**Modified Components:**
+- `src/business/memory/compression_handler.py` — `_split_messages` 接入边界调整；`compress` 处理空压缩区
+- `src/business/memory/context_manager.py` — `assemble_context` 接入孤立校验
+- `docs/ARCHITECTURE.md` — 压缩流程边界调整描述
+- `CLAUDE.md` — 当前代码现实补充
+
+**Tasks Completed:** 15/15 tasks
