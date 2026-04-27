@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.hook_models import PreHookResult, ToolCallContext
 from src.business.agents.tool_helpers import make_tool_schema, error_json
 
 logger = logging.getLogger(__name__)
@@ -44,15 +45,33 @@ _EXEC_STDOUT_MAX = 5000
 _EXEC_STDERR_MAX = 2000
 
 # exec 安全白名单（无需用户确认即可执行的命令）
-EXEC_SAFE_COMMANDS = frozenset([
-    "dir", "ls", "ls -la", "ls -l", "ls -a",
-    "pwd", "echo", "type", "cat",
-    "ping", "ipconfig", "ifconfig",
-    "python --version", "python3 --version",
-    "pip list", "pip3 list",
-    "date", "time", "whoami", "hostname",
-    "tasklist", "ps", "ps aux",
-])
+EXEC_SAFE_COMMANDS = frozenset(
+    [
+        "dir",
+        "ls",
+        "ls -la",
+        "ls -l",
+        "ls -a",
+        "pwd",
+        "echo",
+        "type",
+        "cat",
+        "ping",
+        "ipconfig",
+        "ifconfig",
+        "python --version",
+        "python3 --version",
+        "pip list",
+        "pip3 list",
+        "date",
+        "time",
+        "whoami",
+        "hostname",
+        "tasklist",
+        "ps",
+        "ps aux",
+    ]
+)
 
 # =========================================================================
 # 用户确认机制（高危工具，线程安全）
@@ -95,13 +114,19 @@ def _ask_user_confirm(message: str) -> bool:
         return False
 
     import uuid
+
     request_id = str(uuid.uuid4())
     event = threading.Event()
     with _confirm_lock:
         _pending_confirms[request_id] = {"event": event, "result": False}
 
-    _confirm_signal.emit(request_id, message)
-    event.wait(timeout=_CONFIRM_TIMEOUT)
+    try:
+        _confirm_signal.emit(request_id, message)
+        event.wait(timeout=_CONFIRM_TIMEOUT)
+    except Exception:
+        with _confirm_lock:
+            _pending_confirms.pop(request_id, None)
+        raise
 
     with _confirm_lock:
         pending = _pending_confirms.pop(request_id, None)
@@ -134,11 +159,13 @@ def web_search_handler(query: str, num_results: int = 5) -> str:
         results = []
         with DDGS() as ddgs:
             for r in ddgs.text(query, max_results=num_results):
-                results.append({
-                    "title": r.get("title", ""),
-                    "url": r.get("href", ""),
-                    "snippet": r.get("body", ""),
-                })
+                results.append(
+                    {
+                        "title": r.get("title", ""),
+                        "url": r.get("href", ""),
+                        "snippet": r.get("body", ""),
+                    }
+                )
         return json.dumps(
             {"success": True, "results": results, "count": len(results)},
             ensure_ascii=False,
@@ -217,6 +244,96 @@ def _extract_text_from_html(html: str) -> str:
     return "\n".join(parser.parts)
 
 
+def _resolve_path_arg(ctx: ToolCallContext, key: str = "path", default: str | None = None) -> Path:
+    raw = ctx.args.get(key, default)
+    if raw is None:
+        raise KeyError(key)
+    return Path(str(raw)).expanduser().resolve()
+
+
+def _is_system_path(path: Path) -> bool:
+    system_dirs = [Path("C:/Windows"), Path("C:/System32"), Path("/etc"), Path("/usr")]
+    for sys_dir in system_dirs:
+        try:
+            path.relative_to(sys_dir.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def _is_safe_exec_command(command: str) -> bool:
+    cmd_lower = command.strip().lower()
+    for safe in EXEC_SAFE_COMMANDS:
+        if cmd_lower == safe:
+            return True
+        if cmd_lower.startswith(safe + " "):
+            rest = cmd_lower[len(safe) + 1 :]
+            if not any(
+                c in rest for c in (";", "|", "&", "`", "$", "(", ")", "\n", "\r", ">", "<")
+            ):
+                return True
+    return False
+
+
+def _confirm_or_reject(message: str) -> PreHookResult | None:
+    try:
+        confirmed = _ask_user_confirm(message)
+    except Exception as exc:
+        logger.warning("[builtin_tools] 确认请求失败，拒绝高危操作: %s", exc, exc_info=True)
+        return PreHookResult(error="确认请求失败，拒绝执行该高危操作")
+    if not confirmed:
+        return PreHookResult(error="用户取消了该操作")
+    return None
+
+
+def read_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    p = _resolve_path_arg(ctx)
+    if not p.exists():
+        return PreHookResult(error=f"文件不存在: {p}")
+    if not p.is_file():
+        return PreHookResult(error=f"不是文件: {p}")
+    return None
+
+
+def write_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    p = _resolve_path_arg(ctx)
+    if _is_system_path(p):
+        return PreHookResult(error="禁止写入系统目录")
+    return _confirm_or_reject(f"将向文件写入内容：\n{p}\n\n是否确认？")
+
+
+def edit_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    p = _resolve_path_arg(ctx)
+    if not p.exists():
+        return PreHookResult(error=f"文件不存在: {p}")
+    if not p.is_file():
+        return PreHookResult(error=f"不是文件: {p}")
+    old_text = str(ctx.args["old_text"])
+    return _confirm_or_reject(
+        f"将编辑文件：{p}\n"
+        f"替换：{old_text[:80]}...\n"
+        f"为：{str(ctx.args['new_text'])[:80]}...\n"
+        "是否确认？"
+    )
+
+
+def list_dir_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    p = _resolve_path_arg(ctx, default=".")
+    if not p.exists():
+        return PreHookResult(error=f"路径不存在: {p}")
+    if not p.is_dir():
+        return PreHookResult(error=f"不是目录: {p}")
+    return None
+
+
+def exec_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    command = str(ctx.args["command"])
+    if _is_safe_exec_command(command):
+        return None
+    return _confirm_or_reject(f"将执行以下命令：\n\n{command}\n\n是否确认？")
+
+
 # =========================================================================
 # read_file
 # =========================================================================
@@ -239,14 +356,12 @@ READ_FILE_SCHEMA = make_tool_schema(
 )
 
 
-def read_file_handler(path: str, encoding: str = "utf-8", max_bytes: int = _READ_FILE_MAX_BYTES) -> str:
+def read_file_handler(
+    path: str, encoding: str = "utf-8", max_bytes: int = _READ_FILE_MAX_BYTES
+) -> str:
     """读取本地文件"""
     try:
         p = Path(path).expanduser().resolve()
-        if not p.exists():
-            return error_json(f"文件不存在: {p}")
-        if not p.is_file():
-            return error_json(f"不是文件: {p}")
 
         size = p.stat().st_size
         with open(p, "r", encoding=encoding, errors="replace") as f:
@@ -288,20 +403,6 @@ def write_file_handler(path: str, content: str, encoding: str = "utf-8") -> str:
     try:
         p = Path(path).expanduser().resolve()
 
-        # 安全检查：禁止写入系统目录
-        system_dirs = [Path("C:/Windows"), Path("C:/System32"), Path("/etc"), Path("/usr")]
-        for sys_dir in system_dirs:
-            try:
-                p.relative_to(sys_dir)
-                return error_json("禁止写入系统目录")
-            except ValueError:
-                pass
-
-        # 请求用户确认
-        confirmed = _ask_user_confirm(f"将向文件写入内容：\n{p}\n\n是否确认？")
-        if not confirmed:
-            return error_json("用户取消了该操作")
-
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding=encoding) as f:
             f.write(content)
@@ -335,22 +436,12 @@ def edit_file_handler(path: str, old_text: str, new_text: str) -> str:
     """替换文件中的指定文本"""
     try:
         p = Path(path).expanduser().resolve()
-        if not p.exists():
-            return error_json(f"文件不存在: {p}")
-
         content = p.read_text(encoding="utf-8", errors="replace")
         count = content.count(old_text)
         if count == 0:
             return error_json("未找到指定文本")
         if count > 1:
             return error_json(f"文本出现 {count} 次，请提供更多上下文确保唯一性")
-
-        confirmed = _ask_user_confirm(
-            f"将编辑文件：{p}\n替换：{old_text[:80]}...\n为：{new_text[:80]}...\n是否确认？"
-        )
-        if not confirmed:
-            return error_json("用户取消了该操作")
-
         new_content = content.replace(old_text, new_text, 1)
         p.write_text(new_content, encoding="utf-8")
         return json.dumps({"success": True, "path": str(p)}, ensure_ascii=False)
@@ -384,20 +475,18 @@ def list_dir_handler(path: str = ".", show_hidden: bool = False) -> str:
     """列出目录内容"""
     try:
         p = Path(path).expanduser().resolve()
-        if not p.exists():
-            return error_json(f"路径不存在: {p}")
-        if not p.is_dir():
-            return error_json(f"不是目录: {p}")
 
         items = []
         for item in sorted(p.iterdir()):
             if not show_hidden and item.name.startswith("."):
                 continue
-            items.append({
-                "name": item.name,
-                "type": "dir" if item.is_dir() else "file",
-                "size": item.stat().st_size if item.is_file() else None,
-            })
+            items.append(
+                {
+                    "name": item.name,
+                    "type": "dir" if item.is_dir() else "file",
+                    "size": item.stat().st_size if item.is_file() else None,
+                }
+            )
 
         return json.dumps(
             {"success": True, "path": str(p), "items": items, "count": len(items)},
@@ -429,25 +518,6 @@ EXEC_SCHEMA = make_tool_schema(
 def exec_handler(command: str, timeout: int = 30) -> str:
     """执行 shell 命令"""
     try:
-        # 检查是否在白名单中：精确匹配命令前缀，防止 ";", "|", "&", "&&", "||" 注入
-        cmd_lower = command.strip().lower()
-        is_safe = False
-        for safe in EXEC_SAFE_COMMANDS:
-            if cmd_lower == safe:
-                is_safe = True
-                break
-            if cmd_lower.startswith(safe + " "):
-                # 确保前缀之后不包含 shell 元字符（防止 "ls; rm -rf /" 绕过）
-                rest = cmd_lower[len(safe) + 1:]
-                if not any(c in rest for c in (";", "|", "&", "`", "$", "(", ")", "\n", "\r", ">", "<")):
-                    is_safe = True
-                    break
-
-        if not is_safe:
-            confirmed = _ask_user_confirm(f"将执行以下命令：\n\n{command}\n\n是否确认？")
-            if not confirmed:
-                return error_json("用户取消了该操作")
-
         result = subprocess.run(
             command,
             shell=True,
@@ -481,11 +551,31 @@ def exec_handler(command: str, timeout: int = 30) -> str:
 BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
     ToolDefinition(name="web_search", schema=WEB_SEARCH_SCHEMA, handler=web_search_handler),
     ToolDefinition(name="web_fetch", schema=WEB_FETCH_SCHEMA, handler=web_fetch_handler),
-    ToolDefinition(name="read_file", schema=READ_FILE_SCHEMA, handler=read_file_handler),
-    ToolDefinition(name="write_file", schema=WRITE_FILE_SCHEMA, handler=write_file_handler),
-    ToolDefinition(name="edit_file", schema=EDIT_FILE_SCHEMA, handler=edit_file_handler),
-    ToolDefinition(name="list_dir", schema=LIST_DIR_SCHEMA, handler=list_dir_handler),
-    ToolDefinition(name="exec", schema=EXEC_SCHEMA, handler=exec_handler),
+    ToolDefinition(
+        name="read_file",
+        schema=READ_FILE_SCHEMA,
+        handler=read_file_handler,
+        pre_hook=read_file_pre_hook,
+    ),
+    ToolDefinition(
+        name="write_file",
+        schema=WRITE_FILE_SCHEMA,
+        handler=write_file_handler,
+        pre_hook=write_file_pre_hook,
+    ),
+    ToolDefinition(
+        name="edit_file",
+        schema=EDIT_FILE_SCHEMA,
+        handler=edit_file_handler,
+        pre_hook=edit_file_pre_hook,
+    ),
+    ToolDefinition(
+        name="list_dir",
+        schema=LIST_DIR_SCHEMA,
+        handler=list_dir_handler,
+        pre_hook=list_dir_pre_hook,
+    ),
+    ToolDefinition(name="exec", schema=EXEC_SCHEMA, handler=exec_handler, pre_hook=exec_pre_hook),
 ]
 
 __all__ = [

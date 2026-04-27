@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-04-25
-**Revision**: 2026-04-26 — Merged `specs/003-fix-agentloop-tool-calls`
+**Last Updated**: 2026-04-27
+**Revision**: 2026-04-27 — Merged `specs/002-tool-hook-system`
 
 ---
 
@@ -35,6 +35,18 @@ Agent 沿用 describe_data → query_data → read_field_chunk 工作流。descr
 ### US-007: 会话恢复不重复或遗漏工具 (Priority: P2)
 
 Agent 中断或重启后，系统恢复时识别同轮模型响应中哪些工具调用已有结果、哪些仍缺结果，只补齐缺失结果且不重复已完成调用。 [Source: specs/003-fix-agentloop-tool-calls]
+
+### US-008: 工具执行管线支持统一 Pre/Post Hook (Priority: P1)
+
+Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefinition` 工具前后挂载同步 pre/post hook；没有声明 hook 的工具保持透明兼容。 [Source: specs/002-tool-hook-system]
+
+### US-009: 门卫式安全校验迁移到 pre_hook (Priority: P2)
+
+`builtin_general_tools`、`recording_data_tools`、`trial_tools` 中可复用的拒绝、确认、安全策略和限流 gate 统一迁移到 pre_hook；handler 保留执行准备与结果转换。 [Source: specs/002-tool-hook-system]
+
+### US-010: AgentConfig 级全局 Hook (Priority: P3)
+
+当前 `AgentConfig` 可以挂载 `global_pre_hooks` / `global_post_hooks`，对该配置实例下所有参与 hook 管线的 `ToolDefinition` 工具生效。 [Source: specs/002-tool-hook-system]
 
 ---
 
@@ -80,6 +92,23 @@ Agent 中断或重启后，系统恢复时识别同轮模型响应中哪些工�
 - **FR-031**: `not_executed` 与 `invalid_model_output` 配对结果的 content 必须采用标准化错误结构：顶层 JSON 对象，含稳定 `error` 字段与 `message`，可附加 `upstream_tool_call_id`、`code` 等诊断字段
 - **FR-032**: 系统必须强制 `ToolDefinition.is_interrupting` 与 handler 实际返回类型一致：`is_interrupting=True` 必须 `ToolSignal`，`is_interrupting=False` 必须 `str`。不一致按 FR-021 失败语义处理（`handler_contract_violation`）
 
+### Agent 工具执行 Hook 系统 [Source: specs/002-tool-hook-system]
+
+- **FR-033**: `ToolDefinition` 必须支持可选 `pre_hook` / `post_hook` 字段；`AgentConfig` 必须支持实例级 `global_pre_hooks` / `global_post_hooks`，默认均为空。
+- **FR-034**: pre_hook 可通过 `PreHookResult(error=...)` 拒绝本次工具调用；被拒绝时 handler 与全部 post_hook 不执行，LLM 收到标准化 `pre_hook_rejected` 工具错误，普通批次后续工具触发 `not_executed` 级联。
+- **FR-035**: pre_hook 不得修改 handler 入参；`ToolCallContext.args` 是 LLM 原始入参的递归只读隔离视图，顶层或嵌套写入必须抛异常且不得影响 handler 实际参数。
+- **FR-036**: post_hook 只可改写普通字符串工具结果；所有 post_hook 都接收 handler 原始字符串结果或 handler 异常转换后的 error 字符串，链不流水线，最后一个非空 `PostHookResult.result` 生效。
+- **FR-037**: hook 执行顺序为工具级 pre_hook -> 当前 `AgentConfig` global pre_hooks -> handler -> 工具级 post_hook -> 当前 `AgentConfig` global post_hooks；任意 pre_hook 返回 error 即短路后续步骤。
+- **FR-038**: hook 未捕获异常必须记录 WARNING 级或更高日志且不污染工具结果；pre_hook 异常停止剩余 pre_hook、执行 handler 并跳过全部 post_hook；post_hook 异常停止剩余 post_hook 并返回 handler 原始结果。
+- **FR-039**: 普通 handler 未捕获异常必须转换为标准化 error 字符串；若没有发生 pre_hook 异常短路，该 error 字符串仍进入 post_hook 链，批处理失败级联依据原始失败状态而非 post_hook 改写文本。
+- **FR-040**: 合法 `ToolSignal` 不进入 post_hook 并原样上抛 AgentLoop；普通工具返回 `ToolSignal` 或中断型工具返回 `str` 均视为 handler 契约违规并按标准化错误处理。
+- **FR-041**: callable 动态工具路径必须每轮刷新 handler、hook 与 `is_interrupting` 元数据；AgentLoop 注入的 `talk_to_user` / `load_reference` 不进入工具级或 global hook 管线。
+- **FR-042**: `read_file`、`write_file`、`edit_file`、`list_dir`、`exec` 的路径存在性/类型、系统目录拒绝、命令安全判断和用户确认 gate 必须位于对应 pre_hook；确认请求失败必须 fail-closed 返回拒绝。`edit_file` 的 `old_text` 查找与唯一性校验保留在 handler。
+- **FR-043**: `query_data` SQL 安全策略与 `analyze_image` 单次最多 5 个 `action_index` gate 必须位于 pre_hook；`query_data` pre_hook 复用既有 `rewrite(sql)` / 过滤策略，不新增 raw-text 注释或字符串分号禁用规则。
+- **FR-044**: `trial_tools.run_command` 的 5 次调用上限必须由单次 `AgentLoop.run()` 范围内的闭包计数器 pre_hook 实现，不跨 run、session 或进程持久化。
+- **FR-045**: `programmer_tools.syntax_check`、`recording_data_tools.execute_code` 沙箱、`tool_executor` venv 隔离/命令白名单、`dynamic_tool_manager` 发布状态与允许列表不得迁移到 hook。
+- **FR-046**: hook 系统必须保留 AgentLoop 003 多工具批处理语义：执行前分类、混合中断批次不执行 hook/handler、普通批次失败级联 `not_executed`、合法单中断成功 `ToolSignal` 直接返回既有 AgentResult。
+
 ---
 
 ## Key Entities
@@ -117,6 +146,21 @@ AgentLoop 发出的配对错误结果通用格式：顶层 JSON 含 `error`（�
 ### ToolDefinition.is_interrupting [Source: specs/003-fix-agentloop-tool-calls]
 `bool` 字段，标记工具是否为中断型。`True` → handler 必须返回 `ToolSignal`；`False` → handler 必须返回 `str`。运行时校验不一致则触发 `handler_contract_violation`。
 
+### ToolCallContext [Source: specs/002-tool-hook-system]
+单次工具调用只读上下文。字段：`tool_name`、`args`、`session_id`、`agent_type`、`iteration`。不包含 `result` 字段、不包含用户确认回调；`args` 是递归只读隔离视图。
+
+### PreHookResult [Source: specs/002-tool-hook-system]
+pre_hook 返回值。字段：`error: str | None = None`。`error` 有值时拒绝本次工具调用；不包含 `args` 字段，不支持参数 merge、替换或删除。
+
+### PostHookResult [Source: specs/002-tool-hook-system]
+post_hook 返回值。字段：`result: str | None = None`。只用于替换普通字符串工具结果；`ToolSignal` 不进入 post_hook。
+
+### ToolDefinition hook fields [Source: specs/002-tool-hook-system]
+`ToolDefinition` 在 `name`、`schema`、`handler`、`is_interrupting` 基础上新增 `pre_hook` / `post_hook`，默认 None。没有 hook 的工具行为保持透明。
+
+### AgentConfig global hooks [Source: specs/002-tool-hook-system]
+`AgentConfig.global_pre_hooks` / `global_post_hooks` 是当前配置实例范围内的列表，不跨 AgentConfig 共享，也不作用于 `talk_to_user` / `load_reference`。
+
 ---
 
 ## Constraints & Compatibility
@@ -139,7 +183,14 @@ AgentLoop 发出的配对错误结果通用格式：顶层 JSON 含 `error`（�
 - **CC-012**: 修复不得改变工具 handler 的业务返回协议；普通字符串结果和中断型结果仍按既有语义处理
 - **CC-013**: 修复不得让已完成工具在恢复时重复执行
 
-[Source: specs/001-recording-field-layering]
+[Sources: specs/001-recording-field-layering, specs/003-fix-agentloop-tool-calls]
+
+### Agent 工具执行 Hook 约束 [Source: specs/002-tool-hook-system]
+
+- **CC-014**: 本系统不引入第三方依赖、持久化表、运行时配置、密钥或 UI。
+- **CC-015**: hook 协议保持同步契约，不把现有同步 handler 改造成异步。
+- **CC-016**: pre_hook 不做参数流水线，post_hook 不做结果流水线；不得重新引入 `PreHookResult.args`、`ToolCallContext.result` 或确认回调字段。
+- **CC-017**: 被迁移的 gate 判断必须从 handler 中删除，不保留作为备用路径；执行必需的解析、规范化、查询准备和结果转换可保留。
 
 ---
 
@@ -163,7 +214,18 @@ AgentLoop 发出的配对错误结果通用格式：顶层 JSON 含 `error`（�
 - **SC-013**: 恢复时 handler 缺失：该调用得到 error 结果，后续得到 not_executed 结果
 - **SC-014**: 现有单工具工作流无可见回归
 
-[Source: specs/001-recording-field-layering]
+[Sources: specs/001-recording-field-layering, specs/003-fix-agentloop-tool-calls]
+
+### Agent 工具执行 Hook 验收标准 [Source: specs/002-tool-hook-system]
+
+- **SC-015**: 现有 Agent 与工具相关单元/集成测试零修改通过。
+- **SC-016**: 空操作 hook 全链路（工具 pre + 1 个 global pre + 工具 post + 1 个 global post）相对无 hook 单次调用额外开销不超过 5 ms。
+- **SC-017**: 迁移 gate 覆盖 `write_file` 系统目录、`exec` 元字符/非白名单、`query_data` 多语句/非查询/隐藏或系统表、`run_command` 第 6 次、`analyze_image` 6 个 action_index，同时保留 query_data harmless 注释和字符串内分号允许路径。
+- **SC-018**: handler 函数体不再出现已迁移的拒绝/确认/限流/安全策略判断；静态 guard 固定非迁移边界。
+- **SC-019**: 新增全局 pre_hook 的挂载成本不超过 30 行，且不需要修改任何工具 handler 或 AgentLoop 引擎本体。
+- **SC-020**: callable 动态工具同名替换 hook 或 `is_interrupting` 后，下一轮工具调用使用最新定义。
+- **SC-021**: 协议测试覆盖 `ToolCallContext.args` 顶层和嵌套只读隔离，误写不会影响 handler 入参且本次 post_hook 被跳过。
+- **SC-022**: 多工具批处理语义保持 003 行为：hook 拒绝/handler 失败级联 `not_executed`，混合中断批次不执行 hook/handler，合法单中断 `ToolSignal` 直接返回既有 AgentResult。
 
 ---
 
@@ -197,3 +259,14 @@ AgentLoop 发出的配对错误结果通用格式：顶层 JSON 含 `error`（�
 - Solo 中断型工具 handler 抛异常时不触发暂停/完成语义；按 FR-021 失败语义处理
 - 会话恢复仅检查最近一条 assistant 消息中的未配对调用（crash 只发生在执行中途）
 - 动态工具列表恢复前变化导致待恢复工具不存在时，按工具失败语义补齐
+
+### Agent 工具执行 Hook [Source: specs/002-tool-hook-system]
+
+- pre_hook 返回 error：handler 与全部 post_hook 均不执行，结果为标准化 `pre_hook_rejected`
+- pre_hook 写入 `ToolCallContext.args` 顶层或嵌套容器：抛出 hook 异常，handler 使用原始入参，本次 post_hook 跳过
+- pre_hook 抛异常：停止剩余 pre_hook，执行 handler，跳过全部 post_hook
+- post_hook 抛异常：停止剩余 post_hook，返回 handler 原始结果，丢弃前序 post_hook 的部分改写
+- 确认类 pre_hook 的确认请求失败：fail-closed，返回拒绝而不是让 AgentLoop 通用 pre_hook 异常策略放行 handler
+- handler 抛异常：转换为标准化 error 字符串并进入 post_hook，批处理失败级联仍按原始异常状态判定
+- 合法 `ToolSignal`：跳过 post_hook；普通工具返回 `ToolSignal` 或中断工具返回字符串均为 handler 契约违规
+- `talk_to_user` / `load_reference`：作为 AgentLoop 注入工具参与既有批处理控制，但不进入 hook 管线

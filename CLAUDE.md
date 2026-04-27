@@ -40,8 +40,10 @@
 - `AgentLoop.run()` 支持**多工具批次处理**：同一轮 LLM 响应的多个 tool_calls 按顺序执行并逐一保存结果；普通工具失败时停止后续真实执行并写入 `not_executed` 级联
 - 中断型工具通过 `ToolDefinition.is_interrupting: bool` 声明式分类；与任何其他工具同轮出现时判定为 `invalid_model_output`，不执行任何 handler
 - `is_interrupting` 与 handler 返回类型必须强一致（`True` → `ToolSignal`，`False` → `str`）；运行时不一致写入 `handler_contract_violation`
+- 工具执行 Hook 系统：`ToolDefinition` 支持 `pre_hook`/`post_hook`；`AgentConfig` 支持 `global_pre_hooks`/`global_post_hooks`；hook 模型定义在 `hook_models.py`；`load_reference`/`talk_to_user` 不进入 hook 管线
+- pre_hook 只做放行/拒绝/观测；post_hook 不形成流水线，每个 hook 看到同一个原始 handler 结果；详见 `docs/PROJECT_CONSTRAINTS.md` 和 `docs/ARCHITECTURE.md`
 - 会话恢复走 `get_pending_tool_calls()`，只补齐最近 assistant 消息中未配对的调用，按原始顺序
-- AgentLoop 发出的配对错误统一为标准化 JSON 结构：`{"error": "<code>", "message": "...", ...}`，错误码：`unknown_tool` / `handler_exception` / `handler_contract_violation` / `not_executed` / `invalid_model_output`
+- AgentLoop 发出的配对错误统一为标准化 JSON 结构：`{"error": "<code>", "message": "...", ...}`，错误码：`unknown_tool` / `handler_exception` / `handler_contract_violation` / `not_executed` / `invalid_model_output` / `pre_hook_rejected`
 
 ---
 

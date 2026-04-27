@@ -63,6 +63,7 @@
 - `docs/local/`：临时分析、计划、草稿
 
 <!-- SPECKIT START -->
-For additional context about technologies to be used, project structure,
-shell commands, and other important information, read `specs/003-fix-agentloop-tool-calls/plan.md`
+For the active `002-tool-hook-system` feature, read
+`specs/002-tool-hook-system/plan.md` for implementation context, project
+structure, validation commands, and generated design artifacts.
 <!-- SPECKIT END -->

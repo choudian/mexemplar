@@ -1,0 +1,37 @@
+# Exemplar Project Constraints
+
+本文件记录开发约束、反模式和允许例外。长期治理原则仍以 `.specify/memory/constitution.md` 为准。
+
+## Agent Tool Hook Boundaries
+
+- pre_hook 只允许放行、拒绝和观测，不允许改写 handler 入参。
+- `ToolCallContext.args` 必须是递归只读隔离视图；顶层和嵌套 dict/list 写入都应抛异常，handler 入参不受影响。
+- `PreHookResult` 只表达拒绝结果，不携带替换参数。
+- post_hook 不通过 `ToolCallContext` 获取结果；它只能通过第二个 `result` 参数读取 handler 原始字符串结果或普通 handler 异常转换出的标准化错误字符串。
+- post_hook 不形成结果流水线；每个 post_hook 看到同一个原始结果，最后一个返回非空 `PostHookResult.result` 的 hook 决定最终文本。
+- `ToolSignal` 是 AgentLoop 控制信号，合法中断型工具返回该信号时跳过 post_hook。
+
+## Migrated Gate Ownership
+
+- `builtin_general_tools.read_file`、`write_file`、`edit_file`、`list_dir`、`exec` 的路径存在性、系统目录拒绝、命令安全分类和用户确认属于 pre_hook。
+- `edit_file` 的 `old_text` 查找与唯一性校验属于编辑执行准备，留在 handler。
+- `recording_data_tools.query_data` 的 SQL 拒绝策略属于 pre_hook，但 handler 仍可再次调用 `rewrite(sql)` 生成实际执行 SQL。
+- `recording_data_tools.analyze_image` 的单次最多 5 个 action_index 限制属于 pre_hook。
+- `trial_tools.run_command` 的单次 `AgentLoop.run()` 调用上限属于 `create_trial_tools()` 内创建的 pre_hook 闭包。
+
+## Non-Migrated Boundaries
+
+- `programmer_tools.syntax_check` 整个 handler 即校验本身，不迁移到 hook。
+- `recording_data_tools.execute_code` 的受限 builtins、import 控制和超时属于执行内核，不迁移到 hook。
+- `src/execution/tool_executor.py` 的 venv 隔离和命令白名单位于 handler 层之下，不迁移到 hook。
+- `dynamic_tool_manager` 的发布状态、允许列表、技能发现和技能组合激活属于工具发现阶段，不迁移到 hook。
+
+## Review Guardrails
+
+Reviewer 必须拒绝下列改动：
+
+- 在 pre_hook 中加入参数改写或参数流水线语义。
+- 在 `ToolCallContext` 中加入确认回调、结果字段或可写参数引用。
+- 在 handler 中保留已经迁移到 pre_hook 的拒绝、确认、限流或安全策略分支。
+- 让 AgentLoop 内建注入的 `load_reference` 或 `talk_to_user` 进入 tool/global hook 链。
+- 绕过 `src/recording/filtering/` 的 SQL 改写或 DuckDB 代理边界读取录制网络数据。

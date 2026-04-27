@@ -50,3 +50,27 @@
 - `src/business/memory/context_manager.py` — `get_pending_tool_calls()` 多工具恢复
 
 **Tasks Completed:** 34/34 tasks
+
+## 工具执行 Pre/Post Hook 系统 — 2026-04-27
+
+**Branch:** `002-tool-hook-system`
+**Spec:** `specs/002-tool-hook-system`
+
+**What was added:**
+- US-008 (P1): `ToolDefinition` 支持工具级 pre/post hook，未声明 hook 的工具保持透明行为
+- US-009 (P2): `builtin_general_tools`、`recording_data_tools`、`trial_tools` 的门卫式 gate 迁移到 pre_hook
+- US-010 (P3): `AgentConfig` 支持实例级 global pre/post hooks，按固定顺序作用于 `ToolDefinition` 工具
+
+**New Components:**
+- `src/business/agents/hook_models.py` — hook 协议 dataclass/type alias 与递归 args freezing helper
+- `tests/test_hook_protocol.py` — hook 协议、迁移 gate、global hook、动态工具和性能烟测覆盖
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` — hook-aware per-call execution、hook 异常处理、post_hook rewrite、可靠失败状态
+- `src/business/agents/config.py` — `ToolDefinition.pre_hook/post_hook` 与 `AgentConfig.global_pre_hooks/global_post_hooks`
+- `src/business/agents/tools/builtin_general_tools.py` — read/write/edit/list/exec pre_hooks；确认请求失败 fail-closed
+- `src/business/agents/tools/recording_data_tools.py` — query_data/analyze_image gate pre_hooks
+- `src/business/agents/tools/trial_tools.py` — run_command per-run pre_hook 限流
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` — hook 运行结构与边界文档
+
+**Tasks Completed:** 34/37 tasks

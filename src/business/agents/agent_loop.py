@@ -17,9 +17,12 @@ from src.utils.helpers import safe_format_template
 
 from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
+from .hook_models import ToolCallContext, ToolExecutionOutcome, freeze_tool_args
 from .tool_helpers import is_standardized_error, make_error_result
 
 logger = logging.getLogger(__name__)
+
+_INJECTED_TOOL_NAMES = frozenset({"load_reference", "talk_to_user"})
 
 
 def classify_tool_calls(
@@ -200,26 +203,170 @@ class AgentLoop:
     def _execute_tool_call(
         self,
         tool_call: ToolCallInfo,
-        tool_handlers: Dict[str, Callable],
-    ) -> Union[str, ToolSignal]:
+        tool_def: ToolDefinition,
+        session_id: str,
+        iteration: int,
+    ) -> ToolExecutionOutcome:
         """
-        执行单个工具调用
+        Execute one ToolDefinition call with tool/global hook semantics.
 
-        查找工具 handler 并执行，处理未知工具。
-        不处理 ToolSignal 判断 -- 由 _handle_tool_result 负责。
-
-        Args:
-            tool_call: 工具调用信息
-            tool_handlers: 工具名称到 handler 的映射
-
-        Returns:
-            工具执行结果（str 或 ToolSignal）
+        The returned failure flag reflects the original execution outcome and is
+        intentionally independent from any post-hook rewrite.
         """
-        handler = tool_handlers.get(tool_call.name)
-        if handler is None:
-            return f"错误：未知工具 '{tool_call.name}'"
+        run_hooks = self._has_hooks(tool_def)
+        context = None
+        skip_post_hooks = False
 
-        return handler(**tool_call.args)
+        if run_hooks:
+            context = self._build_tool_context(tool_call, session_id, iteration)
+            rejected, pre_hook_exc = self._run_pre_hooks(tool_def, context)
+            if rejected is not None:
+                return rejected
+            skip_post_hooks = pre_hook_exc
+
+        handler_result: Union[str, ToolSignal]
+        failed = False
+        failure_code: str | None = None
+
+        try:
+            handler_result = tool_def.handler(**tool_call.args)
+        except Exception as exc:
+            failure_code = "handler_exception"
+            failed = True
+            message = f"工具 '{tool_call.name}' 执行异常: {exc}"
+            logger.warning("[Agent Loop] 工具执行异常: %s -> %s", tool_call.name, exc)
+            handler_result = make_error_result(failure_code, message)
+
+        if isinstance(handler_result, ToolSignal):
+            if tool_def.is_interrupting:
+                return ToolExecutionOutcome(handler_result, failed=False)
+            return ToolExecutionOutcome(
+                make_error_result(
+                    "handler_contract_violation",
+                    f"工具 '{tool_call.name}' 声明为普通工具但返回了 ToolSignal。",
+                ),
+                failed=True,
+                failure_code="handler_contract_violation",
+            )
+
+        if tool_def.is_interrupting and failed:
+            return ToolExecutionOutcome(
+                handler_result,
+                failed=True,
+                failure_code=failure_code,
+            )
+
+        if tool_def.is_interrupting:
+            return ToolExecutionOutcome(
+                make_error_result(
+                    "handler_contract_violation",
+                    f"中断型工具 '{tool_call.name}' 返回了 str 而非 ToolSignal。",
+                ),
+                failed=True,
+                failure_code="handler_contract_violation",
+            )
+
+        if not isinstance(handler_result, str):
+            return ToolExecutionOutcome(
+                make_error_result(
+                    "handler_contract_violation",
+                    f"工具 '{tool_call.name}' handler 返回了不支持的结果类型。",
+                ),
+                failed=True,
+                failure_code="handler_contract_violation",
+            )
+
+        if is_standardized_error(handler_result):
+            failed = True
+            failure_code = failure_code or "standardized_error"
+
+        final_result = handler_result
+        if run_hooks and not skip_post_hooks and context is not None:
+            final_result = self._run_post_hooks(tool_def, context, handler_result)
+
+        return ToolExecutionOutcome(final_result, failed=failed, failure_code=failure_code)
+
+    def _build_tool_context(
+        self,
+        tool_call: ToolCallInfo,
+        session_id: str,
+        iteration: int,
+    ) -> ToolCallContext:
+        return ToolCallContext(
+            tool_name=tool_call.name,
+            args=freeze_tool_args(tool_call.args),
+            session_id=session_id,
+            agent_type=self._config.agent_type,
+            iteration=iteration,
+        )
+
+    def _has_hooks(self, tool_def: ToolDefinition) -> bool:
+        if tool_def.name in _INJECTED_TOOL_NAMES:
+            return False
+        return (
+            tool_def.pre_hook is not None
+            or tool_def.post_hook is not None
+            or bool(self._config.global_pre_hooks)
+            or bool(self._config.global_post_hooks)
+        )
+
+    def _run_pre_hooks(
+        self,
+        tool_def: ToolDefinition,
+        context: ToolCallContext,
+    ) -> tuple[ToolExecutionOutcome | None, bool]:
+        hooks = []
+        if tool_def.pre_hook is not None:
+            hooks.append(("tool pre_hook", tool_def.pre_hook))
+        hooks.extend(("global pre_hook", hook) for hook in self._config.global_pre_hooks)
+
+        for label, hook in hooks:
+            try:
+                result = hook(context)
+            except Exception as exc:
+                logger.warning(
+                    "[Agent Loop] %s 异常: %s -> %s",
+                    label,
+                    context.tool_name,
+                    exc,
+                    exc_info=True,
+                )
+                return None, True
+            if result is not None and result.error is not None:
+                return ToolExecutionOutcome(
+                    make_error_result("pre_hook_rejected", result.error),
+                    failed=True,
+                    failure_code="pre_hook_rejected",
+                ), False
+        return None, False
+
+    def _run_post_hooks(
+        self,
+        tool_def: ToolDefinition,
+        context: ToolCallContext,
+        handler_result: str,
+    ) -> str:
+        final_result = handler_result
+        hooks = []
+        if tool_def.post_hook is not None:
+            hooks.append(("tool post_hook", tool_def.post_hook))
+        hooks.extend(("global post_hook", hook) for hook in self._config.global_post_hooks)
+
+        for label, hook in hooks:
+            try:
+                result = hook(context, handler_result)
+            except Exception as exc:
+                logger.warning(
+                    "[Agent Loop] %s 异常: %s -> %s",
+                    label,
+                    context.tool_name,
+                    exc,
+                    exc_info=True,
+                )
+                return handler_result
+            if result is not None and result.result is not None:
+                final_result = result.result
+        return final_result
 
     def _handle_tool_result(
         self,
@@ -285,8 +432,9 @@ class AgentLoop:
     def _execute_tool_batch(
         self,
         tool_calls: List,
-        tool_handlers: Dict[str, Callable],
         ctx: ContextManager,
+        session_id: str,
+        iteration: int,
     ) -> Optional[AgentResult]:
         """
         Execute a batch of tool calls with multi-tool semantics.
@@ -315,22 +463,30 @@ class AgentLoop:
                 f"{interrupting_count} 个中断型，拒绝执行"
             )
             for tc, _, _ in classified:
-                self._save_error(tc, ctx, "invalid_model_output",
-                                 "同轮响应包含中断型工具与其他工具调用，不执行任何工具。请重新输出合法工具调用。")
+                self._save_error(
+                    tc,
+                    ctx,
+                    "invalid_model_output",
+                    "同轮响应包含中断型工具与其他工具调用，不执行任何工具。请重新输出合法工具调用。",
+                )
             return None
 
         # Solo interrupting tool
         if batch_size == 1 and interrupting_count == 1:
-            tc, _, _ = classified[0]
-            return self._execute_solo_interrupt(tc, tool_handlers, ctx)
+            tc, _, tool_def = classified[0]
+            return self._execute_solo_interrupt(tc, tool_def, ctx, session_id, iteration)
 
         # Ordinary batch (all ordinary or unknown)
         first_failure = None
-        for i, (tc, kind, _) in enumerate(classified):
+        for i, (tc, kind, tool_def) in enumerate(classified):
             if first_failure is not None:
-                self._save_error(tc, ctx, "not_executed",
-                                 "前序工具失败，跳过执行。请基于已有结果重新规划。",
-                                 upstream_tool_call_id=classified[i - 1][0].id if i > 0 else None)
+                self._save_error(
+                    tc,
+                    ctx,
+                    "not_executed",
+                    "前序工具失败，跳过执行。请基于已有结果重新规划。",
+                    upstream_tool_call_id=classified[i - 1][0].id if i > 0 else None,
+                )
                 continue
 
             # Unknown tool
@@ -339,25 +495,12 @@ class AgentLoop:
                 first_failure = i + 1
                 continue
 
-            # Execute ordinary tool
-            try:
-                result = self._execute_tool_call(tc, tool_handlers)
-            except Exception as e:
-                self._save_error(tc, ctx, "handler_exception", f"工具 '{tc.name}' 执行异常: {e}")
-                logger.warning(f"[Agent Loop] 工具执行异常: {tc.name} -> {e}")
-                first_failure = i + 1
-                continue
-
-            # Contract validation: any ToolSignal in ordinary batch is a violation
-            if isinstance(result, ToolSignal):
-                self._save_error(tc, ctx, "handler_contract_violation",
-                                 f"工具 '{tc.name}' 声明为普通工具但返回了 ToolSignal。")
-                first_failure = i + 1
-                continue
+            outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
+            result = outcome.result
 
             # Persist result (standardized error or success)
             ctx.save_tool_result(tool_call_id=tc.id, tool_name=tc.name, content=result)
-            if is_standardized_error(result):
+            if outcome.failed:
                 first_failure = i + 1
             else:
                 logger.debug(f"[Agent Loop] 工具结果: {tc.name} -> {str(result)[:100]}")
@@ -369,7 +512,9 @@ class AgentLoop:
 
         return None
 
-    def _save_error(self, tc: ToolCallInfo, ctx: ContextManager, error_code: str, message: str, **extra):
+    def _save_error(
+        self, tc: ToolCallInfo, ctx: ContextManager, error_code: str, message: str, **extra
+    ):
         """Save a standardized error result for a tool call."""
         ctx.save_tool_result(
             tool_call_id=tc.id,
@@ -379,26 +524,24 @@ class AgentLoop:
 
     def _execute_solo_interrupt(
         self,
-        tc,
-        tool_handlers: Dict[str, Callable],
+        tc: ToolCallInfo,
+        tool_def: ToolDefinition,
         ctx: ContextManager,
+        session_id: str,
+        iteration: int,
     ) -> Optional[AgentResult]:
         """Execute a solo interrupting tool with contract validation."""
-        try:
-            result = self._execute_tool_call(tc, tool_handlers)
-        except Exception as e:
-            self._save_error(tc, ctx, "handler_exception", f"中断型工具 '{tc.name}' 执行异常: {e}")
-            logger.warning(f"[Agent Loop] 中断型工具异常: {tc.name} -> {e}")
-            return None
-
-        # Contract validation: is_interrupting=True must return ToolSignal
-        if not isinstance(result, ToolSignal):
-            self._save_error(tc, ctx, "handler_contract_violation",
-                             f"中断型工具 '{tc.name}' 返回了 str 而非 ToolSignal。")
+        outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
+        if not isinstance(outcome.result, ToolSignal):
+            ctx.save_tool_result(
+                tool_call_id=tc.id,
+                tool_name=tc.name,
+                content=outcome.result,
+            )
             return None
 
         # Valid interrupt: use existing _handle_tool_result path
-        return self._handle_tool_result(result, tc, ctx)
+        return self._handle_tool_result(outcome.result, tc, ctx)
 
     def _process_llm_response(
         self,
@@ -568,12 +711,13 @@ class AgentLoop:
         if init_result is not None:
             return init_result
 
-        # 构建工具 schemas 和 handlers 的辅助函数
-        def _rebuild_tools(tool_defs: List[ToolDefinition], ctx: ContextManager):
-            nonlocal all_tool_schemas, tool_handlers
-            # Build unified tool definitions (single source of truth)
-            self._current_tool_defs = {td.name: td for td in tool_defs}
-            self._current_tool_defs["load_reference"] = ToolDefinition(
+        # 构建工具 schemas 和执行定义的辅助函数
+        def _build_tool_registry(
+            tool_defs: List[ToolDefinition],
+            ctx: ContextManager,
+        ) -> Dict[str, ToolDefinition]:
+            registry = {td.name: td for td in tool_defs}
+            registry["load_reference"] = ToolDefinition(
                 name="load_reference",
                 schema=LOAD_REFERENCE_SCHEMA,
                 handler=lambda reference_id: ctx.load_reference(reference_id),
@@ -582,14 +726,20 @@ class AgentLoop:
             # text_as_user_input=True 时，LLM 直接输出文本即可与用户对话，
             # 不需要 talk_to_user 工具（避免 LLM 在该调 submit 时误调 talk_to_user）
             if not self._config.text_as_user_input:
-                self._current_tool_defs["talk_to_user"] = ToolDefinition(
+                registry["talk_to_user"] = ToolDefinition(
                     name="talk_to_user",
                     schema=TALK_TO_USER_SCHEMA,
                     handler=talk_to_user,
                     is_interrupting=True,
                 )
-            # Derive handlers and schemas from unified definitions
-            tool_handlers = {name: td.handler for name, td in self._current_tool_defs.items()}
+            return registry
+
+        def _refresh_tool_defs(tool_defs: List[ToolDefinition], ctx: ContextManager):
+            self._current_tool_defs = _build_tool_registry(tool_defs, ctx)
+
+        def _rebuild_tools(tool_defs: List[ToolDefinition], ctx: ContextManager):
+            nonlocal all_tool_schemas
+            _refresh_tool_defs(tool_defs, ctx)
             all_tool_schemas = [td.schema for td in tool_defs] + [
                 self._current_tool_defs[k].schema
                 for k in ("load_reference", "talk_to_user")
@@ -598,7 +748,6 @@ class AgentLoop:
 
         _tools_callable = callable(tools)
         all_tool_schemas: list = []
-        tool_handlers: Dict[str, Callable] = {}
         _last_tool_names: Optional[frozenset] = None
         if not _tools_callable:
             _rebuild_tools(tools or [], ctx)
@@ -622,6 +771,8 @@ class AgentLoop:
                 if new_names != _last_tool_names:
                     _rebuild_tools(new_tools, ctx)
                     _last_tool_names = new_names
+                else:
+                    _refresh_tool_defs(new_tools, ctx)
 
             if _pending_tcs:
                 # 恢复：将所有待重试的工具调用作为单个批次处理
@@ -629,7 +780,7 @@ class AgentLoop:
                     self._resolve_pending_tool_call(tc_dict) for tc_dict in _pending_tcs
                 ]
                 _pending_tcs = None
-                signal = self._execute_tool_batch(tool_call_list, tool_handlers, ctx)
+                signal = self._execute_tool_batch(tool_call_list, ctx, session_id, iteration)
                 if signal is not None:
                     return signal
                 continue
@@ -649,7 +800,7 @@ class AgentLoop:
                 tool_call_list = llm_outcome
 
             # 多工具调用：执行列表中的所有工具调用
-            signal = self._execute_tool_batch(tool_call_list, tool_handlers, ctx)
+            signal = self._execute_tool_batch(tool_call_list, ctx, session_id, iteration)
             if signal is not None:
                 return signal
 

@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-04-25
-**Revision**: 2026-04-26 — Merged `specs/003-fix-agentloop-tool-calls`
+**Last Updated**: 2026-04-27
+**Revision**: 2026-04-27 — Merged `specs/002-tool-hook-system`
 
 ---
 
@@ -23,14 +23,15 @@
 src/
 ├── business/
 │   └── agents/
-│       ├── config.py                       # ToolDefinition (含 is_interrupting: bool)
-│       ├── agent_loop.py                   # 多工具批次处理、失败级联、中断校验、契约校验
+│       ├── config.py                       # ToolDefinition (含 is_interrupting/pre_hook/post_hook) 与 AgentConfig global hooks
+│       ├── agent_loop.py                   # 多工具批次处理、hook 执行、失败级联、中断校验、契约校验
+│       ├── hook_models.py                  # ToolCallContext / PreHookResult / PostHookResult / args freezing
 │       ├── tools/
 │       │   ├── recording_data_tools.py     # 5 工具: describe_data, query_data, execute_code, read_recording, read_field_chunk
 │       │   ├── pm_output_tools.py          # PM 中断型工具 (talk_to_user 等)
 │       │   ├── programmer_tools.py         # 程序员工具
-│       │   ├── trial_tools.py              # 试用工具
-│       │   └── builtin_general_tools.py
+│       │   ├── trial_tools.py              # 试用工具；run_command per-run pre_hook 限流
+│       │   └── builtin_general_tools.py    # read/write/edit/list/exec pre_hooks
 │       └── prompts/
 │           ├── pm_prompt.py                # 5 工具工作流
 │           └── programmer_prompt.py        # 5 工具工作流
@@ -48,6 +49,7 @@ src/
     └── unified_config.py                   # get_recording_large_field_config()
 
 tests/
+├── test_hook_protocol.py                    # hook 协议、迁移 gate、global hook、动态工具、性能烟测
 ├── integration/
 │   └── test_agent_loop_multi_tool_calls.py  # 多工具批次、中断型、恢复、契约校验 14 场景
 ├── recording/
@@ -60,7 +62,7 @@ tests/
 │       └── test_recording_tools_no_sqlglot.py      # guard test: recording_data_tools 不 import sqlglot
 ```
 
-[Source: specs/001-recording-field-layering]
+[Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls]
 
 ---
 
@@ -146,7 +148,36 @@ AgentLoop 在收到 LLM 响应后，按以下流程处理 tool_calls：
 ### 标准化错误结构
 
 AgentLoop 发出的配对错误统一为顶层 JSON：`{"error": "<code>", "message": "...", ...}`
-错误码枚举：`unknown_tool`、`handler_exception`、`handler_contract_violation`、`not_executed`、`invalid_model_output`
+错误码枚举：`unknown_tool`、`handler_exception`、`handler_contract_violation`、`not_executed`、`invalid_model_output`、`pre_hook_rejected`
+
+### Agent 工具执行 Hook 管线 [Source: specs/002-tool-hook-system]
+
+Hook 执行发生在 AgentLoop 批处理分类之后、实际 handler 执行之前/之后。参与对象仅限调用方传入或动态构建的 `ToolDefinition`；AgentLoop 注入的 `talk_to_user` / `load_reference` 不进入 hook 管线。
+
+顺序：
+
+1. 工具级 `pre_hook`
+2. 当前 `AgentConfig.global_pre_hooks`（列表顺序）
+3. handler
+4. 工具级 `post_hook`
+5. 当前 `AgentConfig.global_post_hooks`（列表顺序）
+
+关键运行规则：
+
+- `ToolCallContext.args` 使用递归只读隔离视图；pre_hook 不能改写 handler 入参。
+- pre_hook 返回 `PreHookResult(error=...)` 时写入 `pre_hook_rejected` 并跳过 handler/post_hook。
+- pre_hook 抛异常时记录 WARNING、停止剩余 pre_hook、执行 handler、跳过全部 post_hook。
+- post_hook 不做结果流水线；所有 post_hook 接收 handler 原始字符串结果，最后一个非空 rewrite 生效。
+- post_hook 抛异常时返回 handler 原始结果，丢弃前序 post_hook 的部分改写。
+- handler 抛异常时转换为标准化 error 字符串；若未被 pre_hook 异常短路，post_hook 仍可观察/改写该错误文本，但批处理级联依据原始失败状态。
+- 合法 `ToolSignal` 跳过 post_hook；声明式 `is_interrupting` 与 handler 返回类型不一致时写入 `handler_contract_violation`。
+
+### Migrated Gate Ownership [Source: specs/002-tool-hook-system]
+
+- `builtin_general_tools`: `read_file` / `write_file` / `edit_file` / `list_dir` / `exec` 的路径、系统目录、命令安全和确认 gate 在 pre_hook；确认请求异常必须 fail-closed。
+- `recording_data_tools`: `query_data` 复用 `rewrite(sql)` / 过滤策略做 pre_hook 拒绝判断；`analyze_image` 的 6-action 拒绝在 pre_hook。
+- `trial_tools`: `run_command` 5 次上限由 `create_trial_tools()` 内的 per-run 闭包 pre_hook 维护。
+- 非迁移边界：`programmer_tools.syntax_check`、`recording_data_tools.execute_code` 沙箱、`tool_executor` venv 隔离/命令白名单、`dynamic_tool_manager` 工具发现/激活。
 
 ### 结构化日志
 
@@ -161,3 +192,10 @@ AgentLoop 发出的配对错误统一为顶层 JSON：`{"error": "<code>", "mess
 - **Guard**: 下一轮 LLM messages 无未配对 tool calls
 
 [Source: specs/003-fix-agentloop-tool-calls]
+
+### Hook Protocol and Migration Tests [Source: specs/002-tool-hook-system]
+
+- `tests/test_hook_protocol.py`: no-hook 透明性、pre_hook 拒绝、递归只读 args、pre/post hook 异常、post_hook rewrite、handler 异常、ToolSignal 契约、动态 callable 刷新、global hook 顺序/作用域、SC-002/SC-005 性能/挂载成本烟测。
+- Migrated gate coverage: builtin general 工具拒绝路径、`query_data` parser/filter 拒绝与 harmless 路径、`analyze_image` action 上限、`run_command` 第 6 次拒绝。
+- Static guards: 旧 gate 判断不残留在 handler，非迁移边界保持原位。
+- Final gates: hook 协议套件、recording guard/regression、AgentLoop multi-tool smoke、syntax validation、black/flake8/full pytest 或明确例外说明。

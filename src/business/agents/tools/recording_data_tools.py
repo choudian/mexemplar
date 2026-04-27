@@ -28,6 +28,7 @@ from datetime import timedelta
 from typing import Any
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.hook_models import PreHookResult, ToolCallContext
 from src.business.agents.tool_helpers import make_tool_schema
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.duckdb_manager import DuckDBManager
@@ -84,14 +85,24 @@ _COMMON_TABLES: dict[str, dict] = {
             "action_id": ("INTEGER", "操作 ID（主键）", None),
             "recording_id": ("VARCHAR", "所属录制会话 ID", None),
             "sequence_number": ("INTEGER", "操作序号，从 1 开始", None),
-            "action_type": ("VARCHAR", "操作类型：click, fill, navigate, scroll, keydown, ...", None),
+            "action_type": (
+                "VARCHAR",
+                "操作类型：click, fill, navigate, scroll, keydown, ...",
+                None,
+            ),
             "recording_mode": ("VARCHAR", "录制模式：browser / desktop", None),
             "url": ("VARCHAR", "操作发生时的页面 URL（browser 模式）", None),
             "app_name": ("VARCHAR", "应用名称（desktop 模式）", None),
             "process_name": ("VARCHAR", "进程名称（desktop 模式）", None),
             "window_title": ("TEXT", "窗口标题（desktop 模式）", None),
             "parameters": ("JSON", "操作参数（输入值、按键、坐标等）", None),
-            "dom_element": ("JSON", "操作目标 DOM 元素信息，JSON 对象，常用键：tag_name、id、class、text、css_selector 等（⚠️ 这是 JSON 内部字段，不是 SQL 列，不能直接 SELECT tag_name）", None),
+            "dom_element": (
+                "JSON",
+                "操作目标 DOM 元素信息，JSON 对象，常用键：tag_name、id、class、"
+                "text、css_selector 等（⚠️ 这是 JSON 内部字段，不是 SQL 列，"
+                "不能直接 SELECT tag_name）",
+                None,
+            ),
             "dom_tree_snapshot": (
                 "JSON",
                 "操作时的完整 DOM 树快照",
@@ -217,7 +228,11 @@ def _build_large_field_placeholder(
 
     rule = STABLE_LOCATOR_RULES.get(source_table)
     if rule is None:
-        logger.info("[large_field] blocked: unsupported_source_table, table=%s, field=%s", source_table, source_field)
+        logger.info(
+            "[large_field] blocked: unsupported_source_table, table=%s, field=%s",
+            source_table,
+            source_field,
+        )
         return _blocked(
             "unsupported_source_table",
             f"源表 '{source_table}' 未由内置定位规则覆盖，不支持继续读取。",
@@ -228,7 +243,9 @@ def _build_large_field_placeholder(
     if loc_binding is None:
         logger.info(
             "[large_field] blocked: missing_locator_field, table=%s, field=%s, need=%s",
-            source_table, source_field, rule.recommended_id_field,
+            source_table,
+            source_field,
+            rule.recommended_id_field,
         )
         return _blocked(
             "missing_locator_field",
@@ -251,6 +268,7 @@ def _build_large_field_placeholder(
 # 工具 1：describe_data
 # =============================================================================
 
+
 def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
     """
     数据发现入口。渐进式返回：
@@ -263,7 +281,8 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
         try:
             if tn == "network_requests":
                 row = db.fetchone(
-                    "SELECT COUNT(*) FROM network_requests WHERE recording_id = ? AND filtered = FALSE",
+                    "SELECT COUNT(*) FROM network_requests "
+                    "WHERE recording_id = ? AND filtered = FALSE",
                     (recording_id,),
                 )
                 return row[0] if row else 0
@@ -313,10 +332,7 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
             }
             if warning:
                 entry["warning"] = warning
-            if (
-                locator_rule is not None
-                and field_type.upper() in _READABLE_TEXT_TYPES
-            ):
+            if locator_rule is not None and field_type.upper() in _READABLE_TEXT_TYPES:
                 entry["large_field"] = True
                 entry["read_via"] = "read_field_chunk"
                 entry["locator_fields"] = locator_rule.describe_locator_fields
@@ -361,7 +377,7 @@ DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
             "type": "array",
             "items": {"type": "string"},
             "description": (
-                "要查看字段详情的表名列表，如 [\"actions\", \"network_requests\"]。"
+                '要查看字段详情的表名列表，如 ["actions", "network_requests"]。'
                 "不传此参数则返回所有表的概览。"
             ),
         },
@@ -437,6 +453,18 @@ def _query_data(recording_id: str, sql: str) -> str:
         )
 
 
+def query_data_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    sql = str(ctx.args["sql"])
+    try:
+        rewrite(sql)
+    except (SqlRewriteError, DataAccessRestrictedError) as exc:
+        return PreHookResult(error=_mask_recording_data_error(exc))
+    except Exception:
+        logger.warning("[query_data] SQL pre_hook failed: %s", sql, exc_info=True)
+        return PreHookResult(error=SQL_PARSE_FAILED_MESSAGE)
+    return None
+
+
 QUERY_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
     name="query_data",
     description=(
@@ -469,30 +497,92 @@ _SAFE_BUILTINS: dict[str, Any] = {
     name: getattr(_builtins_module, name, None)
     for name in (
         # 类型与转换
-        "int", "float", "str", "bool", "bytes", "bytearray",
-        "list", "tuple", "dict", "set", "frozenset",
-        "type", "isinstance", "issubclass", "callable",
+        "int",
+        "float",
+        "str",
+        "bool",
+        "bytes",
+        "bytearray",
+        "list",
+        "tuple",
+        "dict",
+        "set",
+        "frozenset",
+        "type",
+        "isinstance",
+        "issubclass",
+        "callable",
         # 数值
-        "abs", "round", "min", "max", "sum", "pow", "divmod",
+        "abs",
+        "round",
+        "min",
+        "max",
+        "sum",
+        "pow",
+        "divmod",
         # 容器操作
-        "len", "range", "enumerate", "zip", "map", "filter", "sorted", "reversed",
-        "any", "all", "iter", "next",
+        "len",
+        "range",
+        "enumerate",
+        "zip",
+        "map",
+        "filter",
+        "sorted",
+        "reversed",
+        "any",
+        "all",
+        "iter",
+        "next",
         # 字符串/repr
-        "repr", "format", "chr", "ord", "hex", "oct", "bin", "ascii",
+        "repr",
+        "format",
+        "chr",
+        "ord",
+        "hex",
+        "oct",
+        "bin",
+        "ascii",
         # 其他安全操作（不含 getattr/setattr/hasattr/dir/vars——内省函数可绕过沙箱）
-        "id", "hash",
-        "slice", "object", "super", "property", "staticmethod", "classmethod",
-        "True", "False", "None",
-        "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
-        "RuntimeError", "StopIteration", "AttributeError",
+        "id",
+        "hash",
+        "slice",
+        "object",
+        "super",
+        "property",
+        "staticmethod",
+        "classmethod",
+        "True",
+        "False",
+        "None",
+        "Exception",
+        "ValueError",
+        "TypeError",
+        "KeyError",
+        "IndexError",
+        "RuntimeError",
+        "StopIteration",
+        "AttributeError",
     )
 }
 # 允许 import 指定的安全模块（json、math、re、collections 等数据处理常用库）
-_ALLOWED_MODULES = frozenset({
-    "json", "math", "re", "collections", "itertools", "functools",
-    "datetime", "statistics", "textwrap", "string", "operator",
-    "base64", "hashlib", "urllib",
-})
+_ALLOWED_MODULES = frozenset(
+    {
+        "json",
+        "math",
+        "re",
+        "collections",
+        "itertools",
+        "functools",
+        "datetime",
+        "statistics",
+        "textwrap",
+        "string",
+        "operator",
+        "base64",
+        "hashlib",
+        "urllib",
+    }
+)
 
 
 def _safe_import(name: str, globals_=None, locals_=None, fromlist=(), level=0):
@@ -567,7 +657,7 @@ EXECUTE_CODE_SCHEMA: dict[str, Any] = make_tool_schema(
         "预注入变量：conn（DuckDB 连接）、recording_id（当前录制 ID）。\n"
         "示例（注意：tag_name 是 dom_element JSON 里的键，不是 SQL 列）：\n"
         "import json\n"
-        "rows = conn.execute(\"SELECT dom_element FROM actions WHERE recording_id = ?\" , "
+        'rows = conn.execute("SELECT dom_element FROM actions WHERE recording_id = ?" , '
         "[recording_id]).fetchall()\n"
         "# json.loads 解析 JSON 字符串，tag_name 是 JSON 内部的 key，不是数据库列\n"
         "tags = [json.loads(r[0])['tag_name'] for r in rows if r[0]]\n"
@@ -633,25 +723,13 @@ def _analyze_image(
     从 DuckDB 读取 before/after 截图，按时间顺序传给多模态模型。
     图片不进 agent 主上下文，只返回文本分析结果。
     """
-    if isinstance(action_index, int):
-        indices = [action_index]
-    else:
-        indices = list(action_index)
-
-    if len(indices) > _MAX_ACTION_INDICES:
-        return json.dumps(
-            {
-                "error": f"单次最多分析 {_MAX_ACTION_INDICES} 个操作的截图，"
-                f"当前传入 {len(indices)} 个，请缩小范围。"
-            },
-            ensure_ascii=False,
-        )
+    indices = _normalize_action_indices(action_index)
 
     db = DuckDBManager()
 
     _WINDOW_SPECS = {
-        "before": (1.0, 0.25),   # (backward_seconds, forward_seconds)
-        "after":  (0.0, 1.5),    # (backward_seconds, forward_seconds)
+        "before": (1.0, 0.25),  # (backward_seconds, forward_seconds)
+        "after": (0.0, 1.5),  # (backward_seconds, forward_seconds)
     }
 
     _SCREENSHOT_SQL = """
@@ -680,11 +758,13 @@ def _analyze_image(
             )
             if match:
                 label = f"操作{idx}{'前' if moment == 'before' else '后'}"
-                images.append({
-                    "label": label,
-                    "data": base64.standard_b64encode(match[0]).decode(),
-                    "media_type": match[1] or _detect_image_type(match[0]),
-                })
+                images.append(
+                    {
+                        "label": label,
+                        "data": base64.standard_b64encode(match[0]).decode(),
+                        "media_type": match[1] or _detect_image_type(match[0]),
+                    }
+                )
 
     if not images:
         return json.dumps(
@@ -719,6 +799,24 @@ def _analyze_image(
     except Exception as e:
         logger.error("[analyze_image] 调用多模态模型失败: %s", e, exc_info=True)
         return json.dumps({"error": f"多模态模型调用失败: {e}"}, ensure_ascii=False)
+
+
+def _normalize_action_indices(action_index) -> list[int]:
+    if action_index is None:
+        return []
+    return [action_index] if isinstance(action_index, int) else list(action_index)
+
+
+def analyze_image_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    indices = _normalize_action_indices(ctx.args["action_index"])
+    if len(indices) > _MAX_ACTION_INDICES:
+        return PreHookResult(
+            error=(
+                f"单次最多分析 {_MAX_ACTION_INDICES} 个操作的截图，"
+                f"当前传入 {len(indices)} 个，请缩小范围。"
+            )
+        )
+    return None
 
 
 ANALYZE_IMAGE_SCHEMA: dict[str, Any] = make_tool_schema(
@@ -783,8 +881,13 @@ def _make_chunk_response(
 
 
 def _make_chunk_error(
-    code: str, message: str, *, field: str = "", locator: Any = None,
-    offset: int = 0, total_length: int | None = None,
+    code: str,
+    message: str,
+    *,
+    field: str = "",
+    locator: Any = None,
+    offset: int = 0,
+    total_length: int | None = None,
 ) -> dict[str, Any]:
     return _make_chunk_response(
         field=field,
@@ -834,12 +937,16 @@ def _read_field_chunk(
 
     rule = STABLE_LOCATOR_RULES.get(table)
     if rule is None:
-        return _err("unsupported_continuation", f"表 '{table}' 未由内置定位规则覆盖，不支持分段读取")
+        return _err(
+            "unsupported_continuation", f"表 '{table}' 未由内置定位规则覆盖，不支持分段读取"
+        )
 
     if id_field != rule.recommended_id_field:
         logger.info(
             "[read_field_chunk] unknown_id_field: table=%s, id_field=%s, expected=%s",
-            table, id_field, rule.recommended_id_field,
+            table,
+            id_field,
+            rule.recommended_id_field,
         )
         return _err(
             "unknown_id_field",
@@ -857,10 +964,7 @@ def _read_field_chunk(
     # 数据读取
     db = DuckDBManager()
     try:
-        raw_sql = (
-            f"SELECT {field} FROM {table} "
-            f"WHERE {id_field} = ? AND recording_id = ?"
-        )
+        raw_sql = f"SELECT {field} FROM {table} " f"WHERE {id_field} = ? AND recording_id = ?"
         effective_sql = rewrite(raw_sql) if rule.requires_filter_rewrite else raw_sql
         row = db.fetchone(effective_sql, (id_value, recording_id))
         raw_value = row[0] if row is not None else None
@@ -868,9 +972,13 @@ def _read_field_chunk(
         if raw_value is None:
             logger.info(
                 "[read_field_chunk] record_unavailable: table=%s, %s=%s",
-                table, id_field, id_value,
+                table,
+                id_field,
+                id_value,
             )
-            return _err("record_unavailable", f"{table} 记录 {id_field}={id_value} 未找到或已被过滤。")
+            return _err(
+                "record_unavailable", f"{table} 记录 {id_field}={id_value} 未找到或已被过滤。"
+            )
 
         if not isinstance(raw_value, str):
             return _err("non_text_field", f"字段 '{field}' 的值不是文本类型")
@@ -909,10 +1017,13 @@ def _read_field_chunk(
             ensure_ascii=False,
         )
 
-    except Exception as e:
+    except Exception:
         logger.error(
             "[read_field_chunk] internal_error: table=%s, field=%s, %s=%s",
-            table, field, id_field, id_value,
+            table,
+            field,
+            id_field,
+            id_value,
             exc_info=True,
         )
         return _err("internal_error", "内部错误，请稍后重试。")
@@ -927,7 +1038,7 @@ READ_FIELD_CHUNK_SCHEMA: dict[str, Any] = make_tool_schema(
         "1. 从占位对象的 locator 字段获取定位信息\n"
         "2. 使用 field（字段名）、offset（起始偏移，默认0）、length（读取长度，可选）调用\n"
         "3. 根据 has_more 和 next_offset 继续读取剩余内容\n"
-        "4. 返回 content=\"\" 且 has_more=false 表示已到末尾"
+        '4. 返回 content="" 且 has_more=false 表示已到末尾'
     ),
     properties={
         "locator": {
@@ -961,6 +1072,7 @@ READ_FIELD_CHUNK_SCHEMA: dict[str, Any] = make_tool_schema(
 # 工厂函数：创建绑定了 recording_id 的工具列表
 # =============================================================================
 
+
 def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
     """
     创建录制数据访问工具列表，recording_id 通过闭包绑定，对 agent 透明。
@@ -981,6 +1093,7 @@ def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
             name="query_data",
             schema=QUERY_DATA_SCHEMA,
             handler=lambda sql: _query_data(recording_id, sql),
+            pre_hook=query_data_pre_hook,
         ),
         ToolDefinition(
             name="read_field_chunk",
@@ -1000,6 +1113,7 @@ def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
             handler=lambda action_index, question: _analyze_image(
                 recording_id, action_index, question
             ),
+            pre_hook=analyze_image_pre_hook,
         ),
     ]
 

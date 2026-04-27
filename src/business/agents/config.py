@@ -8,6 +8,13 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Dict, Any, Union
 
+from src.business.agents.hook_models import (
+    PostHook,
+    PostHookResult,
+    PreHook,
+    PreHookResult,
+    ToolCallContext,
+)
 from src.business.agents.prompts.pm_prompt import PM_SYSTEM_PROMPT
 from src.business.agents.prompts.programmer_prompt import PROGRAMMER_SYSTEM_PROMPT
 from src.business.agents.prompts.assistant_prompt import ASSISTANT_SYSTEM_PROMPT
@@ -80,6 +87,8 @@ class ToolDefinition:
     schema: Dict[str, Any]
     handler: Callable[..., Union[str, ToolSignal]]
     is_interrupting: bool = False
+    pre_hook: Optional[PreHook] = None
+    post_hook: Optional[PostHook] = None
 
 
 @dataclass
@@ -91,11 +100,11 @@ class AgentConfig:
     max_iterations: int = 10
     retry: RetryConfig = field(default_factory=RetryConfig)
     text_as_user_input: bool = False
-    """
-    为 True 时，LLM 直接返回文字（未调用任何工具）视为隐式 talk_to_user，
-    loop 返回 NEEDS_USER_INPUT 而非 COMPLETED。
-    适用于需要持续与用户对话、不能自然结束的 Agent（如 PM Agent）。
-    """
+    # 为 True 时，LLM 直接返回文字（未调用任何工具）视为隐式 talk_to_user，
+    # loop 返回 NEEDS_USER_INPUT 而非 COMPLETED。
+    # 适用于需要持续与用户对话、不能自然结束的 Agent（如 PM Agent）。
+    global_pre_hooks: List[PreHook] = field(default_factory=list)
+    global_post_hooks: List[PostHook] = field(default_factory=list)
 
 
 @dataclass
@@ -148,6 +157,11 @@ __all__ = [
     "ToolDefinition",
     "AgentConfig",
     "AgentResult",
+    "ToolCallContext",
+    "PreHookResult",
+    "PostHookResult",
+    "PreHook",
+    "PostHook",
     "PM_CONFIG",
     "PROGRAMMER_CONFIG",
     "ASSISTANT_CONFIG",

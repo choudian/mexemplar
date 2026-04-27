@@ -210,6 +210,24 @@ PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），t
 
 办公助理 Agent 采用 **FC + 懒加载**——内置工具全量 FC 注入，用户动态工具和技能组合按需注入。技能组合作为虚拟 ToolDefinition 注册，固定 schema（`task` + `context`），内部按模式分发到成员技能。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 4.1-4.4 节和第九节。
 
+### 工具执行 Hook
+
+`AgentLoop` 对调用方传入或动态构建的 `ToolDefinition` 支持同步 pre/post hook。执行顺序为：
+
+```text
+tool pre_hook
+→ AgentConfig.global_pre_hooks
+→ handler
+→ tool post_hook
+→ AgentConfig.global_post_hooks
+```
+
+pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCallContext.args` 是递归只读隔离视图。post_hook 只接收 handler 的原始字符串结果或普通 handler 异常转换出的标准化错误字符串；多个 post_hook 不形成结果流水线，最后一个返回非空 `PostHookResult.result` 的 hook 决定最终展示文本。
+
+多工具批处理语义先于 hook 生效：同轮混合中断型工具时直接写入 `invalid_model_output`，不执行 hook 或 handler；普通批次中 hook 拒绝、handler 异常、标准化错误结果或 handler 返回类型与 `is_interrupting` 不匹配都会触发后续工具的 `not_executed`。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。
+
+`load_reference` 和 `talk_to_user` 是 AgentLoop 内建注入工具，继续用于上下文引用和用户交互，但不进入 tool/global hook 管线。
+
 ### 用户交互
 
 靠消息历史串联，不在 Loop 内部暂停。每一轮用户交互就是一次独立的 Loop 调用，用户回复后作为新消息进来，Agent 看到历史上下文自然接上。
