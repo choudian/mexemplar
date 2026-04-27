@@ -1120,9 +1120,4 @@ def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
 
 __all__ = [
     "create_recording_tools",
-    "DESCRIBE_DATA_SCHEMA",
-    "QUERY_DATA_SCHEMA",
-    "READ_FIELD_CHUNK_SCHEMA",
-    "EXECUTE_CODE_SCHEMA",
-    "ANALYZE_IMAGE_SCHEMA",
 ]

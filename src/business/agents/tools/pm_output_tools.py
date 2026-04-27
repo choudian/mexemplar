@@ -115,6 +115,4 @@ report_code_issue = ToolDefinition(
 __all__ = [
     "submit_requirements",
     "report_code_issue",
-    "SUBMIT_REQUIREMENTS_SCHEMA",
-    "REPORT_CODE_ISSUE_SCHEMA",
 ]

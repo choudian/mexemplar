@@ -148,7 +148,4 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
 
 __all__ = [
     "create_trial_tools",
-    "EXECUTE_TOOL_SCHEMA",
-    "SUBMIT_TRIAL_RESULT_SCHEMA",
-    "RUN_COMMAND_SCHEMA",
 ]

@@ -197,6 +197,4 @@ submit_code = ToolDefinition(
 __all__ = [
     "syntax_check",
     "submit_code",
-    "SYNTAX_CHECK_SCHEMA",
-    "SUBMIT_CODE_SCHEMA",
 ]

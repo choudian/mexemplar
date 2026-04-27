@@ -331,9 +331,9 @@ DISMISS_SUGGESTION = ToolDefinition(
 )
 
 __all__ = [
-    "REPORT_TOOL_BUG", "report_tool_bug_handler", "REPORT_TOOL_BUG_SCHEMA",
+    "REPORT_TOOL_BUG",
     "SAVE_PROFILE_SCHEMA", "create_save_profile_handler",
     "CODIFY_AS_TOOL_SCHEMA", "create_codify_as_tool_handler",
-    "DISMISS_SUGGESTION", "dismiss_suggestion_handler", "DISMISS_SUGGESTION_SCHEMA",
+    "DISMISS_SUGGESTION",
     "register_task_worker_notify",
 ]

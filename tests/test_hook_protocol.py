@@ -9,14 +9,16 @@ from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
     AgentConfig,
     AgentType,
-    PostHookResult,
-    PreHookResult,
     ResultType,
-    ToolCallContext,
     ToolDefinition,
     ToolSignal,
 )
-from src.business.agents.hook_models import freeze_tool_args
+from src.business.agents.hook_models import (
+    PostHookResult,
+    PreHookResult,
+    ToolCallContext,
+    freeze_tool_args,
+)
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.agents.tools import builtin_general_tools as general_tools
 from src.business.agents.tools import dynamic_tool_manager, programmer_tools
