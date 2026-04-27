@@ -3,6 +3,7 @@
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
 **Last Updated**: 2026-04-27
 **Revision**: 2026-04-27 — Merged `specs/005-fix-compression-tool-pairing`
+**Revision**: 2026-04-27 — Merged `specs/004-auth-toast`
 
 ---
 
@@ -31,7 +32,7 @@ src/
 │       │   ├── pm_output_tools.py          # PM 中断型工具 (talk_to_user 等)
 │       │   ├── programmer_tools.py         # 程序员工具
 │       │   ├── trial_tools.py              # 试用工具；run_command per-run pre_hook 限流
-│       │   └── builtin_general_tools.py    # read/write/edit/list/exec pre_hooks
+│       │   └── builtin_general_tools.py    # read/write/edit/list/exec pre_hooks + 确认状态/自动放行/脱敏日志
 │       └── prompts/
 │           ├── pm_prompt.py                # 5 工具工作流
 │           └── programmer_prompt.py        # 5 工具工作流
@@ -40,6 +41,17 @@ src/
 │   └── memory/
 │       ├── compression_handler.py         # _adjust_boundary_for_tool_pairs (压缩边界 tool 组调整)
 │       └── context_manager.py             # get_pending_tool_calls (多工具恢复), _cleanup_orphan_tool_results (孤立校验)
+│       └── context_manager.py             # get_pending_tool_calls (多工具恢复)
+├── ui/
+│   ├── main_window.py                       # auth toast 状态/队列/resize 重定位
+│   ├── mixins/
+│   │   ├── agent_bridge_mixin.py            # register_confirm_mechanism wiring
+│   │   └── agent_handler_mixin.py           # 非阻塞确认队列 + toast 决策处理
+│   ├── resources/
+│   │   └── styles.qss                       # auth toast + 顶栏 Toggle 样式
+│   └── widgets/
+│       ├── chat_widget.py                   # 顶栏 "免确认" Toggle + new_chat_started
+│       └── auth_toast.py                    # AuthToastSurface 非模态确认浮层
 ├── recording/
 │   └── filtering/
 │       ├── query_projection_analyzer.py    # SQL 列血缘分析 (sqlglot), StableLocatorRule, ProjectionBinding
@@ -56,6 +68,7 @@ tests/
 │       ├── conftest.py                      # mock Message 工厂与 mock MessageRepository fixture
 │       ├── test_compression_tool_pairing.py # 压缩边界调整单元测试 (7 场景)
 │       └── test_context_orphan_cleanup.py   # 孤立校验与上下文兼容性测试 (6 场景)
+├── test_auth_toast_confirmation.py          # 确认状态/日志/自动放行业务测试
 ├── integration/
 │   └── test_agent_loop_multi_tool_calls.py  # 多工具批次、中断型、恢复、契约校验 14 场景
 ├── recording/
@@ -66,9 +79,14 @@ tests/
 │   └── filtering/
 │       ├── test_query_projection_analyzer.py       # 投影分析器 unit tests
 │       └── test_recording_tools_no_sqlglot.py      # guard test: recording_data_tools 不 import sqlglot
+└── ui/
+    ├── test_auth_toast_surface.py           # AuthToastSurface 按钮/超时/关闭限制
+    ├── test_chat_widget_auth_toggle.py      # Toggle 状态同步/新对话复位
+    └── test_agent_handler_mixin.py          # 队列 FIFO/QMessageBox guard/会话切换
 ```
 
 [Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/005-fix-compression-tool-pairing]
+[Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/004-auth-toast]
 
 ---
 
@@ -211,3 +229,31 @@ Hook 执行发生在 AgentLoop 批处理分类之后、实际 handler 执行之�
 - `tests/business/memory/test_compression_tool_pairing.py`: 7 场景覆盖无 tool 组不调整、tool 组完全在压缩区不调整、边界跨越整组移入、assistant 在压缩区全部 result 在保留区、多组仅最后跨越、空压缩区跳过、二次压缩吸收上一轮边界组
 - `tests/business/memory/test_context_orphan_cleanup.py`: 6 场景覆盖无孤立不变、孤立剔除、混合有效/孤立、warning 日志、reference_handler 替换后仍可续读、pending_tool_calls 检测不受影响
 - 使用 mock Message 和 mock MessageRepository，不依赖真实 DB
+---
+
+## 高危操作确认 Toast 化 [Source: specs/004-auth-toast]
+
+### 确认浮层架构
+
+Assistant 高危工具确认从 `QMessageBox.question` 模态弹窗改为非阻塞 `AuthToastSurface` 浮层。保留现有 `builtin_general_tools` 的 request_id + `threading.Event` 等待模型和 `pyqtSignal` 跨线程通道。UI 端新增独立于普通 Toast 的确认浮层队列管理。
+
+核心运行机制：
+1. Worker 线程触发 `_ask_user_confirm` → 创建 `PendingConfirmation` → `pyqtSignal` emit request_id + message
+2. UI 线程 `AgentHandlerMixin._on_confirm_action_requested` 入队 → 显示一个 `AuthToastSurface`
+3. 用户决策（三按钮或超时）→ `set_confirm_result` 回写 → Worker `event.set()` 唤醒
+4. 自动放行开启时（"全部允许"或顶栏 Toggle）：pre_hook 直接返回 None，不 emit signal
+
+### 会话级自动放行状态
+
+`_auto_approve_enabled` + `_auto_approve_source` 为模块级变量，受 `_confirm_lock` 保护。开启时覆盖 Assistant 全部高危工具（write_file/edit_file/exec）。新对话时 `reset_auto_approve` 复位。不持久化。
+
+### 脱敏结构化日志
+
+每次终态决策写入 `logger.info`，字段：request_id、tool_name、decision、source、elapsed_ms、summary。summary 由 `_truncate_summary` + `_sanitize_fragment` 生成，自动截断长参数并替换敏感模式（sk-*、password=、token= 等）。
+
+### 测试覆盖
+
+- **Business tests**: `tests/test_auth_toast_confirmation.py` — 确认状态、脱敏摘要、自动放行开关、超时映射、settle 截止时间
+- **UI surface tests**: `tests/ui/test_auth_toast_surface.py` — 三按钮信号、超时触发、重复决策忽略、手动关闭拒绝
+- **UI integration tests**: `tests/ui/test_agent_handler_mixin.py` — 5-Worker FIFO、Toast 共存、响应性 ≤100ms、超时收敛 ≤1s、allow-all 排队放行、Toggle 双向同步、新对话收敛、QMessageBox guard
+- **ChatWidget tests**: `tests/ui/test_chat_widget_auth_toggle.py` — Toggle 默认关闭、状态同步、新对话复位

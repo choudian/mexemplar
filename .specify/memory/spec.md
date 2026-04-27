@@ -3,6 +3,7 @@
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
 **Last Updated**: 2026-04-27
 **Revision**: 2026-04-27 — Merged `specs/005-fix-compression-tool-pairing`
+**Revision**: 2026-04-27 — Merged `specs/004-auth-toast`
 
 ---
 
@@ -59,6 +60,17 @@ Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefin
 ### US-013: 压缩后"继续"能正常恢复 (Priority: P3)
 
 当因边缘 case 导致孤立 tool result 残留时，用户点击"继续"恢复会话，系统能自动检测并清理孤立消息，会话能正常运行。 [Source: specs/005-fix-compression-tool-pairing]
+### US-011: 单次确认改为非阻塞浮层 (Priority: P1)
+
+Assistant Agent 触发高危工具时，主窗口右下角出现非阻塞浮层，显示工具名与关键参数摘要，提供"全部允许 / 同意 / 拒绝"三按钮。用户可正常浏览聊天记录、滚动页面、打开侧边栏。 [Source: specs/004-auth-toast]
+
+### US-012: 会话级"全部允许"快捷通道 (Priority: P2)
+
+浮层"全部允许"按钮一键开启会话级豁免：本次会话内后续所有 Assistant 高危工具请求自动放行。新建对话时自动复位。 [Source: specs/004-auth-toast]
+
+### US-013: 顶栏 Toggle 与浮层状态双向同步 (Priority: P3)
+
+对话窗口顶栏提供"免确认" Toggle，与浮层"全部允许"共享同一会话级状态，任一入口变化后另一处可视状态立刻同步。新对话时一并复位。 [Source: specs/004-auth-toast]
 
 ---
 
@@ -128,6 +140,26 @@ Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefin
 - **FR-049**: 完全在压缩区内部的 tool 组正常压缩，不做特殊处理——它们内部配对完整，压缩后通过摘要中的 tool_call_id 后处理保留信息
 - **FR-050**: 保留区调整后若压缩区为空，必须跳过 LLM 压缩调用，直接构建 `system | [保留区消息]` 的消息列表
 - **FR-051**: `assemble_context` 返回前必须校验消息列表中不存在孤立的 tool result（有 tool_call_id 但无对应 tool_call 的 tool 消息），发现时剔除该孤立消息并记录 warning 日志
+### 高危操作确认 Toast 化 [Source: specs/004-auth-toast]
+
+- **FR-047**: 当 Assistant Agent 调用受确认管控的高危工具（`write_file` / `edit_file` / `exec`）时，系统 MUST 在主窗口右下角显示非阻塞浮层并要求用户决策
+- **FR-048**: 浮层 MUST 是非模态的——出现期间用户对主窗口其它控件的输入 MUST 不被阻塞
+- **FR-049**: 浮层 MUST 显示足够上下文信息（至少工具名 + 关键参数摘要），摘要 MUST 包含目标路径或命令首行等关键字段，长参数 MUST 截断，且 MUST NOT 展示完整文件内容
+- **FR-050**: 浮层 MUST 提供三个按钮："全部允许" / "同意" / "拒绝"，每个按钮的语义与本规范定义一致
+- **FR-051**: 用户点击"同意" MUST 仅对当前一次确认请求放行，不影响后续请求
+- **FR-052**: 用户点击"拒绝" MUST 仅对当前一次确认请求拒绝，不影响后续请求
+- **FR-053**: 用户点击"全部允许" MUST 既放行当前请求，又使本次会话内 Assistant 的后续全部高危确认请求被自动放行（不再弹浮层）
+- **FR-054**: 当"全部允许"或顶栏 Toggle 开启时，系统 MUST 将确认队列中尚未展示的 Assistant 高危请求立即按自动放行处理
+- **FR-055**: 系统 MUST 在用户开启新对话时自动复位"全部允许"状态为关闭
+- **FR-056**: 对话窗口顶栏 MUST 提供"免确认"开关，与"全部允许"内部状态双向同步
+- **FR-057**: 浮层 MUST 设置超时机制；超时时间不晚于 Worker 阻塞确认超时阈值，超时按"拒绝"语义关闭
+- **FR-058**: 多个并发确认请求 MUST 被全部处理（按到达顺序排队展示），任何请求都不能因同时出现而丢失
+- **FR-059**: 确认浮层与普通 Toast（成功/错误提示）MUST 独立管理生命周期，互不覆盖
+- **FR-060**: 当"全部允许"或顶栏 Toggle 处于开启状态时，UI MUST 给出可见提示
+- **FR-061**: 现有的 `IntentConfirmationUI`（PM/Trial Agent）和 `ToolExecutionDialog` MUST 不受本变更影响
+- **FR-062**: 系统 MUST 为每次确认决策写入脱敏结构化日志（request_id、工具名、决策结果、决策来源、等待耗时与摘要），MUST NOT 记录完整工具参数或完整文件内容
+- **FR-063**: 确认浮层 MUST NOT 提供普通关闭按钮，也 MUST NOT 因点击浮层外区域而关闭；只能通过三按钮或超时结束
+- **FR-064**: 当用户在旧会话仍有未决确认请求时开启新对话，系统 MUST 将这些请求按拒绝/超时语义收敛并清空，MUST NOT 泄漏到新对话
 
 ---
 
@@ -186,6 +218,14 @@ post_hook 返回值。字段：`result: str | None = None`。只用于替换普�
 
 ### Boundary Tool Group [Source: specs/005-fix-compression-tool-pairing]
 tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 tool result 消息位于保留区的 tool 组。
+### PendingConfirmation [Source: specs/004-auth-toast]
+高危工具确认请求的运行时记录。字段：`request_id`（UUID）、`tool_name`（write_file/edit_file/exec）、`summary`（脱敏摘要）、`created_at`（monotonic 时间戳）、`event`（threading.Event）、`result`（bool）、`decision`（枚举：accepted/rejected/timeout/auto_approved/confirm_error）、`source`（枚举：toast_accept/toast_reject/toast_timeout/toast_allow_all/top_toggle/auto_scope/new_chat_reset/system_error）。每个请求恰好到达一个终态决策。
+
+### AutoApproveScope [Source: specs/004-auth-toast]
+会话级自动放行状态。字段：`enabled`（bool，默认 False）、`source`（最近变更来源）。生命周期等于一次对话；新对话复位。不持久化到 config/DB/keyring。
+
+### AuthToastSurface [Source: specs/004-auth-toast]
+UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summary`、`timeout_timer`（QTimer singleShot）。三按钮："全部允许"/"同意"/"拒绝"。无普通关闭按钮；不响应外部点击关闭。与普通 Toast 独立生命周期。
 
 ---
 
@@ -225,6 +265,13 @@ tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 
 - **CC-020**: `_post_process_summary` 的 tool_call_id 替换逻辑保持不变——完全在压缩区内部的 tool 组仍需要此逻辑来保留 tool 信息
 - **CC-021**: reference_handler 对大内容 tool result 的替换不受影响——移入保留区的是 DB 中的原始 Message 对象，引用替换在 `assemble_context` 中统一执行
 - **CC-022**: 不影响 `get_pending_tool_calls` 的现有行为——它检测的是 assistant 消息中有 tool_calls 但无对应 tool result 的场景，与本次修复方向互补
+### 高危操作确认 Toast 化约束 [Source: specs/004-auth-toast]
+
+- **CC-018**: 现有 Worker → UI 的跨线程信号机制（pyqtSignal + Event 等待）MUST 保持不变；仅替换 UI 端展示形态
+- **CC-019**: 高危工具判定清单不变，不扩展也不收缩
+- **CC-020**: 浮层超时 MUST 不晚于 Worker 阻塞超时（120s），二者同步收敛
+- **CC-021**: 普通 Toast 行为不变；确认浮层与普通 Toast 通过独立生命周期管理共存
+- **CC-022**: "新对话"边界 MUST 同时复位会话级自动放行状态并清空旧会话未决确认
 
 ---
 
@@ -266,6 +313,15 @@ tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 
 - **SC-023**: 任何会话经历上下文压缩后，消息列表中不存在孤立的 tool result（100% 无 400 错误）
 - **SC-024**: 多次压缩后上下文大小可控——每次压缩只额外保留边界处跨越的 tool 组，不随压缩次数累积
 - **SC-025**: 会话恢复（failed → active）后，assemble_context 的兜底校验能检测并清理孤立 tool result，不阻塞恢复流程
+### 高危操作确认 Toast 化验收标准 [Source: specs/004-auth-toast]
+
+- **SC-023**: 浮层弹出期间，用户在主窗口其它区域的点击响应延迟 ≤ 100ms
+- **SC-024**: 同一会话连续 10 次高危操作，开启"全部允许"后无需再做任何点击决策
+- **SC-025**: 新对话开启后，前一会话的"全部允许"100% 失效
+- **SC-026**: 顶栏 Toggle 与浮层"全部允许"双向同步成功率 100%（同帧或下一帧内同步）
+- **SC-027**: 5 个 Worker 同时发起确认请求，所有请求都被排队展示并得到一次决策或超时，无请求丢失
+- **SC-028**: 浮层超时关闭时间与 Worker 阻塞超时阈值的差值 ≤ 1 秒
+- **SC-029**: 同意、拒绝、超时、自动放行四类决策路径均产生 1 条脱敏结构化日志
 
 ---
 
@@ -318,3 +374,13 @@ tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 
 - 保留区首条消息是 tool result，其对应的 assistant(tool_calls) 在压缩区中——核心修复场景
 - tool 组中 tool_result 内容已被 reference_handler 替换为指针，移入保留区后指针仍然有效
 - 会话恢复（`get_pending_tool_calls`）检测到的未配对 tool_call 与孤立 tool_result 同时存在的场景
+### 高危操作确认 Toast 化 [Source: specs/004-auth-toast]
+
+- 多 Worker 并发确认请求：按到达顺序排队展示，前一个关闭后下一个再显示
+- 排队中开启"全部允许"：当前请求放行，队列中尚未展示的请求立即自动放行
+- 普通 Toast 与确认浮层共存：独立管理，互不覆盖
+- 浮层超时与 Worker 阻塞对齐：浮层超时不晚于 Worker 超时
+- 会话切换时存在未决确认：所有未决请求按超时/拒绝语义收敛，不得泄漏到新对话
+- "全部允许"安全可见性：开启状态下 Toggle 文案变化
+- 手动关闭限制：浮层只能通过三按钮或超时结束
+- 非 Assistant Agent 的工具确认：PM/Trial 走 IntentConfirmationUI，不受影响

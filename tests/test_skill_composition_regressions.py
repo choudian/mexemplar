@@ -878,6 +878,44 @@ def test_intent_confirmation_cancel_emits_signal_without_closing_parent(qt_app):
         parent.deleteLater()
 
 
+def test_tool_execution_dialog_required_parameter_warning_remains_modal(qt_app, monkeypatch):
+    from PyQt6.QtWidgets import QMessageBox
+
+    from src.ui.tool_execution_dialog import ToolExecutionDialog
+
+    warnings = []
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda _parent, title, message: warnings.append((title, message)),
+    )
+    dialog = ToolExecutionDialog(
+        Tool(
+            tool_name="参数校验工具",
+            parameters=[
+                {
+                    "name": "target",
+                    "type": "text",
+                    "required": True,
+                    "description": "必填参数",
+                }
+            ],
+        )
+    )
+    dialog.show()
+    qt_app.processEvents()
+
+    try:
+        dialog._on_execute_clicked()
+        qt_app.processEvents()
+
+        assert warnings == [("参数验证失败", "请填写必填参数：target")]
+        assert dialog.isVisible() is True
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+
+
 def test_start_trial_session_creates_session():
     _seed_published_tool("tool_range_dialog_member", "范围成员", "范围成员描述")
     composition = _create_composition(

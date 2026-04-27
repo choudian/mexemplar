@@ -96,6 +96,7 @@ credentials.json
 # OS
 .DS_Store
 Thumbs.db
+bash.exe.stackdump
 
 # Temporary and test files
 demo_*.py
