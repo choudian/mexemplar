@@ -1,10 +1,13 @@
 ---
 name: "speckit-specify"
 description: "Create or update the feature specification from a natural language feature description."
+argument-hint: "Describe the feature you want to specify"
 compatibility: "Requires spec-kit project structure with .specify/ directory"
 metadata:
   author: "github-spec-kit"
   source: "templates/commands/specify.md"
+user-invocable: true
+disable-model-invocation: false
 ---
 
 
@@ -26,6 +29,7 @@ You **MUST** consider the user input before proceeding (if not empty).
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
   - If the hook defines a non-empty `condition`, skip the hook and leave condition evaluation to the HookExecutor implementation
+- When constructing slash commands from hook command names, replace dots (`.`) with hyphens (`-`). For example, `speckit.git.commit` → `/speckit-git-commit`.
 - For each executable hook, output the following based on its `optional` flag:
   - **Optional hook** (`optional: true`):
     ```
@@ -54,56 +58,73 @@ You **MUST** consider the user input before proceeding (if not empty).
 
 The text the user typed after `/speckit.specify` in the triggering message **is** the feature description. Assume you always have it available in this conversation even if `$ARGUMENTS` appears literally below. Do not ask the user to repeat it unless they provided an empty command.
 
+When invoking the `before_specify` hook (typically `speckit.worktree.create`), **pass the user's feature description through as `$ARGUMENTS`** so the hook can compute a branch name and create a worktree. After the hook completes, **scan its output for a `WORKTREE_RESULT:` line** containing JSON with `BRANCH_NAME`, `FEATURE_NUM`, `WORKTREE_PATH`, and `MODE`. Capture all four values:
+
+- If `WORKTREE_RESULT` is present and `MODE == "new-feature"`, set `WORKTREE_PATH` to its value (e.g., `.worktrees/003-user-auth`). All subsequent file operations in this command **must target paths under `WORKTREE_PATH`** rather than the main repository root.
+- If no `WORKTREE_RESULT` is present (e.g., the worktree hook was disabled or fell back to existing-branch mode without spec scaffolding), leave `WORKTREE_PATH` unset and proceed with main-repo-relative paths as before.
+- The legacy `git.feature` hook is no longer used by default; if it ran instead, treat `BRANCH_NAME` / `FEATURE_NUM` from its JSON the same way (no `WORKTREE_PATH`).
+
 Given that feature description, do this:
 
 1. **Generate a concise short name** (2-4 words) for the feature:
-   - Analyze the feature description and extract the most meaningful keywords
-   - Create a 2-4 word short name that captures the essence of the feature
-   - Use action-noun format when possible (e.g., "add-user-auth", "fix-payment-bug")
-   - Preserve technical terms and acronyms (OAuth2, API, JWT, etc.)
-   - Keep it concise but descriptive enough to understand the feature at a glance
-   - Examples:
-     - "I want to add user authentication" → "user-auth"
-     - "Implement OAuth2 integration for the API" → "oauth2-api-integration"
-     - "Create a dashboard for analytics" → "analytics-dashboard"
-     - "Fix payment processing timeout bug" → "fix-payment-timeout"
+   - **If `BRANCH_NAME` was returned by the `before_specify` hook**, derive the short name by stripping the numeric or timestamp prefix from `BRANCH_NAME` (e.g., `003-user-auth` → `user-auth`, `20260319-143022-user-auth` → `user-auth`). Do **not** regenerate it independently — the hook's name is authoritative so the spec directory and the worktree branch stay in sync.
+   - Otherwise (no hook ran), generate fresh:
+     - Analyze the feature description and extract the most meaningful keywords
+     - Create a 2-4 word short name that captures the essence of the feature
+     - Use action-noun format when possible (e.g., "add-user-auth", "fix-payment-bug")
+     - Preserve technical terms and acronyms (OAuth2, API, JWT, etc.)
+     - Keep it concise but descriptive enough to understand the feature at a glance
+     - Examples:
+       - "I want to add user authentication" → "user-auth"
+       - "Implement OAuth2 integration for the API" → "oauth2-api-integration"
+       - "Create a dashboard for analytics" → "analytics-dashboard"
+       - "Fix payment processing timeout bug" → "fix-payment-timeout"
 
-2. **Branch creation** (optional, via hook):
+2. **Branch + worktree creation** (via hook):
 
-   If a `before_specify` hook ran successfully in the Pre-Execution Checks above, it will have created/switched to a git branch and output JSON containing `BRANCH_NAME` and `FEATURE_NUM`. Note these values for reference, but the branch name does **not** dictate the spec directory name.
+   The `before_specify` hook is `speckit.worktree.create` (new-feature mode). When it ran successfully it returned JSON containing `BRANCH_NAME`, `FEATURE_NUM`, `WORKTREE_PATH`, and `MODE`. Note these values:
 
-   If the user explicitly provided `GIT_BRANCH_NAME`, pass it through to the hook so the branch script uses the exact value as the branch name (bypassing all prefix/suffix generation).
+   - The new feature branch lives **only** in the worktree — the main working directory's branch is unchanged.
+   - The branch name does **not** dictate the spec directory name (you may pick a different short name) but the default below keeps them aligned to avoid surprises.
+   - If the user explicitly provided `GIT_BRANCH_NAME`, pass it through to the hook so the worktree branch uses that exact value.
+   - If the legacy `git.feature` hook ran instead (no `WORKTREE_PATH`), treat the result the same way but skip the worktree-aware path rewrites in step 3.
 
-3. **Create the spec feature directory**:
+3. **Create the spec feature directory** (inside the worktree when present):
 
-   Specs live under the default `specs/` directory unless the user explicitly provides `SPECIFY_FEATURE_DIRECTORY`.
+   **Resolve the base directory** (where `specs/` lives):
+   - If `WORKTREE_PATH` was returned by the hook, the base is `<WORKTREE_PATH>` (e.g., `.worktrees/003-user-auth`).
+   - Otherwise, the base is the main repository root.
+
+   All paths in the rest of this step are **relative to the resolved base**.
 
    **Resolution order for `SPECIFY_FEATURE_DIRECTORY`**:
-   1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is
-   2. Otherwise, auto-generate it under `specs/`:
-      - Check `.specify/init-options.json` for `branch_numbering`
-      - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
-      - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `specs/`)
-      - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
-      - Set `SPECIFY_FEATURE_DIRECTORY` to `specs/<directory-name>`
+   1. If the user explicitly provided `SPECIFY_FEATURE_DIRECTORY` (e.g., via environment variable, argument, or configuration), use it as-is. If `WORKTREE_PATH` is set and the explicit value is *relative*, resolve it against the worktree base; if it is *absolute*, use it verbatim.
+   2. Otherwise, auto-generate it under `<base>/specs/`:
+      - **Prefer the hook's `BRANCH_NAME`** as the directory name when it was returned — this keeps the branch and spec dir aligned and avoids re-scanning for the next number.
+      - If no hook ran:
+        - Check `.specify/init-options.json` for `branch_numbering`
+        - If `"timestamp"`: prefix is `YYYYMMDD-HHMMSS` (current timestamp)
+        - If `"sequential"` or absent: prefix is `NNN` (next available 3-digit number after scanning existing directories in `<base>/specs/`)
+        - Construct the directory name: `<prefix>-<short-name>` (e.g., `003-user-auth` or `20260319-143022-user-auth`)
+      - Set `SPECIFY_FEATURE_DIRECTORY` to `<base>/specs/<directory-name>` (e.g., `.worktrees/003-user-auth/specs/003-user-auth` when running inside a worktree, otherwise `specs/003-user-auth`).
 
    **Create the directory and spec file**:
    - `mkdir -p SPECIFY_FEATURE_DIRECTORY`
-   - Copy `.specify/templates/spec-template.md` to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
+   - Copy `.specify/templates/spec-template.md` (always read from the **main** repository — templates are not duplicated into the worktree) to `SPECIFY_FEATURE_DIRECTORY/spec.md` as the starting point
    - Set `SPEC_FILE` to `SPECIFY_FEATURE_DIRECTORY/spec.md`
-   - Persist the resolved path to `.specify/feature.json`:
+   - Persist the resolved path to `<base>/.specify/feature.json` (i.e., inside the worktree when `WORKTREE_PATH` is set, otherwise the main repo):
      ```json
      {
-       "feature_directory": "<resolved feature dir>"
+       "feature_directory": "<resolved feature dir, relative to base>"
      }
      ```
-     Write the actual resolved directory path value (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY`.
-     This allows downstream commands (`/speckit.plan`, `/speckit.tasks`, etc.) to locate the feature directory without relying on git branch name conventions.
+     Write the actual resolved directory path value relative to the base (for example, `specs/003-user-auth`), not the literal string `SPECIFY_FEATURE_DIRECTORY` and not the worktree-prefixed absolute path. This allows downstream commands (`/speckit-plan`, `/speckit-tasks`, etc.) — which run *inside* the worktree — to locate the feature directory without rewriting paths.
 
    **IMPORTANT**:
-   - You must only create one feature per `/speckit.specify` invocation
-   - The spec directory name and the git branch name are independent — they may be the same but that is the user's choice
-   - The spec directory and file are always created by this command, never by the hook
+   - You must only create one feature per `/speckit-specify` invocation.
+   - The spec directory name and the git branch name are independent — but when the worktree hook ran, the default keeps them identical so the worktree's branch and `specs/<dir>` line up. Override only if you have a reason.
+   - The spec directory and file are always created by this command, never by the hook.
+   - **Never write into the main repo's `specs/` when a worktree was created** — the spec belongs on the feature branch, not on `main`.
 
 4. Load `.specify/templates/spec-template.md` to understand required sections.
 
@@ -136,7 +157,7 @@ Given that feature description, do this:
 
 7. **Specification Quality Validation**: After writing the initial spec, validate it against quality criteria:
 
-   a. **Create Spec Quality Checklist**: Generate a checklist file at `SPECIFY_FEATURE_DIRECTORY/checklists/requirements.md` using the checklist template structure with these validation items:
+   a. **Create Spec Quality Checklist**: Generate a checklist file at `SPECIFY_FEATURE_DIRECTORY/checklists/requirements.md` (note: `SPECIFY_FEATURE_DIRECTORY` is already worktree-prefixed when applicable, so the checklist also lands inside the worktree) using the checklist template structure with these validation items:
 
       ```markdown
       # Specification Quality Checklist: [FEATURE NAME]
@@ -227,10 +248,19 @@ Given that feature description, do this:
    d. **Update Checklist**: After each validation iteration, update the checklist file with current pass/fail status
 
 8. **Report completion** to the user with:
-   - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path
+   - `SPECIFY_FEATURE_DIRECTORY` — the feature directory path (worktree-prefixed when applicable)
    - `SPEC_FILE` — the spec file path
+   - `WORKTREE_PATH` and `BRANCH_NAME` — when the feature is being developed in a worktree
    - Checklist results summary
-   - Readiness for the next phase (`/speckit.clarify` or `/speckit.plan`)
+   - Readiness for the next phase (`/speckit-clarify` or `/speckit-plan`)
+   - **When `WORKTREE_PATH` is set**, lead the next-steps section with this instruction (the user *must* `cd` into the worktree before running any further `/speckit-*` command, otherwise downstream commands will not find `.specify/feature.json`):
+
+     ```
+     ⚠️  This feature lives in an isolated worktree. Continue with:
+         cd <WORKTREE_PATH>
+         /speckit-git-commit   # commit the new spec on the feature branch
+         /speckit-clarify       # or /speckit-plan
+     ```
 
 9. **Check for extension hooks**: After reporting completion, check if `.specify/extensions.yml` exists in the project root.
    - If it exists, read it and look for entries under the `hooks.after_specify` key
@@ -239,6 +269,7 @@ Given that feature description, do this:
    - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
      - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
      - If the hook defines a non-empty `condition`, skip the hook and leave condition evaluation to the HookExecutor implementation
+   - When constructing slash commands from hook command names, replace dots (`.`) with hyphens (`-`). For example, `speckit.git.commit` → `/speckit-git-commit`.
    - For each executable hook, output the following based on its `optional` flag:
      - **Optional hook** (`optional: true`):
        ```
@@ -261,7 +292,7 @@ Given that feature description, do this:
        ```
    - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
 
-**NOTE:** Branch creation is handled by the `before_specify` hook (git extension). Spec directory and file creation are always handled by this core command.
+**NOTE:** Branch + worktree creation is handled by the `before_specify` hook — by default `speckit.worktree.create` (worktree extension), which uses `git worktree add -b ... HEAD` so the main working directory's branch is **never** changed. The new feature branch only exists inside `.worktrees/<branch>/`. Spec directory and file creation are always handled by this core command, *inside the worktree* when the hook returned a `WORKTREE_PATH`. The legacy `git.feature` hook (which switches the main branch) is no longer wired by default but remains available if the user explicitly re-enables it in `.specify/extensions.yml`.
 
 ## Quick Guidelines
 
