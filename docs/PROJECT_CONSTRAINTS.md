@@ -15,6 +15,8 @@
 
 - `builtin_general_tools.read_file`、`write_file`、`edit_file`、`list_dir`、`exec` 的路径存在性、系统目录拒绝、命令安全分类和用户确认属于 pre_hook。
 - `edit_file` 的 `old_text` 查找与唯一性校验属于编辑执行准备，留在 handler。
+- assistant 高危确认必须只展示和记录脱敏摘要：`write_file` 只含目标路径，`edit_file` 只含截断片段，`exec` 只含命令首行；不得记录完整文件内容、完整替换文本或多行命令体。
+- assistant “全部允许/免确认”只允许是当前进程会话级内存状态，不得写入配置、keyring、SQLite 或 DuckDB；新对话入口必须复位该状态并收敛旧 pending 请求。
 - `recording_data_tools.query_data` 的 SQL 拒绝策略属于 pre_hook，但 handler 仍可再次调用 `rewrite(sql)` 生成实际执行 SQL。
 - `recording_data_tools.analyze_image` 的单次最多 5 个 action_index 限制属于 pre_hook。
 - `trial_tools.run_command` 的单次 `AgentLoop.run()` 调用上限属于 `create_trial_tools()` 内创建的 pre_hook 闭包。
@@ -33,5 +35,7 @@ Reviewer 必须拒绝下列改动：
 - 在 pre_hook 中加入参数改写或参数流水线语义。
 - 在 `ToolCallContext` 中加入确认回调、结果字段或可写参数引用。
 - 在 handler 中保留已经迁移到 pre_hook 的拒绝、确认、限流或安全策略分支。
+- 将 assistant 高危确认改回模态 `QMessageBox.question`，或让普通 Toast 与 Auth Toast 复用同一个生命周期引用。
+- 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。
 - 让 AgentLoop 内建注入的 `load_reference` 或 `talk_to_user` 进入 tool/global hook 链。
 - 绕过 `src/recording/filtering/` 的 SQL 改写或 DuckDB 代理边界读取录制网络数据。

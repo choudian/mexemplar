@@ -15,8 +15,12 @@
 
 import json
 import logging
+import re
 import subprocess
 import threading
+import time
+import uuid
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import List
@@ -33,6 +37,26 @@ logger = logging.getLogger(__name__)
 
 # 用户确认超时（秒）
 _CONFIRM_TIMEOUT = 120
+CONFIRM_TIMEOUT_MS = _CONFIRM_TIMEOUT * 1000
+
+CONFIRM_DECISION_ACCEPTED = "accepted"
+CONFIRM_DECISION_REJECTED = "rejected"
+CONFIRM_DECISION_TIMEOUT = "timeout"
+CONFIRM_DECISION_AUTO_APPROVED = "auto_approved"
+CONFIRM_DECISION_ERROR = "confirm_error"
+
+CONFIRM_SOURCE_TOAST = "toast"
+CONFIRM_SOURCE_TOAST_ACCEPT = "toast_accept"
+CONFIRM_SOURCE_TOAST_REJECT = "toast_reject"
+CONFIRM_SOURCE_TOAST_ALLOW_ALL = "toast_allow_all"
+CONFIRM_SOURCE_TOAST_TIMEOUT = "toast_timeout"
+CONFIRM_SOURCE_TOP_TOGGLE = "top_toggle"
+CONFIRM_SOURCE_AUTO_SCOPE = "auto_scope"
+CONFIRM_SOURCE_SYSTEM_ERROR = "system_error"
+CONFIRM_SOURCE_NEW_CHAT_RESET = "new_chat_reset"
+
+_SUMMARY_SNIPPET_MAX = 80
+_SUMMARY_TOTAL_MAX = 240
 
 # web_fetch 返回内容最大字符数
 _WEB_FETCH_MAX_LENGTH = 5000
@@ -79,8 +103,24 @@ EXEC_SAFE_COMMANDS = frozenset(
 # =========================================================================
 
 _confirm_signal = None  # pyqtSignal(str, str)，(request_id, message)
-_pending_confirms: dict = {}  # request_id → {"event": Event, "result": bool}
+_pending_confirms: dict = {}  # request_id → PendingConfirmation
 _confirm_lock = threading.Lock()
+_auto_approve_enabled = False
+_auto_approve_source = "startup_default"
+
+
+@dataclass
+class PendingConfirmation:
+    """等待 UI 决策的高危工具确认请求。"""
+
+    request_id: str
+    tool_name: str
+    summary: str
+    created_at: float
+    event: threading.Event
+    result: bool = False
+    decision: str | None = None
+    source: str | None = None
 
 
 def register_confirm_mechanism(signal):
@@ -94,16 +134,99 @@ def register_confirm_mechanism(signal):
     _confirm_signal = signal
 
 
-def set_confirm_result(request_id: str, result: bool):
+def set_confirm_result(
+    request_id: str,
+    result: bool,
+    source: str = CONFIRM_SOURCE_TOAST,
+) -> None:
     """UI 线程设置确认结果并唤醒对应的 worker 线程"""
     with _confirm_lock:
         pending = _pending_confirms.get(request_id)
-    if pending:
-        pending["result"] = result
-        pending["event"].set()
+        if pending is None:
+            logger.debug("[builtin_tools] 忽略未知确认请求: request_id=%s, source=%s", request_id, source)
+            return
+        if pending.event.is_set():
+            return
+        pending.result = result
+        pending.source = source
+        pending.decision = _decision_from_result_source(result, source)
+        pending.event.set()
+    _log_confirmation_decision(pending)
 
 
-def _ask_user_confirm(message: str) -> bool:
+def settle_pending_confirmations(
+    result: bool,
+    source: str,
+    created_before: float | None = None,
+) -> list[str]:
+    """结算仍在等待 UI 决策的确认请求，返回实际触达的 request_id。"""
+    with _confirm_lock:
+        request_ids = [
+            request_id
+            for request_id, pending in _pending_confirms.items()
+            if not pending.event.is_set()
+            and (created_before is None or pending.created_at <= created_before)
+        ]
+
+    for request_id in request_ids:
+        set_confirm_result(request_id, result, source)
+    return request_ids
+
+
+def get_pending_confirmation(request_id: str) -> PendingConfirmation | None:
+    """返回 pending confirmation 的只读元数据引用，供 UI 展示安全摘要。"""
+    with _confirm_lock:
+        pending = _pending_confirms.get(request_id)
+    return pending if isinstance(pending, PendingConfirmation) else None
+
+
+def get_confirmation_remaining_timeout_ms(request_id: str) -> int | None:
+    """返回从 Worker 创建确认请求开始计算的剩余 UI 超时时间。"""
+    with _confirm_lock:
+        pending = _pending_confirms.get(request_id)
+    if not isinstance(pending, PendingConfirmation):
+        return None
+    if pending.event.is_set():
+        return 0
+    elapsed_ms = int((time.monotonic() - pending.created_at) * 1000)
+    return CONFIRM_TIMEOUT_MS - elapsed_ms
+
+
+def set_auto_approve_enabled(enabled: bool, source: str) -> None:
+    """设置当前进程会话级高危工具自动放行状态。"""
+    global _auto_approve_enabled, _auto_approve_source
+    with _confirm_lock:
+        _auto_approve_enabled = bool(enabled)
+        _auto_approve_source = source
+    logger.info(
+        "[builtin_tools] auth_auto_approve_state=%s source=%s",
+        _auto_approve_enabled,
+        source,
+    )
+
+
+def is_auto_approve_enabled() -> bool:
+    """返回当前会话级自动放行状态。"""
+    with _confirm_lock:
+        return _auto_approve_enabled
+
+
+def reset_auto_approve(source: str = CONFIRM_SOURCE_NEW_CHAT_RESET) -> None:
+    """复位当前会话级自动放行状态。"""
+    set_auto_approve_enabled(False, source)
+
+
+def reset_confirmation_state_for_tests() -> None:
+    """测试用：清空确认状态、pending 请求和自动放行标记。"""
+    global _confirm_signal, _auto_approve_enabled, _auto_approve_source
+    with _confirm_lock:
+        _pending_confirms.clear()
+        _auto_approve_enabled = False
+        _auto_approve_source = "startup_default"
+    _confirm_signal = None
+
+
+def _ask_user_confirm(message: str, tool_name: str = "unknown") -> bool:
     """
     请求用户确认高危操作（线程安全，支持多 worker 并发）。
 
@@ -113,24 +236,121 @@ def _ask_user_confirm(message: str) -> bool:
         logger.warning("[builtin_tools] 确认机制未注册，拒绝高危操作")
         return False
 
-    import uuid
-
     request_id = str(uuid.uuid4())
     event = threading.Event()
+    pending = PendingConfirmation(
+        request_id=request_id,
+        tool_name=tool_name,
+        summary=_truncate_summary(message),
+        created_at=time.monotonic(),
+        event=event,
+    )
     with _confirm_lock:
-        _pending_confirms[request_id] = {"event": event, "result": False}
+        _pending_confirms[request_id] = pending
 
     try:
         _confirm_signal.emit(request_id, message)
-        event.wait(timeout=_CONFIRM_TIMEOUT)
+        completed = event.wait(timeout=_CONFIRM_TIMEOUT)
     except Exception:
         with _confirm_lock:
             _pending_confirms.pop(request_id, None)
+        pending.decision = CONFIRM_DECISION_ERROR
+        pending.source = CONFIRM_SOURCE_SYSTEM_ERROR
+        pending.result = False
+        _log_confirmation_decision(pending)
         raise
+
+    if not completed:
+        set_confirm_result(request_id, False, CONFIRM_SOURCE_TOAST_TIMEOUT)
 
     with _confirm_lock:
         pending = _pending_confirms.pop(request_id, None)
-    return pending["result"] if pending else False
+    if isinstance(pending, PendingConfirmation):
+        return pending.result
+    return False
+
+
+def _decision_from_result_source(result: bool, source: str) -> str:
+    if source in {CONFIRM_SOURCE_TOAST_TIMEOUT, CONFIRM_SOURCE_NEW_CHAT_RESET}:
+        return CONFIRM_DECISION_TIMEOUT
+    if source in {
+        CONFIRM_SOURCE_TOAST_ALLOW_ALL,
+        CONFIRM_SOURCE_TOP_TOGGLE,
+        CONFIRM_SOURCE_AUTO_SCOPE,
+    }:
+        return CONFIRM_DECISION_AUTO_APPROVED if result else CONFIRM_DECISION_REJECTED
+    return CONFIRM_DECISION_ACCEPTED if result else CONFIRM_DECISION_REJECTED
+
+
+def _truncate_summary(summary: str, max_len: int = _SUMMARY_TOTAL_MAX) -> str:
+    normalized = " ".join(str(summary).split())
+    if len(normalized) <= max_len:
+        return normalized
+    return normalized[: max_len - 3] + "..."
+
+
+_SENSITIVE_PATTERNS = [
+    re.compile(r"(?<!\w)sk-\S+", re.IGNORECASE),
+    re.compile(r"api_key=\S+", re.IGNORECASE),
+    re.compile(r"token=\S+", re.IGNORECASE),
+    re.compile(r"password=\S+", re.IGNORECASE),
+    re.compile(r"secret=\S+", re.IGNORECASE),
+]
+_SENSITIVE_REPLACEMENTS = {
+    "sk-": "sk-***",
+    "api_key=": "api_key=***",
+    "token=": "token=***",
+    "password=": "password=***",
+    "secret=": "secret=***",
+}
+
+
+def _sanitize_fragment(value: object, max_len: int = _SUMMARY_SNIPPET_MAX) -> str:
+    text = " ".join(str(value).replace("\r", "\n").split())
+    for pattern in _SENSITIVE_PATTERNS:
+        matched = pattern.search(text)
+        if matched:
+            match_text = matched.group()
+            for prefix, replacement in _SENSITIVE_REPLACEMENTS.items():
+                if match_text.lower().startswith(prefix):
+                    text = text[: matched.start()] + replacement + text[matched.end() :]
+                    break
+    if len(text) > max_len:
+        return text[: max_len - 3] + "..."
+    return text
+
+
+def _build_write_summary(path: Path) -> str:
+    return _truncate_summary(f"目标文件: {path}")
+
+
+def _build_edit_summary(path: Path, old_text: str, new_text: str) -> str:
+    old_preview = _sanitize_fragment(old_text)
+    new_preview = _sanitize_fragment(new_text)
+    return _truncate_summary(f"目标文件: {path}; 替换片段: {old_preview}; 新片段: {new_preview}")
+
+
+def _build_exec_summary(command: str) -> str:
+    lines = str(command).splitlines()
+    first_line = lines[0] if lines else ""
+    return _truncate_summary(f"命令首行: {_sanitize_fragment(first_line, 120)}")
+
+
+def _log_confirmation_decision(pending: PendingConfirmation) -> None:
+    elapsed_ms = max(0, int((time.monotonic() - pending.created_at) * 1000))
+    payload = {
+        "request_id": pending.request_id,
+        "tool_name": pending.tool_name,
+        "decision": pending.decision
+        or _decision_from_result_source(pending.result, pending.source or CONFIRM_SOURCE_TOAST),
+        "source": pending.source or CONFIRM_SOURCE_TOAST,
+        "elapsed_ms": elapsed_ms,
+        "summary": pending.summary,
+    }
+    logger.info(
+        "[builtin_tools] auth_confirmation_decision %s",
+        json.dumps(payload, ensure_ascii=False),
+    )
 
 
 # =========================================================================
@@ -276,9 +496,23 @@ def _is_safe_exec_command(command: str) -> bool:
     return False
 
 
-def _confirm_or_reject(message: str) -> PreHookResult | None:
+def _confirm_or_reject(tool_name: str, summary: str) -> PreHookResult | None:
+    if is_auto_approve_enabled():
+        pending = PendingConfirmation(
+            request_id=str(uuid.uuid4()),
+            tool_name=tool_name,
+            summary=summary,
+            created_at=time.monotonic(),
+            event=threading.Event(),
+            result=True,
+            decision=CONFIRM_DECISION_AUTO_APPROVED,
+            source=CONFIRM_SOURCE_AUTO_SCOPE,
+        )
+        _log_confirmation_decision(pending)
+        return None
+
     try:
-        confirmed = _ask_user_confirm(message)
+        confirmed = _ask_user_confirm(summary, tool_name=tool_name)
     except Exception as exc:
         logger.warning("[builtin_tools] 确认请求失败，拒绝高危操作: %s", exc, exc_info=True)
         return PreHookResult(error="确认请求失败，拒绝执行该高危操作")
@@ -300,7 +534,7 @@ def write_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     p = _resolve_path_arg(ctx)
     if _is_system_path(p):
         return PreHookResult(error="禁止写入系统目录")
-    return _confirm_or_reject(f"将向文件写入内容：\n{p}\n\n是否确认？")
+    return _confirm_or_reject("write_file", _build_write_summary(p))
 
 
 def edit_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
@@ -311,10 +545,8 @@ def edit_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
         return PreHookResult(error=f"不是文件: {p}")
     old_text = str(ctx.args["old_text"])
     return _confirm_or_reject(
-        f"将编辑文件：{p}\n"
-        f"替换：{old_text[:80]}...\n"
-        f"为：{str(ctx.args['new_text'])[:80]}...\n"
-        "是否确认？"
+        "edit_file",
+        _build_edit_summary(p, old_text, str(ctx.args["new_text"])),
     )
 
 
@@ -331,7 +563,7 @@ def exec_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     command = str(ctx.args["command"])
     if _is_safe_exec_command(command):
         return None
-    return _confirm_or_reject(f"将执行以下命令：\n\n{command}\n\n是否确认？")
+    return _confirm_or_reject("exec", _build_exec_summary(command))
 
 
 # =========================================================================
@@ -580,6 +812,25 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
 
 __all__ = [
     "BUILTIN_GENERAL_TOOLS",
+    "CONFIRM_DECISION_ACCEPTED",
+    "CONFIRM_DECISION_TIMEOUT",
+    "CONFIRM_SOURCE_AUTO_SCOPE",
+    "CONFIRM_SOURCE_NEW_CHAT_RESET",
+    "CONFIRM_SOURCE_TOAST",
+    "CONFIRM_SOURCE_TOAST_ACCEPT",
+    "CONFIRM_SOURCE_TOAST_ALLOW_ALL",
+    "CONFIRM_SOURCE_TOAST_REJECT",
+    "CONFIRM_SOURCE_TOAST_TIMEOUT",
+    "CONFIRM_SOURCE_TOP_TOGGLE",
+    "CONFIRM_TIMEOUT_MS",
+    "PendingConfirmation",
+    "get_confirmation_remaining_timeout_ms",
+    "get_pending_confirmation",
+    "is_auto_approve_enabled",
     "register_confirm_mechanism",
+    "reset_auto_approve",
+    "reset_confirmation_state_for_tests",
+    "set_auto_approve_enabled",
     "set_confirm_result",
+    "settle_pending_confirmations",
 ]

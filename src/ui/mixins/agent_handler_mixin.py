@@ -8,13 +8,38 @@ AgentHandlerMixin — Agent 事件处理
 - 教学失败重试
 """
 
+import time
+from collections import deque
+
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 
 from src.business.agents.config import AgentType, ResultType
+from src.business.agents.tools.builtin_general_tools import (
+    CONFIRM_SOURCE_AUTO_SCOPE,
+    CONFIRM_SOURCE_NEW_CHAT_RESET,
+    CONFIRM_SOURCE_TOAST_ACCEPT,
+    CONFIRM_SOURCE_TOAST_ALLOW_ALL,
+    CONFIRM_SOURCE_TOAST_REJECT,
+    CONFIRM_SOURCE_TOAST_TIMEOUT,
+    CONFIRM_SOURCE_TOP_TOGGLE,
+    get_confirmation_remaining_timeout_ms,
+    get_pending_confirmation,
+    is_auto_approve_enabled,
+    reset_auto_approve,
+    set_auto_approve_enabled,
+    set_confirm_result,
+    settle_pending_confirmations,
+)
 from src.business.services import SkillCompositionError, SkillCompositionService, SkillsService
 from src.ui.page_ids import CONVERSATIONS, INTENT_CONFIRMATION, SKILLS
-
+from src.ui.widgets.auth_toast import (
+    DECISION_ACCEPT,
+    DECISION_ALLOW_ALL,
+    DECISION_REJECT,
+    DECISION_TIMEOUT,
+    AuthToastSurface,
+)
 
 COMPOSITION_TRIAL_AGENT_TYPE = "composition_trial"
 
@@ -53,9 +78,7 @@ class AgentHandlerMixin:
                 intent_page.add_trial_question(question, workflow_id)
             return
 
-        self._show_intent_confirmation_from_agent(
-            {"message": question}, question, workflow_id
-        )
+        self._show_intent_confirmation_from_agent({"message": question}, question, workflow_id)
 
     def _on_agent_progress(self, workflow_id: str, event_name: str) -> None:
         """处理 Agent 进度事件"""
@@ -215,17 +238,151 @@ class AgentHandlerMixin:
                 chat.set_loading(False)
 
     def _on_confirm_action_requested(self, request_id: str, message: str) -> None:
-        """UI 线程槽：收到 worker 线程的确认请求后弹框"""
-        from src.business.agents.tools.builtin_general_tools import set_confirm_result
+        """UI 线程槽：收到 worker 线程的确认请求后显示非阻塞确认浮层。"""
+        pending = get_pending_confirmation(request_id)
+        if pending is None or pending.event.is_set():
+            return
 
-        reply = QMessageBox.question(
-            self,
-            "操作确认",
-            message,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        if pending.created_at <= self._auth_confirm_ignore_before:
+            set_confirm_result(request_id, False, CONFIRM_SOURCE_NEW_CHAT_RESET)
+            return
+
+        if is_auto_approve_enabled():
+            set_confirm_result(request_id, True, CONFIRM_SOURCE_AUTO_SCOPE)
+            self._sync_auth_toggle_state(True)
+            return
+
+        self._auth_toast_queue.append((request_id, message))
+        if self._active_auth_toast is None:
+            self._show_next_auth_toast()
+
+    def _auth_toast_parent(self):
+        central_widget = getattr(self, "centralWidget", lambda: None)()
+        return central_widget or self
+
+    def _show_next_auth_toast(self) -> None:
+        if self._active_auth_toast is not None or not self._auth_toast_queue:
+            return
+
+        while self._auth_toast_queue:
+            request_id, _message = self._auth_toast_queue.popleft()
+            pending = get_pending_confirmation(request_id)
+            if pending is None or pending.event.is_set():
+                continue
+            if pending.created_at <= self._auth_confirm_ignore_before:
+                set_confirm_result(request_id, False, CONFIRM_SOURCE_NEW_CHAT_RESET)
+                continue
+
+            remaining_ms = get_confirmation_remaining_timeout_ms(request_id)
+            if remaining_ms is None:
+                continue
+            if remaining_ms <= 0:
+                set_confirm_result(request_id, False, CONFIRM_SOURCE_TOAST_TIMEOUT)
+                continue
+
+            toast = AuthToastSurface(
+                request_id=request_id,
+                tool_name=pending.tool_name,
+                summary=pending.summary,
+                timeout_ms=remaining_ms,
+                parent=self._auth_toast_parent(),
+            )
+            toast.decision_made.connect(self._on_auth_toast_decision)
+            toast.adjustSize()
+            self._active_auth_toast = toast
+            self._position_active_auth_toast()
+            toast.show()
+            toast.raise_()
+            self._position_active_notification_toast()
+            return
+
+        self._position_active_notification_toast()
+
+    def _on_auth_toast_decision(self, request_id: str, decision: str) -> None:
+        show_next = True
+        if decision == DECISION_ALLOW_ALL:
+            set_auto_approve_enabled(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+            set_confirm_result(request_id, True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+            self._sync_auth_toggle_state(True)
+            self._drain_auth_toast_queue(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+            show_next = False
+        elif decision == DECISION_ACCEPT:
+            set_confirm_result(request_id, True, CONFIRM_SOURCE_TOAST_ACCEPT)
+        elif decision == DECISION_REJECT:
+            set_confirm_result(request_id, False, CONFIRM_SOURCE_TOAST_REJECT)
+        elif decision == DECISION_TIMEOUT:
+            set_confirm_result(request_id, False, CONFIRM_SOURCE_TOAST_TIMEOUT)
+        else:
+            set_confirm_result(request_id, False, CONFIRM_SOURCE_TOAST_REJECT)
+
+        self._clear_active_auth_toast()
+        if show_next:
+            self._show_next_auth_toast()
+        else:
+            self._position_active_notification_toast()
+
+    def _clear_active_auth_toast(self) -> None:
+        toast = self._active_auth_toast
+        self._active_auth_toast = None
+        if toast is not None:
+            toast.deleteLater()
+
+    def _drain_auth_toast_queue(self, approved: bool, source: str) -> None:
+        queued = list(self._auth_toast_queue)
+        self._auth_toast_queue.clear()
+        for queued_request_id, _message in queued:
+            set_confirm_result(queued_request_id, approved, source)
+
+    @staticmethod
+    def _move_to_bottom_right(widget, parent, margin=16):
+        x = max(margin, parent.width() - widget.width() - margin)
+        y = max(margin, parent.height() - widget.height() - margin)
+        widget.move(x, y)
+
+    def _position_active_auth_toast(self) -> None:
+        if self._active_auth_toast is None:
+            return
+        self._move_to_bottom_right(self._active_auth_toast, self._auth_toast_parent())
+
+    def _position_active_notification_toast(self, toast=None):
+        """no-op 基方法，由 MainWindow 覆盖。"""
+
+    def _sync_auth_toggle_state(self, enabled: bool) -> None:
+        chat = self._get_chat_widget() if hasattr(self, "_get_chat_widget") else None
+        if chat and hasattr(chat, "set_auto_approve_enabled"):
+            chat.set_auto_approve_enabled(enabled)
+
+    def _on_chat_auto_approve_toggled(self, enabled: bool) -> None:
+        set_auto_approve_enabled(enabled, CONFIRM_SOURCE_TOP_TOGGLE)
+        self._sync_auth_toggle_state(enabled)
+        if not enabled:
+            return
+
+        active = self._active_auth_toast
+        if active is not None:
+            set_confirm_result(active.request_id, True, CONFIRM_SOURCE_TOP_TOGGLE)
+            self._clear_active_auth_toast()
+        self._drain_auth_toast_queue(True, CONFIRM_SOURCE_TOP_TOGGLE)
+        self._position_active_notification_toast()
+
+    def _settle_auth_confirmations_for_new_chat(self) -> None:
+        self._auth_confirm_ignore_before = time.monotonic()
+        active = self._active_auth_toast
+        if active is not None:
+            set_confirm_result(active.request_id, False, CONFIRM_SOURCE_NEW_CHAT_RESET)
+            self._clear_active_auth_toast()
+        self._drain_auth_toast_queue(False, CONFIRM_SOURCE_NEW_CHAT_RESET)
+        settle_pending_confirmations(
+            False,
+            CONFIRM_SOURCE_NEW_CHAT_RESET,
+            created_before=self._auth_confirm_ignore_before,
         )
-        set_confirm_result(request_id, reply == QMessageBox.StandardButton.Yes)
+        reset_auto_approve()
+        self._sync_auth_toggle_state(False)
+        self._position_active_notification_toast()
+
+    def _on_chat_new_chat_started(self) -> None:
+        self._settle_auth_confirmations_for_new_chat()
 
     # ------------------------------------------------------------------
     # 工具试用 / 删除 / 更新
@@ -315,9 +472,13 @@ class AgentHandlerMixin:
         if not composition_id or not session_id.strip():
             self.logger.warning("技能组合试用上下文丢失，无法继续")
             return
-        if self._current_composition_trial_session_id and session_id != self._current_composition_trial_session_id:
+        if (
+            self._current_composition_trial_session_id
+            and session_id != self._current_composition_trial_session_id
+        ):
             self.logger.warning(
-                f"忽略过期技能组合试用会话: current={self._current_composition_trial_session_id}, got={session_id}"
+                "忽略过期技能组合试用会话: "
+                f"current={self._current_composition_trial_session_id}, got={session_id}"
             )
             return
 
@@ -366,7 +527,9 @@ class AgentHandlerMixin:
             )
             return
 
-        final_message = reply or error or ("技能组合试用完成。" if success else "技能组合试用失败。")
+        final_message = (
+            reply or error or ("技能组合试用完成。" if success else "技能组合试用失败。")
+        )
         intent_page.complete_trial(session_id, final_message, success=success)
         self._current_composition_trial_session_id = None
         self._current_agent_workflow_id = None

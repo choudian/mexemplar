@@ -484,7 +484,7 @@ def test_builtin_general_pre_hooks_reject_before_handler(
         payload = json.loads(_tool_results(loop, f"hook-{name}-reject")[0].content)
         assert payload["error"] == "pre_hook_rejected"
 
-    monkeypatch.setattr(general_tools, "_ask_user_confirm", lambda message: False)
+    monkeypatch.setattr(general_tools, "_ask_user_confirm", lambda message, **_kw: False)
     exec_tool = ToolDefinition(
         name="exec",
         schema=_schema("exec"),
@@ -510,7 +510,7 @@ def test_builtin_general_confirm_pre_hook_denial_and_approval(
     target = tmp_path / "out.txt"
     write_tool = _tool_by_name("write_file")
 
-    monkeypatch.setattr(general_tools, "_ask_user_confirm", lambda message: False)
+    monkeypatch.setattr(general_tools, "_ask_user_confirm", lambda message, **_kw: False)
     loop, _ = _run_batch(
         [write_tool],
         [
@@ -534,7 +534,7 @@ def test_builtin_general_confirm_pre_hook_denial_and_approval(
 
     confirmations = []
 
-    def confirm(message):
+    def confirm(message, **_kw):
         confirmations.append(message)
         return True
 

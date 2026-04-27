@@ -13,6 +13,7 @@ Agent、录制、工具试用等业务逻辑分别由以下 Mixin 承载：
 """
 
 import threading
+from collections import deque
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
@@ -27,7 +28,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.ui.mixins import AgentBridgeMixin, AgentHandlerMixin, OrchestratorInitStatus, RecordingMixin
+from src.ui.mixins import (
+    AgentBridgeMixin,
+    AgentHandlerMixin,
+    OrchestratorInitStatus,
+    RecordingMixin,
+)
 from src.ui.page_ids import CONVERSATIONS, INTENT_CONFIRMATION, SETTINGS, SKILLS, TEACHING
 from src.ui.resources.icons.sidebar_icons import (
     FILE_ICON,
@@ -81,6 +87,9 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
 
         self._sidebar_visible = True
         self._active_toast = None
+        self._active_auth_toast = None
+        self._auth_toast_queue = deque()
+        self._auth_confirm_ignore_before = 0.0
         self.menubar = None
 
         # Agent 会话上下文
@@ -149,6 +158,8 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         # 页面
         chat_page = ChatWidget()
         chat_page.send_message_requested.connect(self._on_chat_send_message)
+        chat_page.auto_approve_toggled.connect(self._on_chat_auto_approve_toggled)
+        chat_page.new_chat_started.connect(self._on_chat_new_chat_started)
         self.main_content.add_page(CONVERSATIONS, chat_page)
 
         self.recording_page = RecordingWidget()
@@ -180,9 +191,15 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         self.intent_confirmation_page.cancel_requested.connect(self._on_intent_cancel_requested)
 
         self.pending_tools_page.trial_start_request.connect(self._on_trial_start_request)
-        self.pending_tools_page.composition_trial_request.connect(self._on_composition_trial_request)
-        self.pending_tools_page.tool_delete_request.connect(self._on_tool_delete_request)
-        self.pending_tools_page.tool_update_request.connect(self._on_tool_update_request)
+        self.pending_tools_page.composition_trial_request.connect(
+            self._on_composition_trial_request
+        )
+        self.pending_tools_page.tool_delete_request.connect(
+            self._on_tool_delete_request
+        )
+        self.pending_tools_page.tool_update_request.connect(
+            self._on_tool_update_request
+        )
         self.pending_tools_page.retry_requested.connect(self._on_retry_requested)
 
         self.sidebar.new_chat_requested.connect(self._on_new_chat_requested)
@@ -371,9 +388,7 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
 
         toast.setFixedWidth(320)
         toast.adjustSize()
-        x = self.centralWidget().width() - toast.width() - 16
-        y = self.centralWidget().height() - toast.height() - 16
-        toast.move(x, y)
+        self._position_active_notification_toast(toast)
         toast.raise_()
         style = toast.style()
         for w in (toast, label):
@@ -395,14 +410,22 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         auto_timer.timeout.connect(_dismiss)
         auto_timer.start(auto_dismiss_ms)
 
+    def _position_active_notification_toast(self, toast: QFrame | None = None) -> None:
+        """定位普通 toast；若确认浮层存在，则放在确认浮层上方避免重叠。"""
+        target = toast or self._active_toast
+        if target is None:
+            return
+        self._move_to_bottom_right(target, self.centralWidget())
+        auth_toast = self._active_auth_toast
+        if auth_toast is not None and auth_toast.isVisible():
+            y = auth_toast.y() - target.height() - 12
+            target.move(max(16, target.x()), max(16, y))
+
     def resizeEvent(self, event: QResizeEvent):
         """窗口大小变化时重新定位 toast"""
         super().resizeEvent(event)
-        if self._active_toast is not None:
-            central = self.centralWidget()
-            x = central.width() - self._active_toast.width() - 16
-            y = central.height() - self._active_toast.height() - 16
-            self._active_toast.move(x, y)
+        self._position_active_auth_toast()
+        self._position_active_notification_toast()
 
     # =========================================================================
     # 对话框 / 关闭

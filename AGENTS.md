@@ -39,6 +39,8 @@
 - 录制数据工具现为 **5 工具模型**：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`；大字段（≥1000 字符）自动占位替换，Agent 按需分段读取
 - SQL 列血缘分析在 `src/recording/filtering/query_projection_analyzer.py`（用 sqlglot）；`recording_data_tools.py` 不直接 import sqlglot（guard test 约束）
 - 大字段配置走 `recording.large_field.*`（`threshold_chars` / `preview_chars` / `max_chunk_chars`，默认均 1000）
+- assistant 的 `write_file` / `edit_file` / `exec` 高危确认使用右下角非模态 `AuthToastSurface`；UI 侧 FIFO 队列一次只展示一个确认，普通 Toast 继续走独立 `_active_toast`
+- “全部允许”和对话顶栏“免确认”共享 `builtin_general_tools` 内的会话级内存状态；新对话必须复位并把旧会话 active/queued 确认按拒绝/超时语义收敛
 
 ---
 
@@ -51,6 +53,7 @@
 - 架构切换时，补两类接线测试：
   - 链路冒烟测试：新路径真的被调用
   - 门卫测试：旧路径不再被导入
+- 改 assistant 高危确认时，必须保留 `request_id + threading.Event + pyqtSignal(str, str)` 同步协议，只替换 UI 展示方式；不得恢复 `QMessageBox.question`
 
 ---
 
@@ -63,7 +66,7 @@
 - `docs/local/`：临时分析、计划、草稿
 
 <!-- SPECKIT START -->
-For the active `002-tool-hook-system` feature, read
-`specs/002-tool-hook-system/plan.md` for implementation context, project
+For the active `004-auth-toast` feature, read
+`specs/004-auth-toast/plan.md` for implementation context, project
 structure, validation commands, and generated design artifacts.
 <!-- SPECKIT END -->

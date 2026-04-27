@@ -44,6 +44,16 @@
 - pre_hook 只做放行/拒绝/观测；post_hook 不形成流水线，每个 hook 看到同一个原始 handler 结果；详见 `docs/PROJECT_CONSTRAINTS.md` 和 `docs/ARCHITECTURE.md`
 - 会话恢复走 `get_pending_tool_calls()`，只补齐最近 assistant 消息中未配对的调用，按原始顺序
 - AgentLoop 发出的配对错误统一为标准化 JSON 结构：`{"error": "<code>", "message": "...", ...}`，错误码：`unknown_tool` / `handler_exception` / `handler_contract_violation` / `not_executed` / `invalid_model_output` / `pre_hook_rejected`
+- Assistant 高危工具确认已从 `QMessageBox.question` 模态弹窗改为非阻塞 `AuthToastSurface` 浮层（右下角）；UI 端由 `AgentHandlerMixin` 的 FIFO 队列管理，一次显示一个浮层
+- 确认状态模型：`PendingConfirmation` dataclass（request_id / tool_name / summary / decision / source）+ 模块级 `_auto_approve_enabled` 自动放行开关；均受 `_confirm_lock` 保护
+- 脱敏摘要：`_truncate_summary` + `_sanitize_fragment` 生成工具参数摘要，自动截断长参数并替换敏感模式（sk-* / password= / token= / secret=）
+- 结构化决策日志：每次终态决策写入 `logger.info`，含 request_id / tool_name / decision / source / elapsed_ms / summary
+- 会话级自动放行："全部允许"按钮或顶栏"免确认" Toggle 开启后，同会话后续高危请求自动放行；新对话时 `reset_auto_approve` 复位
+- 顶栏 Toggle 与浮层"全部允许"双向同步：任一入口变化，另一处同帧/下一帧内同步状态
+- 新对话时 `settle_pending_confirmations` 按 monotonic 截止时间收敛旧会话未决请求
+- `AuthToastSurface` 无普通关闭按钮，不响应外部点击关闭，只通过三按钮或 QTimer 超时结束
+- 普通 Toast 与确认浮层独立生命周期管理，互不覆盖；`MainWindow.resizeEvent` 分别重定位
+- PM / Trial Agent 的 `IntentConfirmationUI` 和手动参数 `ToolExecutionDialog` 不受确认 Toast 化影响
 
 ---
 
@@ -71,5 +81,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/003-fix-agentloop-tool-calls/plan.md`
+at `specs/004-auth-toast/plan.md`
 <!-- SPECKIT END -->

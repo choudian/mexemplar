@@ -74,6 +74,8 @@ class ChatWidget(QWidget):
 
     # 发出信号给 MainWindow，让它通过 UIBridge 启动 Agent
     send_message_requested = pyqtSignal(str, str, str)  # session_id, agent_type, user_input
+    auto_approve_toggled = pyqtSignal(bool)
+    new_chat_started = pyqtSignal()
 
     # 视图索引常量
     VIEW_SESSION_LIST = 0
@@ -175,6 +177,27 @@ class ChatWidget(QWidget):
         chat_layout = QVBoxLayout(view)
         chat_layout.setSpacing(0)
         chat_layout.setContentsMargins(0, 0, 0, 0)
+
+        header = QWidget()
+        header.setObjectName("chat_header")
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(32, 14, 32, 14)
+        header_layout.setSpacing(12)
+
+        title = QLabel("AI 助手")
+        title.setObjectName("chat_title")
+        header_layout.addWidget(title)
+        header_layout.addStretch()
+
+        self.auto_approve_toggle = QPushButton()
+        self.auto_approve_toggle.setObjectName("chat_auto_approve_toggle")
+        self.auto_approve_toggle.setCheckable(True)
+        self.auto_approve_toggle.setToolTip("当前会话内自动允许 Assistant 高危工具")
+        self.auto_approve_toggle.clicked.connect(self._on_auto_approve_toggle_clicked)
+        self._refresh_auto_approve_toggle_text(False)
+        header_layout.addWidget(self.auto_approve_toggle)
+
+        chat_layout.addWidget(header)
 
         # 消息展示区域
         messages_scroll = QScrollArea()
@@ -523,7 +546,9 @@ class ChatWidget(QWidget):
 
     def on_new_chat(self):
         """新建对话（外部调用入口）— 只准备 UI，不创建 DB 会话"""
+        self.set_auto_approve_enabled(False)
         self._prepare_new_chat()
+        self.new_chat_started.emit()
 
     def show_session_list(self):
         """显示会话列表视图（供 MainWindow 在页面切换时调用）"""
@@ -542,6 +567,15 @@ class ChatWidget(QWidget):
         self._dismiss_welcome()
         self._do_send(message)
 
+    def set_auto_approve_enabled(self, enabled: bool):
+        """同步顶栏免确认 Toggle 状态，不发出用户切换信号。"""
+        self.auto_approve_toggle.blockSignals(True)
+        try:
+            self.auto_approve_toggle.setChecked(enabled)
+            self._refresh_auto_approve_toggle_text(enabled)
+        finally:
+            self.auto_approve_toggle.blockSignals(False)
+
     # =========================================================================
     # Private
     # =========================================================================
@@ -549,6 +583,18 @@ class ChatWidget(QWidget):
     def _get_display_name(self) -> str:
         """从用户偏好档案获取称呼"""
         return ChatService().get_display_name()
+
+    def _on_auto_approve_toggle_clicked(self, checked: bool) -> None:
+        self._refresh_auto_approve_toggle_text(checked)
+        self.auto_approve_toggled.emit(checked)
+
+    def _refresh_auto_approve_toggle_text(self, enabled: bool) -> None:
+        state = "开启" if enabled else "关闭"
+        self.auto_approve_toggle.setText(f"免确认：{state}")
+        self.auto_approve_toggle.setProperty("autoApproveEnabled", enabled)
+        style = self.auto_approve_toggle.style()
+        style.unpolish(self.auto_approve_toggle)
+        style.polish(self.auto_approve_toggle)
 
     def _on_welcome_send(self):
         """从欢迎页输入框发送"""
