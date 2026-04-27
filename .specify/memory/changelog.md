@@ -74,3 +74,28 @@
 - `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` — hook 运行结构与边界文档
 
 **Tasks Completed:** 34/37 tasks
+
+## 高危操作确认 Toast 化 — 2026-04-27
+
+**Branch:** `004-auth-toast`
+**Spec:** `specs/004-auth-toast`
+
+**What was added:**
+- US-011 (P1): Assistant 高危工具确认从 QMessageBox 模态弹窗改为非阻塞右下角浮层
+- US-012 (P2): 浮层"全部允许"按钮开启会话级自动放行，新对话自动复位
+- US-013 (P3): 顶栏"免确认"Toggle 与浮层双向同步
+
+**New Components:**
+- `src/ui/widgets/auth_toast.py` — AuthToastSurface 非模态确认浮层
+- `tests/test_auth_toast_confirmation.py` — 确认状态/脱敏/自动放行业务测试
+- `tests/ui/test_auth_toast_surface.py` — 浮层 UI 测试
+- `tests/ui/test_chat_widget_auth_toggle.py` — Toggle 状态同步测试
+
+**Modified Components:**
+- `src/business/agents/tools/builtin_general_tools.py` — PendingConfirmation、自动放行状态、脱敏摘要/日志、确认 helper 重构
+- `src/ui/mixins/agent_handler_mixin.py` — 非阻塞确认队列替代 QMessageBox
+- `src/ui/main_window.py` — auth toast 状态/队列/resize 重定位
+- `src/ui/widgets/chat_widget.py` — 顶栏 Toggle + new_chat_started 信号
+- `src/ui/resources/styles.qss` — auth toast + Toggle 样式
+
+**Tasks Completed:** 37/38 tasks (T038 black/flake8 待完成)
