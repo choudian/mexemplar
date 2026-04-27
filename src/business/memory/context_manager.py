@@ -55,8 +55,9 @@ class ContextManager:
         流程：
         1. 从 DB 加载非 archived 消息（按 sequence 排序）
         2. 检查是否需要压缩 → 如需要，执行压缩，重新加载
-        3. 对 tool result 消息应用引用替换
-        4. 转换为 LLM API 格式
+        3. 清理孤立 tool result（压缩后、引用替换前）
+        4. 对 tool result 消息应用引用替换
+        5. 转换为 LLM API 格式
 
         Returns:
             LLM API 格式的消息列表
@@ -72,11 +73,59 @@ class ContextManager:
                 # 重新加载消息
                 messages = self._msg_repo.get_context(self.session_id)
 
-        # 3. 应用引用替换
+        # 3. 清理孤立 tool result
+        messages = self._cleanup_orphan_tool_results(messages)
+
+        # 4. 应用引用替换
         llm_messages = self._reference_handler.apply_replacements(messages)
 
         logger.debug(f"[上下文] 已组装 {len(llm_messages)} 条消息")
         return llm_messages
+
+    def _cleanup_orphan_tool_results(self, messages: List[Message]) -> List[Message]:
+        """检测并剔除孤立的 tool result 消息。
+
+        孤立 tool result 是指 tool_call_id 不在任意 assistant(tool_calls) 中出现的
+        tool 消息。这通常由压缩边界调整遗漏导致。
+
+        清理不影响 get_pending_tool_calls 的语义：只移除 tool 消息，
+        不修改 assistant(tool_calls)。
+        """
+        # 收集所有 assistant(tool_calls) 中的 id
+        valid_tc_ids = set()
+        for msg in messages:
+            if msg.role == "assistant" and msg.tool_calls:
+                try:
+                    for tc in json.loads(msg.tool_calls):
+                        tc_id = tc.get("id")
+                        if tc_id:
+                            valid_tc_ids.add(tc_id)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+        if not valid_tc_ids:
+            # 没有 assistant(tool_calls)，所有 tool 消息都是孤立的
+            orphan_count = sum(1 for m in messages if m.role == "tool")
+            if orphan_count > 0:
+                logger.warning(
+                    f"[上下文] 发现 {orphan_count} 个孤立 tool result（无对应 assistant），已剔除"
+                )
+                return [m for m in messages if m.role != "tool"]
+            return messages
+
+        # 过滤孤立 tool result
+        cleaned = []
+        orphan_count = 0
+        for msg in messages:
+            if msg.role == "tool" and msg.tool_call_id not in valid_tc_ids:
+                orphan_count += 1
+                continue
+            cleaned.append(msg)
+
+        if orphan_count > 0:
+            logger.warning(f"[上下文] 发现 {orphan_count} 个孤立 tool result，已剔除")
+
+        return cleaned
 
     # --- 消息持久化 ---
 
@@ -149,16 +198,6 @@ class ContextManager:
     def get_last_message(self):
         """获取最后一条非归档消息（用于判断是否需要等待用户输入）"""
         return self._msg_repo.get_last(self.session_id)
-
-    def get_pending_tool_call(self) -> Optional[dict]:
-        """
-        检测 session 是否有待重试的工具调用（兼容旧路径，返回第一个）。
-
-        Returns:
-            {"id": ..., "name": ..., "args": {...}} 或 None
-        """
-        pending = self.get_pending_tool_calls()
-        return pending[0] if pending else None
 
     def get_pending_tool_calls(self) -> List[dict]:
         """

@@ -89,15 +89,19 @@ class AssistantMemoryManager:
         self._embedding_checked = True
         try:
             from src.data.unified_config import get_unified_config
+
             openai_key = get_unified_config().get_embedding_api_key()
             if openai_key:
                 from openai import OpenAI
+
                 client = OpenAI(api_key=openai_key)
 
                 class _EmbeddingClient:
                     """轻量封装，提供 embed_query 接口"""
+
                     def __init__(self, oai_client):
                         self._client = oai_client
+
                     def embed_query(self, text: str) -> list:
                         resp = self._client.embeddings.create(
                             input=text, model="text-embedding-3-small"
@@ -118,6 +122,7 @@ class AssistantMemoryManager:
             return
         try:
             from src.data.repositories import AssistantSummaryRepository
+
             embedding = client.embed_query(content)
             AssistantSummaryRepository().store_embedding(summary_id, embedding)
             logger.debug(f"[AssistantMemory] embedding 已存储: {summary_id}")
@@ -142,7 +147,11 @@ class AssistantMemoryManager:
     def _batch_generate_session_summaries(self, exclude_session_id: str):
         """批量为未生成摘要的历史会话生成摘要"""
         try:
-            from src.data.repositories import SessionRepository, MessageRepository, AssistantSummaryRepository
+            from src.data.repositories import (
+                SessionRepository,
+                MessageRepository,
+                AssistantSummaryRepository,
+            )
 
             session_repo = SessionRepository()
             all_sessions = session_repo.get_by_agent_type("assistant", limit=200)
@@ -228,9 +237,7 @@ class AssistantMemoryManager:
 
             # 取最老的 GROUP_SIZE 个生成分组摘要
             batch = ungrouped[:GROUP_SIZE]
-            summaries_text = "\n\n".join(
-                f"[{s.summary_id}]\n{s.content}" for s in batch
-            )
+            summaries_text = "\n\n".join(f"[{s.summary_id}]\n{s.content}" for s in batch)
 
             content = self._call_llm_simple(
                 GROUP_SUMMARY_PROMPT.format(session_summaries=summaries_text)
@@ -267,9 +274,7 @@ class AssistantMemoryManager:
             if not all_groups:
                 return
 
-            group_text = "\n\n".join(
-                f"[{g.summary_id}]\n{g.content}" for g in all_groups
-            )
+            group_text = "\n\n".join(f"[{g.summary_id}]\n{g.content}" for g in all_groups)
             content = self._call_llm_simple(
                 GLOBAL_SUMMARY_PROMPT.format(group_summaries=group_text)
             )
@@ -333,14 +338,21 @@ class AssistantMemoryManager:
                     "summary_id": s.summary_id,
                     "level": s.level,
                     "score": 1.0,
-                    "snippet": s.content[:300],
-                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "snippet": s.content[:300] if s.content else "",
+                    "created_at": self._format_created_at(s.created_at),
                 }
                 for s in like_results
             ]
         except Exception as e:
             logger.error(f"[AssistantMemory] 搜索失败: {e}")
             return []
+
+    @staticmethod
+    def _format_created_at(created_at) -> str:
+        """将 created_at 统一转为 ISO 格式字符串（兼容 naive/aware datetime 和字符串）。"""
+        if hasattr(created_at, "isoformat"):
+            return created_at.isoformat()
+        return str(created_at or "")
 
     def _try_vector_search(self, query: str, repo, levels: list, limit: int) -> list:
         """尝试向量检索。未配置 embedding 时返回空列表（静默降级）。"""
@@ -358,14 +370,15 @@ class AssistantMemoryManager:
             for r in rows:
                 # 余弦距离 → 相似度：similarity = 1 - distance/2
                 similarity = 1.0 - (r["distance"] / 2.0) if r["distance"] is not None else 0.0
-                created_at = r["created_at"]
-                results.append({
-                    "summary_id": r["summary_id"],
-                    "level": r["level"],
-                    "score": similarity,
-                    "snippet": r["content"][:300] if r["content"] else "",
-                    "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
-                })
+                results.append(
+                    {
+                        "summary_id": r["summary_id"],
+                        "level": r["level"],
+                        "score": similarity,
+                        "snippet": r["content"][:300] if r["content"] else "",
+                        "created_at": self._format_created_at(r["created_at"]),
+                    }
+                )
             return results
         except Exception as e:
             logger.warning(f"[AssistantMemory] 向量搜索失败（降级到 FTS）: {e}")
@@ -379,14 +392,15 @@ class AssistantMemoryManager:
 
         results = []
         for r in rows:
-            created_at = r["created_at"]
-            results.append({
-                "summary_id": r["summary_id"],
-                "level": r["level"],
-                "score": -r["fts_rank"] if r["fts_rank"] else 0.0,  # FTS5 rank 越负越好，取反
-                "snippet": r["content"][:300] if r["content"] else "",
-                "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
-            })
+            results.append(
+                {
+                    "summary_id": r["summary_id"],
+                    "level": r["level"],
+                    "score": -r["fts_rank"] if r["fts_rank"] else 0.0,  # FTS5 rank 越负越好，取反
+                    "snippet": r["content"][:300] if r["content"] else "",
+                    "created_at": self._format_created_at(r["created_at"]),
+                }
+            )
         return results
 
     def _merge_hybrid(self, vector_results: list, fts_results: list, limit: int) -> list:
@@ -436,10 +450,15 @@ class AssistantMemoryManager:
     def _time_decay_factor(created_at_str: str) -> float:
         """时间衰减因子：越近权重越高。半衰期 30 天。"""
         import math
+
         try:
             if not created_at_str:
                 return 0.5
-            dt = datetime.fromisoformat(created_at_str) if isinstance(created_at_str, str) else created_at_str
+            dt = (
+                datetime.fromisoformat(created_at_str)
+                if isinstance(created_at_str, str)
+                else created_at_str
+            )
             # dt 可能是 naive（旧数据）或 aware（新数据），统一转 naive UTC 后比较
             if dt.tzinfo is not None:
                 dt = to_naive_utc(dt)
@@ -464,7 +483,9 @@ class AssistantMemoryManager:
     # LLM 调用辅助
     # =========================================================================
 
-    def _call_llm_for_summary(self, prompt_template: str, session, messages: list, max_tokens: int = 300) -> Optional[str]:
+    def _call_llm_for_summary(
+        self, prompt_template: str, session, messages: list, max_tokens: int = 300
+    ) -> Optional[str]:
         """为会话生成摘要"""
         if not self._llm:
             return self._fallback_session_summary(session, messages)
@@ -520,7 +541,7 @@ class AssistantMemoryManager:
                 if start and end:
                     return f"{format_local(start, '%Y-%m-%d %H:%M')} ~ {format_local(end, '%H:%M')}"
             if session.created_at:
-                return format_local(session.created_at, '%Y-%m-%d %H:%M')
+                return format_local(session.created_at, "%Y-%m-%d %H:%M")
         except Exception:
             pass
         return "未知时间"

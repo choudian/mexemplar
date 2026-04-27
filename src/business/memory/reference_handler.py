@@ -73,7 +73,10 @@ class ReferenceHandler:
 
     def _make_pointer(self, message_id: str, original_size: int) -> str:
         """生成指针文本"""
-        return f"[REF::{message_id}] 此工具结果已归档（原始大小: {original_size}字符）。如需查看原始数据，请调用 load_reference(\"{message_id}\")"
+        return (
+            f"[REF::{message_id}] 此工具结果已归档（原始大小: {original_size}字符）。"
+            f'如需查看原始数据，请调用 load_reference("{message_id}")'
+        )
 
     def _count_assistant_steps_after(self, messages: List[Message], tool_index: int) -> int:
         """
@@ -86,7 +89,7 @@ class ReferenceHandler:
         Returns:
             后续的 assistant 消息数量
         """
-        return sum(1 for msg in messages[tool_index + 1:] if msg.role == "assistant")
+        return sum(1 for msg in messages[tool_index + 1 :] if msg.role == "assistant")
 
     def _to_llm_format(self, msg: Message) -> dict:
         """

@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
 **Last Updated**: 2026-04-27
-**Revision**: 2026-04-27 — Merged `specs/002-tool-hook-system`
+**Revision**: 2026-04-27 — Merged `specs/005-fix-compression-tool-pairing`
 
 ---
 
@@ -38,7 +38,8 @@ src/
 │   ├── ai/
 │   │   └── llm_client.py                  # LLMResponse.tool_calls 完整暴露
 │   └── memory/
-│       └── context_manager.py             # get_pending_tool_calls (多工具恢复)
+│       ├── compression_handler.py         # _adjust_boundary_for_tool_pairs (压缩边界 tool 组调整)
+│       └── context_manager.py             # get_pending_tool_calls (多工具恢复), _cleanup_orphan_tool_results (孤立校验)
 ├── recording/
 │   └── filtering/
 │       ├── query_projection_analyzer.py    # SQL 列血缘分析 (sqlglot), StableLocatorRule, ProjectionBinding
@@ -50,6 +51,11 @@ src/
 
 tests/
 ├── test_hook_protocol.py                    # hook 协议、迁移 gate、global hook、动态工具、性能烟测
+├── business/
+│   └── memory/
+│       ├── conftest.py                      # mock Message 工厂与 mock MessageRepository fixture
+│       ├── test_compression_tool_pairing.py # 压缩边界调整单元测试 (7 场景)
+│       └── test_context_orphan_cleanup.py   # 孤立校验与上下文兼容性测试 (6 场景)
 ├── integration/
 │   └── test_agent_loop_multi_tool_calls.py  # 多工具批次、中断型、恢复、契约校验 14 场景
 ├── recording/
@@ -62,7 +68,7 @@ tests/
 │       └── test_recording_tools_no_sqlglot.py      # guard test: recording_data_tools 不 import sqlglot
 ```
 
-[Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls]
+[Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/005-fix-compression-tool-pairing]
 
 ---
 
@@ -199,3 +205,9 @@ Hook 执行发生在 AgentLoop 批处理分类之后、实际 handler 执行之�
 - Migrated gate coverage: builtin general 工具拒绝路径、`query_data` parser/filter 拒绝与 harmless 路径、`analyze_image` action 上限、`run_command` 第 6 次拒绝。
 - Static guards: 旧 gate 判断不残留在 handler，非迁移边界保持原位。
 - Final gates: hook 协议套件、recording guard/regression、AgentLoop multi-tool smoke、syntax validation、black/flake8/full pytest 或明确例外说明。
+
+### Compression Boundary Tests [Source: specs/005-fix-compression-tool-pairing]
+
+- `tests/business/memory/test_compression_tool_pairing.py`: 7 场景覆盖无 tool 组不调整、tool 组完全在压缩区不调整、边界跨越整组移入、assistant 在压缩区全部 result 在保留区、多组仅最后跨越、空压缩区跳过、二次压缩吸收上一轮边界组
+- `tests/business/memory/test_context_orphan_cleanup.py`: 6 场景覆盖无孤立不变、孤立剔除、混合有效/孤立、warning 日志、reference_handler 替换后仍可续读、pending_tool_calls 检测不受影响
+- 使用 mock Message 和 mock MessageRepository，不依赖真实 DB

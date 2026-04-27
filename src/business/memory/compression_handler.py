@@ -50,10 +50,7 @@ class TokenTrigger(CompressionTrigger):
 
     def should_compress(self, messages: List[Message]) -> bool:
         """根据 token 估算判断是否压缩"""
-        total_tokens = sum(
-            self._estimate_tokens(msg.content or "")
-            for msg in messages
-        )
+        total_tokens = sum(self._estimate_tokens(msg.content or "") for msg in messages)
         return total_tokens >= self.threshold
 
     @staticmethod
@@ -202,12 +199,7 @@ class CompressionHandler:
         """委托给触发策略判断"""
         return self._trigger.should_compress(messages)
 
-    def compress(
-        self,
-        session_id: str,
-        messages: List[Message],
-        msg_repo
-    ) -> List[Message]:
+    def compress(self, session_id: str, messages: List[Message], msg_repo) -> List[Message]:
         """
         执行压缩：
         1. 分离 system prompt、压缩区、保留区
@@ -227,10 +219,14 @@ class CompressionHandler:
         # 分离消息区域
         system_msg, compress_msgs, keep_msgs = self._split_messages(messages)
 
-        # 压缩区为空，跳过
+        # 压缩区为空，跳过（边界调整后压缩区可能为空）
         if not compress_msgs:
-            logger.debug("[压缩] 压缩区为空，跳过压缩")
-            return messages
+            logger.debug("[压缩] 边界调整后压缩区为空，跳过压缩")
+            result = []
+            if system_msg:
+                result.append(system_msg)
+            result.extend(keep_msgs)
+            return result
 
         # 获取 LLM 客户端
         llm_client = self._get_llm_client()
@@ -272,8 +268,7 @@ class CompressionHandler:
             msg_repo.mark_archived(session_id, start_seq, end_seq)
 
             logger.info(
-                f"[压缩] 已压缩消息 {start_seq}-{end_seq} "
-                f"(摘要长度: {len(summary)}字符)"
+                f"[压缩] 已压缩消息 {start_seq}-{end_seq} " f"(摘要长度: {len(summary)}字符)"
             )
 
             # 返回更新后的消息列表
@@ -284,9 +279,61 @@ class CompressionHandler:
             # 不阻塞流程，下次重新检查
             return messages
 
-    def _split_messages(
+    def _adjust_boundary_for_tool_pairs(
         self,
-        messages: List[Message]
+        compress_msgs: List[Message],
+        keep_msgs: List[Message],
+    ) -> Tuple[List[Message], List[Message]]:
+        """将跨越压缩/保留边界的 tool 组移入保留区。
+
+        算法：
+        1. 收集 keep_msgs 中所有 tool role 消息的 tool_call_id
+        2. 迭代查找 compress_msgs 中包含这些 id 的 assistant(tool_calls)
+        3. 将该 assistant 及压缩区内同组的 tool result 移入 keep_msgs 前部
+        4. 重复直到无新匹配（处理多组跨界情况）
+        """
+        keep_tc_ids = set()
+        for msg in keep_msgs:
+            if msg.role == "tool" and msg.tool_call_id:
+                keep_tc_ids.add(msg.tool_call_id)
+
+        if not keep_tc_ids:
+            return compress_msgs, keep_msgs
+
+        to_move = set()
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(compress_msgs) - 1, -1, -1):
+                if i in to_move:
+                    continue
+                msg = compress_msgs[i]
+                if msg.role == "assistant" and msg.tool_calls:
+                    try:
+                        tc_ids = {tc.get("id") for tc in json.loads(msg.tool_calls) if tc.get("id")}
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if tc_ids & keep_tc_ids:
+                        to_move.add(i)
+                        for j in range(i + 1, len(compress_msgs)):
+                            if j in to_move:
+                                continue
+                            m = compress_msgs[j]
+                            if m.role == "tool" and m.tool_call_id in tc_ids:
+                                to_move.add(j)
+                        changed = True
+                        break
+
+        if not to_move:
+            return compress_msgs, keep_msgs
+
+        new_compress = [m for i, m in enumerate(compress_msgs) if i not in to_move]
+        moved = [compress_msgs[i] for i in sorted(to_move)]
+        new_keep = moved + list(keep_msgs)
+        return new_compress, new_keep
+
+    def _split_messages(
+        self, messages: List[Message]
     ) -> Tuple[Optional[Message], List[Message], List[Message]]:
         """
         分离消息区域：system prompt / 压缩区 / 保留区
@@ -320,6 +367,8 @@ class CompressionHandler:
 
         compress_msgs = messages[start_idx:compress_start]
         keep_msgs = messages[compress_start:]
+
+        compress_msgs, keep_msgs = self._adjust_boundary_for_tool_pairs(compress_msgs, keep_msgs)
 
         return system_msg, compress_msgs, keep_msgs
 
@@ -355,11 +404,7 @@ class CompressionHandler:
 
         return "\n\n".join(lines)
 
-    def _post_process_summary(
-        self,
-        summary: str,
-        compress_messages: List[Message]
-    ) -> str:
+    def _post_process_summary(self, summary: str, compress_messages: List[Message]) -> str:
         """
         后处理摘要文本：
         1. 扫描摘要中出现的 tool_call_id
@@ -392,7 +437,9 @@ class CompressionHandler:
                     tool_call_id, func_name, args = _parse_tool_call(tc)
                     tool_call_info[tool_call_id] = f"{func_name}({args})"
             elif msg.role == "tool" and msg.tool_call_id:
-                tool_result_refs[msg.tool_call_id] = f"[REF::{msg.message_id}]({len(msg.content or '')}字符)"
+                tool_result_refs[msg.tool_call_id] = (
+                    f"[REF::{msg.message_id}]({len(msg.content or '')}字符)"
+                )
 
         # 检查匹配情况
         matched_count = sum(1 for tc_id in tool_call_info if tc_id in summary)
@@ -408,7 +455,7 @@ class CompressionHandler:
         result = summary
         for tool_call_id, call_info in tool_call_info.items():
             # 匹配 tool_call_id（可能包含 call_ 前缀）
-            pattern = re.compile(r'\b' + re.escape(tool_call_id) + r'\b')
+            pattern = re.compile(r"\b" + re.escape(tool_call_id) + r"\b")
             replacement = call_info
             if tool_call_id in tool_result_refs:
                 replacement += " → " + tool_result_refs[tool_call_id]
@@ -417,10 +464,7 @@ class CompressionHandler:
         return result
 
     def _rebuild_messages(
-        self,
-        system_msg: Optional[Message],
-        compressed_msg: Message,
-        keep_msgs: List[Message]
+        self, system_msg: Optional[Message], compressed_msg: Message, keep_msgs: List[Message]
     ) -> List[Message]:
         """重建消息列表"""
         result = []

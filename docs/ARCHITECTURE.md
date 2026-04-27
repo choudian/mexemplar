@@ -324,6 +324,15 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 - **普通消息（normal）** — Agent 回复、用户输入、系统提示、工具调用结果
 - **压缩消息（compressed）** — 对第 X-Y 条消息的摘要，原始消息可归档
 
+压缩流程由 `CompressionHandler` 驱动，分为以下步骤：
+
+1. `_split_messages` 将消息划分为 system / 压缩区 / 保留区
+2. `_adjust_boundary_for_tool_pairs` 检测跨越压缩/保留边界的 tool 组（assistant(tool_calls) + 对应 tool result），将跨界 tool 组整体移入保留区，避免配对断裂
+3. 调用压缩 LLM 对压缩区生成结构化摘要
+4. 若边界调整后压缩区为空，跳过 LLM 调用和持久化，直接返回 `system + keep_msgs`
+
+`assemble_context` 在压缩后、引用替换前执行 `_cleanup_orphan_tool_results`，检测并剔除孤立 tool result（tool_call_id 不在任意 assistant(tool_calls) 中出现的 tool 消息），作为边界调整的兜底校验。
+
 引用替换不体现为消息类型，而是运行时行为（见记忆机制设计）。
 
 ### 跨会话记忆（办公助理专用）
