@@ -106,7 +106,6 @@ _confirm_signal = None  # pyqtSignal(str, str)，(request_id, message)
 _pending_confirms: dict = {}  # request_id → PendingConfirmation
 _confirm_lock = threading.Lock()
 _auto_approve_enabled = False
-_auto_approve_source = "startup_default"
 
 
 @dataclass
@@ -194,10 +193,9 @@ def get_confirmation_remaining_timeout_ms(request_id: str) -> int | None:
 
 def set_auto_approve_enabled(enabled: bool, source: str) -> None:
     """设置当前进程会话级高危工具自动放行状态。"""
-    global _auto_approve_enabled, _auto_approve_source
+    global _auto_approve_enabled
     with _confirm_lock:
         _auto_approve_enabled = bool(enabled)
-        _auto_approve_source = source
     logger.info(
         "[builtin_tools] auth_auto_approve_state=%s source=%s",
         _auto_approve_enabled,
@@ -218,11 +216,10 @@ def reset_auto_approve(source: str = CONFIRM_SOURCE_NEW_CHAT_RESET) -> None:
 
 def reset_confirmation_state_for_tests() -> None:
     """测试用：清空确认状态、pending 请求和自动放行标记。"""
-    global _confirm_signal, _auto_approve_enabled, _auto_approve_source
+    global _confirm_signal, _auto_approve_enabled
     with _confirm_lock:
         _pending_confirms.clear()
         _auto_approve_enabled = False
-        _auto_approve_source = "startup_default"
     _confirm_signal = None
 
 

@@ -124,14 +124,6 @@ class BrowserRecorder:
         self._loop_runner.event_loop = loop
 
     @property
-    def _browser(self):
-        return self._playwright_driver.browser
-
-    @_browser.setter
-    def _browser(self, value) -> None:
-        self._playwright_driver.browser = value
-
-    @property
     def _context(self):
         return self._playwright_driver.context
 

@@ -34,7 +34,6 @@ class ContextManager:
             config: 统一配置管理器
         """
         self.session_id = session_id
-        self._config = config
 
         # 初始化 Repository
         self._msg_repo = MessageRepository()

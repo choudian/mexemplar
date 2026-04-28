@@ -157,16 +157,12 @@ class _AfterScheduler:
     def __init__(
         self,
         capture_queue: _CaptureTaskQueue,
-        id_gen: _CaptureIdGenerator,
-        logger_: logging.Logger,
     ) -> None:
         self._capture_queue = capture_queue
-        self._id_gen = id_gen
         self._heap: list[tuple[float, str, str, float]] = []  # (fire_time, capture_id, source_trigger, event_ts)
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._stop_event = threading.Event()
-        self._logger = logger_
         self._thread: Optional[threading.Thread] = None
 
     def start(self) -> None:
@@ -538,7 +534,7 @@ class BrowserScreenshotHook:
             self._after_delay,
         )
         self._after_scheduler = _AfterScheduler(
-            self._capture_queue, self._id_gen, self._logger,
+            self._capture_queue,
         )
 
         self._mouse_listener = None
