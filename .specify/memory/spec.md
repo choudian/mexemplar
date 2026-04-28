@@ -2,7 +2,6 @@
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
 **Last Updated**: 2026-04-27
-**Revision**: 2026-04-27 — Merged `specs/005-fix-compression-tool-pairing`
 **Revision**: 2026-04-27 — Merged `specs/004-auth-toast`
 
 ---
@@ -142,24 +141,24 @@ Assistant Agent 触发高危工具时，主窗口右下角出现非阻塞浮层�
 - **FR-051**: `assemble_context` 返回前必须校验消息列表中不存在孤立的 tool result（有 tool_call_id 但无对应 tool_call 的 tool 消息），发现时剔除该孤立消息并记录 warning 日志
 ### 高危操作确认 Toast 化 [Source: specs/004-auth-toast]
 
-- **FR-047**: 当 Assistant Agent 调用受确认管控的高危工具（`write_file` / `edit_file` / `exec`）时，系统 MUST 在主窗口右下角显示非阻塞浮层并要求用户决策
-- **FR-048**: 浮层 MUST 是非模态的——出现期间用户对主窗口其它控件的输入 MUST 不被阻塞
-- **FR-049**: 浮层 MUST 显示足够上下文信息（至少工具名 + 关键参数摘要），摘要 MUST 包含目标路径或命令首行等关键字段，长参数 MUST 截断，且 MUST NOT 展示完整文件内容
-- **FR-050**: 浮层 MUST 提供三个按钮："全部允许" / "同意" / "拒绝"，每个按钮的语义与本规范定义一致
-- **FR-051**: 用户点击"同意" MUST 仅对当前一次确认请求放行，不影响后续请求
-- **FR-052**: 用户点击"拒绝" MUST 仅对当前一次确认请求拒绝，不影响后续请求
-- **FR-053**: 用户点击"全部允许" MUST 既放行当前请求，又使本次会话内 Assistant 的后续全部高危确认请求被自动放行（不再弹浮层）
-- **FR-054**: 当"全部允许"或顶栏 Toggle 开启时，系统 MUST 将确认队列中尚未展示的 Assistant 高危请求立即按自动放行处理
-- **FR-055**: 系统 MUST 在用户开启新对话时自动复位"全部允许"状态为关闭
-- **FR-056**: 对话窗口顶栏 MUST 提供"免确认"开关，与"全部允许"内部状态双向同步
-- **FR-057**: 浮层 MUST 设置超时机制；超时时间不晚于 Worker 阻塞确认超时阈值，超时按"拒绝"语义关闭
-- **FR-058**: 多个并发确认请求 MUST 被全部处理（按到达顺序排队展示），任何请求都不能因同时出现而丢失
-- **FR-059**: 确认浮层与普通 Toast（成功/错误提示）MUST 独立管理生命周期，互不覆盖
-- **FR-060**: 当"全部允许"或顶栏 Toggle 处于开启状态时，UI MUST 给出可见提示
-- **FR-061**: 现有的 `IntentConfirmationUI`（PM/Trial Agent）和 `ToolExecutionDialog` MUST 不受本变更影响
-- **FR-062**: 系统 MUST 为每次确认决策写入脱敏结构化日志（request_id、工具名、决策结果、决策来源、等待耗时与摘要），MUST NOT 记录完整工具参数或完整文件内容
-- **FR-063**: 确认浮层 MUST NOT 提供普通关闭按钮，也 MUST NOT 因点击浮层外区域而关闭；只能通过三按钮或超时结束
-- **FR-064**: 当用户在旧会话仍有未决确认请求时开启新对话，系统 MUST 将这些请求按拒绝/超时语义收敛并清空，MUST NOT 泄漏到新对话
+- **FR-052**: 当 Assistant Agent 调用受确认管控的高危工具（`write_file` / `edit_file` / `exec`）时，系统 MUST 在主窗口右下角显示非阻塞浮层并要求用户决策
+- **FR-053**: 浮层 MUST 是非模态的——出现期间用户对主窗口其它控件的输入 MUST 不被阻塞
+- **FR-054**: 浮层 MUST 显示足够上下文信息（至少工具名 + 关键参数摘要），摘要 MUST 包含目标路径或命令首行等关键字段，长参数 MUST 截断，且 MUST NOT 展示完整文件内容
+- **FR-055**: 浮层 MUST 提供三个按钮："全部允许" / "同意" / "拒绝"，每个按钮的语义与本规范定义一致
+- **FR-056**: 用户点击"同意" MUST 仅对当前一次确认请求放行，不影响后续请求
+- **FR-057**: 用户点击"拒绝" MUST 仅对当前一次确认请求拒绝，不影响后续请求
+- **FR-058**: 用户点击"全部允许" MUST 既放行当前请求，又使本次会话内 Assistant 的后续全部高危确认请求被自动放行（不再弹浮层）
+- **FR-059**: 当"全部允许"或顶栏 Toggle 开启时，系统 MUST 将确认队列中尚未展示的 Assistant 高危请求立即按自动放行处理
+- **FR-060**: 系统 MUST 在用户开启新对话时自动复位"全部允许"状态为关闭
+- **FR-061**: 对话窗口顶栏 MUST 提供"免确认"开关，与"全部允许"内部状态双向同步
+- **FR-062**: 浮层 MUST 设置超时机制；超时时间不晚于 Worker 阻塞确认超时阈值，超时按"拒绝"语义关闭
+- **FR-063**: 多个并发确认请求 MUST 被全部处理（按到达顺序排队展示），任何请求都不能因同时出现而丢失
+- **FR-064**: 确认浮层与普通 Toast（成功/错误提示）MUST 独立管理生命周期，互不覆盖
+- **FR-065**: 当"全部允许"或顶栏 Toggle 处于开启状态时，UI MUST 给出可见提示
+- **FR-066**: 现有的 `IntentConfirmationUI`（PM/Trial Agent）和 `ToolExecutionDialog` MUST 不受本变更影响
+- **FR-067**: 系统 MUST 为每次确认决策写入脱敏结构化日志（request_id、工具名、决策结果、决策来源、等待耗时与摘要），MUST NOT 记录完整工具参数或完整文件内容
+- **FR-068**: 确认浮层 MUST NOT 提供普通关闭按钮，也 MUST NOT 因点击浮层外区域而关闭；只能通过三按钮或超时结束
+- **FR-069**: 当用户在旧会话仍有未决确认请求时开启新对话，系统 MUST 将这些请求按拒绝/超时语义收敛并清空，MUST NOT 泄漏到新对话
 
 ---
 

@@ -2,7 +2,6 @@
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
 **Last Updated**: 2026-04-27
-**Revision**: 2026-04-27 — Merged `specs/005-fix-compression-tool-pairing`
 **Revision**: 2026-04-27 — Merged `specs/004-auth-toast`
 
 ---
