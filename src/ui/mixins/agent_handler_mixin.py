@@ -9,7 +9,6 @@ AgentHandlerMixin — Agent 事件处理
 """
 
 import time
-from collections import deque
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox

@@ -1,7 +1,9 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from src.business.orchestration.agent_orchestrator import AgentOrchestrator
+import pytest
+
+from src.business.orchestration.agent import AgentOrchestrator
 from src.data.repositories import TeachingFailureRepository
 from src.utils.events import clear_all, emit
 
@@ -89,3 +91,11 @@ def test_task_worker_accessible_via_property(mock_config):
         orchestrator.task_worker.start()
 
     mock_start.assert_called_once_with()
+
+
+def test_old_shim_import_path_removed():
+    """门卫测试：旧兼容入口 agent_orchestrator.py 已被移除"""
+    import importlib
+
+    with pytest.raises(ModuleNotFoundError):
+        importlib.import_module("src.business.orchestration.agent_orchestrator")

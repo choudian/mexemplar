@@ -5,7 +5,7 @@ SQL 列血缘分析器：判定 query_data 结果列是直接源字段还是计�
 仅在 src/recording/filtering/ 内使用 sqlglot；recording_data_tools.py 不得直接 import sqlglot。
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from sqlglot import exp, parse

@@ -12,7 +12,7 @@ Mock 策略：
 """
 
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
-from src.business.orchestration.agent_orchestrator import AgentOrchestrator
+from src.business.orchestration.agent import AgentOrchestrator
 from src.data.repositories import ToolRepository, WorkflowTransitionRepository
 
 from tests.conftest import MockLLMClient

@@ -24,8 +24,7 @@
 
 ## 当前代码现实
 
-- `src/business/orchestration/agent_orchestrator.py` 只是**兼容入口**；真实实现已拆到 `src/business/orchestration/agent/`
-- 当前 Orchestrator 由多个子组件协作：`AgentSessionStore`、`AssistantPromptBuilder`、`AssistantTaskWorker`、`TeachingFailureTracker`、`WorkflowRetryCoordinator`
+- Orchestrator 实现在 `src/business/orchestration/agent/`，由多个子组件协作：`AgentSessionStore`、`AssistantPromptBuilder`、`AssistantTaskWorker`、`TeachingFailureTracker`、`WorkflowRetryCoordinator`
 - `AgentLoop.run()` 支持两种工具注入方式：
   - 直接传 `list[ToolDefinition]`（PM / 程序员 / 试用）
   - 传 `callable` 每轮重建工具列表（assistant 的动态工具懒加载依赖这个）

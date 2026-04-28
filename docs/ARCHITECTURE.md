@@ -240,7 +240,7 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 ### Agent 之间的衔接：两层通信机制
 
-流程编排对外仍由 `AgentOrchestrator` 统一负责；公开 import 入口保持在 `src/business/orchestration/agent_orchestrator.py`，内部实现已拆到 `src/business/orchestration/agent/` 子模块。通信分两层：
+流程编排对外仍由 `AgentOrchestrator` 统一负责；公开 import 入口为 `src.business.orchestration.agent`，内部由多个子模块协作。通信分两层：
 
 | 通信方向 | 机制 | 说明 |
 |---------|------|------|

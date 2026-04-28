@@ -13,7 +13,7 @@ import pytest
 
 from src.business.agents.config import AgentType
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
-from src.business.orchestration.agent_orchestrator import AgentOrchestrator
+from src.business.orchestration.agent import AgentOrchestrator
 from src.data.models_sqlite import Session
 from src.data.repositories import SessionRepository, MessageRepository
 

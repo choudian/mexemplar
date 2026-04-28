@@ -71,7 +71,7 @@ class AgentBridgeMixin:
         """创建 AgentUIBridge 实例（内部方法）"""
         from src.business.agents.tools.builtin_general_tools import register_confirm_mechanism
         from src.business.ai.llm_client import LangChainLLMClient
-        from src.business.orchestration.agent_orchestrator import AgentOrchestrator
+        from src.business.orchestration.agent import AgentOrchestrator
         from src.data.unified_config import get_unified_config
         from src.ui.agent_ui_bridge import AgentUIBridge
         from src.utils.events import connect, event_value
