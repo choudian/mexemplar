@@ -16,7 +16,6 @@ AgentLoop 多工具调用集成测试
 
 import json
 import pytest
-from unittest.mock import MagicMock
 
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (

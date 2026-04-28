@@ -29,19 +29,3 @@ class FilterDecision:
         if self.pattern_matched:
             summary["pattern_matched"] = self.pattern_matched
         return summary
-
-    def to_row(self) -> dict[str, Any]:
-        return {
-            "request_id": self.request_id,
-            "action_id": self.action_id,
-            "recording_id": self.recording_id,
-            "decision": self.decision,
-            "source": self.source,
-            "confidence": self.confidence,
-            "reason": self.reason,
-            "pattern_matched": self.pattern_matched,
-            "scores": self.scores,
-            "request_timestamp": self.request_timestamp,
-            "action_timestamp": self.action_timestamp,
-            "timestamp": self.timestamp,
-        }

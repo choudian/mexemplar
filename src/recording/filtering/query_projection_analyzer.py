@@ -56,9 +56,6 @@ class ProjectionBinding:
 class QueryProjectionAnalyzer:
     """分析 SELECT 语句的列投影血缘。"""
 
-    def __init__(self, schema_info: Optional[dict[str, set[str]]] = None):
-        self._schema = schema_info or {}
-
     def analyze(self, sql: str) -> list[ProjectionBinding]:
         """解析 SQL 并返回每个结果列的 ProjectionBinding。"""
         try:
