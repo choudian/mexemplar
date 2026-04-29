@@ -39,7 +39,11 @@
 - SQL 列血缘分析在 `src/recording/filtering/query_projection_analyzer.py`（用 sqlglot）；`recording_data_tools.py` 不直接 import sqlglot（guard test 约束）
 - 大字段配置走 `recording.large_field.*`（`threshold_chars` / `preview_chars` / `max_chunk_chars`，默认均 1000）
 - assistant 的 `write_file` / `edit_file` / `exec` 高危确认使用右下角非模态 `AuthToastSurface`；UI 侧 FIFO 队列一次只展示一个确认，普通 Toast 继续走独立 `_active_toast`
-- “全部允许”和对话顶栏“免确认”共享 `builtin_general_tools` 内的会话级内存状态；新对话必须复位并把旧会话 active/queued 确认按拒绝/超时语义收敛
+- “全部允许”和对话顶栏”免确认”共享 `builtin_general_tools` 内的会话级内存状态；新对话必须复位并把旧会话 active/queued 确认按拒绝/超时语义收敛
+- AI 回复 Markdown 渲染使用 `MarkdownMessageView`（`src/ui/widgets/markdown_message_view.py`），基于 Qt `QTextDocument.setMarkdown(MarkdownDialectGitHub)`，渲染前对 raw HTML/script 安全降级；用户消息仍走纯文本
+- 聊天历史展示走 `ChatWidget → ChatService.get_display_messages() → MessageRepository.get_display_page()` 独立分页路径，不复用 LLM 上下文；DTO 为 `DisplayChatMessage` + `ChatHistoryPage`
+- 压缩前旧消息与当前消息按 `sequence` 合并为同一连续聊天时间线，初始展示最近 10 条，向上滚动分页加载
+- “免确认” Toggle 可见性由 `ChatWidget` 内部状态机控制：仅在当前对话已启动过 Agent 会话时可见；欢迎页、新对话起始态、清空后会话隐藏
 
 ---
 
@@ -65,7 +69,7 @@
 - `docs/local/`：临时分析、计划、草稿
 
 <!-- SPECKIT START -->
-For the active `004-auth-toast` feature, read
-`specs/004-auth-toast/plan.md` for implementation context, project
+For the active `006-chat-ui-polish` feature, read
+`specs/006-chat-ui-polish/plan.md` for implementation context, project
 structure, validation commands, and generated design artifacts.
 <!-- SPECKIT END -->

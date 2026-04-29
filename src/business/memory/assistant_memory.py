@@ -88,27 +88,14 @@ class AssistantMemoryManager:
 
         self._embedding_checked = True
         try:
+            from langchain_openai import OpenAIEmbeddings
             from src.data.unified_config import get_unified_config
 
             openai_key = get_unified_config().get_embedding_api_key()
             if openai_key:
-                from openai import OpenAI
-
-                client = OpenAI(api_key=openai_key)
-
-                class _EmbeddingClient:
-                    """轻量封装，提供 embed_query 接口"""
-
-                    def __init__(self, oai_client):
-                        self._client = oai_client
-
-                    def embed_query(self, text: str) -> list:
-                        resp = self._client.embeddings.create(
-                            input=text, model="text-embedding-3-small"
-                        )
-                        return resp.data[0].embedding
-
-                self._embedding_client = _EmbeddingClient(client)
+                self._embedding_client = OpenAIEmbeddings(
+                    api_key=openai_key, model="text-embedding-3-small"
+                )
                 logger.info("[AssistantMemory] OpenAI embedding 客户端已初始化")
         except (ImportError, Exception) as e:
             logger.debug(f"[AssistantMemory] embedding 不可用（FTS-only 模式）: {e}")

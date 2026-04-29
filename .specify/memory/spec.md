@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-04-27
-**Revision**: 2026-04-27 — Merged `specs/004-auth-toast`
+**Last Updated**: 2026-04-29
+**Revision**: 2026-04-29 — Merged `specs/006-chat-ui-polish`
 
 ---
 
@@ -70,6 +70,18 @@ Assistant Agent 触发高危工具时，主窗口右下角出现非阻塞浮层�
 ### US-013: 顶栏 Toggle 与浮层状态双向同步 (Priority: P3)
 
 对话窗口顶栏提供"免确认" Toggle，与浮层"全部允许"共享同一会话级状态，任一入口变化后另一处可视状态立刻同步。新对话时一并复位。 [Source: specs/004-auth-toast]
+
+### US-014: AI 回复消息以富文本展示 Markdown (Priority: P1)
+
+AI 回复包含标题、列表、代码块、加粗、链接、图片、表格等 Markdown 元素时，聊天气泡将 AI 回复渲染为富文本结构。用户消息保持纯文本。Markdown 链接/图片不触发外部导航。 [Source: specs/006-chat-ui-polish]
+
+### US-015: 压缩后的旧聊天记录仍可回看 (Priority: P2)
+
+长会话触发上下文压缩后，被归档的早期用户消息与助手回复仍按原时间顺序出现在同一聊天时间线中。不显示归档/压缩分区标签。工具调用/结果/压缩摘要不作为普通聊天记录展示。初始展示最近 10 条，滚动向上分页加载。 [Source: specs/006-chat-ui-polish]
+
+### US-016: 新对话/欢迎界面不展示"免确认"Toggle (Priority: P3)
+
+"免确认" Toggle 仅在当前对话已启动过 Agent 会话后可见。欢迎界面、新对话起始态、清空后的会话不展示。 [Source: specs/006-chat-ui-polish]
 
 ---
 
@@ -160,6 +172,35 @@ Assistant Agent 触发高危工具时，主窗口右下角出现非阻塞浮层�
 - **FR-068**: 确认浮层 MUST NOT 提供普通关闭按钮，也 MUST NOT 因点击浮层外区域而关闭；只能通过三按钮或超时结束
 - **FR-069**: 当用户在旧会话仍有未决确认请求时开启新对话，系统 MUST 将这些请求按拒绝/超时语义收敛并清空，MUST NOT 泄漏到新对话
 
+### 聊天界面体验完善 [Source: specs/006-chat-ui-polish]
+
+#### Story 1 — AI 回复 Markdown 渲染
+
+- **FR-070**: AI 回复在聊天气泡中展示时，系统 MUST 将其按 Markdown 语法解析并渲染为对应的富文本结构（至少包含标题、有序/无序列表、加粗、斜体、行内代码、代码块、引用、链接样式文本、远程图片、GitHub 风格 pipe table、分隔线）
+- **FR-071**: 用户消息（非 AI 回复）MUST 不进行 Markdown 解析，保持纯文本展示
+- **FR-072**: 渲染层 MUST 安全处理 AI 回复中的潜在脚本与裸 HTML：MUST NOT 执行任何脚本，MUST NOT 直接渲染未声明的 HTML 标签；未支持或不安全的内容 MUST 降级为纯文本
+- **FR-073**: AI 回复在流式输出过程中，未闭合的 Markdown 记号 MUST 不导致明显的样式抖动或大段重排；最终消息收敛后渲染结果 MUST 与一次性传入的渲染结果在视觉上一致
+- **FR-074**: 不含任何 Markdown 记号的纯文本 AI 回复 MUST 在视觉上与变更前一致
+- **FR-075**: Markdown 链接 MUST 只渲染为带链接视觉样式的文本，MUST NOT 提供点击打开或浏览器跳转能力；Markdown 图片 MAY 渲染远程 http(s) 图片资源，但 MUST NOT 可点击或触发导航
+
+#### Story 2 — 压缩后的旧聊天记录可回看
+
+- **FR-076**: 当前会话存在已被内部归档的用户消息或助手回复时，聊天框 MUST 将这些旧消息与当前未压缩消息按原 sequence 合并为同一条连续聊天时间线展示
+- **FR-077**: UI MUST NOT 把内部归档状态做成用户可见概念；MUST NOT 显示独立归档区、"已归档"、"已压缩"、分隔条或特殊底色
+- **FR-078**: 完整聊天时间线 MUST 按时间顺序、按发送方（用户/助手）渲染，遵循现有聊天气泡一致的发送方区分规则
+- **FR-079**: 工具调用、工具结果和压缩摘要等内部消息 MUST NOT 作为普通聊天记录展示
+- **FR-080**: 当会话从未发生过压缩时，聊天框 MUST 与今天的历史记录展示一致
+- **FR-081**: 压缩前旧消息中的用户消息与助手回复 MUST 默认完整展示原文，不因内部归档状态做每条消息折叠
+- **FR-082**: 用户开启新对话或清空当前会话时，旧消息 MUST 立即清空
+- **FR-083**: 聊天框打开存在大量历史的会话时，系统 MUST 初始展示最近 10 条展示消息，并在用户向上滚动时分页加载更早历史
+
+#### Story 3 — 新对话/欢迎界面隐藏免确认 Toggle
+
+- **FR-084**: 应用停留在欢迎界面时，对话窗口顶栏 MUST NOT 展示"免确认" Toggle
+- **FR-085**: 用户进入新对话起始态时，对话窗口顶栏 MUST NOT 展示"免确认" Toggle
+- **FR-086**: 一旦当前对话已启动过 Agent 会话，对话窗口顶栏 MUST 持续展示"免确认" Toggle，行为完全沿用 004-auth-toast 中定义的同步语义
+- **FR-087**: Toggle 显示/隐藏切换 MUST 不破坏顶栏其余控件的位置与样式
+
 ---
 
 ## Key Entities
@@ -226,6 +267,18 @@ tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 
 ### AuthToastSurface [Source: specs/004-auth-toast]
 UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summary`、`timeout_timer`（QTimer singleShot）。三按钮："全部允许"/"同意"/"拒绝"。无普通关闭按钮；不响应外部点击关闭。与普通 Toast 独立生命周期。
 
+### DisplayChatMessage [Source: specs/006-chat-ui-polish]
+业务层返回给 UI 的展示 DTO，不持久化。字段：`sequence`（int）、`role`（user/assistant）、`content`（str，已过滤空内容）、`created_at`（datetime or None）。映射自一条 SQLite Message，不包含 `is_archived`/`message_type`/`tool_calls` 等内部状态。
+
+### ChatHistoryPage [Source: specs/006-chat-ui-polish]
+业务层返回给 UI 的分页结果，不持久化。字段：`messages`（list[DisplayChatMessage]，按 sequence 升序）、`has_more_before`（bool）、`next_before_sequence`（int or None）。
+
+### MarkdownMessageView [Source: specs/006-chat-ui-polish]
+聊天气泡内部渲染 widget。使用 Qt `QTextDocument.setMarkdown(MarkdownDialectGitHub)` 渲染。属性：`navigation_enabled` 固定 false；`allowed_image_schemes` 限 http/https；渲染前对 raw HTML/script 做安全降级。
+
+### AutoApproveToggleVisibility [Source: specs/006-chat-ui-polish]
+ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏、`new_chat_empty`→隐藏、`conversation_started`→显示、`conversation_cleared`→隐藏。
+
 ---
 
 ## Constraints & Compatibility
@@ -271,6 +324,15 @@ UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summa
 - **CC-020**: 浮层超时 MUST 不晚于 Worker 阻塞超时（120s），二者同步收敛
 - **CC-021**: 普通 Toast 行为不变；确认浮层与普通 Toast 通过独立生命周期管理共存
 - **CC-022**: "新对话"边界 MUST 同时复位会话级自动放行状态并清空旧会话未决确认
+
+### 聊天界面体验完善约束 [Source: specs/006-chat-ui-polish]
+
+- **CC-023**: 现有压缩边界处理与孤立 tool result 兜底的行为 MUST 不被本 feature 改动；完整历史回看只读取现有数据，不改变压缩输入/输出契约
+- **CC-024**: 004-auth-toast 中 Toggle 与浮层的双向同步、新对话复位等语义 MUST 保持完全一致；本 feature 仅控制控件的可见性，不变更其行为
+- **CC-025**: Markdown 渲染 MUST NOT 改变现有用户消息渲染路径，MUST NOT 影响普通 Toast、确认浮层、IntentConfirmationUI、ToolExecutionDialog
+- **CC-026**: 渲染层 MUST 不执行 AI 回复中的脚本或裸 HTML，避免 XSS/注入风险
+- **CC-027**: 现有跨线程信号、Worker 阻塞确认机制 MUST 不被本 feature 改动
+- **CC-028**: 若现有 UI 可访问接口不能直接提供完整历史消息，允许在业务层增加最小只读接口；UI MUST NOT 直接调用 Repository，且该接口 MUST NOT 改变存储 schema 或压缩契约
 
 ---
 
@@ -321,6 +383,17 @@ UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summa
 - **SC-027**: 5 个 Worker 同时发起确认请求，所有请求都被排队展示并得到一次决策或超时，无请求丢失
 - **SC-028**: 浮层超时关闭时间与 Worker 阻塞超时阈值的差值 ≤ 1 秒
 - **SC-029**: 同意、拒绝、超时、自动放行四类决策路径均产生 1 条脱敏结构化日志
+
+### 聊天界面体验完善验收标准 [Source: specs/006-chat-ui-polish]
+
+- **SC-030**: 包含标题、列表、代码块、加粗、链接、图片、表格的 AI 回复 100% 以富文本展示，原始 Markdown 记号不可见，链接/图片点击 0 次触发外部导航
+- **SC-031**: 不含 Markdown 记号的纯文本 AI 回复，渲染前后视觉无可识别差异
+- **SC-032**: 压缩后聊天框 100% 展示旧用户消息与助手回复，与当前消息按原时间顺序组成连续记录；0 条工具调用/结果/压缩摘要作为普通聊天消息可见
+- **SC-033**: 发生过压缩和从未压缩的会话都不显示任何内部状态提示
+- **SC-034**: "免确认" Toggle 在四类状态下可见性正确率 100%
+- **SC-035**: Toggle 显隐切换帧内完成，不出现视觉闪烁或布局抖动
+- **SC-036**: ≥1000 条旧消息时首屏加载 ≤2s，滚动/输入 UI 阻塞 ≤100ms
+- **SC-037**: AI 回复含脚本/裸 HTML 时 0 次脚本被执行，0 次裸 HTML 渲染为活动元素
 
 ---
 
@@ -383,3 +456,14 @@ UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summa
 - "全部允许"安全可见性：开启状态下 Toggle 文案变化
 - 手动关闭限制：浮层只能通过三按钮或超时结束
 - 非 Assistant Agent 的工具确认：PM/Trial 走 IntentConfirmationUI，不受影响
+
+### 聊天界面体验完善 [Source: specs/006-chat-ui-polish]
+
+- Markdown 含 raw HTML/script 片段：渲染层降级为纯文本，不执行脚本
+- Markdown 链接/图片目标安全：只渲染带样式文本和远程 http(s) 图片，不打开浏览器
+- 压缩边界与完整聊天记录冲突：工具调用/结果不作为普通聊天记录展示，压缩摘要不可见
+- "清空对话"清除旧消息，不在新会话中残留
+- Toggle 在会话生命周期边界的瞬态：显隐必须与目标视图严格对齐
+- 大规模旧消息性能：初始展示最近 10 条，向上滚动分页加载
+- IntentConfirmationUI / ToolExecutionDialog / 普通 Toast 不在本 feature 改动范围
+- 顶栏其它控件不受 Toggle 隐藏影响

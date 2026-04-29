@@ -55,6 +55,10 @@
 - `AuthToastSurface` 无普通关闭按钮，不响应外部点击关闭，只通过三按钮或 QTimer 超时结束
 - 普通 Toast 与确认浮层独立生命周期管理，互不覆盖；`MainWindow.resizeEvent` 分别重定位
 - PM / Trial Agent 的 `IntentConfirmationUI` 和手动参数 `ToolExecutionDialog` 不受确认 Toast 化影响
+- AI 回复 Markdown 渲染使用 `MarkdownMessageView`（`src/ui/widgets/markdown_message_view.py`），基于 Qt `QTextDocument.setMarkdown(MarkdownDialectGitHub)`，渲染前对 raw HTML/script 安全降级；用户消息仍走纯文本 `QLabel`
+- 聊天历史展示走 `ChatWidget → ChatService.get_display_messages() → MessageRepository.get_display_page()` 独立分页路径，不复用 LLM 上下文的 `ContextManager`；DTO 为 `DisplayChatMessage` + `ChatHistoryPage`，不暴露 `is_archived`/`message_type` 给 UI
+- 压缩前旧消息（含 archived）与当前消息按 `sequence` 合并为同一条连续聊天时间线，初始展示最近 10 条，向上滚动分页加载
+- "免确认" Toggle 可见性由 `ChatWidget` 内部状态机控制：仅在当前对话已启动过 Agent 会话时可见；欢迎页、新对话起始态、清空后会话隐藏
 
 ---
 
@@ -82,5 +86,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `specs/004-auth-toast/plan.md`
+at `.specify/memory/plan.md`
 <!-- SPECKIT END -->

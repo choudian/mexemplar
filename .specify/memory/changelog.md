@@ -123,3 +123,30 @@
 - `src/ui/resources/styles.qss` — auth toast + Toggle 样式
 
 **Tasks Completed:** 37/38 tasks (T038 black/flake8 待完成)
+
+## 聊天界面体验完善 — 2026-04-29
+
+**Branch:** `006-chat-ui-polish`
+**Spec:** `specs/006-chat-ui-polish`
+
+**What was added:**
+- US-014 (P1): AI 回复 Markdown 渲染为富文本（标题、列表、代码块、表格、远程图片等），用户消息保持纯文本
+- US-015 (P2): 压缩后旧聊天记录按原时间线分页回看，初始 10 条，向上滚动加载更早历史
+- US-016 (P3): "免确认" Toggle 仅在已启动 Agent 的对话中可见，欢迎页/新对话起始态隐藏
+
+**New Components:**
+- `src/ui/widgets/markdown_message_view.py` — Markdown 安全渲染 widget（Qt 内建）
+- `src/business/services/chat_service.py` — DisplayChatMessage/ChatHistoryPage DTO + get_display_messages()
+- `tests/ui/test_chat_widget_markdown.py` — Markdown 渲染/安全降级测试
+- `tests/ui/test_chat_widget_history.py` — 历史分页/性能/归档透明性测试
+- `tests/ui/test_chat_widget_layering.py` — UI 分层门卫测试
+- `tests/business/test_chat_service_history.py` — Service 契约测试
+- `tests/data/chat_history_test_helpers.py` + `tests/ui/chat_widget_test_helpers.py` — 测试辅助
+
+**Modified Components:**
+- `src/ui/widgets/chat_widget.py` — Markdown 集成 + 历史分页 + Toggle 可见性状态机
+- `src/data/repos/message_repository.py` — get_display_page() 展示历史分页查询
+- `src/ui/resources/styles.qss` — Markdown 内容样式
+- `docs/ARCHITECTURE.md` — 展示历史分页路径文档
+
+**Tasks Completed:** 36/36 tasks

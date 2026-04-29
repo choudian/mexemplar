@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-04-27
-**Revision**: 2026-04-27 — Merged `specs/004-auth-toast`
+**Last Updated**: 2026-04-29
+**Revision**: 2026-04-29 — Merged `specs/006-chat-ui-polish`
 
 ---
 
@@ -35,9 +35,9 @@ src/
 │       └── prompts/
 │           ├── pm_prompt.py                # 5 工具工作流
 │           └── programmer_prompt.py        # 5 工具工作流
+│   ├── services/
+│   │   └── chat_service.py                  # DisplayChatMessage/ChatHistoryPage DTO + get_display_messages() 展示分页
 │   ├── ai/
-│   │   └── llm_client.py                  # LLMResponse.tool_calls 完整暴露
-│   └── memory/
 │       ├── compression_handler.py         # _adjust_boundary_for_tool_pairs (压缩边界 tool 组调整)
 │       └── context_manager.py             # get_pending_tool_calls (多工具恢复), _cleanup_orphan_tool_results (孤立校验)
 │       └── context_manager.py             # get_pending_tool_calls (多工具恢复)
@@ -49,7 +49,8 @@ src/
 │   ├── resources/
 │   │   └── styles.qss                       # auth toast + 顶栏 Toggle 样式
 │   └── widgets/
-│       ├── chat_widget.py                   # 顶栏 "免确认" Toggle + new_chat_started
+│       ├── chat_widget.py                   # 顶栏 "免确认" Toggle + new_chat_started + 历史分页 + Markdown 集成
+│       ├── markdown_message_view.py         # AI 回复 Markdown 安全渲染 widget
 │       └── auth_toast.py                    # AuthToastSurface 非模态确认浮层
 ├── recording/
 │   └── filtering/
@@ -58,7 +59,9 @@ src/
 │       └── filtered_conn.py               # FilteredDuckDBConnection
 └── data/
     ├── config_models.py                    # LargeFieldConfig dataclass (threshold/preview/chunk)
-    └── unified_config.py                   # get_recording_large_field_config()
+    ├── unified_config.py                   # get_recording_large_field_config()
+    └── repos/
+        └── message_repository.py           # get_display_page() 展示历史分页查询
 
 tests/
 ├── test_hook_protocol.py                    # hook 协议、迁移 gate、global hook、动态工具、性能烟测
@@ -80,12 +83,15 @@ tests/
 │       └── test_recording_tools_no_sqlglot.py      # guard test: recording_data_tools 不 import sqlglot
 └── ui/
     ├── test_auth_toast_surface.py           # AuthToastSurface 按钮/超时/关闭限制
-    ├── test_chat_widget_auth_toggle.py      # Toggle 状态同步/新对话复位
+    ├── test_chat_widget_auth_toggle.py      # Toggle 状态同步/可见性/新对话复位
+    ├── test_chat_widget_markdown.py         # Markdown 渲染/安全降级/纯文本回归
+    ├── test_chat_widget_history.py          # 历史分页/性能/归档透明性
+    ├── test_chat_widget_layering.py         # UI 分层门卫测试
     └── test_agent_handler_mixin.py          # 队列 FIFO/QMessageBox guard/会话切换
 ```
 
 [Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/005-fix-compression-tool-pairing]
-[Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/004-auth-toast]
+[Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/004-auth-toast, specs/006-chat-ui-polish]
 
 ---
 
@@ -244,7 +250,7 @@ Assistant 高危工具确认从 `QMessageBox.question` 模态弹窗改为非阻�
 
 ### 会话级自动放行状态
 
-`_auto_approve_enabled` + `_auto_approve_source` 为模块级变量，受 `_confirm_lock` 保护。开启时覆盖 Assistant 全部高危工具（write_file/edit_file/exec）。新对话时 `reset_auto_approve` 复位。不持久化。
+`_auto_approve_enabled` 为模块级变量，受 `_confirm_lock` 保护。开启时覆盖 Assistant 全部高危工具（write_file/edit_file/exec）。新对话时 `reset_auto_approve` 复位。不持久化。
 
 ### 脱敏结构化日志
 
@@ -256,3 +262,30 @@ Assistant 高危工具确认从 `QMessageBox.question` 模态弹窗改为非阻�
 - **UI surface tests**: `tests/ui/test_auth_toast_surface.py` — 三按钮信号、超时触发、重复决策忽略、手动关闭拒绝
 - **UI integration tests**: `tests/ui/test_agent_handler_mixin.py` — 5-Worker FIFO、Toast 共存、响应性 ≤100ms、超时收敛 ≤1s、allow-all 排队放行、Toggle 双向同步、新对话收敛、QMessageBox guard
 - **ChatWidget tests**: `tests/ui/test_chat_widget_auth_toggle.py` — Toggle 默认关闭、状态同步、新对话复位
+
+---
+
+## 聊天界面体验完善 [Source: specs/006-chat-ui-polish]
+
+### 架构概览
+
+三类聊天界面体验修复：AI 回复 Markdown 富文本渲染、压缩前旧聊天记录分页回看、欢迎页/新对话隐藏"免确认" Toggle。改动集中在 `ChatWidget → ChatService → MessageRepository` 分层路径内。
+
+### Markdown 渲染
+
+使用 Qt 内建 `QTextDocument.setMarkdown(MarkdownDialectGitHub)` 渲染 AI 回复，不引入新依赖。`MarkdownMessageView` 作为聊天气泡内部 widget，渲染前统一安全降级 raw HTML/script。用户消息仍用 `QLabel` 纯文本。
+
+### 展示历史分页
+
+`ChatService.get_display_messages()` 调用 `MessageRepository.get_display_page()`，按 `sequence` keyset 分页读取 user/assistant 消息（排除 tool/summary/compressed/空内容），返回 `DisplayChatMessage` + `ChatHistoryPage` DTO。UI 初始展示最近 10 条，向上滚动 prepend 更早页。不复用 `ContextManager.get_context()` 避免污染 LLM 上下文。
+
+### Toggle 可见性状态机
+
+`ChatWidget` 维护内部视图状态：`session_list`/`new_chat_empty`/`conversation_started`/`conversation_cleared`。仅 `conversation_started` 时显示 Toggle。不改变 004-auth-toast 的确认协议。
+
+### 测试覆盖
+
+- **UI**: `tests/ui/test_chat_widget_markdown.py`（渲染+安全+纯文本回归）、`tests/ui/test_chat_widget_history.py`（分页+性能+归档透明性）、`tests/ui/test_chat_widget_layering.py`（分层门卫）
+- **Business**: `tests/business/test_chat_service_history.py`（DTO+Service 契约）
+- **Data**: `tests/data/test_message_repository.py`（分页查询+过滤+排序）
+- **Integration**: `tests/integration/test_assistant_new_session.py`（扩展冒烟测试）
