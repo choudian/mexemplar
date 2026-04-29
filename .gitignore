@@ -110,6 +110,7 @@ nul
 .reports/
 .backups/
 research.md
+!specs/**/research.md
 
 # Build artifacts
 dist/

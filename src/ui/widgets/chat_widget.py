@@ -26,6 +26,7 @@ from src.business.agents.config import AgentType
 from src.business.services import ChatService
 from src.ui.widgets.message_input import MessageInputEdit
 from src.ui.widgets.layout_utils import clear_layout, scroll_to_bottom
+from src.ui.widgets.markdown_message_view import MarkdownMessageView
 from src.utils.logger import get_logger
 
 
@@ -93,6 +94,9 @@ class ChatWidget(QWidget):
         self._search_text = ""  # 搜索关键词
         self._welcome_visible = False  # 欢迎页是否显示中
         self._welcome_input = None  # 欢迎页输入框引用
+        self._oldest_loaded_sequence = None  # 当前最早加载的展示 sequence
+        self._has_more_history = False  # 是否还能向上加载
+        self._loading_history_page = False  # 正在加载历史分页
         self.init_ui()
 
     def init_ui(self):
@@ -213,6 +217,9 @@ class ChatWidget(QWidget):
         self.messages_layout.setSpacing(24)
         self.messages_layout.setContentsMargins(32, 24, 32, 24)
         messages_scroll.setWidget(self.messages_container)
+
+        self._messages_scroll = messages_scroll
+        messages_scroll.verticalScrollBar().valueChanged.connect(self._on_messages_scroll)
 
         chat_layout.addWidget(messages_scroll, 1)
 
@@ -338,6 +345,7 @@ class ChatWidget(QWidget):
         """准备新对话界面（不立即创建 DB 会话，等用户发第一条消息时再创建）"""
         self._session_id = None
         self._pending_tool_ids = tool_ids
+        self._set_auto_approve_toggle_visible(False)
         self._clear_messages()
         self._add_welcome_message()
         self._stack.setCurrentIndex(self.VIEW_CONVERSATION)
@@ -353,17 +361,22 @@ class ChatWidget(QWidget):
         self._load_session_messages(session_id)
 
     def _load_session_messages(self, session_id: str):
-        """从数据库加载会话历史消息（只加载非归档消息）"""
+        """从数据库加载会话历史消息（使用展示分页，初始 10 条）"""
         try:
-            messages = ChatService().get_session_messages(session_id)
-            if not messages:
+            page = ChatService().get_display_messages(session_id, limit=10)
+            if not page.messages:
+                self._set_auto_approve_toggle_visible(False)
                 self._add_welcome_message()
                 return
-            for msg in messages:
-                if msg.role in ("user", "assistant") and msg.content:
-                    self._add_message(msg.role, msg.content)
+            for msg in page.messages:
+                self._add_message(msg.role, msg.content)
+            if page.messages:
+                self._oldest_loaded_sequence = page.messages[0].sequence
+            self._has_more_history = page.has_more_before
+            self._mark_conversation_started()
         except Exception as e:
             self.logger.error(f"加载会话消息失败: {e}")
+            self._set_auto_approve_toggle_visible(False)
             self._add_welcome_message()
 
     # =========================================================================
@@ -371,9 +384,12 @@ class ChatWidget(QWidget):
     # =========================================================================
 
     def _clear_messages(self):
-        """清空消息区域"""
+        """清空消息区域并重置分页状态"""
         self._welcome_visible = False
         self._welcome_input = None
+        self._oldest_loaded_sequence = None
+        self._has_more_history = False
+        self._loading_history_page = False
         clear_layout(self.messages_layout)
 
     def _add_welcome_message(self):
@@ -493,7 +509,14 @@ class ChatWidget(QWidget):
         content_label.setWordWrap(True)
         content_label.setTextFormat(Qt.TextFormat.PlainText)
         content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        bubble_content_layout.addWidget(content_label)
+        if role == "assistant":
+            md_view = MarkdownMessageView(content)
+            md_view.setObjectName("content_assistant")
+            bubble_content_layout.addWidget(md_view)
+            content_label.hide()
+            bubble_content_layout.addWidget(content_label)
+        else:
+            bubble_content_layout.addWidget(content_label)
         bubble_layout.addWidget(message_bubble)
         container_layout.addWidget(bubble_container)
 
@@ -506,6 +529,102 @@ class ChatWidget(QWidget):
     def _scroll_to_bottom(self):
         """滚动消息区域到底部"""
         scroll_to_bottom("messages_scroll", self)
+
+    def _on_messages_scroll(self, value):
+        """消息区域滚动 — 顶部加载更早历史"""
+        if not self._has_more_history or self._loading_history_page:
+            return
+        scrollbar = self._messages_scroll.verticalScrollBar()
+        if value <= scrollbar.minimum() + 50:
+            self._load_older_history()
+
+    def _load_older_history(self):
+        """加载更早一页历史消息"""
+        if not self._session_id or not self._oldest_loaded_sequence:
+            return
+        self._loading_history_page = True
+        try:
+            page = ChatService().get_display_messages(
+                self._session_id, limit=10, before_sequence=self._oldest_loaded_sequence,
+            )
+            if page.messages:
+                self._prepend_older_messages(page.messages)
+                self._oldest_loaded_sequence = page.messages[0].sequence
+            self._has_more_history = page.has_more_before
+        except Exception as e:
+            self.logger.error(f"加载更早历史失败: {e}")
+        finally:
+            self._loading_history_page = False
+
+    def _prepend_older_messages(self, messages):
+        """在消息区域顶部插入更早的历史消息，保持视口位置"""
+        scrollbar = self._messages_scroll.verticalScrollBar()
+        old_max = scrollbar.maximum()
+        old_value = scrollbar.value()
+
+        for msg in reversed(messages):
+            self._insert_message_at_top(msg.role, msg.content)
+
+        self.messages_layout.invalidate()
+        self._messages_scroll.widget().adjustSize()
+        new_max = scrollbar.maximum()
+        scrollbar.setValue(new_max - old_max + old_value)
+
+    def _insert_message_at_top(self, role: str, content: str):
+        """在消息区域最前面插入一条消息（不自动滚动）"""
+        message_container = QWidget()
+        message_container.setObjectName("message_row")
+        container_layout = QHBoxLayout(message_container)
+        container_layout.setContentsMargins(0, 0, 0, 0)
+        container_layout.setSpacing(12)
+
+        if role == "user":
+            container_layout.addStretch()
+
+        bubble_container = QWidget()
+        bubble_container.setObjectName(f"bubble_container_{role}")
+        bubble_layout = QVBoxLayout(bubble_container)
+        bubble_layout.setContentsMargins(0, 0, 0, 0)
+        bubble_layout.setSpacing(8)
+
+        role_row = QHBoxLayout()
+        role_row.setSpacing(8)
+        role_icon = QLabel("U" if role == "user" else "A")
+        role_icon.setObjectName("role_icon")
+        role_row.addWidget(role_icon)
+        role_name = QLabel("你" if role == "user" else "AI 助手")
+        role_name.setObjectName(f"role_name_{role}")
+        role_row.addWidget(role_name)
+        role_row.addStretch()
+        bubble_layout.addLayout(role_row)
+
+        message_bubble = QWidget()
+        message_bubble.setObjectName(f"message_bubble_{role}")
+        message_bubble.setMaximumWidth(700)
+        bubble_content_layout = QVBoxLayout(message_bubble)
+        bubble_content_layout.setContentsMargins(20, 16, 20, 16)
+        bubble_content_layout.setSpacing(0)
+
+        content_label = QLabel(content)
+        content_label.setObjectName(f"content_{role}")
+        content_label.setWordWrap(True)
+        content_label.setTextFormat(Qt.TextFormat.PlainText)
+        content_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        if role == "assistant":
+            md_view = MarkdownMessageView(content)
+            md_view.setObjectName("content_assistant")
+            bubble_content_layout.addWidget(md_view)
+            content_label.hide()
+            bubble_content_layout.addWidget(content_label)
+        else:
+            bubble_content_layout.addWidget(content_label)
+        bubble_layout.addWidget(message_bubble)
+        container_layout.addWidget(bubble_container)
+
+        if role == "assistant":
+            container_layout.addStretch()
+
+        self.messages_layout.insertWidget(0, message_container)
 
     def _on_input_changed(self):
         """输入框内容变化"""
@@ -552,6 +671,7 @@ class ChatWidget(QWidget):
 
     def show_session_list(self):
         """显示会话列表视图（供 MainWindow 在页面切换时调用）"""
+        self._set_auto_approve_toggle_visible(False)
         self._load_sessions()
         self._stack.setCurrentIndex(self.VIEW_SESSION_LIST)
 
@@ -575,6 +695,14 @@ class ChatWidget(QWidget):
             self._refresh_auto_approve_toggle_text(enabled)
         finally:
             self.auto_approve_toggle.blockSignals(False)
+
+    def _set_auto_approve_toggle_visible(self, visible: bool):
+        """改变 Toggle 可见性，不发出 auto_approve_toggled 信号。"""
+        self.auto_approve_toggle.setVisible(visible)
+
+    def _mark_conversation_started(self):
+        """标记对话已启动，显示 Toggle。"""
+        self._set_auto_approve_toggle_visible(True)
 
     # =========================================================================
     # Private
@@ -617,6 +745,7 @@ class ChatWidget(QWidget):
         self._add_message("user", message)
         self.message_input.clear()
         self.set_loading(True)
+        self._mark_conversation_started()
 
         session_id = self.get_session_id()
         self.send_message_requested.emit(session_id, AgentType.ASSISTANT, message)
