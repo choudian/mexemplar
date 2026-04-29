@@ -68,7 +68,7 @@ class SQLAlchemyManager:
 
             # 注册连接事件：每个新连接加载 sqlite-vec 扩展（可选）
             @event.listens_for(self.engine, "connect")
-            def _load_sqlite_vec(dbapi_conn, connection_record):
+            def _load_sqlite_vec(dbapi_conn, _connection_record):
                 try:
                     import sqlite_vec
 

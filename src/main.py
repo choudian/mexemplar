@@ -26,7 +26,7 @@ def cleanup() -> None:
     logger.info("Mexemplar 已退出")
 
 
-def signal_handler(signum, frame) -> None:
+def signal_handler(signum, _frame) -> None:
     """信号处理器。"""
     logger.info(f"收到信号: {signum}")
     cleanup()

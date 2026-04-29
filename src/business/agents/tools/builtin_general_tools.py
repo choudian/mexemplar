@@ -440,7 +440,7 @@ class _HtmlTextExtractor(HTMLParser):
         self.parts: list[str] = []
         self._skip = False
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(self, tag, _attrs):
         if tag in ("script", "style", "head"):
             self._skip = True
 

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import re
 
-from PyQt6.QtCore import QUrl, Qt
+from PyQt6.QtCore import QUrl, Qt, QSize
 from PyQt6.QtGui import QTextCursor, QTextDocument
-from PyQt6.QtWidgets import QTextBrowser
+from PyQt6.QtWidgets import QFrame, QSizePolicy, QTextBrowser
 
 
 class MarkdownMessageView(QTextBrowser):
@@ -42,11 +42,22 @@ class MarkdownMessageView(QTextBrowser):
         super().__init__(parent)
         self._raw_text = text or ""
         self._is_streaming = False
+        self._adjusting = False
+        self._cached_size_hint: QSize | None = None
 
         self.setReadOnly(True)
         self.setOpenExternalLinks(False)
         self.setOpenLinks(False)
         self.setObjectName("markdown_message_view")
+
+        # 去掉 QTextBrowser 默认的边框、滚动条，使其作为内联渲染 widget
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.setMinimumHeight(0)
+
+        self.document().contentsChanged.connect(self._on_contents_changed)
 
         if self._raw_text:
             self._apply_content(self._raw_text)
@@ -76,6 +87,46 @@ class MarkdownMessageView(QTextBrowser):
         doc = self.document()
         doc.setMarkdown(safe, QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
         self.setTextCursor(QTextCursor(doc))
+        # contentsChanged signal handles size adjustment
+
+    def _on_contents_changed(self) -> None:
+        self._cached_size_hint = None
+        self._adjust_size()
+
+    def sizeHint(self):
+        if self._cached_size_hint is not None:
+            return self._cached_size_hint
+        w = max(int(self.document().idealWidth()), 50)
+        h = max(int(self.document().size().height()) + 4, 1)
+        self._cached_size_hint = QSize(w, h)
+        return self._cached_size_hint
+
+    def minimumSizeHint(self):
+        return QSize(0, 0)
+
+    def _adjust_size(self) -> None:
+        """根据文档内容自动调整高度（含重入保护）。"""
+        if self._adjusting:
+            return
+        self._adjusting = True
+        try:
+            w = self.width()
+            if w <= 0:
+                self.updateGeometry()
+                return
+            doc = self.document()
+            doc.setTextWidth(w)
+            new_h = max(int(doc.size().height()) + 4, 1)
+            if self.height() != new_h:
+                self.setFixedHeight(new_h)
+            self.updateGeometry()
+        finally:
+            self._adjusting = False
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if event.size().width() != event.oldSize().width():
+            self._adjust_size()
 
     def _sanitize_markdown(self, text: str) -> str:
         text = self._SCRIPT_BLOCK_RE.sub("", text)
@@ -102,7 +153,7 @@ class MarkdownMessageView(QTextBrowser):
     def setSource(self, name: QUrl) -> None:
         pass
 
-    def anchorClicked(self, link: QUrl) -> None:
+    def anchorClicked(self, _link: QUrl) -> None:
         pass
 
 

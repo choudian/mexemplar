@@ -136,16 +136,7 @@ class MessageRepository(BaseRepository):
 
         sub = sub.order_by(Message.sequence.desc()).limit(limit)
 
-        return (
-            self.session.query(Message)
-            .filter(Message.message_id.in_(
-                self.session.query(Message.message_id)
-                .filter(Message.session_id == session_id)
-                .filter(self._display_filter.subquery())
-            ))
-            .order_by(Message.sequence)
-            .all()
-        ) if False else list(reversed(sub.all()))
+        return list(reversed(sub.all()))
 
     def has_more_before(self, session_id: str, before_sequence: int) -> bool:
         exists = (

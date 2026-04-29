@@ -182,9 +182,9 @@ class ChatWidget(QWidget):
         chat_layout.setSpacing(0)
         chat_layout.setContentsMargins(0, 0, 0, 0)
 
-        header = QWidget()
-        header.setObjectName("chat_header")
-        header_layout = QHBoxLayout(header)
+        self._chat_header = QWidget()
+        self._chat_header.setObjectName("chat_header")
+        header_layout = QHBoxLayout(self._chat_header)
         header_layout.setContentsMargins(32, 14, 32, 14)
         header_layout.setSpacing(12)
 
@@ -201,7 +201,7 @@ class ChatWidget(QWidget):
         self._refresh_auto_approve_toggle_text(False)
         header_layout.addWidget(self.auto_approve_toggle)
 
-        chat_layout.addWidget(header)
+        chat_layout.addWidget(self._chat_header)
 
         # 消息展示区域
         messages_scroll = QScrollArea()
@@ -357,6 +357,7 @@ class ChatWidget(QWidget):
         self.send_button.setEnabled(False)
         self.send_button.setText("发送")
         self._clear_messages()
+        self._chat_header.show()
         self.input_container.show()
         self._load_session_messages(session_id)
 
@@ -398,7 +399,8 @@ class ChatWidget(QWidget):
             return
         self._welcome_visible = True
 
-        # 隐藏底部输入区域，欢迎页自带居中输入框
+        # 隐藏顶部标题栏和底部输入区域，欢迎页自带居中输入框
+        self._chat_header.hide()
         self.input_container.hide()
 
         welcome = QWidget()
@@ -733,10 +735,11 @@ class ChatWidget(QWidget):
         self._do_send(text)
 
     def _dismiss_welcome(self):
-        """清除欢迎页并恢复底部输入栏"""
+        """清除欢迎页并恢复顶部标题栏和底部输入栏"""
         if not self._welcome_visible:
             return
         self._clear_messages()
+        self._chat_header.show()
         self.input_container.show()
 
     def _do_send(self, message: str):
