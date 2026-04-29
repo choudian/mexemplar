@@ -7,6 +7,8 @@ ChatService — 助理聊天业务服务
 import json
 import logging
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 from src.business.agents.config import AgentType
@@ -15,6 +17,21 @@ from src.data.repositories import AssistantProfileRepository, MessageRepository,
 from src.utils.timezone import format_local
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DisplayChatMessage:
+    sequence: int
+    role: str
+    content: str
+    created_at: Optional[datetime] = None
+
+
+@dataclass
+class ChatHistoryPage:
+    messages: list[DisplayChatMessage] = field(default_factory=list)
+    has_more_before: bool = False
+    next_before_sequence: Optional[int] = None
 
 
 class ChatService:
@@ -61,6 +78,38 @@ class ChatService:
     def get_session_messages(self, session_id: str) -> list[Message]:
         """返回会话的非归档消息列表（供 UI 渲染历史记录）"""
         return MessageRepository().get_context(session_id)
+
+    def get_display_messages(
+        self,
+        session_id: str,
+        limit: int = 10,
+        before_sequence: Optional[int] = None,
+    ) -> ChatHistoryPage:
+        """返回用户可见的展示消息分页，不含内部状态字段。"""
+        repo = MessageRepository()
+        rows = repo.get_display_page(session_id, limit=limit, before_sequence=before_sequence)
+
+        if before_sequence is not None:
+            has_more = repo.has_more_before(session_id, before_sequence=before_sequence)
+        else:
+            oldest_seq = rows[0].sequence if rows else 0
+            has_more = repo.has_more_before(session_id, before_sequence=oldest_seq) if rows else False
+
+        messages = [
+            DisplayChatMessage(
+                sequence=m.sequence,
+                role=m.role,
+                content=m.content,
+                created_at=m.created_at,
+            )
+            for m in rows
+        ]
+
+        return ChatHistoryPage(
+            messages=messages,
+            has_more_before=has_more,
+            next_before_sequence=messages[0].sequence if messages else None,
+        )
 
     # ------------------------------------------------------------------
     # 用户档案

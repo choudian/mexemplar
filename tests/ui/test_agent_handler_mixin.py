@@ -60,12 +60,32 @@ class _DummyMainContent:
         self.switched_pages.append(page_name)
 
 
+class _DummyToggle:
+    def __init__(self):
+        self._checked = False
+        self._visible = True
+
+    def isChecked(self):
+        return self._checked
+
+    def setChecked(self, val):
+        self._checked = val
+
+    def isVisible(self):
+        return self._visible
+
+    def setVisible(self, val):
+        self._visible = val
+
+
 class _DummyChatWidget:
     def __init__(self):
         self.auto_approve_states = []
+        self.auto_approve_toggle = _DummyToggle()
 
     def set_auto_approve_enabled(self, enabled):
         self.auto_approve_states.append(enabled)
+        self.auto_approve_toggle.setChecked(enabled)
 
 
 class _DummyWindow(QWidget, AgentHandlerMixin):
@@ -397,3 +417,14 @@ def test_assistant_auth_confirmation_no_longer_uses_qmessagebox_question():
     source = inspect.getsource(AgentHandlerMixin._on_confirm_action_requested)
     assert "QMessageBox.question" not in source
     assert "AuthToastSurface" in inspect.getsource(AgentHandlerMixin._show_next_auth_toast)
+
+
+def test_toggle_visibility_does_not_break_set_auto_approve(app):
+    """Toggle 可见性变化不影响 set_auto_approve_enabled 同步行为。"""
+    chat = _DummyChatWidget()
+    chat.auto_approve_toggle.setVisible(False)
+    chat.set_auto_approve_enabled(True)
+    assert chat.auto_approve_states == [True]
+    assert chat.auto_approve_toggle.isChecked() is True
+    chat.set_auto_approve_enabled(False)
+    assert chat.auto_approve_states == [True, False]

@@ -273,6 +273,22 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应 UI，办公助理通过 `session_id` 路由到对应 ChatWidget 实例。
 
+### 聊天展示路径
+
+```
+ChatWidget → ChatService.get_display_messages() → MessageRepository.get_display_page()
+```
+
+`ChatWidget` 加载历史消息时调用 `ChatService.get_display_messages(session_id, limit=10, before_sequence=None)`，由 `MessageRepository.get_display_page()` 在 SQLite `messages` 表上执行 keyset 分页，过滤掉 `role=tool`、`role=summary`、`message_type=compressed`、空内容和仅工具调用的 assistant 消息，返回 `ChatHistoryPage`（包含 `DisplayChatMessage` DTO 列表和 `has_more_before` 分页标志）。UI 向上滚动时传入 `before_sequence` 加载更早展示消息。
+
+### Markdown 渲染边界
+
+assistant 消息通过 `MarkdownMessageView`（`QTextBrowser` 子类）以 `QTextDocument.setMarkdown(... MarkdownDialectGitHub)` 渲染为只读富文本。渲染前降级 raw HTML/script 和非 `http(s)` 图片目标；`anchorClicked` 和 `setSource` 覆写为 no-op 阻止外部导航。用户消息保持 `QLabel` + `PlainText`。
+
+### 免确认 Toggle 可见性
+
+`ChatWidget._set_auto_approve_toggle_visible()` 控制顶栏 Toggle 的显隐：欢迎页/会话列表/新对话空态时隐藏，首次发送消息或切换到有消息的会话时显示。可见性变化不发出 `auto_approve_toggled` 信号，不影响现有 `AgentHandlerMixin` 的确认协议。
+
 **职责分离：**
 - **Agent Loop** — 纯执行引擎，只负责跑循环和返回 AgentResult，不感知事件系统
 - **AgentOrchestrator** — 根据 loop.run() 的返回值发出业务事件、通过 `_dispatch_next` 显式调度下一个 Agent

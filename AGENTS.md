@@ -65,7 +65,7 @@
 - `docs/local/`：临时分析、计划、草稿
 
 <!-- SPECKIT START -->
-For the active `004-auth-toast` feature, read
-`specs/004-auth-toast/plan.md` for implementation context, project
+For the active `006-chat-ui-polish` feature, read
+`specs/006-chat-ui-polish/plan.md` for implementation context, project
 structure, validation commands, and generated design artifacts.
 <!-- SPECKIT END -->

@@ -356,6 +356,21 @@ QLabel#content_assistant {
     background-color: transparent;
 }
 
+/* === Markdown 富文本视图 === */
+QTextBrowser#markdown_message_view {
+    background-color: transparent;
+    border: none;
+    color: #212529;
+    font-size: 15px;
+    line-height: 1.6;
+    selection-background-color: #667eea;
+    selection-color: #ffffff;
+}
+
+QTextBrowser#markdown_message_view:hover {
+    border: none;
+}
+
 /* === 输入区域容器 === */
 QWidget#input_container {
     background-color: #ffffff;

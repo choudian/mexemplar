@@ -97,3 +97,61 @@ class MessageRepository(BaseRepository):
         if msg:
             msg.content = content
             self.session.commit()
+
+    def _display_filter(self, query):
+        return query.filter(
+            and_(
+                Message.role.in_(["user", "assistant"]),
+                Message.content != "",
+                Message.content.isnot(None),
+                Message.message_type != "compressed",
+                Message.role != "tool",
+                Message.role != "summary",
+            ),
+        ).filter(
+            ~and_(
+                Message.role == "assistant",
+                (Message.content == "") | (Message.content.is_(None)),
+                Message.tool_calls.isnot(None),
+            )
+        )
+
+    def get_display_page(
+        self,
+        session_id: str,
+        limit: int = 10,
+        before_sequence: Optional[int] = None,
+    ) -> List[Message]:
+        if limit <= 0:
+            raise ValueError(f"limit must be positive, got {limit}")
+
+        sub = (
+            self.session.query(Message)
+            .filter(Message.session_id == session_id)
+        )
+        sub = self._display_filter(sub)
+
+        if before_sequence is not None:
+            sub = sub.filter(Message.sequence < before_sequence)
+
+        sub = sub.order_by(Message.sequence.desc()).limit(limit)
+
+        return (
+            self.session.query(Message)
+            .filter(Message.message_id.in_(
+                self.session.query(Message.message_id)
+                .filter(Message.session_id == session_id)
+                .filter(self._display_filter.subquery())
+            ))
+            .order_by(Message.sequence)
+            .all()
+        ) if False else list(reversed(sub.all()))
+
+    def has_more_before(self, session_id: str, before_sequence: int) -> bool:
+        exists = (
+            self.session.query(Message.message_id)
+            .filter(Message.session_id == session_id)
+            .filter(Message.sequence < before_sequence)
+        )
+        exists = self._display_filter(exists)
+        return exists.first() is not None
