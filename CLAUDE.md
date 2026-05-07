@@ -36,6 +36,14 @@
 - `assemble_context` 在压缩后、引用替换前执行 `_cleanup_orphan_tool_results` 兜底校验，剔除孤立 tool result
 - 启动入口在 `src/main.py`：GUI 启动前会先跑 `get_unified_config()` 和 `RecordingRepository.ensure_startup_recovery()`
 - 录制数据工具现为 **5 工具模型**：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`；大字段（≥1000 字符）自动占位替换，Agent 按需分段读取
+- 5 个通用录制数据工具按 `recording_mode` dispatch：浏览器 mode 走浏览器录制表，桌面 mode 走 `desktop_recordings` / `desktop_actions`；跨 mode SQL / stable locator 返回 `table_not_in_mode`
+- 桌面 PM / Programmer prompt 通过 `build_pm_prompt(mode)` / `build_programmer_prompt(mode)` 双轨构建；浏览器 mode 返回 legacy prompt，桌面 mode 增加 `window_title` 聚焦、桌面专属工具和 `async def execute() -> dict` 契约
+- 桌面录制 UI 通过 `DesktopRecordingService` 启动；主窗 minimize 完成回调后才启动 hook，停止后 sanity check 通过 `get_health_stats()` 读取 `desktop_recordings.health_stats`，三按钮为继续分析 / 放弃录制 / 重新录制
+- 桌面录制 action 带 `monitor_index`；进程启动在 QApplication 前应用 DPI Per-Monitor V2，失败只降级记录日志
+- 桌面专属工具为 `list_desktop_actions` / `read_action_clip` / `analyze_desktop_action`；`vision_model` 缺失时不注入 `analyze_desktop_action`，桌面工具集不得注入浏览器 `analyze_image`
+- 桌面 Trial 由 `src/execution/desktop_trial_runner.py` 创建 `data/trials/<trial_id>/`、设置 cwd / env 白名单 / 120s 超时和 Windows `taskkill` 清理；business 层只编排和发事件
+- 桌面 Programmer 代码先过 `ast.parse` syntax gate，自动反馈重试最多 2 次；失败发 `desktop_syntax_gate_retry_failed`
+- 桌面录制跨模块通知走 `src/utils/events.py` blinker，UI 只做本地 Qt bridge
 - SQL 列血缘分析在 `src/recording/filtering/query_projection_analyzer.py`（用 sqlglot）；`recording_data_tools.py` 不直接 import sqlglot（guard test 约束）
 - 大字段配置走 `recording.large_field.*`（`threshold_chars` / `preview_chars` / `max_chunk_chars`，默认均 1000）
 - `AgentLoop.run()` 支持**多工具批次处理**：同一轮 LLM 响应的多个 tool_calls 按顺序执行并逐一保存结果；普通工具失败时停止后续真实执行并写入 `not_executed` 级联
@@ -86,5 +94,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan
-at `.specify/memory/plan.md`
+at `specs/007-desktop-recording/plan.md`
 <!-- SPECKIT END -->

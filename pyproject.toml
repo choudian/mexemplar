@@ -23,6 +23,7 @@ classifiers = [
 dependencies = [
     "anthropic>=0.75.0",
     "blinker>=1.9.0",
+    "comtypes>=1.4.12; platform_system == 'Windows'",
     "duckdb>=1.0.0",
     "keyring>=25.7.0",
     "langchain-core>=0.3.0",
@@ -35,6 +36,7 @@ dependencies = [
     "playwright>=1.57.0",
     "psutil>=5.9.0",
     "pynput>=1.8.1",
+    "pywin32>=311; platform_system == 'Windows'",
     "pyqt6>=6.10.1",
     "pywinauto>=0.6.9",
     "sqlglot>=23.0.0,<30.0.0",

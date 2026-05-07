@@ -1,6 +1,6 @@
 from typing import Any
 
-from .sql_rewriter import rewrite
+from .sql_rewriter import rewrite, validate_table_against_mode_allowlist
 
 SQL_PARSE_FAILED_MESSAGE = "SQL 解析失败，请简化查询后重试"
 DATA_ACCESS_RESTRICTED_MESSAGE = "数据访问受限"
@@ -40,12 +40,22 @@ class DataAccessRestrictedError(RuntimeError):
 def sanitize_tool_exception(exc: Exception) -> RuntimeError:
     if isinstance(exc, DataAccessRestrictedError):
         return exc
+    if str(exc).startswith("table_not_in_mode:"):
+        return RuntimeError(str(exc))
     return MaskedSqlParseError()
 
 
+def _validate_and_rewrite(sql: str, mode: str) -> str:
+    """Rewrite SQL and validate table access against mode allowlist."""
+    rewritten = rewrite(sql)
+    validate_table_against_mode_allowlist(sql, mode)
+    return rewritten
+
+
 class FilteredDuckDBConnection:
-    def __init__(self, conn: Any) -> None:
+    def __init__(self, conn: Any, *, mode: str = "browser") -> None:
         self._conn = conn
+        self._mode = mode
 
     def execute(self, sql: str, parameters: Any = None):
         rewritten = self._rewrite_sql(sql)
@@ -79,13 +89,14 @@ class FilteredDuckDBConnection:
         return self._call_relation_method("query", sql, *args, **kwargs)
 
     def cursor(self):
-        return FilteredDuckDBCursor(self._conn.cursor())
+        return FilteredDuckDBCursor(self._conn.cursor(), mode=self._mode)
 
     def table(self, name: str):
         normalized = name.strip().strip('"').lower()
         if normalized == "filter_decisions":
             raise DataAccessRestrictedError()
         try:
+            validate_table_against_mode_allowlist(f"SELECT * FROM {normalized}", self._mode)
             if normalized == "network_requests":
                 relation = self._conn.sql(rewrite("SELECT * FROM network_requests"))
             else:
@@ -114,10 +125,9 @@ class FilteredDuckDBConnection:
             raise sanitize_tool_exception(exc) from None
         return FilteredDuckDBRelation(relation)
 
-    @staticmethod
-    def _rewrite_sql(sql: str) -> str:
+    def _rewrite_sql(self, sql: str) -> str:
         try:
-            return rewrite(sql)
+            return _validate_and_rewrite(sql, self._mode)
         except Exception as exc:
             raise sanitize_tool_exception(exc) from None
 
@@ -129,11 +139,15 @@ class FilteredDuckDBConnection:
 
 
 class FilteredDuckDBCursor:
-    def __init__(self, cursor: Any) -> None:
+    def __init__(self, cursor: Any, *, mode: str = "browser") -> None:
         self._cursor = cursor
+        self._mode = mode
 
     def execute(self, sql: str, parameters: Any = None):
-        rewritten = FilteredDuckDBConnection._rewrite_sql(sql)
+        try:
+            rewritten = _validate_and_rewrite(sql, self._mode)
+        except Exception as exc:
+            raise sanitize_tool_exception(exc) from None
         try:
             if parameters is None:
                 self._cursor.execute(rewritten)

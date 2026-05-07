@@ -150,3 +150,32 @@
 - `docs/ARCHITECTURE.md` — 展示历史分页路径文档
 
 **Tasks Completed:** 36/36 tasks
+
+## 桌面录制 Phase 1 — 2026-05-07
+
+**Branch:** `007-desktop-recording`
+**Spec:** `specs/007-desktop-recording`
+
+**What was added:**
+- US-017 (P1): 桌面录制从"暂不支持"变为 Windows-only 录制闭环，包含 minimize 后启动 hook、浮窗停止、health_stats sanity check。
+- US-018 (P1): 5 个通用录制数据工具按 browser/desktop mode dispatch，新增 3 个桌面专属工具并保持浏览器路径不退化。
+- US-019 (P2): 桌面 Programmer 代码先过 `ast.parse` syntax gate，再由 execution 层 Trial 子进程用隔离 cwd/env 和 120s `taskkill` 兜底试用。
+- US-020 (P3): sanity check 三按钮状态机、`vision_model` 缺失提示、桌面录制设置区和 early-loss feedback。
+
+**New Components:**
+- `src/recording/desktop_recorder.py` + `src/recording/desktop/` — pynput hook、UIA、剪贴板、ring buffer、PNG/clip sink、热键和 DPI awareness。
+- `src/business/agents/tools/desktop_tools.py` — `list_desktop_actions` / `analyze_desktop_action` / `read_action_clip`。
+- `src/business/agents/prompts/desktop_prompts.py` — PM / Programmer 双轨 prompt 构建。
+- `src/business/orchestration/agent/desktop_syntax_gate.py` — Programmer 代码语法 gate 与自动反馈模板。
+- `src/execution/desktop_trial_runner.py` / `desktop_trial_models.py` — Trial 子进程执行协议。
+- `src/ui/widgets/recording_floating_widget.py` / `desktop_sanity_check_dialog.py` / `desktop_trial_dialogs.py` / `settings/desktop_recording_settings.py`。
+
+**Modified Components:**
+- `src/business/agents/tools/recording_data_tools.py` — 5 通用工具 mode dispatch + desktop stable locator 支持。
+- `src/data/recording_repository.py` — `desktop_recordings` / `desktop_actions` 表、mode 查询入口、Trial 调试目录 startup cleanup。
+- `src/data/config_models.py` / `src/data/unified_config.py` — `recording.desktop.enable_clip` / `vision_model` 配置。
+- `src/recording/filtering/decision.py` / `sql_rewriter.py` — desktop/browser mode allowlist 和 `table_not_in_mode`。
+- `src/ui/widgets/recording_widget.py` / `src/ui/mixins/recording_mixin.py` — desktop 启停、minimize/restore、互斥与 sanity flow。
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` / `AGENTS.md` / `CLAUDE.md` — 桌面录制运行结构与边界同步。
+
+**Tasks Completed:** 86/104 tasks

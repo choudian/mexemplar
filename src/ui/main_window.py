@@ -16,9 +16,10 @@ import threading
 from collections import deque
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, QTimer, QSize, pyqtSignal
 from PyQt6.QtGui import QAction, QIcon, QResizeEvent
 from PyQt6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -62,6 +63,12 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
     recording_error = pyqtSignal(str)
     extension_recording_started = pyqtSignal(str)
     extension_recording_stopped = pyqtSignal()
+    desktop_recording_start_ready = pyqtSignal(str)
+    desktop_recording_stop_finished = pyqtSignal(str, object)
+    _desktop_hotkey_stop_requested = pyqtSignal()
+    desktop_recording_action_count_changed = pyqtSignal(str, int)
+    desktop_trial_preview_requested = pyqtSignal(object)
+    desktop_trial_finished_notified = pyqtSignal(object)
     _agent_start_requested = pyqtSignal(str)       # recording_id，跨线程触发 start_agent
     _switch_to_intent_page = pyqtSignal()           # 跨线程切换到意图确认页
     _ensure_bridge_requested = pyqtSignal()         # 跨线程创建 AgentUIBridge
@@ -207,6 +214,12 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         self.recording_start_success.connect(self._on_recording_start_success)
         self.recording_start_failed.connect(self._on_recording_start_failed)
         self.recording_error.connect(self._on_recording_error)
+        self.desktop_recording_start_ready.connect(self._on_desktop_recording_start_ready)
+        self.desktop_recording_stop_finished.connect(self._on_desktop_recording_stop_finished)
+        self._desktop_hotkey_stop_requested.connect(self._on_recording_stopped)
+        self.desktop_recording_action_count_changed.connect(self._on_desktop_action_count_changed)
+        self.desktop_trial_preview_requested.connect(self._on_desktop_trial_preview_requested)
+        self.desktop_trial_finished_notified.connect(self._on_desktop_trial_finished_notified)
         self._ensure_bridge_requested.connect(self._on_ensure_bridge_requested)
 
         self.main_content.switch_page(CONVERSATIONS)
@@ -234,10 +247,83 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
                 return
             self.extension_recording_stopped.emit()
 
+        def on_desktop_action_count_changed(sender, **kwargs):
+            recording_id = kwargs.get("recording_id")
+            action_count = kwargs.get("action_count", 0)
+            if not recording_id:
+                return
+            self.desktop_recording_action_count_changed.emit(str(recording_id), int(action_count))
+
+        def on_desktop_trial_preview_ready(sender, **kwargs):
+            _ = sender
+            response_event = threading.Event()
+            response = {"approved": False}
+            self.desktop_trial_preview_requested.emit(
+                {
+                    "workflow_id": kwargs.get("workflow_id") or "",
+                    "trial_id": kwargs.get("trial_id") or "",
+                    "code": kwargs.get("code") or kwargs.get("code_preview") or "",
+                    "response": response,
+                    "response_event": response_event,
+                }
+            )
+            if not response_event.wait(timeout=300):
+                self.logger.warning("桌面试用事前提示等待 UI 响应超时")
+                return False
+            return bool(response.get("approved"))
+
+        def on_desktop_trial_finished(sender, **kwargs):
+            _ = sender
+            self.desktop_trial_finished_notified.emit(
+                {
+                    "workflow_id": kwargs.get("workflow_id") or "",
+                    "trial_id": kwargs.get("trial_id") or "",
+                    "result": kwargs.get("result"),
+                }
+            )
+
+        def on_desktop_stop_requested(_sender, **_kwargs):
+            if getattr(self, "_active_desktop_recording_id", None):
+                self._desktop_hotkey_stop_requested.emit()
+
         self._on_extension_recording_started_handler = on_recording_started
         self._on_extension_recording_stopped_handler = on_recording_stopped
+        self._on_desktop_action_count_changed_handler = on_desktop_action_count_changed
+        self._on_desktop_trial_preview_ready_handler = on_desktop_trial_preview_ready
+        self._on_desktop_trial_finished_handler = on_desktop_trial_finished
+        self._on_desktop_stop_requested_handler = on_desktop_stop_requested
         connect("recording_started", self._on_extension_recording_started_handler)
         connect("recording_stopped", self._on_extension_recording_stopped_handler)
+        connect("desktop_action_count_changed", self._on_desktop_action_count_changed_handler)
+        connect("desktop_trial_preview_ready", self._on_desktop_trial_preview_ready_handler)
+        connect("desktop_trial_finished", self._on_desktop_trial_finished_handler)
+        connect("desktop_stop_requested", self._on_desktop_stop_requested_handler)
+
+    def _on_desktop_trial_preview_requested(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        response = data.get("response")
+        response_event = data.get("response_event")
+        try:
+            from src.ui.widgets.desktop_trial_dialogs import DesktopTrialPreviewDialog
+
+            dialog = DesktopTrialPreviewDialog(str(data.get("code") or ""), parent=self)
+            approved = dialog.exec() == QDialog.DialogCode.Accepted
+            if isinstance(response, dict):
+                response["approved"] = approved
+        finally:
+            if response_event is not None:
+                response_event.set()
+
+    def _on_desktop_trial_finished_notified(self, payload: object) -> None:
+        data = payload if isinstance(payload, dict) else {}
+        result = data.get("result")
+        if result is None:
+            return
+        from src.ui.widgets.desktop_trial_dialogs import trial_toast_payload
+
+        title, body = trial_toast_payload(result)
+        toast_type = "success" if result.ok and result.exit_code == 0 else "error"
+        self._show_toast(f"{title}：{body}", auto_dismiss_ms=8000, toast_type=toast_type)
 
     def create_menu_bar(self) -> None:
         """创建菜单栏"""
@@ -427,6 +513,13 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
         self._position_active_auth_toast()
         self._position_active_notification_toast()
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            start_pending = getattr(self, "_begin_pending_desktop_recording_if_minimized", None)
+            if start_pending is not None:
+                start_pending()
+
     # =========================================================================
     # 对话框 / 关闭
     # =========================================================================
@@ -457,6 +550,14 @@ class MainWindow(AgentBridgeMixin, AgentHandlerMixin, RecordingMixin, QMainWindo
     def closeEvent(self, event) -> None:
         """窗口关闭：确保资源正确释放"""
         self.logger.info("正在关闭应用程序...")
+
+        desktop_recording_id = getattr(self, "_active_desktop_recording_id", None)
+        if desktop_recording_id:
+            try:
+                self.logger.info("停止正在进行的桌面录制...")
+                self._get_desktop_recording_service().stop(desktop_recording_id)
+            except Exception as e:
+                self.logger.error(f"停止桌面录制失败: {e}")
 
         if self.browser_recorder is not None:
             try:

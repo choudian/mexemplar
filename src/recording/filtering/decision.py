@@ -4,6 +4,18 @@ from typing import Any, Literal
 
 from src.utils.timezone import utc_now_naive
 
+BROWSER_MODE_TABLES = frozenset(
+    {
+        "recording_sessions",
+        "actions",
+        "network_requests",
+        "sibling_snapshots",
+        "recording_screenshots",
+    }
+)
+DESKTOP_MODE_TABLES = frozenset({"desktop_recordings", "desktop_actions"})
+MODE_TABLES = {"browser": BROWSER_MODE_TABLES, "desktop": DESKTOP_MODE_TABLES}
+
 
 @dataclass(frozen=True)
 class FilterDecision:

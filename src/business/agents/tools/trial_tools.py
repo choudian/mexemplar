@@ -7,13 +7,16 @@
 - run_command：在工具执行环境中运行命令（自修复用）
 """
 
-import json
+import uuid
+from dataclasses import asdict
 from typing import Any, Dict
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.hook_models import PreHookResult, ToolCallContext
-from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler, error_json
+from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler, error_json, to_json
+from src.execution.desktop_trial_runner import run_desktop_trial
 from src.execution.tool_executor import run_command_in_venv, run_tool_code
+from src.utils.events import emit, emit_collect
 
 # =============================================================================
 # execute_tool schema
@@ -85,32 +88,22 @@ RUN_COMMAND_SCHEMA: Dict[str, Any] = make_tool_schema(
 _MAX_COMMAND_ATTEMPTS = 5  # 单次试用 Agent 运行中允许的 run_command 最大调用次数
 
 
-def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
-    """创建试用工具列表，workflow_id 通过闭包绑定。"""
+def _resolve_tool_code(workflow_id: str) -> tuple[Any, str | None]:
+    """Look up tool by workflow_id. Returns (tool, error_json_or_None)."""
+    from src.data.repositories import ToolRepository
 
-    # 自修复计数器：生命周期 = 单次 run_agent("trial") 调用
-    # 每次 Orchestrator 启动试用 Agent 时都会重置
+    tool_repo = ToolRepository()
+    tool = tool_repo.get_by_workflow_id(workflow_id)
+    if not tool:
+        return None, error_json(f"未找到工作流 {workflow_id} 对应的工具")
+    if not tool.execution_code:
+        return None, error_json("工具代码为空")
+    return tool, None
+
+
+def _make_run_command_tools() -> tuple[ToolDefinition, ToolDefinition]:
+    """Create shared run_command + submit_trial_result tool definitions."""
     _command_attempts = 0
-
-    def _execute_tool_handler(parameters: dict) -> str:
-        from src.data.repositories import ToolRepository
-
-        tool_repo = ToolRepository()
-        tool = tool_repo.get_by_workflow_id(workflow_id)
-        if not tool:
-            return error_json(f"未找到工作流 {workflow_id} 对应的工具")
-        if not tool.execution_code:
-            return error_json("工具代码为空")
-
-        dependencies = tool.dependencies or []
-
-        result = run_tool_code(tool.execution_code, parameters, dependencies=dependencies)
-        if result.get("success", False):
-            return json.dumps(result, ensure_ascii=False, default=str)
-
-        result.setdefault("message", "工具执行失败")
-        result.setdefault("data", None)
-        return json.dumps(result, ensure_ascii=False, default=str)
 
     def _run_command_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
         nonlocal _command_attempts
@@ -123,14 +116,9 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
 
     def _run_command_handler(command: str) -> str:
         result = run_command_in_venv(command)
-        return json.dumps(result, ensure_ascii=False)
+        return to_json(result)
 
-    return [
-        ToolDefinition(
-            name="execute_tool",
-            schema=EXECUTE_TOOL_SCHEMA,
-            handler=_execute_tool_handler,
-        ),
+    return (
         ToolDefinition(
             name="submit_trial_result",
             schema=SUBMIT_TRIAL_RESULT_SCHEMA,
@@ -143,9 +131,96 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
             handler=_run_command_handler,
             pre_hook=_run_command_pre_hook,
         ),
+    )
+
+
+def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
+    """创建试用工具列表，workflow_id 通过闭包绑定。"""
+
+    def _execute_tool_handler(parameters: dict) -> str:
+        tool, err = _resolve_tool_code(workflow_id)
+        if err:
+            return err
+
+        dependencies = tool.dependencies or []
+
+        result = run_tool_code(tool.execution_code, parameters, dependencies=dependencies)
+        if result.get("success", False):
+            return to_json(result)
+
+        result.setdefault("message", "工具执行失败")
+        result.setdefault("data", None)
+        return to_json(result)
+
+    submit_tool, run_command_tool = _make_run_command_tools()
+    return [
+        ToolDefinition(
+            name="execute_tool",
+            schema=EXECUTE_TOOL_SCHEMA,
+            handler=_execute_tool_handler,
+        ),
+        submit_tool,
+        run_command_tool,
+    ]
+
+
+def create_desktop_trial_tools(workflow_id: str) -> list[ToolDefinition]:
+    """创建桌面试用工具，execute_tool 使用隔离 desktop runner。"""
+
+    def _preview_cancelled(responses: list[tuple[Any, Any]]) -> bool:
+        return any(response is False for _receiver, response in responses)
+
+    def _execute_tool_handler(parameters: dict | None = None) -> str:
+        del parameters
+        tool, err = _resolve_tool_code(workflow_id)
+        if err:
+            return err
+
+        trial_id = str(uuid.uuid4())
+        preview_responses = emit_collect(
+            "desktop_trial_preview_ready",
+            sender=None,
+            workflow_id=workflow_id,
+            trial_id=trial_id,
+            code=tool.execution_code,
+            code_preview="\n".join(tool.execution_code.splitlines()[:20]),
+        )
+        if _preview_cancelled(preview_responses):
+            return to_json(
+                {
+                    "ok": False,
+                    "summary": "用户取消桌面试用",
+                    "details": {"cancelled": True},
+                    "exit_code": None,
+                    "timed_out": False,
+                    "stdout_path": None,
+                    "stderr_path": None,
+                    "trial_id": trial_id,
+                },
+            )
+        result = run_desktop_trial(tool.execution_code, trial_id)
+        emit(
+            "desktop_trial_finished",
+            sender=None,
+            workflow_id=workflow_id,
+            trial_id=trial_id,
+            result=result,
+        )
+        return to_json(asdict(result))
+
+    submit_tool, run_command_tool = _make_run_command_tools()
+    return [
+        ToolDefinition(
+            name="execute_tool",
+            schema=EXECUTE_TOOL_SCHEMA,
+            handler=_execute_tool_handler,
+        ),
+        submit_tool,
+        run_command_tool,
     ]
 
 
 __all__ = [
+    "create_desktop_trial_tools",
     "create_trial_tools",
 ]

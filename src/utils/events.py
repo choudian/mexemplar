@@ -28,6 +28,27 @@ recording_stopped = _signals.signal("recording_stopped")
 recording_completed = _signals.signal("recording_completed")
 """录制完成事件 - 当录制数据准备就绪时触发"""
 
+desktop_action_count_changed = _signals.signal("desktop_action_count_changed")
+"""桌面录制动作计数变化事件"""
+
+desktop_recorder_start_failed = _signals.signal("desktop_recorder_start_failed")
+"""桌面录制启动失败事件"""
+
+desktop_recording_degraded = _signals.signal("desktop_recording_degraded")
+"""桌面录制降级事件"""
+
+desktop_stop_requested = _signals.signal("desktop_stop_requested")
+"""桌面录制停止请求事件（由热键等非 UI 入口触发，UI 层订阅后走正式停止流程）"""
+
+desktop_syntax_gate_retry_failed = _signals.signal("desktop_syntax_gate_retry_failed")
+"""桌面 Programmer 语法门卫重试失败事件"""
+
+desktop_trial_preview_ready = _signals.signal("desktop_trial_preview_ready")
+"""桌面 Trial 事前提示准备事件"""
+
+desktop_trial_finished = _signals.signal("desktop_trial_finished")
+"""桌面 Trial 完成事件"""
+
 # Agent 交互事件
 agent_needs_user_input = _signals.signal("agent_needs_user_input")
 """Agent 需要用户输入事件"""
@@ -153,6 +174,22 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
         logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}")
 
 
+def emit_collect(signal_name: str, sender: Any = None, **kwargs) -> list[tuple[Any, Any]]:
+    """
+    发送信号并收集监听器返回值。
+
+    用于少数需要同步审批结果的业务路径；普通通知仍使用 emit()。
+    """
+    signal = _signals.signal(signal_name)
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug(f"发送事件 '{signal_name}' 并收集返回值")
+    try:
+        return signal.send(sender, event_name=signal_name, **kwargs)
+    except Exception as exc:
+        logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}")
+        return []
+
+
 # =============================================================================
 # 测试辅助
 # =============================================================================
@@ -161,6 +198,13 @@ _signal_names = [
     "recording_started",
     "recording_stopped",
     "recording_completed",
+    "desktop_action_count_changed",
+    "desktop_recorder_start_failed",
+    "desktop_recording_degraded",
+    "desktop_stop_requested",
+    "desktop_syntax_gate_retry_failed",
+    "desktop_trial_preview_ready",
+    "desktop_trial_finished",
     "agent_needs_user_input",
     "agent_error",
     "requirement_confirmed",
@@ -196,6 +240,13 @@ __all__ = [
     "recording_started",
     "recording_stopped",
     "recording_completed",
+    "desktop_action_count_changed",
+    "desktop_recorder_start_failed",
+    "desktop_recording_degraded",
+    "desktop_stop_requested",
+    "desktop_syntax_gate_retry_failed",
+    "desktop_trial_preview_ready",
+    "desktop_trial_finished",
     "agent_needs_user_input",
     "agent_error",
     "requirement_confirmed",
@@ -216,6 +267,7 @@ __all__ = [
     "event_value",
     "connect",
     "emit",
+    "emit_collect",
     # 测试辅助
     "clear_all",
 ]

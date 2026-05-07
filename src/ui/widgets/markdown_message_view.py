@@ -85,9 +85,13 @@ class MarkdownMessageView(QTextBrowser):
     def _apply_content(self, text: str) -> None:
         safe = self._sanitize_markdown(text)
         doc = self.document()
-        doc.setMarkdown(safe, QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
-        self.setTextCursor(QTextCursor(doc))
-        # contentsChanged signal handles size adjustment
+        doc.blockSignals(True)
+        try:
+            doc.setMarkdown(safe, QTextDocument.MarkdownFeature.MarkdownDialectGitHub)
+            self.setTextCursor(QTextCursor(doc))
+        finally:
+            doc.blockSignals(False)
+        self._on_contents_changed()
 
     def _on_contents_changed(self) -> None:
         self._cached_size_hint = None
@@ -117,9 +121,10 @@ class MarkdownMessageView(QTextBrowser):
             doc = self.document()
             doc.setTextWidth(w)
             new_h = max(int(doc.size().height()) + 4, 1)
+            self._cached_size_hint = QSize(w, new_h)
             if self.height() != new_h:
                 self.setFixedHeight(new_h)
-            self.updateGeometry()
+                self.updateGeometry()
         finally:
             self._adjusting = False
 

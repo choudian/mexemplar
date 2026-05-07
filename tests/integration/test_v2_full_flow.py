@@ -93,6 +93,11 @@ def _trial_submit_result(success: bool, feedback: str = "") -> LLMResponse:
     )
 
 
+def _trial_wait_for_user(message: str = "请重新试用修复后的工具。") -> LLMResponse:
+    """试用 Agent 在修复后自动恢复会话时等待用户继续输入。"""
+    return LLMResponse(content=message, tool_calls=[])
+
+
 def _pm_report_code_issue(feedback: str = "代码逻辑有误", tc_id: str = "tc-pm-triage") -> LLMResponse:
     """PM Agent 分诊后报告代码问题的 mock 响应"""
     return LLMResponse(
@@ -260,6 +265,7 @@ def test_trial_fail_triage_fix(mock_config, events_collector):
         _pm_report_code_issue("输出结果不对，代码逻辑有误"),             # 5. PM 分诊 → code_issue
         _programmer_submit_code(SAMPLE_CODE_V2, tc_id="tc-prog-fix"), # 6. 程序员修复
         _review_passed(),                                             # 7. Review 再次通过
+        _trial_wait_for_user(),                                        # 8. 修复后恢复 Trial，会等待用户继续试用
     ]
 
     mock_llm = MockLLMClient(responses)

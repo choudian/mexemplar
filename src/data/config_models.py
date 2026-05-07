@@ -117,6 +117,14 @@ class LargeFieldConfig:
 
 
 @dataclass
+class RecordingDesktopConfig:
+    """桌面录制配置"""
+
+    enable_clip: bool = True
+    vision_model: Optional[str] = None
+
+
+@dataclass
 class RecordingNoiseFilterConfig:
     """录制噪声过滤配置"""
 
@@ -173,7 +181,7 @@ class RecordingConfig:
     screenshot_delay_after_action: float = 0.2  # 操作后截图延迟（秒）
     record_mouse_move: bool = False  # 是否记录鼠标移动事件
     # 浏览器录制配置
-    default_recording_mode: str = "desktop"  # 默认录制模式（'browser' 或 'desktop'）
+    default_recording_mode: str = "browser"  # 默认录制模式（'browser' 或 'desktop'）
     browser_type: str = "chromium"  # 浏览器类型（'chromium', 'firefox', 'webkit'）
     browser_headless: bool = False  # 是否无头模式
     browser_start_url: Optional[str] = None  # 浏览器启动URL
@@ -185,6 +193,7 @@ class RecordingConfig:
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
     noise_filter: RecordingNoiseFilterConfig = field(default_factory=RecordingNoiseFilterConfig)
     large_field: LargeFieldConfig = field(default_factory=LargeFieldConfig)
+    desktop: RecordingDesktopConfig = field(default_factory=RecordingDesktopConfig)
     # 用户数据目录配置
     persistent_user_data: bool = True  # 是否使用持久化用户数据目录（保留登录状态，默认启用）
     user_data_dir: Optional[str] = None  # 自定义用户数据目录路径（如果为 None，使用默认路径）
@@ -233,6 +242,7 @@ class AppConfig:
                 ("proxy", ProxyConfig),
                 ("noise_filter", RecordingNoiseFilterConfig),
                 ("large_field", LargeFieldConfig),
+                ("desktop", RecordingDesktopConfig),
             ):
                 val = recording_data.get(key)
                 if isinstance(val, dict):

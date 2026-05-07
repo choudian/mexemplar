@@ -296,9 +296,7 @@ class ToolsManagementUI(QWidget):
             tab == "published" and len(self.published_tools) == 0
         )
 
-        self._create_composition_btn.setVisible(
-            tab == "compositions" and len(self.skill_compositions) > 0
-        )
+        self._create_composition_btn.setVisible(tab == "compositions")
         self._compositions_scroll.setVisible(tab == "compositions")
         self.compositions_empty_state.setVisible(
             tab == "compositions" and len(self.skill_compositions) == 0
@@ -469,9 +467,7 @@ class ToolsManagementUI(QWidget):
         self.skill_composition_cards.clear()
 
         self._compositions_tab_btn.setText(f"技能组合 ({len(compositions)})")
-        self._create_composition_btn.setVisible(
-            len(compositions) > 0 and self._current_tab == "compositions"
-        )
+        self._create_composition_btn.setVisible(self._current_tab == "compositions")
         self.compositions_empty_state.setVisible(
             len(compositions) == 0 and self._current_tab == "compositions"
         )

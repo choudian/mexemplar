@@ -204,24 +204,25 @@ class TestScreenshotFeatureGatekeeper:
 
 
 class TestLargeFieldToolWiring:
-    """T029: read_field_chunk 注册为第 5 个工具的 wiring smoke test。"""
+    """T029: read_field_chunk 注册在 5 个通用录制工具内的 wiring smoke test。"""
 
-    def test_create_recording_tools_returns_five_tools(self):
+    def test_browser_create_recording_tools_returns_five_common_plus_analyze_image(self):
         tools = recording_data_tools.create_recording_tools("test-rec")
-        assert len(tools) == 5
+        assert len(tools) == 6
 
     def test_read_field_chunk_is_registered(self):
         tools = recording_data_tools.create_recording_tools("test-rec")
         names = [t.name for t in tools]
         assert "read_field_chunk" in names
 
-    def test_tool_order_is_correct(self):
+    def test_browser_tool_order_is_correct(self):
         tools = recording_data_tools.create_recording_tools("test-rec")
         names = [t.name for t in tools]
         assert names == [
             "describe_data",
             "query_data",
-            "read_field_chunk",
             "execute_code",
+            "read_recording",
+            "read_field_chunk",
             "analyze_image",
         ]

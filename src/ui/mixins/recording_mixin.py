@@ -1,23 +1,14 @@
-"""
-RecordingMixin — 录制生命周期管理
-
-包含 MainWindow 中与浏览器录制相关的全部方法：
-- 启动/停止录制
-- 后台线程录制逻辑
-- 录制信号槽（成功/失败/错误）
-"""
-
 import threading
+import time
+import uuid
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QMessageBox
 from src.recording.browser_recorder import RecordingMode
 
 
 class RecordingMixin:
-    """录制生命周期 Mixin，由 MainWindow 混入使用"""
-
     def _initialize_browser_recorder(self) -> bool:
-        """确保 App 生命周期级别的 BrowserRecorder 单例已创建。"""
         if self.browser_recorder is not None:
             self.browser_recorder.arm_extension_triggered_mode()
             return True
@@ -34,19 +25,103 @@ class RecordingMixin:
             return False
 
     def _on_recording_started(self, mode: str, url: str) -> None:
-        """开始录制处理函数"""
         self.logger.info(f"开始录制: mode={mode}, url={url}")
 
         if mode == RecordingMode.BROWSER:
             self._start_browser_recording(url)
+        elif mode == RecordingMode.DESKTOP:
+            self._start_desktop_recording()
         elif mode == RecordingMode.EXTENSION_TRIGGERED:
             self._arm_extension_triggered_recording()
         else:
             self.logger.warning(f"暂不支持 {mode} 录制模式")
             QMessageBox.warning(
-                self, "不支持的模式", f"暂不支持 {mode} 模式\n\n当前仅支持浏览器操作。"
+                self, "不支持的模式", f"暂不支持 {mode} 模式。"
             )
             self.recording_page.reset()
+
+    def _get_desktop_recording_service(self):
+        service = getattr(self, "_desktop_recording_service", None)
+        if service is None:
+            from src.business.services.desktop_recording_service import DesktopRecordingService
+
+            service = DesktopRecordingService()
+            self._desktop_recording_service = service
+        return service
+
+    def _start_desktop_recording(self) -> None:
+        """最小化主窗后启动桌面录制，避免“开始教学”的点击被 hook 捕获。"""
+        recording_id = str(uuid.uuid4())
+        self._pending_desktop_recording_id = recording_id
+        self._active_desktop_recording_id = None
+        self._desktop_stop_in_progress = False
+        self._desktop_recording_started_at = getattr(self, "_desktop_recording_started_at", None)
+
+        self.logger.info(f"准备启动桌面录制: {recording_id}")
+        self.showMinimized()
+        QTimer.singleShot(250, self._begin_pending_desktop_recording_if_minimized)
+
+    def _begin_pending_desktop_recording_if_minimized(self) -> None:
+        recording_id = getattr(self, "_pending_desktop_recording_id", None)
+        if not recording_id or not self.isMinimized():
+            return
+
+        self._pending_desktop_recording_id = None
+        service = self._get_desktop_recording_service()
+
+        def start_recording():
+            try:
+                service.start_after_minimize(recording_id)
+                self.desktop_recording_start_ready.emit(recording_id)
+            except Exception as exc:
+                self.logger.error(f"桌面录制启动失败: {exc}", exc_info=True)
+                self.recording_start_failed.emit(f"桌面录制启动失败：\n\n{str(exc)}")
+
+        threading.Thread(target=start_recording, daemon=True, name="DesktopRecordingStart").start()
+
+    def _on_desktop_recording_start_ready(self, recording_id: str) -> None:
+        self._active_desktop_recording_id = recording_id
+        self._desktop_recording_started_at = time.time()
+        self.logger.info(f"桌面录制已启动: {recording_id}")
+
+        from src.utils.events import RecordingEventData, emit
+
+        emit(
+            "recording_started",
+            event_data=RecordingEventData(
+                session_id=recording_id,
+                recording_mode=RecordingMode.DESKTOP,
+                start_time=self._desktop_recording_started_at,
+            ),
+        )
+        self._show_desktop_floating_widget(recording_id)
+        self.recording_start_success.emit()
+
+    def _show_desktop_floating_widget(self, recording_id: str) -> None:
+        self._hide_desktop_floating_widget()
+
+        from src.ui.widgets.recording_floating_widget import RecordingFloatingWidget
+
+        floating = RecordingFloatingWidget()
+        floating.stopRequested.connect(self._on_recording_stopped)
+        floating.set_action_count(0)
+        floating.show()
+        self._desktop_recording_floating_widget = floating
+
+    def _hide_desktop_floating_widget(self) -> None:
+        floating = getattr(self, "_desktop_recording_floating_widget", None)
+        if floating is None:
+            return
+        floating.hide()
+        floating.deleteLater()
+        self._desktop_recording_floating_widget = None
+
+    def _on_desktop_action_count_changed(self, recording_id: str, action_count: int) -> None:
+        if recording_id != getattr(self, "_active_desktop_recording_id", None):
+            return
+        floating = getattr(self, "_desktop_recording_floating_widget", None)
+        if floating is not None:
+            floating.set_action_count(action_count)
 
     def _arm_extension_triggered_recording(self) -> None:
         """扩展触发模式只需确保 BrowserRecorder/WS 服务器已准备好。"""
@@ -98,6 +173,10 @@ class RecordingMixin:
         """停止录制处理函数"""
         self.logger.info("停止录制")
 
+        if getattr(self, "_active_desktop_recording_id", None):
+            self._stop_desktop_recording()
+            return
+
         if not self.browser_recorder:
             return
 
@@ -138,18 +217,107 @@ class RecordingMixin:
 
         threading.Thread(target=stop_recording, daemon=True).start()
 
+    def _stop_desktop_recording(self) -> None:
+        recording_id = getattr(self, "_active_desktop_recording_id", None)
+        if not recording_id or getattr(self, "_desktop_stop_in_progress", False):
+            return
+
+        self._desktop_stop_in_progress = True
+        self._hide_desktop_floating_widget()
+        service = self._get_desktop_recording_service()
+
+        def stop_recording():
+            try:
+                stats = service.stop(recording_id)
+                self.desktop_recording_stop_finished.emit(recording_id, stats)
+            except Exception as exc:
+                self.logger.error(f"停止桌面录制时出错: {exc}", exc_info=True)
+                self.recording_error.emit(f"停止桌面录制时出错：\n\n{str(exc)}")
+
+        threading.Thread(target=stop_recording, daemon=True, name="DesktopRecordingStop").start()
+
+    def _on_desktop_recording_stop_finished(self, recording_id: str, stats) -> None:
+        self._desktop_stop_in_progress = False
+        self._active_desktop_recording_id = None
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self.recording_page.reset()
+
+        from src.data.unified_config import get_unified_config
+        from src.ui.widgets.desktop_sanity_check_dialog import DesktopSanityCheckDialog
+
+        enable_clip = get_unified_config().get_desktop_enable_clip()
+        dialog = DesktopSanityCheckDialog(recording_id, stats=stats, enable_clip=enable_clip, parent=self)
+        dialog.continueAnalysisRequested.connect(self._continue_desktop_analysis)
+        dialog.abandonRequested.connect(self._abandon_desktop_recording)
+        dialog.rerecordRequested.connect(self._rerecord_desktop_recording)
+        dialog.exec()
+
+    def _continue_desktop_analysis(self, recording_id: str) -> None:
+        self._get_desktop_recording_service().mark_stopped(recording_id)
+        if not self._ensure_agent_bridge(timeout=30.0):
+            self.logger.error("AgentUIBridge 不可用，无法启动桌面录制 Agent 分析")
+            return
+
+        self._maybe_show_desktop_vision_model_warning(recording_id)
+        self._switch_to_intent_page.emit()
+
+        from src.utils.events import RecordingEventData, emit
+
+        started_at = getattr(self, "_desktop_recording_started_at", None) or time.time()
+        stats = self._get_desktop_recording_service().get_health_stats(recording_id)
+        emit(
+            "recording_completed",
+            event_data=RecordingEventData(
+                session_id=recording_id,
+                recording_mode=RecordingMode.DESKTOP,
+                start_time=started_at,
+                end_time=time.time(),
+                action_count=stats.action_total,
+            ),
+        )
+        self.logger.info("已发射桌面 recording_completed 事件，等待 Agent 处理...")
+
+    def _abandon_desktop_recording(self, recording_id: str) -> None:
+        self._get_desktop_recording_service().mark_abandoned(recording_id)
+        self.recording_page.reset()
+
+    def _rerecord_desktop_recording(self, recording_id: str) -> None:
+        self._abandon_desktop_recording(recording_id)
+        self._start_desktop_recording()
+
+    def _maybe_show_desktop_vision_model_warning(self, recording_id: str) -> None:
+        if not hasattr(self, "_vision_model_warning_shown_for_recordings"):
+            self._vision_model_warning_shown_for_recordings: set[str] = set()
+        shown = self._vision_model_warning_shown_for_recordings
+        if recording_id in shown:
+            return
+        from src.data.unified_config import get_unified_config
+
+        if get_unified_config().get_desktop_vision_model():
+            return
+        shown.add(recording_id)
+        self._show_toast(
+            "未配置桌面视觉模型，将仅使用动作文本和结构化数据分析。",
+            auto_dismiss_ms=8000,
+            toast_type="warning",
+        )
+
     def _on_recording_start_success(self) -> None:
-        """录制启动成功的槽函数（主线程）"""
         self.logger.info("录制启动成功")
 
     def _on_recording_start_failed(self, error_message: str) -> None:
-        """录制启动失败的槽函数（主线程）"""
         self.logger.error(f"录制启动失败: {error_message}")
+        self._pending_desktop_recording_id = None
+        self._active_desktop_recording_id = None
+        self._desktop_stop_in_progress = False
+        self._hide_desktop_floating_widget()
+        self.showNormal()
         self.recording_page.reset()
         QMessageBox.critical(self, "教学失败", error_message)
 
     def _on_recording_error(self, error_message: str) -> None:
-        """录制错误的槽函数（主线程）"""
         self.logger.error(f"录制错误: {error_message}")
         self.recording_page.reset()
         QMessageBox.critical(self, "教学错误", error_message)

@@ -12,6 +12,7 @@ from typing import Any, Dict, List
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler
+from src.utils.ast_helpers import top_name
 
 # =============================================================================
 # syntax_check
@@ -85,12 +86,12 @@ def _syntax_check(code: str) -> str:
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                top_module = alias.name.split(".")[0]
+                top_module = top_name(alias.name)
                 if top_module in _BLOCKED_MODULES:
                     errors.append(f"禁止导入模块: {alias.name}")
         elif isinstance(node, ast.ImportFrom):
             if node.module:
-                top_module = node.module.split(".")[0]
+                top_module = top_name(node.module)
                 if top_module in _BLOCKED_MODULES:
                     errors.append(f"禁止导入模块: {node.module}")
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -134,8 +135,11 @@ SUBMIT_CODE_SCHEMA: Dict[str, Any] = make_tool_schema(
         },
         "execution_strategy": {
             "type": "string",
-            "enum": ["browser", "api", "hybrid"],
-            "description": ("执行策略：browser=浏览器自动化, api=直接调用API, hybrid=混合"),
+            "enum": ["browser", "api", "hybrid", "desktop"],
+            "description": (
+                "执行策略：browser=浏览器自动化, api=直接调用API, "
+                "hybrid=混合, desktop=桌面自动化/系统捷径"
+            ),
         },
         "parameters": {
             "type": "array",

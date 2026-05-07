@@ -33,6 +33,7 @@ STABLE_LOCATOR_RULES: dict[str, StableLocatorRule] = {
         StableLocatorRule(table="network_requests", recommended_id_field="request_id", requires_filter_rewrite=True),
         StableLocatorRule(table="actions", recommended_id_field="action_id"),
         StableLocatorRule(table="sibling_snapshots", recommended_id_field="snapshot_id"),
+        StableLocatorRule(table="desktop_actions", recommended_id_field="action_id"),
     ]
 }
 

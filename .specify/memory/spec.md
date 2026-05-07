@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-04-29
-**Revision**: 2026-04-29 — Merged `specs/006-chat-ui-polish`
+**Last Updated**: 2026-05-07
+**Revision**: 2026-05-07 — Merged `specs/007-desktop-recording`
 
 ---
 
@@ -82,6 +82,22 @@ AI 回复包含标题、列表、代码块、加粗、链接、图片、表格�
 ### US-016: 新对话/欢迎界面不展示"免确认"Toggle (Priority: P3)
 
 "免确认" Toggle 仅在当前对话已启动过 Agent 会话后可见。欢迎界面、新对话起始态、清空后的会话不展示。 [Source: specs/006-chat-ui-polish]
+
+### US-017: 录制桌面操作并产出可分析数据 (Priority: P1)
+
+用户在录制页选择桌面模式后，应用最小化主窗并在 minimize 完成后启动全局键鼠 hook、UIA 查询、剪贴板订阅和帧缓冲。停止录制后主窗恢复，sanity check 对话框展示健康统计，用户可继续进入 intent 分析。 [Source: specs/007-desktop-recording]
+
+### US-018: Agent 使用桌面录制数据生成方案 (Priority: P1)
+
+PM / Programmer / Trial 在桌面 mode 下使用 5 个通用录制数据工具的 mode dispatch 和 3 个桌面专属工具分析 `desktop_recordings` / `desktop_actions`，同时浏览器路径工具和 prompt 保持不退化。 [Source: specs/007-desktop-recording]
+
+### US-019: 桌面 Programmer 代码进入隔离 Trial 子进程 (Priority: P2)
+
+Programmer 输出的 `async def execute() -> dict` 先经过 `ast.parse` syntax gate 和最多 2 次自动反馈重试，再由 execution 层子进程在 `data/trials/<trial_id>/` 隔离 cwd、env 白名单和 120s 超时兜底下试用执行。 [Source: specs/007-desktop-recording]
+
+### US-020: 桌面录制健康反馈与早期止损 (Priority: P3)
+
+录制停止后，用户通过 sanity check 颜色、动作总数、UIA 命中率、clip 成功率和三按钮状态机决定继续分析、放弃录制或重新录制；`vision_model` 缺失时以设置区说明和一次性 toast 透明提示降级。 [Source: specs/007-desktop-recording]
 
 ---
 
@@ -201,6 +217,56 @@ AI 回复包含标题、列表、代码块、加粗、链接、图片、表格�
 - **FR-086**: 一旦当前对话已启动过 Agent 会话，对话窗口顶栏 MUST 持续展示"免确认" Toggle，行为完全沿用 004-auth-toast 中定义的同步语义
 - **FR-087**: Toggle 显示/隐藏切换 MUST 不破坏顶栏其余控件的位置与样式
 
+### 桌面录制 Phase 1 [Source: specs/007-desktop-recording]
+
+#### 录制层
+
+- **FR-088**: 系统 MUST 支持桌面录制模式，从 `RecordingMixin._on_recording_started` 经 `DesktopRecordingService` / business bridge 路由到 `DesktopRecorder`；UI 层不得直接实例化或启动 Recorder。
+- **FR-089**: 桌面录制 MUST 通过 pynput 全局 hook 捕获鼠标左/右/中键、滚轮、拖拽、特殊键、组合键和 typing 序列；hook 注册失败 MUST 阻塞录制启动并弹错。
+- **FR-090**: 桌面录制 MUST 在 hook 触发时同步查询 UIA `ElementFromPoint`，50ms 超时后排异步队列回填；UIA COM 初始化失败降级启动并通过 toast 提示。
+- **FR-091**: 桌面录制 MUST 订阅剪贴板变更并在 Ctrl+V 时立即读取最新剪贴板内容；文本超阈值走 large-field 占位，图片落 `clipboard/<recording_id>_<event_seq>.png`。
+- **FR-092**: 桌面录制 MUST 维护 15fps、30 帧 FIFO ring buffer；每个动作落多帧 PNG，mp4 clip 受 `recording.desktop.enable_clip` 控制，clip 失败不得影响 PNG。
+- **FR-093**: 进程启动期 MUST 在 QApplication 前应用 Per-Monitor V2 DPI awareness；坐标、UIA 和截屏统一使用 physical pixel，`desktop_actions.monitor_index` 记录动作时刻屏幕。
+
+#### 数据层
+
+- **FR-094**: 系统 MUST 新增 `desktop_recordings` / `desktop_actions` DuckDB 表；帧、clip、剪贴板图落 `data/recordings/<recording_id>/` 目录，`desktop_recordings.health_stats` 在停止时一次性写入。
+- **FR-095**: `desktop_actions` MUST 包含动作类型、坐标、`monitor_index`、`window_title`、`uia_summary`、剪贴板字段、typing 文本、时间戳、duration、frame_count 和 has_clip 等桌面动作字段；drag 以 mouse_up 终点作为坐标和时间语义。
+- **FR-096**: `RecordingRepository.save_recording_session()` 的 `recording_mode` 默认值 MUST 修正为 browser 或必填，避免浏览器录制误写为 desktop。
+- **FR-097**: 配置模型和 UI fallback 的默认录制模式 MUST 统一为 browser，不得把桌面模式作为默认启动模式。
+
+#### Agent 工具层
+
+- **FR-098**: 5 个通用录制数据工具 MUST 通过 `RecordingRepository.get_recording_mode(recording_id)` 查询 mode 一次，并按 browser / desktop mode 内部切表。
+- **FR-099**: `describe_data` / `query_data` MUST 按 mode 严格隔离 allowlist；跨 mode 表访问由 sqlglot security gate 拒绝并返回 `table_not_in_mode` 标准错误。
+- **FR-100**: 桌面 mode MUST 提供 `list_desktop_actions`、`analyze_desktop_action`、`read_action_clip` 三个桌面专属工具，分别支持动作分页、最多 2 个动作的多模态分析和 clip 元数据读取。
+- **FR-101**: `analyze_desktop_action` MUST 始终返回字符串；失败 action 段写入 `[error: <reason_code>]`，reason_code 至少覆盖 `vision_timeout`、`vision_unauthorized`、`vision_failed`，且每次调用写 INFO 成本审计日志。
+- **FR-102**: 桌面 mode 下 PM / Programmer / Trial 工具集 MUST 用 3 个桌面专属工具替换浏览器 `analyze_image`；browser mode MUST 保留 `analyze_image` 且不注入桌面专属工具。
+
+#### Agent 编排层
+
+- **FR-103**: 系统 MUST 提供 `build_pm_prompt(mode)` / `build_programmer_prompt(mode)`；browser mode 返回 legacy prompt，desktop mode 返回桌面专用三段 prompt。
+- **FR-104**: Orchestrator 启动 PM / Programmer 前 MUST 用 `dataclasses.replace(..., system_prompt=...)` 构造临时 AgentConfig；不得改造 `agent_loop.format_system_prompt()`。
+- **FR-105**: Orchestrator MUST 在 Programmer 输出交给 Trial 前执行 `ast.parse` syntax gate；语法错误时最多自动反馈重试 2 次，连续失败后以用户可见 Toast 和进程日志收敛。
+- **FR-106**: `execution_strategy` MUST 支持 `desktop` 取值，并同步 Programmer 工具 schema、trial model 注释和 Trial 分发语义。
+- **FR-107**: 桌面 PM prompt MUST 引导 Agent 先看首尾摘要、按 `window_title` 聚焦、跳过冗余动作并按需调用 `analyze_desktop_action`；桌面 Programmer prompt MUST 强约束 `async def execute() -> dict`。
+
+#### 试用层
+
+- **FR-108**: 桌面试用 MUST 走"事前提示对话框 -> 用户开始 -> 跑期间无遮挡 -> 跑完普通 Toast"流程，事前提示展示代码预览和共享高危 API 检测标签。
+- **FR-109**: 桌面试用代码 MUST 由 `src/execution/desktop_trial_runner.py` 通过 `subprocess.Popen` 独立子进程执行，使用 `data/trials/<trial_id>/` cwd、env 白名单、stdout/stderr 落盘、120s 超时和 Windows `taskkill /F /T` 兜底。
+- **FR-110**: Trial wrapper MUST 捕获任意异常并把 `{"ok": false, "summary": ..., "details": {"traceback": ...}}` 写 stdout 末行；stdout 无有效 JSON 时 runner MUST 用 stderr 末 5 行生成失败 Toast 摘要。
+
+#### UI 与配置
+
+- **FR-111**: 录制页 MUST 提供右下角可拖录制浮窗；点"开始"后主窗最小化，hook/ring buffer/UIA/剪贴板订阅 MUST 在 minimize 完成回调后启动，停止后恢复主窗并弹 sanity check modal child。
+- **FR-112**: Ctrl+Alt+S MUST 注册为全局停止快捷键；注册失败不阻塞录制启动，但 UI MUST 一次性提示用户改用浮窗按钮。
+- **FR-113**: sanity check 对话框 MUST 通过 `DesktopRecordingService.get_health_stats(recording_id)` 间接读取 `desktop_recordings.health_stats`，显示健康指标并提供"继续分析 / 放弃录制 / 重新录制"三按钮状态机。
+- **FR-114**: 浏览器、桌面、扩展触发三种录制模式 MUST 两两互斥，互斥判定基于 in-memory active recorder state，UI 禁用和业务拒绝双保险。
+- **FR-115**: 系统 MUST 新增 `recording.desktop.enable_clip`（默认 true）和 `recording.desktop.vision_model`（无默认）配置，均通过 `get_unified_config()` 入口读写。
+- **FR-116**: `recording.desktop.vision_model` 未配置时 MUST 不注入 `analyze_desktop_action`，并在设置页说明和桌面 intent 页一次性 toast 中提示降级；provider 和 API key 沿用 `analyze_image` 现有 provider/keyring entry。
+- **FR-117**: Phase 1 MUST 不引入录制数据 retention、cleanup、compress 或 disk quota；放弃录制为软删除状态，Trial 调试目录 7 天 startup cleanup 与录制数据保留边界分开。
+
 ---
 
 ## Key Entities
@@ -279,6 +345,24 @@ UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summa
 ### AutoApproveToggleVisibility [Source: specs/006-chat-ui-polish]
 ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏、`new_chat_empty`→隐藏、`conversation_started`→显示、`conversation_cleared`→隐藏。
 
+### DesktopRecordingSession [Source: specs/007-desktop-recording]
+一次桌面录制 session，对应 `desktop_recordings` 表。字段：`recording_id`、`recording_mode='desktop'`、`start_time`、`end_time`、`monitor_index`、`status`（`recording` / `stopped` / `abandoned`）、`health_stats`。桌面录制不要求镜像写入 `recording_sessions`。
+
+### DesktopAction [Source: specs/007-desktop-recording]
+桌面录制中的单个动作，对应 `desktop_actions` 表。字段：`action_id`、`recording_id`、`type`（mouse_left / mouse_right / mouse_middle / wheel / drag / typing / hotkey）、`coord_x`、`coord_y`、`monitor_index`、`window_title`、`uia_summary`、`clipboard_text`、`clipboard_image_path`、`text_content`、`timestamp`、`duration_ms`、`frame_count`、`has_clip`。typing 一段一行；drag 使用 mouse_up 终点语义。
+
+### DesktopHealthStats [Source: specs/007-desktop-recording]
+停止时写入 `desktop_recordings.health_stats` 的 JSON 汇总。字段：`uia_hit`、`uia_total`、`clip_success`、`clip_total`、`clipboard_event_count`、`action_type_counts`、`frame_total`、`duration_ms`。颜色规则：动作总数为 0 红；UIA 命中率低或 clip 失败率高黄；否则绿。
+
+### DesktopTrialResult [Source: specs/007-desktop-recording]
+桌面 Trial 子进程结果 DTO。字段至少包含 `ok`、`summary`、`details`、`exit_code`、`timed_out`、`stdout_path`、`stderr_path`、`trial_id`。SC-003 的"试用通过"要求 exit code 0、stdout 末行 JSON 解析成功且 `ok=True`。
+
+### DesktopRecordingConfig [Source: specs/007-desktop-recording]
+运行时配置 namespace `recording.desktop.*`。字段：`enable_clip`（bool，默认 true）、`vision_model`（str | None，无默认）。provider 和 API key 沿用 `analyze_image` 当前 provider/keyring entry。
+
+### HighRiskApiDetection [Source: specs/007-desktop-recording]
+桌面 Trial 事前提示与"走捷径"判定共用的静态检测结果。命中规则覆盖 `subprocess`、`os.startfile`、`webbrowser`、Win32 协议 URL（排除 Windows 盘符路径）、pywin32 高级 API、pywinauto 控件级 API；纯 pyautogui 坐标点击不算捷径。
+
 ---
 
 ## Constraints & Compatibility
@@ -333,6 +417,16 @@ ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏�
 - **CC-026**: 渲染层 MUST 不执行 AI 回复中的脚本或裸 HTML，避免 XSS/注入风险
 - **CC-027**: 现有跨线程信号、Worker 阻塞确认机制 MUST 不被本 feature 改动
 - **CC-028**: 若现有 UI 可访问接口不能直接提供完整历史消息，允许在业务层增加最小只读接口；UI MUST NOT 直接调用 Repository，且该接口 MUST NOT 改变存储 schema 或压缩契约
+
+### 桌面录制 Phase 1 约束 [Source: specs/007-desktop-recording]
+
+- **CC-029**: Phase 1 仅支持 Windows 10/11；macOS / Linux 桌面录制不在本期范围。
+- **CC-030**: 5 个通用录制数据工具的 mode dispatch MUST 保持浏览器路径 byte-equal，不得破坏 `network_requests.filtered = FALSE` 视图和 `recording_data_tools.py` 不直接 import sqlglot 的 guard。
+- **CC-031**: PM / Programmer 浏览器 prompt MUST 字节级保留；桌面 prompt 使用双轨构建，不把浏览器 prompt 改成动态分支。
+- **CC-032**: Phase 1 不做运行期隐私机制或上传确认；原始录制数据仅本地落盘，vision 分析按工具调用上传本次涉及的最多 2 个动作帧和关联剪贴板图。
+- **CC-033**: 桌面录制 MUST 与浏览器录制、扩展触发录制互斥，不支持中途切换或并发录制。
+- **CC-034**: 性能目标为软退出标准：CPU 单核 < 15%、鼠标延迟 < 50ms、内存 < 500MB、磁盘 IO 突发 < 50MB/s；Phase 1 通过 manual e2e 主观判断和日志审计，不设自动化硬门。
+- **CC-035**: 单次桌面录制不设时长、动作数或磁盘占用硬上限；崩溃孤儿和超量录制数据由开发/内测用户手动处理，硬限制推迟到 Phase 2。
 
 ---
 
@@ -394,6 +488,17 @@ ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏�
 - **SC-035**: Toggle 显隐切换帧内完成，不出现视觉闪烁或布局抖动
 - **SC-036**: ≥1000 条旧消息时首屏加载 ≤2s，滚动/输入 UI 阻塞 ≤100ms
 - **SC-037**: AI 回复含脚本/裸 HTML 时 0 次脚本被执行，0 次裸 HTML 渲染为活动元素
+
+### 桌面录制 Phase 1 验收标准 [Source: specs/007-desktop-recording]
+
+- **SC-038**: 5 个标准场景全部录制成功；客观判定为 `health_stats.action_type_counts` 之和 > 0，US4 完成后 sanity check UI 颜色非红。
+- **SC-039**: 5 个标准场景 Agent 均能进入 intent 页并给出可执行方案；PM 到达 talk_to_user 终态，Programmer 输出代码通过 `ast.parse`。
+- **SC-040**: 5 个标准场景中至少 3/5 试用通过；客观判定为子进程 exit code 0、stdout 末行 JSON 解析成功且 `ok=True`。
+- **SC-041**: 5 个标准场景中至少 3/5 生成代码命中"走捷径"规则；先用共享 high-risk detector 机械判定，再由人工 spot check 复核误伤。
+- **SC-042**: 浏览器路径门卫不变量 1-7 在 mode dispatch 改造前后 100% 通过，5 个通用工具 canonical JSON baseline byte-equal。
+- **SC-043**: 浏览器 PM / Programmer prompt 行为级守卫测试 100% 通过，关键短语断言不退化。
+- **SC-044**: 5 场景 manual e2e 期间用户主观判断"不卡"，鼠标响应和整体流畅度无感知卡顿。
+- **SC-045**: installer 公开发版前完成产品/安全侧对"全局录制 + 无隐私机制 + vision 按需上传"的隐私风险签字。
 
 ---
 
@@ -467,3 +572,16 @@ ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏�
 - 大规模旧消息性能：初始展示最近 10 条，向上滚动分页加载
 - IntentConfirmationUI / ToolExecutionDialog / 普通 Toast 不在本 feature 改动范围
 - 顶栏其它控件不受 Toggle 隐藏影响
+
+### 桌面录制 Phase 1 [Source: specs/007-desktop-recording]
+
+- pynput hook 注册失败：阻塞录制启动并弹错；UIA、剪贴板、Ctrl+Alt+S 失败：降级启动并 toast 提示。
+- 点"开始"按钮污染首动作：hook / ring buffer / UIA / 剪贴板订阅必须延迟到主窗 minimize 完成回调之后启动。
+- 录制启动后马上产生首动作：前置帧取 ring buffer 里所有可用帧，不补帧、不等齐 1 秒。
+- 多显示器和拖拽跨屏：每条 action 记录动作时刻 `monitor_index`；drag 使用 mouse_up 终点屏幕、坐标和时间。
+- `vision_model` 缺失：`analyze_desktop_action` 不注入工具集，设置页说明和 intent 页一次性 toast 提示降级。
+- vision timeout / unauthorized / failed：`analyze_desktop_action` 在对应 action 段返回 `[error: <reason_code>]`，与成功段拼接为同一字符串。
+- Trial 子进程超时：120s 后 terminate 并用 `taskkill /F /T` 兜底，Toast 标题为"试用超时"。
+- Trial stdout 无有效末行 JSON：runner 用 stderr 末 5 行生成失败摘要，完整 stdout/stderr 保留在 `data/trials/<trial_id>/`。
+- 三模式并发尝试：UI 禁用和业务拒绝双保险；互斥判定不依赖崩溃残留 DB 行。
+- 录制中崩溃：Phase 1 不自动恢复或清理 `desktop_recordings` 与录制目录，用户手动清理；Trial 调试目录 7 天 startup cleanup 是独立边界。

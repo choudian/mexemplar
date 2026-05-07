@@ -8,6 +8,8 @@
 """
 
 import json
+import threading
+from typing import Any
 
 from src.business.agents.config import ResultType, ToolSignal
 
@@ -47,6 +49,11 @@ def make_error_result(error_code: str, message: str, **extra) -> str:
     return json.dumps(obj, ensure_ascii=False)
 
 
+def to_json(value) -> str:
+    """Serialize value to JSON string with ensure_ascii=False and default=str."""
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 def is_standardized_error(result: str) -> bool:
     """检查工具结果是否为标准化错误结构。
 
@@ -77,4 +84,56 @@ __all__ = [
     "error_json",
     "make_error_result",
     "is_standardized_error",
+    "to_json",
+    "get_vision_llm_client",
+    "invoke_vision_model",
 ]
+
+# =============================================================================
+# 多模态 LLM 客户端共享工厂
+# =============================================================================
+
+_vision_client_cache: dict[tuple, Any] = {}
+_vision_client_lock = threading.Lock()
+
+
+def get_vision_llm_client(model: str | None = None) -> Any:
+    from src.business.ai.llm_client import LangChainLLMClient
+    from src.data.unified_config import get_unified_config
+
+    config = get_unified_config()
+    provider = config.get_ai_vision_provider()
+    resolved_model = model or config.get_ai_vision_model()
+    api_key = config.get_ai_vision_api_key()
+    base_url = config.get_ai_vision_base_url()
+    key = (provider, resolved_model, api_key, base_url)
+
+    client = _vision_client_cache.get(key)
+    if client is not None:
+        return client
+
+    with _vision_client_lock:
+        client = _vision_client_cache.get(key)
+        if client is not None:
+            return client
+        client = LangChainLLMClient(
+            provider=provider,
+            model=resolved_model,
+            api_key=api_key,
+            base_url=base_url,
+            temperature=0.3,
+            max_tokens=1024,
+        )
+        _vision_client_cache[key] = client
+        return client
+
+
+def invoke_vision_model(content: list[dict[str, Any]], model: str | None = None) -> str:
+    from langchain_core.messages import HumanMessage
+
+    vision_client = get_vision_llm_client(model)
+    response = vision_client.llm.invoke([HumanMessage(content=content)])
+    answer = getattr(response, "content", None)
+    if not answer:
+        raise RuntimeError("empty_vision_response")
+    return str(answer)

@@ -23,6 +23,8 @@ pytestmark = pytest.mark.real_llm
 def _read_llm_config() -> dict:
     """从项目根目录 config.json 读取 LLM 配置"""
     config_path = Path(__file__).resolve().parent.parent / "config.json"
+    if not config_path.exists():
+        pytest.skip("缺少 config.json，跳过真实 LLM 后端测试")
     with open(config_path, encoding="utf-8") as f:
         cfg = json.load(f)
     ai = cfg.get("ai", {})

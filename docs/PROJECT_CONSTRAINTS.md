@@ -28,6 +28,18 @@
 - `src/execution/tool_executor.py` 的 venv 隔离和命令白名单位于 handler 层之下，不迁移到 hook。
 - `dynamic_tool_manager` 的发布状态、允许列表、技能发现和技能组合激活属于工具发现阶段，不迁移到 hook。
 
+## Desktop Recording Boundaries
+
+- UI 不直接实例化 `DesktopRecorder`，也不直接读写 Repository；桌面录制只能经 `DesktopRecordingService` / UI bridge 进入业务层。
+- 桌面录制必须在主窗口完成 minimize 之后启动 hook，避免 UI 点击本身被写入 `desktop_actions`。
+- `recording_data_tools` 根据 `RecordingRepository.get_recording_mode(recording_id)` 固定本次工具集 mode；浏览器 mode 只能访问浏览器录制表，桌面 mode 只能访问 `desktop_recordings` / `desktop_actions`，跨 mode 返回 `table_not_in_mode`。
+- 浏览器 PM/Programmer/Trial 工具集保持 legacy 路径和 `analyze_image`；桌面 PM/Programmer/Trial 工具集注入桌面专属工具，且不得注入 `analyze_image`。
+- `analyze_desktop_action` 只在 `recording.desktop.vision_model` 已配置时注入；缺失时自然降级为文本和结构化数据分析。
+- 桌面 Programmer 输出代码先过 `ast.parse` syntax gate；连续重试失败通过 `desktop_syntax_gate_retry_failed` 和 agent error 终止，不进入 Trial 执行。
+- 桌面 Trial 子进程由 `src/execution/desktop_trial_runner.py` 创建 `data/trials/<trial_id>/`、设置 cwd、应用 env 白名单、执行 120s 超时和 Windows `taskkill` 清理；business 层只负责编排调用和事件。
+- 桌面录制跨模块通知只能走 `src/utils/events.py` blinker 事件；UI 侧通过本地 Qt signal 回到 UI 线程，不允许 recording / business / execution 层 import UI widget。
+- 桌面 action 必须带 `monitor_index`；DPI awareness 在 QApplication 前应用，失败只降级记录日志。
+
 ## Review Guardrails
 
 Reviewer 必须拒绝下列改动：
@@ -39,3 +51,6 @@ Reviewer 必须拒绝下列改动：
 - 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。
 - 让 AgentLoop 内建注入的 `load_reference` 或 `talk_to_user` 进入 tool/global hook 链。
 - 绕过 `src/recording/filtering/` 的 SQL 改写或 DuckDB 代理边界读取录制网络数据。
+- 让桌面录制 UI 直接访问 Repository 或 Recorder，或绕过 `DesktopRecordingService`。
+- 在桌面 mode 中注入 `analyze_image`，或允许桌面工具读取浏览器录制表。
+- 让桌面 Trial 继承完整父进程环境、在任意 cwd 执行，或缺少超时清理。

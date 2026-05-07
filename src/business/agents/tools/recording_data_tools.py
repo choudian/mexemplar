@@ -5,8 +5,10 @@
   1. describe_data      — 数据发现（渐进式：无参返回表概览，传表名返回字段详情）
   2. query_data         — agent 写 SQL 直接查询 DuckDB
   3. execute_code       — 临时 Python 代码执行（SQL 不够用时的补充）
-  4. analyze_image      — 多模态模型分析截图
+  4. read_recording     — 录制整体摘要
   5. read_field_chunk   — 分段读取大字段原始内容
+
+浏览器录制额外注入 analyze_image；桌面录制改用 desktop_tools 中的桌面专属工具。
 
 所有工具都不接受 recording_id 参数——通过 create_recording_tools() 工厂函数
 在注册时用闭包绑定，对 agent 透明。
@@ -29,9 +31,9 @@ from typing import Any
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.hook_models import PreHookResult, ToolCallContext
-from src.business.agents.tool_helpers import make_tool_schema
-from src.business.ai.llm_client import LangChainLLMClient
+from src.business.agents.tool_helpers import make_tool_schema, to_json, invoke_vision_model
 from src.data.duckdb_manager import DuckDBManager
+from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import get_unified_config
 from src.recording.filtering.filtered_conn import (
     DATA_ACCESS_RESTRICTED_MESSAGE,
@@ -39,13 +41,18 @@ from src.recording.filtering.filtered_conn import (
     DataAccessRestrictedError,
     FilteredDuckDBConnection,
 )
-from src.recording.filtering.sql_rewriter import SqlRewriteError, rewrite
+from src.recording.filtering.sql_rewriter import (
+    SqlRewriteError,
+    rewrite,
+    validate_table_against_mode_allowlist,
+)
 from src.recording.filtering.query_projection_analyzer import (
     STABLE_LOCATOR_RULES,
     QueryProjectionAnalyzer,
     ProjectionBinding,
     find_stable_locator_in_row,
 )
+from src.recording.browser.recorder import RecordingMode
 from src.utils.llm_helpers import sanitize_text_for_llm
 
 logger = logging.getLogger(__name__)
@@ -177,7 +184,57 @@ _COMMON_TABLES: dict[str, dict] = {
 }
 
 _ALL_TABLE_NAMES = list(_COMMON_TABLES.keys())
-_ALL_TABLE_NAME_SET = set(_COMMON_TABLES.keys())
+
+_DESKTOP_TABLES: dict[str, dict] = {
+    "desktop_recordings": {
+        "description": "桌面录制会话元数据与健康统计",
+        "fields": {
+            "recording_id": ("VARCHAR", "桌面录制唯一 ID（主键）", None),
+            "recording_mode": ("VARCHAR", "录制模式，固定 desktop", None),
+            "start_time": ("DATETIME", "录制开始时间", None),
+            "end_time": ("DATETIME", "录制结束时间", None),
+            "monitor_index": ("INTEGER", "开始录制时所在屏幕序号", None),
+            "status": ("VARCHAR", "recording / stopped / abandoned", None),
+            "health_stats": ("JSON", "停止时写入的一次性健康统计", None),
+            "created_at": ("DATETIME", "记录创建时间", None),
+        },
+    },
+    "desktop_actions": {
+        "description": "桌面动作记录（键鼠、typing、hotkey、剪贴板、UIA 摘要）",
+        "fields": {
+            "action_id": ("VARCHAR", "桌面动作唯一 ID（主键）", None),
+            "recording_id": ("VARCHAR", "所属桌面录制 ID", None),
+            "recording_mode": ("VARCHAR", "录制模式，固定 desktop", None),
+            "type": ("VARCHAR", "mouse_left / mouse_right / mouse_middle / wheel / drag / typing / hotkey", None),
+            "coord_x": ("INTEGER", "动作坐标 X", None),
+            "coord_y": ("INTEGER", "动作坐标 Y", None),
+            "monitor_index": ("INTEGER", "动作发生屏幕序号", None),
+            "window_title": ("TEXT", "UIA owning window 标题", None),
+            "uia_summary": ("JSON", "UIA 元素摘要", "⚠️ 大字段，按需读取"),
+            "clipboard_text": ("TEXT", "动作发生时最新剪贴板文本", "⚠️ 大字段，按需读取"),
+            "clipboard_image_path": ("TEXT", "动作发生时最新剪贴板图片路径", None),
+            "text_content": ("TEXT", "typing 文本内容", "⚠️ 大字段，按需读取"),
+            "timestamp": ("DATETIME", "动作发生时间", None),
+            "duration_ms": ("INTEGER", "动作持续时间", None),
+            "frame_count": ("INTEGER", "动作关联 PNG 帧数量", None),
+            "has_clip": ("BOOLEAN", "是否有 mp4 clip", None),
+            "clip_path": ("TEXT", "mp4 clip 路径", None),
+            "clip_duration_ms": ("INTEGER", "clip 时长", None),
+            "clip_fps": ("INTEGER", "clip FPS", None),
+            "clip_resolution": ("TEXT", "clip 分辨率", None),
+        },
+    },
+}
+
+
+def _tables_for_mode(mode: str) -> dict[str, dict]:
+    if mode == RecordingMode.DESKTOP:
+        return _DESKTOP_TABLES
+    return _COMMON_TABLES
+
+
+def _table_names_for_mode(mode: str) -> list[str]:
+    return list(_tables_for_mode(mode).keys())
 
 
 # =============================================================================
@@ -269,7 +326,11 @@ def _build_large_field_placeholder(
 # =============================================================================
 
 
-def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
+def _describe_data(
+    recording_id: str,
+    tables: list[str] | None = None,
+    mode: str = RecordingMode.BROWSER,
+) -> str:
     """
     数据发现入口。渐进式返回：
     - 不传 tables：返回所有表的概览（表名 + 含义 + 行数）
@@ -296,7 +357,7 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
 
     if tables is None:
         result = {"tables": []}
-        for table_name, meta in _COMMON_TABLES.items():
+        for table_name, meta in _tables_for_mode(mode).items():
             result["tables"].append(
                 {
                     "name": table_name,
@@ -304,22 +365,23 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
                     "row_count": _get_row_count(table_name),
                 }
             )
-        return json.dumps(result, ensure_ascii=False)
+        return to_json(result)
 
     # 第二级：字段详情
-    unknown = [t for t in tables if t not in _ALL_TABLE_NAME_SET]
+    table_meta = _tables_for_mode(mode)
+    table_names = _table_names_for_mode(mode)
+    unknown = [t for t in tables if t not in table_meta]
     if unknown:
-        return json.dumps(
+        return to_json(
             {
                 "error": f"未知表名: {unknown}",
-                "available_tables": _ALL_TABLE_NAMES,
+                "available_tables": table_names,
             },
-            ensure_ascii=False,
         )
 
     table_details: dict[str, Any] = {}
     for table_name in tables:
-        meta = _COMMON_TABLES[table_name]
+        meta = table_meta[table_name]
         row_count = _get_row_count(table_name)
 
         fields = []
@@ -344,7 +406,7 @@ def _describe_data(recording_id: str, tables: list[str] | None = None) -> str:
             "fields": fields,
         }
 
-    return json.dumps({"table_details": table_details}, ensure_ascii=False)
+    return to_json({"table_details": table_details})
 
 
 def _classify_error(exc: Exception) -> str | None:
@@ -391,7 +453,7 @@ DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
 # =============================================================================
 
 
-def _query_data(recording_id: str, sql: str) -> str:
+def _query_data(recording_id: str, sql: str, mode: str = RecordingMode.BROWSER) -> str:
     """
     执行 SQL 查询。只允许 SELECT 语句。
     recording_id 通过闭包绑定，agent 写 SQL 时需自己在 WHERE 中加过滤条件。
@@ -399,10 +461,11 @@ def _query_data(recording_id: str, sql: str) -> str:
     db = DuckDBManager()
     try:
         rewritten_sql = rewrite(sql)
+        validate_table_against_mode_allowlist(sql, mode)
         col_names, rows = db.execute_and_fetchall(rewritten_sql)
 
         if not rows:
-            return json.dumps({"rows": [], "row_count": 0}, ensure_ascii=False)
+            return to_json({"rows": [], "row_count": 0})
 
         config = get_unified_config().get_recording_large_field_config()
         threshold = config.threshold_chars
@@ -437,28 +500,31 @@ def _query_data(recording_id: str, sql: str) -> str:
                     record[col] = val
             result_rows.append(record)
 
-        return json.dumps(
-            {"rows": result_rows, "row_count": len(result_rows)},
-            ensure_ascii=False,
-            default=str,
-        )
+        return to_json({"rows": result_rows, "row_count": len(result_rows)})
 
     except Exception as e:
         logger.error("[query_data] SQL failed: %s", sql, exc_info=True)
-        return json.dumps(
-            {
-                "error": _mask_recording_data_error(e),
-            },
-            ensure_ascii=False,
+        return to_json(
+            _mode_error_payload(e) or {"error": _mask_recording_data_error(e)},
         )
 
 
-def query_data_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+def _mode_error_payload(exc: Exception) -> dict[str, str] | None:
+    text = str(exc)
+    if text.startswith("table_not_in_mode:"):
+        _, table, mode = text.split(":", 2)
+        return {"error": "table_not_in_mode", "table": table, "mode": mode}
+    return None
+
+
+def _query_data_pre_hook_for_mode(mode: str, ctx: ToolCallContext) -> PreHookResult | None:
     sql = str(ctx.args["sql"])
     try:
         rewrite(sql)
+        validate_table_against_mode_allowlist(sql, mode)
     except (SqlRewriteError, DataAccessRestrictedError) as exc:
-        return PreHookResult(error=_mask_recording_data_error(exc))
+        payload = _mode_error_payload(exc)
+        return PreHookResult(error=to_json(payload) if payload else _mask_recording_data_error(exc))
     except Exception:
         logger.warning("[query_data] SQL pre_hook failed: %s", sql, exc_info=True)
         return PreHookResult(error=SQL_PARSE_FAILED_MESSAGE)
@@ -489,7 +555,157 @@ QUERY_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
 
 
 # =============================================================================
-# 工具 3：execute_code
+# 工具 3：read_recording
+# =============================================================================
+
+
+def _rows_to_dicts(columns: list[str], rows: list[tuple]) -> list[dict[str, Any]]:
+    return [dict(zip(columns, row)) for row in rows]
+
+
+def _deduped_preview(
+    head: list[dict[str, Any]],
+    tail: list[dict[str, Any]],
+    id_field: str = "action_id",
+    max_items: int = 10,
+) -> list[dict[str, Any]]:
+    seen: set[Any] = set()
+    preview: list[dict[str, Any]] = []
+    for item in head + tail:
+        key = item.get(id_field)
+        if key in seen:
+            continue
+        seen.add(key)
+        preview.append(item)
+    return preview[:max_items]
+
+
+def _read_recording(recording_id: str, mode: str = RecordingMode.BROWSER) -> str:
+    """返回录制整体摘要，桌面 mode 不返回中段动作原始行。"""
+    db = DuckDBManager()
+    if mode == RecordingMode.DESKTOP:
+        repo = RecordingRepository()
+        meta = repo.get_desktop_recording_meta(recording_id)
+        agg_row = db.fetchone(
+            "SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM desktop_actions WHERE recording_id = ?",
+            (recording_id,),
+        )
+        action_count = int(agg_row[0]) if agg_row and agg_row[0] else 0
+        range_row = (agg_row[1], agg_row[2]) if agg_row else (None, None)
+        type_rows = db.fetchall(
+            """
+            SELECT type, COUNT(*) AS count
+            FROM desktop_actions
+            WHERE recording_id = ?
+            GROUP BY type
+            ORDER BY count DESC, type
+            """,
+            (recording_id,),
+        )
+        window_rows = db.fetchall(
+            """
+            SELECT window_title, COUNT(*) AS count
+            FROM desktop_actions
+            WHERE recording_id = ? AND window_title IS NOT NULL AND window_title <> ''
+            GROUP BY window_title
+            ORDER BY count DESC, window_title
+            LIMIT 5
+            """,
+            (recording_id,),
+        )
+        head = repo.list_desktop_actions(recording_id, limit=min(5, action_count), offset=0)
+        tail_offset = max(0, action_count - 5)
+        tail = repo.list_desktop_actions(recording_id, limit=5, offset=tail_offset)
+        preview = _deduped_preview(head, tail)
+        return to_json(
+            {
+                "recording": meta,
+                "summary": {
+                    "action_count": action_count,
+                    "type_counts": {row[0]: int(row[1]) for row in type_rows},
+                    "window_title_counts": [
+                        {"window_title": row[0], "count": int(row[1])}
+                        for row in window_rows
+                    ],
+                    "time_range": {
+                        "first_ts": range_row[0] if range_row else None,
+                        "last_ts": range_row[1] if range_row else None,
+                    },
+                    "actions_preview": preview[:10],
+                },
+            },
+        )
+
+    session_columns = [
+        "recording_id",
+        "status",
+        "recording_mode",
+        "browser_type",
+        "start_time",
+        "end_time",
+        "metadata",
+        "created_at",
+    ]
+    session_row = db.fetchone(
+        f"SELECT {', '.join(session_columns)} FROM recording_sessions WHERE recording_id = ?",
+        (recording_id,),
+    )
+    action_count_row = db.fetchone(
+        "SELECT COUNT(*) FROM actions WHERE recording_id = ?",
+        (recording_id,),
+    )
+    type_rows = db.fetchall(
+        """
+        SELECT action_type, COUNT(*) AS count
+        FROM actions
+        WHERE recording_id = ?
+        GROUP BY action_type
+        ORDER BY count DESC, action_type
+        """,
+        (recording_id,),
+    )
+    action_columns = ["action_id", "sequence_number", "action_type", "url", "timestamp"]
+    head_rows = db.fetchall(
+        f"SELECT {', '.join(action_columns)} FROM actions "
+        "WHERE recording_id = ? ORDER BY sequence_number LIMIT 5",
+        (recording_id,),
+    )
+    count = int(action_count_row[0] if action_count_row else 0)
+    tail_rows = db.fetchall(
+        f"SELECT {', '.join(action_columns)} FROM actions "
+        "WHERE recording_id = ? ORDER BY sequence_number LIMIT 5 OFFSET ?",
+        (recording_id, max(0, count - 5)),
+    )
+    preview = _deduped_preview(
+        _rows_to_dicts(action_columns, head_rows),
+        _rows_to_dicts(action_columns, tail_rows),
+    )
+    return to_json(
+        {
+            "recording": dict(zip(session_columns, session_row)) if session_row else None,
+            "summary": {
+                "action_count": count,
+                "type_counts": {row[0]: int(row[1]) for row in type_rows},
+                "actions_preview": preview[:10],
+            },
+        },
+    )
+
+
+READ_RECORDING_SCHEMA: dict[str, Any] = make_tool_schema(
+    name="read_recording",
+    description=(
+        "读取当前录制的整体摘要。浏览器 mode 返回录制会话、动作计数、类型分布和首尾动作；"
+        "桌面 mode 返回 desktop_recordings 元数据、health_stats、动作类型分布、窗口标题分布、"
+        "时间范围和首尾动作，不返回中段动作。"
+    ),
+    properties={},
+    required=[],
+)
+
+
+# =============================================================================
+# 工具 4：execute_code
 # =============================================================================
 
 # execute_code 允许使用的内建函数白名单（数据探索够用，阻止 open/exec/eval/__import__ 等危险操作）
@@ -598,7 +814,7 @@ def _safe_import(name: str, globals_=None, locals_=None, fromlist=(), level=0):
 _SAFE_BUILTINS_WITH_IMPORT: dict[str, Any] = {**_SAFE_BUILTINS, "__import__": _safe_import}
 
 
-def _execute_code(recording_id: str, code: str) -> str:
+def _execute_code(recording_id: str, code: str, mode: str = RecordingMode.BROWSER) -> str:
     """
     临时执行 Python 代码。用于 SQL 搞不定的复杂数据探索。
     预注入 conn（DuckDB 连接）和 recording_id。
@@ -614,12 +830,12 @@ def _execute_code(recording_id: str, code: str) -> str:
     safe_builtins = _SAFE_BUILTINS_WITH_IMPORT
     exec_globals: dict[str, Any] = {
         "__builtins__": safe_builtins,
-        "conn": FilteredDuckDBConnection(db.connect()),
+        "conn": FilteredDuckDBConnection(db.connect(), mode=mode),
         "recording_id": recording_id,
         "print": lambda *args, **kwargs: print(*args, **{**kwargs, "file": stdout_buf}),
     }
 
-    result_holder: dict[str, Any] = {"output": None, "error": None}
+    result_holder: dict[str, Any] = {"output": None, "error": None, "error_payload": None}
 
     def _run():
         try:
@@ -627,6 +843,7 @@ def _execute_code(recording_id: str, code: str) -> str:
             result_holder["output"] = stdout_buf.getvalue()
         except Exception as e:
             logger.error("[execute_code] execution failed", exc_info=True)
+            result_holder["error_payload"] = _mode_error_payload(e)
             masked_error = _classify_error(e)
             result_holder["error"] = masked_error or f"{type(e).__name__}: {e}"
 
@@ -635,17 +852,18 @@ def _execute_code(recording_id: str, code: str) -> str:
     thread.join(timeout=_EXECUTE_TIMEOUT)
 
     if thread.is_alive():
-        return json.dumps(
+        return to_json(
             {"error": f"代码执行超时（超过 {_EXECUTE_TIMEOUT} 秒）"},
-            ensure_ascii=False,
         )
 
-    if result_holder["error"]:
-        return json.dumps({"error": result_holder["error"]}, ensure_ascii=False)
+    if result_holder["error_payload"]:
+        return to_json(result_holder["error_payload"])
 
-    return json.dumps(
+    if result_holder["error"]:
+        return to_json({"error": result_holder["error"]})
+
+    return to_json(
         {"output": result_holder["output"] or "（无输出）"},
-        ensure_ascii=False,
     )
 
 
@@ -674,31 +892,8 @@ EXECUTE_CODE_SCHEMA: dict[str, Any] = make_tool_schema(
 
 
 # =============================================================================
-# 工具 4：analyze_image
+# 浏览器额外工具：analyze_image
 # =============================================================================
-
-# 多模态 LLM 客户端懒加载单例（基于 LangChain，支持 Anthropic / OpenAI / 各家兼容接口）
-_vision_llm_client: LangChainLLMClient | None = None
-_vision_llm_lock = threading.Lock()
-
-
-def _get_vision_llm_client() -> LangChainLLMClient:
-    """获取多模态 LLM 客户端（线程安全懒加载）。"""
-    global _vision_llm_client
-    if _vision_llm_client is None:
-        with _vision_llm_lock:
-            if _vision_llm_client is None:
-                config = get_unified_config()
-                _vision_llm_client = LangChainLLMClient(
-                    provider=config.get_ai_vision_provider(),
-                    model=config.get_ai_vision_model(),
-                    api_key=config.get_ai_vision_api_key(),
-                    base_url=config.get_ai_vision_base_url(),
-                    temperature=0.3,
-                    max_tokens=1024,
-                )
-    return _vision_llm_client
-
 
 def _detect_image_type(data: bytes) -> str:
     """根据文件头字节检测图片 MIME 类型，默认 image/png。"""
@@ -767,9 +962,8 @@ def _analyze_image(
                 )
 
     if not images:
-        return json.dumps(
+        return to_json(
             {"error": f"未找到操作 {indices} 的截图数据（可能该录制模式不保存截图）"},
-            ensure_ascii=False,
         )
 
     # 构建 LangChain 多模态消息（OpenAI 格式，LangChain 会自动适配各家 API）
@@ -787,18 +981,12 @@ def _analyze_image(
     content.append({"type": "text", "text": question})
 
     try:
-        vision_client = _get_vision_llm_client()
-        from langchain_core.messages import HumanMessage
-
-        response = vision_client.llm.invoke([HumanMessage(content=content)])
-        answer = response.content
-        if not answer:
-            return json.dumps({"error": "多模态模型返回空响应"}, ensure_ascii=False)
-        return json.dumps({"analysis": answer}, ensure_ascii=False)
+        answer = invoke_vision_model(content)
+        return to_json({"analysis": answer})
 
     except Exception as e:
         logger.error("[analyze_image] 调用多模态模型失败: %s", e, exc_info=True)
-        return json.dumps({"error": f"多模态模型调用失败: {e}"}, ensure_ascii=False)
+        return to_json({"error": f"多模态模型调用失败: {e}"})
 
 
 def _normalize_action_indices(action_index) -> list[int]:
@@ -904,18 +1092,17 @@ def _read_field_chunk(
     field: str,
     offset: int,
     length: int | None = None,
+    mode: str = RecordingMode.BROWSER,
 ) -> str:
-    """
-    分段读取大字段原始内容。按 locator 定位源记录，Python str 切片返回。
+    """分段读取大字段原始内容。按 locator 定位源记录，Python str 切片返回。
     network_requests 走 filtered SQL rewrite path。
     """
     config = get_unified_config().get_recording_large_field_config()
     max_chunk = config.max_chunk_chars
 
     def _err(code: str, msg: str, *, _locator=locator, _offset=offset, **kw) -> str:
-        return json.dumps(
+        return to_json(
             _make_chunk_error(code, msg, field=field, locator=_locator, offset=_offset, **kw),
-            ensure_ascii=False,
         )
 
     # 参数校验
@@ -932,7 +1119,8 @@ def _read_field_chunk(
     id_field = locator.get("id_field", "")
     id_value = locator.get("id_value")
 
-    if table not in _ALL_TABLE_NAME_SET:
+    table_meta_for_mode = _tables_for_mode(mode)
+    if table not in table_meta_for_mode:
         return _err("unknown_table", f"表 '{table}' 不存在", _locator=None)
 
     rule = STABLE_LOCATOR_RULES.get(table)
@@ -953,7 +1141,7 @@ def _read_field_chunk(
             f"定位字段 '{id_field}' 不是表 '{table}' 的稳定定位字段（期望: {rule.recommended_id_field}）",
         )
 
-    table_meta = _COMMON_TABLES[table]
+    table_meta = table_meta_for_mode[table]
     field_meta = table_meta["fields"].get(field)
     if field_meta is None:
         return _err("field_not_found", f"字段 '{field}' 不存在于表 '{table}'")
@@ -986,7 +1174,7 @@ def _read_field_chunk(
         total_length = len(raw_value)
 
         if offset >= total_length:
-            return json.dumps(
+            return to_json(
                 _make_chunk_response(
                     content="",
                     field=field,
@@ -994,7 +1182,6 @@ def _read_field_chunk(
                     offset=offset,
                     total_length=total_length,
                 ),
-                ensure_ascii=False,
             )
 
         end = min(offset + effective_length, total_length)
@@ -1003,7 +1190,7 @@ def _read_field_chunk(
         has_more = end < total_length
         next_offset = offset + returned_length if has_more else None
 
-        return json.dumps(
+        return to_json(
             _make_chunk_response(
                 content=content,
                 field=field,
@@ -1014,7 +1201,6 @@ def _read_field_chunk(
                 has_more=has_more,
                 next_offset=next_offset,
             ),
-            ensure_ascii=False,
         )
 
     except Exception:
@@ -1073,40 +1259,56 @@ READ_FIELD_CHUNK_SCHEMA: dict[str, Any] = make_tool_schema(
 # =============================================================================
 
 
-def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
+def create_recording_tools(recording_id: str, mode: str | None = None) -> list[ToolDefinition]:
     """
     创建录制数据访问工具列表，recording_id 通过闭包绑定，对 agent 透明。
 
     Args:
         recording_id: 当前录制会话 ID
+        mode: 预解析的录制模式，None 时自动查询
 
     Returns:
-        5 个 ToolDefinition，可直接传给 AgentLoop
+        通用 ToolDefinition，可直接传给 AgentLoop；浏览器 mode 额外包含 analyze_image。
     """
-    return [
+    if mode is None:
+        try:
+            mode = RecordingRepository().get_recording_mode(recording_id)
+        except ValueError:
+            mode = "browser"
+
+    tools = [
         ToolDefinition(
             name="describe_data",
             schema=DESCRIBE_DATA_SCHEMA,
-            handler=lambda tables=None: _describe_data(recording_id, tables),
+            handler=lambda tables=None: _describe_data(recording_id, tables, mode),
         ),
         ToolDefinition(
             name="query_data",
             schema=QUERY_DATA_SCHEMA,
-            handler=lambda sql: _query_data(recording_id, sql),
-            pre_hook=query_data_pre_hook,
+            handler=lambda sql: _query_data(recording_id, sql, mode),
+            pre_hook=functools.partial(_query_data_pre_hook_for_mode, mode),
+        ),
+        ToolDefinition(
+            name="execute_code",
+            schema=EXECUTE_CODE_SCHEMA,
+            handler=lambda code: _execute_code(recording_id, code, mode),
+        ),
+        ToolDefinition(
+            name="read_recording",
+            schema=READ_RECORDING_SCHEMA,
+            handler=lambda: _read_recording(recording_id, mode),
         ),
         ToolDefinition(
             name="read_field_chunk",
             schema=READ_FIELD_CHUNK_SCHEMA,
             handler=lambda locator, field, offset, length=None: _read_field_chunk(
-                recording_id, locator, field, offset, length
+                recording_id, locator, field, offset, length, mode
             ),
         ),
-        ToolDefinition(
-            name="execute_code",
-            schema=EXECUTE_CODE_SCHEMA,
-            handler=lambda code: _execute_code(recording_id, code),
-        ),
+    ]
+    if mode == RecordingMode.DESKTOP:
+        return tools
+    tools.append(
         ToolDefinition(
             name="analyze_image",
             schema=ANALYZE_IMAGE_SCHEMA,
@@ -1115,7 +1317,8 @@ def create_recording_tools(recording_id: str) -> list[ToolDefinition]:
             ),
             pre_hook=analyze_image_pre_hook,
         ),
-    ]
+    )
+    return tools
 
 
 __all__ = [

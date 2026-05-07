@@ -38,6 +38,12 @@
   - `ContextManager` 负责会话内上下文组装、压缩、引用替换
   - `assistant_memory.py` 负责 assistant 的跨会话分层摘要和 `memory_search`
 - 启动入口在 `src/main.py`：GUI 启动前会先跑 `get_unified_config()` 和 `RecordingRepository.ensure_startup_recovery()`
+- 录制数据工具现为 5 工具模型：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`；桌面 mode 通过 mode dispatch 走 `desktop_recordings` / `desktop_actions`
+- 桌面录制 UI 通过 `DesktopRecordingService` 启动；主窗 minimize 完成回调后才启动 hook，停止后 sanity check 通过 `get_health_stats()` 读取 `desktop_recordings.health_stats`
+- 桌面专属工具为 `list_desktop_actions` / `read_action_clip` / `analyze_desktop_action`；`vision_model` 缺失时不注入 `analyze_desktop_action`，桌面工具集不得注入浏览器 `analyze_image`
+- 桌面 Trial 由 `src/execution/desktop_trial_runner.py` 创建 `data/trials/<trial_id>/`、设置 cwd / env 白名单 / 120s 超时和 Windows `taskkill` 清理；business 层只编排和发事件
+- 桌面 Programmer 代码先过 `ast.parse` syntax gate，自动反馈重试最多 2 次；失败发 `desktop_syntax_gate_retry_failed`
+- 桌面录制跨模块通知走 `src/utils/events.py` blinker，UI 只做本地 Qt bridge
 
 ---
 
@@ -64,6 +70,7 @@
 
 ## Recent Changes
 
+- 007-desktop-recording: 新增 Windows 桌面录制 Phase 1、桌面数据工具、双轨 prompt、syntax gate、Trial 子进程和 sanity check UI。
 - 002-tool-hook-system: 新增 Agent 工具执行 pre/post hook 协议、AgentConfig global hooks，并把门卫式工具 gate 迁移到 pre_hook。
 - 003-fix-agentloop-tool-calls: AgentLoop 支持同轮多工具调用完整配对、声明式中断型分类和恢复补齐。
 - 001-recording-field-layering: 录制数据工具改为 5 工具模型，大字段按需占位与 `read_field_chunk` 分段读取。
@@ -79,3 +86,18 @@
 **Issue:** `_ask_user_confirm()` 如果抛异常，AgentLoop 的通用 pre_hook 异常策略会继续执行 handler。
 **Root Cause:** 通用 hook 契约为了不污染工具结果而在 pre_hook 异常后运行 handler；确认 gate 属于安全边界，必须在 hook 内捕获异常并返回拒绝。
 **Prevention Rule:** `write_file`、`edit_file`、非安全 `exec` 等确认 gate 必须用本地包装捕获确认异常，返回 `PreHookResult(error=...)`。
+
+### 桌面录制 hook 启动不能早于主窗最小化完成
+**Issue:** 如果点"开始"后立即启动 hook，开始按钮 click 会污染为首个桌面动作。
+**Root Cause:** 用户点击仍发生在 Exemplar 窗口内，目标应用尚未获得焦点。
+**Prevention Rule:** desktop hook / ring buffer / UIA / clipboard 订阅必须在 Qt minimize 完成回调后启动，UI 只通过 `DesktopRecordingService.start_after_minimize()` 进入业务层。
+
+### 桌面 vision 只独立 model，不独立 provider
+**Issue:** 为桌面录制新增独立 vision provider 会分裂密钥和 routing 语义。
+**Root Cause:** Phase 1 约定 provider 维度复用 `analyze_image`，仅 `recording.desktop.vision_model` 独立。
+**Prevention Rule:** `analyze_desktop_action` 复用 `analyze_image` 的 provider/keyring entry；`vision_model` 缺失时不注入该工具，并用设置页说明和一次性 toast 告知用户。
+
+### Desktop Trial 子进程只能由 execution runner 创建
+**Issue:** UI 或 business 直接创建 `data/trials/`、启动 subprocess 或继承全量 env 会破坏分层和安全边界。
+**Root Cause:** Trial 执行需要 cwd 隔离、env 白名单、stdout/stderr 落盘和 120s `taskkill` 兜底。
+**Prevention Rule:** 只通过 `src/execution/desktop_trial_runner.py` 启动桌面 Trial；business/orchestrator 只编排 runner 调用和 blinker 事件，UI 只展示对话框和 Toast。

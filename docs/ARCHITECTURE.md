@@ -35,7 +35,7 @@
         → 需求问题 → 恢复 PM Agent Loop → 重新确认 → 再派程序员
 ```
 
-### 录制层：双模式并存
+### 录制层：三模式并存
 
 录制模式一：Playwright 驱动（原有）
 - App 启动 Chromium + 扩展
@@ -49,6 +49,13 @@
 - mitmproxy 网络事件和 Windows UIA 交互事件共同写入同一 JSONL 队列
 
 新增录制驱动模块：`ProxyRecorder`、`AccessibilityRecorder`、`SystemProxyManager`、`CertManager`
+
+录制模式三：桌面录制
+- GUI 录制页选择“桌面操作”后，UI 只通过 `DesktopRecordingService` 进入业务层；主窗口完成 minimize 后才启动 `DesktopRecorder`，避免“开始教学”的点击进入录制数据。
+- `DesktopRecorder` 聚合 pynput hook、UIA 查询、剪贴板 watcher、帧 ring buffer、PNG/clip sink 和全局热键注册；动作写入 DuckDB 的 `desktop_recordings` / `desktop_actions`，每条 action 带 `monitor_index`。
+- 停止后主窗口恢复并弹出 sanity check；对话框通过 `DesktopRecordingService.get_health_stats()` 读取 `desktop_recordings.health_stats`，三按钮分别为继续分析、放弃录制、重新录制。
+- 桌面录制跨模块通知走 `src/utils/events.py` 的 blinker 事件，UI 只做本地 Qt bridge；动作计数通过浮窗展示。
+- 进程启动时在 `QGuiApplication` 创建前应用 Per-Monitor V2 DPI awareness；非 Windows 或 API 不可用时降级记录日志，不阻塞启动。
 
 ### 用技能：办公助理日常入口
 
@@ -155,6 +162,9 @@ PM 的人设是**懂需求分析的产品经理**，不是程序员。核心能�
 | 6 | 跟用户对话 | 把分析结果转化为用户能懂的问题去确认 | Agent 提问，不替用户做决定 |
 
 - **PM 和程序员共用同一套 5 个录制数据工具**，角色差异由 prompt 引导（PM 关注操作流程和用户意图，程序员关注技术线索）。试用 Agent 和办公助理不使用录制数据工具
+- 5 个通用录制数据工具为 `describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`。它们在创建时根据 `recording_id` 查询 `recording_mode` 并切换表集合；跨 mode 访问返回 `table_not_in_mode`，而不是泄露另一种录制模式的表。
+- 浏览器录制路径保留 `analyze_image`；桌面录制路径不注入 `analyze_image`，改由 `create_desktop_specific_tools()` 注入 `list_desktop_actions`、`read_action_clip`，并在 `recording.desktop.vision_model` 已配置时注入 `analyze_desktop_action`。
+- PM / 程序员 prompt 通过 `build_pm_prompt(mode)` / `build_programmer_prompt(mode)` 双轨构建：浏览器 mode 返回 legacy prompt，桌面 mode 增加按 `window_title` 聚焦、跳过冗余动作、关键节点多模态分析和 `async def execute() -> dict` 等契约提示。
 - `query_data` 与 `execute_code` 查询 `network_requests` 时默认只暴露 `filtered=false` 的可见行，并隐藏 `filtered / filter_reason / filtered_at / is_recommendation / importance_level` 以及 `filter_decisions` 表；这一约束由 `src/recording/filtering/` 中的 SQL 改写器和 DuckDB 代理统一实现，`recording_data_tools.py` 只负责装配
 - `describe_data` 中的 `network_requests.row_count` 也只统计 Agent 可见行，避免通过概览计数反推出被隐藏的噪声请求数量
 - 列表操作通过元素上下文启发式识别，不确定就直接问用户
@@ -268,6 +278,11 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 | 失败追踪 | `teaching_failure_updated` | 教学失败记录新增或更新 |
 | 失败追踪 | `teaching_failure_resolved` | 失败记录已解决 |
 | 失败追踪 | `teaching_failure_retrying` | 开始重试失败流程 |
+| 桌面录制 | `desktop_action_count_changed` | 桌面 action 数变化，UI 浮窗刷新 |
+| 桌面录制 | `desktop_recorder_start_failed` | hook 注册等启动失败 |
+| 桌面录制 | `desktop_recording_degraded` | UIA、剪贴板、热键等子系统降级 |
+| 桌面生成 | `desktop_syntax_gate_retry_failed` | 桌面 Programmer 代码连续语法失败 |
+| 桌面试用 | `desktop_trial_preview_ready` / `desktop_trial_finished` | 桌面 Trial 预览和执行结果 |
 
 各协作事件的数据格式详见 [event_system_design.md](design/event_system_design.md) 第三节。
 
@@ -499,3 +514,4 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 *更新：2026-04-07 — 同步代码现状：精确化 Agent 两层通信机制描述；补全事件列表（teaching_failure 系列、trial_success、recording_started/stopped）；补充 Trial Agent Config 动态构建说明；新增教学失败追踪系统说明；更新优先级表完成状态*
 *更新：2026-04-13 — 新增技能组合架构（第九节）：双模执行、数据模型、Assistant 集成、试用机制、needs_review 标记；删除已完成的优先级跟踪表，保留细化设计文档索引*
 *更新：2026-04-21 — 同步当前实现形态：补充 assistant 后台任务队列为何不走 blinker；更正 AgentOrchestrator 为“对外单一入口 + 内部拆分子模块”的现状*
+*更新：2026-05-05 — 同步桌面录制：新增桌面 recorder / Service / mode dispatch / 桌面专属工具 / sanity check / Trial runner / syntax gate / DPI 与 blinker 事件边界*

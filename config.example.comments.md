@@ -2,13 +2,20 @@
 
 ## `recording.large_field`
 
-大字段占位与分段读取配置。Agent 查询录制数据时，文本字段值达到阈值后以结构化占位对象交付，Agent 通过 `read_field_chunk` 按需分段续读原始内容。录制数据工具为 5 工具模型：`describe_data`、`query_data`、`read_field_chunk`、`execute_code`、`analyze_image`。大字段占位与续读涉及其中 `query_data`（占位触发）和 `read_field_chunk`（分段续读）两个工具。
+大字段占位与分段读取配置。Agent 查询录制数据时，文本字段值达到阈值后以结构化占位对象交付，Agent 通过 `read_field_chunk` 按需分段续读原始内容。通用录制数据工具为 5 工具模型：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`。浏览器路径额外保留 `analyze_image`，桌面路径改用桌面专属工具。大字段占位与续读涉及其中 `query_data`（占位触发）和 `read_field_chunk`（分段续读）两个工具。
 
 - `threshold_chars`: 占位触发阈值（字符数，按 Python `len()` Unicode 码点计）。任意文本结果列值 `>=` 此值时触发占位替换，取代原 12KB 无差别截断。默认 1000。
 - `preview_chars`: 占位对象 `preview` 字段的最大长度（字符数）。默认 1000。
 - `max_chunk_chars`: `read_field_chunk` 单次返回 `content` 的最大长度（字符数），同时也是省略 `length` 参数时的默认值。默认 1000。
 
 运行时修改以上三个值立即影响后续工具调用，但不使已返回的 `locator` 失效。
+
+## `recording.desktop`
+
+桌面录制配置。
+
+- `enable_clip`: 是否为桌面动作额外生成 mp4 clip。默认 `true`。关闭后仍保存 PNG 帧和动作元数据。
+- `vision_model`: 桌面动作多模态分析使用的模型名。留空或 `null` 时不注入 `analyze_desktop_action`，但 `list_desktop_actions` / `read_action_clip` 等元数据工具仍可用。
 
 ## `recording.noise_filter`
 

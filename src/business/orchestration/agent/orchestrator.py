@@ -3,6 +3,7 @@ import logging
 import threading
 import uuid
 from collections import OrderedDict
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from src.business.agents.agent_loop import AgentLoop
@@ -16,9 +17,11 @@ from src.business.agents.config import (
     ToolDefinition,
 )
 from src.business.agents.tools.pm_output_tools import report_code_issue, submit_requirements
+from src.business.agents.prompts.desktop_prompts import build_pm_prompt, build_programmer_prompt
+from src.business.agents.tools.desktop_tools import create_desktop_specific_tools
 from src.business.agents.tools.programmer_tools import submit_code, syntax_check
 from src.business.agents.tools.recording_data_tools import create_recording_tools
-from src.business.agents.tools.trial_tools import create_trial_tools
+from src.business.agents.tools.trial_tools import create_desktop_trial_tools, create_trial_tools
 from src.business.ai.llm_client import LangChainLLMClient
 from src.data.repositories import (
     AssistantProfileRepository,
@@ -28,13 +31,16 @@ from src.data.repositories import (
     ToolRepository,
     WorkflowTransitionRepository,
 )
+from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import UnifiedConfigManager
+from src.recording.browser.recorder import RecordingMode
 from src.utils.events import connect, emit
 
 from ..llm_reviewer import LLMReviewer, ReviewResult
 from .agent_session_store import AgentSessionStore
 from .assistant_prompt_builder import AssistantPromptBuilder
 from .assistant_task_worker import AssistantTaskWorker
+from .desktop_syntax_gate import check_code, log_terminal_failure, should_retry
 from .ports import AgentExecutionPort, AssistantTaskPort, EventBusPort, ReviewStatePort
 from .teaching_failure_tracker import TeachingFailureTracker
 from .workflow_retry_coordinator import WorkflowRetryCoordinator
@@ -115,6 +121,18 @@ class _AssistantTaskAdapter(AssistantTaskPort):
         self._start_triage(tool_id, user_feedback, workflow_id)
 
 
+@dataclass
+class _DesktopSyntaxState:
+    retry_count: int = 0
+    attempts: list[str] = field(default_factory=list)
+    feedbacks: list[str] = field(default_factory=list)
+
+    def clear(self) -> None:
+        self.retry_count = 0
+        self.attempts.clear()
+        self.feedbacks.clear()
+
+
 class AgentOrchestrator:
     """
     Agent 编排器
@@ -146,6 +164,8 @@ class AgentOrchestrator:
         self._dynamic_managers: OrderedDict[str, "DynamicToolManager"] = OrderedDict()
         self._dynamic_managers_lock = threading.Lock()
         self._MAX_DYNAMIC_MANAGERS = 20
+        self._desktop_syntax_state: Dict[str, _DesktopSyntaxState] = {}
+        self._mode_cache: Dict[str, str] = {}
         from src.business.services import SkillCompositionService
         self._composition_service = SkillCompositionService()
 
@@ -484,6 +504,48 @@ class AgentOrchestrator:
 
         code_data = result.signal_tool.args
         code = code_data["code"]
+        if self._recording_mode(workflow_id) == RecordingMode.DESKTOP:
+            syntax_result = check_code(code)
+            if not syntax_result.ok:
+                state = self._desktop_syntax_state.setdefault(workflow_id, _DesktopSyntaxState())
+                state.retry_count += 1
+                state.attempts.append(code)
+                if syntax_result.feedback:
+                    state.feedbacks.append(syntax_result.feedback)
+                if should_retry(state.retry_count):
+                    self.run_agent(
+                        AgentType.PROGRAMMER,
+                        (
+                            f"[桌面语法门卫第 {state.retry_count} 次反馈]\n\n"
+                            f"{syntax_result.feedback}"
+                        ),
+                        workflow_id,
+                    )
+                    return
+                log_terminal_failure(
+                    workflow_id,
+                    state.attempts,
+                    state.feedbacks,
+                )
+                emit(
+                    "desktop_syntax_gate_retry_failed",
+                    sender=self,
+                    workflow_id=workflow_id,
+                    session_id=session_id,
+                    feedback=syntax_result.feedback,
+                    lineno=syntax_result.lineno,
+                    message=syntax_result.message,
+                )
+                self._desktop_syntax_state.pop(workflow_id, None)
+                self._emit_agent_error(
+                    workflow_id,
+                    session_id,
+                    AgentType.PROGRAMMER,
+                    "Programmer 输出代码持续语法错误",
+                    "desktop_syntax_error",
+                )
+                return
+            self._desktop_syntax_state.pop(workflow_id, None)
         self._emit_and_log(
             event_name="code_completed",
             workflow_id=workflow_id,
@@ -620,15 +682,38 @@ class AgentOrchestrator:
         workflow_id: str = None,
         session_id: str = None,
     ) -> Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]:
-        if agent_type == AgentType.PM:
-            return create_recording_tools(workflow_id) + [submit_requirements, report_code_issue]
-        if agent_type == AgentType.PROGRAMMER:
-            return create_recording_tools(workflow_id) + [syntax_check, submit_code]
-        if agent_type == AgentType.TRIAL:
-            return create_trial_tools(workflow_id)
         if agent_type == AgentType.ASSISTANT:
             return self._build_assistant_tools(session_id)
+        mode = self._recording_mode(workflow_id)
+        recording_tools = create_recording_tools(workflow_id, mode)
+        if mode == RecordingMode.DESKTOP:
+            recording_tools = recording_tools + create_desktop_specific_tools(workflow_id)
+        if agent_type == AgentType.PM:
+            return recording_tools + [submit_requirements, report_code_issue]
+        if agent_type == AgentType.PROGRAMMER:
+            return recording_tools + [syntax_check, submit_code]
+        if agent_type == AgentType.TRIAL:
+            if mode == RecordingMode.DESKTOP:
+                return recording_tools + create_desktop_trial_tools(workflow_id)
+            return create_trial_tools(workflow_id)
         return []
+
+    def _recording_mode(self, workflow_id: str | None) -> str:
+        if not workflow_id:
+            return RecordingMode.BROWSER
+        cached = self._mode_cache.get(workflow_id)
+        if cached is not None:
+            return cached
+        try:
+            mode = RecordingRepository().get_recording_mode(workflow_id)
+        except Exception:
+            mode = RecordingMode.BROWSER
+        self._mode_cache[workflow_id] = mode
+        if len(self._mode_cache) > self._MAX_DYNAMIC_MANAGERS:
+            oldest = next(iter(self._mode_cache))
+            del self._mode_cache[oldest]
+            self._desktop_syntax_state.pop(oldest, None)
+        return mode
 
     def _build_assistant_tools(self, session_id: str) -> Callable[[], List[ToolDefinition]]:
         from src.business.agents.tools.assistant_tools import (
@@ -699,12 +784,14 @@ class AgentOrchestrator:
         if agent_type == AgentType.ASSISTANT:
             return AgentLoop(ASSISTANT_CONFIG, self._llm, self._config)
 
-        if agent_type not in self._loops:
-            configs = {AgentType.PM: PM_CONFIG, AgentType.PROGRAMMER: PROGRAMMER_CONFIG}
-            if agent_type not in configs:
-                raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
-            self._loops[agent_type] = AgentLoop(configs[agent_type], self._llm, self._config)
-        return self._loops[agent_type]
+        mode = self._recording_mode(workflow_id)
+        if agent_type == AgentType.PM:
+            config = replace(PM_CONFIG, system_prompt=build_pm_prompt(mode))
+            return AgentLoop(config, self._llm, self._config)
+        if agent_type == AgentType.PROGRAMMER:
+            config = replace(PROGRAMMER_CONFIG, system_prompt=build_programmer_prompt(mode))
+            return AgentLoop(config, self._llm, self._config)
+        raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
 
 
     def _save_tool(

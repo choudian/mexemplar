@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from src.data.unified_config import get_unified_config
 from src.utils.logger import get_logger
+from src.ui.widgets.settings.desktop_recording_settings import DesktopRecordingSettings
 
 
 class SettingsPage(QWidget):
@@ -142,6 +143,9 @@ class SettingsPage(QWidget):
         ws_port_layout.addWidget(self.ws_port_spin)
         recording_layout.addLayout(ws_port_layout)
 
+        self.desktop_recording_settings = DesktopRecordingSettings(config=self.config)
+        recording_layout.addWidget(self.desktop_recording_settings)
+
         recording_group.setLayout(recording_layout)
         scroll_layout.addWidget(recording_group)
 
@@ -248,6 +252,7 @@ class SettingsPage(QWidget):
                 self.ws_port_spin.value(),
                 value_type="int",
             )
+            self.desktop_recording_settings.save()
 
             # 压缩配置
             self.config.set("ai.compression_level", self.comp_level_combo.currentData())
@@ -262,9 +267,11 @@ class SettingsPage(QWidget):
     def _show_success_message(self):
         """显示成功消息"""
         from PyQt6.QtWidgets import QMessageBox
+
         QMessageBox.information(self, "成功", "配置已保存")
 
     def _show_error_message(self, error: str):
         """显示错误消息"""
         from PyQt6.QtWidgets import QMessageBox
+
         QMessageBox.warning(self, "错误", f"保存配置失败：\n{error}")

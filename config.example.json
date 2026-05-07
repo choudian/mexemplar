@@ -34,7 +34,7 @@
     "video_fps": 15,
     "video_quality": 85,
     "record_mouse_move": false,
-    "default_recording_mode": "desktop",
+    "default_recording_mode": "browser",
     "browser_type": "chromium",
     "browser_headless": false,
     "browser_start_url": null,
@@ -96,6 +96,10 @@
       "threshold_chars": 1000,
       "preview_chars": 1000,
       "max_chunk_chars": 1000
+    },
+    "desktop": {
+      "enable_clip": true,
+      "vision_model": null
     }
   },
   "ui": {

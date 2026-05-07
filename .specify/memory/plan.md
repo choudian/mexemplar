@@ -1,18 +1,18 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-04-29
-**Revision**: 2026-04-29 — Merged `specs/006-chat-ui-polish`
+**Last Updated**: 2026-05-07
+**Revision**: 2026-05-07 — Merged `specs/007-desktop-recording`
 
 ---
 
 ## Technical Context
 
 **Language/Version**: Python 3.11+ (runtime 3.12)
-**Primary Dependencies**: PyQt6, SQLite (SQLAlchemy/Alembic), DuckDB, Playwright, blinker, sqlglot, LangChain, mitmproxy, AgentLoop (自研)
-**Storage**: SQLite (业务数据, via Repository); DuckDB (录制分析数据, via FilteredDuckDBConnection/sql_rewriter)
+**Primary Dependencies**: PyQt6, SQLite (SQLAlchemy/Alembic), DuckDB, Playwright, blinker, sqlglot, LangChain, mitmproxy, AgentLoop (自研), pynput, mss, opencv-python, Pillow, comtypes, pywinauto, pywin32
+**Storage**: SQLite (业务数据, via Repository); DuckDB (录制分析数据, via FilteredDuckDBConnection/sql_rewriter; desktop_recordings/desktop_actions); filesystem (`data/recordings/<recording_id>/`, `data/trials/<trial_id>/`)
 **Testing**: pytest (`tests/`)
-**Target Platform**: Windows + Linux desktop
+**Target Platform**: Windows + Linux desktop; desktop recording Phase 1 is Windows-only
 **Project Type**: Desktop application (single repo)
 
 ---
@@ -93,6 +93,53 @@ tests/
 [Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/005-fix-compression-tool-pairing]
 [Sources: specs/001-recording-field-layering, specs/002-tool-hook-system, specs/003-fix-agentloop-tool-calls, specs/004-auth-toast, specs/006-chat-ui-polish]
 
+### Desktop Recording Additions [Source: specs/007-desktop-recording]
+
+```text
+src/
+├── business/
+│   ├── agents/
+│   │   ├── prompts/
+│   │   │   └── desktop_prompts.py              # build_pm_prompt(mode) / build_programmer_prompt(mode)
+│   │   └── tools/
+│   │       └── desktop_tools.py                # list_desktop_actions / analyze_desktop_action / read_action_clip
+│   ├── orchestration/agent/
+│   │   └── desktop_syntax_gate.py              # ast.parse gate + retry feedback
+│   ├── services/
+│   │   └── desktop_recording_service.py        # UI -> business bridge for start/stop/health/status
+│   └── utils/
+│       └── high_risk_api_detector.py           # Trial warning + shortcut detector
+├── execution/
+│   ├── desktop_trial_models.py                 # TrialResult DTO
+│   └── desktop_trial_runner.py                 # subprocess cwd/env/timeout/stdout/stderr
+├── recording/
+│   ├── desktop_recorder.py                     # DesktopRecorder lifecycle + health_stats
+│   └── desktop/
+│       ├── dpi_awareness.py                    # Per-Monitor V2 startup call
+│       ├── pynput_hook.py                      # keyboard/mouse hook + typing/hotkey segmentation
+│       ├── uia_querier.py                      # UIA ElementFromPoint + async backfill
+│       ├── clipboard_watcher.py                # WM_CLIPBOARDUPDATE + Ctrl+V latest snapshot
+│       ├── frame_ring_buffer.py                # 15fps / 30-frame FIFO
+│       ├── png_sink.py                         # native-resolution frames
+│       ├── clip_sink.py                        # mp4v clips controlled by enable_clip
+│       └── hotkey_register.py                  # Ctrl+Alt+S global stop hotkey
+└── ui/widgets/
+    ├── recording_floating_widget.py            # always-on-top desktop recording stop/count widget
+    ├── desktop_sanity_check_dialog.py          # health stats + color + three-button state machine
+    ├── desktop_trial_dialogs.py                # trial preflight dialog + toast result helpers
+    └── settings/desktop_recording_settings.py  # recording.desktop config controls
+
+tests/
+├── business/test_high_risk_api_detector.py
+├── data/test_recording_desktop_config.py
+├── data/test_recording_repository_desktop.py
+├── integration/test_desktop_*                 # tools, prompts, syntax gate, trial runner, mode dispatch
+├── recording/test_desktop_*                   # hook/UIA/clipboard/ring/sink/action semantics
+└── ui/test_desktop_*                          # minimize start, sanity dialog, trial dialog, vision toast
+```
+
+[Source: specs/007-desktop-recording]
+
 ---
 
 ## Configuration
@@ -109,6 +156,17 @@ tests/
 
 [Source: specs/001-recording-field-layering]
 
+### recording.desktop.* (via UnifiedConfigManager)
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `recording.desktop.enable_clip` | bool | `true` | 控制桌面录制是否生成 mp4 clip；关闭后仍保留多帧 PNG |
+| `recording.desktop.vision_model` | string/null | `null` | 独立指定桌面多模态分析 model；缺失时不注入 `analyze_desktop_action` |
+
+provider routing 和 API key 复用 `analyze_image` 当前 provider/keyring entry；不新增 `recording.desktop.vision_provider`。
+
+[Source: specs/007-desktop-recording]
+
 ---
 
 ## Tool Architecture
@@ -120,6 +178,16 @@ tests/
 3. **execute_code** — 代码执行
 4. **read_recording** — 录制元数据
 5. **read_field_chunk** — 大字段分段读取 (新增)
+
+Desktop recording extends these 5 tools through mode dispatch: `create_recording_tools(recording_id)` queries `RecordingRepository.get_recording_mode(recording_id)` once and closes over browser/desktop mode for handlers and the query pre_hook. Browser mode continues to use the existing 5 browser tables; desktop mode uses `desktop_recordings` / `desktop_actions`. Cross-mode table access returns `table_not_in_mode`.
+
+### Desktop-Specific Recording Tools [Source: specs/007-desktop-recording]
+
+1. **list_desktop_actions** — pages and filters `desktop_actions` by action type/time.
+2. **analyze_desktop_action** — sends up to 2 actions' typing text, clipboard image, and frame sequence to the configured vision model; returns per-action text segments with `[error: <reason_code>]` on partial failure.
+3. **read_action_clip** — returns mp4 clip path/metadata, or `clip_unavailable` when no clip exists.
+
+Desktop PM / Programmer / Trial toolsets replace browser `analyze_image` with these 3 tools. If `recording.desktop.vision_model` is missing, `analyze_desktop_action` is not injected and the other two desktop tools remain available.
 
 ### SQL 列血缘分析
 
@@ -157,6 +225,16 @@ tests/
 - **Regression**: CC-002 reference_handler 正交性、SC-004 小字段零回归
 
 [Source: specs/001-recording-field-layering]
+
+### Desktop Recording Testing [Source: specs/007-desktop-recording]
+
+- **Recording components**: pynput hook classification, UIA 50ms timeout/backfill, clipboard watcher latest snapshot, 30-frame ring buffer, PNG/clip sink behavior, drag/typing segmentation.
+- **Data/config**: `desktop_recordings` / `desktop_actions` schema and status transitions; `recording.desktop.*` defaults and round trip; `recording_mode` defaults corrected to browser.
+- **Tooling and guard tests**: browser 5-tool canonical JSON byte-equal, desktop mode allowlist, `read_recording` desktop summary, desktop tool validation, `recording_data_tools.py` no direct sqlglot import.
+- **Agent orchestration**: PM/Programmer dual prompt, browser prompt guard, desktop toolset composition, `ast.parse` syntax gate and retry feedback.
+- **Trial**: subprocess cwd isolation, env whitelist, timeout/taskkill, stdout last-line JSON parsing, stderr fallback, high-risk API detector.
+- **UI**: minimize-complete startup, floating widget, sanity color and three-button state machine, `vision_model` missing toast, desktop card mutual exclusion.
+- **Manual e2e**: 5 scenarios in quickstart; gates are 5/5 recording success, 5/5 intent generation, at least 3/5 trial success, at least 3/5 shortcut detection, and subjective no-jank check.
 
 ---
 
@@ -289,3 +367,31 @@ Assistant 高危工具确认从 `QMessageBox.question` 模态弹窗改为非阻�
 - **Business**: `tests/business/test_chat_service_history.py`（DTO+Service 契约）
 - **Data**: `tests/data/test_message_repository.py`（分页查询+过滤+排序）
 - **Integration**: `tests/integration/test_assistant_new_session.py`（扩展冒烟测试）
+
+---
+
+## 桌面录制 Phase 1 [Source: specs/007-desktop-recording]
+
+### 架构概览
+
+桌面录制把原有录制页的 desktop "暂不支持"路径替换为 Windows-only 录制闭环。UI 只通过 `DesktopRecordingService` / bridge 调业务层；业务层编排 Recorder、Agent 工具和 Trial；execution 层独立负责桌面 Trial 子进程；DuckDB 录制分析数据通过 Repository/过滤层访问；跨模块通知走 `src/utils/events.py` blinker，UI 只在本地 Qt bridge 切回 UI 线程。
+
+### 录制管线
+
+进程启动期在 `QGuiApplication` 前应用 Per-Monitor V2 DPI awareness。用户开始桌面录制后主窗先最小化，minimize 完成回调后启动 hook / ring buffer / UIA / 剪贴板订阅，避免开始按钮 click 被记录为首动作。`DesktopRecorder` 聚合 pynput、UIA、clipboard、frame buffer、PNG sink、clip sink 和 Ctrl+Alt+S hotkey，写 `desktop_recordings` / `desktop_actions` 并在停止时一次性写 `health_stats`。
+
+### Agent 与工具
+
+5 个通用录制数据工具按 `recording_mode` dispatch，browser mode 保持现有 5 表与 prompt 不退化，desktop mode 只允许 `desktop_recordings` / `desktop_actions`。桌面专属工具由 `create_desktop_specific_tools(recording_id)` 提供；`recording.desktop.vision_model` 缺失时不注入 `analyze_desktop_action`。PM / Programmer prompt 由 `build_pm_prompt(mode)` / `build_programmer_prompt(mode)` 双轨构建，Orchestrator 使用临时 `AgentConfig` 拷贝接线。
+
+### Trial 子进程
+
+桌面 Programmer 输出代码进入 Trial 前先过 `ast.parse` syntax gate，最多自动反馈重试 2 次。Trial 由 `src/execution/desktop_trial_runner.py` 创建 `data/trials/<trial_id>/`、设置 cwd/env 白名单、启动 `python -u -c <wrapper>`、解析 stdout 末行 JSON、落 stdout/stderr、120s 超时后 `taskkill /F /T` 清理子进程树。business/orchestrator 只编排 runner 调用和 blinker 事件，不直接执行 subprocess。
+
+### UI 状态与健康反馈
+
+桌面录制 UI 使用 `RecordingFloatingWidget` 显示录制状态和停止入口。停止后主窗恢复并弹 `DesktopSanityCheckDialog` modal child；dialog 通过 `DesktopRecordingService.get_health_stats(recording_id)` 间接读取 `desktop_recordings.health_stats`，提供继续分析 / 放弃录制 / 重新录制三按钮。录制模式互斥同时由 UI 禁用和业务层 active recorder state 拒绝保证。
+
+### Phase 1 边界
+
+Phase 1 不引入录制数据 retention、cleanup、compress、disk quota、运行期隐私确认、vision quota/rate limit、Trial 资源配额或桌面 UI 播放器。录制数据崩溃孤儿保留并由用户手动清理；Trial 调试目录单独保留 7 天并在 startup recovery 清理。

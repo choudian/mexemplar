@@ -341,7 +341,7 @@ def test_control_stop_stops_recorders_and_emits_event():
     recorder = build_recorder()
     recorder._recording_id = "rec_test"
     recorder._recording_start_time = 123.0
-    recorder._action_queue_path = recorder._get_queue_paths("rec_test")
+    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths("rec_test")
     recorder._is_recording = True
     recorder._active_recording_mode = "extension_triggered"
 
@@ -374,7 +374,7 @@ def test_control_stop_replies_before_duckdb_flush():
     recorder = build_recorder()
     recorder._recording_id = "rec_test"
     recorder._recording_start_time = 123.0
-    recorder._action_queue_path = recorder._get_queue_paths("rec_test")
+    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths("rec_test")
     recorder._is_recording = True
     recorder._active_recording_mode = "extension_triggered"
 

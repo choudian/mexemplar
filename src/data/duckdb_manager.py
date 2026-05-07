@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 _VALID_TABLES = frozenset([
     "recording_sessions",
     "actions",
+    "desktop_recordings",
+    "desktop_actions",
     "network_requests",
     "filter_decisions",
     "sibling_snapshots",
@@ -38,6 +40,39 @@ _VALID_COLUMNS: dict[str, frozenset] = {
         "parameters", "url", "dom_element", "dom_tree_snapshot",
         "visual_features",
         "timestamp",
+    ]),
+    "desktop_recordings": frozenset([
+        "recording_id",
+        "recording_mode",
+        "start_time",
+        "end_time",
+        "monitor_index",
+        "status",
+        "health_stats",
+        "created_at",
+    ]),
+    "desktop_actions": frozenset([
+        "action_id",
+        "recording_id",
+        "recording_mode",
+        "type",
+        "coord_x",
+        "coord_y",
+        "monitor_index",
+        "window_title",
+        "uia_summary",
+        "clipboard_text",
+        "clipboard_image_path",
+        "text_content",
+        "timestamp",
+        "duration_ms",
+        "frame_count",
+        "has_clip",
+        "clip_path",
+        "clip_duration_ms",
+        "clip_fps",
+        "clip_resolution",
+        "created_at",
     ]),
     "network_requests": frozenset([
         "request_id", "action_id", "recording_id", "url", "method",
@@ -183,6 +218,7 @@ class DuckDBManager:
                 return self.conn
 
             try:
+                Path(self.db_path).parent.mkdir(parents=True, exist_ok=True)
                 self.conn = duckdb.connect(self.db_path)
                 logger.info(f"DuckDB 连接已建立: {self.db_path}")
                 return self.conn

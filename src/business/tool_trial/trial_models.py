@@ -40,7 +40,7 @@ class PendingTool:
     # 代码相关
     execution_code: Optional[str] = None  # LLM 生成的代码
     code_language: str = "python"
-    execution_strategy: Optional[str] = None  # api, browser, hybrid
+    execution_strategy: Optional[str] = None  # api, browser, hybrid, desktop
 
     # 参数定义
     parameters: List[Dict[str, Any]] = field(default_factory=list)

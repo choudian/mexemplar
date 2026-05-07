@@ -17,7 +17,13 @@ import threading
 from typing import Optional, Dict, Any, Callable, List
 import dataclasses
 
-from src.data.config_models import AppConfig, ConfigFileLoader, RecordingNoiseFilterConfig, LargeFieldConfig
+from src.data.config_models import (
+    AppConfig,
+    ConfigFileLoader,
+    LargeFieldConfig,
+    RecordingDesktopConfig,
+    RecordingNoiseFilterConfig,
+)
 from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manager
 
 logger = logging.getLogger(__name__)
@@ -339,6 +345,27 @@ class UnifiedConfigManager:
     def get_recording_large_field_config(self) -> LargeFieldConfig:
         """获取录制数据大字段占位与分段读取配置。"""
         return self._load_dataclass_config("recording.large_field", LargeFieldConfig)
+
+    def get_recording_desktop_config(self) -> RecordingDesktopConfig:
+        """获取桌面录制配置。"""
+        return self._load_dataclass_config("recording.desktop", RecordingDesktopConfig)
+
+    def get_desktop_enable_clip(self) -> bool:
+        """桌面录制是否生成 mp4 clip。"""
+        value = self.get("recording.desktop.enable_clip", default=True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def get_desktop_vision_model(self) -> Optional[str]:
+        """桌面录制专用 vision 模型；为空时不注入 analyze_desktop_action。"""
+        value = self.get("recording.desktop.vision_model", default=None)
+        if value is None:
+            return None
+        text = str(value).strip()
+        if text.lower() in {"none", "null"}:
+            return None
+        return text or None
 
     # ===== 内部方法 =====
 

@@ -1,6 +1,8 @@
 from sqlglot import exp, parse
 from sqlglot.optimizer.scope import traverse_scope
 
+from src.recording.filtering.decision import MODE_TABLES
+
 VISIBLE_NETWORK_REQUEST_COLUMNS = [
     "request_id",
     "action_id",
@@ -49,6 +51,28 @@ def rewrite(sql: str) -> str:
                 source.replace(_filtered_network_requests_subquery(source.alias_or_name))
 
     return expression.sql(dialect="duckdb")
+
+
+def validate_table_against_mode_allowlist(sql: str, mode: str) -> None:
+    allowed = MODE_TABLES.get(mode)
+    if allowed is None:
+        raise SqlRewriteError(f"unknown_mode:{mode}")
+    try:
+        statements = parse(sql, read="duckdb")
+    except Exception as exc:
+        raise SqlRewriteError("failed to parse SQL") from exc
+    if len(statements) != 1:
+        raise SqlRewriteError("expected a single statement")
+    expression = statements[0]
+    for scope in traverse_scope(expression):
+        for source in scope.sources.values():
+            if not isinstance(source, exp.Table):
+                continue
+            table_name = source.name.lower()
+            if _is_information_schema_table(source) or _is_prefixed_system_source(source):
+                continue
+            if table_name not in allowed:
+                raise SqlRewriteError(f"table_not_in_mode:{table_name}:{mode}")
 
 
 def _is_network_requests_table(table: exp.Table) -> bool:
