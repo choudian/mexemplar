@@ -351,8 +351,13 @@ class AgentOrchestrator:
                 logger.info(f"[Orchestrator] 试用成功 {new_count}/3，继续试用: workflow={workflow_id}")
                 self.run_agent(
                     AgentType.TRIAL,
-                    f"第 {new_count} 次试用成功（共需 3 次），还需再成功 {remaining} 次。"
-                    "请引导用户用不同的参数再试一次。",
+                    {
+                        "role": "program",
+                        "content": (
+                            f"第 {new_count} 次试用成功（共需 3 次），还需再成功 {remaining} 次。"
+                            "请引导用户用不同的参数再试一次。"
+                        ),
+                    },
                     workflow_id,
                 )
             return

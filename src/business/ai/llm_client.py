@@ -74,6 +74,13 @@ class LangChainLLMClient:
         "moonshot": "https://api.moonshot.cn/v1",
     }
 
+    # 推理强度 → Anthropic budget_tokens 映射
+    _ANTHROPIC_THINKING_BUDGET = {"low": 2048, "medium": 8192, "high": 16384}
+    # 推理强度 → OpenAI reasoning_effort 映射（直传枚举）
+    _OPENAI_REASONING_EFFORT = {"low": "low", "medium": "medium", "high": "high"}
+    # 已知支持 reasoning_effort 的 provider
+    _OPENAI_REASONING_PROVIDERS = {"openai"}
+
     def __init__(
         self,
         provider: str,
@@ -82,6 +89,7 @@ class LangChainLLMClient:
         base_url: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 1024,
+        thinking_level: str = "off",
     ):
         """
         初始化 LLM 客户端
@@ -111,14 +119,25 @@ class LangChainLLMClient:
         self.base_url = base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.thinking_level = self._normalize_thinking_level(thinking_level)
 
         # 初始化 LangChain LLM 实例
         self.llm = self._create_llm()
 
         logger.info(
             f"[LLM客户端] 已初始化: {provider}/{model} "
-            f"(温度={temperature}, max_tokens={max_tokens})"
+            f"(温度={temperature}, max_tokens={max_tokens}, thinking={self.thinking_level})"
         )
+
+    @staticmethod
+    def _normalize_thinking_level(value: Optional[str]) -> str:
+        normalized = (str(value).strip().lower() if value is not None else "off")
+        if normalized not in {"off", "low", "medium", "high"}:
+            logger.warning(
+                f"[LLM客户端] 非法 thinking_level={value!r}，回退到 'off'"
+            )
+            return "off"
+        return normalized
 
     def _get_default_endpoint(self, provider: str) -> Optional[str]:
         """
@@ -186,6 +205,20 @@ class LangChainLLMClient:
             if self.base_url:
                 kwargs["base_url"] = self.base_url
 
+            # 注入推理（Anthropic 启用 thinking 时 temperature 必须为 1，
+            # 且 max_tokens 必须严格大于 budget_tokens）
+            budget = self._ANTHROPIC_THINKING_BUDGET.get(self.thinking_level)
+            if budget is not None:
+                if kwargs["max_tokens"] <= budget:
+                    bumped = budget + 1024
+                    logger.warning(
+                        f"[LLM客户端] thinking={self.thinking_level} 需要 max_tokens > {budget}，"
+                        f"自动从 {kwargs['max_tokens']} 提升到 {bumped}"
+                    )
+                    kwargs["max_tokens"] = bumped
+                kwargs["temperature"] = 1
+                kwargs["thinking"] = {"type": "enabled", "budget_tokens": budget}
+
             logger.debug(
                 f"[LLM客户端] 使用 ChatAnthropic: {self.model}, "
                 f"配置: {self._sanitize_for_logging(kwargs)}"
@@ -200,6 +233,16 @@ class LangChainLLMClient:
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
+
+            # 注入推理（仅对官方 openai provider；其他兼容 provider 静默忽略）
+            effort = self._OPENAI_REASONING_EFFORT.get(self.thinking_level)
+            if effort is not None and self.provider in self._OPENAI_REASONING_PROVIDERS:
+                kwargs["reasoning_effort"] = effort
+            elif effort is not None:
+                logger.debug(
+                    f"[LLM客户端] provider={self.provider} 暂不支持 reasoning_effort 透传，"
+                    f"已忽略 thinking_level={self.thinking_level}"
+                )
 
             # 确定 base_url
             if self.base_url:

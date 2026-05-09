@@ -82,6 +82,7 @@ class SkillCompositionService:
             base_url=config.get_ai_base_url(),
             temperature=temperature,
             max_tokens=max_tokens,
+            thinking_level=config.get_ai_thinking_level(),
         )
 
     @property

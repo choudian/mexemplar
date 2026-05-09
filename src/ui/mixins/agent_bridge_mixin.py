@@ -83,6 +83,7 @@ class AgentBridgeMixin:
             api_key=config.get_ai_api_key(),
             base_url=config.get_ai_base_url(),
             temperature=0.7,
+            thinking_level=config.get_ai_thinking_level(),
         )
 
         orchestrator = AgentOrchestrator(llm_client=llm_client, config=config)

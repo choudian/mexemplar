@@ -166,38 +166,42 @@ def create_trial_tools(workflow_id: str) -> list[ToolDefinition]:
 
 def create_desktop_trial_tools(workflow_id: str) -> list[ToolDefinition]:
     """创建桌面试用工具，execute_tool 使用隔离 desktop runner。"""
+    _execution_approved = False
 
     def _preview_cancelled(responses: list[tuple[Any, Any]]) -> bool:
         return any(response is False for _receiver, response in responses)
 
     def _execute_tool_handler(parameters: dict | None = None) -> str:
+        nonlocal _execution_approved
         del parameters
         tool, err = _resolve_tool_code(workflow_id)
         if err:
             return err
 
         trial_id = str(uuid.uuid4())
-        preview_responses = emit_collect(
-            "desktop_trial_preview_ready",
-            sender=None,
-            workflow_id=workflow_id,
-            trial_id=trial_id,
-            code=tool.execution_code,
-            code_preview="\n".join(tool.execution_code.splitlines()[:20]),
-        )
-        if _preview_cancelled(preview_responses):
-            return to_json(
-                {
-                    "ok": False,
-                    "summary": "用户取消桌面试用",
-                    "details": {"cancelled": True},
-                    "exit_code": None,
-                    "timed_out": False,
-                    "stdout_path": None,
-                    "stderr_path": None,
-                    "trial_id": trial_id,
-                },
+        if not _execution_approved:
+            preview_responses = emit_collect(
+                "desktop_trial_preview_ready",
+                sender=None,
+                workflow_id=workflow_id,
+                trial_id=trial_id,
+                code=tool.execution_code,
+                code_preview="\n".join(tool.execution_code.splitlines()[:20]),
             )
+            if _preview_cancelled(preview_responses):
+                return to_json(
+                    {
+                        "ok": False,
+                        "summary": "用户取消桌面试用",
+                        "details": {"cancelled": True},
+                        "exit_code": None,
+                        "timed_out": False,
+                        "stdout_path": None,
+                        "stderr_path": None,
+                        "trial_id": trial_id,
+                    },
+                )
+            _execution_approved = True
         result = run_desktop_trial(tool.execution_code, trial_id)
         emit(
             "desktop_trial_finished",
