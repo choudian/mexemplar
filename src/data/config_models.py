@@ -69,6 +69,18 @@ class AIConfig:
     timeout: int = 60
     base_url: Optional[str] = None  # 自定义 API endpoint（用于代理或兼容 API）
 
+    # LLM 调用重试配置（agent_loop 层）
+    # 任意异常都会触发重试，线性退避：delay = retry_delay * (retry_count + 1)
+    retry_max_retries: int = 3  # 最大重试次数（最终调用次数 = max_retries + 1）
+    retry_delay: float = 1.0  # 退避基数（秒）
+
+    # 推理强度（仅作用于主对话；vision / 压缩调用强制 off）
+    # 取值：off | low | medium | high
+    # - Anthropic：映射到 thinking={"type":"enabled","budget_tokens":N}，启用时 temperature 强制 1
+    # - OpenAI 兼容：映射到 reasoning_effort 参数（minimal/low/medium/high）
+    # - 不支持思考的模型/provider：静默忽略
+    thinking_level: str = "off"
+
     # 会话压缩调用配置
     compression_model_provider: str = "anthropic"  # 兼容保留；运行时跟随主对话模型 provider
     compression_model_name: str = "claude-3-5-haiku-20241022"  # 兼容保留；运行时跟随主对话模型名称

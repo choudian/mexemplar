@@ -49,17 +49,14 @@ class ResultType(str, Enum):
 
 @dataclass
 class RetryConfig:
-    """重试配置"""
+    """重试配置
+
+    任何 LLM 调用异常都会触发重试，采用线性退避：
+    delay = retry_delay * (retry_count + 1)。
+    """
 
     max_retries: int = 3
     retry_delay: float = 1.0
-    retryable_errors: List[str] = field(
-        default_factory=lambda: [
-            "rate_limit_exceeded",
-            "timeout",
-            "connection_error",
-        ]
-    )
 
 
 @dataclass
@@ -95,6 +92,8 @@ class AgentConfig:
     agent_type: AgentType
     system_prompt: str
     max_iterations: int = 10
+    # retry 字段保留以兼容历史构造调用，但 AgentLoop 在运行时已不再消费它——
+    # 实际重试参数由 unified_config 的 ai.retry_max_retries / ai.retry_delay 决定。
     retry: RetryConfig = field(default_factory=RetryConfig)
     text_as_user_input: bool = False
     # 为 True 时，LLM 直接返回文字（未调用任何工具）视为隐式 talk_to_user，

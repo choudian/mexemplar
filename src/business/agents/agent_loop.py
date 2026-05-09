@@ -79,6 +79,12 @@ class AgentLoop:
         self._config = config
         self._llm = llm_client
         self._unified_config = unified_config
+        # 优先从 unified_config 读取 retry 配置；getter 自带默认值与边界校验。
+        # AgentConfig.retry 仅保留为构造签名的一部分，运行时不再消费。
+        self._retry = RetryConfig(
+            max_retries=unified_config.get_ai_retry_max_retries(),
+            retry_delay=unified_config.get_ai_retry_delay(),
+        )
         self._current_tool_defs: Dict[str, ToolDefinition] = {}
         self._ctx_cache: Dict[str, ContextManager] = {}
         self._max_ctx_cache = 20  # 限制缓存大小，防止内存泄漏
@@ -137,26 +143,6 @@ class AgentLoop:
         self._system_prompt_checked[session_id] = result
         return result
 
-    def _is_retryable_error(self, error: Exception) -> bool:
-        """
-        判断错误是否可重试
-
-        使用字符串子串匹配而非异常类型匹配：LangChain 将底层 API 错误包装为
-        通用 Exception，原始异常类型丢失，类型匹配无法命中。字符串匹配覆盖
-        Anthropic/OpenAI API 的实际错误消息（如 "rate_limit_exceeded"、"timeout"）。
-
-        Args:
-            error: 异常对象
-
-        Returns:
-            是否可重试
-        """
-        error_str = str(error).lower()
-        for retryable in self._config.retry.retryable_errors:
-            if retryable.lower() in error_str:
-                return True
-        return False
-
     def _call_llm_with_retry(
         self,
         messages: list,
@@ -166,6 +152,9 @@ class AgentLoop:
         """
         调用 LLM（带重试机制）
 
+        任何异常都会触发重试，最多 max_retries 次。退避策略为线性：
+        delay = retry_delay * (retry_count + 1)。
+
         Args:
             messages: 消息列表
             tools: 工具列表
@@ -174,7 +163,7 @@ class AgentLoop:
         Returns:
             LLMResponse 对象，失败返回 None
         """
-        retry_config: RetryConfig = self._config.retry
+        retry_config: RetryConfig = self._retry
 
         for retry_count in range(retry_config.max_retries + 1):
             try:
@@ -187,16 +176,15 @@ class AgentLoop:
                 return response
 
             except Exception as e:
-                if retry_count < retry_config.max_retries and self._is_retryable_error(e):
-                    delay = retry_config.retry_delay
-                    logger.warning(
-                        f"[Agent Loop] LLM 调用失败（可重试）: {e}, "
-                        f"等待 {delay}s 后重试 ({retry_count + 1}/{retry_config.max_retries})"
-                    )
-                    time.sleep(delay)
-                else:
-                    logger.error(f"[Agent Loop] LLM 调用失败: {e}")
+                if retry_count >= retry_config.max_retries:
+                    logger.error(f"[Agent Loop] LLM 调用最终失败: {e}")
                     return None
+                delay = retry_config.retry_delay * (retry_count + 1)
+                logger.warning(
+                    f"[Agent Loop] LLM 调用失败: {e}, "
+                    f"等待 {delay}s 后重试 ({retry_count + 1}/{retry_config.max_retries})"
+                )
+                time.sleep(delay)
 
         return None
 

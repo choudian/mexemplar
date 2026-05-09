@@ -227,6 +227,43 @@ class UnifiedConfigManager:
         """获取主 LLM 自定义 endpoint（用于代理）"""
         return self.get("ai.base_url", default=None)
 
+    def get_ai_thinking_level(self) -> str:
+        """主对话推理强度：off | low | medium | high。非法值回退到 off。"""
+        raw = self.get("ai.thinking_level", default="off")
+        value = str(raw).strip().lower() if raw is not None else "off"
+        if value not in {"off", "low", "medium", "high"}:
+            logger.warning(
+                f"[配置] ai.thinking_level 非法值 {raw!r}，回退到 'off'"
+            )
+            return "off"
+        return value
+
+    def get_ai_retry_max_retries(self) -> int:
+        """LLM 调用最大重试次数（>=0）。非法值回退到 3。"""
+        raw = self.get("ai.retry_max_retries", default=3)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(f"[配置] ai.retry_max_retries 非法值 {raw!r}，回退到 3")
+            return 3
+        if value < 0:
+            logger.warning(f"[配置] ai.retry_max_retries 不能为负 {value}，回退到 3")
+            return 3
+        return value
+
+    def get_ai_retry_delay(self) -> float:
+        """LLM 调用重试退避基数（秒，>=0）。非法值回退到 1.0。"""
+        raw = self.get("ai.retry_delay", default=1.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(f"[配置] ai.retry_delay 非法值 {raw!r}，回退到 1.0")
+            return 1.0
+        if value < 0:
+            logger.warning(f"[配置] ai.retry_delay 不能为负 {value}，回退到 1.0")
+            return 1.0
+        return value
+
     def get_embedding_api_key(self) -> Optional[str]:
         """获取 embedding 服务 API 密钥（用于向量搜索）"""
         # 优先从配置文件获取
@@ -358,14 +395,13 @@ class UnifiedConfigManager:
         return bool(value)
 
     def get_desktop_vision_model(self) -> Optional[str]:
-        """桌面录制专用 vision 模型；为空时不注入 analyze_desktop_action。"""
+        """桌面录制 vision 模型；未单独配置时 fallback 到 ai.vision_model。"""
         value = self.get("recording.desktop.vision_model", default=None)
-        if value is None:
-            return None
-        text = str(value).strip()
-        if text.lower() in {"none", "null"}:
-            return None
-        return text or None
+        if value is not None:
+            text = str(value).strip()
+            if text and text.lower() not in {"none", "null"}:
+                return text
+        return self.get_ai_vision_model() or None
 
     # ===== 内部方法 =====
 

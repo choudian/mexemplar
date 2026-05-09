@@ -239,12 +239,13 @@ class AgentType(str, Enum):
 
 @dataclass
 class RetryConfig:
-    """LLM 调用重试配置"""
+    """LLM 调用重试配置
+
+    任何异常都会触发重试（基于线性退避）。不再按错误关键词区分可重试/不可重试——
+    早期的字符串白名单几乎匹配不到 LangChain/SDK 包装后的真实异常文本，等价于关闭。
+    """
     max_retries: int = 3      # 最大重试次数
-    retry_delay: float = 1.0  # 重试延迟（秒）
-    retryable_errors: List[str] = field(default_factory=lambda: [
-        "rate_limit_exceeded", "timeout", "connection_error",
-    ])
+    retry_delay: float = 1.0  # 退避基数；实际延迟 = retry_delay * (retry_count + 1)
 
 
 @dataclass
@@ -614,6 +615,9 @@ def _call_llm_with_retry(
     """
     调用 LLM，带重试机制
 
+    所有异常都会触发重试（最多 max_retries 次），采用线性退避：
+    delay = retry_delay * (retry_count + 1)。
+
     Returns:
         LLMResponse，失败时返回 None（调用者需检查）
     """
@@ -621,21 +625,13 @@ def _call_llm_with_retry(
         try:
             return self._llm.chat_with_tools(messages, tool_schemas)
         except Exception as e:
-            # LangChain 将底层 API 错误包装为通用 Exception，
-            # 原始异常类型丢失，只能用字符串子串匹配判断是否可重试
-            if retry_count < self._config.retry.max_retries and self._is_retryable_error(e):
-                delay = self._config.retry.retry_delay * (retry_count + 1)
-                logger.warning(f"[AgentLoop] LLM 调用失败，{delay}秒后重试（{retry_count + 1}/{self._config.retry.max_retries}）: {e}")
-                time.sleep(delay)
-            else:
-                logger.error(f"[AgentLoop] LLM 调用失败: {e}")
+            if retry_count >= self._config.retry.max_retries:
+                logger.error(f"[AgentLoop] LLM 调用最终失败: {e}")
                 ctx.update_session_status("failed")
                 return None
-
-def _is_retryable_error(self, error: Exception) -> bool:
-    """用字符串子串匹配判断错误是否可重试"""
-    error_str = str(error).lower()
-    return any(r.lower() in error_str for r in self._config.retry.retryable_errors)
+            delay = self._config.retry.retry_delay * (retry_count + 1)
+            logger.warning(f"[AgentLoop] LLM 调用失败，{delay}秒后重试（{retry_count + 1}/{self._config.retry.max_retries}）: {e}")
+            time.sleep(delay)
 
 def _has_system_prompt(self, session_id: str) -> bool:
     """检查会话是否已有 system prompt（轻量查询，不触发压缩和引用替换）"""
