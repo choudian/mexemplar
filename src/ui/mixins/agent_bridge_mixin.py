@@ -84,6 +84,7 @@ class AgentBridgeMixin:
             base_url=config.get_ai_base_url(),
             temperature=0.7,
             thinking_level=config.get_ai_thinking_level(),
+            timeout=config.get_ai_request_timeout(),
         )
 
         orchestrator = AgentOrchestrator(llm_client=llm_client, config=config)

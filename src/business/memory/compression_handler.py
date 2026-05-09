@@ -189,6 +189,7 @@ class CompressionHandler:
                     base_url=self._config.get_compression_model_base_url(),
                     temperature=self._config.get_compression_model_temperature(),
                     max_tokens=self._config.get_compression_model_max_tokens(),
+                    timeout=self._config.get_ai_request_timeout(),
                 )
             except Exception as e:
                 logger.error(f"[压缩] 创建 LLM 客户端失败: {e}")

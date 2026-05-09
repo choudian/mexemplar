@@ -83,6 +83,7 @@ class SkillCompositionService:
             temperature=temperature,
             max_tokens=max_tokens,
             thinking_level=config.get_ai_thinking_level(),
+            timeout=config.get_ai_request_timeout(),
         )
 
     @property

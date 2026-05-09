@@ -36,6 +36,12 @@ class AgentSessionStore:
         )
 
     def get_or_create_session(self, workflow_id: str, agent_type: str) -> str:
+        """获取或创建 session：同一 (workflow_id, agent_type) 永远复用同一条 session。
+
+        - 不存在时创建新 session（status=active）
+        - 存在时直接返回 latest，由 AgentLoop entry 把 failed/completed 复活为 active
+        - latest=active 时记 warning，提示可能的并发调用，但仍复用
+        """
         sessions = self._session_repo.get_by_workflow(
             workflow_id,
             agent_type=agent_type,
@@ -44,8 +50,6 @@ class AgentSessionStore:
 
         if sessions:
             latest = sessions[0]
-            if latest.status == "failed":
-                return self.create_session(workflow_id, agent_type)
             if latest.status == "active":
                 self._logger.warning(
                     f"[Orchestrator] 会话 {latest.session_id} 仍在 active 状态，可能存在并发调用"

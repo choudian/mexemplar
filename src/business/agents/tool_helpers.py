@@ -123,6 +123,7 @@ def get_vision_llm_client(model: str | None = None) -> Any:
             base_url=base_url,
             temperature=0.3,
             max_tokens=1024,
+            timeout=config.get_ai_request_timeout(),
         )
         _vision_client_cache[key] = client
         return client

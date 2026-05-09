@@ -238,6 +238,23 @@ class UnifiedConfigManager:
             return "off"
         return value
 
+    def get_ai_request_timeout(self) -> float:
+        """LLM HTTP 请求超时（秒，>0）。非法值回退到 180.0。
+
+        对应 UI 设置页的 ai.timeout 字段。推理模型（reasoning_effort=high）
+        + 长上下文场景下，上游响应可能数十秒，建议 ≥120s。
+        """
+        raw = self.get("ai.timeout", default=180.0)
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            logger.warning(f"[配置] ai.timeout 非法值 {raw!r}，回退到 180.0")
+            return 180.0
+        if value <= 0:
+            logger.warning(f"[配置] ai.timeout 必须为正 {value}，回退到 180.0")
+            return 180.0
+        return value
+
     def get_ai_retry_max_retries(self) -> int:
         """LLM 调用最大重试次数（>=0）。非法值回退到 3。"""
         raw = self.get("ai.retry_max_retries", default=3)

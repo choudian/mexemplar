@@ -90,6 +90,7 @@ class LangChainLLMClient:
         temperature: float = 0.7,
         max_tokens: int = 1024,
         thinking_level: str = "off",
+        timeout: Optional[float] = None,
     ):
         """
         初始化 LLM 客户端
@@ -120,13 +121,15 @@ class LangChainLLMClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.thinking_level = self._normalize_thinking_level(thinking_level)
+        self.timeout = timeout
 
         # 初始化 LangChain LLM 实例
         self.llm = self._create_llm()
 
         logger.info(
             f"[LLM客户端] 已初始化: {provider}/{model} "
-            f"(温度={temperature}, max_tokens={max_tokens}, thinking={self.thinking_level})"
+            f"(温度={temperature}, max_tokens={max_tokens}, "
+            f"thinking={self.thinking_level}, timeout={self.timeout})"
         )
 
     @staticmethod
@@ -200,6 +203,8 @@ class LangChainLLMClient:
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
+            if self.timeout is not None:
+                kwargs["timeout"] = self.timeout
 
             # 如果有自定义 endpoint（用于代理）
             if self.base_url:
@@ -233,6 +238,8 @@ class LangChainLLMClient:
                 "temperature": self.temperature,
                 "max_tokens": self.max_tokens,
             }
+            if self.timeout is not None:
+                kwargs["timeout"] = self.timeout
 
             # 注入推理（仅对官方 openai provider；其他兼容 provider 静默忽略）
             effort = self._OPENAI_REASONING_EFFORT.get(self.thinking_level)
