@@ -214,6 +214,7 @@ describe("skills and compositions screens", () => {
     render(<CompositionListScreen />);
 
     await waitFor(() => expect(screen.getByText("待复核")).toBeInTheDocument());
+    fireEvent.click(screen.getAllByRole("button", { name: /新建组合/ })[0]);
     await waitFor(() => expect(screen.getByText("Published Skill")).toBeInTheDocument());
     fireEvent.change(screen.getByLabelText("名称"), { target: { value: "Morning Flow" } });
     fireEvent.change(screen.getByLabelText("描述"), { target: { value: "Automates the morning task" } });
@@ -229,7 +230,7 @@ describe("skills and compositions screens", () => {
         .find(Boolean) ?? null;
     expect(firstMember).not.toBeNull();
     fireEvent.click(within(firstMember as HTMLElement).getByRole("button", { name: "下移成员" }));
-    expect(screen.getByText("顺序完整")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /AI 推荐顺序/ })).toBeEnabled();
 
     fireEvent.click(screen.getByRole("button", { name: "保存草稿" }));
     await waitFor(() =>

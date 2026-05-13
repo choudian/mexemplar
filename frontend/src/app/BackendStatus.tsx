@@ -18,19 +18,13 @@ export function BackendStatus({ backend }: { backend: BackendConnectionState | n
 
   return (
     <div
+      className="me-backend-status"
       role="status"
       aria-live="polite"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 8,
-        color: "var(--text-2)",
-        fontSize: 12.5,
-      }}
     >
       <Icon size={14} aria-hidden="true" />
       <Badge tone={tone}>{labels[status]}</Badge>
-      <span>{backend?.message ?? "正在连接本地后端"}</span>
+      <span className="me-backend-message">{backend?.message ?? "正在连接本地后端"}</span>
     </div>
   );
 }

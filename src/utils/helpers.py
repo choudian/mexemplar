@@ -7,6 +7,7 @@
 import json
 import os
 import re
+import sys
 import threading
 from contextlib import nullcontext
 from pathlib import Path
@@ -43,7 +44,9 @@ def get_default_data_dir() -> Path:
     """获取默认数据目录，确保目录存在。
 
     优先使用 `EXEMPLAR_DATA_DIR` 指定的运行时根目录；未设置时回退到
-    项目根目录下的 `data/` 目录。如不存在则自动创建。
+    项目根目录下的 `data/` 目录。PyInstaller onefile 运行时不使用
+    `_MEI...` 临时解压目录，而是优先定位开发仓库，找不到时使用本机
+    应用数据目录。如不存在则自动创建。
 
     Returns:
         data 目录的 Path 对象
@@ -51,11 +54,40 @@ def get_default_data_dir() -> Path:
     configured_dir = os.environ.get("EXEMPLAR_DATA_DIR", "").strip()
     if configured_dir:
         data_dir = Path(configured_dir).expanduser()
+    elif getattr(sys, "frozen", False):
+        data_dir = _frozen_data_dir()
     else:
         project_root = Path(__file__).parent.parent.parent
         data_dir = project_root / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     return data_dir
+
+
+def _frozen_data_dir() -> Path:
+    repo_data_dir = _find_repo_data_dir_from_executable()
+    if repo_data_dir is not None:
+        return repo_data_dir
+
+    local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_app_data:
+        return Path(local_app_data) / "Mexemplar" / "data"
+    return Path.home() / ".mexemplar" / "data"
+
+
+def _find_repo_data_dir_from_executable() -> Optional[Path]:
+    executable = getattr(sys, "executable", "")
+    if not executable:
+        return None
+
+    exe_dir = Path(executable).resolve().parent
+    for candidate in (exe_dir, *exe_dir.parents):
+        if (
+            (candidate / "src-tauri").is_dir()
+            and (candidate / "frontend").is_dir()
+            and (candidate / "src").is_dir()
+        ):
+            return candidate / "data"
+    return None
 
 
 def append_jsonl(filepath: Path, record: dict, lock: Optional[threading.Lock] = None) -> None:

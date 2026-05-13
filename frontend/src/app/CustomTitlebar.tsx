@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 async function runWindowCommand(command: "close" | "minimize" | "toggle_maximize"): Promise<void> {
   try {
@@ -13,22 +13,13 @@ function startDrag(): void {
   invoke("start_dragging").catch(() => {});
 }
 
-export function CustomTitlebar({ title }: { title: string }): JSX.Element {
+export function CustomTitlebar({ right, title }: { right?: ReactNode; title: string }): JSX.Element {
   return (
     <header
+      className="me-titlebar"
       onMouseDown={startDrag}
-      style={{
-        display: "flex",
-        height: 38,
-        flexShrink: 0,
-        alignItems: "center",
-        gap: 8,
-        padding: "0 14px",
-        borderBottom: "1px solid var(--border-1)",
-        background: "var(--titlebar-bg)",
-      }}
     >
-      <div style={{ display: "flex", gap: 8 }} onMouseDown={(e) => e.stopPropagation()}>
+      <div className="me-titlebar-controls" onMouseDown={(e) => e.stopPropagation()}>
         <button
           type="button"
           aria-label="关闭窗口"
@@ -48,21 +39,12 @@ export function CustomTitlebar({ title }: { title: string }): JSX.Element {
           style={dotStyle("#28c840")}
         />
       </div>
-      <div
-        style={{
-          flex: 1,
-          overflow: "hidden",
-          textAlign: "center",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-          color: "var(--text-2)",
-          fontSize: 12,
-          fontWeight: 600,
-        }}
-      >
+      <div className="me-titlebar-title">
         {title}
       </div>
-      <div style={{ width: 60 }} />
+      <div className="me-titlebar-right" onMouseDown={(e) => e.stopPropagation()}>
+        {right}
+      </div>
     </header>
   );
 }
@@ -73,8 +55,9 @@ function dotStyle(background: string): CSSProperties {
     height: 12,
     padding: 0,
     cursor: "pointer",
-    border: "1px solid rgb(0 0 0 / 18%)",
+    border: 0,
     borderRadius: "50%",
     background,
+    boxShadow: "inset 0 0 0 0.5px rgb(0 0 0 / 18%)",
   };
 }

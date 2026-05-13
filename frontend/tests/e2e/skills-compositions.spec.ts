@@ -14,6 +14,7 @@ test("T076 inspects skill states and creates range plus ordered compositions", a
   await expect(page.getByText("Failed Skill")).toBeVisible();
 
   await page.getByRole("button", { name: /技能组合/ }).click();
+  await page.getByRole("button", { name: /新建组合/ }).first().click();
   await expect(page.getByText("Published Skill")).toBeVisible();
   await page.getByLabel("名称").fill("Range fixture");
   await page.getByLabel("描述").fill("Range composition");
@@ -22,7 +23,7 @@ test("T076 inspects skill states and creates range plus ordered compositions", a
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(page.getByText("当前：Range fixture")).toBeVisible();
 
-  await page.getByRole("button", { name: "新建" }).click();
+  await page.getByRole("button", { name: /新建组合/ }).first().click();
   await page.getByLabel("名称").fill("Ordered fixture");
   await page.getByLabel("描述").fill("Ordered composition");
   await page.getByLabel("模式").selectOption("ordered");
@@ -30,7 +31,7 @@ test("T076 inspects skill states and creates range plus ordered compositions", a
   await page.getByRole("button", { name: /Published Skill/ }).click();
   await page.getByRole("button", { name: /Second Skill/ }).click();
   await page.getByRole("button", { name: "下移成员" }).first().click();
-  await expect(page.getByText("顺序完整")).toBeVisible();
+  await expect(page.getByRole("button", { name: /AI 推荐顺序/ })).toBeVisible();
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(page.getByText("当前：Ordered fixture")).toBeVisible();
 });

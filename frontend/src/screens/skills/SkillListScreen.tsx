@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Plus, Search } from "lucide-react";
 
 import type { SkillCategory } from "../../api/skills";
 import { Button } from "../../components/primitives";
@@ -42,34 +43,44 @@ export function SkillListScreen(): JSX.Element {
   return (
     <section className="skills-screen" aria-label="技能列表">
       <div className="skills-header">
-        <h2>技能列表</h2>
+        <div>
+          <h2>技能列表</h2>
+          <p>管理所有学习到的技能</p>
+        </div>
         <div className="skills-header-actions">
           <label className="skills-search">
-            <span>搜索技能</span>
+            <Search size={14} />
             <input
               aria-label="搜索技能"
+              placeholder="搜索技能"
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
             />
           </label>
-          <Button kind="secondary" onClick={() => setRoute("teaching")}>
-            教学新技能
+          <Button kind="primary" onClick={() => setRoute("teaching")}>
+            <Plus size={15} />
+            <span>教学新技能</span>
           </Button>
-          <div className="skills-tabs" role="tablist" aria-label="技能分类">
-            {categories.map((category) => (
-              <Button
-                aria-selected={activeCategory === category.id}
-                kind={activeCategory === category.id ? "primary" : "secondary"}
-                key={category.id}
-                onClick={() => setCategory(category.id)}
-                role="tab"
-              >
-                {category.label}
-                <span>{data[category.id].length}</span>
-              </Button>
-            ))}
-          </div>
         </div>
+      </div>
+      <div className="skills-tabs" role="tablist" aria-label="技能分类">
+        {categories.map((category) => {
+          const active = activeCategory === category.id;
+          return (
+            <button
+              aria-selected={active}
+              className="skills-tab"
+              data-active={active}
+              key={category.id}
+              onClick={() => setCategory(category.id)}
+              role="tab"
+              type="button"
+            >
+              <span>{category.label}</span>
+              <small className="me-mono">{data[category.id].length}</small>
+            </button>
+          );
+        })}
       </div>
       {busy ? <div className="skills-empty">正在加载</div> : null}
       <SkillCards

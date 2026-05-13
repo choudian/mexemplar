@@ -23,7 +23,7 @@ export function MessageComposer({
     >
       <textarea
         aria-label="输入消息"
-        placeholder="输入消息"
+        placeholder="问点什么，或描述一项任务..."
         value={draft}
         onChange={(event) => onDraftChange(event.currentTarget.value)}
         onKeyDown={(event) => {
@@ -34,7 +34,7 @@ export function MessageComposer({
         }}
       />
       <div className="assistant-composer-bar">
-        <div>
+        <div className="assistant-composer-tools">
           <IconButton label="附件暂不可用" disabled>
             <Paperclip size={16} />
           </IconButton>

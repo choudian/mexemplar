@@ -1,14 +1,16 @@
 use std::{
+    env, fs,
     io::{Read, Write},
     net::TcpListener,
     net::TcpStream,
+    path::PathBuf,
     sync::Mutex,
     time::{Duration, Instant},
 };
 
 use rand::{distributions::Alphanumeric, Rng};
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_shell::{
     process::{CommandChild, CommandEvent},
     ShellExt,
@@ -77,7 +79,9 @@ fn generate_token() -> String {
 fn check_sidecar_health(port: u16, token: &str) -> bool {
     let addr = format!("127.0.0.1:{port}");
     let Ok(mut stream) = TcpStream::connect_timeout(
-        &addr.parse().unwrap_or_else(|_| ([127, 0, 0, 1], port).into()),
+        &addr
+            .parse()
+            .unwrap_or_else(|_| ([127, 0, 0, 1], port).into()),
         Duration::from_millis(300),
     ) else {
         return false;
@@ -110,16 +114,40 @@ fn spawn_health_poll(config: SidecarConfig) {
     });
 }
 
+fn resolve_sidecar_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Ok(configured) = env::var("EXEMPLAR_DATA_DIR") {
+        let trimmed = configured.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed));
+        }
+    }
+
+    if cfg!(debug_assertions) {
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if let Some(project_root) = manifest_dir.parent() {
+            return Ok(project_root.join("data"));
+        }
+    }
+
+    app.path()
+        .app_data_dir()
+        .map(|dir| dir.join("data"))
+        .map_err(|error| error.to_string())
+}
+
 pub fn launch_sidecar(app: &AppHandle) -> Result<SidecarState, String> {
     let port = reserve_local_port()?;
     let token = generate_token();
     let port_arg = port.to_string();
+    let data_dir = resolve_sidecar_data_dir(app)?;
+    fs::create_dir_all(&data_dir).map_err(|error| error.to_string())?;
     let command = app
         .shell()
         .sidecar("mexamplar-sidecar")
         .map_err(|error| error.to_string())?
         .args(["--host", "127.0.0.1", "--port", &port_arg])
-        .env("MEXEMPLAR_DESKTOP_TOKEN", &token);
+        .env("MEXEMPLAR_DESKTOP_TOKEN", &token)
+        .env("EXEMPLAR_DATA_DIR", data_dir.as_os_str());
 
     let (mut events, child) = command.spawn().map_err(|error| error.to_string())?;
     tauri::async_runtime::spawn(async move {

@@ -37,8 +37,11 @@ export function SettingsScreen(): JSX.Element {
 
   return (
     <section className="settings-screen" aria-label="应用设置">
-      <div className="settings-sidebar">
+      <div className="settings-page-header">
         <h2>应用设置</h2>
+        <p>所有修改通过本地后端保存，密钥只显示脱敏状态。</p>
+      </div>
+      <div className="settings-sidebar">
         <div className="settings-tabs" role="tablist" aria-label="设置分区">
           {sections.map((item) => (
             <Button

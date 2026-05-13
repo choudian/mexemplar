@@ -164,26 +164,12 @@ export function AppShell(): JSX.Element {
           userStatusLabel={userStatusLabel}
           onRouteChange={setRoute}
         />
-        <main style={{ display: "flex", minWidth: 0, flex: 1, flexDirection: "column", background: "var(--surface-1)" }}>
-          <CustomTitlebar title={`Mexemplar — ${route.label}`} />
-          <div
-            style={{
-              display: "flex",
-              height: 54,
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: 18,
-              padding: "0 32px",
-              borderBottom: "1px solid var(--border-1)",
-            }}
-          >
-            <div>
-              <div style={{ fontSize: 13, color: "var(--text-muted)" }}>当前区域</div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>{route.label}</div>
-            </div>
-            <BackendStatus backend={backend} />
-          </div>
-          <div className="me-scroll" style={{ minHeight: 0, flex: 1, overflow: "auto" }}>
+        <main className="me-main-pane">
+          <CustomTitlebar
+            right={<BackendStatus backend={backend} />}
+            title={`Mexemplar — ${route.label}`}
+          />
+          <div className="me-screen-host">
             <Screen />
           </div>
         </main>
