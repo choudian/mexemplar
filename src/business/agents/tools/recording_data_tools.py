@@ -425,8 +425,27 @@ def _mask_recording_data_error(exc: Exception) -> str:
     if masked is not None:
         return masked
     if isinstance(exc, duckdb.Error):
+        msg = str(exc)
+        # 列不存在时，附上出错的表的可用列名，帮助 agent 自修正
+        col_hint = _column_hint_for_binder_error(msg)
+        if col_hint:
+            return f"SQL 执行失败: {exc}。{col_hint}"
         return f"SQL 执行失败: {exc}。可用表: {', '.join(_ALL_TABLE_NAMES)}。"
     return SQL_PARSE_FAILED_MESSAGE
+
+
+def _column_hint_for_binder_error(msg: str) -> str | None:
+    """解析 DuckDB Binder Error，返回可用列提示。"""
+    import re
+
+    m = re.search(r"Referenced column \S+ not found.*FROM clause", msg)
+    if not m:
+        return None
+    # 从错误消息中提取候选绑定（DuckDB 会列出 candidate bindings）
+    candidates = re.findall(r'"(\w+)"', msg.split("Candidate bindings:")[-1])
+    if candidates:
+        return f"该表的可用列为: {', '.join(candidates)}。请只用这些列名重试。"
+    return None
 
 
 DESCRIBE_DATA_SCHEMA: dict[str, Any] = make_tool_schema(
@@ -1013,7 +1032,7 @@ def analyze_image_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
 ANALYZE_IMAGE_SCHEMA: dict[str, Any] = make_tool_schema(
     name="analyze_image",
     description=(
-        "⚠️ 最后手段工具。仅当文本数据（URL、parameters、dom_element、css_selector 等）"
+        "⚠️ 最后手段工具。仅当文本数据（URL、parameters、dom_element 等）"
         "完全不足以回答问题时才使用。调用多模态模型成本高、耗时长。\n"
         "绝大多数情况下，查询文本字段已足够，不要把截图分析当作常规步骤。\n"
         "适用场景举例：需要识别截图中的验证码、图片内容、无法从 DOM 推断的视觉布局。\n"
