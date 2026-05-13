@@ -26,12 +26,16 @@ class TestDirectColumn:
         bindings = analyzer.analyze("SELECT request_id, response_body FROM network_requests")
         assert len(bindings) == 2
         assert bindings[0] == ProjectionBinding(
-            output_name="request_id", source_table="network_requests",
-            source_field="request_id", is_direct_column=True,
+            output_name="request_id",
+            source_table="network_requests",
+            source_field="request_id",
+            is_direct_column=True,
         )
         assert bindings[1] == ProjectionBinding(
-            output_name="response_body", source_table="network_requests",
-            source_field="response_body", is_direct_column=True,
+            output_name="response_body",
+            source_table="network_requests",
+            source_field="response_body",
+            is_direct_column=True,
         )
 
     def test_qualified_column(self, analyzer):
@@ -84,9 +88,7 @@ class TestJoinLocator:
         assert loc.source_field == "request_id"
 
     def test_find_stable_locator_missing(self, analyzer):
-        bindings = analyzer.analyze(
-            "SELECT nr.response_body FROM network_requests nr"
-        )
+        bindings = analyzer.analyze("SELECT nr.response_body FROM network_requests nr")
         loc = _find_stable_locator_in_bindings(bindings, "network_requests")
         assert loc is None
 
@@ -98,15 +100,11 @@ class TestJoinLocator:
 
 class TestComputedColumns:
     def test_concatenation(self, analyzer):
-        bindings = analyzer.analyze(
-            "SELECT response_body || '' AS body FROM network_requests"
-        )
+        bindings = analyzer.analyze("SELECT response_body || '' AS body FROM network_requests")
         assert bindings[0].is_direct_column is False
 
     def test_function_call(self, analyzer):
-        bindings = analyzer.analyze(
-            "SELECT COUNT(*) FROM network_requests"
-        )
+        bindings = analyzer.analyze("SELECT COUNT(*) FROM network_requests")
         assert bindings[0].is_direct_column is False
 
     def test_aggregate_group_by(self, analyzer):
@@ -117,9 +115,7 @@ class TestComputedColumns:
         assert bindings[1].is_direct_column is False  # COUNT(*) is not
 
     def test_arithmetic(self, analyzer):
-        bindings = analyzer.analyze(
-            "SELECT duration * 1000 AS duration_ms FROM network_requests"
-        )
+        bindings = analyzer.analyze("SELECT duration * 1000 AS duration_ms FROM network_requests")
         assert bindings[0].is_direct_column is False
 
 
@@ -130,9 +126,7 @@ class TestComputedColumns:
 
 class TestUncoveredTable:
     def test_non_covered_table_column(self, analyzer):
-        bindings = analyzer.analyze(
-            "SELECT some_id, some_field FROM unknown_table"
-        )
+        bindings = analyzer.analyze("SELECT some_id, some_field FROM unknown_table")
         assert bindings[0].is_direct_column is True  # still direct
         # but STABLE_LOCATOR_RULES won't have it
         assert "unknown_table" not in STABLE_LOCATOR_RULES
@@ -214,9 +208,7 @@ class TestEdgeCases:
 
     def test_find_stable_locator_in_row_unqualified(self, analyzer):
         """无表前缀时，如果字段名匹配且无歧义，仍可定位。"""
-        bindings = analyzer.analyze(
-            "SELECT request_id, response_body FROM network_requests"
-        )
+        bindings = analyzer.analyze("SELECT request_id, response_body FROM network_requests")
         row = {"request_id": 42, "response_body": "big content..." * 100}
         loc = find_stable_locator_in_row(bindings, "network_requests", row)
         assert loc is not None

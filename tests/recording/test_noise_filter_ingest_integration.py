@@ -243,28 +243,38 @@ def test_persister_writes_filtered_requests_and_decisions(tmp_path):
         assert all(row[5] is False for row in network_rows)
         assert all(row[6] == "unknown" for row in network_rows)
 
-        same_site_row = next(row for row in network_rows if row[0] == "https://api.example.co.uk/orders")
+        same_site_row = next(
+            row for row in network_rows if row[0] == "https://api.example.co.uk/orders"
+        )
         assert same_site_row[2] is False
         assert same_site_row[3] is None
 
-        static_row = next(row for row in network_rows if row[0] == "https://static.example.co.uk/logo.png")
+        static_row = next(
+            row for row in network_rows if row[0] == "https://static.example.co.uk/logo.png"
+        )
         assert static_row[2] is True
         assert "static_asset" in static_row[3]
         assert static_row[4] == "PNGDATA"
 
-        assert db.fetchone(
-            """
+        assert (
+            db.fetchone(
+                """
             SELECT count(*)
             FROM filter_decisions fd
             JOIN network_requests nr ON fd.request_id = CAST(nr.request_id AS VARCHAR)
             WHERE fd.recording_id = ? AND nr.recording_id = ?
             """,
-            ("rec_noise", "rec_noise"),
-        )[0] == 5
-        assert db.fetchone(
-            "SELECT count(*) FROM filter_decisions WHERE recording_id = ? AND decision = 'keep'",
-            ("rec_noise",),
-        )[0] == 0
+                ("rec_noise", "rec_noise"),
+            )[0]
+            == 5
+        )
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM filter_decisions WHERE recording_id = ? AND decision = 'keep'",
+                ("rec_noise",),
+            )[0]
+            == 0
+        )
     finally:
         _restore_repository(db, old_instance, old_auto_recover)
 
@@ -280,8 +290,12 @@ def test_recovery_matches_persister_output_for_same_queue(tmp_path):
     _write_noise_queue(queue_path_left, "rec_parity")
     _write_noise_queue(queue_path_right, "rec_parity")
 
-    repo_a, db_a, old_instance_a, old_auto_a = _temporary_repository(left_path, "persister_parity.duckdb")
-    repo_b, db_b, old_instance_b, old_auto_b = _temporary_repository(right_path, "recovery_parity.duckdb")
+    repo_a, db_a, old_instance_a, old_auto_a = _temporary_repository(
+        left_path, "persister_parity.duckdb"
+    )
+    repo_b, db_b, old_instance_b, old_auto_b = _temporary_repository(
+        right_path, "recovery_parity.duckdb"
+    )
 
     try:
         persister = DuckDBRecordingPersister(repo_factory=lambda: repo_a)
@@ -321,15 +335,19 @@ def test_enabled_false_short_circuits_filtering(tmp_path):
 
     try:
         persister = DuckDBRecordingPersister(repo_factory=lambda: repo)
-        with patch(
-            "src.recording.filtering.ingest_hook.get_unified_config",
-            return_value=_config_stub(enabled=False),
-        ), patch(
-            "src.recording.filtering.ingest_hook.NoiseFilterPipeline",
-            side_effect=AssertionError("pipeline should not be instantiated"),
-        ), patch(
-            "src.recording.filtering.ingest_hook.LLMNoiseJudge",
-            side_effect=AssertionError("judge should not be instantiated"),
+        with (
+            patch(
+                "src.recording.filtering.ingest_hook.get_unified_config",
+                return_value=_config_stub(enabled=False),
+            ),
+            patch(
+                "src.recording.filtering.ingest_hook.NoiseFilterPipeline",
+                side_effect=AssertionError("pipeline should not be instantiated"),
+            ),
+            patch(
+                "src.recording.filtering.ingest_hook.LLMNoiseJudge",
+                side_effect=AssertionError("judge should not be instantiated"),
+            ),
         ):
             persister.save_to_duckdb(
                 recording_id="rec_disabled",
@@ -339,14 +357,20 @@ def test_enabled_false_short_circuits_filtering(tmp_path):
                 end_time=1734508925.0,
             )
 
-        assert db.fetchone(
-            "SELECT count(*) FROM filter_decisions WHERE recording_id = ?",
-            ("rec_disabled",),
-        )[0] == 0
-        assert db.fetchone(
-            "SELECT count(*) FROM network_requests WHERE recording_id = ? AND filtered = TRUE",
-            ("rec_disabled",),
-        )[0] == 0
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM filter_decisions WHERE recording_id = ?",
+                ("rec_disabled",),
+            )[0]
+            == 0
+        )
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM network_requests WHERE recording_id = ? AND filtered = TRUE",
+                ("rec_disabled",),
+            )[0]
+            == 0
+        )
     finally:
         _restore_repository(db, old_instance, old_auto_recover)
 
@@ -381,8 +405,7 @@ def test_enabled_false_still_keeps_query_side_contracts(tmp_path):
                 recording_data_tools._describe_data("rec_disabled_query", ["network_requests"])
             )
             field_names = {
-                field["name"]
-                for field in details["table_details"]["network_requests"]["fields"]
+                field["name"] for field in details["table_details"]["network_requests"]["fields"]
             }
             assert {"filtered", "filter_reason", "filtered_at"} & field_names == set()
 
@@ -407,7 +430,7 @@ def test_enabled_false_still_keeps_query_side_contracts(tmp_path):
                 recording_data_tools._execute_code(
                     "rec_disabled_query",
                     "try:\n"
-                    "    conn.execute(\"SHOW TABLES\").fetchall()\n"
+                    '    conn.execute("SHOW TABLES").fetchall()\n'
                     "except Exception as e:\n"
                     "    print(e)\n",
                 )
@@ -461,18 +484,19 @@ def test_new_ingest_does_not_backfill_historical_rows(tmp_path):
             ("rec_old",),
         )
         assert old_row == (False, None)
-        assert db.fetchone(
-            "SELECT count(*) FROM filter_decisions WHERE recording_id = ?",
-            ("rec_old",),
-        )[0] == 0
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM filter_decisions WHERE recording_id = ?",
+                ("rec_old",),
+            )[0]
+            == 0
+        )
     finally:
         _restore_repository(db, old_instance, old_auto_recover)
 
 
 def test_smoke_persister_then_agent_query_only_sees_visible_requests(tmp_path):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
-        tmp_path, "smoke_query.duckdb"
-    )
+    repo, db, old_instance, old_auto_recover = _temporary_repository(tmp_path, "smoke_query.duckdb")
     queue_path = tmp_path / "rec_smoke_actions.jsonl"
     _write_noise_queue(queue_path, "rec_smoke")
 

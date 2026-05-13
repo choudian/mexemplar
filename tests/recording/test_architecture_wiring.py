@@ -32,7 +32,9 @@ class TestExtensionTriggerSmokeTests:
         mock_ws = AsyncMock()
         mock_ws.remote_address = ("127.0.0.1", 12345)
 
-        asyncio.run(server.process_message({"type": "recording_control", "action": "start"}, mock_ws))
+        asyncio.run(
+            server.process_message({"type": "recording_control", "action": "start"}, mock_ws)
+        )
 
         assert len(called) == 1
         assert called[0]["action"] == "start"
@@ -85,7 +87,9 @@ class TestGatekeeperTests:
     def test_browser_recorder_facade_delegates_to_new_persister(self):
         recorder = build_recorder()
 
-        with patch.object(recorder._duckdb_persister, "save_to_duckdb", return_value=3) as mock_save:
+        with patch.object(
+            recorder._duckdb_persister, "save_to_duckdb", return_value=3
+        ) as mock_save:
             result = recorder._save_to_duckdb(123.0)
 
         assert result == 3
@@ -115,17 +119,25 @@ class TestScreenshotFeatureGatekeeper:
 
     def test_analyze_image_no_legacy_screenshot_columns(self):
         """_analyze_image should not reference screenshot_before/screenshot_after from actions."""
-        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
+        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(
+            encoding="utf-8"
+        )
         func_start = source.find("def _analyze_image(")
         func_end = source.find("\ndef ", func_start + 1)
         func_body = source[func_start:func_end]
 
-        assert "screenshot_before" not in func_body, "_analyze_image still references screenshot_before"
-        assert "screenshot_after" not in func_body, "_analyze_image still references screenshot_after"
+        assert (
+            "screenshot_before" not in func_body
+        ), "_analyze_image still references screenshot_before"
+        assert (
+            "screenshot_after" not in func_body
+        ), "_analyze_image still references screenshot_after"
 
     def test_analyze_image_sql_no_source_trigger_where(self):
         """_analyze_image SQL must not use source_trigger in WHERE clause."""
-        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
+        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(
+            encoding="utf-8"
+        )
         func_start = source.find("def _analyze_image(")
         func_end = source.find("\ndef ", func_start + 1)
         func_body = source[func_start:func_end]
@@ -155,25 +167,31 @@ class TestScreenshotFeatureGatekeeper:
 
     def test_persister_no_pair_matching(self):
         """duckdb_recording_persister.py must not contain screenshot pairing/matching logic."""
-        source = Path("src/recording/browser/duckdb_recording_persister.py").read_text(encoding="utf-8")
+        source = Path("src/recording/browser/duckdb_recording_persister.py").read_text(
+            encoding="utf-8"
+        )
         for forbidden in ["pair_screenshot", "match_anchor", "match_window", "screenshot_pair"]:
             assert forbidden not in source, f"Persister contains forbidden term: {forbidden}"
 
     def test_websocket_coordinator_unchanged(self):
         """recording_websocket_coordinator.py should not contain browser_context."""
-        source = Path("src/recording/browser/recording_websocket_coordinator.py").read_text(encoding="utf-8")
+        source = Path("src/recording/browser/recording_websocket_coordinator.py").read_text(
+            encoding="utf-8"
+        )
         assert "browser_context" not in source
 
     def test_playwright_driver_no_framenavigated(self):
         """playwright_recording_driver.py must not subscribe to framenavigated or URL tracking."""
-        source = Path("src/recording/browser/playwright_recording_driver.py").read_text(encoding="utf-8")
+        source = Path("src/recording/browser/playwright_recording_driver.py").read_text(
+            encoding="utf-8"
+        )
         assert "framenavigated" not in source
         assert "update_current_url" not in source
 
     def test_recorder_uses_queue_paths(self):
         """browser_recorder.py should not hardcode get_default_data_dir / 'queues'."""
         source = Path("src/recording/browser_recorder.py").read_text(encoding="utf-8")
-        assert 'get_default_data_dir()' not in source or "queue_paths" in source
+        assert "get_default_data_dir()" not in source or "queue_paths" in source
 
     def test_browser_stop_order_keeps_hook_flush_before_close_and_save(self):
         source = Path("src/recording/browser_recorder.py").read_text(encoding="utf-8")
@@ -183,8 +201,12 @@ class TestScreenshotFeatureGatekeeper:
 
         assert func_body.find("_send_stop_command_via_ws") < func_body.find("_wait_for_stop_drain")
         assert func_body.find("_wait_for_stop_drain") < func_body.find("self._screenshot_hook.stop")
-        assert func_body.find("self._screenshot_hook.stop") < func_body.find("await self._close_browser()")
-        assert func_body.find("await self._close_browser()") < func_body.find("self._save_to_duckdb")
+        assert func_body.find("self._screenshot_hook.stop") < func_body.find(
+            "await self._close_browser()"
+        )
+        assert func_body.find("await self._close_browser()") < func_body.find(
+            "self._save_to_duckdb"
+        )
 
     def test_recovery_no_screenshot_replay(self):
         """recording_recovery.py should not contain screenshot replay/restore logic."""
@@ -193,8 +215,9 @@ class TestScreenshotFeatureGatekeeper:
         lines = source.lower().split("\n")
         for line in lines:
             if "screenshot" in line:
-                assert "replay" not in line and "restore" not in line, \
-                    f"Found forbidden screenshot replay/restore: {line.strip()}"
+                assert (
+                    "replay" not in line and "restore" not in line
+                ), f"Found forbidden screenshot replay/restore: {line.strip()}"
 
     def test_screenshot_modules_exist(self):
         """New screenshot modules should exist."""

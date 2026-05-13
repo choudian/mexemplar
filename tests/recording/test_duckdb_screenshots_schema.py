@@ -17,13 +17,11 @@ def test_recording_screenshots_table_creation_is_idempotent(tmp_path):
         db.initialize()
         db.initialize()
 
-        assert db.fetchone(
-            """
+        assert db.fetchone("""
             SELECT count(*)
             FROM information_schema.tables
             WHERE table_name = 'recording_screenshots'
-            """
-        )[0] == 1
+            """)[0] == 1
     finally:
         try:
             db.close()

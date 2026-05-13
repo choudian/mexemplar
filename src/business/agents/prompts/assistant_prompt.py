@@ -5,7 +5,6 @@
 由 format_assistant_prompt() 在每次会话启动时替换为实际内容。
 """
 
-
 ASSISTANT_SYSTEM_PROMPT = """\
 你是用户的办公助理。你的职责是帮助用户完成日常工作任务。
 
@@ -104,7 +103,9 @@ def format_assistant_prompt(
         tool_lines = []
         for t in tools:
             name = t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
-            desc = t.get("description", "") if isinstance(t, dict) else getattr(t, "description", "")
+            desc = (
+                t.get("description", "") if isinstance(t, dict) else getattr(t, "description", "")
+            )
             tool_lines.append(f"- **{name}**：{desc}")
         tools_section = (
             "### 内置工具\n\n"

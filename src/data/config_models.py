@@ -59,14 +59,14 @@ class AIConfig:
 
     provider: str = "anthropic"  # anthropic, openai等
     api_key: Optional[str] = None
-    model: str = "claude-sonnet-4-20250514"  # Claude Sonnet 4.5
+    model: str = "claude-sonnet-4-20250514"
     vision_model: str = "claude-3-5-sonnet-20241022"  # 多模态视觉模型名称
     vision_provider: Optional[str] = None  # 视觉模型提供商（为空则跟随主模型 provider）
     vision_api_key: Optional[str] = None  # 视觉模型专用 API key（为空则跟随主模型）
     vision_base_url: Optional[str] = None  # 视觉模型专用 endpoint（为空则跟随主模型）
     temperature: float = 0.7
     max_tokens: int = 4096
-    timeout: int = 60
+    timeout: int = 180
     base_url: Optional[str] = None  # 自定义 API endpoint（用于代理或兼容 API）
 
     # LLM 调用重试配置（agent_loop 层）
@@ -95,7 +95,7 @@ class AIConfig:
     memory_compression_token_threshold: int = 80000  # token 估算触发压缩的阈值
     memory_compression_count_threshold: Optional[int] = None  # 消息条数触发压缩的阈值（可选）
     memory_compression_keep_recent: int = 20  # 压缩时保留的最近消息数
-    memory_compression_trigger_strategy: str = "token"  # 压缩触发策略："token" | "count" | "combined"
+    memory_compression_trigger_strategy: str = "token"  # token | count | combined
 
 
 @dataclass
@@ -215,7 +215,8 @@ class RecordingConfig:
 class UIConfig:
     """UI配置"""
 
-    theme: str = "light"  # light, dark
+    theme: str = "light"  # light, dark, system
+    density: str = "comfy"  # comfy, compact
     language: str = "zh_CN"  # zh_CN, en_US
     window_width: int = 1200
     window_height: int = 800

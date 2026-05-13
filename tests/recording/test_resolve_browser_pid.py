@@ -31,7 +31,8 @@ class TestResolveBrowserPid:
         driver._playwright_extension_bundle_path = bundle
 
         fake_proc = _fake_process(
-            42, "chrome.exe",
+            42,
+            "chrome.exe",
             ["chrome.exe", f"--load-extension={bundle}"],
         )
 
@@ -54,11 +55,13 @@ class TestResolveBrowserPid:
         driver._playwright_extension_bundle_path = bundle
 
         main_proc = _fake_process(
-            42, "chrome.exe",
+            42,
+            "chrome.exe",
             ["chrome.exe", f"--load-extension={bundle}"],
         )
         renderer_proc = _fake_process(
-            43, "chrome.exe",
+            43,
+            "chrome.exe",
             ["chrome.exe", f"--load-extension={bundle}", "--type=renderer"],
         )
 
@@ -86,7 +89,8 @@ class TestResolveBrowserPid:
         driver._playwright_extension_bundle_path = bundle
 
         other_proc = _fake_process(
-            42, "chrome.exe",
+            42,
+            "chrome.exe",
             ["chrome.exe", "--load-extension=/other/path"],
         )
 
@@ -118,7 +122,8 @@ class TestResolveBrowserPid:
         driver._playwright_extension_bundle_path = bundle
 
         fake_proc = _fake_process(
-            42, "firefox.exe",
+            42,
+            "firefox.exe",
             ["firefox.exe", f"--load-extension={bundle}"],
         )
 
@@ -133,7 +138,8 @@ class TestResolveBrowserPid:
         driver._playwright_extension_bundle_path = bundle
 
         edge_proc = _fake_process(
-            55, "msedge.exe",
+            55,
+            "msedge.exe",
             ["msedge.exe", f"--load-extension={bundle}"],
         )
 

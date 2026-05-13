@@ -12,9 +12,12 @@ from src.data.models import (
 
 from .types import SkillCompositionError
 
-
 VALID_MODES = {"range", "ordered"}
 VALID_STATUSES = {"draft", "published", "offline"}
+
+
+def is_published_available(composition) -> bool:
+    return composition.status == "published" and not bool(composition.needs_review)
 
 
 def normalize_members(mode: str, members: List[dict], tool_repo) -> List[dict]:
@@ -38,9 +41,7 @@ def normalize_members(mode: str, members: List[dict], tool_repo) -> List[dict]:
                 "tool_id": tool_id,
                 "selected_order": int(member.get("selected_order") or index),
                 "execution_order": (
-                    int(member.get("execution_order") or index)
-                    if mode == "ordered"
-                    else None
+                    int(member.get("execution_order") or index) if mode == "ordered" else None
                 ),
             }
         )
@@ -147,10 +148,7 @@ def to_tool_model(tool) -> Tool:
 
 def to_composition_model(composition, members_orm, tool_repo) -> SkillComposition:
     tool_ids = [member.tool_id for member in members_orm]
-    tool_map = {
-        tool.tool_id: to_tool_model(tool)
-        for tool in tool_repo.get_by_ids(tool_ids)
-    }
+    tool_map = {tool.tool_id: to_tool_model(tool) for tool in tool_repo.get_by_ids(tool_ids)}
     member_models = [
         SkillCompositionMember(
             member_id=member.member_id,

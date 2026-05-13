@@ -62,7 +62,7 @@ def _seed_session(session_id, mock_config, tool_calls_dicts, existing_results=No
     ctx.save_message(role="system", content="You are a test agent.")
     ctx.save_user_message("test")
     ctx.save_assistant_message(content=None, tool_calls=json.dumps(tool_calls_dicts))
-    for result in (existing_results or []):
+    for result in existing_results or []:
         ctx.save_tool_result(**result)
 
 

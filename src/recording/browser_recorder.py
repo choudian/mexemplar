@@ -4,7 +4,6 @@
 实现通过浏览器扩展与 Mexemplar 实时通信，并通过 Playwright 启动浏览器。
 """
 
-
 import asyncio
 import logging
 import threading
@@ -86,6 +85,7 @@ class BrowserRecorder:
         self._screenshot_hook = None
         self._last_browser_action_ts: float = 0.0
         self._screenshot_queue_path: Optional[Path] = None
+        self._pending_extension_recording_id: Optional[str] = None
 
         if storage_path is None:
             storage_path = get_default_data_dir() / "recordings"
@@ -326,7 +326,8 @@ class BrowserRecorder:
             control_handler=self._submit_control_message,
         )
 
-    def arm_extension_triggered_mode(self) -> None:
+    def arm_extension_triggered_mode(self, recording_id: Optional[str] = None) -> None:
+        self._pending_extension_recording_id = recording_id
         self._ensure_ws_server()
 
     def _submit_control_message(self, data: Dict[str, Any], websocket) -> None:
@@ -366,7 +367,7 @@ class BrowserRecorder:
                 error="已有录制进行中，请先停止当前录制",
             )
 
-        recording_id = str(uuid.uuid4())
+        recording_id = self._pending_extension_recording_id or str(uuid.uuid4())
         queue_file, self._screenshot_queue_path = self._get_queue_paths(recording_id)
         start_time = time.time()
 
@@ -397,6 +398,7 @@ class BrowserRecorder:
         self._action_queue_path = queue_file
         self._is_recording = True
         self._active_recording_mode = RecordingMode.EXTENSION_TRIGGERED
+        self._pending_extension_recording_id = None
 
         emit(
             "recording_started",
@@ -449,6 +451,7 @@ class BrowserRecorder:
 
         if save_ok:
             from src.recording.queue_paths import delete_queue_file
+
             for qpath in [queue_file, self._screenshot_queue_path]:
                 delete_queue_file(qpath)
 
@@ -536,7 +539,9 @@ class BrowserRecorder:
 
             logger.info(f"开始浏览器录制，会话ID: {self._recording_id}")
 
-            self._action_queue_path, self._screenshot_queue_path = self._get_queue_paths(self._recording_id)
+            self._action_queue_path, self._screenshot_queue_path = self._get_queue_paths(
+                self._recording_id
+            )
 
             if not self._ws_server or not self._ws_server.is_running:
                 logger.warning("[BrowserRecorder] WS 服务器未运行，尝试启动...")
@@ -586,12 +591,15 @@ class BrowserRecorder:
             # 启动截图钩子
             browser_pid = self._playwright_driver.resolve_browser_pid()
             from .browser_screenshot_hook import BrowserScreenshotHook
+
             self._screenshot_hook = BrowserScreenshotHook(
                 recording_id=self._recording_id,
                 screenshots_queue_file=self._screenshot_queue_path,
                 browser_pid=browser_pid,
                 jpeg_quality=self._unified_config.get("recording.screenshot_quality", 85),
-                after_delay=self._unified_config.get("recording.screenshot_delay_after_action", 0.2),
+                after_delay=self._unified_config.get(
+                    "recording.screenshot_delay_after_action", 0.2
+                ),
                 logger=logger,
             )
             if not self._screenshot_hook.start():
@@ -688,6 +696,7 @@ class BrowserRecorder:
 
         if save_ok:
             from src.recording.queue_paths import delete_queue_file
+
             for qpath in [result_queue_path, result_screenshot_path]:
                 delete_queue_file(qpath)
 

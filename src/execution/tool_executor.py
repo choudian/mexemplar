@@ -38,7 +38,7 @@ _PIP_TO_IMPORT = {
 
 # Runner 脚本：以模块方式加载工具代码，调用 execute()，结果写入 JSON 文件
 # 工具代码的 if __name__ == "__main__" 不会被触发（模块名不是 __main__）
-_RUNNER_CODE = '''\
+_RUNNER_CODE = """\
 import asyncio
 import importlib.util
 import json
@@ -69,7 +69,7 @@ def main():
 
 if __name__ == "__main__":
     main()
-'''
+"""
 
 
 def _find_system_python() -> str | None:
@@ -93,9 +93,7 @@ def _get_venv_python() -> str:
 
     system_python = _find_system_python()
     if not system_python:
-        raise RuntimeError(
-            "未找到系统 Python。请安装 Python 3.11+ 并确保 python 命令在 PATH 中。"
-        )
+        raise RuntimeError("未找到系统 Python。请安装 Python 3.11+ 并确保 python 命令在 PATH 中。")
 
     logger.info(f"[ToolExecutor] 使用 {system_python} 创建虚拟环境: {_VENV_DIR}")
     _VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
@@ -142,7 +140,7 @@ def run_command_in_venv(command: str) -> dict:
 
     # 安全校验：拒绝换行符和 shell 元字符，防止命令拼接注入
     cmd_stripped = command.strip()
-    if re.search(r'[\r\n;&|`$]', cmd_stripped):
+    if re.search(r"[\r\n;&|`$]", cmd_stripped):
         return {"success": False, "message": "命令包含不安全字符"}
 
     # 安全校验：只允许常见安全命令前缀
@@ -156,7 +154,10 @@ def run_command_in_venv(command: str) -> dict:
             "playwright install ",
         )
     ):
-        return {"success": False, "message": "不支持的命令，仅允许: pip install, playwright install"}
+        return {
+            "success": False,
+            "message": "不支持的命令，仅允许: pip install, playwright install",
+        }
 
     try:
         venv_python = _get_venv_python()
@@ -165,9 +166,9 @@ def run_command_in_venv(command: str) -> dict:
 
     # 替换命令中的 python → venv python
     if cmd_stripped.startswith("python ") or cmd_stripped.startswith("python3 "):
-        cmd_stripped = venv_python + cmd_stripped[cmd_stripped.index(" "):]
+        cmd_stripped = venv_python + cmd_stripped[cmd_stripped.index(" ") :]
     elif cmd_stripped.startswith("pip ") or cmd_stripped.startswith("pip3 "):
-        cmd_stripped = f'{venv_python} -m pip{cmd_stripped[4:]}'
+        cmd_stripped = f"{venv_python} -m pip{cmd_stripped[4:]}"
     elif cmd_stripped.startswith("playwright "):
         cmd_stripped = f"{venv_python} -m playwright {cmd_stripped[11:]}"
 
@@ -182,7 +183,10 @@ def run_command_in_venv(command: str) -> dict:
         output = proc.stdout.strip()
         error = proc.stderr.strip()
         if proc.returncode != 0:
-            return {"success": False, "message": error or output or f"命令执行失败 (exit code {proc.returncode})"}
+            return {
+                "success": False,
+                "message": error or output or f"命令执行失败 (exit code {proc.returncode})",
+            }
         return {"success": True, "message": output or "命令执行成功"}
     except subprocess.TimeoutExpired:
         return {"success": False, "message": "命令执行超时（180秒）"}

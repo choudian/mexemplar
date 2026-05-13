@@ -13,6 +13,7 @@ from enum import Enum
 
 class PendingToolStatus(str, Enum):
     """待试用工具状态枚举"""
+
     PENDING_TRIAL = "pending_trial"  # 等待试用
     TRIALING = "trialing"  # 试用中
     TRIAL_SUCCESS = "trial_success"  # 试用成功

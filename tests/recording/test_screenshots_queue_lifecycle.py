@@ -136,10 +136,13 @@ class TestScreenshotsQueueLifecycle:
             recovered = recovery.auto_recover_on_startup()
 
             assert recovered is True
-            assert db.fetchone(
-                "SELECT count(*) FROM actions WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 1
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM actions WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 1
+            )
             assert not screenshots_file.exists()
             assert actions_file.exists()
         finally:

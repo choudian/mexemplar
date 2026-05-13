@@ -49,6 +49,56 @@ class MessageRepository(BaseRepository):
             query = query.filter(Message.is_archived.is_(False))
         return query.order_by(Message.sequence.desc()).first()
 
+    def get_first_user_message(self, session_id: str) -> str:
+        """返回会话中第一条非空 user 消息的 content，不存在时返回空字符串。"""
+        row = (
+            self.session.query(Message.content)
+            .filter(
+                Message.session_id == session_id,
+                Message.role == "user",
+                Message.content != "",
+                Message.content.isnot(None),
+            )
+            .order_by(Message.sequence.asc())
+            .limit(1)
+            .first()
+        )
+        return row[0] if row else ""
+
+    def get_first_user_messages(self, session_ids: list[str]) -> dict[str, str]:
+        """批量返回多个会话中第一条非空 user 消息的 content。"""
+        if not session_ids:
+            return {}
+        sub = (
+            self.session.query(
+                Message.session_id,
+                func.min(Message.sequence).label("min_seq"),
+            )
+            .filter(
+                Message.session_id.in_(session_ids),
+                Message.role == "user",
+                Message.content != "",
+                Message.content.isnot(None),
+            )
+            .group_by(Message.session_id)
+            .subquery()
+        )
+        rows = (
+            self.session.query(Message.session_id, Message.content)
+            .join(
+                sub,
+                and_(
+                    Message.session_id == sub.c.session_id,
+                    Message.sequence == sub.c.min_seq,
+                ),
+            )
+            .all()
+        )
+        result: dict[str, str] = {sid: "" for sid in session_ids}
+        for sid, content in rows:
+            result[sid] = content
+        return result
+
     def get_context(self, session_id: str) -> List[Message]:
         """获取会话上下文（非归档消息，按序列排序）"""
         return (
@@ -105,15 +155,7 @@ class MessageRepository(BaseRepository):
                 Message.content != "",
                 Message.content.isnot(None),
                 Message.message_type != "compressed",
-                Message.role != "tool",
-                Message.role != "summary",
             ),
-        ).filter(
-            ~and_(
-                Message.role == "assistant",
-                (Message.content == "") | (Message.content.is_(None)),
-                Message.tool_calls.isnot(None),
-            )
         )
 
     def get_display_page(
@@ -125,10 +167,7 @@ class MessageRepository(BaseRepository):
         if limit <= 0:
             raise ValueError(f"limit must be positive, got {limit}")
 
-        sub = (
-            self.session.query(Message)
-            .filter(Message.session_id == session_id)
-        )
+        sub = self.session.query(Message).filter(Message.session_id == session_id)
         sub = self._display_filter(sub)
 
         if before_sequence is not None:
@@ -138,6 +177,14 @@ class MessageRepository(BaseRepository):
 
         return list(reversed(sub.all()))
 
+    def get_display_after(self, session_id: str, after_sequence: int = 0) -> List[Message]:
+        query = self.session.query(Message).filter(
+            Message.session_id == session_id,
+            Message.sequence > after_sequence,
+        )
+        query = self._display_filter(query)
+        return query.order_by(Message.sequence.asc()).all()
+
     def has_more_before(self, session_id: str, before_sequence: int) -> bool:
         exists = (
             self.session.query(Message.message_id)
@@ -146,3 +193,11 @@ class MessageRepository(BaseRepository):
         )
         exists = self._display_filter(exists)
         return exists.first() is not None
+
+    def get_max_display_sequence(self, session_id: str) -> int:
+        """返回会话中展示消息的最大 sequence，无展示消息时返回 0。"""
+        row = self.session.query(func.max(Message.sequence)).filter(
+            Message.session_id == session_id,
+        )
+        row = self._display_filter(row)
+        return row.scalar() or 0

@@ -88,7 +88,11 @@ class TestSaveScreenshots:
         mock_repo.insert_screenshot_batch.return_value = [1]
 
         persister = DuckDBRecordingPersister(repo_factory=lambda: mock_repo)
-        with patch.object(persister, "convert_event_to_action_dict", side_effect=lambda *a, **kw: {"action_type": "click"}):
+        with patch.object(
+            persister,
+            "convert_event_to_action_dict",
+            side_effect=lambda *a, **kw: {"action_type": "click"},
+        ):
             persister.save_to_duckdb(
                 recording_id="rec_test",
                 recording_start_time=100.0,
@@ -125,9 +129,12 @@ class TestSaveScreenshots:
         actions_path = tmp_path / "rec_test_actions.jsonl"
         actions_path.write_text("", encoding="utf-8")
         screenshots_path = tmp_path / "rec_test_screenshots.jsonl"
-        _write_screenshots_queue(screenshots_path, [
-            {**_screenshot_record(), "data_b64": None, "skipped_reason": "not_foreground"},
-        ])
+        _write_screenshots_queue(
+            screenshots_path,
+            [
+                {**_screenshot_record(), "data_b64": None, "skipped_reason": "not_foreground"},
+            ],
+        )
 
         mock_repo = MagicMock()
         mock_repo.save_recording_session.return_value = None
@@ -177,18 +184,27 @@ class TestSaveScreenshots:
             )
 
             assert result == 1
-            assert db.fetchone(
-                "SELECT count(*) FROM recording_sessions WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 1
-            assert db.fetchone(
-                "SELECT count(*) FROM actions WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 1
-            assert db.fetchone(
-                "SELECT count(*) FROM recording_screenshots WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 1
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM recording_sessions WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 1
+            )
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM actions WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 1
+            )
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM recording_screenshots WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 1
+            )
 
         assert not actions_path.exists()
         assert not screenshots_path.exists()
@@ -213,14 +229,20 @@ class TestSaveScreenshots:
             )
 
             assert result == 1
-            assert db.fetchone(
-                "SELECT count(*) FROM actions WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 1
-            assert db.fetchone(
-                "SELECT count(*) FROM recording_screenshots WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 1
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM actions WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 1
+            )
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM recording_screenshots WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 1
+            )
 
         assert not actions_path.exists()
         assert not screenshots_path.exists()
@@ -244,18 +266,27 @@ class TestSaveScreenshots:
                         end_time=200.0,
                     )
 
-            assert db.fetchone(
-                "SELECT count(*) FROM recording_sessions WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 0
-            assert db.fetchone(
-                "SELECT count(*) FROM actions WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 0
-            assert db.fetchone(
-                "SELECT count(*) FROM recording_screenshots WHERE recording_id = ?",
-                ("rec_test",),
-            )[0] == 0
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM recording_sessions WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 0
+            )
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM actions WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 0
+            )
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM recording_screenshots WHERE recording_id = ?",
+                    ("rec_test",),
+                )[0]
+                == 0
+            )
 
         assert actions_path.exists()
         assert screenshots_path.exists()

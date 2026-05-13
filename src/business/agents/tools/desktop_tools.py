@@ -15,6 +15,8 @@ from src.utils.helpers import get_default_data_dir
 
 logger = logging.getLogger(__name__)
 
+MAX_FRAMES_PER_ACTION = 8
+
 
 LIST_DESKTOP_ACTIONS_SCHEMA = make_tool_schema(
     name="list_desktop_actions",
@@ -93,7 +95,6 @@ def _read_action_clip(
     )
 
 
-
 def _encode_image_for_vision(path: Path) -> dict[str, str]:
     from PIL import Image
 
@@ -162,9 +163,7 @@ def _build_desktop_vision_content(
         content.append(
             {
                 "type": "text",
-                "text": (
-                    f"[动作 {action_id} 元数据]\n" f"{to_json(summary)}"
-                ),
+                "text": (f"[动作 {action_id} 元数据]\n" f"{to_json(summary)}"),
             }
         )
 
@@ -184,7 +183,6 @@ def _build_desktop_vision_content(
                     }
                 )
 
-        MAX_FRAMES_PER_ACTION = 8
         frame_paths = _action_frame_paths(recording_id, action_id)
         if len(frame_paths) > MAX_FRAMES_PER_ACTION:
             step = len(frame_paths) / MAX_FRAMES_PER_ACTION

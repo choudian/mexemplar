@@ -1,8 +1,7 @@
 """
 助理 Agent 专属工具（非动态用户工具）
 
-目前包含：
-- report_tool_bug: 提交工具 Bug 报告，触发分诊修复流程
+这些工具把耗时的工具修复/工具化任务写入 DB 队列，由 AssistantTaskWorker 后台消费。
 """
 
 import json
@@ -11,7 +10,7 @@ import uuid
 from src.utils.timezone import utc_now
 
 from src.business.agents.config import ToolDefinition
-from src.business.agents.tool_helpers import make_tool_schema, error_json
+from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
 from src.data.models_sqlite import PendingAssistantTask
 from src.data.repositories import PendingTaskRepository, ToolRepository
 
@@ -25,10 +24,14 @@ def register_task_worker_notify(callback):
     _task_worker_notify = callback
 
 
-def _notify_task_worker():
+def _notify_task_worker() -> bool:
     """唤醒后台 Worker 立即处理 pending 任务"""
-    if _task_worker_notify:
-        _task_worker_notify()
+    if _task_worker_notify is None:
+        logger.error("[assistant_tools] 后台任务 Worker 唤醒回调未注册")
+        return False
+    _task_worker_notify()
+    return True
+
 
 logger = logging.getLogger(__name__)
 
@@ -72,15 +75,14 @@ def report_tool_bug_handler(
         return error_json(f"找不到工具 '{tool_name}'")
 
     task_id = str(uuid.uuid4())
-    payload = json.dumps(
+    payload = to_json(
         {
             "tool_id": tool.tool_id,
             "tool_name": tool_name,
             "error_message": error_message,
             "user_input": user_input,
             "reported_at": utc_now().isoformat(),
-        },
-        ensure_ascii=False,
+        }
     )
 
     task_repo = PendingTaskRepository()
@@ -94,16 +96,16 @@ def report_tool_bug_handler(
     )
 
     # 通知后台 Worker 立即处理（不用 blinker 事件，避免线程嵌套）
-    _notify_task_worker()
+    worker_notified = _notify_task_worker()
 
     logger.info(f"[report_tool_bug] 已提交 Bug 报告: tool={tool_name}, task={task_id}")
-    return json.dumps(
+    return to_json(
         {
             "success": True,
             "message": f"已收到工具 '{tool_name}' 的 Bug 报告，系统将安排自动修复。",
             "task_id": task_id,
-        },
-        ensure_ascii=False,
+            "worker_notified": worker_notified,
+        }
     )
 
 
@@ -165,11 +167,20 @@ def _extract_tool_calls_from_messages(messages: list) -> list:
             try:
                 calls = json.loads(msg.tool_calls)
                 for c in calls:
-                    trace.append({"type": "tool_call", "name": c.get("name", ""), "args": c.get("args", {})})
-            except Exception:
-                pass
+                    trace.append(
+                        {"type": "tool_call", "name": c.get("name", ""), "args": c.get("args", {})}
+                    )
+            except (json.JSONDecodeError, TypeError) as exc:
+                logger.warning(
+                    "[codify_as_tool] 工具调用记录解析失败: message_id=%s, session_id=%s, error=%s",
+                    getattr(msg, "message_id", ""),
+                    getattr(msg, "session_id", ""),
+                    exc,
+                )
         elif msg.role == "tool" and msg.content:
-            trace.append({"type": "tool_result", "name": msg.tool_name or "", "content": msg.content[:500]})
+            trace.append(
+                {"type": "tool_result", "name": msg.tool_name or "", "content": msg.content[:500]}
+            )
 
     return trace
 
@@ -192,14 +203,13 @@ def create_codify_as_tool_handler(session_id: str):
             return error_json("未找到最近的工具调用记录，请先执行一次该任务再要求做成工具")
 
         task_id = str(uuid.uuid4())
-        payload = json.dumps(
+        payload = to_json(
             {
                 "task_description": task_description,
                 "execution_trace": execution_trace,
                 "session_id": session_id,
                 "requested_at": utc_now().isoformat(),
-            },
-            ensure_ascii=False,
+            }
         )
 
         repo = PendingTaskRepository()
@@ -213,16 +223,16 @@ def create_codify_as_tool_handler(session_id: str):
         )
 
         # 通知后台 Worker 立即处理（不用 blinker 事件，避免线程嵌套）
-        _notify_task_worker()
+        worker_notified = _notify_task_worker()
         logger.info(f"[codify_as_tool] 已提交工具创建请求: {task_description}, task={task_id}")
 
-        return json.dumps(
+        return to_json(
             {
                 "success": True,
                 "message": "已提交工具创建请求，系统正在后台处理，完成后会通知你。",
                 "task_id": task_id,
-            },
-            ensure_ascii=False,
+                "worker_notified": worker_notified,
+            }
         )
 
     return codify_as_tool_handler
@@ -287,13 +297,16 @@ def create_save_profile_handler(session_id: str):
                     msg_repo.update_content(system_msg.message_id, new_content)
                     logger.info(f"[save_profile] 当前会话 system prompt 已更新: {session_id}")
 
-            logger.info(f"[save_profile] 用户偏好已保存: display_name={display_name}, style={style}")
-            return json.dumps({"success": True, "message": "偏好已保存"}, ensure_ascii=False)
+            logger.info(
+                f"[save_profile] 用户偏好已保存: display_name={display_name}, style={style}"
+            )
+            return to_json({"success": True, "message": "偏好已保存"})
         except Exception as e:
             logger.error(f"[save_profile] 保存失败: {e}")
             return error_json(e)
 
     return save_profile_handler
+
 
 DISMISS_SUGGESTION_SCHEMA = make_tool_schema(
     name="dismiss_suggestion",
@@ -318,7 +331,7 @@ def dismiss_suggestion_handler(task_pattern: str) -> str:
         if record:
             repo.mark_rejected(record)
 
-        return json.dumps({"success": True, "message": "好的，不再建议了"}, ensure_ascii=False)
+        return to_json({"success": True, "message": "好的，不再建议了"})
     except Exception as e:
         logger.error(f"[dismiss_suggestion] 失败: {e}")
         return error_json(e)
@@ -332,8 +345,10 @@ DISMISS_SUGGESTION = ToolDefinition(
 
 __all__ = [
     "REPORT_TOOL_BUG",
-    "SAVE_PROFILE_SCHEMA", "create_save_profile_handler",
-    "CODIFY_AS_TOOL_SCHEMA", "create_codify_as_tool_handler",
+    "SAVE_PROFILE_SCHEMA",
+    "create_save_profile_handler",
+    "CODIFY_AS_TOOL_SCHEMA",
+    "create_codify_as_tool_handler",
     "DISMISS_SUGGESTION",
     "register_task_worker_notify",
 ]

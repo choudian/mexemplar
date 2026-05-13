@@ -38,10 +38,13 @@ def _make_record(**overrides) -> dict:
 class TestIterScreenshotsQueue:
     def test_parses_valid_records(self, tmp_path):
         path = tmp_path / "test_screenshots.jsonl"
-        _write_jsonl(path, [
-            _make_record(moment="before"),
-            _make_record(moment="after", captured_at=1734508923.700),
-        ])
+        _write_jsonl(
+            path,
+            [
+                _make_record(moment="before"),
+                _make_record(moment="after", captured_at=1734508923.700),
+            ],
+        )
 
         rows = list(iter_screenshots_queue(path))
         assert len(rows) == 2
@@ -77,7 +80,9 @@ class TestIterScreenshotsQueue:
     def test_missing_required_field_skipped(self, tmp_path):
         path = tmp_path / "test_screenshots.jsonl"
         # missing "captured_at"
-        path.write_text(json.dumps({"recording_id": "x", "moment": "before"}) + "\n", encoding="utf-8")
+        path.write_text(
+            json.dumps({"recording_id": "x", "moment": "before"}) + "\n", encoding="utf-8"
+        )
 
         rows = list(iter_screenshots_queue(path))
         assert len(rows) == 0
@@ -108,17 +113,24 @@ class TestIterScreenshotsQueue:
 class TestBatchInsertScreenshots:
     def test_inserts_valid_rows(self):
         from unittest.mock import MagicMock
+
         mock_repo = MagicMock()
         mock_repo.insert_screenshot_batch.return_value = [1, 2]
         img = b"\xff\xd8\xff\xe0fake"
         rows = [
             ScreenshotRow(
-                recording_id="rec_1", moment="before", timestamp=100.0,
-                data=img, media_type="image/jpeg",
+                recording_id="rec_1",
+                moment="before",
+                timestamp=100.0,
+                data=img,
+                media_type="image/jpeg",
             ),
             ScreenshotRow(
-                recording_id="rec_1", moment="after", timestamp=100.2,
-                data=img, media_type="image/jpeg",
+                recording_id="rec_1",
+                moment="after",
+                timestamp=100.2,
+                data=img,
+                media_type="image/jpeg",
             ),
         ]
 
@@ -128,12 +140,19 @@ class TestBatchInsertScreenshots:
 
     def test_filters_skipped_rows(self):
         from unittest.mock import MagicMock
+
         mock_repo = MagicMock()
         mock_repo.insert_screenshot_batch.return_value = [1]
         img = b"\xff\xd8\xff\xe0fake"
         rows = [
             ScreenshotRow(recording_id="rec_1", moment="before", timestamp=100.0, data=img),
-            ScreenshotRow(recording_id="rec_1", moment="before", timestamp=101.0, data=None, skipped_reason="not_foreground"),
+            ScreenshotRow(
+                recording_id="rec_1",
+                moment="before",
+                timestamp=101.0,
+                data=None,
+                skipped_reason="not_foreground",
+            ),
         ]
 
         count = batch_insert_screenshots(mock_repo, rows)
@@ -165,6 +184,7 @@ class TestBatchInsertScreenshots:
 
     def test_batches_correctly(self):
         from unittest.mock import MagicMock
+
         mock_repo = MagicMock()
         mock_repo.insert_screenshot_batch.return_value = [1]
         rows = [
@@ -177,6 +197,7 @@ class TestBatchInsertScreenshots:
 
     def test_empty_input(self):
         from unittest.mock import MagicMock
+
         mock_repo = MagicMock()
         assert batch_insert_screenshots(mock_repo, []) == 0
         mock_repo.insert_screenshot_batch.assert_not_called()

@@ -165,7 +165,12 @@ class TestTimeWindowQuery:
             ORDER BY abs(epoch(timestamp) - epoch(?))
             LIMIT 1
             """,
-            ("rec_1", t_action - timedelta(seconds=1.0), t_action + timedelta(seconds=0.25), t_action),
+            (
+                "rec_1",
+                t_action - timedelta(seconds=1.0),
+                t_action + timedelta(seconds=0.25),
+                t_action,
+            ),
         ).fetchone()
 
         conn.close()
@@ -198,20 +203,27 @@ class TestAnalyzeImageIntegration:
         """Gatekeeper: _analyze_image SQL must not reference source_trigger."""
         from pathlib import Path
 
-        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
+        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(
+            encoding="utf-8"
+        )
         # Find the _analyze_image function body
         func_start = source.find("def _analyze_image(")
         func_end = source.find("\ndef ", func_start + 1)
         func_body = source[func_start:func_end]
 
         # SQL in function should not contain source_trigger in WHERE
-        assert "source_trigger" not in func_body or "WHERE" not in func_body.split("source_trigger")[0][-200:]
+        assert (
+            "source_trigger" not in func_body
+            or "WHERE" not in func_body.split("source_trigger")[0][-200:]
+        )
 
     def test_old_screenshot_before_after_not_used(self):
         """Gatekeeper: _analyze_image should not query screenshot_before/after from actions."""
         from pathlib import Path
 
-        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
+        source = Path("src/business/agents/tools/recording_data_tools.py").read_text(
+            encoding="utf-8"
+        )
         func_start = source.find("def _analyze_image(")
         func_end = source.find("\ndef ", func_start + 1)
         func_body = source[func_start:func_end]

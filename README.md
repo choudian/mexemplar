@@ -85,12 +85,15 @@ PM — 跟你确认，搞明白你这一步到底想达到什么效果
 
 ## 快速开始
 
-需要：Python 3.11+，[uv](https://github.com/astral-sh/uv)
+需要：Python 3.11+、[uv](https://github.com/astral-sh/uv)、Node.js 20+、Rust stable（Tauri 2）。
 
 ```bash
 git clone https://github.com/choudian/mexemplar.git
 cd mexemplar
 uv sync
+cd frontend
+npm install
+cd ..
 ```
 
 配置文件配置（当前阶段）：
@@ -101,31 +104,33 @@ uv sync
 cp config.example.json config.json
 ```
 
-2. 修改 `config.json` 里的关键配置（当前阶段重点）：
+2. 修改 `config.json` 里的非密钥默认配置，或在应用 Settings 里调整：
 
 - `provider`
 - `model`
-- `api_key`
 - `base_url`
 
-示例：
+API Key 等密钥由 Settings 写入系统 keyring，不建议写入 `config.json`。非密钥示例：
 
 ```json
 {
   "ai": {
     "provider": "openai",
     "model": "gpt-4o-mini",
-    "api_key": "your_api_key_here",
+    "api_key": "",
     "base_url": "https://api.openai.com/v1"
   }
 }
 ```
 
-3. 启动应用：
+3. 开发模式启动桌面应用：
 
 ```bash
-uv run python -m src.main --gui
+cd frontend
+npm run tauri:dev
 ```
+
+旧的 `uv run python -m src.main --gui` / PyQt 启动方式已退休，只会返回不支持提示。
 
 ---
 

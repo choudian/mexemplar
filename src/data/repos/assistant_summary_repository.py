@@ -85,8 +85,7 @@ class AssistantSummaryRepository(BaseRepository):
         level_params = {f"lv{i}": int(lv) for i, lv in enumerate(levels)}
         level_placeholders = ",".join(f":lv{i}" for i in range(len(levels)))
 
-        sql = text(
-            f"""
+        sql = text(f"""
             SELECT s.summary_id, s.level, s.content, s.created_at,
                    fts.rank AS fts_rank
             FROM assistant_summaries_fts fts
@@ -95,8 +94,7 @@ class AssistantSummaryRepository(BaseRepository):
               AND s.level IN ({level_placeholders})
             ORDER BY fts.rank
             LIMIT :limit
-        """
-        )
+        """)
         try:
             params = {"query": fts_query, "limit": limit}
             params.update(level_params)
@@ -150,8 +148,7 @@ class AssistantSummaryRepository(BaseRepository):
         level_params = {f"lv{i}": int(lv) for i, lv in enumerate(levels)}
         level_placeholders = ",".join(f":lv{i}" for i in range(len(levels)))
 
-        sql = text(
-            f"""
+        sql = text(f"""
             SELECT s.summary_id, s.level, s.content, s.created_at, v.distance
             FROM (
                 SELECT summary_id, distance
@@ -162,8 +159,7 @@ class AssistantSummaryRepository(BaseRepository):
             JOIN assistant_summaries s ON s.summary_id = v.summary_id
             WHERE s.level IN ({level_placeholders})
             ORDER BY v.distance
-        """
-        )
+        """)
         try:
             params = {"query": query_blob, "k": limit}
             params.update(level_params)
@@ -204,12 +200,10 @@ class AssistantSummaryRepository(BaseRepository):
 
             # 插入 vec0 虚拟表
             self.session.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO assistant_summaries_vec(summary_id, embedding)
                     VALUES (:summary_id, :embedding)
-                """
-                ),
+                """),
                 {"summary_id": summary_id, "embedding": embedding_blob},
             )
             self.session.commit()

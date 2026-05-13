@@ -9,8 +9,6 @@
 - edit_file: 编辑本地文件（局部替换）
 - list_dir: 列目录
 - exec: 执行 shell 命令（高危，白名单限制）
-
-注：cron、image_generate、browser、image、pdf、memory_search 在后续 Step 实现。
 """
 
 import json
@@ -102,7 +100,7 @@ EXEC_SAFE_COMMANDS = frozenset(
 # 每个 worker 线程用独立的 threading.Event 等待，结果按 request_id 隔离。
 # =========================================================================
 
-_confirm_signal = None  # pyqtSignal(str, str)，(request_id, message)
+_confirm_signal = None  # emit-compatible signal: (request_id, message)
 _pending_confirms: dict = {}  # request_id → PendingConfirmation
 _confirm_lock = threading.Lock()
 _auto_approve_enabled = False
@@ -124,10 +122,10 @@ class PendingConfirmation:
 
 def register_confirm_mechanism(signal):
     """
-    注入跨线程确认信号（由 MainWindow 在初始化时调用）。
+    注入跨线程确认信号（由 UI/sidecar adapter 在初始化时调用）。
 
     Args:
-        signal: pyqtSignal(str, str)，emit(request_id, message) 后 UI 线程弹框
+        signal: emit(request_id, message) 后由 UI 展示确认
     """
     global _confirm_signal
     _confirm_signal = signal
@@ -142,7 +140,9 @@ def set_confirm_result(
     with _confirm_lock:
         pending = _pending_confirms.get(request_id)
         if pending is None:
-            logger.debug("[builtin_tools] 忽略未知确认请求: request_id=%s, source=%s", request_id, source)
+            logger.debug(
+                "[builtin_tools] 忽略未知确认请求: request_id=%s, source=%s", request_id, source
+            )
             return
         if pending.event.is_set():
             return

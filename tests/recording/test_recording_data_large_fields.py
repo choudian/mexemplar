@@ -11,7 +11,6 @@ from unittest.mock import patch
 from src.data.recording_repository import RecordingRepository
 from src.data.duckdb_manager import DuckDBManager
 
-
 # ---------------------------------------------------------------------------
 # Shared fixtures
 # ---------------------------------------------------------------------------
@@ -48,11 +47,13 @@ def tool_db(tmp_path):
     repo = RecordingRepository(db)
 
     # 初始化 recording session
-    repo.save_recording_session({
-        "recording_id": RECORDING_ID,
-        "status": "stopped",
-        "recording_mode": "browser",
-    })
+    repo.save_recording_session(
+        {
+            "recording_id": RECORDING_ID,
+            "status": "stopped",
+            "recording_mode": "browser",
+        }
+    )
 
     # 插入大字段网络请求（1.2MB response_body）
     large_body = _make_1_2mb_html()
@@ -140,9 +141,7 @@ def tool_db(tmp_path):
         action_id=1,
         recording_id=RECORDING_ID,
         siblings_snapshot={
-            "siblings": json.dumps(
-                [{"tag": "div", "text": "x" * 200_000} for _ in range(5)]
-            ),
+            "siblings": json.dumps([{"tag": "div", "text": "x" * 200_000} for _ in range(5)]),
             "timestamp": 1735689600,
         },
     )
@@ -304,7 +303,10 @@ class TestLocatorAndBlockedReason:
         assert placeholder["locator"]["table"] == "network_requests"
         assert placeholder["locator"]["id_field"] == "request_id"
         assert isinstance(placeholder["locator"]["id_value"], int)
-        assert "read_blocked_reason" not in placeholder or placeholder.get("read_blocked_reason") is None
+        assert (
+            "read_blocked_reason" not in placeholder
+            or placeholder.get("read_blocked_reason") is None
+        )
 
     def test_missing_stable_id_gives_missing_locator_field(self, tool_db):
         """只选 response_body 不选 request_id → missing_locator_field。"""
@@ -343,8 +345,7 @@ class TestLocatorAndBlockedReason:
         result = json.loads(
             _query_data(
                 RECORDING_ID,
-                "SELECT recording_id, COUNT(*) FROM network_requests "
-                "GROUP BY recording_id",
+                "SELECT recording_id, COUNT(*) FROM network_requests " "GROUP BY recording_id",
             )
         )
         # COUNT(*) returns integer, not text → no placeholder
@@ -621,7 +622,6 @@ class TestPagingLifecycle:
             _read_field_chunk,
         )
 
-
         db, repo = tool_db
         # 插入含 emoji 的数据
         unicode_text = "你好世界🌍" * 500  # 2500 code points (5 chars * 500)
@@ -757,9 +757,7 @@ class TestRuntimeConfigChanges:
         # 小字段 response_body = '{"ok":true}' (10 chars)
         # threshold 降到 5 → 应该触发占位
         mock_config = LargeFieldConfig(threshold_chars=5, preview_chars=1000, max_chunk_chars=1000)
-        with patch(
-            "src.business.agents.tools.recording_data_tools.get_unified_config"
-        ) as mock_uc:
+        with patch("src.business.agents.tools.recording_data_tools.get_unified_config") as mock_uc:
             mock_uc.return_value.get_recording_large_field_config.return_value = mock_config
             result = json.loads(
                 _query_data(
@@ -793,9 +791,7 @@ class TestRuntimeConfigChanges:
 
         # 变更配置后续读仍然成功
         mock_config = LargeFieldConfig(threshold_chars=2000, preview_chars=500, max_chunk_chars=500)
-        with patch(
-            "src.business.agents.tools.recording_data_tools.get_unified_config"
-        ) as mock_uc:
+        with patch("src.business.agents.tools.recording_data_tools.get_unified_config") as mock_uc:
             mock_uc.return_value.get_recording_large_field_config.return_value = mock_config
             chunk = json.loads(
                 _read_field_chunk(

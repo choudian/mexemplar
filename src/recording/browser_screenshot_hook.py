@@ -14,17 +14,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Optional
 
-
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class _CaptureTask:
     """截图任务（由 pynput 回调产生，由 _ScreenCapturer 消费）"""
+
     capture_id: str
     moment: Literal["before", "after"]
     source_trigger: str  # "mouse_left" | "enter"
-    event_ts: float      # mousedown/keydown 时间戳
+    event_ts: float  # mousedown/keydown 时间戳
 
 
 @dataclass
@@ -126,6 +126,7 @@ class _CaptureTaskQueue:
 
 class _CaptureIdGenerator:
     """为每次物理输入生成单调递增的 capture_id"""
+
     def __init__(self) -> None:
         self._counter = 0
         self._lock = threading.Lock()
@@ -138,11 +139,13 @@ class _CaptureIdGenerator:
 
 class _QueueWriter:
     """加锁写 JSONL（screenshots queue）—— 委托给 append_jsonl"""
+
     def __init__(self, path: Path, logger_: logging.Logger) -> None:
         self._path = path
         self._lock = threading.Lock()
         self._logger = logger_
         from src.utils.helpers import append_jsonl
+
         self._append = append_jsonl
 
     def write(self, record: dict) -> None:
@@ -154,12 +157,15 @@ class _QueueWriter:
 
 class _AfterScheduler:
     """heapq 调度 after 截图（避免每个 action 起 Timer 线程）"""
+
     def __init__(
         self,
         capture_queue: _CaptureTaskQueue,
     ) -> None:
         self._capture_queue = capture_queue
-        self._heap: list[tuple[float, str, str, float]] = []  # (fire_time, capture_id, source_trigger, event_ts)
+        self._heap: list[tuple[float, str, str, float]] = (
+            []
+        )  # (fire_time, capture_id, source_trigger, event_ts)
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._stop_event = threading.Event()
@@ -169,7 +175,9 @@ class _AfterScheduler:
         self._thread = threading.Thread(target=self._run, daemon=True, name="AfterScheduler")
         self._thread.start()
 
-    def schedule(self, fire_time: float, capture_id: str, source_trigger: str, event_ts: float) -> None:
+    def schedule(
+        self, fire_time: float, capture_id: str, source_trigger: str, event_ts: float
+    ) -> None:
         with self._lock:
             heapq.heappush(self._heap, (fire_time, capture_id, source_trigger, event_ts))
         self._event.set()
@@ -187,7 +195,12 @@ class _AfterScheduler:
                 while self._heap and self._heap[0][0] <= now:
                     _, cid, trigger, original_ts = heapq.heappop(self._heap)
                     self._capture_queue.put(
-                        _CaptureTask(capture_id=cid, moment="after", source_trigger=trigger, event_ts=original_ts)
+                        _CaptureTask(
+                            capture_id=cid,
+                            moment="after",
+                            source_trigger=trigger,
+                            event_ts=original_ts,
+                        )
                     )
 
             if self._heap:
@@ -202,12 +215,15 @@ class _AfterScheduler:
             while self._heap:
                 _, cid, trigger, original_ts = heapq.heappop(self._heap)
                 self._capture_queue.put(
-                    _CaptureTask(capture_id=cid, moment="after", source_trigger=trigger, event_ts=original_ts)
+                    _CaptureTask(
+                        capture_id=cid, moment="after", source_trigger=trigger, event_ts=original_ts
+                    )
                 )
 
 
 class _BrowserHwndLocator:
     """根据 browser_pid 定位 Chromium 前台窗口 HWND"""
+
     def __init__(self, browser_pid: Optional[int], logger_: logging.Logger) -> None:
         self._browser_pid = browser_pid
         self._logger = logger_
@@ -245,9 +261,7 @@ class _BrowserHwndLocator:
             return
 
         user32 = ctypes.windll.user32
-        candidates = {
-            hwnd for hwnd in self._candidate_hwnds if user32.IsWindow(hwnd)
-        }
+        candidates = {hwnd for hwnd in self._candidate_hwnds if user32.IsWindow(hwnd)}
 
         enum_proc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
 
@@ -276,6 +290,7 @@ class _BrowserHwndLocator:
         if now - self._pid_cache_ts > self._cache_ttl:
             try:
                 import psutil
+
                 proc = psutil.Process(self._browser_pid)
                 self._pid_cache = {self._browser_pid} | {
                     c.pid for c in proc.children(recursive=True)
@@ -288,6 +303,7 @@ class _BrowserHwndLocator:
 
 class _ScreenCapturer:
     """工作线程：从队列拉取 CaptureTask → 截图 → 写队列文件"""
+
     def __init__(
         self,
         capture_queue: _CaptureTaskQueue,
@@ -335,7 +351,9 @@ class _ScreenCapturer:
         if self._thread:
             self._thread.join(timeout=flush_timeout)
             if self._thread.is_alive():
-                self._logger.warning(f"ScreenCapturer flush 超时，丢弃 {len(self._pending_tasks)} 个未完成任务")
+                self._logger.warning(
+                    f"ScreenCapturer flush 超时，丢弃 {len(self._pending_tasks)} 个未完成任务"
+                )
         if self._mss:
             try:
                 self._mss.close()
@@ -375,7 +393,9 @@ class _ScreenCapturer:
                     capture_result = self._capture_window(hwnd)
                     if capture_result is not None:
                         img_bytes, captured_at = capture_result
-                        self._frame_buffer.append(_FrameSample(timestamp=captured_at, data=img_bytes))
+                        self._frame_buffer.append(
+                            _FrameSample(timestamp=captured_at, data=img_bytes)
+                        )
             except Exception as exc:
                 self._logger.debug(f"帧采样失败: {exc}")
             time.sleep(self._sampler_interval)
@@ -495,6 +515,7 @@ class _ScreenCapturer:
 
             img = Image.frombytes("RGB", screenshot.size, screenshot.bgra, "raw", "BGRX")
             import io
+
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=self._quality)
             return buf.getvalue(), captured_at
@@ -529,8 +550,12 @@ class BrowserScreenshotHook:
         self._queue_writer = _QueueWriter(self._queue_file, self._logger)
         self._hwnd_locator = _BrowserHwndLocator(self._browser_pid, self._logger)
         self._capturer = _ScreenCapturer(
-            self._capture_queue, self._queue_writer, self._hwnd_locator,
-            self._recording_id, self._jpeg_quality, self._logger,
+            self._capture_queue,
+            self._queue_writer,
+            self._hwnd_locator,
+            self._recording_id,
+            self._jpeg_quality,
+            self._logger,
             self._after_delay,
         )
         self._after_scheduler = _AfterScheduler(
@@ -544,6 +569,7 @@ class BrowserScreenshotHook:
     def start(self) -> bool:
         """启动钩子。返回 True 表示成功，False 表示降级（不影响录制主路径）。"""
         import sys
+
         if sys.platform != "win32":
             self._logger.debug("非 Windows 平台，跳过截图钩子")
             return False
@@ -597,6 +623,7 @@ class BrowserScreenshotHook:
     def _on_mouse_click(self, x, y, button, pressed) -> None:
         """鼠标点击回调（在 pynput 内部线程执行）"""
         from pynput.mouse import Button
+
         del x, y
         if button != Button.left or not pressed:
             return
@@ -605,7 +632,12 @@ class BrowserScreenshotHook:
         event_ts = time.time()
 
         self._capture_queue.put(
-            _CaptureTask(capture_id=capture_id, moment="before", source_trigger="mouse_left", event_ts=event_ts)
+            _CaptureTask(
+                capture_id=capture_id,
+                moment="before",
+                source_trigger="mouse_left",
+                event_ts=event_ts,
+            )
         )
         self._after_scheduler.schedule(
             fire_time=event_ts + self._after_delay,
@@ -624,7 +656,9 @@ class BrowserScreenshotHook:
 
         # keydown → before（pynput 在 press 时调用，不是 release）
         self._capture_queue.put(
-            _CaptureTask(capture_id=capture_id, moment="before", source_trigger="enter", event_ts=event_ts)
+            _CaptureTask(
+                capture_id=capture_id, moment="before", source_trigger="enter", event_ts=event_ts
+            )
         )
         # schedule after
         self._after_scheduler.schedule(

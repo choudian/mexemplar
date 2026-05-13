@@ -8,7 +8,10 @@ import src.data.duckdb_manager as duckdb_module
 from src.business.agents.tools import recording_data_tools
 from src.data.duckdb_manager import DuckDBManager
 from src.data.recording_repository import RecordingRepository
-from src.recording.filtering.filtered_conn import DATA_ACCESS_RESTRICTED_MESSAGE, SQL_PARSE_FAILED_MESSAGE
+from src.recording.filtering.filtered_conn import (
+    DATA_ACCESS_RESTRICTED_MESSAGE,
+    SQL_PARSE_FAILED_MESSAGE,
+)
 
 
 def _create_tool_db(tmp_path):
@@ -67,7 +70,9 @@ def _create_tool_db(tmp_path):
     )
     repo.save_filter_decisions(
         [
-            __import__("src.recording.filtering.decision", fromlist=["FilterDecision"]).FilterDecision(
+            __import__(
+                "src.recording.filtering.decision", fromlist=["FilterDecision"]
+            ).FilterDecision(
                 decision="filter",
                 source="rule",
                 reason="static_asset",
@@ -93,12 +98,16 @@ def test_query_data_rewrites_network_requests_and_masks_errors(tmp_path):
     db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
     try:
         with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
-            data = json.loads(recording_data_tools._query_data("rec", "SELECT * FROM network_requests"))
+            data = json.loads(
+                recording_data_tools._query_data("rec", "SELECT * FROM network_requests")
+            )
             assert data["row_count"] == 1
             assert data["rows"][0]["url"] == "https://visible.example/api"
             assert "filtered" not in data["rows"][0]
 
-            comment_sql = json.loads(recording_data_tools._query_data("rec", "SELECT 1 -- harmless comment"))
+            comment_sql = json.loads(
+                recording_data_tools._query_data("rec", "SELECT 1 -- harmless comment")
+            )
             assert comment_sql["rows"][0]["1"] == 1
 
             semicolon_string = json.loads(
@@ -128,12 +137,22 @@ def test_describe_data_hides_filtering_infrastructure(tmp_path):
             table_names = {table["name"] for table in overview["tables"]}
             assert "filter_decisions" not in table_names
 
-            network_meta = next(table for table in overview["tables"] if table["name"] == "network_requests")
+            network_meta = next(
+                table for table in overview["tables"] if table["name"] == "network_requests"
+            )
             assert network_meta["row_count"] == 1
 
             details = json.loads(recording_data_tools._describe_data("rec", ["network_requests"]))
-            field_names = {field["name"] for field in details["table_details"]["network_requests"]["fields"]}
-            assert {"filtered", "filter_reason", "filtered_at", "is_recommendation", "importance_level"} & field_names == set()
+            field_names = {
+                field["name"] for field in details["table_details"]["network_requests"]["fields"]
+            }
+            assert {
+                "filtered",
+                "filter_reason",
+                "filtered_at",
+                "is_recommendation",
+                "importance_level",
+            } & field_names == set()
     finally:
         _restore_tool_db(db, old_instance, old_auto_recover)
 
@@ -145,7 +164,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
             visible = json.loads(
                 recording_data_tools._execute_code(
                     "rec",
-                    "print(conn.execute(\"SELECT * FROM network_requests\").fetchall())",
+                    'print(conn.execute("SELECT * FROM network_requests").fetchall())',
                 )
             )
             assert "visible.example" in visible["output"]
@@ -160,7 +179,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
                 recording_data_tools._execute_code(
                     "rec",
                     "cur = conn.cursor()\n"
-                    "print(cur.execute(\"SELECT * FROM network_requests\").fetchall())",
+                    'print(cur.execute("SELECT * FROM network_requests").fetchall())',
                 )
             )
             assert "visible.example" in cursor_visible["output"]
@@ -169,7 +188,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
             relation_visible = json.loads(
                 recording_data_tools._execute_code(
                     "rec",
-                    "print(conn.table(\"network_requests\").fetchall())",
+                    'print(conn.table("network_requests").fetchall())',
                 )
             )
             assert "visible.example" in relation_visible["output"]
@@ -179,7 +198,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
                 recording_data_tools._execute_code(
                     "rec",
                     "try:\n"
-                    "    conn.execute(\"SELECT filtered FROM network_requests\").fetchall()\n"
+                    '    conn.execute("SELECT filtered FROM network_requests").fetchall()\n'
                     "except Exception as e:\n"
                     "    print(e)\n",
                 )
@@ -190,7 +209,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
                 recording_data_tools._execute_code(
                     "rec",
                     "try:\n"
-                    "    conn.execute(\"SELECT * FROM filter_decisions\").fetchall()\n"
+                    '    conn.execute("SELECT * FROM filter_decisions").fetchall()\n'
                     "except Exception as e:\n"
                     "    print(e)\n",
                 )
@@ -250,9 +269,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
                 SQL_PARSE_FAILED_MESSAGE,
             ]
 
-            import_error = json.loads(
-                recording_data_tools._execute_code("rec", "import pandas")
-            )
+            import_error = json.loads(recording_data_tools._execute_code("rec", "import pandas"))
             assert "ImportError" in import_error["error"]
             assert "pandas" in import_error["error"]
     finally:
@@ -267,7 +284,9 @@ def test_gatekeepers_keep_business_layer_free_of_hidden_tables_and_sqlglot():
     source = Path("src/business/agents/tools/recording_data_tools.py").read_text(encoding="utf-8")
     assert "sqlglot" not in source
     for blocked in ["pandas", "polars", "pyarrow"]:
-        assert blocked not in source[source.find("_ALLOWED_MODULES"):source.find("def _safe_import")]
+        assert (
+            blocked not in source[source.find("_ALLOWED_MODULES") : source.find("def _safe_import")]
+        )
 
 
 def test_describe_data_masks_duckdb_errors_without_leaking_details(tmp_path):
@@ -275,7 +294,9 @@ def test_describe_data_masks_duckdb_errors_without_leaking_details(tmp_path):
         def fetchone(self, *_args, **_kwargs):
             raise duckdb.BinderException("column xyz does not exist")
 
-    with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=_BrokenDB()):
+    with patch(
+        "src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=_BrokenDB()
+    ):
         payload = json.loads(recording_data_tools._describe_data("rec"))
         assert payload["tables"]
         assert "xyz" not in json.dumps(payload, ensure_ascii=False)
@@ -303,7 +324,11 @@ def test_read_field_chunk_cannot_reveal_filtered_network_request(tmp_path):
             result = json.loads(
                 recording_data_tools._read_field_chunk(
                     "rec",
-                    locator={"table": "network_requests", "id_field": "request_id", "id_value": filtered_rid},
+                    locator={
+                        "table": "network_requests",
+                        "id_field": "request_id",
+                        "id_value": filtered_rid,
+                    },
                     field="response_body",
                     offset=0,
                     length=None,
@@ -331,7 +356,11 @@ def test_read_field_chunk_reads_visible_network_request(tmp_path):
             result = json.loads(
                 recording_data_tools._read_field_chunk(
                     "rec",
-                    locator={"table": "network_requests", "id_field": "request_id", "id_value": visible_rid},
+                    locator={
+                        "table": "network_requests",
+                        "id_field": "request_id",
+                        "id_value": visible_rid,
+                    },
                     field="response_body",
                     offset=0,
                     length=100,

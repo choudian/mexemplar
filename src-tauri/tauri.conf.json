@@ -1,0 +1,35 @@
+{
+  "productName": "Mexemplar",
+  "version": "0.1.0",
+  "identifier": "com.mexamplar.desktop",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../frontend/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Mexemplar",
+        "width": 1280,
+        "height": 800,
+        "decorations": false,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/mexamplar-sidecar"
+    ]
+  }
+}

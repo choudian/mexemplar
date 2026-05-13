@@ -111,9 +111,7 @@ def test_start_rolls_back_system_proxy_when_enable_fails():
                             ImmediateThread,
                         ):
                             with patch.object(recorder, "_shutdown_master") as mock_shutdown:
-                                with patch.object(
-                                    recorder, "_reset_runtime_state"
-                                ) as mock_reset:
+                                with patch.object(recorder, "_reset_runtime_state") as mock_reset:
                                     with patch.object(
                                         recorder._system_proxy,
                                         "enable",

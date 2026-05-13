@@ -112,6 +112,7 @@ class Session(Base):
     workflow_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     agent_type: Mapped[str] = mapped_column(String(20), nullable=False)
     status: Mapped[str] = mapped_column(String(20), default="active")
+    title: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     tool_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -272,7 +273,9 @@ class AppSettings(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
     def __repr__(self) -> str:
-        return f"<AppSettings(setting_key={self.setting_key!r}, setting_type={self.setting_type!r})>"
+        return (
+            f"<AppSettings(setting_key={self.setting_key!r}, setting_type={self.setting_type!r})>"
+        )
 
 
 class SchemaVersion(Base):

@@ -103,7 +103,9 @@ def test_click_event_refreshes_url_before_logging():
         return True
 
     with patch("src.recording.accessibility_recorder.auto", mock_auto):
-        with patch.object(recorder, "_update_url_from_chrome", side_effect=refresh_url) as mock_update:
+        with patch.object(
+            recorder, "_update_url_from_chrome", side_effect=refresh_url
+        ) as mock_update:
             with patch.object(recorder, "_write_event") as mock_write:
                 recorder._on_win_event(EVENT_OBJECT_INVOKED, 1, 0, 0)
 

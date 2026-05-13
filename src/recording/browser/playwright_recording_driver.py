@@ -125,7 +125,10 @@ class PlaywrightRecordingDriver:
         Returns:
             Chromium 主进程 PID，或 None（无法确定时降级）
         """
-        if not self._playwright_extension_bundle_path or not self._playwright_extension_bundle_path.exists():
+        if (
+            not self._playwright_extension_bundle_path
+            or not self._playwright_extension_bundle_path.exists()
+        ):
             self._logger.debug("扩展 bundle path 不存在，无法解析 browser PID")
             return None
 
@@ -189,8 +192,7 @@ class PlaywrightRecordingDriver:
         if not normalized_bundle:
             return False
         return any(
-            normalized_bundle in cls._normalize_path_for_cmdline_match(arg)
-            for arg in cmdline
+            normalized_bundle in cls._normalize_path_for_cmdline_match(arg) for arg in cmdline
         )
 
     async def launch_browser_with_subprocess(
@@ -202,7 +204,9 @@ class PlaywrightRecordingDriver:
         async_playwright_factory: Callable[[], Any],
         prepare_extension_bundle: Callable[[Path], Path],
         validate_extension_path: Callable[[str], str],
-        classify_extension_targets: Callable[[List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]],
+        classify_extension_targets: Callable[
+            [List[Dict[str, Any]]], Dict[str, List[Dict[str, Any]]]
+        ],
         sleep_coro: Callable[[float], Any] = asyncio.sleep,
     ) -> bool:
         if not playwright_available:
@@ -259,9 +263,7 @@ class PlaywrightRecordingDriver:
                                 self._logger.info(f"发现已安装的扩展: {ext_dir.name}")
                                 break
                         except (json.JSONDecodeError, IOError, OSError) as exc:
-                            self._logger.debug(
-                                f"跳过损坏的扩展目录: {ext_dir.name}, 错误: {exc}"
-                            )
+                            self._logger.debug(f"跳过损坏的扩展目录: {ext_dir.name}, 错误: {exc}")
 
                     if not has_our_extension:
                         self._logger.warning(f"持久化目录中未找到扩展，清理重建: {user_data_dir}")
@@ -428,9 +430,7 @@ class PlaywrightRecordingDriver:
 
                         classified_targets = classify_extension_targets(all_targets)
                         extension_targets = classified_targets["extension_targets"]
-                        extension_service_workers = classified_targets[
-                            "extension_service_workers"
-                        ]
+                        extension_service_workers = classified_targets["extension_service_workers"]
 
                         if extension_targets:
                             break
@@ -527,7 +527,10 @@ class PlaywrightRecordingDriver:
         return bundle_path
 
     def cleanup_playwright_extension_bundle(self) -> None:
-        if self._playwright_extension_bundle_path and self._playwright_extension_bundle_path.exists():
+        if (
+            self._playwright_extension_bundle_path
+            and self._playwright_extension_bundle_path.exists()
+        ):
             try:
                 shutil.rmtree(self._playwright_extension_bundle_path)
             except Exception as exc:

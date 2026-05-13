@@ -23,6 +23,7 @@ from .composition_normalizer import (
     VALID_STATUSES,
     build_composition_orm,
     build_member_orms,
+    is_published_available,
     member_to_payload,
     normalize_members,
     to_composition_model,
@@ -155,9 +156,7 @@ class SkillCompositionService:
         composition = self._composition_repo.get_by_name(name)
         if composition is None:
             return None
-        if require_published and (
-            composition.status != "published" or composition.needs_review
-        ):
+        if require_published and not is_published_available(composition):
             return None
         members = self._composition_repo.get_members(composition.composition_id)
         return self._to_composition_model(composition, members)
@@ -311,9 +310,7 @@ class SkillCompositionService:
         self._composition_repo.delete(composition_id)
 
     def mark_needs_review_by_tool(self, tool_id: str) -> List[SkillComposition]:
-        return self._hydrate_compositions(
-            self._composition_repo.mark_needs_review_by_tool(tool_id)
-        )
+        return self._hydrate_compositions(self._composition_repo.mark_needs_review_by_tool(tool_id))
 
     def recommend_execution_order(
         self,

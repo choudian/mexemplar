@@ -25,7 +25,9 @@ def test_enable_sets_registry():
 
         calls = mock_reg.SetValueEx.call_args_list
         assert any(call.args[1] == "ProxyEnable" and call.args[4] == 1 for call in calls)
-        assert any(call.args[1] == "ProxyServer" and call.args[4] == "127.0.0.1:8080" for call in calls)
+        assert any(
+            call.args[1] == "ProxyServer" and call.args[4] == "127.0.0.1:8080" for call in calls
+        )
 
 
 def test_disable_restores_registry():
@@ -40,7 +42,9 @@ def test_disable_restores_registry():
 
         calls = mock_reg.SetValueEx.call_args_list
         assert any(call.args[1] == "ProxyEnable" and call.args[4] == 1 for call in calls)
-        assert any(call.args[1] == "ProxyServer" and call.args[4] == "original:1234" for call in calls)
+        assert any(
+            call.args[1] == "ProxyServer" and call.args[4] == "original:1234" for call in calls
+        )
 
 
 def test_disable_clears_proxy_server_when_original_missing():

@@ -102,9 +102,7 @@ def extract_json_from_response(
     except json.JSONDecodeError as e:
         logger.error(f"{prefix} JSON 解析失败: {e}")
         logger.error(f"{prefix} 响应前500字符: {response_text[:500]}")
-        raise ValueError(
-            f"无法从响应中提取有效 JSON: {e}\n响应内容: {response_text[:200]}"
-        ) from e
+        raise ValueError(f"无法从响应中提取有效 JSON: {e}\n响应内容: {response_text[:200]}") from e
 
 
 def _extract_json_by_bracket_matching(text: str) -> Optional[str]:

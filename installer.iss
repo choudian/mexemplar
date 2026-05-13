@@ -4,7 +4,7 @@
 #define AppName "Mexemplar"
 #define AppVersion "0.1.0"
 #define AppPublisher "gaopan"
-#define AppExeName "Mexemplar.exe"
+#define AppExeName "mexemplar-desktop.exe"
 #define AppPublisherName "gaopan"
 
 [Setup]
@@ -22,7 +22,7 @@ SolidCompression=yes
 WizardStyle=modern
 WizardImageFile=installer_sidebar.bmp
 WizardSmallImageFile=installer_small.bmp
-SetupIconFile=src\ui\resources\icons\app_icon.ico
+SetupIconFile=src-tauri\icons\icon.ico
 UninstallDisplayIcon={app}\{#AppExeName}
 ChangesAssociations=yes
 
@@ -34,7 +34,8 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Name: "quicklaunchicon"; Description: "创建快速启动快捷方式"; GroupDescription: "附加快捷方式:"; Flags: unchecked
 
 [Files]
-Source: "dist\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "src-tauri\target\release\{#AppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "src-tauri\binaries\mexamplar-sidecar-x86_64-pc-windows-msvc.exe"; DestDir: "{app}\binaries"; Flags: ignoreversion
 Source: "src\recording\browser_extension\*"; DestDir: "{app}\browser_extension"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "data\*"; DestDir: "{userappdata}\{#AppName}\data"; Flags: ignoreversion recursesubdirs createallsubdirs
 

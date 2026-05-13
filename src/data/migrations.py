@@ -39,45 +39,6 @@ def get_schema_version(engine) -> int:
             return 0
 
 
-def run_migrations(engine):
-    """运行所有待执行的迁移"""
-    current_version = get_schema_version(engine)
-
-    if current_version < 2:
-        migrate_to_v2(engine)
-        logger.info(f"数据库迁移完成：{current_version} -> 2")
-
-    if current_version < 3:
-        migrate_to_v3(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 2)} -> 3")
-
-    if current_version < 4:
-        migrate_to_v4(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 3)} -> 4")
-
-    if current_version < 5:
-        migrate_to_v5(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 4)} -> 5")
-
-    if current_version < 6:
-        migrate_to_v6(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 5)} -> 6")
-
-    if current_version < 7:
-        migrate_to_v7(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 6)} -> 7")
-
-    if current_version < 8:
-        migrate_to_v8(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 7)} -> 8")
-
-    if current_version < 9:
-        migrate_to_v9(engine)
-        logger.info(f"数据库迁移完成：{max(current_version, 8)} -> 9")
-
-    logger.info(f"数据库已是最新版本：{get_schema_version(engine)}")
-
-
 def migrate_to_v2(engine):
     """迁移到版本 2：添加意图和试用相关表"""
     with engine.connect() as conn:
@@ -175,7 +136,10 @@ def migrate_to_v2(engine):
                 ("idx_pending_tools_status", "pending_tools(status)"),
                 ("idx_tool_trials_pending_tool_id", "tool_trials(pending_tool_id)"),
                 ("idx_tool_trials_status", "tool_trials(status)"),
-                ("idx_trial_data_templates_pending_tool_id", "trial_data_templates(pending_tool_id)"),
+                (
+                    "idx_trial_data_templates_pending_tool_id",
+                    "trial_data_templates(pending_tool_id)",
+                ),
             ]:
                 conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}"))
 
@@ -266,7 +230,9 @@ def migrate_to_v4(engine):
                     pass  # 列已存在，忽略
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 4})
             conn.commit()
-            logger.info("数据库迁移到版本 4 完成：tools 表新增 workflow_id、trial_success_count、status")
+            logger.info(
+                "数据库迁移到版本 4 完成：tools 表新增 workflow_id、trial_success_count、status"
+            )
         except Exception as e:
             conn.rollback()
             logger.error(f"迁移到版本 4 失败: {e}")
@@ -423,12 +389,16 @@ def migrate_to_v6(engine):
                     resolved_at DATETIME
                 )
             """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_tfr_status ON teaching_failure_records (status)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_tfr_updated_at ON teaching_failure_records (updated_at DESC)"
-            ))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_tfr_status ON teaching_failure_records (status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_tfr_updated_at ON teaching_failure_records (updated_at DESC)"
+                )
+            )
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 6})
             conn.commit()
             logger.info("数据库迁移到版本 6 完成：新增 teaching_failure_records 表")
@@ -454,7 +424,9 @@ def migrate_to_v7(engine):
                     pass  # 列已存在，忽略
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 7})
             conn.commit()
-            logger.info("数据库迁移到版本 7 完成：tools 表补齐 dependencies、workflow_id、trial_success_count、status 列")
+            logger.info(
+                "数据库迁移到版本 7 完成：tools 表补齐 dependencies、workflow_id、trial_success_count、status 列"
+            )
         except Exception as e:
             conn.rollback()
             logger.error(f"迁移到版本 7 失败: {e}")
@@ -490,26 +462,36 @@ def migrate_to_v8(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             """))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_composition_tool "
-                "ON skill_composition_members (composition_id, tool_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_skill_compositions_status "
-                "ON skill_compositions (status)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_skill_compositions_updated_at "
-                "ON skill_compositions (updated_at DESC)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_scm_composition_id "
-                "ON skill_composition_members (composition_id)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_scm_tool_id "
-                "ON skill_composition_members (tool_id)"
-            ))
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_composition_tool "
+                    "ON skill_composition_members (composition_id, tool_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_skill_compositions_status "
+                    "ON skill_compositions (status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_skill_compositions_updated_at "
+                    "ON skill_compositions (updated_at DESC)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_scm_composition_id "
+                    "ON skill_composition_members (composition_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_scm_tool_id "
+                    "ON skill_composition_members (tool_id)"
+                )
+            )
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 8})
             conn.commit()
             logger.info("数据库迁移到版本 8 完成：新增技能组合表与成员关系表")
@@ -540,13 +522,11 @@ def migrate_to_v9(engine):
                     continue
 
                 conn.execute(
-                    text(
-                        """
+                    text("""
                         UPDATE skill_compositions
                         SET updated_at = :updated_at
                         WHERE composition_id = :composition_id
-                        """
-                    ),
+                        """),
                     {
                         "composition_id": row["composition_id"],
                         "updated_at": normalized,
@@ -564,3 +544,56 @@ def migrate_to_v9(engine):
             conn.rollback()
             logger.error(f"迁移到版本 9 失败: {e}")
             raise
+
+
+def migrate_to_v10(engine):
+    """迁移到版本 10：sessions 表新增用户可编辑标题。"""
+    with engine.connect() as conn:
+        try:
+            table_exists = conn.execute(text("""
+                    SELECT 1
+                    FROM sqlite_master
+                    WHERE type = 'table' AND name = 'sessions'
+                    """)).fetchone()
+            if table_exists is None:
+                conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 10})
+                conn.commit()
+                logger.info("数据库迁移到版本 10 完成：sessions 表不存在，跳过 title")
+                return
+
+            result = conn.execute(text("PRAGMA table_info(sessions)"))
+            existing_columns = {row[1] for row in result.fetchall()}
+            if "title" not in existing_columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN title TEXT"))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 10})
+            conn.commit()
+            logger.info("数据库迁移到版本 10 完成：sessions 表新增 title")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 10 失败: {e}")
+            raise
+
+
+_MIGRATIONS = [
+    (2, migrate_to_v2),
+    (3, migrate_to_v3),
+    (4, migrate_to_v4),
+    (5, migrate_to_v5),
+    (6, migrate_to_v6),
+    (7, migrate_to_v7),
+    (8, migrate_to_v8),
+    (9, migrate_to_v9),
+    (10, migrate_to_v10),
+]
+
+
+def run_migrations(engine):
+    """运行所有待执行的迁移"""
+    current_version = get_schema_version(engine)
+
+    for version, migrate_fn in _MIGRATIONS:
+        if current_version < version:
+            migrate_fn(engine)
+            current_version = version
+
+    logger.info(f"数据库已是最新版本：{get_schema_version(engine)}")

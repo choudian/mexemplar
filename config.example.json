@@ -107,6 +107,7 @@
   },
   "ui": {
     "theme": "light",
+    "density": "comfy",
     "language": "zh_CN",
     "window_width": 1200,
     "window_height": 800

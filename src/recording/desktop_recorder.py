@@ -47,6 +47,7 @@ class DesktopRecorderHealth:
     action_type_counts: dict[str, int] = field(default_factory=dict)
     frame_total: int = 0
     duration_seconds: float = 0.0
+    degraded_reasons: list[str] = field(default_factory=list)
 
     @property
     def action_total(self) -> int:
@@ -56,7 +57,9 @@ class DesktopRecorderHealth:
         return asdict(self)
 
     @classmethod
-    def from_value(cls, value: dict[str, Any] | "DesktopRecorderHealth" | None) -> "DesktopRecorderHealth":
+    def from_value(
+        cls, value: dict[str, Any] | "DesktopRecorderHealth" | None
+    ) -> "DesktopRecorderHealth":
         if isinstance(value, cls):
             return value
         if isinstance(value, dict):
@@ -151,15 +154,28 @@ class DesktopRecorder:
         except RecorderStartFailed:
             ActiveDesktopRecorderRegistry.stop(self.recording_id)
             self._stop_optional_components()
+            self._mark_start_failed("hook_register_failed")
             desktop_recorder_start_failed.send(
                 self,
                 recording_id=self.recording_id,
                 reason="hook_register_failed",
             )
             raise
-        except Exception:
+        except Exception as exc:
             ActiveDesktopRecorderRegistry.stop(self.recording_id)
             self._stop_optional_components()
+            logger.error(
+                "[DesktopRecorder] 启动失败: recording_id=%s, error=%s",
+                self.recording_id,
+                exc,
+                exc_info=True,
+            )
+            self._mark_start_failed("start_failed")
+            desktop_recorder_start_failed.send(
+                self,
+                recording_id=self.recording_id,
+                reason="start_failed",
+            )
             raise
         self._started_at = time.time()
         self._running = True
@@ -228,11 +244,12 @@ class DesktopRecorder:
             )
             self._frame_queue.append((payload, action_id, timestamp, pre_action_frames))
             self._ensure_frame_writer()
-        if self.get_action_count() % 5 == 0:
+        action_count = self.get_action_count()
+        if action_count % 5 == 0:
             desktop_action_count_changed.send(
                 self,
                 recording_id=self.recording_id,
-                action_count=self.get_action_count(),
+                action_count=action_count,
             )
         return action_id
 
@@ -409,8 +426,17 @@ class DesktopRecorder:
         if reason in self._emitted_degraded_reasons:
             return
         self._emitted_degraded_reasons.add(reason)
+        self.health.degraded_reasons.append(reason)
         desktop_recording_degraded.send(
             self,
             recording_id=self.recording_id,
             reason=reason,
         )
+
+    def _mark_start_failed(self, reason: str) -> None:
+        self._emit_degraded(reason)
+        self.repository.update_desktop_recording_health_stats(
+            self.recording_id,
+            self.health.to_dict(),
+        )
+        self.repository.update_desktop_recording_status(self.recording_id, "abandoned")

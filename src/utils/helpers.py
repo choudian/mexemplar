@@ -12,8 +12,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from typing import Optional
 
-
-_TEMPLATE_RE = re.compile(r'\{(\w+)\}')
+_TEMPLATE_RE = re.compile(r"\{(\w+)\}")
 
 
 def safe_format_template(template: str, **kwargs: str) -> str:
@@ -32,9 +31,11 @@ def safe_format_template(template: str, **kwargs: str) -> str:
     Returns:
         替换后的字符串
     """
+
     def replacer(match):
         key = match.group(1)
         return str(kwargs[key]) if key in kwargs else match.group(0)
+
     return _TEMPLATE_RE.sub(replacer, template)
 
 
@@ -64,3 +65,14 @@ def append_jsonl(filepath: Path, record: dict, lock: Optional[threading.Lock] = 
     with ctx:
         with open(filepath, "a", encoding="utf-8") as f:
             f.write(line)
+
+
+_VALID_THINKING_LEVELS = {"off", "low", "medium", "high"}
+
+
+def normalize_thinking_level(value, *, fallback: str = "off") -> str:
+    """将 thinking_level 归一化为 off | low | medium | high，非法值回退。"""
+    normalized = str(value).strip().lower() if value is not None else fallback
+    if normalized not in _VALID_THINKING_LEVELS:
+        return fallback
+    return normalized

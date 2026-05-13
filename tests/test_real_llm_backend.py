@@ -5,38 +5,34 @@
   pytest tests/test_real_llm_backend.py -xvs
 
 标记:
-  pytest.mark.real_llm — 需要 config.json 中有有效的 API Key
+  pytest.mark.real_llm — 需要通过统一配置/keyring 配置有效 API Key
 """
 
-
 import json
-from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
 
 from src.business.ai.llm_client import LLMResponse, LangChainLLMClient
+from src.data.unified_config import get_unified_config
 
 pytestmark = pytest.mark.real_llm
 
 
 def _read_llm_config() -> dict:
-    """从项目根目录 config.json 读取 LLM 配置"""
-    config_path = Path(__file__).resolve().parent.parent / "config.json"
-    if not config_path.exists():
-        pytest.skip("缺少 config.json，跳过真实 LLM 后端测试")
-    with open(config_path, encoding="utf-8") as f:
-        cfg = json.load(f)
-    ai = cfg.get("ai", {})
-    if not ai.get("api_key"):
-        pytest.skip("config.json 中没有 ai.api_key")
+    """从统一配置入口读取真实 LLM 配置。"""
+    config = get_unified_config()
+    api_key = config.get_ai_api_key()
+    if not api_key:
+        pytest.skip("统一配置/keyring 中没有 AI API Key")
     return {
-        "provider": ai.get("provider", "openai"),
-        "model": ai.get("model", "gpt-4"),
-        "api_key": ai["api_key"],
-        "base_url": ai.get("base_url"),
-        "temperature": ai.get("temperature", 0.7),
+        "provider": config.get_ai_provider(),
+        "model": config.get_ai_model(),
+        "api_key": api_key,
+        "base_url": config.get_ai_base_url(),
+        "temperature": config.get("ai.temperature", 0.7),
         "max_tokens": 256,
+        "timeout": config.get_ai_request_timeout(),
     }
 
 
@@ -150,7 +146,8 @@ def test_agent_loop_with_real_llm(real_llm):
     )
 
     print(f"\n[AgentLoop 结果] type={result.result_type.value}, question={result.question}")
-    assert result.result_type.value in ("completed", "needs_user_input"), (
-        f"意外的结果类型: {result.result_type.value}, error={result.error}"
-    )
+    assert result.result_type.value in (
+        "completed",
+        "needs_user_input",
+    ), f"意外的结果类型: {result.result_type.value}, error={result.error}"
     assert result.error is None, f"AgentLoop 出错: {result.error}"

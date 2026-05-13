@@ -8,7 +8,12 @@ from src.business.agents.config import ASSISTANT_CONFIG, ResultType
 from src.data.models import SkillComposition, SkillCompositionMember, sort_composition_members
 from src.data.models_sqlite import Session
 
-from .composition_normalizer import VALID_MODES, to_composition_model, to_tool_model
+from .composition_normalizer import (
+    VALID_MODES,
+    is_published_available,
+    to_composition_model,
+    to_tool_model,
+)
 from .trial_prompt_builder import (
     build_trial_system_prompt,
     build_trial_user_input,
@@ -135,9 +140,7 @@ class TrialRunner:
         composition = self._composition_repo.get_by_id(composition_id)
         if composition is None:
             return None
-        if require_published and (
-            composition.status != "published" or composition.needs_review
-        ):
+        if require_published and not is_published_available(composition):
             return None
         if require_assistant_enabled and not composition.assistant_enabled:
             return None
@@ -255,22 +258,22 @@ class TrialRunner:
         session: Session,
     ) -> Optional[SkillComposition]:
         live_composition = (
-            self.get_execution_snapshot(session.workflow_id, require_published=False, require_assistant_enabled=False)
-            if session.workflow_id else None
+            self.get_execution_snapshot(
+                session.workflow_id, require_published=False, require_assistant_enabled=False
+            )
+            if session.workflow_id
+            else None
         )
         snapshot = parse_trial_session_snapshot(session.tool_ids)
         snapshot_members = snapshot.get("members") or []
         member_tool_ids = snapshot.get("member_tool_ids") or (
-            [member.tool_id for member in live_composition.members]
-            if live_composition
-            else []
+            [member.tool_id for member in live_composition.members] if live_composition else []
         )
         if not member_tool_ids and live_composition is None:
             return None
 
         mode = str(
-            snapshot.get("mode")
-            or (live_composition.mode if live_composition else "range")
+            snapshot.get("mode") or (live_composition.mode if live_composition else "range")
         ).strip()
         if mode not in VALID_MODES:
             mode = live_composition.mode if live_composition else "range"
@@ -279,13 +282,8 @@ class TrialRunner:
             tool.tool_id: to_tool_model(tool)
             for tool in self._tool_repo.get_by_ids(member_tool_ids)
         }
-        composition_id = (
-            snapshot.get("composition_id")
-            or (
-                live_composition.composition_id
-                if live_composition
-                else session.workflow_id or ""
-            )
+        composition_id = snapshot.get("composition_id") or (
+            live_composition.composition_id if live_composition else session.workflow_id or ""
         )
         if snapshot_members:
             member_models = []
@@ -303,12 +301,14 @@ class TrialRunner:
                             index,
                         ),
                         execution_order=(
-                            coerce_snapshot_int(execution_order, index)
-                            if mode == "ordered"
-                            else None
-                        )
-                        if execution_order is not None
-                        else (index if mode == "ordered" else None),
+                            (
+                                coerce_snapshot_int(execution_order, index)
+                                if mode == "ordered"
+                                else None
+                            )
+                            if execution_order is not None
+                            else (index if mode == "ordered" else None)
+                        ),
                         tool=deserialize_trial_session_tool(payload.get("tool"))
                         or live_tool_map.get(tool_id),
                     )
@@ -332,11 +332,7 @@ class TrialRunner:
             composition_id=composition_id,
             composition_name=(
                 snapshot.get("composition_name")
-                or (
-                    live_composition.composition_name
-                    if live_composition
-                    else "技能组合试用"
-                )
+                or (live_composition.composition_name if live_composition else "技能组合试用")
             ),
             description=(
                 snapshot["description"]
@@ -345,11 +341,7 @@ class TrialRunner:
             ),
             applicability=(
                 snapshot.get("applicability")
-                or (
-                    live_composition.applicability
-                    if live_composition
-                    else "试用技能组合"
-                )
+                or (live_composition.applicability if live_composition else "试用技能组合")
             ),
             mode=mode,
             status=snapshot.get("status")

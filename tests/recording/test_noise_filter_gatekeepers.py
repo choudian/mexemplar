@@ -49,9 +49,9 @@ def test_tldextract_imports_are_limited_to_filtering_package():
 
 
 def test_persister_and_recovery_both_wire_shared_filter_hook():
-    persister_source = Path(
-        "src/recording/browser/duckdb_recording_persister.py"
-    ).read_text(encoding="utf-8")
+    persister_source = Path("src/recording/browser/duckdb_recording_persister.py").read_text(
+        encoding="utf-8"
+    )
     recovery_source = Path("src/data/recording_recovery.py").read_text(encoding="utf-8")
 
     assert "persist_filtered_network_requests" in persister_source

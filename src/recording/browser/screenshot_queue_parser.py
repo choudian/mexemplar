@@ -10,7 +10,6 @@ After recording stops, the persister reads these queue files via
 :func:`batch_insert_screenshots`.
 """
 
-
 import base64
 import json
 import logging

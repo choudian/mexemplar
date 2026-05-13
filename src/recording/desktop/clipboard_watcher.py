@@ -16,12 +16,14 @@ def _lazy_import_clipboard_deps() -> None:
     if _win32clipboard is None:
         try:
             import win32clipboard as _wcb
+
             _win32clipboard = _wcb
         except Exception:
             pass
     if _ImageGrab is None:
         try:
             from PIL import ImageGrab as _ig
+
             _ImageGrab = _ig
         except Exception:
             pass

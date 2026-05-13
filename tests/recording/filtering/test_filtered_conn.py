@@ -11,8 +11,7 @@ from src.recording.filtering.filtered_conn import (
 
 def _build_conn():
     conn = duckdb.connect(":memory:")
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE network_requests (
             request_id INTEGER,
             action_id INTEGER,
@@ -33,16 +32,13 @@ def _build_conn():
             is_recommendation BOOLEAN,
             importance_level VARCHAR
         )
-        """
-    )
+        """)
     conn.execute("CREATE TABLE filter_decisions (decision_id INTEGER)")
-    conn.execute(
-        """
+    conn.execute("""
         INSERT INTO network_requests VALUES
             (1, 1, 'rec', 'https://visible.example/api', 'GET', 'xhr', '{}', NULL, 200, '{}', 'ok', 1.0, current_timestamp, FALSE, NULL, NULL, FALSE, 'unknown'),
             (2, 1, 'rec', 'https://hidden.example/api', 'GET', 'xhr', '{}', NULL, 200, '{}', 'hidden', 1.0, current_timestamp, TRUE, '{}', current_timestamp, FALSE, 'unknown')
-        """
-    )
+        """)
     return FilteredDuckDBConnection(conn)
 
 
@@ -106,10 +102,16 @@ def test_connection_supports_sql_cursor_and_relation_paths():
             conn.sql("SELECT * FROM network_requests").fetchall()[0][12],
         )
     ]
-    assert conn.query("SELECT * FROM network_requests").fetchall()[0][3] == "https://visible.example/api"
+    assert (
+        conn.query("SELECT * FROM network_requests").fetchall()[0][3]
+        == "https://visible.example/api"
+    )
     assert from_query_relation.fetchall()
     cur = conn.cursor()
-    assert cur.execute("SELECT * FROM network_requests").fetchall()[0][3] == "https://visible.example/api"
+    assert (
+        cur.execute("SELECT * FROM network_requests").fetchall()[0][3]
+        == "https://visible.example/api"
+    )
     assert table_relation.fetchall()[0][3] == "https://visible.example/api"
     assert isinstance(filtered_relation, FilteredDuckDBRelation)
     assert isinstance(from_query_relation, FilteredDuckDBRelation)

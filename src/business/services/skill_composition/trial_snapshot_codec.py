@@ -8,9 +8,7 @@ from src.data.models import SkillComposition, Tool, serialize_tool
 
 
 def normalize_generated_text(content: str) -> str:
-    cleaned = " ".join(
-        line.strip() for line in (content or "").splitlines() if line.strip()
-    )
+    cleaned = " ".join(line.strip() for line in (content or "").splitlines() if line.strip())
     cleaned = re.sub(r"^适用场景[:：]\s*", "", cleaned)
     return cleaned.strip().strip("\"'“”")
 
@@ -115,9 +113,7 @@ def parse_trial_session_snapshot(raw_tool_ids: Optional[str]) -> dict:
 
     if isinstance(parsed, list):
         return {
-            "member_tool_ids": [
-                str(tool_id).strip() for tool_id in parsed if str(tool_id).strip()
-            ]
+            "member_tool_ids": [str(tool_id).strip() for tool_id in parsed if str(tool_id).strip()]
         }
 
     if isinstance(parsed, dict):

@@ -6,17 +6,14 @@ from src.recording.filtering.sql_rewriter import SqlRewriteError, rewrite
 
 def _build_db():
     conn = duckdb.connect(":memory:")
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE actions (
             action_id INTEGER,
             recording_id VARCHAR,
             sequence_number INTEGER
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         CREATE TABLE network_requests (
             request_id INTEGER,
             action_id INTEGER,
@@ -37,22 +34,17 @@ def _build_db():
             is_recommendation BOOLEAN,
             importance_level VARCHAR
         )
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         INSERT INTO actions VALUES
             (1, 'rec', 1),
             (2, 'rec', 2)
-        """
-    )
-    conn.execute(
-        """
+        """)
+    conn.execute("""
         INSERT INTO network_requests VALUES
             (1, 1, 'rec', 'https://visible.example/api', 'GET', 'xhr', '{}', NULL, 200, '{}', 'ok', 1.0, current_timestamp, FALSE, NULL, NULL, FALSE, 'unknown'),
             (2, 2, 'rec', 'https://hidden.example/api', 'GET', 'xhr', '{}', NULL, 200, '{}', 'hidden', 1.0, current_timestamp, TRUE, '{}', current_timestamp, FALSE, 'unknown')
-        """
-    )
+        """)
     return conn
 
 
@@ -131,16 +123,14 @@ def test_rewrite_handles_alias_subquery_union_and_recursive_cte():
         "UNION ALL SELECT url FROM network_requests WHERE response_status = 200"
     )
     union_rows = conn.execute(union_sql).fetchall()
-    recursive_sql = rewrite(
-        """
+    recursive_sql = rewrite("""
         WITH RECURSIVE seen AS (
             SELECT request_id, url FROM network_requests
             UNION ALL
             SELECT request_id, url FROM seen WHERE request_id < 0
         )
         SELECT * FROM seen
-        """
-    )
+        """)
     recursive_rows = conn.execute(recursive_sql).fetchall()
 
     assert alias_rows == [("https://visible.example/api",)]
@@ -157,36 +147,24 @@ def test_rewrite_handles_alias_subquery_union_and_recursive_cte():
 def test_rewrite_preserves_join_semantics_for_left_right_and_full_join():
     conn = _build_db()
 
-    left_rows = conn.execute(
-        rewrite(
-            """
+    left_rows = conn.execute(rewrite("""
             SELECT actions.action_id, network_requests.url
             FROM actions LEFT JOIN network_requests
             ON actions.action_id = network_requests.action_id
             ORDER BY actions.action_id
-            """
-        )
-    ).fetchall()
-    right_rows = conn.execute(
-        rewrite(
-            """
+            """)).fetchall()
+    right_rows = conn.execute(rewrite("""
             SELECT actions.action_id, network_requests.url
             FROM actions RIGHT JOIN network_requests
             ON actions.action_id = network_requests.action_id
             ORDER BY actions.action_id, network_requests.url
-            """
-        )
-    ).fetchall()
-    full_rows = conn.execute(
-        rewrite(
-            """
+            """)).fetchall()
+    full_rows = conn.execute(rewrite("""
             SELECT actions.action_id, network_requests.url
             FROM actions FULL JOIN network_requests
             ON actions.action_id = network_requests.action_id
             ORDER BY actions.action_id, network_requests.url
-            """
-        )
-    ).fetchall()
+            """)).fetchall()
 
     assert left_rows == [(1, "https://visible.example/api"), (2, None)]
     assert right_rows == [(1, "https://visible.example/api")]
@@ -222,9 +200,7 @@ def test_rewrite_allows_strings_and_comments_without_false_positive():
 
 
 def test_rewrite_preserves_parameter_placeholders():
-    rewritten = rewrite(
-        "SELECT * FROM network_requests WHERE method = ? AND response_status = ?"
-    )
+    rewritten = rewrite("SELECT * FROM network_requests WHERE method = ? AND response_status = ?")
     assert rewritten.count("?") == 2
     assert rewritten.find("?") < rewritten.rfind("?")
 

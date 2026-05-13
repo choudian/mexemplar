@@ -15,7 +15,6 @@ from unittest.mock import MagicMock
 from src.business.ai.llm_client import LLMResponse
 from src.data.unified_config import UnifiedConfigManager
 
-
 # =============================================================================
 # MockLLMClient
 # =============================================================================
@@ -109,6 +108,7 @@ def events_collector():
     def make_handler(name: str):
         def handler(sender, **kwargs):
             captured.setdefault(name, []).append(kwargs)
+
         return handler
 
     # 必须保持强引用，否则 blinker 弱引用会被 GC，导致事件监听失效

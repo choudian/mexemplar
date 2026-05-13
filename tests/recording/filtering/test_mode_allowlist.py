@@ -1,6 +1,9 @@
 import pytest
 
-from src.recording.filtering.sql_rewriter import SqlRewriteError, validate_table_against_mode_allowlist
+from src.recording.filtering.sql_rewriter import (
+    SqlRewriteError,
+    validate_table_against_mode_allowlist,
+)
 
 
 def test_mode_allowlist_rejects_cross_mode_tables():

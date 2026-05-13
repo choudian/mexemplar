@@ -1,9 +1,5 @@
-import os
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
 import json
-import sys
-from types import MethodType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,63 +22,6 @@ from src.data.repositories import (
     SkillCompositionRepository,
     ToolRepository,
 )
-from src.ui.skill_composition_dialogs import (
-    ApplicabilityGenerationThread,
-    COMPOSITION_MODE_CHEVRON_DATA_URI,
-    RecommendationGenerationThread,
-    SkillCompositionEditDialog,
-)
-from src.ui.tools_management_ui import ToolsManagementUI
-
-
-@pytest.fixture(scope="module")
-def qt_app():
-    try:
-        from PyQt6.QtWidgets import QApplication
-
-        app = QApplication.instance() or QApplication(sys.argv)
-    except Exception:
-        pytest.skip("PyQt6 不可用或无法创建 QApplication")
-    return app
-
-
-class _DummySelectedListItem:
-    def __init__(self, tool_id: str, checked):
-        self._tool_id = tool_id
-        self._checked = checked
-
-    def data(self, _role):
-        return self._tool_id
-
-    def checkState(self):
-        return self._checked
-
-
-class _DummySelectedList:
-    def __init__(self, items: list[tuple[str, object]]):
-        self._items = [_DummySelectedListItem(tool_id, checked) for tool_id, checked in items]
-
-    def count(self) -> int:
-        return len(self._items)
-
-    def item(self, row: int):
-        return self._items[row]
-
-
-class _DummyLineInput:
-    def __init__(self, value: str):
-        self._value = value
-
-    def text(self) -> str:
-        return self._value
-
-
-class _DummyTextInput:
-    def __init__(self, value: str):
-        self._value = value
-
-    def toPlainText(self) -> str:
-        return self._value
 
 
 class _FakeConfig:
@@ -97,6 +36,18 @@ class _FakeConfig:
 
     def get_ai_base_url(self):
         return None
+
+    def get_ai_thinking_level(self):
+        return None
+
+    def get_ai_request_timeout(self) -> int:
+        return 60
+
+    def get_ai_retry_max_retries(self) -> int:
+        return 0
+
+    def get_ai_retry_delay(self) -> float:
+        return 0.0
 
 
 class _DummyLLMClient:
@@ -234,32 +185,6 @@ def test_execution_snapshot_hides_needs_review_composition_when_published_is_req
         )
         is not None
     )
-
-
-def test_sync_selected_order_from_list_updates_selected_order_map():
-    from PyQt6.QtCore import Qt
-
-    dialog = SimpleNamespace(
-        selected_tool_ids=["tool_a", "tool_b", "tool_c"],
-        selection_order_map={"tool_a": 1, "tool_b": 2, "tool_c": 3},
-        available_list=_DummySelectedList(
-            [
-                ("tool_c", Qt.CheckState.Checked),
-                ("tool_a", Qt.CheckState.Checked),
-                ("tool_x", Qt.CheckState.Unchecked),
-                ("tool_b", Qt.CheckState.Checked),
-            ]
-        ),
-    )
-    dialog._sync_selection_order_map = MethodType(
-        SkillCompositionEditDialog._sync_selection_order_map,
-        dialog,
-    )
-
-    SkillCompositionEditDialog._sync_selected_order_from_list(dialog)
-
-    assert dialog.selected_tool_ids == ["tool_c", "tool_a", "tool_b"]
-    assert dialog.selection_order_map == {"tool_c": 1, "tool_a": 2, "tool_b": 3}
 
 
 def test_large_composition_keeps_all_members_activated():
@@ -451,469 +376,13 @@ def test_save_tool_marks_referencing_compositions_stale_when_status_changes_to_p
     assert composition_short_id not in {tool.name for tool in manager.get_activated_tools()}
 
 
-def test_dialog_payload_does_not_include_business_defaults():
-    """UI payload 不再包含 assistant_enabled / recommend_order，由 Service 层提供默认值。"""
-    dialog = SimpleNamespace(
-        selected_tool_ids=["tool_a", "tool_b"],
-        selection_order_map={"tool_a": 1, "tool_b": 2},
-        _current_mode=lambda: "ordered",
-        name_input=_DummyLineInput("组合名称"),
-        description_input=_DummyTextInput("组合描述"),
-        applicability_input=_DummyTextInput("组合适用场景"),
-    )
-
-    payload = SkillCompositionEditDialog.get_payload(dialog)
-
-    assert "assistant_enabled" not in payload
-    assert "recommend_order" not in payload
-    assert payload["members"] == [
-        {"tool_id": "tool_a", "selected_order": 1, "execution_order": 1},
-        {"tool_id": "tool_b", "selected_order": 2, "execution_order": 2},
-    ]
-
-
 def test_service_create_composition_defaults_assistant_enabled_and_recommend_order():
     """Service 层 create_composition 的 assistant_enabled / recommend_order 有正确默认值。"""
     import inspect
+
     sig = inspect.signature(SkillCompositionService.create_composition)
     assert sig.parameters["assistant_enabled"].default is True
     assert sig.parameters["recommend_order"].default is False
-
-
-def test_dialog_tab_focus_and_applicability_overlay(qt_app, monkeypatch):
-    from PyQt6.QtCore import QPoint, Qt, QRect
-    from PyQt6.QtTest import QTest
-    from PyQt6.QtWidgets import QAbstractItemView
-
-    monkeypatch.setattr(
-        SkillCompositionService,
-        "get_published_tool_choices",
-        lambda self: [
-            Tool(tool_id="tool_a", tool_name="技能A", description="A", status="published"),
-            Tool(tool_id="tool_b", tool_name="技能B", description="B", status="published"),
-            Tool(tool_id="tool_c", tool_name="技能C", description="C", status="published"),
-        ],
-    )
-
-    dialog = SkillCompositionEditDialog()
-    dialog.show()
-    qt_app.processEvents()
-
-    try:
-        assert dialog.description_input.tabChangesFocus() is True
-        assert dialog.applicability_input.tabChangesFocus() is True
-        assert dialog.mode_combo.objectName() == "composition_mode_combo"
-        assert COMPOSITION_MODE_CHEVRON_DATA_URI in dialog.styleSheet()
-
-        dialog.description_input.setFocus()
-        qt_app.processEvents()
-        assert dialog.description_input.hasFocus() is True
-
-        dialog.selected_tool_ids = ["tool_a", "tool_b"]
-        dialog.selection_order_map = {"tool_a": 1, "tool_b": 2}
-        dialog._refresh_selected_tools()
-        qt_app.processEvents()
-
-        assert not hasattr(dialog, "selected_title_label")
-        assert dialog.available_list.dragDropMode() == QAbstractItemView.DragDropMode.NoDragDrop
-        assert dialog.recommend_now_button.parentWidget() is dialog.available_list
-        assert dialog.recommend_now_button.isVisible() is False
-        assert dialog.available_list.viewportMargins().top() == 0
-        assert dialog.available_list.count() == 3
-        assert dialog.available_list.item(0).text() == "技能A"
-        assert dialog.available_list.item(1).text() == "技能B"
-        assert dialog.available_list.item(2).text() == "技能C"
-        assert "选择序" not in dialog.available_list.item(0).text()
-
-        ordered_index = dialog.mode_combo.findData("ordered")
-        dialog.mode_combo.setCurrentIndex(ordered_index)
-        qt_app.processEvents()
-
-        assert dialog.available_list.dragDropMode() == QAbstractItemView.DragDropMode.InternalMove
-        assert dialog.recommend_now_button.isVisible() is True
-        assert dialog.available_list.viewportMargins().top() == 0
-        assert dialog.available_list.item(0).text() == "1. 技能A"
-        assert dialog.available_list.item(1).text() == "2. 技能B"
-        assert dialog.available_list.item(2).text() == "技能C"
-        button_rect = dialog.recommend_now_button.geometry()
-        assert button_rect.top() == 8
-        assert button_rect.right() <= dialog.available_list.rect().right() - 8
-
-        dialog._set_recommend_button_position(QPoint(10_000, 10_000))
-        qt_app.processEvents()
-        left, top, width, height = dialog._recommend_button_bounds()
-        allowed_rect = QRect(left, top, width, height)
-        button_rect = dialog.recommend_now_button.geometry()
-        assert allowed_rect.contains(button_rect.topLeft())
-        assert allowed_rect.contains(button_rect.bottomRight())
-
-        dialog._set_recommend_button_position(QPoint(-10_000, -10_000))
-        qt_app.processEvents()
-        button_rect = dialog.recommend_now_button.geometry()
-        assert allowed_rect.contains(button_rect.topLeft())
-        assert allowed_rect.contains(button_rect.bottomRight())
-
-        QTest.keyClick(dialog.description_input, Qt.Key.Key_Tab)
-        qt_app.processEvents()
-        assert dialog.applicability_input.hasFocus() is True
-
-        floating_field = dialog.generate_applicability_button.parentWidget().parentWidget()
-        floating_field._set_button_position(QPoint(10_000, 10_000))
-        qt_app.processEvents()
-
-        left, top, width, height = floating_field._button_bounds()
-        allowed_rect = QRect(left, top, width, height)
-        button_rect = dialog.generate_applicability_button.geometry()
-        assert allowed_rect.contains(button_rect.topLeft())
-        assert allowed_rect.contains(button_rect.bottomRight())
-
-        floating_field._set_button_position(QPoint(-10_000, -10_000))
-        qt_app.processEvents()
-        button_rect = dialog.generate_applicability_button.geometry()
-        assert allowed_rect.contains(button_rect.topLeft())
-        assert allowed_rect.contains(button_rect.bottomRight())
-
-        assert (
-            dialog.generate_applicability_button.parentWidget()
-            is floating_field.panel
-        )
-        assert dialog.applicability_input.viewportMargins().right() == 0
-    finally:
-        dialog.close()
-        dialog.deleteLater()
-
-
-def test_dialog_member_list_enables_vertical_scrollbar_when_height_is_limited(qt_app, monkeypatch):
-    from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QSizePolicy
-
-    monkeypatch.setattr(
-        SkillCompositionService,
-        "get_published_tool_choices",
-        lambda self: [
-            Tool(tool_id=f"tool_{index}", tool_name=f"技能{index}", description=str(index), status="published")
-            for index in range(1, 9)
-        ],
-    )
-
-    dialog = SkillCompositionEditDialog()
-    dialog.show()
-    qt_app.processEvents()
-
-    try:
-        assert dialog.available_list.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        assert dialog.available_list.sizePolicy().verticalPolicy() == QSizePolicy.Policy.Expanding
-        assert dialog.available_list.count() == 8
-
-        row_height = dialog.available_list.sizeHintForRow(0)
-        assert row_height > 0
-        dialog.available_list.setMaximumHeight(row_height * 5 + dialog.available_list.frameWidth() * 2)
-        qt_app.processEvents()
-
-        assert dialog.available_list.verticalScrollBar().maximum() > 0
-    finally:
-        dialog.close()
-        dialog.deleteLater()
-
-
-def test_dialog_member_list_double_click_toggles_membership(qt_app, monkeypatch):
-    from PyQt6.QtCore import Qt
-    from PyQt6.QtTest import QTest
-
-    monkeypatch.setattr(
-        SkillCompositionService,
-        "get_published_tool_choices",
-        lambda self: [
-            Tool(tool_id="tool_a", tool_name="技能A", description="A", status="published"),
-            Tool(tool_id="tool_b", tool_name="技能B", description="B", status="published"),
-        ],
-    )
-
-    dialog = SkillCompositionEditDialog()
-    dialog.show()
-    qt_app.processEvents()
-
-    try:
-        first_item = dialog.available_list.item(0)
-        assert first_item.checkState() == Qt.CheckState.Unchecked
-
-        first_rect = dialog.available_list.visualItemRect(first_item)
-        QTest.mouseDClick(
-            dialog.available_list.viewport(),
-            Qt.MouseButton.LeftButton,
-            pos=first_rect.center(),
-        )
-        qt_app.processEvents()
-
-        assert dialog.selected_tool_ids == ["tool_a"]
-        assert dialog.available_list.item(0).checkState() == Qt.CheckState.Checked
-
-        first_item = dialog.available_list.item(0)
-        first_rect = dialog.available_list.visualItemRect(first_item)
-        QTest.mouseDClick(
-            dialog.available_list.viewport(),
-            Qt.MouseButton.LeftButton,
-            pos=first_rect.center(),
-        )
-        qt_app.processEvents()
-
-        assert dialog.selected_tool_ids == []
-        assert dialog.available_list.item(0).checkState() == Qt.CheckState.Unchecked
-    finally:
-        dialog.close()
-        dialog.deleteLater()
-
-
-def test_dialog_generate_applicability_uses_background_thread(qt_app, monkeypatch):
-    monkeypatch.setattr(
-        SkillCompositionService,
-        "get_published_tool_choices",
-        lambda self: [
-            Tool(tool_id="tool_a", tool_name="技能A", description="A", status="published"),
-        ],
-    )
-
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError("generate_applicability should not run on the UI thread")
-
-    started = {}
-
-    def fake_start(self):
-        started["composition_name"] = self.composition_name
-        started["mode"] = self.mode
-        started["members"] = self.members
-
-    monkeypatch.setattr(SkillCompositionService, "generate_applicability", fail_if_called)
-    monkeypatch.setattr(ApplicabilityGenerationThread, "start", fake_start)
-
-    dialog = SkillCompositionEditDialog()
-    dialog.show()
-    qt_app.processEvents()
-
-    try:
-        dialog.name_input.setText("异步组合")
-        dialog.selected_tool_ids = ["tool_a"]
-        dialog.selection_order_map = {"tool_a": 1}
-        dialog._refresh_selected_tools()
-        qt_app.processEvents()
-
-        dialog._generate_applicability()
-
-        assert started["composition_name"] == "异步组合"
-        assert started["mode"] == "range"
-        assert started["members"] == [{"tool_id": "tool_a", "selected_order": 1, "execution_order": None}]
-        assert dialog.generate_applicability_button.text() == "生成中..."
-        assert dialog.generate_applicability_button.isEnabled() is False
-
-        dialog._on_applicability_generated(True, "适合异步生成测试。", "")
-        dialog._clear_applicability_generation_thread()
-        qt_app.processEvents()
-
-        assert dialog.applicability_input.toPlainText() == "适合异步生成测试。"
-        assert dialog.generate_applicability_button.text() == "一键生成"
-        assert dialog.generate_applicability_button.isEnabled() is True
-    finally:
-        dialog.close()
-        dialog.deleteLater()
-
-
-def test_dialog_generate_recommendation_uses_background_thread(qt_app, monkeypatch):
-    from PyQt6.QtWidgets import QMessageBox
-
-    monkeypatch.setattr(
-        SkillCompositionService,
-        "get_published_tool_choices",
-        lambda self: [
-            Tool(tool_id="tool_a", tool_name="技能A", description="A", status="published"),
-            Tool(tool_id="tool_b", tool_name="技能B", description="B", status="published"),
-        ],
-    )
-
-    def fail_if_called(*args, **kwargs):
-        raise AssertionError("recommend_execution_order should not run on the UI thread")
-
-    started = {}
-    notices = []
-
-    def fake_start(self):
-        started["composition_name"] = self.composition_name
-        started["applicability"] = self.applicability
-        started["members"] = self.members
-
-    monkeypatch.setattr(SkillCompositionService, "recommend_execution_order", fail_if_called)
-    monkeypatch.setattr(RecommendationGenerationThread, "start", fake_start)
-    monkeypatch.setattr(
-        QMessageBox,
-        "information",
-        lambda *args: notices.append((args[1], args[2])),
-    )
-
-    dialog = SkillCompositionEditDialog()
-    dialog.show()
-    qt_app.processEvents()
-
-    try:
-        dialog.selected_tool_ids = ["tool_a", "tool_b"]
-        dialog.selection_order_map = {"tool_a": 1, "tool_b": 2}
-        dialog.name_input.setText("异步推荐组合")
-        dialog.applicability_input.setPlainText("适合同步改异步测试。")
-        ordered_index = dialog.mode_combo.findData("ordered")
-        dialog.mode_combo.setCurrentIndex(ordered_index)
-        dialog._refresh_selected_tools()
-        qt_app.processEvents()
-
-        assert dialog._generate_recommendation() is True
-
-        assert started["composition_name"] == "异步推荐组合"
-        assert started["applicability"] == "适合同步改异步测试。"
-        assert started["members"] == [
-            {"tool_id": "tool_a", "selected_order": 1, "execution_order": 1},
-            {"tool_id": "tool_b", "selected_order": 2, "execution_order": 2},
-        ]
-        assert dialog.recommend_now_button.text() == "推荐中..."
-        assert dialog.recommend_now_button.isEnabled() is False
-        assert dialog.mode_combo.isEnabled() is False
-        assert dialog.available_list.isEnabled() is False
-
-        dialog._on_recommendation_generated(
-            True,
-            {
-                "members": [
-                    {"tool_id": "tool_b", "execution_order": 1},
-                    {"tool_id": "tool_a", "execution_order": 2},
-                ],
-                "reason": "建议先执行技能B。",
-            },
-            "",
-        )
-        dialog._clear_recommendation_generation_thread()
-        qt_app.processEvents()
-
-        assert dialog.selected_tool_ids == ["tool_b", "tool_a"]
-        assert dialog.recommend_now_button.text() == "推荐顺序"
-        assert dialog.recommend_now_button.isEnabled() is True
-        assert dialog.mode_combo.isEnabled() is True
-        assert dialog.available_list.isEnabled() is True
-        assert notices == [("推荐顺序已更新", "建议先执行技能B。")]
-    finally:
-        dialog.close()
-        dialog.deleteLater()
-
-
-def test_tools_management_composition_create_button_moves_to_tab_bar(qt_app, monkeypatch):
-    monkeypatch.setattr(ToolsManagementUI, "_load_tools", lambda self: None)
-    monkeypatch.setattr(ToolsManagementUI, "_load_compositions", lambda self: None)
-
-    ui = ToolsManagementUI()
-    ui.show()
-    qt_app.processEvents()
-
-    try:
-        assert ui._create_composition_btn.parentWidget() is ui._tab_bar
-        assert ui._create_composition_btn.isVisible() is False
-        assert ui.compositions_empty_state.isVisible() is False
-
-        ui._switch_tab("compositions")
-        qt_app.processEvents()
-
-        assert ui._create_composition_btn.isVisible() is True
-        assert ui.compositions_empty_state.isVisible() is True
-        assert ui._empty_create_composition_btn.isVisible() is True
-
-        ui.update_skill_compositions(
-            [
-                SkillComposition(
-                    composition_id="comp_visible",
-                    composition_name="可见组合",
-                    applicability="测试",
-                    mode="range",
-                    status="draft",
-                    assistant_enabled=True,
-                    members=[],
-                )
-            ]
-        )
-        qt_app.processEvents()
-
-        assert ui.compositions_empty_state.isVisible() is False
-    finally:
-        ui.close()
-        ui.deleteLater()
-
-
-def test_intent_confirmation_cancel_emits_signal_without_closing_parent(qt_app):
-    from PyQt6.QtWidgets import QWidget
-
-    from src.ui.intent_confirmation_ui import IntentConfirmationUI
-
-    class _ParentWidget(QWidget):
-        def __init__(self):
-            super().__init__()
-            self.closed_via_event = False
-
-        def closeEvent(self, event):
-            self.closed_via_event = True
-            super().closeEvent(event)
-
-    parent = _ParentWidget()
-    page = IntentConfirmationUI(parent)
-    triggered = []
-    page.cancel_requested.connect(lambda: triggered.append(True))
-
-    parent.show()
-    page.show()
-    qt_app.processEvents()
-
-    try:
-        page.cancel_button.click()
-        qt_app.processEvents()
-
-        assert triggered == [True]
-        assert parent.closed_via_event is False
-        assert parent.isVisible() is True
-    finally:
-        page.close()
-        page.deleteLater()
-        parent.close()
-        parent.deleteLater()
-
-
-def test_tool_execution_dialog_required_parameter_warning_remains_modal(qt_app, monkeypatch):
-    from PyQt6.QtWidgets import QMessageBox
-
-    from src.ui.tool_execution_dialog import ToolExecutionDialog
-
-    warnings = []
-    monkeypatch.setattr(
-        QMessageBox,
-        "warning",
-        lambda _parent, title, message: warnings.append((title, message)),
-    )
-    dialog = ToolExecutionDialog(
-        Tool(
-            tool_name="参数校验工具",
-            parameters=[
-                {
-                    "name": "target",
-                    "type": "text",
-                    "required": True,
-                    "description": "必填参数",
-                }
-            ],
-        )
-    )
-    dialog.show()
-    qt_app.processEvents()
-
-    try:
-        dialog._on_execute_clicked()
-        qt_app.processEvents()
-
-        assert warnings == [("参数验证失败", "请填写必填参数：target")]
-        assert dialog.isVisible() is True
-    finally:
-        dialog.close()
-        dialog.deleteLater()
 
 
 def test_start_trial_session_creates_session():
@@ -963,7 +432,12 @@ def test_trial_prompt_does_not_reference_unavailable_helper_tools():
                     tool_name="成员A",
                     parameters=[
                         {"name": "query", "description": "想查的主题", "required": True},
-                        {"name": "limit", "description": "数量上限", "required": False, "default": 3},
+                        {
+                            "name": "limit",
+                            "description": "数量上限",
+                            "required": False,
+                            "default": 3,
+                        },
                     ],
                     status="published",
                 ),

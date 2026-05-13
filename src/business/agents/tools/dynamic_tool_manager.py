@@ -8,13 +8,12 @@
 - LRU 淘汰机制：最多同时激活 MAX_ACTIVATED 个用户能力
 """
 
-import json
 import logging
 from collections import OrderedDict
 from typing import Callable, List, Optional, Set, Tuple
 
 from src.business.agents.config import ToolDefinition
-from src.business.agents.tool_helpers import make_tool_schema, error_json
+from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
 from src.business.services.skill_composition_service import SkillCompositionService
 from src.data.models import MODE_DISPLAY_TEXT, sort_composition_members
 from src.data.repositories import ToolRepository
@@ -39,6 +38,7 @@ def _get_suggestion_repos():
     global _suggestion_repo, _suggestion_tool_repo
     if _suggestion_repo is None:
         from src.data.repositories import ToolSuggestionRepository, ToolRepository
+
         _suggestion_repo = ToolSuggestionRepository()
         _suggestion_tool_repo = ToolRepository()
     return _suggestion_repo, _suggestion_tool_repo
@@ -160,15 +160,9 @@ class DynamicToolManager:
 
     def _make_short_id(self, entity_id: str, prefix: str) -> str:
         short = f"{prefix}_{entity_id[:8]}"
-        if (
-            short in self._short_id_to_entity_id
-            and self._short_id_to_entity_id[short] != entity_id
-        ):
+        if short in self._short_id_to_entity_id and self._short_id_to_entity_id[short] != entity_id:
             short = f"{prefix}_{entity_id[:12]}"
-        if (
-            short in self._short_id_to_entity_id
-            and self._short_id_to_entity_id[short] != entity_id
-        ):
+        if short in self._short_id_to_entity_id and self._short_id_to_entity_id[short] != entity_id:
             short = f"{prefix}_{entity_id}"
         return short
 
@@ -178,7 +172,9 @@ class DynamicToolManager:
         if not query:
             return "请输入要搜索的关键词。"
 
-        tools = [tool for tool in self._tool_repo.search_published(query) if self._is_allowed_tool(tool)]
+        tools = [
+            tool for tool in self._tool_repo.search_published(query) if self._is_allowed_tool(tool)
+        ]
         compositions = [
             composition
             for composition in self.composition_service.search_published_compositions(query)
@@ -291,7 +287,7 @@ class DynamicToolManager:
     def _build_tool_schema(self, tool, short_id: str) -> dict:
         properties = {}
         required = []
-        for param in (tool.parameters or []):
+        for param in tool.parameters or []:
             properties[param["name"]] = {
                 "type": param.get("type", "string"),
                 "description": param.get("description", ""),
@@ -308,6 +304,7 @@ class DynamicToolManager:
 
     def _create_tool_handler(self, tool) -> Callable:
         if not tool or not tool.execution_code:
+
             def _unavailable_handler(**kwargs) -> str:
                 return error_json("技能不可用")
 
@@ -323,7 +320,7 @@ class DynamicToolManager:
                 suggestion = _check_tool_suggestion(cached_name)
                 if suggestion:
                     result["_suggestion"] = suggestion
-            return json.dumps(result, ensure_ascii=False, default=str)
+            return to_json(result)
 
         return handler
 
@@ -363,7 +360,8 @@ class DynamicToolManager:
         activatable_members = [
             member
             for member in ordered_members
-            if member.tool and self._is_allowed_tool(member.tool)
+            if member.tool
+            and self._is_allowed_tool(member.tool)
             and member.tool.tool_id not in self._entity_id_to_short_id
         ]
         if not activatable_members:
@@ -434,9 +432,7 @@ class DynamicToolManager:
                 if composition is None or not self._is_allowed_composition(composition):
                     stale_short_ids.append(short_id)
                     continue
-                self._activated_tools[short_id] = self._build_composition_definition(
-                    composition
-                )
+                self._activated_tools[short_id] = self._build_composition_definition(composition)
                 continue
 
             if short_id.startswith("utool_"):
@@ -465,7 +461,7 @@ class DynamicToolManager:
         if tool.description:
             lines.append(f"描述：{tool.description}")
         lines.append("参数列表：")
-        for param in (tool.parameters or []):
+        for param in tool.parameters or []:
             req = "（必填）" if param.get("required") else "（选填）"
             lines.append(
                 f"  - {param['name']}{req}：{param.get('description', '无描述')} "

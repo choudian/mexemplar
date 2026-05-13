@@ -91,7 +91,8 @@ def test_anthropic_invalid_level_falls_back_to_off(stub_langchain):
 
 
 @pytest.mark.parametrize(
-    "level", ["low", "medium", "high"],
+    "level",
+    ["low", "medium", "high"],
 )
 def test_openai_levels_inject_reasoning_effort(stub_langchain, level):
     _, chat_openai = stub_langchain
@@ -105,6 +106,19 @@ def test_openai_off_does_not_inject_reasoning(stub_langchain):
     _make_client("off", provider="openai", model="gpt-5")
     kwargs = chat_openai.call_args.kwargs
     assert "reasoning_effort" not in kwargs
+
+
+def test_openai_custom_base_url_does_not_inject_reasoning(stub_langchain):
+    _, chat_openai = stub_langchain
+    _make_client(
+        "high",
+        provider="openai",
+        model="compatible-model",
+        base_url="https://compatible.example/v1",
+    )
+    kwargs = chat_openai.call_args.kwargs
+    assert "reasoning_effort" not in kwargs
+    assert kwargs["base_url"] == "https://compatible.example/v1"
 
 
 # ===== 兼容 provider（DeepSeek/Qwen/Zhipu/Moonshot）应静默忽略 =====

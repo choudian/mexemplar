@@ -4,6 +4,27 @@
 
 ---
 
+## 零、桌面运行时
+
+当前维护的桌面 UI 是 **Tauri 2 + React + TypeScript**，Python 代码以 FastAPI sidecar 的形式提供本地业务 API。
+
+```text
+React UI (frontend/)
+  → typed API client / event stream
+  → Tauri shell (src-tauri/)
+  → localhost FastAPI sidecar (src/desktop_api/)
+  → business services / AgentOrchestrator
+  → execution / recording / data repositories
+```
+
+- Tauri 负责窗口、custom chrome、sidecar 生命周期、端口/token handoff 和打包。
+- React 负责五个主界面：AI Assistant、Skill Teaching、Skill List、Skill Composition、Settings。
+- `src/desktop_api/` 是 UI adapter，不直接访问 Repository；它只调用 business services，并把 `src/utils/events.py` 的 blinker 事件转成前端事件流。
+- sidecar 只绑定本机回环地址，并要求每次启动生成的 session token；token 不写入配置、OpenAPI 或日志。
+- `src/main.py`、`mexemplar_gui.py`、`start.bat` 和 `mexemplar_gui.bat` 是显式失败的 legacy 兼容入口；`src/ui/` 的 PyQt 主 UI 代码已退休。
+
+---
+
 ## 一、整体流程
 
 系统有两个独立入口：**教技能**（录制流程）和**用技能**（办公助理）。
@@ -51,16 +72,16 @@
 新增录制驱动模块：`ProxyRecorder`、`AccessibilityRecorder`、`SystemProxyManager`、`CertManager`
 
 录制模式三：桌面录制
-- GUI 录制页选择“桌面操作”后，UI 只通过 `DesktopRecordingService` 进入业务层；主窗口完成 minimize 后才启动 `DesktopRecorder`，避免“开始教学”的点击进入录制数据。
+- React 教学页选择“桌面操作”后，经 `src/desktop_api/routers/teaching.py` 和 `DesktopRecordingService` 进入业务层；窗口最小化完成后才启动 `DesktopRecorder`，避免“开始教学”的点击进入录制数据。
 - `DesktopRecorder` 聚合 pynput hook、UIA 查询、剪贴板 watcher、帧 ring buffer、PNG/clip sink 和全局热键注册；动作写入 DuckDB 的 `desktop_recordings` / `desktop_actions`，每条 action 带 `monitor_index`。
-- 停止后主窗口恢复并弹出 sanity check；对话框通过 `DesktopRecordingService.get_health_stats()` 读取 `desktop_recordings.health_stats`，三按钮分别为继续分析、放弃录制、重新录制。
-- 桌面录制跨模块通知走 `src/utils/events.py` 的 blinker 事件，UI 只做本地 Qt bridge；动作计数通过浮窗展示。
-- 进程启动时在 `QGuiApplication` 创建前应用 Per-Monitor V2 DPI awareness；非 Windows 或 API 不可用时降级记录日志，不阻塞启动。
+- 停止后前端进入 sanity review 状态；通过 `DesktopRecordingService.get_health_stats()` 读取 `desktop_recordings.health_stats`，三种决策为继续分析、放弃录制、重新录制。
+- 桌面录制跨模块通知走 `src/utils/events.py` 的 blinker 事件，再由 sidecar event stream 推给前端；动作计数在 React 录制状态中展示。
+- 进程启动时在桌面 recorder/hook 启动前应用 Per-Monitor V2 DPI awareness；非 Windows 或 API 不可用时降级记录日志，不阻塞启动。
 
 ### 用技能：办公助理日常入口
 
 ```
-用户在 ChatWidget 中发消息
+用户在 React AssistantScreen 中发消息
   → 办公助理理解任务
   → 判断需要哪个工具、缺什么参数
   → 参数不够 → 问用户
@@ -286,23 +307,23 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 各协作事件的数据格式详见 [event_system_design.md](design/event_system_design.md) 第三节。
 
-PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应 UI，办公助理通过 `session_id` 路由到对应 ChatWidget 实例。
+PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应教学/试用状态，办公助理通过 `session_id` 路由到对应前端会话状态。
 
 ### 聊天展示路径
 
 ```
-ChatWidget → ChatService.get_display_messages() → MessageRepository.get_display_page()
+AssistantScreen → desktop API → ChatService.get_display_messages() → MessageRepository.get_display_page()
 ```
 
-`ChatWidget` 加载历史消息时调用 `ChatService.get_display_messages(session_id, limit=10, before_sequence=None)`，由 `MessageRepository.get_display_page()` 在 SQLite `messages` 表上执行 keyset 分页，过滤掉 `role=tool`、`role=summary`、`message_type=compressed`、空内容和仅工具调用的 assistant 消息，返回 `ChatHistoryPage`（包含 `DisplayChatMessage` DTO 列表和 `has_more_before` 分页标志）。UI 向上滚动时传入 `before_sequence` 加载更早展示消息。
+前端通过 `/api/assistant/sessions/{session_id}/messages` 加载历史消息；API 调用 `ChatService.get_display_messages(session_id, limit=10, before_sequence=None)`，由 `MessageRepository.get_display_page()` 在 SQLite `messages` 表上执行 keyset 分页，过滤掉 `role=tool`、`role=summary`、`message_type=compressed`、空内容和仅工具调用的 assistant 消息，返回 `ChatHistoryPage`（包含 `DisplayChatMessage` DTO 列表和 `has_more_before` 分页标志）。UI 向上滚动时传入 `before_sequence` 加载更早展示消息。
 
 ### Markdown 渲染边界
 
-assistant 消息通过 `MarkdownMessageView`（`QTextBrowser` 子类）以 `QTextDocument.setMarkdown(... MarkdownDialectGitHub)` 渲染为只读富文本。渲染前降级 raw HTML/script 和非 `http(s)` 图片目标；`anchorClicked` 和 `setSource` 覆写为 no-op 阻止外部导航。用户消息保持 `QLabel` + `PlainText`。
+assistant 消息在前端通过 `SafeMarkdown` 渲染。渲染前剥离 raw HTML/script 和不安全链接目标；用户消息按纯文本显示。后端 DTO 用 `rendering` 字段标识 `safe_markdown` 或 `plain_text`，但不向 UI 暴露 archive/compression 内部术语。
 
 ### 免确认 Toggle 可见性
 
-`ChatWidget._set_auto_approve_toggle_visible()` 控制顶栏 Toggle 的显隐：欢迎页/会话列表/新对话空态时隐藏，首次发送消息或切换到有消息的会话时显示。可见性变化不发出 `auto_approve_toggled` 信号，不影响现有 `AgentHandlerMixin` 的确认协议。
+前端 assistant store 控制顶栏免确认 Toggle 的显隐：欢迎页/新对话空态时隐藏，当前会话启动过 assistant 运行后显示。高危确认仍由 `builtin_general_tools` 的 `request_id + threading.Event` 等待模型管理，sidecar 用 emit-compatible shim 发布 `assistant.confirmation` 事件，前端通过非模态确认浮层回写决策。
 
 **职责分离：**
 - **Agent Loop** — 纯执行引擎，只负责跑循环和返回 AgentResult，不感知事件系统
@@ -479,6 +500,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 - 该组合对 Assistant 隐藏（不参与搜索和激活）
 - 用户打开组合并保存一次后自动清除
+- API/UI 会把该标记映射为 `displayStatus = needs_review`，而持久化 `status` 仍只保留 `draft / published / offline` 生命周期。
 
 ### 关键设计决策
 

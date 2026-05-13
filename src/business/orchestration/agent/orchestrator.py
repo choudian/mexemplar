@@ -86,7 +86,7 @@ class _AgentExecutionAdapter(AgentExecutionPort):
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
-    ) -> None:
+    ) -> AgentResult | None:
         self._run_agent(
             agent_type,
             user_input,
@@ -167,6 +167,7 @@ class AgentOrchestrator:
         self._desktop_syntax_state: Dict[str, _DesktopSyntaxState] = {}
         self._mode_cache: Dict[str, str] = {}
         from src.business.services import SkillCompositionService
+
         self._composition_service = SkillCompositionService()
 
         self._event_bus = _EventBusAdapter()
@@ -236,7 +237,7 @@ class AgentOrchestrator:
 
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
-        except ValueError as exc:
+        except Exception as exc:
             logger.error(f"[Orchestrator] 无法创建 {agent_type} Loop: {exc}")
             self._emit_agent_error(
                 workflow_id or "",
@@ -245,18 +246,29 @@ class AgentOrchestrator:
                 str(exc),
                 "setup_error",
             )
-            return
+            return None
 
         logger.info(
             f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
         )
 
-        tools = self._build_tools(agent_type, workflow_id=workflow_id, session_id=session_id)
-        formatted_prompt = (
-            self._prompt_builder.format_assistant_prompt(session_id)
-            if agent_type == AgentType.ASSISTANT
-            else loop.format_system_prompt(recording_id=workflow_id)
-        )
+        try:
+            tools = self._build_tools(agent_type, workflow_id=workflow_id, session_id=session_id)
+            formatted_prompt = (
+                self._prompt_builder.format_assistant_prompt(session_id)
+                if agent_type == AgentType.ASSISTANT
+                else loop.format_system_prompt(recording_id=workflow_id)
+            )
+        except Exception as exc:
+            logger.error(f"[Orchestrator] 无法准备 {agent_type} Agent: {exc}", exc_info=True)
+            self._emit_agent_error(
+                workflow_id or "",
+                session_id,
+                agent_type,
+                str(exc),
+                "setup_error",
+            )
+            return None
 
         result = loop.run(
             session_id,
@@ -269,7 +281,7 @@ class AgentOrchestrator:
             if agent_type != AgentType.ASSISTANT:
                 self._failure_tracker.try_resolve_failure(workflow_id)
                 self._dispatch_next(agent_type, result, session_id, workflow_id)
-            return
+            return result
 
         if result.result_type == ResultType.NEEDS_USER_INPUT:
             emit(
@@ -280,7 +292,7 @@ class AgentOrchestrator:
                 agent_type=agent_type,
                 question=result.question,
             )
-            return
+            return result
 
         if result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
             self._emit_agent_error(
@@ -290,6 +302,7 @@ class AgentOrchestrator:
                 result.error,
                 result.result_type.value,
             )
+        return result
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
         initial_input = (
@@ -348,7 +361,9 @@ class AgentOrchestrator:
                 )
             else:
                 remaining = 3 - new_count
-                logger.info(f"[Orchestrator] 试用成功 {new_count}/3，继续试用: workflow={workflow_id}")
+                logger.info(
+                    f"[Orchestrator] 试用成功 {new_count}/3，继续试用: workflow={workflow_id}"
+                )
                 self.run_agent(
                     AgentType.TRIAL,
                     {
@@ -446,7 +461,9 @@ class AgentOrchestrator:
     def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
         if result.signal_tool and result.signal_tool.name == "submit_requirements":
             requirements = result.signal_tool.args
-            programmer_session_id = self._session_store.get_or_create_session(workflow_id, AgentType.PROGRAMMER)
+            programmer_session_id = self._session_store.get_or_create_session(
+                workflow_id, AgentType.PROGRAMMER
+            )
             self._emit_and_log(
                 event_name="requirement_confirmed",
                 workflow_id=workflow_id,
@@ -459,12 +476,16 @@ class AgentOrchestrator:
                 session_id=session_id,
                 requirements_json=requirements,
             )
-            self.run_agent(AgentType.PROGRAMMER, json.dumps(requirements, ensure_ascii=False), workflow_id)
+            self.run_agent(
+                AgentType.PROGRAMMER, json.dumps(requirements, ensure_ascii=False), workflow_id
+            )
             return
 
         if result.signal_tool and result.signal_tool.name == "report_code_issue":
             feedback = result.signal_tool.args.get("feedback", "")
-            programmer_session_id = self._session_store.get_or_create_session(workflow_id, AgentType.PROGRAMMER)
+            programmer_session_id = self._session_store.get_or_create_session(
+                workflow_id, AgentType.PROGRAMMER
+            )
             self._emit_and_log(
                 event_name="triage_completed",
                 workflow_id=workflow_id,
@@ -481,7 +502,9 @@ class AgentOrchestrator:
             self.run_agent(AgentType.PROGRAMMER, feedback, workflow_id)
             return
 
-        logger.warning(f"[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session={session_id}")
+        logger.warning(
+            f"[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session={session_id}"
+        )
         self._emit_agent_error(
             workflow_id,
             session_id,
@@ -497,7 +520,9 @@ class AgentOrchestrator:
         workflow_id: str,
     ) -> None:
         if not (result.signal_tool and result.signal_tool.name == "submit_code"):
-            logger.warning(f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}")
+            logger.warning(
+                f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}"
+            )
             self._emit_agent_error(
                 workflow_id,
                 session_id,
@@ -624,7 +649,9 @@ class AgentOrchestrator:
 
         retry_count = self._review_state.increment_retry_count(workflow_id)
         if retry_count < 4:
-            programmer_session_id = self._session_store.get_or_create_session(workflow_id, AgentType.PROGRAMMER)
+            programmer_session_id = self._session_store.get_or_create_session(
+                workflow_id, AgentType.PROGRAMMER
+            )
             self._emit_and_log(
                 event_name="review_failed",
                 workflow_id=workflow_id,
@@ -671,7 +698,9 @@ class AgentOrchestrator:
 
     def _start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
         failure_context = (
-            f"用户反馈：{user_feedback}" if user_feedback else "工具执行报错（错误详情见试用会话历史）"
+            f"用户反馈：{user_feedback}"
+            if user_feedback
+            else "工具执行报错（错误详情见试用会话历史）"
         )
         initial_input = (
             f"工具 {tool_id} 试用失败，{failure_context}。"
@@ -679,7 +708,6 @@ class AgentOrchestrator:
             "如果是代码问题，请直接输出用户反馈供程序员排查。"
         )
         self.run_agent(AgentType.PM, initial_input, workflow_id)
-
 
     def _build_tools(
         self,
@@ -711,8 +739,21 @@ class AgentOrchestrator:
             return cached
         try:
             mode = RecordingRepository().get_recording_mode(workflow_id)
-        except Exception:
-            mode = RecordingMode.BROWSER
+        except ValueError as exc:
+            logger.error(
+                "[Orchestrator] 录制不存在或模式不可用: workflow_id=%s, error=%s",
+                workflow_id,
+                exc,
+            )
+            raise
+        except Exception as exc:
+            logger.error(
+                "[Orchestrator] 读取录制模式失败: workflow_id=%s, error=%s",
+                workflow_id,
+                exc,
+                exc_info=True,
+            )
+            raise RuntimeError(f"无法读取录制模式: {workflow_id}") from exc
         self._mode_cache[workflow_id] = mode
         if len(self._mode_cache) > self._MAX_DYNAMIC_MANAGERS:
             oldest = next(iter(self._mode_cache))
@@ -798,7 +839,6 @@ class AgentOrchestrator:
             return AgentLoop(config, self._llm, self._config)
         raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
 
-
     def _save_tool(
         self,
         code_data: dict,
@@ -856,7 +896,9 @@ class AgentOrchestrator:
             try:
                 self._composition_service.mark_needs_review_by_tool(tool_id)
             except Exception as exc:
-                logger.warning(f"[Orchestrator] 标记技能组合待复核失败: tool_id={tool_id}, error={exc}")
+                logger.warning(
+                    f"[Orchestrator] 标记技能组合待复核失败: tool_id={tool_id}, error={exc}"
+                )
 
         trial_sessions = self._session_store.get_sessions_by_workflow(
             workflow_id,

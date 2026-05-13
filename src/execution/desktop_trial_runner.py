@@ -29,7 +29,7 @@ WHITELISTED_ENV_VARS = {
 SENSITIVE_PATTERNS = ("API_KEY", "TOKEN", "SECRET", "PASSWORD", "KEYRING")
 TRIAL_TIMEOUT_SECONDS = 120
 
-_WRAPPER_SUFFIX = r'''
+_WRAPPER_SUFFIX = r"""
 async def _main():
     try:
         result = await execute()
@@ -55,7 +55,7 @@ if __name__ == "__main__":
             "details": {"traceback": traceback.format_exc()},
         }
     print(json.dumps(payload, ensure_ascii=False))
-'''
+"""
 
 _WRAPPER_PREFIX = "import asyncio\nimport json\nimport traceback\n\n"
 
@@ -98,6 +98,7 @@ def parse_trial_stdout(stdout_bytes: bytes, stderr_bytes: bytes, exit_code: int)
 
 def _trial_root() -> Path:
     from src.utils.helpers import get_default_data_dir
+
     return get_default_data_dir() / "trials"
 
 

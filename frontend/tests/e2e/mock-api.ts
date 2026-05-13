@@ -1,0 +1,332 @@
+import type { Page, Route } from "@playwright/test";
+
+type BackendStatus = "starting" | "ready" | "degraded" | "failed" | "shutting_down";
+
+interface MockOptions {
+  backendStatus?: BackendStatus;
+  backendMessage?: string;
+}
+
+interface MockRequestRecord {
+  method: string;
+  path: string;
+}
+
+export interface MockApiHarness {
+  requests: MockRequestRecord[];
+}
+
+const jsonHeaders = { "Content-Type": "application/json" };
+
+function json(route: Route, payload: unknown, status = 200) {
+  return route.fulfill({ status, headers: jsonHeaders, body: JSON.stringify(payload) });
+}
+
+function bootstrap(status: BackendStatus, message: string) {
+  return {
+    connection: {
+      status,
+      message,
+      checks: [{ name: "sidecar", status: status === "failed" ? "failed" : "ok", message }],
+      serverTime: new Date().toISOString(),
+    },
+    user: { displayName: "E2E User", statusLabel: "Fixture backend" },
+    navigation: { pendingSkillCount: 1, publishedSkillCount: 1, failureCount: 1, compositionCount: 0 },
+    settingsSummary: { theme: "light", dark: false, density: "comfy" },
+  };
+}
+
+export async function installMockApi(page: Page, options: MockOptions = {}): Promise<MockApiHarness> {
+  const requests: MockRequestRecord[] = [];
+  let assistantMessagePosted = false;
+  let secretPresent = false;
+  let settingsModel = "claude-sonnet-4-20250514";
+  let compositionCounter = 0;
+
+  await page.route("**/api/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    const method = request.method();
+    if (!path.startsWith("/api/")) {
+      return route.fallback();
+    }
+    requests.push({ method, path });
+    const status = options.backendStatus ?? "ready";
+    const message = options.backendMessage ?? (status === "ready" ? "Desktop backend ready." : "Fixture state.");
+
+    if (path === "/api/events") {
+      return route.fulfill({ status: 204, body: "" });
+    }
+    if (path === "/api/bootstrap") {
+      return json(route, bootstrap(status, message));
+    }
+    if (path === "/api/health") {
+      return json(route, bootstrap(status, message).connection);
+    }
+
+    if (path === "/api/assistant/sessions" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            sessionId: "ast_1",
+            title: "E2E conversation",
+            preview: "Fixture conversation",
+            status: "active",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            dateLabel: "2026-05-10",
+          },
+        ],
+        hasMore: false,
+      });
+    }
+    if (path === "/api/assistant/sessions" && method === "POST") {
+      return json(route, { sessionId: "ast_1" });
+    }
+    if (path === "/api/assistant/sessions/ast_1" && method === "PATCH") {
+      const body = request.postDataJSON() as { title?: string };
+      return json(route, {
+        sessionId: "ast_1",
+        title: body.title ?? "E2E conversation",
+        preview: "Fixture conversation",
+        status: "active",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        dateLabel: "2026-05-10",
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1" && method === "DELETE") {
+      return json(route, { archived: true });
+    }
+    if (path === "/api/assistant/sessions/ast_1/messages" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            sequence: 1,
+            role: "assistant",
+            content: assistantMessagePosted ? "### 已收到\n- fixture response" : "### Ready",
+            createdAt: new Date().toISOString(),
+            rendering: "safe_markdown",
+          },
+        ],
+        hasMoreBefore: false,
+        nextBeforeSequence: null,
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/messages" && method === "POST") {
+      assistantMessagePosted = true;
+      return json(route, { accepted: true, sessionId: "ast_1" });
+    }
+    if (path.includes("/api/assistant/confirmations/")) {
+      return json(route, { requestId: "req_1", decision: "approve", accepted: true });
+    }
+
+    if (path === "/api/teaching/readiness") {
+      return json(route, {
+        modes: [
+          { mode: "browser", status: "ready", message: "可录制浏览器操作。", actions: [] },
+          { mode: "extension", status: "ready", message: "可通过浏览器扩展触发录制。", actions: [] },
+          { mode: "desktop", status: "ready", message: "可录制桌面操作。", actions: [] },
+        ],
+      });
+    }
+    if (path === "/api/teaching/runs") {
+      return json(route, { workflowId: "rec_1", mode: "browser", stage: "selecting", summary: {} });
+    }
+    if (path.endsWith("/recording/start")) {
+      return json(route, { workflowId: "rec_1", mode: "browser", stage: "recording", summary: {} });
+    }
+    if (path.endsWith("/recording/stop")) {
+      return json(route, { workflowId: "rec_1", mode: "browser", stage: "intent_confirmation", summary: {} });
+    }
+    if (path.endsWith("/intent/confirm")) {
+      return json(route, { workflowId: "rec_1", mode: "browser", stage: "learning", summary: {} });
+    }
+    if (path.endsWith("/intent/reply")) {
+      return json(route, { workflowId: "rec_1", mode: "browser", stage: "intent_confirmation", summary: {} });
+    }
+    if (path.endsWith("/trial/start")) {
+      return json(route, { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} });
+    }
+
+    if (path === "/api/skills") {
+      const category = url.searchParams.get("category");
+      if (category === "published") {
+        return json(route, {
+          category,
+          count: 2,
+          items: [
+            {
+              toolId: "tool_a",
+              name: "Published Skill",
+              description: "Ready to reuse",
+              status: "published",
+              source: "teaching",
+              trialSuccessCount: 3,
+            },
+            {
+              toolId: "tool_b",
+              name: "Second Skill",
+              description: "Runs after first",
+              status: "published",
+              source: "teaching",
+              trialSuccessCount: 3,
+            },
+          ],
+        });
+      }
+      if (category === "failed") {
+        return json(route, {
+          category,
+          count: 1,
+          items: [
+            {
+              toolId: "tool_failed",
+              name: "Failed Skill",
+              description: "Retryable failure",
+              status: "failed",
+              source: "teaching",
+              trialSuccessCount: 0,
+              workflowId: "wf_failed",
+              failureStage: "trial",
+              errorSummary: "Timed out",
+            },
+          ],
+        });
+      }
+      return json(route, {
+        category: "pending",
+        count: 1,
+        items: [
+          {
+            toolId: "tool_pending",
+            name: "Pending Skill",
+            description: "Needs validation",
+            status: "pending",
+            source: "teaching",
+            trialSuccessCount: 0,
+          },
+        ],
+      });
+    }
+    if (path.includes("/api/skills/") || path.includes("/api/skills/failures/")) {
+      return json(route, { accepted: true, workflowId: "wf_fixture" });
+    }
+
+    if (path === "/api/compositions" && method === "GET") {
+      return json(route, { items: [] });
+    }
+    if (path === "/api/compositions" && method === "POST") {
+      compositionCounter += 1;
+      const body = request.postDataJSON() as Record<string, unknown>;
+      return json(route, {
+        compositionId: `comp_${compositionCounter}`,
+        status: "draft",
+        displayStatus: "draft",
+        needsReview: false,
+        ...body,
+      });
+    }
+    if (path.includes("/api/compositions/") && path.endsWith("/trial")) {
+      return json(route, { accepted: true, sessionId: "trial_1" });
+    }
+    if (path.includes("/api/compositions/") && path.endsWith("/publish")) {
+      return json(route, {
+        compositionId: path.split("/")[3],
+        name: "Published Composition",
+        description: "Published",
+        mode: "ordered",
+        status: "published",
+        displayStatus: "published",
+        needsReview: false,
+        applicability: "When fixture applies",
+        members: [{ toolId: "tool_a", selectedOrder: 1, executionOrder: 1 }],
+      });
+    }
+
+    if (path === "/api/settings/schema") {
+      return json(route, {
+        sections: [
+          {
+            id: "ai",
+            label: "AI",
+            items: [
+              {
+                key: "ai.model",
+                label: "主模型",
+                section: "ai",
+                valueKind: "string",
+                description: "",
+                options: [],
+                validationRules: { required: true },
+                status: "available",
+              },
+              {
+                key: "ai.timeout",
+                label: "请求超时",
+                section: "ai",
+                valueKind: "integer",
+                description: "",
+                options: [],
+                validationRules: { min: 1, max: 600 },
+                status: "available",
+              },
+              {
+                key: "ai.api_key",
+                label: "API Key",
+                section: "ai",
+                valueKind: "secret",
+                description: "",
+                options: [],
+                validationRules: {},
+                status: "available",
+              },
+            ],
+            actions: [{ key: "test_ai_connection", label: "测试 AI 连接", section: "ai", valueKind: "action", status: "available" }],
+          },
+          {
+            id: "about",
+            label: "关于",
+            items: [],
+            actions: [{ key: "check_updates", label: "检查更新", section: "about", valueKind: "action", status: "available" }],
+          },
+        ],
+      });
+    }
+    if (path === "/api/settings/values" && method === "PATCH") {
+      const body = request.postDataJSON() as { values?: Record<string, string> };
+      settingsModel = body.values?.["ai.model"] ?? settingsModel;
+      return json(route, settingsValues(settingsModel, secretPresent));
+    }
+    if (path === "/api/settings/values" || path === "/api/settings") {
+      return json(route, settingsValues(settingsModel, secretPresent));
+    }
+    if (path === "/api/settings/secrets/ai.api_key" && method === "POST") {
+      secretPresent = true;
+      return json(route, { secretKey: "ai.api_key", present: true, masked: "••••••••" });
+    }
+    if (path === "/api/settings/secrets/ai.api_key" && method === "DELETE") {
+      secretPresent = false;
+      return json(route, { secretKey: "ai.api_key", present: false, masked: "" });
+    }
+    if (path === "/api/settings/actions/check_updates") {
+      return json(route, { actionName: "check_updates", status: "unavailable", message: "当前构建未配置更新通道。", details: {} });
+    }
+    if (path.startsWith("/api/settings/actions/")) {
+      return json(route, { actionName: path.split("/").pop(), status: "completed", message: "已完成。", details: {} });
+    }
+
+    return json(route, {});
+  });
+
+  return { requests };
+}
+
+function settingsValues(model: string, secretPresent: boolean) {
+  return {
+    values: { "ai.model": model, "ai.timeout": 120 },
+    secrets: { "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" } },
+    status: { "ai.api_key": secretPresent ? "available" : "missing_secret" },
+  };
+}

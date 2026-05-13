@@ -106,7 +106,8 @@ class AssistantTaskWorker:
 
         tool = self._tool_repo.get_by_id(tool_id)
         if not tool or not tool.workflow_id:
-            self._logger.warning(f"[TaskWorker] fix_tool_bug: 找不到 workflow_id, tool_id={tool_id}")
-            return
+            message = f"fix_tool_bug 找不到可分诊的工具或 workflow_id: tool_id={tool_id}"
+            self._logger.warning("[TaskWorker] %s", message)
+            raise ValueError(message)
 
         self._assistant_task_port.start_triage(tool_id, error_message, tool.workflow_id)

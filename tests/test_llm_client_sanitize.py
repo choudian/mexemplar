@@ -8,4 +8,3 @@ def test_sanitize_message_content_removes_control_chars():
 
 def test_sanitize_message_content_accepts_none():
     assert LangChainLLMClient._sanitize_message_content(None) == ""
-

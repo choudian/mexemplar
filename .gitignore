@@ -34,6 +34,18 @@ ENV/
 .venv/
 uv.lock
 
+# Node / Tauri
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.tsbuildinfo
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/*.exe
+src-tauri/binaries/*-pc-windows-msvc
+src-tauri/binaries/*-unknown-linux-gnu
+src-tauri/binaries/*-apple-darwin
+
 # IDE
 .vscode/
 .idea/
@@ -44,14 +56,19 @@ uv.lock
 
 # Testing
 .pytest_cache/
+.pytest-cache-run/
+developcodeExemplar.worktrees*.pytest-cache-run/
 .coverage
 coverage.xml
 htmlcov/
 .tox/
 .hypothesis/
+tmp/pytest/
+frontend/test-results/
 
 # Logs
 *.log
+@AutomationLog.txt
 logs/
 
 # Database
@@ -61,6 +78,7 @@ logs/
 
 # Application data (project root only)
 /data/
+/.test-data*/
 *.db-journal
 
 # OS
@@ -119,10 +137,19 @@ build/
 
 # Local documentation (not for remote)
 docs/local/
+AGENTS.md
 CLAUDE.md
+GEMINI.md
+AI.md
+.agents/
+.cursor/
+.gemini/
+.specify/
 
 # Scripts (local development tools)
-scripts/
+scripts/*
+!scripts/
+!scripts/build_desktop_sidecar.ps1
 
 # Browser extension private key (DO NOT COMMIT)
 extension_key.txt

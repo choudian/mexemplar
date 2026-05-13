@@ -32,8 +32,10 @@ def make_tool_schema(name: str, description: str, properties: dict, required: li
 
 def make_signal_handler(display_text: str, result_type: ResultType = ResultType.COMPLETED):
     """创建只返回 ToolSignal 的简单工具 handler"""
+
     def handler(**kwargs) -> ToolSignal:
         return ToolSignal(result_type=result_type, display_text=display_text)
+
     return handler
 
 

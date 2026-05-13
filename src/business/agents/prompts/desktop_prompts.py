@@ -20,7 +20,9 @@ _PM_DESKTOP_NO_VISION_GUIDANCE = (
 )
 _PM_COMMON_FOOTER = "最后通过既有终态工具把可执行 intent 交给用户确认。\n"
 
-_PROGRAMMER_COMMON_HEADER = "你是桌面自动化 Programmer Agent，输出可在真实桌面试用的 Python 代码。\n"
+_PROGRAMMER_COMMON_HEADER = (
+    "你是桌面自动化 Programmer Agent，输出可在真实桌面试用的 Python 代码。\n"
+)
 _PROGRAMMER_DESKTOP_GUIDANCE = (
     "优先寻找系统 API、命令行、pywinauto、Win32 协议等捷径；"
     "例如能直接打开文件或发送协议 URL 时，不要模拟多次鼠标点击。"

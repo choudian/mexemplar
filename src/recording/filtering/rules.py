@@ -62,7 +62,9 @@ def is_static_asset(
     return None
 
 
-def matches_blacklist(request: Mapping[str, Any], *, blacklist_domains: Iterable[str]) -> str | None:
+def matches_blacklist(
+    request: Mapping[str, Any], *, blacklist_domains: Iterable[str]
+) -> str | None:
     host = _request_host(request)
     if not host:
         return None

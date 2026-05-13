@@ -136,23 +136,17 @@ def test_run_migrations_v9_normalizes_legacy_skill_composition_updated_at(monkey
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE schema_version (version INTEGER)"))
             conn.execute(text("INSERT INTO schema_version (version) VALUES (8)"))
-            conn.execute(
-                text(
-                    """
+            conn.execute(text("""
                     CREATE TABLE skill_compositions (
                         composition_id TEXT PRIMARY KEY,
                         updated_at DATETIME
                     )
-                    """
-                )
-            )
+                    """))
             conn.execute(
-                text(
-                    """
+                text("""
                     INSERT INTO skill_compositions (composition_id, updated_at)
                     VALUES (:composition_id, :updated_at)
-                    """
-                ),
+                    """),
                 [
                     {
                         "composition_id": "legacy-local",
@@ -165,22 +159,20 @@ def test_run_migrations_v9_normalizes_legacy_skill_composition_updated_at(monkey
                 ],
             )
 
-        run_migrations(engine)
+        try:
+            run_migrations(engine)
 
-        with engine.connect() as conn:
-            version = conn.execute(text("SELECT version FROM schema_version")).scalar_one()
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT composition_id, updated_at
-                    FROM skill_compositions
-                    ORDER BY composition_id
-                    """
-                )
-            ).fetchall()
+            with engine.connect() as conn:
+                version = conn.execute(text("SELECT version FROM schema_version")).scalar_one()
+                rows = conn.execute(text("""
+                        SELECT composition_id, updated_at
+                        FROM skill_compositions
+                        ORDER BY composition_id
+                        """)).fetchall()
 
-        updated_at_by_id = {row[0]: _parse_db_datetime(row[1]) for row in rows}
-        assert version == 9
-        assert updated_at_by_id["already-utc"] == datetime(2026, 4, 18, 2, 0, 0)
-        assert updated_at_by_id["legacy-local"] == datetime(2026, 4, 18, 2, 0, 0, 123456)
-        engine.dispose()
+            updated_at_by_id = {row[0]: _parse_db_datetime(row[1]) for row in rows}
+            assert version == 10
+            assert updated_at_by_id["already-utc"] == datetime(2026, 4, 18, 2, 0, 0)
+            assert updated_at_by_id["legacy-local"] == datetime(2026, 4, 18, 2, 0, 0, 123456)
+        finally:
+            engine.dispose()

@@ -10,10 +10,10 @@ from typing import Optional
 
 from sqlglot import exp, parse
 
-
 # ---------------------------------------------------------------------------
 # StableLocatorRule: 声明每张源表的稳定定位字段映射
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class StableLocatorRule:
@@ -30,7 +30,11 @@ class StableLocatorRule:
 STABLE_LOCATOR_RULES: dict[str, StableLocatorRule] = {
     rule.table: rule
     for rule in [
-        StableLocatorRule(table="network_requests", recommended_id_field="request_id", requires_filter_rewrite=True),
+        StableLocatorRule(
+            table="network_requests",
+            recommended_id_field="request_id",
+            requires_filter_rewrite=True,
+        ),
         StableLocatorRule(table="actions", recommended_id_field="action_id"),
         StableLocatorRule(table="sibling_snapshots", recommended_id_field="snapshot_id"),
         StableLocatorRule(table="desktop_actions", recommended_id_field="action_id"),
@@ -41,6 +45,7 @@ STABLE_LOCATOR_RULES: dict[str, StableLocatorRule] = {
 # ---------------------------------------------------------------------------
 # ProjectionBinding: 分析器对单个结果列的输出
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ProjectionBinding:
@@ -53,6 +58,7 @@ class ProjectionBinding:
 # ---------------------------------------------------------------------------
 # QueryProjectionAnalyzer
 # ---------------------------------------------------------------------------
+
 
 class QueryProjectionAnalyzer:
     """分析 SELECT 语句的列投影血缘。"""
@@ -115,9 +121,7 @@ class QueryProjectionAnalyzer:
         # Anything else (functions, aggregates, concatenations, arithmetic, etc.)
         return ProjectionBinding(output_name=output_name)
 
-    def _resolve_column(
-        self, col: exp.Column, output_name: str
-    ) -> ProjectionBinding:
+    def _resolve_column(self, col: exp.Column, output_name: str) -> ProjectionBinding:
         return ProjectionBinding(
             output_name=output_name,
             source_table=col.table or None,
@@ -177,7 +181,10 @@ def find_stable_locator_in_row(
             continue
         # 表名匹配 或 表名未知且字段名匹配
         if b.source_table == source_table or b.source_table is None:
-            if b.source_field == rule.recommended_id_field or b.output_name == rule.recommended_id_field:
+            if (
+                b.source_field == rule.recommended_id_field
+                or b.output_name == rule.recommended_id_field
+            ):
                 candidates.append(b)
 
     if len(candidates) == 1:

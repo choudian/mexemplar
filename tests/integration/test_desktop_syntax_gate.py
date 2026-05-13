@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from src.business.agents.config import AgentResult, ResultType
 from src.business.orchestration.agent.desktop_syntax_gate import check_code, should_retry
-from src.business.orchestration.agent.orchestrator import AgentOrchestrator, _DesktopSyntaxState
+from src.business.orchestration.agent.orchestrator import AgentOrchestrator
 
 
 def test_desktop_syntax_gate_accepts_valid_code():
@@ -53,3 +53,35 @@ def test_desktop_syntax_gate_retries_programmer_before_terminal_failure():
     assert len(calls) == 1
     assert "语法门卫" in calls[0][1]
     assert errors == []
+
+
+def test_desktop_syntax_gate_terminal_failure_stops_before_review():
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._desktop_syntax_state = {}
+    orchestrator._recording_mode = lambda workflow_id: "desktop"
+    calls = []
+    errors = []
+    review_calls = []
+    orchestrator.run_agent = lambda agent_type, user_input, workflow_id: calls.append(
+        (agent_type, user_input, workflow_id)
+    )
+    orchestrator._emit_agent_error = lambda *args: errors.append(args)
+    orchestrator._emit_and_log = lambda *args, **kwargs: None
+    orchestrator._run_review = lambda *args, **kwargs: review_calls.append(args)
+
+    result = AgentResult(
+        result_type=ResultType.COMPLETED,
+        signal_tool=SimpleNamespace(
+            name="submit_code",
+            args={"code": "async def execute()\n", "description": "", "parameters": []},
+        ),
+    )
+
+    orchestrator._on_programmer_completed(result, "session-1", "wf-1")
+    orchestrator._on_programmer_completed(result, "session-1", "wf-1")
+    orchestrator._on_programmer_completed(result, "session-1", "wf-1")
+
+    assert len(calls) == 2
+    assert review_calls == []
+    assert errors[-1][4] == "desktop_syntax_error"
+    assert "wf-1" not in orchestrator._desktop_syntax_state

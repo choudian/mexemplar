@@ -13,7 +13,12 @@ from typing import Any, Dict
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.hook_models import PreHookResult, ToolCallContext
-from src.business.agents.tool_helpers import make_tool_schema, make_signal_handler, error_json, to_json
+from src.business.agents.tool_helpers import (
+    make_tool_schema,
+    make_signal_handler,
+    error_json,
+    to_json,
+)
 from src.execution.desktop_trial_runner import run_desktop_trial
 from src.execution.tool_executor import run_command_in_venv, run_tool_code
 from src.utils.events import emit, emit_collect
@@ -169,7 +174,25 @@ def create_desktop_trial_tools(workflow_id: str) -> list[ToolDefinition]:
     _execution_approved = False
 
     def _preview_cancelled(responses: list[tuple[Any, Any]]) -> bool:
-        return any(response is False for _receiver, response in responses)
+        # The preview event is an advisory UI hook. Headless sidecar paths may have
+        # no synchronous listener, so only an explicit False cancels execution.
+        if any(response is False for _receiver, response in responses):
+            return True
+        return False
+
+    def _preview_cancelled_result(trial_id: str) -> str:
+        return to_json(
+            {
+                "ok": False,
+                "summary": "用户取消桌面试用",
+                "details": {"cancelled": True, "reason": "desktop_trial_preview_cancelled"},
+                "exit_code": None,
+                "timed_out": False,
+                "stdout_path": None,
+                "stderr_path": None,
+                "trial_id": trial_id,
+            },
+        )
 
     def _execute_tool_handler(parameters: dict | None = None) -> str:
         nonlocal _execution_approved
@@ -189,18 +212,7 @@ def create_desktop_trial_tools(workflow_id: str) -> list[ToolDefinition]:
                 code_preview="\n".join(tool.execution_code.splitlines()[:20]),
             )
             if _preview_cancelled(preview_responses):
-                return to_json(
-                    {
-                        "ok": False,
-                        "summary": "用户取消桌面试用",
-                        "details": {"cancelled": True},
-                        "exit_code": None,
-                        "timed_out": False,
-                        "stdout_path": None,
-                        "stderr_path": None,
-                        "trial_id": trial_id,
-                    },
-                )
+                return _preview_cancelled_result(trial_id)
             _execution_approved = True
         result = run_desktop_trial(tool.execution_code, trial_id)
         emit(

@@ -65,9 +65,7 @@ class CompositionLLMHelper:
         if not isinstance(ordered_tool_ids, list):
             raise SkillCompositionError("推荐顺序失败：模型返回格式不正确")
 
-        if set(ordered_tool_ids) != set(tool_ids) or len(ordered_tool_ids) != len(
-            tool_ids
-        ):
+        if set(ordered_tool_ids) != set(tool_ids) or len(ordered_tool_ids) != len(tool_ids):
             raise SkillCompositionError("推荐顺序失败：模型返回的技能集合不完整")
 
         id_to_member = {member["tool_id"]: member for member in normalized_members}

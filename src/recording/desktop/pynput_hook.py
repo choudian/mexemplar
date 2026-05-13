@@ -107,7 +107,6 @@ class DesktopPynputHook:
         self._keyboard_listener = None
 
     def classify_key(self, key: object) -> str:
-        name = getattr(key, "name", None)
         char = getattr(key, "char", None)
         if char:
             return _TYPING

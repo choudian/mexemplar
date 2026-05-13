@@ -23,7 +23,6 @@ import builtins as _builtins_module
 import duckdb
 import functools
 import io
-import json
 import logging
 import threading
 from datetime import timedelta
@@ -183,8 +182,6 @@ _COMMON_TABLES: dict[str, dict] = {
     },
 }
 
-_ALL_TABLE_NAMES = list(_COMMON_TABLES.keys())
-
 _DESKTOP_TABLES: dict[str, dict] = {
     "desktop_recordings": {
         "description": "桌面录制会话元数据与健康统计",
@@ -205,7 +202,11 @@ _DESKTOP_TABLES: dict[str, dict] = {
             "action_id": ("VARCHAR", "桌面动作唯一 ID（主键）", None),
             "recording_id": ("VARCHAR", "所属桌面录制 ID", None),
             "recording_mode": ("VARCHAR", "录制模式，固定 desktop", None),
-            "type": ("VARCHAR", "mouse_left / mouse_right / mouse_middle / wheel / drag / typing / hotkey", None),
+            "type": (
+                "VARCHAR",
+                "mouse_left / mouse_right / mouse_middle / wheel / drag / typing / hotkey",
+                None,
+            ),
             "coord_x": ("INTEGER", "动作坐标 X", None),
             "coord_y": ("INTEGER", "动作坐标 Y", None),
             "monitor_index": ("INTEGER", "动作发生屏幕序号", None),
@@ -225,6 +226,8 @@ _DESKTOP_TABLES: dict[str, dict] = {
         },
     },
 }
+
+_ALL_TABLE_NAMES = list(dict.fromkeys([*_COMMON_TABLES.keys(), *_DESKTOP_TABLES.keys()]))
 
 
 def _tables_for_mode(mode: str) -> dict[str, dict]:
@@ -624,8 +627,7 @@ def _read_recording(recording_id: str, mode: str = RecordingMode.BROWSER) -> str
                     "action_count": action_count,
                     "type_counts": {row[0]: int(row[1]) for row in type_rows},
                     "window_title_counts": [
-                        {"window_title": row[0], "count": int(row[1])}
-                        for row in window_rows
+                        {"window_title": row[0], "count": int(row[1])} for row in window_rows
                     ],
                     "time_range": {
                         "first_ts": range_row[0] if range_row else None,
@@ -895,6 +897,7 @@ EXECUTE_CODE_SCHEMA: dict[str, Any] = make_tool_schema(
 # 浏览器额外工具：analyze_image
 # =============================================================================
 
+
 def _detect_image_type(data: bytes) -> str:
     """根据文件头字节检测图片 MIME 类型，默认 image/png。"""
     if data[:3] == b"\xff\xd8\xff":
@@ -1121,6 +1124,12 @@ def _read_field_chunk(
 
     table_meta_for_mode = _tables_for_mode(mode)
     if table not in table_meta_for_mode:
+        if table in _ALL_TABLE_NAMES:
+            return _err(
+                "table_not_in_mode",
+                f"表 '{table}' 不属于当前录制模式 {mode}",
+                _locator=None,
+            )
         return _err("unknown_table", f"表 '{table}' 不存在", _locator=None)
 
     rule = STABLE_LOCATOR_RULES.get(table)
@@ -1273,7 +1282,13 @@ def create_recording_tools(recording_id: str, mode: str | None = None) -> list[T
     if mode is None:
         try:
             mode = RecordingRepository().get_recording_mode(recording_id)
-        except ValueError:
+        except ValueError as exc:
+            logger.warning(
+                "[recording_data_tools] 录制模式不可用，按浏览器兼容路径创建工具: "
+                "recording_id=%s, error=%s",
+                recording_id,
+                exc,
+            )
             mode = "browser"
 
     tools = [

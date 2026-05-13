@@ -11,19 +11,45 @@ Mock 策略：
 - 数据库使用 in-memory SQLite（通过 conftest.in_memory_db 替换全局 singleton）
 """
 
+import pytest
+
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.orchestration.agent import AgentOrchestrator
+from src.data.duckdb_manager import DuckDBManager
+from src.data.recording_repository import RecordingRepository
 from src.data.repositories import ToolRepository, WorkflowTransitionRepository
 
 from tests.conftest import MockLLMClient
+
+
+@pytest.fixture(autouse=True)
+def isolated_recording_db(tmp_path):
+    """Keep recording-mode fixtures out of the process-global DuckDB file."""
+    import src.data.duckdb_manager as duckdb_module
+
+    old_instance = duckdb_module._duckdb_instance
+    old_auto_recover = RecordingRepository._auto_recover_done
+    old_desktop_ensured = RecordingRepository._desktop_tables_ensured
+    duckdb_module._duckdb_instance = None
+    RecordingRepository._auto_recover_done = True
+    RecordingRepository._desktop_tables_ensured = False
+    db = DuckDBManager(str(tmp_path / "v2_full_flow.duckdb"))
+    db.initialize()
+    try:
+        yield db
+    finally:
+        db.close()
+        duckdb_module._duckdb_instance = old_instance
+        RecordingRepository._auto_recover_done = old_auto_recover
+        RecordingRepository._desktop_tables_ensured = old_desktop_ensured
+
 
 # =============================================================================
 # 辅助函数：构造常用的 LLMResponse
 # =============================================================================
 
 SAMPLE_CODE = (
-    "async def execute(**kwargs):\n"
-    "    return {'success': True, 'message': 'ok', 'data': {}}"
+    "async def execute(**kwargs):\n" "    return {'success': True, 'message': 'ok', 'data': {}}"
 )
 
 SAMPLE_CODE_V2 = (
@@ -98,7 +124,9 @@ def _trial_wait_for_user(message: str = "请重新试用修复后的工具。") 
     return LLMResponse(content=message, tool_calls=[])
 
 
-def _pm_report_code_issue(feedback: str = "代码逻辑有误", tc_id: str = "tc-pm-triage") -> LLMResponse:
+def _pm_report_code_issue(
+    feedback: str = "代码逻辑有误", tc_id: str = "tc-pm-triage"
+) -> LLMResponse:
     """PM Agent 分诊后报告代码问题的 mock 响应"""
     return LLMResponse(
         content=None,
@@ -109,6 +137,12 @@ def _pm_report_code_issue(feedback: str = "代码逻辑有误", tc_id: str = "tc
                 args={"feedback": feedback},
             )
         ],
+    )
+
+
+def _seed_browser_recording(recording_id: str) -> None:
+    RecordingRepository().save_recording_session(
+        {"recording_id": recording_id, "start_time": 1, "recording_mode": "browser"}
     )
 
 
@@ -127,11 +161,12 @@ def test_happy_path(mock_config, events_collector):
     - WorkflowTransition 包含对应事件类型
     """
     workflow_id = "wf-happy-001"
+    _seed_browser_recording(workflow_id)
 
     responses = [
-        _pm_submit_requirements(workflow_id),       # 1. PM
-        _programmer_submit_code(),                   # 2. 程序员
-        _review_passed(),                            # 3. Review
+        _pm_submit_requirements(workflow_id),  # 1. PM
+        _programmer_submit_code(),  # 2. 程序员
+        _review_passed(),  # 3. Review
     ]
 
     mock_llm = MockLLMClient(responses)
@@ -148,7 +183,9 @@ def test_happy_path(mock_config, events_collector):
     assert "review_passed" in events_collector, "应触发 review_passed 事件"
     assert "tool_saved" in events_collector, "应触发 tool_saved 事件"
 
-    assert "agent_error" not in events_collector, f"不应有错误事件: {events_collector.get('agent_error')}"
+    assert (
+        "agent_error" not in events_collector
+    ), f"不应有错误事件: {events_collector.get('agent_error')}"
 
     tool_id = events_collector["tool_saved"][0]["tool_id"]
     assert tool_id is not None
@@ -185,17 +222,18 @@ def test_review_retry_forced_save(mock_config, events_collector):
     - _review_counts 中该 workflow_id 已清除（通过 orchestrator 内部状态验证）
     """
     workflow_id = "wf-retry-002"
+    _seed_browser_recording(workflow_id)
 
     responses = [
-        _pm_submit_requirements(workflow_id),            # 1. PM
-        _programmer_submit_code(tc_id="tc-prog-1"),      # 2. 程序员（第1次）
-        _review_failed("函数签名错误"),                    # 3. Review 失败（retry_count=1）
-        _programmer_submit_code(tc_id="tc-prog-2"),      # 4. 程序员（第2次）
-        _review_failed("缺少返回格式"),                    # 5. Review 失败（retry_count=2）
-        _programmer_submit_code(tc_id="tc-prog-3"),      # 6. 程序员（第3次）
-        _review_failed("必崩逻辑"),                       # 7. Review 失败（retry_count=3）
-        _programmer_submit_code(tc_id="tc-prog-4"),      # 8. 程序员（第4次）
-        _review_failed("仍有问题"),                       # 9. Review 失败（retry_count=4，强制入库）
+        _pm_submit_requirements(workflow_id),  # 1. PM
+        _programmer_submit_code(tc_id="tc-prog-1"),  # 2. 程序员（第1次）
+        _review_failed("函数签名错误"),  # 3. Review 失败（retry_count=1）
+        _programmer_submit_code(tc_id="tc-prog-2"),  # 4. 程序员（第2次）
+        _review_failed("缺少返回格式"),  # 5. Review 失败（retry_count=2）
+        _programmer_submit_code(tc_id="tc-prog-3"),  # 6. 程序员（第3次）
+        _review_failed("必崩逻辑"),  # 7. Review 失败（retry_count=3）
+        _programmer_submit_code(tc_id="tc-prog-4"),  # 8. 程序员（第4次）
+        _review_failed("仍有问题"),  # 9. Review 失败（retry_count=4，强制入库）
     ]
 
     mock_llm = MockLLMClient(responses)
@@ -221,14 +259,14 @@ def test_review_retry_forced_save(mock_config, events_collector):
     assert failed_events[3]["retry_count"] == 4
 
     assert "tool_saved" in events_collector, "强制入库后应触发 tool_saved"
-    assert "agent_error" not in events_collector, (
-        f"不应有错误事件: {events_collector.get('agent_error')}"
-    )
+    assert (
+        "agent_error" not in events_collector
+    ), f"不应有错误事件: {events_collector.get('agent_error')}"
 
     # --- orchestrator 内部状态：_review_counts 已清除 ---
-    assert workflow_id not in orchestrator._review_counts, (
-        "_review_counts 中该 workflow_id 应已清除（强制入库后 pop）"
-    )
+    assert (
+        workflow_id not in orchestrator._review_counts
+    ), "_review_counts 中该 workflow_id 应已清除（强制入库后 pop）"
 
     # --- DB 验证 ---
     tool = ToolRepository().get_by_workflow_id(workflow_id)
@@ -253,19 +291,19 @@ def test_trial_fail_triage_fix(mock_config, events_collector):
     - trial_success_count 清零（_save_tool 更新时重置为 0）
     """
     workflow_id = "wf-trial-003"
+    _seed_browser_recording(workflow_id)
 
     responses = [
         # === 阶段一：首次正常入库 ===
-        _pm_submit_requirements(workflow_id, tc_id="tc-pm-init"),   # 1. PM
-        _programmer_submit_code(tc_id="tc-prog-init"),               # 2. 程序员
-        _review_passed(),                                            # 3. Review 通过
-
+        _pm_submit_requirements(workflow_id, tc_id="tc-pm-init"),  # 1. PM
+        _programmer_submit_code(tc_id="tc-prog-init"),  # 2. 程序员
+        _review_passed(),  # 3. Review 通过
         # === 阶段二：试用失败 → 分诊 → 修复 ===
         _trial_submit_result(success=False, feedback="输出结果不对"),  # 4. 试用 Agent 失败
-        _pm_report_code_issue("输出结果不对，代码逻辑有误"),             # 5. PM 分诊 → code_issue
-        _programmer_submit_code(SAMPLE_CODE_V2, tc_id="tc-prog-fix"), # 6. 程序员修复
-        _review_passed(),                                             # 7. Review 再次通过
-        _trial_wait_for_user(),                                        # 8. 修复后恢复 Trial，会等待用户继续试用
+        _pm_report_code_issue("输出结果不对，代码逻辑有误"),  # 5. PM 分诊 → code_issue
+        _programmer_submit_code(SAMPLE_CODE_V2, tc_id="tc-prog-fix"),  # 6. 程序员修复
+        _review_passed(),  # 7. Review 再次通过
+        _trial_wait_for_user(),  # 8. 修复后恢复 Trial，会等待用户继续试用
     ]
 
     mock_llm = MockLLMClient(responses)
@@ -301,21 +339,19 @@ def test_trial_fail_triage_fix(mock_config, events_collector):
     triage_ev = events_collector["triage_completed"][0]
     assert triage_ev["triage_result"] == "code_issue"
 
-    assert "agent_error" not in events_collector, (
-        f"不应有错误事件: {events_collector.get('agent_error')}"
-    )
+    assert (
+        "agent_error" not in events_collector
+    ), f"不应有错误事件: {events_collector.get('agent_error')}"
 
     # tool_saved 共两条：首次入库 + 修复后更新
-    assert len(events_collector["tool_saved"]) == 2, (
-        f"应有 2 次 tool_saved，实际 {len(events_collector['tool_saved'])} 次"
-    )
+    assert (
+        len(events_collector["tool_saved"]) == 2
+    ), f"应有 2 次 tool_saved，实际 {len(events_collector['tool_saved'])} 次"
 
     # --- DB 验证：工具代码已更新，trial_success_count 清零 ---
     tool_after_fix = ToolRepository().get_by_workflow_id(workflow_id)
     assert tool_after_fix is not None
-    assert tool_after_fix.execution_code == SAMPLE_CODE_V2, (
-        "修复后工具代码应更新为 SAMPLE_CODE_V2"
-    )
-    assert tool_after_fix.trial_success_count == 0, (
-        "_save_tool 更新已有工具时应将 trial_success_count 清零"
-    )
+    assert tool_after_fix.execution_code == SAMPLE_CODE_V2, "修复后工具代码应更新为 SAMPLE_CODE_V2"
+    assert (
+        tool_after_fix.trial_success_count == 0
+    ), "_save_tool 更新已有工具时应将 trial_success_count 清零"

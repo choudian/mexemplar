@@ -14,6 +14,7 @@ from enum import Enum
 
 class IntentStatus(str, Enum):
     """意图状态枚举"""
+
     ANALYZING = "analyzing"  # 分析中
     PENDING_CONFIRMATION = "pending_confirmation"  # 等待确认
     CONFIRMED = "confirmed"  # 已确认

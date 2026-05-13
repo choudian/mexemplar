@@ -22,7 +22,9 @@ logger = logging.getLogger(__name__)
 class RecordingRecovery:
     """录制数据恢复器"""
 
-    def __init__(self, queues_dir: Optional[Path] = None, db_manager: Optional[DuckDBManager] = None):
+    def __init__(
+        self, queues_dir: Optional[Path] = None, db_manager: Optional[DuckDBManager] = None
+    ):
         """
         初始化恢复器
 
@@ -32,6 +34,7 @@ class RecordingRecovery:
         """
         if queues_dir is None:
             from src.recording.queue_paths import get_recording_queue_dir
+
             queues_dir = get_recording_queue_dir()
 
         self.queues_dir = Path(queues_dir)
@@ -154,14 +157,16 @@ class RecordingRecovery:
         try:
             result = self.db_manager.fetchone(
                 "SELECT recording_id FROM recording_sessions WHERE recording_id = ?",
-                (recording_id,)
+                (recording_id,),
             )
             return result is not None
         except Exception as e:
             logger.error(f"检查录制存在性失败: {e}")
             return False
 
-    def recover_recording(self, recording_id: str, queue_file: Path, overwrite: bool = False) -> bool:
+    def recover_recording(
+        self, recording_id: str, queue_file: Path, overwrite: bool = False
+    ) -> bool:
         """
         从队列文件恢复单个录制
 
@@ -207,15 +212,20 @@ class RecordingRecovery:
                 "browser_type": browser_type,
                 "start_time": start_time,
                 "end_time": end_time,
-                "metadata": json.dumps({"recovered": True, "queue_file": str(queue_file)}, ensure_ascii=False),
+                "metadata": json.dumps(
+                    {"recovered": True, "queue_file": str(queue_file)}, ensure_ascii=False
+                ),
             }
 
             with self.db_manager.transaction():
                 if overwrite:
                     logger.info(f"删除旧数据: {recording_id}")
                     for table in (
-                        "filter_decisions", "network_requests",
-                        "sibling_snapshots", "actions", "recording_sessions",
+                        "filter_decisions",
+                        "network_requests",
+                        "sibling_snapshots",
+                        "actions",
+                        "recording_sessions",
                     ):
                         self.db_manager.execute(
                             f"DELETE FROM {table} WHERE recording_id = ?",
@@ -234,7 +244,9 @@ class RecordingRecovery:
                 for index, action_id in enumerate(action_ids):
                     siblings_snapshot = sibling_snapshots.get(index)
                     if siblings_snapshot:
-                        self.repository.save_sibling_snapshot(action_id, siblings_snapshot, recording_id)
+                        self.repository.save_sibling_snapshot(
+                            action_id, siblings_snapshot, recording_id
+                        )
                         snapshot_count += 1
 
                 if snapshot_count > 0:

@@ -5,7 +5,6 @@ Accessibility 录制器模块。
 写入 browser_action JSONL 队列文件。
 """
 
-
 import logging
 import platform
 import threading
@@ -51,7 +50,9 @@ class AccessibilityRecorder:
         self._current_url: str = ""
         self._callback_ref = None
 
-    def start(self, recording_id: str, queue_file: Path, queue_write_lock: Optional[threading.Lock] = None) -> None:
+    def start(
+        self, recording_id: str, queue_file: Path, queue_write_lock: Optional[threading.Lock] = None
+    ) -> None:
         """启动 UIA 事件监听。"""
         if not PLATFORM_SUPPORTED:
             logger.warning("[Accessibility] 非 Windows 平台，跳过 UIA 录制")
@@ -109,7 +110,11 @@ class AccessibilityRecorder:
         def run_message_pump() -> None:
             ole32.CoInitialize(0)
             try:
-                for event_id in (EVENT_OBJECT_INVOKED, EVENT_OBJECT_VALUECHANGE, EVENT_SYSTEM_FOREGROUND):
+                for event_id in (
+                    EVENT_OBJECT_INVOKED,
+                    EVENT_OBJECT_VALUECHANGE,
+                    EVENT_SYSTEM_FOREGROUND,
+                ):
                     hook = user32.SetWinEventHook(
                         event_id,
                         event_id,
@@ -164,9 +169,13 @@ class AccessibilityRecorder:
             elif event == EVENT_OBJECT_VALUECHANGE:
                 value = self._get_control_value(control)
                 url_changed = self._update_url_from_chrome(control)
-                if self._should_skip_value_change(control, element_name, element_role, value, url_changed):
+                if self._should_skip_value_change(
+                    control, element_name, element_role, value, url_changed
+                ):
                     return
-                self._write_event("fill", element_name, element_role, self._current_url, value=value)
+                self._write_event(
+                    "fill", element_name, element_role, self._current_url, value=value
+                )
             elif event == EVENT_SYSTEM_FOREGROUND:
                 self._update_url_from_chrome(control)
         except Exception as exc:

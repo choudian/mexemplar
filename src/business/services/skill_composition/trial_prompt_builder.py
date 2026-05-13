@@ -69,9 +69,7 @@ def format_trial_parameter_lines(parameters: List[Dict[str, Any]]) -> List[str]:
 
     lines = []
     for param in parameters:
-        description = str(
-            param.get("description") or param.get("name") or "未命名输入"
-        ).strip()
+        description = str(param.get("description") or param.get("name") or "未命名输入").strip()
         internal_name = str(param.get("name") or description).strip()
         required = bool(param.get("required"))
         default = param.get("default")
@@ -122,8 +120,7 @@ def build_trial_system_prompt(composition: SkillComposition) -> str:
     mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
     ordered_members = sort_composition_members(composition.members, composition.mode)
     member_names = [
-        member.tool.tool_name if member.tool else member.tool_id
-        for member in ordered_members
+        member.tool.tool_name if member.tool else member.tool_id for member in ordered_members
     ]
 
     lines = [

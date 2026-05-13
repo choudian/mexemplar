@@ -7,7 +7,6 @@
 
 from typing import Any, Dict, List
 
-
 TRIAL_SYSTEM_PROMPT_TEMPLATE = """你是 Exemplar 的试用助手。你正在帮助用户试用一个刚自动生成的工具。
 
 ⚠️ 重要说明：这个工具是由 AI 自动生成的，还未经过人工验证。试用的目的就是发现问题——

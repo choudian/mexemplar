@@ -27,6 +27,7 @@ class ClipSink:
             try:
                 import cv2
                 import numpy as np
+
                 self._cv2 = cv2
                 self._np = np
             except Exception:
@@ -63,7 +64,9 @@ class ClipSink:
             (int(width), int(height)),
         )
         if not writer.isOpened():
-            return ClipWriteResult(has_clip=False, path=path, reason="writer_open_failed", fps=self.fps)
+            return ClipWriteResult(
+                has_clip=False, path=path, reason="writer_open_failed", fps=self.fps
+            )
 
         try:
             for frame in frames:

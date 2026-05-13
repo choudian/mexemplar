@@ -6,6 +6,8 @@ SQL 血缘分析严格留在 src/recording/filtering/ 内。
 import importlib
 from pathlib import Path
 
+import pytest
+
 from src.utils.ast_helpers import extract_import_names
 
 
@@ -17,12 +19,8 @@ def test_recording_data_tools_does_not_import_sqlglot():
 
     imports = extract_import_names(tools_path.read_text(encoding="utf-8"))
     assert "sqlglot" not in imports, (
-        f"recording_data_tools.py must not import sqlglot directly. "
-        f"Found imports: {imports}"
+        f"recording_data_tools.py must not import sqlglot directly. " f"Found imports: {imports}"
     )
-
-
-import pytest
 
 
 def test_recording_data_tools_no_transitive_sqlglot():

@@ -16,88 +16,158 @@ from src.utils.helpers import get_default_data_dir
 logger = logging.getLogger(__name__)
 
 # 表名白名单，防止通过 f-string 拼接导致的 SQL 注入
-_VALID_TABLES = frozenset([
-    "recording_sessions",
-    "actions",
-    "desktop_recordings",
-    "desktop_actions",
-    "network_requests",
-    "filter_decisions",
-    "sibling_snapshots",
-    "recording_screenshots",
-])
+_VALID_TABLES = frozenset(
+    [
+        "recording_sessions",
+        "actions",
+        "desktop_recordings",
+        "desktop_actions",
+        "network_requests",
+        "filter_decisions",
+        "sibling_snapshots",
+        "recording_screenshots",
+    ]
+)
 
 # 每个表的合法列名白名单，防止 data.keys() 注入
 # ⚠️ 与 recording_data_tools._COMMON_TABLES.fields 保持同步
 _VALID_COLUMNS: dict[str, frozenset] = {
-    "recording_sessions": frozenset([
-        "recording_id", "status", "recording_mode", "browser_type",
-        "start_time", "end_time", "metadata", "created_at",
-    ]),
-    "actions": frozenset([
-        "action_id", "recording_id", "sequence_number", "action_type",
-        "recording_mode", "app_name", "process_name", "window_title",
-        "parameters", "url", "dom_element", "dom_tree_snapshot",
-        "visual_features",
-        "timestamp",
-    ]),
-    "desktop_recordings": frozenset([
-        "recording_id",
-        "recording_mode",
-        "start_time",
-        "end_time",
-        "monitor_index",
-        "status",
-        "health_stats",
-        "created_at",
-    ]),
-    "desktop_actions": frozenset([
-        "action_id",
-        "recording_id",
-        "recording_mode",
-        "type",
-        "coord_x",
-        "coord_y",
-        "monitor_index",
-        "window_title",
-        "uia_summary",
-        "clipboard_text",
-        "clipboard_image_path",
-        "text_content",
-        "timestamp",
-        "duration_ms",
-        "frame_count",
-        "has_clip",
-        "clip_path",
-        "clip_duration_ms",
-        "clip_fps",
-        "clip_resolution",
-        "created_at",
-    ]),
-    "network_requests": frozenset([
-        "request_id", "action_id", "recording_id", "url", "method",
-        "request_type", "request_headers", "request_body",
-        "response_status", "response_headers", "response_body",
-        "duration", "timestamp", "filtered", "filter_reason",
-        "filtered_at", "is_recommendation", "importance_level",
-    ]),
-    "filter_decisions": frozenset([
-        "decision_id", "request_id", "action_id", "recording_id",
-        "decision", "source", "confidence", "reason",
-        "pattern_matched", "scores", "request_timestamp",
-        "action_timestamp", "timestamp",
-    ]),
-    "sibling_snapshots": frozenset([
-        "snapshot_id", "action_id", "recording_id",
-        "container_selector", "item_selector", "list_type",
-        "siblings", "structure_similarity", "is_homogeneous",
-        "clicked_index", "total_count", "timestamp",
-    ]),
-    "recording_screenshots": frozenset([
-        "screenshot_id", "recording_id", "moment", "timestamp",
-        "capture_id", "source_trigger", "input_started_at",
-        "input_completed_at", "media_type", "data",
-    ]),
+    "recording_sessions": frozenset(
+        [
+            "recording_id",
+            "status",
+            "recording_mode",
+            "browser_type",
+            "start_time",
+            "end_time",
+            "metadata",
+            "created_at",
+        ]
+    ),
+    "actions": frozenset(
+        [
+            "action_id",
+            "recording_id",
+            "sequence_number",
+            "action_type",
+            "recording_mode",
+            "app_name",
+            "process_name",
+            "window_title",
+            "parameters",
+            "url",
+            "dom_element",
+            "dom_tree_snapshot",
+            "visual_features",
+            "timestamp",
+        ]
+    ),
+    "desktop_recordings": frozenset(
+        [
+            "recording_id",
+            "recording_mode",
+            "start_time",
+            "end_time",
+            "monitor_index",
+            "status",
+            "health_stats",
+            "created_at",
+        ]
+    ),
+    "desktop_actions": frozenset(
+        [
+            "action_id",
+            "recording_id",
+            "recording_mode",
+            "type",
+            "coord_x",
+            "coord_y",
+            "monitor_index",
+            "window_title",
+            "uia_summary",
+            "clipboard_text",
+            "clipboard_image_path",
+            "text_content",
+            "timestamp",
+            "duration_ms",
+            "frame_count",
+            "has_clip",
+            "clip_path",
+            "clip_duration_ms",
+            "clip_fps",
+            "clip_resolution",
+            "created_at",
+        ]
+    ),
+    "network_requests": frozenset(
+        [
+            "request_id",
+            "action_id",
+            "recording_id",
+            "url",
+            "method",
+            "request_type",
+            "request_headers",
+            "request_body",
+            "response_status",
+            "response_headers",
+            "response_body",
+            "duration",
+            "timestamp",
+            "filtered",
+            "filter_reason",
+            "filtered_at",
+            "is_recommendation",
+            "importance_level",
+        ]
+    ),
+    "filter_decisions": frozenset(
+        [
+            "decision_id",
+            "request_id",
+            "action_id",
+            "recording_id",
+            "decision",
+            "source",
+            "confidence",
+            "reason",
+            "pattern_matched",
+            "scores",
+            "request_timestamp",
+            "action_timestamp",
+            "timestamp",
+        ]
+    ),
+    "sibling_snapshots": frozenset(
+        [
+            "snapshot_id",
+            "action_id",
+            "recording_id",
+            "container_selector",
+            "item_selector",
+            "list_type",
+            "siblings",
+            "structure_similarity",
+            "is_homogeneous",
+            "clicked_index",
+            "total_count",
+            "timestamp",
+        ]
+    ),
+    "recording_screenshots": frozenset(
+        [
+            "screenshot_id",
+            "recording_id",
+            "moment",
+            "timestamp",
+            "capture_id",
+            "source_trigger",
+            "input_started_at",
+            "input_completed_at",
+            "media_type",
+            "data",
+        ]
+    ),
 }
 
 
@@ -110,6 +180,7 @@ def _validate_columns(table: str, data: dict) -> None:
     invalid = [k for k in data.keys() if k not in valid]
     if invalid:
         raise ValueError(f"表 '{table}' 包含非法列名: {invalid}")
+
 
 # 全局单例
 _duckdb_instance: Optional["DuckDBManager"] = None
@@ -130,7 +201,11 @@ class DuckDBManager:
 
         # 第一次检查（无锁）
         if _duckdb_instance is not None:
-            if db_path is not None and hasattr(_duckdb_instance, 'db_path') and _duckdb_instance.db_path != db_path:
+            if (
+                db_path is not None
+                and hasattr(_duckdb_instance, "db_path")
+                and _duckdb_instance.db_path != db_path
+            ):
                 logger.warning(
                     f"DuckDBManager 单例已存在（路径: {_duckdb_instance.db_path}），"
                     f"忽略新路径: {db_path}"
@@ -295,8 +370,7 @@ class DuckDBManager:
 
         try:
             # 创建录制会话表
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS recording_sessions (
                     recording_id TEXT PRIMARY KEY,
                     status TEXT,
@@ -307,21 +381,17 @@ class DuckDBManager:
                     metadata JSON,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # ⭐ 迁移：添加新列（如果不存在）
             self._migrate_network_requests_table()
             self._migrate_other_tables()
 
             # 创建操作序列表
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE SEQUENCE IF NOT EXISTS action_id_seq START 1
-            """
-            )
-            conn.execute(
-                """
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS actions (
                     action_id INTEGER PRIMARY KEY DEFAULT nextval('action_id_seq'),
                     recording_id TEXT,
@@ -338,17 +408,13 @@ class DuckDBManager:
                     visual_features JSON,
                     timestamp TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # 创建网络请求表
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE SEQUENCE IF NOT EXISTS request_id_seq START 1
-            """
-            )
-            conn.execute(
-                """
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS network_requests (
                     request_id INTEGER PRIMARY KEY DEFAULT nextval('request_id_seq'),
                     action_id INTEGER,
@@ -369,17 +435,13 @@ class DuckDBManager:
                     is_recommendation BOOLEAN DEFAULT FALSE,
                     importance_level VARCHAR DEFAULT 'unknown'
                 )
-            """
-            )
+            """)
 
             # 创建兄弟元素快照表
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE SEQUENCE IF NOT EXISTS snapshot_id_seq START 1
-            """
-            )
-            conn.execute(
-                """
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS sibling_snapshots (
                     snapshot_id INTEGER PRIMARY KEY DEFAULT nextval('snapshot_id_seq'),
                     action_id INTEGER,
@@ -394,17 +456,13 @@ class DuckDBManager:
                     total_count INTEGER,
                     timestamp TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # ⭐ 创建过滤决策表（用于反馈循环）
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE SEQUENCE IF NOT EXISTS filter_decision_id_seq START 1
-            """
-            )
-            conn.execute(
-                """
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS filter_decisions (
                     decision_id INTEGER PRIMARY KEY DEFAULT nextval('filter_decision_id_seq'),
                     request_id TEXT,
@@ -420,17 +478,13 @@ class DuckDBManager:
                     action_timestamp TIMESTAMP,
                     timestamp TIMESTAMP
                 )
-            """
-            )
+            """)
 
             # 创建截图时序表
-            conn.execute(
-                """
+            conn.execute("""
                 CREATE SEQUENCE IF NOT EXISTS recording_screenshot_id_seq START 1
-            """
-            )
-            conn.execute(
-                """
+            """)
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS recording_screenshots (
                     screenshot_id INTEGER PRIMARY KEY DEFAULT nextval('recording_screenshot_id_seq'),
                     recording_id VARCHAR NOT NULL,
@@ -443,8 +497,7 @@ class DuckDBManager:
                     media_type VARCHAR,
                     data BLOB
                 )
-            """
-            )
+            """)
 
             # 创建索引
             conn.execute(
@@ -591,9 +644,7 @@ class DuckDBManager:
         if not data_list:
             return []
 
-        _validate_columns(table, dict.fromkeys(
-            set().union(*(d.keys() for d in data_list))
-        ))
+        _validate_columns(table, dict.fromkeys(set().union(*(d.keys() for d in data_list))))
 
         columns = ", ".join(data_list[0].keys())
         placeholders = ", ".join(["?" for _ in data_list[0]])
@@ -670,25 +721,21 @@ class DuckDBManager:
 
             # 添加 recording_id 列
             if "recording_id" not in existing_columns:
-                conn.execute(
-                    f"""
+                conn.execute(f"""
                     ALTER TABLE {table_name}
                     ADD COLUMN recording_id VARCHAR
-                """
-                )
+                """)
                 logger.info(f"✅ DuckDB迁移: 已为 {table_name} 添加 recording_id 列")
 
             # 回填历史数据（从 actions 表获取）
             if reference_column == "action_id":
-                conn.execute(
-                    f"""
+                conn.execute(f"""
                     UPDATE {table_name} t
                     SET recording_id = a.recording_id
                     FROM actions a
                     WHERE t.{reference_column} = a.action_id
                     AND t.recording_id IS NULL
-                """
-                )
+                """)
                 updated_count = conn.execute(
                     f"SELECT COUNT(*) FROM {table_name} WHERE recording_id IS NOT NULL"
                 ).fetchone()[0]
@@ -736,15 +783,13 @@ class DuckDBManager:
             logger.info(f"🔍 发现 {orphaned_count} 条孤立的网络请求，尝试通过时间戳回填...")
 
             # 通过时间戳匹配到录制会话
-            conn.execute(
-                """
+            conn.execute("""
                 UPDATE network_requests nr
                 SET recording_id = rs.recording_id
                 FROM recording_sessions rs
                 WHERE nr.recording_id IS NULL
                 AND nr.timestamp BETWEEN rs.start_time AND COALESCE(rs.end_time, '9999-12-31')
-            """
-            )
+            """)
 
             backfilled_count = conn.execute(
                 "SELECT COUNT(*) FROM network_requests WHERE recording_id IS NOT NULL"
@@ -798,68 +843,54 @@ class DuckDBManager:
 
             # 添加 filtered 列
             if "filtered" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE network_requests
                     ADD COLUMN filtered BOOLEAN DEFAULT FALSE
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已添加 filtered 列")
 
             # 添加 filter_reason 列
             if "filter_reason" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE network_requests
                     ADD COLUMN filter_reason JSON
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已添加 filter_reason 列")
 
             # 添加 filtered_at 列
             if "filtered_at" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE network_requests
                     ADD COLUMN filtered_at TIMESTAMP
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已添加 filtered_at 列")
 
             # 添加 is_recommendation 列
             if "is_recommendation" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE network_requests
                     ADD COLUMN is_recommendation BOOLEAN DEFAULT FALSE
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已添加 is_recommendation 列")
 
             # 添加 importance_level 列
             if "importance_level" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE network_requests
                     ADD COLUMN importance_level VARCHAR DEFAULT 'unknown'
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已添加 importance_level 列")
 
             # 创建复合索引（提高查询性能）
             try:
-                conn.execute(
-                    """
+                conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_network_recording_filtered
                     ON network_requests(recording_id, filtered)
-                """
-                )
-                conn.execute(
-                    """
+                """)
+                conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_network_recording_time
                     ON network_requests(recording_id, timestamp)
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已为 network_requests 创建复合索引")
             except Exception as idx_err:
                 logger.warning(f"创建复合索引失败（已忽略）: {idx_err}")
@@ -909,24 +940,20 @@ class DuckDBManager:
 
             # 添加 action_id 列
             if "action_id" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE filter_decisions
                     ADD COLUMN action_id INTEGER
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已为 filter_decisions 添加 action_id 列")
 
                 # 回填 action_id（从 network_requests 获取）
-                conn.execute(
-                    """
+                conn.execute("""
                     UPDATE filter_decisions fd
                     SET action_id = nr.action_id
                     FROM network_requests nr
                     WHERE fd.request_id = CAST(nr.request_id AS VARCHAR)
                     AND fd.action_id IS NULL
-                """
-                )
+                """)
                 updated_count = conn.execute(
                     "SELECT COUNT(*) FROM filter_decisions WHERE action_id IS NOT NULL"
                 ).fetchone()[0]
@@ -939,46 +966,38 @@ class DuckDBManager:
 
             # 添加 request_timestamp 列
             if "request_timestamp" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE filter_decisions
                     ADD COLUMN request_timestamp TIMESTAMP
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已为 filter_decisions 添加 request_timestamp 列")
 
                 # 回填 request_timestamp
-                conn.execute(
-                    """
+                conn.execute("""
                     UPDATE filter_decisions fd
                     SET request_timestamp = nr.timestamp
                     FROM network_requests nr
                     WHERE fd.request_id = CAST(nr.request_id AS VARCHAR)
                     AND fd.request_timestamp IS NULL
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已回填 request_timestamp")
 
             # 添加 action_timestamp 列
             if "action_timestamp" not in existing_columns:
-                conn.execute(
-                    """
+                conn.execute("""
                     ALTER TABLE filter_decisions
                     ADD COLUMN action_timestamp TIMESTAMP
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已为 filter_decisions 添加 action_timestamp 列")
 
                 # 回填 action_timestamp
-                conn.execute(
-                    """
+                conn.execute("""
                     UPDATE filter_decisions fd
                     SET action_timestamp = a.timestamp
                     FROM actions a
                     WHERE fd.action_id = a.action_id
                     AND fd.action_timestamp IS NULL
-                """
-                )
+                """)
                 logger.info("✅ DuckDB迁移: 已回填 action_timestamp")
 
         except Exception as e:

@@ -185,6 +185,7 @@ class FilteredDuckDBRelation:
             raise DataAccessRestrictedError()
 
         if name in _RELATION_FETCH_METHODS:
+
             def _fetch(*args, **kwargs):
                 try:
                     return getattr(self._relation, name)(*args, **kwargs)
@@ -194,6 +195,7 @@ class FilteredDuckDBRelation:
             return _fetch
 
         if name in _RELATION_WRAP_METHODS:
+
             def _wrap(*args, **kwargs):
                 unwrapped_args = [_unwrap_relation_arg(arg) for arg in args]
                 try:

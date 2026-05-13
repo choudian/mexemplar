@@ -148,7 +148,11 @@ def test_filtering_repository_methods_participate_in_outer_transaction(tmp_path)
                             "url": "https://example.com/api/orders",
                             "timestamp": 1734508923.0,
                             "filtered": True,
-                            "filter_reason": {"decision": "filter", "source": "rule", "reason": "static_asset"},
+                            "filter_reason": {
+                                "decision": "filter",
+                                "source": "rule",
+                                "reason": "static_asset",
+                            },
                             "filtered_at": 1734508924.0,
                         }
                     ],
@@ -169,14 +173,20 @@ def test_filtering_repository_methods_participate_in_outer_transaction(tmp_path)
         except RuntimeError as exc:
             assert str(exc) == "rollback"
 
-        assert db.fetchone(
-            "SELECT count(*) FROM network_requests WHERE recording_id = ?",
-            ("rec-tx",),
-        )[0] == 0
-        assert db.fetchone(
-            "SELECT count(*) FROM filter_decisions WHERE recording_id = ?",
-            ("rec-tx",),
-        )[0] == 0
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM network_requests WHERE recording_id = ?",
+                ("rec-tx",),
+            )[0]
+            == 0
+        )
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM filter_decisions WHERE recording_id = ?",
+                ("rec-tx",),
+            )[0]
+            == 0
+        )
     finally:
         _restore_db(db, old_instance, old_auto_recover)
 
@@ -200,15 +210,21 @@ def test_save_network_requests_does_not_commit_outer_transaction_early(tmp_path)
                 recording_id="rec-depth",
             )
             assert db._transaction_depth() > 0
-            assert db.fetchone(
+            assert (
+                db.fetchone(
+                    "SELECT count(*) FROM network_requests WHERE recording_id = ?",
+                    ("rec-depth",),
+                )[0]
+                == 1
+            )
+
+        assert (
+            db.fetchone(
                 "SELECT count(*) FROM network_requests WHERE recording_id = ?",
                 ("rec-depth",),
-            )[0] == 1
-
-        assert db.fetchone(
-            "SELECT count(*) FROM network_requests WHERE recording_id = ?",
-            ("rec-depth",),
-        )[0] == 1
+            )[0]
+            == 1
+        )
     finally:
         _restore_db(db, old_instance, old_auto_recover)
 
@@ -229,8 +245,7 @@ def test_network_requests_migration_path_keeps_importance_level_default(tmp_path
     db = DuckDBManager(str(tmp_path / "repo_migration.duckdb"))
     conn = db.connect()
     conn.execute("CREATE SEQUENCE IF NOT EXISTS request_id_seq START 1")
-    conn.execute(
-        """
+    conn.execute("""
         CREATE TABLE network_requests (
             request_id INTEGER PRIMARY KEY DEFAULT nextval('request_id_seq'),
             action_id INTEGER,
@@ -250,8 +265,7 @@ def test_network_requests_migration_path_keeps_importance_level_default(tmp_path
             filtered_at TIMESTAMP,
             is_recommendation BOOLEAN DEFAULT FALSE
         )
-        """
-    )
+        """)
 
     try:
         db.initialize()

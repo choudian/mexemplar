@@ -18,6 +18,7 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
 from src.utils.llm_helpers import sanitize_text_for_llm
+from src.utils.helpers import normalize_thinking_level
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,6 @@ class LangChainLLMClient:
         Raises:
             ValueError: 如果 API 密钥为空
         """
-        # 🔧 验证 API 密钥
         if not api_key or not isinstance(api_key, str) or not api_key.strip():
             raise ValueError(
                 "API 密钥未配置或为空。请通过「设置」界面配置 AI 密钥，"
@@ -116,11 +116,11 @@ class LangChainLLMClient:
 
         self.provider = provider.lower()
         self.model = model
-        self.api_key = api_key.strip()  # 移除首尾空格
+        self.api_key = api_key.strip()
         self.base_url = base_url
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.thinking_level = self._normalize_thinking_level(thinking_level)
+        self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout = timeout
 
         # 初始化 LangChain LLM 实例
@@ -131,16 +131,6 @@ class LangChainLLMClient:
             f"(温度={temperature}, max_tokens={max_tokens}, "
             f"thinking={self.thinking_level}, timeout={self.timeout})"
         )
-
-    @staticmethod
-    def _normalize_thinking_level(value: Optional[str]) -> str:
-        normalized = (str(value).strip().lower() if value is not None else "off")
-        if normalized not in {"off", "low", "medium", "high"}:
-            logger.warning(
-                f"[LLM客户端] 非法 thinking_level={value!r}，回退到 'off'"
-            )
-            return "off"
-        return normalized
 
     def _get_default_endpoint(self, provider: str) -> Optional[str]:
         """
@@ -166,7 +156,7 @@ class LangChainLLMClient:
             清理后的数据字典（敏感信息被遮蔽）
         """
         sanitized = data.copy()
-        sensitive_keys = ['api_key', 'authorization', 'token', 'password', 'secret']
+        sensitive_keys = ["api_key", "authorization", "token", "password", "secret"]
 
         for key in list(sanitized.keys()):
             if any(sensitive in key.lower() for sensitive in sensitive_keys):
@@ -241,13 +231,17 @@ class LangChainLLMClient:
             if self.timeout is not None:
                 kwargs["timeout"] = self.timeout
 
-            # 注入推理（仅对官方 openai provider；其他兼容 provider 静默忽略）
+            # 注入推理（仅对官方 OpenAI endpoint；自定义/兼容 endpoint 静默忽略）
             effort = self._OPENAI_REASONING_EFFORT.get(self.thinking_level)
-            if effort is not None and self.provider in self._OPENAI_REASONING_PROVIDERS:
+            if (
+                effort is not None
+                and self.provider in self._OPENAI_REASONING_PROVIDERS
+                and not self.base_url
+            ):
                 kwargs["reasoning_effort"] = effort
             elif effort is not None:
                 logger.debug(
-                    f"[LLM客户端] provider={self.provider} 暂不支持 reasoning_effort 透传，"
+                    f"[LLM客户端] provider={self.provider} 或自定义 endpoint 暂不透传 reasoning_effort，"
                     f"已忽略 thinking_level={self.thinking_level}"
                 )
 
@@ -341,9 +335,7 @@ class LangChainLLMClient:
                 logger.debug(f"[LLM→] ({len(messages)} msgs) {role}: {content}")
 
             # 绑定工具（单工具调用模式）
-            llm_with_tools = self.llm.bind_tools(
-                tools, parallel_tool_calls=False
-            )
+            llm_with_tools = self.llm.bind_tools(tools, parallel_tool_calls=False)
 
             # 调用模型
             ai_message = llm_with_tools.invoke(lc_messages, **kwargs)
@@ -356,6 +348,7 @@ class LangChainLLMClient:
                 if response.has_tool_calls:
                     tc = response.tool_calls[0]
                     import json as _json
+
                     args_str = _json.dumps(tc.args, ensure_ascii=False)
                     logger.debug(f"[←LLM] tool_call={tc.name} args={args_str}")
                 else:
@@ -367,9 +360,7 @@ class LangChainLLMClient:
             logger.error(f"[LLM客户端] 工具调用失败: {e}")
             raise
 
-    def _convert_to_langchain_messages(
-        self, messages: List[Dict[str, Any]]
-    ) -> List[Any]:
+    def _convert_to_langchain_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         """
         转换消息格式为 LangChain 消息对象
 
@@ -405,11 +396,13 @@ class LangChainLLMClient:
                     # 转换为 LangChain 格式：[{"id": "...", "name": "...", "args": {...}}, ...]
                     langchain_tool_calls = []
                     for tc in tool_calls:
-                        langchain_tool_calls.append({
-                            "id": tc["id"],
-                            "name": tc["name"],
-                            "args": tc["args"],
-                        })
+                        langchain_tool_calls.append(
+                            {
+                                "id": tc["id"],
+                                "name": tc["name"],
+                                "args": tc["args"],
+                            }
+                        )
                     lc_messages.append(
                         AIMessage(content=content or "", tool_calls=langchain_tool_calls)
                     )
@@ -458,4 +451,3 @@ class LangChainLLMClient:
                 )
 
         return LLMResponse(content=content, tool_calls=tool_calls)
-

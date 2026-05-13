@@ -72,22 +72,26 @@ def test_recovery_saves_standalone_network_request_only_to_network_requests(tmp_
         encoding="utf-8",
     )
 
-    db, old_instance, old_auto_recover = _create_fresh_db(
-        tmp_path, "recovery_network_only.duckdb"
-    )
+    db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "recovery_network_only.duckdb")
 
     try:
         recovery = RecordingRecovery(queues_dir=queues_dir, db_manager=db)
 
         assert recovery.recover_recording("rec_network_only", queue_file) is True
-        assert db.fetchone(
-            "SELECT count(*) FROM actions WHERE recording_id = ?",
-            ("rec_network_only",),
-        )[0] == 0
-        assert db.fetchone(
-            "SELECT count(*) FROM network_requests WHERE recording_id = ?",
-            ("rec_network_only",),
-        )[0] == 1
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM actions WHERE recording_id = ?",
+                ("rec_network_only",),
+            )[0]
+            == 0
+        )
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM network_requests WHERE recording_id = ?",
+                ("rec_network_only",),
+            )[0]
+            == 1
+        )
 
         action_id, response_body = db.fetchone(
             """
@@ -169,41 +173,59 @@ def test_recovery_restores_associated_requests_and_sibling_snapshots(tmp_path):
         recovery = RecordingRecovery(queues_dir=queues_dir, db_manager=db)
 
         assert recovery.recover_recording("rec_mixed", queue_file) is True
-        assert db.fetchone(
-            "SELECT count(*) FROM actions WHERE recording_id = ?",
-            ("rec_mixed",),
-        )[0] == 1
-        assert db.fetchone(
-            """
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM actions WHERE recording_id = ?",
+                ("rec_mixed",),
+            )[0]
+            == 1
+        )
+        assert (
+            db.fetchone(
+                """
             SELECT count(*)
             FROM actions
             WHERE recording_id = ? AND action_type = 'network_request'
             """,
-            ("rec_mixed",),
-        )[0] == 0
-        assert db.fetchone(
-            "SELECT count(*) FROM sibling_snapshots WHERE recording_id = ?",
-            ("rec_mixed",),
-        )[0] == 1
-        assert db.fetchone(
-            "SELECT count(*) FROM network_requests WHERE recording_id = ?",
-            ("rec_mixed",),
-        )[0] == 2
-        assert db.fetchone(
-            """
+                ("rec_mixed",),
+            )[0]
+            == 0
+        )
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM sibling_snapshots WHERE recording_id = ?",
+                ("rec_mixed",),
+            )[0]
+            == 1
+        )
+        assert (
+            db.fetchone(
+                "SELECT count(*) FROM network_requests WHERE recording_id = ?",
+                ("rec_mixed",),
+            )[0]
+            == 2
+        )
+        assert (
+            db.fetchone(
+                """
             SELECT count(*)
             FROM network_requests
             WHERE recording_id = ? AND action_id IS NOT NULL
             """,
-            ("rec_mixed",),
-        )[0] == 1
-        assert db.fetchone(
-            """
+                ("rec_mixed",),
+            )[0]
+            == 1
+        )
+        assert (
+            db.fetchone(
+                """
             SELECT count(*)
             FROM network_requests
             WHERE recording_id = ? AND action_id IS NULL
             """,
-            ("rec_mixed",),
-        )[0] == 1
+                ("rec_mixed",),
+            )[0]
+            == 1
+        )
     finally:
         _restore_db(db, old_instance, old_auto_recover)

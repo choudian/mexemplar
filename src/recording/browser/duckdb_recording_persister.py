@@ -119,11 +119,7 @@ class DuckDBRecordingPersister:
             return 0
 
         db = getattr(repository, "db", None)
-        transaction_ctx = (
-            db.transaction()
-            if isinstance(db, DuckDBManager)
-            else nullcontext()
-        )
+        transaction_ctx = db.transaction() if isinstance(db, DuckDBManager) else nullcontext()
 
         screenshot_count = 0
         try:
@@ -138,7 +134,9 @@ class DuckDBRecordingPersister:
 
                     snapshot_count = 0
                     for index, action_id in enumerate(action_ids):
-                        if index < len(actions_list) and actions_list[index].get("siblings_snapshot"):
+                        if index < len(actions_list) and actions_list[index].get(
+                            "siblings_snapshot"
+                        ):
                             try:
                                 repository.save_sibling_snapshot(
                                     action_id,
@@ -170,6 +168,7 @@ class DuckDBRecordingPersister:
             raise
 
         from src.recording.queue_paths import delete_queue_file
+
         delete_queue_file(action_queue_path)
         delete_queue_file(screenshots_path)
 
@@ -201,6 +200,7 @@ class DuckDBRecordingPersister:
         if action_queue_path:
             return action_queue_path.with_name(f"{recording_id}_screenshots.jsonl")
         from src.recording.queue_paths import get_recording_screenshots_queue_path
+
         return get_recording_screenshots_queue_path(recording_id)
 
     def convert_event_to_action_dict(

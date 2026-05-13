@@ -86,14 +86,17 @@ class SQLAlchemyManager:
 
             # 确保 schema_version 有初始行（新安装时表为空）
             with self.engine.connect() as conn:
-                conn.execute(text(
-                    "INSERT INTO schema_version (version) "
-                    "SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
-                ))
+                conn.execute(
+                    text(
+                        "INSERT INTO schema_version (version) "
+                        "SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
+                    )
+                )
                 conn.commit()
 
             # 运行增量迁移（为旧版安装补充缺失列/表）
             from src.data.migrations import run_migrations
+
             run_migrations(self.engine)
 
             self._initialized = True

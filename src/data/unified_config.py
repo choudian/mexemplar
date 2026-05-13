@@ -17,6 +17,7 @@ import threading
 from typing import Optional, Dict, Any, Callable, List
 import dataclasses
 
+from src.utils.helpers import normalize_thinking_level
 from src.data.config_models import (
     AppConfig,
     ConfigFileLoader,
@@ -230,13 +231,7 @@ class UnifiedConfigManager:
     def get_ai_thinking_level(self) -> str:
         """主对话推理强度：off | low | medium | high。非法值回退到 off。"""
         raw = self.get("ai.thinking_level", default="off")
-        value = str(raw).strip().lower() if raw is not None else "off"
-        if value not in {"off", "low", "medium", "high"}:
-            logger.warning(
-                f"[配置] ai.thinking_level 非法值 {raw!r}，回退到 'off'"
-            )
-            return "off"
-        return value
+        return normalize_thinking_level(raw)
 
     def get_ai_request_timeout(self) -> float:
         """LLM HTTP 请求超时（秒，>0）。非法值回退到 180.0。
@@ -412,13 +407,13 @@ class UnifiedConfigManager:
         return bool(value)
 
     def get_desktop_vision_model(self) -> Optional[str]:
-        """桌面录制 vision 模型；未单独配置时 fallback 到 ai.vision_model。"""
+        """桌面录制 vision 模型；未单独配置时不启用桌面视觉工具。"""
         value = self.get("recording.desktop.vision_model", default=None)
         if value is not None:
             text = str(value).strip()
             if text and text.lower() not in {"none", "null"}:
                 return text
-        return self.get_ai_vision_model() or None
+        return None
 
     # ===== 内部方法 =====
 

@@ -9,7 +9,6 @@ Mock 策略：
 """
 
 import json
-import pytest
 
 from src.business.agents.config import AgentType
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
@@ -18,7 +17,6 @@ from src.data.models_sqlite import Session
 from src.data.repositories import SessionRepository, MessageRepository
 
 from tests.conftest import MockLLMClient
-
 
 # =============================================================================
 # 辅助函数
@@ -111,9 +109,11 @@ class TestAssistantNewSession:
         session_id = _create_assistant_session()
 
         # LLM 返回一条直接文字回复
-        mock_llm = MockLLMClient([
-            _assistant_text_reply("你好！我是你的办公助理，有什么可以帮你的？"),
-        ])
+        mock_llm = MockLLMClient(
+            [
+                _assistant_text_reply("你好！我是你的办公助理，有什么可以帮你的？"),
+            ]
+        )
         orchestrator = AgentOrchestrator(mock_llm, mock_config)
         orchestrator.run_agent(
             agent_type=AgentType.ASSISTANT,
@@ -132,9 +132,11 @@ class TestAssistantNewSession:
         """Orchestrator 运行后，数据库中应有 system + user + assistant 三条消息"""
         session_id = _create_assistant_session()
 
-        mock_llm = MockLLMClient([
-            _assistant_text_reply("你好！有什么可以帮你的？"),
-        ])
+        mock_llm = MockLLMClient(
+            [
+                _assistant_text_reply("你好！有什么可以帮你的？"),
+            ]
+        )
         orchestrator = AgentOrchestrator(mock_llm, mock_config)
         orchestrator.run_agent(
             agent_type=AgentType.ASSISTANT,
@@ -168,9 +170,11 @@ class TestAssistantNewSession:
         """assistant 直接文字回复（text_as_user_input=True）应触发 NEEDS_USER_INPUT"""
         session_id = _create_assistant_session()
 
-        mock_llm = MockLLMClient([
-            _assistant_text_reply("请问你需要什么帮助？"),
-        ])
+        mock_llm = MockLLMClient(
+            [
+                _assistant_text_reply("请问你需要什么帮助？"),
+            ]
+        )
         orchestrator = AgentOrchestrator(mock_llm, mock_config)
         orchestrator.run_agent(
             agent_type=AgentType.ASSISTANT,
@@ -197,9 +201,11 @@ class TestAssistantNewSession:
         session_id = _create_assistant_session()
 
         # 第 1 轮
-        mock_llm_1 = MockLLMClient([
-            _assistant_text_reply("你好！我是你的办公助理。"),
-        ])
+        mock_llm_1 = MockLLMClient(
+            [
+                _assistant_text_reply("你好！我是你的办公助理。"),
+            ]
+        )
         orchestrator = AgentOrchestrator(mock_llm_1, mock_config)
         orchestrator.run_agent(
             agent_type=AgentType.ASSISTANT,
@@ -208,9 +214,11 @@ class TestAssistantNewSession:
         )
 
         # 第 2 轮：重建 orchestrator（新的 LLM 响应序列）
-        mock_llm_2 = MockLLMClient([
-            _assistant_text_reply("好的，让我来查一下天气。"),
-        ])
+        mock_llm_2 = MockLLMClient(
+            [
+                _assistant_text_reply("好的，让我来查一下天气。"),
+            ]
+        )
         orchestrator_2 = AgentOrchestrator(mock_llm_2, mock_config)
         orchestrator_2.run_agent(
             agent_type=AgentType.ASSISTANT,
@@ -260,48 +268,7 @@ class TestAssistantNewSession:
         assert error_data["agent_type"] == AgentType.ASSISTANT
 
     # -------------------------------------------------------------------------
-    # 6. UI 接线层：ChatWidget 信号发射验证
-    # -------------------------------------------------------------------------
-
-    def test_chat_widget_emits_send_signal(self, in_memory_db):
-        """
-        ChatWidget.on_send_message() 应发射 send_message_requested 信号，
-        携带正确的 session_id、agent_type、user_input。
-
-        注意：此测试需要 PyQt6 QApplication 实例。如果环境无法创建则跳过。
-        """
-        try:
-            from PyQt6.QtWidgets import QApplication
-            import sys
-
-            app = QApplication.instance() or QApplication(sys.argv)
-        except (ImportError, RuntimeError):
-            pytest.skip("PyQt6 不可用或无法创建 QApplication")
-
-        from src.ui.widgets.chat_widget import ChatWidget
-
-        widget = ChatWidget()
-
-        # 捕获信号
-        received = []
-        widget.send_message_requested.connect(
-            lambda sid, atype, msg: received.append((sid, atype, msg))
-        )
-
-        # 模拟输入文本并发送
-        widget.message_input.setPlainText("测试消息")
-        widget.on_send_message()
-
-        assert len(received) == 1
-        session_id, agent_type, user_input = received[0]
-        assert session_id.startswith("ast_")
-        assert agent_type == AgentType.ASSISTANT
-        assert user_input == "测试消息"
-
-        widget.close()
-
-    # -------------------------------------------------------------------------
-    # 7. 带工具选择的会话创建
+    # 6. 带工具选择的会话创建
     # -------------------------------------------------------------------------
 
     def test_create_session_with_tool_ids(self, in_memory_db):

@@ -55,10 +55,13 @@ def test_is_static_asset_matches_extension_and_content_type_case_insensitively()
 def test_matches_blacklist_returns_first_matching_pattern():
     request = {"url": "https://www.googletagmanager.com/gtm.js"}
 
-    assert matches_blacklist(
-        request,
-        blacklist_domains=["doubleclick", "googletagmanager", "sentry"],
-    ) == "googletagmanager"
+    assert (
+        matches_blacklist(
+            request,
+            blacklist_domains=["doubleclick", "googletagmanager", "sentry"],
+        )
+        == "googletagmanager"
+    )
     assert matches_blacklist(request, blacklist_domains=["sentry"]) is None
 
 

@@ -44,7 +44,10 @@ def test_list_desktop_actions_validation_and_paging(tmp_path, monkeypatch):
             "error": "invalid_action_type",
             "value": "bad",
         }
-        assert json.loads(tools["list_desktop_actions"].handler(limit=501))["error"] == "limit_too_large"
+        assert (
+            json.loads(tools["list_desktop_actions"].handler(limit=501))["error"]
+            == "limit_too_large"
+        )
     finally:
         db.close()
         duckdb_module._duckdb_instance = old_instance

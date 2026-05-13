@@ -489,9 +489,7 @@ class RecordingRepository:
             result.append(item)
         return result
 
-    def get_desktop_action_clip(
-        self, recording_id: str, action_id: str
-    ) -> dict[str, Any] | None:
+    def get_desktop_action_clip(self, recording_id: str, action_id: str) -> dict[str, Any] | None:
         row = self.db.fetchone(
             """
             SELECT has_clip, clip_path, clip_duration_ms, clip_fps, clip_resolution

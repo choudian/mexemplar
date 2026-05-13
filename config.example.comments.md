@@ -1,5 +1,14 @@
 # `config.example.json` Notes
 
+## `ai`
+
+设置页展示的 AI 配置均通过 `get_unified_config()` 读写。`ai.api_key` 只用于迁移兼容，运行时写入密钥必须走 keyring，不应把明文密钥保存在配置文件或数据库。
+
+## `ui`
+
+- `theme`: 设置页可选 `light`、`dark`、`system`。
+- `density`: 设置页可选 `comfy`、`compact`，默认 `comfy`。
+
 ## `recording.large_field`
 
 大字段占位与分段读取配置。Agent 查询录制数据时，文本字段值达到阈值后以结构化占位对象交付，Agent 通过 `read_field_chunk` 按需分段续读原始内容。通用录制数据工具为 5 工具模型：`describe_data`、`query_data`、`execute_code`、`read_recording`、`read_field_chunk`。浏览器路径额外保留 `analyze_image`，桌面路径改用桌面专属工具。大字段占位与续读涉及其中 `query_data`（占位触发）和 `read_field_chunk`（分段续读）两个工具。

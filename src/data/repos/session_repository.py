@@ -3,6 +3,7 @@ SessionRepository -- 会话 Repository
 """
 
 import logging
+from datetime import datetime
 from typing import List, Optional
 
 from ..models_sqlite import Session
@@ -10,12 +11,16 @@ from .base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
 
+SESSION_STATUSES = frozenset({"active", "suspended", "completed", "failed", "archived"})
+
 
 class SessionRepository(BaseRepository):
     """会话 Repository"""
 
     def create(self, model: Session) -> Session:
         """创建会话"""
+        if model.status not in SESSION_STATUSES:
+            raise ValueError(f"invalid session status: {model.status}")
         try:
             self.session.add(model)
             self.session.commit()
@@ -49,23 +54,40 @@ class SessionRepository(BaseRepository):
 
     def update_status(self, session_id: str, status: str):
         """更新会话状态"""
+        if status not in SESSION_STATUSES:
+            raise ValueError(f"invalid session status: {status}")
         model = self.session.query(Session).filter(Session.session_id == session_id).first()
         if model:
             model.status = status
+            model.updated_at = datetime.now()
             self.session.commit()
             logger.debug(f"会话 {session_id} 状态更新为 {status}")
+
+    def update_title(self, session_id: str, title: str) -> Optional[Session]:
+        """更新会话标题。"""
+        model = self.session.query(Session).filter(Session.session_id == session_id).first()
+        if not model:
+            return None
+        model.title = title
+        model.updated_at = datetime.now()
+        self.session.commit()
+        self.session.refresh(model)
+        logger.debug("会话 %s 标题已更新", session_id)
+        return model
 
     def get_status(self, session_id: str) -> Optional[str]:
         """获取会话状态"""
         model = self.get_by_id(session_id)
         return model.status if model else None
 
-    def get_by_agent_type(self, agent_type: str, limit: int = 50) -> List[Session]:
+    def get_by_agent_type(
+        self,
+        agent_type: str,
+        limit: int = 50,
+        statuses: Optional[list[str]] = None,
+    ) -> List[Session]:
         """获取指定 agent_type 的会话列表，按最近更新排序"""
-        return (
-            self.session.query(Session)
-            .filter(Session.agent_type == agent_type)
-            .order_by(Session.updated_at.desc())
-            .limit(limit)
-            .all()
-        )
+        query = self.session.query(Session).filter(Session.agent_type == agent_type)
+        if statuses is not None:
+            query = query.filter(Session.status.in_(statuses))
+        return query.order_by(Session.updated_at.desc()).limit(limit).all()

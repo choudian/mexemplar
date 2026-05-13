@@ -59,8 +59,12 @@ def test_async_start_recording_targets_ws_client_by_launch_token():
         return True
 
     with patch.object(recorder, "_ensure_ws_server", return_value=None):
-        with patch.object(recorder, "_launch_browser_with_subprocess", AsyncMock(side_effect=fake_launch)):
-            with patch.object(recorder, "_wait_for_target_ws_client", return_value=target_client) as mock_wait:
+        with patch.object(
+            recorder, "_launch_browser_with_subprocess", AsyncMock(side_effect=fake_launch)
+        ):
+            with patch.object(
+                recorder, "_wait_for_target_ws_client", return_value=target_client
+            ) as mock_wait:
                 with patch.object(recorder, "_send_start_command_via_ws") as mock_send:
                     with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
                         result = asyncio.run(
@@ -115,9 +119,7 @@ def test_launch_browser_uses_generated_extension_bundle():
     class FakeAsyncPlaywrightContext:
         async def __aenter__(self):
             return SimpleNamespace(
-                chromium=SimpleNamespace(
-                    launch_persistent_context=launch_persistent_context
-                )
+                chromium=SimpleNamespace(launch_persistent_context=launch_persistent_context)
             )
 
         async def __aexit__(self, exc_type, exc, tb):
@@ -155,8 +157,7 @@ def test_classify_extension_targets_ignores_non_extension_service_workers():
     assert len(classified["extension_targets"]) == 2
     assert len(classified["extension_service_workers"]) == 1
     assert (
-        classified["extension_service_workers"][0]["url"]
-        == "chrome-extension://abc/background.js"
+        classified["extension_service_workers"][0]["url"] == "chrome-extension://abc/background.js"
     )
 
 
@@ -211,9 +212,7 @@ def test_launch_browser_warns_instead_of_error_when_extension_targets_not_visibl
     class FakeAsyncPlaywrightContext:
         async def __aenter__(self):
             return SimpleNamespace(
-                chromium=SimpleNamespace(
-                    launch_persistent_context=launch_persistent_context
-                )
+                chromium=SimpleNamespace(launch_persistent_context=launch_persistent_context)
             )
 
         async def __aexit__(self, exc_type, exc, tb):
@@ -263,6 +262,30 @@ def test_control_start_creates_session_and_starts_recorders():
     mock_accessibility.start.assert_called_once()
     reply = json.loads(mock_ws.send.call_args[0][0])
     assert reply["status"] == "started"
+
+
+def test_control_start_uses_armed_recording_id():
+    recorder = build_recorder()
+    mock_proxy = MagicMock()
+    mock_proxy.start.return_value = True
+    mock_accessibility = MagicMock()
+    mock_ws = AsyncMock()
+
+    with patch.object(recorder, "_ensure_ws_server", return_value=None):
+        recorder.arm_extension_triggered_mode(recording_id="rec_expected")
+    with patch.object(recorder, "_proxy_recorder", mock_proxy):
+        with patch.object(recorder, "_accessibility_recorder", mock_accessibility):
+            asyncio.run(
+                recorder._handle_control_message(
+                    {"type": "recording_control", "action": "start", "source": "extension"},
+                    mock_ws,
+                )
+            )
+
+    reply = json.loads(mock_ws.send.call_args[0][0])
+    assert reply["status"] == "started"
+    assert reply["recording_id"] == "rec_expected"
+    assert recorder._recording_id == "rec_expected"
 
 
 def test_control_start_replies_error_when_proxy_fails():
@@ -323,7 +346,9 @@ def test_async_start_recording_marks_startup_busy_before_launch():
         return False
 
     with patch.object(recorder, "_ensure_ws_server", return_value=None):
-        with patch.object(recorder, "_launch_browser_with_subprocess", AsyncMock(side_effect=fake_launch)):
+        with patch.object(
+            recorder, "_launch_browser_with_subprocess", AsyncMock(side_effect=fake_launch)
+        ):
             result = asyncio.run(
                 recorder._async_start_recording(
                     start_url="https://example.com",
@@ -341,7 +366,9 @@ def test_control_stop_stops_recorders_and_emits_event():
     recorder = build_recorder()
     recorder._recording_id = "rec_test"
     recorder._recording_start_time = 123.0
-    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths("rec_test")
+    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths(
+        "rec_test"
+    )
     recorder._is_recording = True
     recorder._active_recording_mode = "extension_triggered"
 
@@ -350,7 +377,9 @@ def test_control_stop_stops_recorders_and_emits_event():
     mock_ws = AsyncMock()
     emitted = []
 
-    with patch("src.recording.browser_recorder.emit", side_effect=lambda name, **kw: emitted.append(name)):
+    with patch(
+        "src.recording.browser_recorder.emit", side_effect=lambda name, **kw: emitted.append(name)
+    ):
         with patch.object(recorder, "_proxy_recorder", mock_proxy):
             with patch.object(recorder, "_accessibility_recorder", mock_accessibility):
                 with patch.object(recorder, "_save_to_duckdb", return_value=0):
@@ -374,7 +403,9 @@ def test_control_stop_replies_before_duckdb_flush():
     recorder = build_recorder()
     recorder._recording_id = "rec_test"
     recorder._recording_start_time = 123.0
-    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths("rec_test")
+    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths(
+        "rec_test"
+    )
     recorder._is_recording = True
     recorder._active_recording_mode = "extension_triggered"
 

@@ -4,7 +4,6 @@
 用 mitmproxy 拦截 HTTP/HTTPS 请求，转成 browser_action JSONL 写入队列文件。
 """
 
-
 import asyncio
 import logging
 import threading
@@ -116,7 +115,9 @@ class ProxyRecorder:
         self._addon: Optional[RecordingAddon] = None
         self._system_proxy = SystemProxyManager()
 
-    def start(self, recording_id: str, queue_file: Path, queue_write_lock: Optional[threading.Lock] = None) -> bool:
+    def start(
+        self, recording_id: str, queue_file: Path, queue_write_lock: Optional[threading.Lock] = None
+    ) -> bool:
         """启动 mitmproxy 并启用系统代理。"""
         if not MITMPROXY_AVAILABLE:
             logger.error("[Proxy] mitmproxy 未安装")
@@ -126,7 +127,9 @@ class ProxyRecorder:
             logger.warning("[Proxy] 仍在运行，先停止旧会话")
             self.stop()
 
-        self._addon = RecordingAddon(recording_id=recording_id, queue_file=queue_file, queue_write_lock=queue_write_lock)
+        self._addon = RecordingAddon(
+            recording_id=recording_id, queue_file=queue_file, queue_write_lock=queue_write_lock
+        )
         ready = threading.Event()
         errors: List[Exception] = []
 
@@ -137,7 +140,9 @@ class ProxyRecorder:
             async def _init_and_run() -> None:
                 opts = options.Options(listen_host=self.host, listen_port=self.port)
                 self._master = DumpMaster(
-                    opts, with_termlog=False, with_dumper=False,
+                    opts,
+                    with_termlog=False,
+                    with_dumper=False,
                 )
                 self._master.addons.add(self._addon)
                 ready.set()

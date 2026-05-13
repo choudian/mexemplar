@@ -2,6 +2,7 @@ import src.data.duckdb_manager as duckdb_module
 from src.data.duckdb_manager import DuckDBManager
 from src.data.recording_repository import RecordingRepository
 from src.recording.desktop.pynput_hook import DesktopActionEvent
+from src.recording.desktop.pynput_hook import RecorderStartFailed
 from src.recording.desktop.clip_sink import ClipWriteResult
 from src.recording.desktop.frame_ring_buffer import FrameSample
 from src.recording.desktop_recorder import ActiveDesktopRecorderRegistry, DesktopRecorder
@@ -17,6 +18,11 @@ class _FakeHook:
 
     def stop(self):
         self.stopped = True
+
+
+class _FailingHook(_FakeHook):
+    def start(self):
+        raise RecorderStartFailed("hook denied")
 
 
 class _FakeClipboard:
@@ -143,6 +149,41 @@ def test_desktop_recorder_lifecycle_persists_health_stats(tmp_path):
         assert repo.get_desktop_recording_meta("rec-1")["health_stats"]["action_type_counts"] == {
             "typing": 1
         }
+    finally:
+        ActiveDesktopRecorderRegistry._active.clear()
+        db.close()
+        duckdb_module._duckdb_instance = old_instance
+
+
+def test_desktop_recorder_start_failure_marks_recording_abandoned(tmp_path):
+    old_instance = duckdb_module._duckdb_instance
+    duckdb_module._duckdb_instance = None
+    ActiveDesktopRecorderRegistry._active.clear()
+    db = DuckDBManager(str(tmp_path / "recorder-start-failure.duckdb"))
+    db.initialize()
+    repo = RecordingRepository(db)
+    recorder = DesktopRecorder(
+        "rec-fail",
+        repository=repo,
+        recording_root=tmp_path / "rec",
+        hook=_FailingHook(),
+        clipboard_watcher=_FakeClipboard(),
+        hotkey=_FakeHotkey(),
+        enable_frame_capture=False,
+    )
+    try:
+        try:
+            recorder.start()
+        except RecorderStartFailed:
+            pass
+        else:
+            raise AssertionError("start should fail")
+
+        meta = repo.get_desktop_recording_meta("rec-fail")
+        assert meta["status"] == "abandoned"
+        assert meta["end_time"] is not None
+        assert "hook_register_failed" in meta["health_stats"]["degraded_reasons"]
+        assert ActiveDesktopRecorderRegistry.state()["active"] is False
     finally:
         ActiveDesktopRecorderRegistry._active.clear()
         db.close()

@@ -43,9 +43,7 @@ def test_normalize_members_sorts_selected_order_for_ordered_mode():
 
 
 def test_normalize_members_rejects_unpublished_tools():
-    repo = _FakeToolRepo(
-        [Tool(tool_id="tool_hidden", tool_name="隐藏技能", status="draft")]
-    )
+    repo = _FakeToolRepo([Tool(tool_id="tool_hidden", tool_name="隐藏技能", status="draft")])
 
     with pytest.raises(SkillCompositionError, match="只能将已掌握技能加入技能组合"):
         normalize_members(
@@ -119,11 +117,14 @@ def test_service_get_execution_snapshot_delegates_to_trial_runner():
         get_execution_snapshot=fake_get_execution_snapshot
     )
 
-    assert service.get_execution_snapshot(
-        "comp_split",
-        require_published=False,
-        require_assistant_enabled=False,
-    ) == "snapshot"
+    assert (
+        service.get_execution_snapshot(
+            "comp_split",
+            require_published=False,
+            require_assistant_enabled=False,
+        )
+        == "snapshot"
+    )
     assert captured == {
         "composition_id": "comp_split",
         "require_published": False,

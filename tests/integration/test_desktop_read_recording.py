@@ -40,9 +40,7 @@ def test_desktop_recording_meta_and_action_summary(tmp_path):
         assert payload["summary"]["action_count"] == 12
         assert payload["summary"]["type_counts"] == {"mouse_left": 6, "typing": 6}
         assert len(payload["summary"]["actions_preview"]) == 10
-        assert "a5" not in {
-            action["action_id"] for action in payload["summary"]["actions_preview"]
-        }
+        assert "a5" not in {action["action_id"] for action in payload["summary"]["actions_preview"]}
     finally:
         db.close()
         duckdb_module._duckdb_instance = old_instance

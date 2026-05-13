@@ -74,7 +74,9 @@ class TestGetDisplayPageFilters:
 
     def test_excludes_compressed_messages(self, session_id):
         seed_message(session_id, sequence=1, role="user", content="hello")
-        seed_message(session_id, sequence=2, role="assistant", content="old", message_type="compressed")
+        seed_message(
+            session_id, sequence=2, role="assistant", content="old", message_type="compressed"
+        )
         seed_message(session_id, sequence=3, role="assistant", content="reply")
         repo = MessageRepository()
         page = repo.get_display_page(session_id, limit=10)
@@ -92,10 +94,25 @@ class TestGetDisplayPageFilters:
 
     def test_excludes_tool_call_only_assistant(self, session_id):
         seed_message(session_id, sequence=1, role="user", content="hello")
-        seed_message(session_id, sequence=2, role="assistant", content="", tool_calls='[{"id":"t1"}]')
+        seed_message(
+            session_id, sequence=2, role="assistant", content="", tool_calls='[{"id":"t1"}]'
+        )
         repo = MessageRepository()
         page = repo.get_display_page(session_id, limit=10)
         assert len(page) == 1
+
+    def test_get_display_after_reuses_display_filter(self, session_id):
+        seed_message(session_id, sequence=1, role="user", content="hello")
+        seed_message(session_id, sequence=2, role="tool", content="hidden")
+        seed_message(
+            session_id, sequence=3, role="assistant", content="old", message_type="compressed"
+        )
+        seed_message(session_id, sequence=4, role="assistant", content="reply")
+        repo = MessageRepository()
+
+        rows = repo.get_display_after(session_id, after_sequence=1)
+
+        assert [(row.sequence, row.content) for row in rows] == [(4, "reply")]
 
 
 class TestGetDisplayPageValidation:

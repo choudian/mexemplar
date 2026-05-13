@@ -319,13 +319,26 @@ class AgentLoop:
                     exc,
                     exc_info=True,
                 )
-                return None, True
+                return (
+                    ToolExecutionOutcome(
+                        make_error_result(
+                            "pre_hook_exception",
+                            f"工具 '{context.tool_name}' 执行前检查异常，已拒绝执行。",
+                        ),
+                        failed=True,
+                        failure_code="pre_hook_exception",
+                    ),
+                    False,
+                )
             if result is not None and result.error is not None:
-                return ToolExecutionOutcome(
-                    make_error_result("pre_hook_rejected", result.error),
-                    failed=True,
-                    failure_code="pre_hook_rejected",
-                ), False
+                return (
+                    ToolExecutionOutcome(
+                        make_error_result("pre_hook_rejected", result.error),
+                        failed=True,
+                        failure_code="pre_hook_rejected",
+                    ),
+                    False,
+                )
         return None, False
 
     def _run_post_hooks(

@@ -274,6 +274,7 @@ class WebSocketServer:
 
             # 在事件循环中延迟 1 秒后重启，不阻塞当前线程
             if self._loop and self._loop.is_running():
+
                 async def _delayed_restart():
                     await asyncio.sleep(1)
                     await self._restart_server(new_host, new_port)
@@ -382,7 +383,9 @@ class WebSocketServer:
                 return  # 正常退出
             except OSError as e:
                 if e.errno == 10048 and attempt < max_retries - 1:  # WSAEADDRINUSE on Windows
-                    logger.warning(f"[WS] 端口 {self.port} 被占用，等待释放... (重试 {attempt + 1}/{max_retries})")
+                    logger.warning(
+                        f"[WS] 端口 {self.port} 被占用，等待释放... (重试 {attempt + 1}/{max_retries})"
+                    )
                     await asyncio.sleep(2)
                 else:
                     self._is_running = False

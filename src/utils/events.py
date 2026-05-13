@@ -38,7 +38,7 @@ desktop_recording_degraded = _signals.signal("desktop_recording_degraded")
 """桌面录制降级事件"""
 
 desktop_stop_requested = _signals.signal("desktop_stop_requested")
-"""桌面录制停止请求事件（由热键等非 UI 入口触发，UI 层订阅后走正式停止流程）"""
+"""桌面录制停止请求事件（由热键等非 API 入口触发，需由 desktop API adapter 接入正式停止流程）"""
 
 desktop_syntax_gate_retry_failed = _signals.signal("desktop_syntax_gate_retry_failed")
 """桌面 Programmer 语法门卫重试失败事件"""
@@ -93,6 +93,18 @@ teaching_failure_resolved = _signals.signal("teaching_failure_resolved")
 
 teaching_failure_retrying = _signals.signal("teaching_failure_retrying")
 """开始重试"""
+
+settings_changed = _signals.signal("settings_changed")
+"""设置变更事件"""
+
+skills_changed = _signals.signal("skills_changed")
+"""工具增删变更事件"""
+
+composition_review_needed = _signals.signal("composition_review_needed")
+"""技能组合需要审核事件"""
+
+trial_requested = _signals.signal("trial_requested")
+"""工具试用请求事件"""
 
 # =============================================================================
 # 事件数据类
@@ -171,7 +183,7 @@ def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
     try:
         signal.send(sender, event_name=signal_name, **kwargs)
     except Exception as exc:
-        logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}")
+        logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}", exc_info=True)
 
 
 def emit_collect(signal_name: str, sender: Any = None, **kwargs) -> list[tuple[Any, Any]]:
@@ -186,7 +198,7 @@ def emit_collect(signal_name: str, sender: Any = None, **kwargs) -> list[tuple[A
     try:
         return signal.send(sender, event_name=signal_name, **kwargs)
     except Exception as exc:
-        logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}")
+        logger.error(f"[Events] 监听器处理 {signal_name} 时异常: {exc}", exc_info=True)
         return []
 
 
@@ -219,6 +231,10 @@ _signal_names = [
     "teaching_failure_updated",
     "teaching_failure_resolved",
     "teaching_failure_retrying",
+    "settings_changed",
+    "skills_changed",
+    "composition_review_needed",
+    "trial_requested",
 ]
 
 
@@ -261,6 +277,10 @@ __all__ = [
     "teaching_failure_updated",
     "teaching_failure_resolved",
     "teaching_failure_retrying",
+    "settings_changed",
+    "skills_changed",
+    "composition_review_needed",
+    "trial_requested",
     # 数据类
     "RecordingEventData",
     # 函数

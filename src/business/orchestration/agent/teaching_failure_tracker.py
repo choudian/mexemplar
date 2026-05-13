@@ -113,7 +113,9 @@ class TeachingFailureTracker:
     def mark_retrying(self, workflow_id: str):
         record = self._failure_repo.get_by_workflow_id(workflow_id)
         if not record:
-            self._logger.warning(f"[Orchestrator] 重试失败：找不到 workflow_id={workflow_id} 的失败记录")
+            self._logger.warning(
+                f"[Orchestrator] 重试失败：找不到 workflow_id={workflow_id} 的失败记录"
+            )
             self._event_bus.emit(
                 "agent_error",
                 workflow_id=workflow_id,

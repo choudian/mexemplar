@@ -180,7 +180,7 @@ def test_recursive_args_are_read_only_and_isolated(mock_config, in_memory_db):
     assert json.loads(_tool_results(loop, "hook-args-freeze")[0].content) == args
 
 
-def test_pre_hook_exception_runs_handler_and_skips_post_hook(caplog, mock_config, in_memory_db):
+def test_pre_hook_exception_rejects_handler_and_logs(caplog, mock_config, in_memory_db):
     calls = {"handler": 0, "post": 0}
 
     def pre_hook(ctx):
@@ -211,8 +211,10 @@ def test_pre_hook_exception_runs_handler_and_skips_post_hook(caplog, mock_config
         "hook-pre-exception",
     )
 
-    assert calls == {"handler": 1, "post": 0}
-    assert _tool_results(loop, "hook-pre-exception")[0].content == "handler-result"
+    payload = json.loads(_tool_results(loop, "hook-pre-exception")[0].content)
+
+    assert calls == {"handler": 0, "post": 0}
+    assert payload["error"] == "pre_hook_exception"
     assert "pre_hook" in caplog.text
 
 
@@ -249,9 +251,7 @@ def test_post_hook_exception_returns_original_and_logs_warning(caplog, mock_conf
     assert "post_hook" in caplog.text
 
 
-def test_later_post_hook_exception_discards_earlier_rewrite(
-    caplog, mock_config, in_memory_db
-):
+def test_later_post_hook_exception_discards_earlier_rewrite(caplog, mock_config, in_memory_db):
     def global_post(ctx, result):
         raise RuntimeError("global post failed")
 
