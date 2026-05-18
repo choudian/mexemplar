@@ -10,6 +10,7 @@ import {
 } from "../api/settings";
 import type { SettingDescriptor, SettingSection, SettingValue, SettingsActionResponse } from "../api/settings";
 import type { UiEvent } from "../api/client";
+import { toErrorMessage } from "./helpers";
 
 export type SettingsState = {
   hydrated: boolean;
@@ -33,10 +34,6 @@ export type SettingsState = {
   markHydrated: () => void;
   setError: (message: string | null) => void;
 };
-
-function message(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 function descriptors(sections: SettingSection[]): SettingDescriptor[] {
   return sections.flatMap((section) => section.items);
@@ -96,7 +93,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         validationErrors: {},
       });
     } catch (error) {
-      set({ lastError: message(error, "无法加载设置。") });
+      set({ lastError: toErrorMessage(error, "无法加载设置。") });
     } finally {
       set({ busy: false });
     }
@@ -127,7 +124,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         validationErrors: {},
       });
     } catch (error) {
-      set({ lastError: message(error, "无法保存设置。") });
+      set({ lastError: toErrorMessage(error, "无法保存设置。") });
     } finally {
       set({ busy: false });
     }
@@ -144,7 +141,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({ secrets, validationErrors: { ...get().validationErrors, [secretKey]: "" } });
       await get().load();
     } catch (error) {
-      set({ lastError: message(error, "无法保存密钥。") });
+      set({ lastError: toErrorMessage(error, "无法保存密钥。") });
     } finally {
       set({ busy: false });
     }
@@ -156,7 +153,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       set({ secrets: { ...get().secrets, [secretKey]: response } });
       await get().load();
     } catch (error) {
-      set({ lastError: message(error, "无法删除密钥。") });
+      set({ lastError: toErrorMessage(error, "无法删除密钥。") });
     } finally {
       set({ busy: false });
     }
@@ -167,7 +164,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const response = await runSettingAction(actionName, options);
       set({ actionResults: { ...get().actionResults, [actionName]: response } });
     } catch (error) {
-      set({ lastError: message(error, "设置动作执行失败。") });
+      set({ lastError: toErrorMessage(error, "设置动作执行失败。") });
     } finally {
       set({ busy: false });
     }

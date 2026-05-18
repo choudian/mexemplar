@@ -43,6 +43,7 @@ class SQLAlchemyManager:
         self.engine = None
         self.SessionLocal = None
         self._initialized = False
+        self._init_lock = threading.Lock()
 
         logger.debug(f"SQLAlchemy Manager initialized: {self.db_path}")
 
@@ -53,58 +54,53 @@ class SQLAlchemyManager:
         if self._initialized:
             return
 
-        try:
-            # 创建 SQLite 引擎
-            # check_same_thread=False 允许多线程访问
-            # :memory: 数据库必须用 StaticPool（否则每次新连接创建空数据库）
-            # 文件数据库用 NullPool 避免多线程共享同一连接导致 InterfaceError
-            is_memory = self.db_path == ":memory:"
-            self.engine = create_engine(
-                f"sqlite:///{self.db_path}",
-                connect_args={"check_same_thread": False},
-                poolclass=StaticPool if is_memory else NullPool,
-                echo=False,  # 设置为 True 可以查看 SQL 语句
-            )
+        with self._init_lock:
+            if self._initialized:
+                return
 
-            # 注册连接事件：每个新连接加载 sqlite-vec 扩展（可选）
-            @event.listens_for(self.engine, "connect")
-            def _load_sqlite_vec(dbapi_conn, _connection_record):
-                try:
-                    import sqlite_vec
-
-                    dbapi_conn.enable_load_extension(True)
-                    dbapi_conn.load_extension(sqlite_vec.loadable_path())
-                    dbapi_conn.enable_load_extension(False)
-                except (ImportError, Exception):
-                    pass  # sqlite-vec 未安装，向量搜索将降级为 FTS
-
-            # 创建会话工厂
-            self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
-
-            # 创建所有 ORM 表（新安装直接获得最新 schema）
-            Base.metadata.create_all(self.engine)
-
-            # 确保 schema_version 有初始行（新安装时表为空）
-            with self.engine.connect() as conn:
-                conn.execute(
-                    text(
-                        "INSERT INTO schema_version (version) "
-                        "SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
-                    )
+            try:
+                is_memory = self.db_path == ":memory:"
+                self.engine = create_engine(
+                    f"sqlite:///{self.db_path}",
+                    connect_args={"check_same_thread": False},
+                    poolclass=StaticPool if is_memory else NullPool,
+                    echo=False,
                 )
-                conn.commit()
 
-            # 运行增量迁移（为旧版安装补充缺失列/表）
-            from src.data.migrations import run_migrations
+                @event.listens_for(self.engine, "connect")
+                def _load_sqlite_vec(dbapi_conn, _connection_record):
+                    try:
+                        import sqlite_vec
 
-            run_migrations(self.engine)
+                        dbapi_conn.enable_load_extension(True)
+                        dbapi_conn.load_extension(sqlite_vec.loadable_path())
+                        dbapi_conn.enable_load_extension(False)
+                    except (ImportError, Exception):
+                        pass
 
-            self._initialized = True
-            logger.info(f"SQLAlchemy 数据库已初始化: {self.db_path}")
+                self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
 
-        except Exception as e:
-            logger.error(f"SQLAlchemy 初始化失败: {e}")
-            raise
+                Base.metadata.create_all(self.engine)
+
+                with self.engine.connect() as conn:
+                    conn.execute(
+                        text(
+                            "INSERT INTO schema_version (version) "
+                            "SELECT 0 WHERE NOT EXISTS (SELECT 1 FROM schema_version)"
+                        )
+                    )
+                    conn.commit()
+
+                from src.data.migrations import run_migrations
+
+                run_migrations(self.engine)
+
+                self._initialized = True
+                logger.info(f"SQLAlchemy 数据库已初始化: {self.db_path}")
+
+            except Exception as e:
+                logger.error(f"SQLAlchemy 初始化失败: {e}")
+                raise
 
     def get_session(self) -> Session:
         """

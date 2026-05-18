@@ -33,6 +33,7 @@ class PendingTool:
 
     pending_tool_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     intent_id: str = ""  # 关联的意图 ID
+    workflow_id: Optional[str] = None
 
     # 工具基本信息
     tool_name: str = ""

@@ -1,18 +1,15 @@
-export function SafeMarkdown({ content }: { content: string }): JSX.Element {
-  const lines = content.split(/\r?\n/);
+import { memo } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+
+const REMARK_PLUGINS = [remarkGfm];
+
+export const SafeMarkdown = memo(function SafeMarkdown({ content }: { content: string }): JSX.Element {
   return (
     <div className="assistant-markdown">
-      {lines.map((line, index) => {
-        if (line.startsWith("### ")) {
-          return <h4 key={`${line}-${index}`}>{line.slice(4)}</h4>;
-        }
-        if (line.startsWith("- ")) {
-          return <p key={`${line}-${index}`}>• {line.slice(2)}</p>;
-        }
-        return <p key={`${line}-${index}`}>{line || "\u00a0"}</p>;
-      })}
+      <ReactMarkdown remarkPlugins={REMARK_PLUGINS}>{content}</ReactMarkdown>
     </div>
   );
-}
+});
 
 export default SafeMarkdown;

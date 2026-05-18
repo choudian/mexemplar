@@ -6,6 +6,7 @@ import { Button } from "../../components/primitives";
 import { useSkillsStore } from "../../state/skillsStore";
 import { useShellStore } from "../../state/shellStore";
 import SkillCards from "./SkillCards";
+import { SkillTrialDialog } from "./SkillTrialDialog";
 
 const categories: { id: SkillCategory; label: string }[] = [
   { id: "pending", label: "待考核" },
@@ -22,7 +23,7 @@ export function SkillListScreen(): JSX.Element {
   const setCategory = useSkillsStore((state) => state.setCategory);
   const setQuery = useSkillsStore((state) => state.setQuery);
   const loadCategory = useSkillsStore((state) => state.loadCategory);
-  const runTrial = useSkillsStore((state) => state.runTrial);
+  const openTrial = useSkillsStore((state) => state.openTrial);
   const deleteSkill = useSkillsStore((state) => state.deleteSkill);
   const retryFailure = useSkillsStore((state) => state.retryFailure);
   const dismissFailure = useSkillsStore((state) => state.dismissFailure);
@@ -87,7 +88,7 @@ export function SkillListScreen(): JSX.Element {
         category={activeCategory}
         skills={filteredSkills}
         onTrial={(toolId) => {
-          void runTrial(toolId);
+          openTrial(toolId);
         }}
         onDelete={(toolId) => {
           void deleteSkill(toolId);
@@ -100,6 +101,7 @@ export function SkillListScreen(): JSX.Element {
         }}
       />
       {lastError ? <div className="skills-error">{lastError}</div> : null}
+      <SkillTrialDialog />
     </section>
   );
 }

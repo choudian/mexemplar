@@ -5,11 +5,12 @@ import {
   dismissFailure,
   getSkills,
   retryFailure,
-  startSkillTrial,
   updateSkillMetadata,
 } from "../api/skills";
 import type { SkillCategory, SkillSummary } from "../api/skills";
 import type { UiEvent } from "../api/client";
+import { useTeachingStore } from "./teachingStore";
+import { toErrorMessage } from "./helpers";
 
 export type SkillsState = {
   hydrated: boolean;
@@ -21,7 +22,7 @@ export type SkillsState = {
   setCategory: (category: SkillCategory) => void;
   setQuery: (query: string) => void;
   loadCategory: (category?: SkillCategory) => Promise<void>;
-  runTrial: (toolId: string) => Promise<void>;
+  openTrial: (toolId: string) => void;
   updateMetadata: (toolId: string, name: string, description: string) => Promise<void>;
   deleteSkill: (toolId: string) => Promise<void>;
   retryFailure: (workflowId: string) => Promise<void>;
@@ -30,10 +31,6 @@ export type SkillsState = {
   markHydrated: () => void;
   setError: (message: string | null) => void;
 };
-
-function message(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
 
 export const useSkillsStore = create<SkillsState>((set, get) => ({
   hydrated: false,
@@ -55,13 +52,13 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
         categories: { ...get().categories, [category]: response.items ?? [] },
       });
     } catch (error) {
-      set({ lastError: message(error, "无法加载技能列表。") });
+      set({ lastError: toErrorMessage(error, "无法加载技能列表。") });
     } finally {
       set({ busy: false });
     }
   },
-  runTrial: async (toolId) => {
-    await startSkillTrial(toolId);
+  openTrial: (toolId) => {
+    useTeachingStore.getState().openSkillTrial(toolId);
   },
   updateMetadata: async (toolId, name, description) => {
     await updateSkillMetadata(toolId, { name, description });

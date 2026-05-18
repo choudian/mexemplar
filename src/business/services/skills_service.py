@@ -21,46 +21,43 @@ class SkillsService:
     def __init__(
         self,
         trial_starter: Callable[[str, str], bool | None] | None = None,
+        trial_replier: Callable[[str, str], bool | None] | None = None,
         retry_starter: Callable[[str], bool | None] | None = None,
+        trial_history_loader: Callable[[str], list[dict]] | None = None,
     ) -> None:
         self._trial_starter = trial_starter
+        self._trial_replier = trial_replier
         self._retry_starter = retry_starter
+        self._trial_history_loader = trial_history_loader
 
     def get_tools(self) -> tuple[list, list]:
-        """
-        读取全部工具，按状态分为待考核和已掌握两组。
-
-        Returns:
-            (pending_tools, published_tools)
-            pending_tools: list[PendingTool]（来自 intent 且未 published）
-            published_tools: list[Tool]（status == "published"）
-        """
+        """读取全部工具，按状态分为待考核和已掌握两组。"""
         from src.business.tool_trial.trial_models import PendingTool, PendingToolStatus
-
-        all_tools = ToolRepository().get_all()
 
         pending_tools: list[PendingTool] = []
         published_tools = []
 
-        for tool in all_tools:
-            if tool.status == "published":
-                published_tools.append(tool)
-            elif tool.source == "intent":
-                pending_tools.append(
-                    PendingTool(
-                        pending_tool_id=tool.tool_id,
-                        tool_name=tool.tool_name,
-                        tool_description=tool.description,
-                        execution_code=tool.execution_code,
-                        execution_strategy=tool.execution_strategy,
-                        parameters=tool.parameters if tool.parameters else [],
-                        status=PendingToolStatus.PENDING_TRIAL,
-                        trial_count=tool.trial_success_count,
-                        max_trials=3,
-                        created_at=tool.created_at,
-                        updated_at=tool.updated_at,
+        with ToolRepository() as repo:
+            for tool in repo.get_all():
+                if tool.status == "published":
+                    published_tools.append(tool)
+                elif tool.source == "intent":
+                    pending_tools.append(
+                        PendingTool(
+                            pending_tool_id=tool.tool_id,
+                            workflow_id=tool.workflow_id,
+                            tool_name=tool.tool_name,
+                            tool_description=tool.description,
+                            execution_code=tool.execution_code,
+                            execution_strategy=tool.execution_strategy,
+                            parameters=tool.parameters if tool.parameters else [],
+                            status=PendingToolStatus.PENDING_TRIAL,
+                            trial_count=tool.trial_success_count,
+                            max_trials=3,
+                            created_at=tool.created_at,
+                            updated_at=tool.updated_at,
+                        )
                     )
-                )
 
         return pending_tools, published_tools
 
@@ -99,29 +96,22 @@ class SkillsService:
 
     def get_active_failures(self) -> list:
         """读取当前活跃的教学失败记录"""
-        return TeachingFailureRepository().get_active_failures()
+        with TeachingFailureRepository() as repo:
+            return repo.get_active_failures()
 
     def get_tool_workflow_id(self, tool_id: str) -> Optional[str]:
-        """
-        按 tool_id 查询对应的 workflow_id。
-
-        Returns:
-            workflow_id 字符串，工具不存在或无 workflow_id 时返回 None。
-        """
-        tool = ToolRepository().get_by_id(tool_id)
-        if tool is None:
-            logger.error(f"找不到工具: {tool_id}")
-            return None
-        if not tool.workflow_id:
-            logger.error(f"工具 {tool_id} 没有 workflow_id")
-            return None
-        return tool.workflow_id
+        with ToolRepository() as repo:
+            tool = repo.get_by_id(tool_id)
+            if tool is None:
+                return None
+            return tool.workflow_id or None
 
     def delete_tool(self, tool_id: str) -> None:
         """删除技能。被任意技能组合引用时不允许删除。"""
         from src.business.services.skill_composition_service import SkillCompositionService
 
-        tool = ToolRepository().get_by_id(tool_id)
+        with ToolRepository() as repo:
+            tool = repo.get_by_id(tool_id)
         if tool is None:
             raise ValueError("技能不存在")
 
@@ -130,7 +120,8 @@ class SkillsService:
             names = "、".join(comp.composition_name for comp in referenced[:5])
             raise ValueError(f"该技能正在被技能组合引用，无法删除：{names}")
 
-        ToolRepository().delete(tool_id)
+        with ToolRepository() as repo:
+            repo.delete(tool_id)
         emit("skills_changed", sender=self, tool_id=tool_id, action="deleted")
 
     def update_tool_metadata(self, tool_id: str, name: str, description: str) -> list[str]:
@@ -157,52 +148,71 @@ class SkillsService:
             emit("composition_review_needed", sender=self, tool_id=tool_id)
         return [comp.composition_name for comp in referenced]
 
+    def get_trial_history(self, tool_id: str) -> dict[str, object]:
+        workflow_id = self.get_tool_workflow_id(tool_id)
+        if not workflow_id or not self._trial_history_loader:
+            return {"messages": [], "workflowId": None}
+        messages = self._trial_history_loader(workflow_id)
+        return {"messages": messages, "workflowId": workflow_id}
+
     def start_trial(self, tool_id: str) -> dict[str, object]:
+        result = self._invoke_trial_action(
+            tool_id, self._trial_starter, "技能试用执行器", tool_id,
+        )
+        if result.get("accepted"):
+            emit("trial_requested", sender=self, tool_id=tool_id, workflow_id=result["workflowId"])
+        return result
+
+    def continue_trial(self, tool_id: str, content: str) -> dict[str, object]:
+        return self._invoke_trial_action(
+            tool_id, self._trial_replier, "技能试用回复器", tool_id, content,
+        )
+
+    def _invoke_trial_action(
+        self, tool_id: str, executor: Callable | None, label: str, *args: object,
+    ) -> dict[str, object]:
         workflow_id = self.get_tool_workflow_id(tool_id)
         if not workflow_id:
             raise ValueError("技能不存在或缺少 workflow_id")
-        if self._trial_starter is None:
-            raise ValueError("技能试用执行器不可用")
-        accepted = self._trial_starter(tool_id, workflow_id)
+        if executor is None:
+            raise ValueError(f"{label}不可用")
+        accepted = executor(*args)
         if accepted is False:
-            return {
-                "accepted": False,
-                "toolId": tool_id,
-                "workflowId": workflow_id,
-                "message": "技能试用已在运行",
-            }
-        emit("trial_requested", sender=self, tool_id=tool_id, workflow_id=workflow_id)
+            return {"accepted": False, "toolId": tool_id, "workflowId": workflow_id, "message": "技能试用已在运行"}
         return {"accepted": True, "toolId": tool_id, "workflowId": workflow_id}
 
-    def retry_failure(self, workflow_id: str) -> dict[str, object]:
-        repo = TeachingFailureRepository()
-        record = repo.get_by_workflow_id(workflow_id)
-        if record is None:
-            raise ValueError("失败记录不存在")
-        if record.status != "active":
-            return {
-                "accepted": False,
-                "workflowId": workflow_id,
-                "message": "失败记录当前不可重试",
-            }
-        if self._retry_starter is None:
-            raise ValueError("教学重试执行器不可用")
-        accepted = self._retry_starter(workflow_id)
+    def _invoke_action(
+        self, executor: Callable | None, label: str, busy_message: str, workflow_id: str, *args: object,
+    ) -> dict[str, object]:
+        if executor is None:
+            raise ValueError(f"{label}不可用")
+        accepted = executor(*args)
         if accepted is False:
-            return {
-                "accepted": False,
-                "workflowId": workflow_id,
-                "message": "教学重试已在运行",
-            }
+            return {"accepted": False, "workflowId": workflow_id, "message": busy_message}
         return {"accepted": True, "workflowId": workflow_id}
 
+    def retry_failure(self, workflow_id: str) -> dict[str, object]:
+        with TeachingFailureRepository() as repo:
+            record = repo.get_by_workflow_id(workflow_id)
+            if record is None:
+                raise ValueError("失败记录不存在")
+            if record.status != "active":
+                return {
+                    "accepted": False,
+                    "workflowId": workflow_id,
+                    "message": "失败记录当前不可重试",
+                }
+        return self._invoke_action(
+            self._retry_starter, "教学重试执行器", "教学重试已在运行", workflow_id, workflow_id,
+        )
+
     def dismiss_failure(self, workflow_id: str) -> dict[str, object]:
-        repo = TeachingFailureRepository()
-        record = repo.get_by_workflow_id(workflow_id)
-        if record is None:
-            raise ValueError("失败记录不存在")
-        record.status = "dismissed"
-        repo.update(record)
+        with TeachingFailureRepository() as repo:
+            record = repo.get_by_workflow_id(workflow_id)
+            if record is None:
+                raise ValueError("失败记录不存在")
+            record.status = "dismissed"
+            repo.update(record)
         emit("teaching_failure_updated", sender=self, workflow_id=workflow_id, status="dismissed")
         return {"accepted": True, "workflowId": workflow_id}
 
@@ -227,6 +237,7 @@ class SkillsService:
             "status": "pending",
             "source": "intent",
             "trialSuccessCount": tool.trial_count or 0,
+            "workflowId": tool.workflow_id,
         }
 
     @staticmethod

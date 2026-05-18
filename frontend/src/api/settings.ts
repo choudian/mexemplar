@@ -1,5 +1,4 @@
 import { requestJson } from "./client";
-import type { DesktopApiClient } from "./client";
 
 export type SettingSectionId = "ai" | "recording" | "data" | "about";
 export type SettingValueKind = "string" | "integer" | "number" | "boolean" | "enum" | "path" | "secret" | "action";
@@ -79,8 +78,3 @@ export function runSettingAction(
   });
 }
 
-export type SettingsResult = SettingsValuesResponse;
-
-export async function fetchSettings(client: DesktopApiClient): Promise<SettingsResult> {
-  return client.request<SettingsResult>("/api/settings/values");
-}

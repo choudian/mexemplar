@@ -225,6 +225,10 @@ class SkillActionResponse(BaseModel):
     message: str = ""
 
 
+class SkillTrialReplyRequest(BaseModel):
+    content: str = Field(min_length=1)
+
+
 class CompositionMemberRequest(BaseModel):
     toolId: str = Field(min_length=1)
     selectedOrder: int = Field(default=1, ge=1)

@@ -11,6 +11,7 @@ import {
 } from "../api/compositions";
 import type { CompositionInput, CompositionMember, CompositionMode, CompositionSummary } from "../api/compositions";
 import type { UiEvent } from "../api/client";
+import { toErrorMessage } from "./helpers";
 
 const emptyDraft: CompositionInput = {
   name: "",
@@ -44,10 +45,6 @@ export type CompositionsState = {
   setError: (message: string | null) => void;
 };
 
-function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
-}
-
 function toDraft(item: CompositionSummary): CompositionInput {
   return {
     name: item.name,
@@ -72,7 +69,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
     try {
       set({ items: await listCompositions(), hydrated: true });
     } catch (error) {
-      set({ lastError: errorMessage(error, "无法加载技能组合。") });
+      set({ lastError: toErrorMessage(error, "无法加载技能组合。") });
     } finally {
       set({ busy: false });
     }
@@ -135,7 +132,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
       const response = await requestApplicability(get().selectedId ?? "draft", get().draft);
       set({ draft: { ...get().draft, applicability: response.applicability } });
     } catch (error) {
-      set({ lastError: errorMessage(error, "无法生成适用场景。") });
+      set({ lastError: toErrorMessage(error, "无法生成适用场景。") });
     } finally {
       set({ busy: false });
     }
@@ -148,7 +145,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
         set({ draft: { ...get().draft, members: response.members } });
       }
     } catch (error) {
-      set({ lastError: errorMessage(error, "无法推荐顺序。") });
+      set({ lastError: toErrorMessage(error, "无法推荐顺序。") });
     } finally {
       set({ busy: false });
     }
@@ -165,7 +162,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
         : [saved, ...get().items];
       set({ items, selectedId: saved.compositionId, draft: toDraft(saved) });
     } catch (error) {
-      set({ lastError: errorMessage(error, "无法保存技能组合。") });
+      set({ lastError: toErrorMessage(error, "无法保存技能组合。") });
     } finally {
       set({ busy: false });
     }

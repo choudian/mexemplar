@@ -1,5 +1,4 @@
 import { requestJson } from "./client";
-import type { DesktopApiClient } from "./client";
 
 export type CompositionMode = "range" | "ordered";
 
@@ -93,8 +92,3 @@ export function publishComposition(compositionId: string): Promise<CompositionSu
   });
 }
 
-export type CompositionsResult = Record<string, unknown>;
-
-export async function fetchCompositions(client: DesktopApiClient): Promise<CompositionsResult> {
-  return client.request<CompositionsResult>("/api/compositions");
-}

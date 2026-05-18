@@ -11,6 +11,7 @@ import {
 } from "../api/assistant";
 import type { AssistantConfirmation, AssistantMessage, AssistantSession } from "../api/assistant";
 import type { UiEvent } from "../api/client";
+import { toErrorMessage } from "./helpers";
 
 type AssistantProgress = {
   status: "idle" | "running" | "waiting_for_user" | "succeeded" | "failed";
@@ -82,7 +83,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       const sessions = await listAssistantSessions(get().query);
       set({ sessions, hydrated: true });
     } catch (error) {
-      set({ lastError: error instanceof Error ? error.message : "无法加载对话列表。" });
+      set({ lastError: toErrorMessage(error, "无法加载对话列表。") });
     } finally {
       set({ loadingSessions: false });
     }
@@ -105,7 +106,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         confirmations: get().confirmations.filter((item) => item.sessionId === sessionId),
       });
     } catch (error) {
-      set({ lastError: error instanceof Error ? error.message : "无法加载对话消息。" });
+      set({ lastError: toErrorMessage(error, "无法加载对话消息。") });
     } finally {
       set({ loadingMessages: false });
     }
@@ -127,7 +128,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         nextBeforeSequence: page.nextBeforeSequence,
       });
     } catch (error) {
-      set({ lastError: error instanceof Error ? error.message : "无法加载更早消息。" });
+      set({ lastError: toErrorMessage(error, "无法加载更早消息。") });
     } finally {
       set({ loadingMessages: false });
     }
@@ -187,7 +188,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
           optimisticSequence === null
             ? get().messages
             : get().messages.filter((message) => message.sequence !== optimisticSequence),
-        lastError: error instanceof Error ? error.message : "消息发送失败。",
+        lastError: toErrorMessage(error, "消息发送失败。"),
       });
     } finally {
       set({ sending: false });

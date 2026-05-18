@@ -64,38 +64,6 @@ export class DesktopApiError extends Error {
   }
 }
 
-export interface DesktopApiClientOptions {
-  baseUrl: string;
-  token: string;
-}
-
-export class DesktopApiClient {
-  private readonly baseUrl: string;
-  private readonly token: string;
-
-  constructor(options: DesktopApiClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/$/, "");
-    this.token = options.token;
-  }
-
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        "Content-Type": "application/json",
-        "X-Mexemplar-Session": this.token,
-        ...init.headers,
-      },
-    });
-
-    if (!response.ok) {
-      throw new DesktopApiError(response.status, "desktop_api_error", response.statusText);
-    }
-
-    return (await response.json()) as T;
-  }
-}
-
 let baseUrl = (import.meta.env.VITE_MEXEMPLAR_API_BASE_URL as string | undefined) ?? "";
 let sessionToken = (import.meta.env.VITE_MEXEMPLAR_SESSION_TOKEN as string | undefined) ?? "";
 
@@ -152,53 +120,68 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
   return (await response.json()) as T;
 }
 
-export function getHealth(): Promise<BackendConnectionState> {
-  return requestJson<BackendConnectionState>("/api/health");
-}
-
 export function getBootstrap(): Promise<BootstrapResponse> {
   return requestJson<BootstrapResponse>("/api/bootstrap");
 }
+
+const SSE_RETRY_DELAYS = [1000, 2000, 4000, 8000];
+const SSE_MAX_RETRIES = 20;
+const SSE_MAX_GRACEFUL_RECONNECTS = 50;
 
 export async function connectEvents(
   onEvent: (event: UiEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {
-  const response = await fetch(`${baseUrl}/api/events`, {
-    headers: {
-      ...(sessionToken ? { "X-Mexemplar-Session": sessionToken } : {}),
-    },
-    signal,
-  });
+  let retryIndex = 0;
+  let gracefulReconnects = 0;
 
-  if (!response.ok || !response.body) {
-    throw new DesktopApiError(response.status, "event_stream_failed", "Desktop event stream failed.");
-  }
-
-  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
-  let buffer = "";
   while (!signal?.aborted) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += value;
-    const chunks = buffer.split("\n\n");
-    buffer = chunks.pop() ?? "";
-    for (const chunk of chunks) {
-      const data = chunk
-        .split("\n")
-        .find((line) => line.startsWith("data: "))
-        ?.slice(6);
-      if (data) {
-        onEvent(JSON.parse(data) as UiEvent);
+    try {
+      const response = await fetch(`${baseUrl}/api/events`, {
+        headers: {
+          ...(sessionToken ? { "X-Mexemplar-Session": sessionToken } : {}),
+        },
+        signal,
+      });
+
+      if (!response.ok || !response.body) {
+        throw new DesktopApiError(response.status, "event_stream_failed", "Desktop event stream failed.");
       }
+
+      retryIndex = 0;
+      gracefulReconnects++;
+
+      const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = "";
+      while (!signal?.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        const chunks = buffer.split("\n\n");
+        buffer = chunks.pop() ?? "";
+        for (const chunk of chunks) {
+          const data = chunk
+            .split("\n")
+            .find((line) => line.startsWith("data: "))
+            ?.slice(6);
+          if (data) {
+            onEvent(JSON.parse(data) as UiEvent);
+          }
+        }
+      }
+
+      if (signal?.aborted) return;
+      if (gracefulReconnects >= SSE_MAX_GRACEFUL_RECONNECTS) return;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } catch (err) {
+      if (signal?.aborted) return;
+      if (err instanceof DOMException && err.name === "AbortError") return;
+
+      const delay = SSE_RETRY_DELAYS[Math.min(retryIndex, SSE_RETRY_DELAYS.length - 1)];
+      retryIndex++;
+      if (retryIndex >= SSE_MAX_RETRIES) return;
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
 
-export const client = {
-  configure: configureDesktopApi,
-  configureFromTauri: configureDesktopApiFromTauri,
-  getHealth,
-  getBootstrap,
-  connectEvents,
-};

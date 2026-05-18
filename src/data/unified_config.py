@@ -174,23 +174,33 @@ class UnifiedConfigManager:
         return self.get("ai.provider", default="anthropic")
 
     def get_ai_api_key(self) -> Optional[str]:
-        """获取 Anthropic API 密钥（优先 keyring，回退数据库）"""
-        # 优先从 keyring 读取
+        """获取 AI API 密钥（keyring 优先，config.json 明文仅作迁移源）"""
+        # 正常路径：从 keyring 读取
         try:
             import keyring
 
             api_key = keyring.get_password(_get_keyring_service_name(), "anthropic_api_key")
             if api_key:
-                logger.debug("[配置] 从 keyring 读取 API 密钥")
                 return api_key
         except ImportError:
             logger.warning("[配置] keyring 模块未安装，无法读取加密存储的 API 密钥")
         except Exception as e:
             logger.warning(f"[配置] 从 keyring 读取 API 密钥失败: {e}")
 
-        # 回退到数据库（兼容未迁移的旧数据）
-        api_key = self.get("ai.api_key", default=None)
-        return api_key or None
+        # 迁移路径：config.json 有残留明文 → 迁移到 keyring 后清除
+        config_key = self.get("ai.api_key", default=None)
+        if config_key and isinstance(config_key, str) and config_key.strip():
+            try:
+                import keyring
+
+                keyring.set_password(_get_keyring_service_name(), "anthropic_api_key", config_key)
+                self.set("ai.api_key", "")
+                logger.info("[配置] 已将 config.json 明文密钥迁移到 keyring 并清除明文")
+            except Exception:
+                logger.warning("[配置] 明文密钥迁移到 keyring 失败，明文密钥暂留", exc_info=True)
+            return config_key
+
+        return None
 
     def set_ai_api_key(self, api_key: str) -> None:
         """安全写入 API 密钥到 keyring，并清除数据库中的明文副本"""

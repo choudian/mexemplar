@@ -1,5 +1,4 @@
 import { requestJson } from "./client";
-import type { DesktopApiClient } from "./client";
 
 export interface AssistantSession {
   sessionId: string;
@@ -106,8 +105,3 @@ export function decideAssistantConfirmation(
   );
 }
 
-export type AssistantResult = Record<string, unknown>;
-
-export async function fetchAssistant(client: DesktopApiClient): Promise<AssistantResult> {
-  return client.request<AssistantResult>("/api/assistant");
-}

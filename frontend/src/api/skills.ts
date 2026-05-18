@@ -1,5 +1,4 @@
 import { requestJson } from "./client";
-import type { DesktopApiClient } from "./client";
 
 export type SkillCategory = "pending" | "published" | "failed";
 
@@ -31,6 +30,27 @@ export function startSkillTrial(toolId: string): Promise<{ accepted: boolean; wo
   });
 }
 
+export function replySkillTrial(toolId: string, content: string): Promise<{ accepted: boolean }> {
+  return requestJson<{ accepted: boolean }>(`/api/skills/${encodeURIComponent(toolId)}/trial/reply`, {
+    method: "POST",
+    body: JSON.stringify({ content }),
+  });
+}
+
+export interface TrialMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface TrialHistoryResponse {
+  messages: TrialMessage[];
+  workflowId: string | null;
+}
+
+export function getSkillTrialHistory(toolId: string): Promise<TrialHistoryResponse> {
+  return requestJson<TrialHistoryResponse>(`/api/skills/${encodeURIComponent(toolId)}/trial/messages`);
+}
+
 export function updateSkillMetadata(
   toolId: string,
   input: { name: string; description: string },
@@ -60,10 +80,4 @@ export function dismissFailure(workflowId: string): Promise<{ accepted: boolean 
   return requestJson<{ accepted: boolean }>(`/api/skills/failures/${encodeURIComponent(workflowId)}/dismiss`, {
     method: "POST",
   });
-}
-
-export type SkillsResult = Record<string, unknown>;
-
-export async function fetchSkills(client: DesktopApiClient): Promise<SkillsResult> {
-  return client.request<SkillsResult>("/api/skills");
 }

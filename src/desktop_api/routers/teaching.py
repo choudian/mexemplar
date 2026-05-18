@@ -26,6 +26,7 @@ def get_teaching_service(
         _service = TeachingService(
             learning_starter=runtime.start_learning,
             trial_starter=runtime.start_tool_trial,
+            learning_replier=runtime.continue_learning,
         )
         _service_runtime = runtime
     return _service

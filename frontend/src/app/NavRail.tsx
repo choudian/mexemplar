@@ -18,10 +18,7 @@ interface NavRailProps {
 
 function badgeForRoute(route: RouteId, counts: NavRailProps["counts"]): number | null {
   if (route === "skills") {
-    return counts.pendingSkillCount + counts.publishedSkillCount + counts.failureCount;
-  }
-  if (route === "compositions") {
-    return counts.compositionCount;
+    return counts.pendingSkillCount || null;
   }
   return null;
 }

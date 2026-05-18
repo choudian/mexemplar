@@ -5,6 +5,7 @@ import threading
 from collections.abc import Callable
 
 from src.business.ai.llm_client import LangChainLLMClient
+from src.business.agents.config import AgentType
 from src.business.orchestration.agent import AgentOrchestrator
 from src.data.unified_config import get_unified_config
 from src.desktop_api.events import event_queue
@@ -36,6 +37,7 @@ class DesktopAgentRuntime:
         self._orchestrator_factory = orchestrator_factory
         self._orchestrator: AgentOrchestrator | None = None
         self._orchestrator_lock = threading.Lock()
+        self._trial_session_store = None
         self._workers: dict[str, threading.Thread] = {}
         self._workers_lock = threading.Lock()
 
@@ -53,6 +55,14 @@ class DesktopAgentRuntime:
             workflow_id,
         )
 
+    def continue_learning(self, workflow_id: str, user_reply: str) -> bool:
+        return self._start_worker(
+            f"learning:{workflow_id}",
+            self._run_continue_learning,
+            workflow_id,
+            user_reply,
+        )
+
     def start_tool_trial(self, tool_id: str, workflow_id: str) -> bool:
         return self._start_worker(
             f"trial:{workflow_id}",
@@ -60,6 +70,26 @@ class DesktopAgentRuntime:
             tool_id,
             workflow_id,
         )
+
+    def continue_tool_trial(self, workflow_id: str, user_reply: str) -> bool:
+        return self._start_worker(
+            f"trial:{workflow_id}",
+            self._run_continue_trial,
+            workflow_id,
+            user_reply,
+        )
+
+    def get_trial_history(self, workflow_id: str) -> list[dict]:
+        from src.business.orchestration.agent.agent_session_store import AgentSessionStore
+        from src.data.repos import MessageRepository, SessionRepository, WorkflowTransitionRepository
+
+        if self._trial_session_store is None:
+            self._trial_session_store = AgentSessionStore(
+                SessionRepository(),
+                MessageRepository(),
+                WorkflowTransitionRepository(),
+            )
+        return self._trial_session_store.get_trial_messages(workflow_id)
 
     def retry_teaching_failure(self, workflow_id: str) -> bool:
         return self._start_worker(
@@ -113,6 +143,12 @@ class DesktopAgentRuntime:
         )
         self._get_orchestrator().start_analysis(workflow_id, workflow_id)
 
+    def _run_continue_agent(self, agent_type: AgentType, workflow_id: str, user_reply: str) -> None:
+        self._get_orchestrator().run_agent(agent_type, user_reply, workflow_id=workflow_id)
+
+    def _run_continue_learning(self, workflow_id: str, user_reply: str) -> None:
+        self._run_continue_agent(AgentType.PM, workflow_id, user_reply)
+
     def _run_tool_trial(self, tool_id: str, workflow_id: str) -> None:
         event_queue.publish_nowait(
             "trial.progress",
@@ -121,9 +157,12 @@ class DesktopAgentRuntime:
         )
         self._get_orchestrator().start_trial(
             tool_id,
-            "请执行一次工具试用，并通过 submit_trial_result 返回试用结果。",
+            "开始试用",
             workflow_id,
         )
+
+    def _run_continue_trial(self, workflow_id: str, user_reply: str) -> None:
+        self._run_continue_agent(AgentType.TRIAL, workflow_id, user_reply)
 
     def _run_teaching_retry(self, workflow_id: str) -> None:
         event_queue.publish_nowait(

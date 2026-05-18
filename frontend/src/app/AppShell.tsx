@@ -15,6 +15,15 @@ import { getRoute } from "./routes";
 
 const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000, 5000];
 
+const TOAST_AUTO_DISMISS_MS = 8000;
+
+const FAILED_BACKEND: BackendConnectionState = {
+  status: "failed",
+  message: "无法连接本地后端。请重新启动应用或查看日志。",
+  checks: [{ name: "sidecar", status: "failed", message: "Sidecar request failed." }],
+  serverTime: "",
+};
+
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
@@ -69,6 +78,7 @@ export function AppShell(): JSX.Element {
       }
       if (event.type === "skills.changed") {
         applySkillsEvent(event);
+        applyTeachingEvent(event);
       }
       if (event.type === "compositions.changed") {
         applyCompositionsEvent(event);
@@ -117,23 +127,13 @@ export function AppShell(): JSX.Element {
       }
 
       if (!cancelled) {
-        setBackend({
-          status: "failed",
-          message: "无法连接本地后端。请重新启动应用或查看日志。",
-          checks: [{ name: "sidecar", status: "failed", message: "Sidecar request failed." }],
-          serverTime: new Date().toISOString(),
-        });
+        setBackend({ ...FAILED_BACKEND, serverTime: new Date().toISOString() });
       }
     };
 
     void connectBackend().catch(() => {
       if (!cancelled) {
-        setBackend({
-          status: "failed",
-          message: "无法连接本地后端。请重新启动应用或查看日志。",
-          checks: [{ name: "sidecar", status: "failed", message: "Sidecar request failed." }],
-          serverTime: new Date().toISOString(),
-        });
+        setBackend({ ...FAILED_BACKEND, serverTime: new Date().toISOString() });
       }
     });
     return () => {
@@ -152,6 +152,25 @@ export function AppShell(): JSX.Element {
 
   const route = useMemo(() => getRoute(activeRoute), [activeRoute]);
   const Screen = route.render;
+
+  const teachingToast = useTeachingStore((state) => state.toast);
+  const dismissTeachingToast = useTeachingStore((state) => state.dismissToast);
+  const closeSkillTrial = useTeachingStore((state) => state.closeSkillTrial);
+  const skillTrialToolId = useTeachingStore((state) => state.skillTrialToolId);
+
+  // Clean up skill trial state when navigating away from skills page
+  useEffect(() => {
+    if (activeRoute !== "skills" && skillTrialToolId) {
+      closeSkillTrial();
+    }
+  }, [activeRoute, skillTrialToolId, closeSkillTrial]);
+
+  // Auto-dismiss teaching toast after 8 seconds
+  useEffect(() => {
+    if (!teachingToast) return;
+    const timer = setTimeout(dismissTeachingToast, TOAST_AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [teachingToast, dismissTeachingToast]);
 
   return (
     <>
@@ -174,6 +193,15 @@ export function AppShell(): JSX.Element {
           </div>
         </main>
       </div>
+      {teachingToast ? (
+        <div className="teaching-toast">
+          <div className="teaching-toast-body">
+            <strong>{teachingToast.title}</strong>
+            <span>{teachingToast.body}</span>
+          </div>
+          <button className="teaching-toast-close" onClick={dismissTeachingToast} type="button">✕</button>
+        </div>
+      ) : null}
     </>
   );
 }

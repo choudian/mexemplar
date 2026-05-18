@@ -1,59 +1,81 @@
-import { Brain, Sparkles } from "lucide-react";
+import { Brain, CircleDot } from "lucide-react";
+import { useMemo, useRef, useState } from "react";
 
-import { Button } from "../../components/primitives";
+import { useTeachingStore } from "../../state/teachingStore";
+import { AgentBubble, ChatComposer, CollapsibleNumberedList, AiMessageContent, ThinkingIndicator, useScrollToBottom, UserBubble, filterAgentMessages } from "./shared";
 
-export function IntentStage({
-  value,
-  disabled,
-  onChange,
-  onReply,
-  onConfirm,
-}: {
-  value: string;
-  disabled: boolean;
-  onChange: (value: string) => void;
-  onReply: () => void;
-  onConfirm: () => void;
-}): JSX.Element {
+// ── Main component ────────────────────────────────────────────────────────
+
+export function IntentStage(): JSX.Element {
+  const messages = useTeachingStore((s) => s.messages);
+  const progressLog = useTeachingStore((s) => s.progressLog);
+  const busy = useTeachingStore((s) => s.busy);
+  const stage = useTeachingStore((s) => s.stage);
+  const replyIntent = useTeachingStore((s) => s.replyIntent);
+
+  const [draft, setDraft] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const pmMessages = useMemo(() => filterAgentMessages(messages, "pm"), [messages]);
+
+  useScrollToBottom(scrollRef, [pmMessages.length, busy]);
+
+  const disabled = busy || stage !== "intent_confirmation";
+
   return (
-    <section className="teaching-intent-card" aria-labelledby="teaching-intent-heading">
-      <div className="teaching-intent-head">
-        <div>
-          <Brain size={20} />
-        </div>
-        <div>
-          <h3 id="teaching-intent-heading">AI 正在理解你刚才的操作</h3>
-          <p>确认系统理解的目标，必要时补充说明。</p>
+    <div className="teaching-chat-stage">
+      <div className="teaching-chat-scroll me-scroll" ref={scrollRef}>
+        <div className="teaching-chat-thread">
+          {progressLog.length > 0 ? (
+            <CollapsibleNumberedList
+              title="刚才的录制"
+              subtitle={<><span className="me-mono">{progressLog.length}</span> 步事件线索</>}
+              toggleOpenLabel="收起"
+              toggleClosedLabel="查看录制"
+              icon={<CircleDot size={14} />}
+              items={progressLog.map((text) => ({ text }))}
+            />
+          ) : null}
+
+          {pmMessages.length === 0 && !busy ? (
+            <AgentBubble icon={<Brain size={16} />} label="需求分析师">
+              <div>我正在分析刚才的录制数据，请稍等…</div>
+            </AgentBubble>
+          ) : null}
+
+          {pmMessages.map((m, i) => {
+            if (m.from === "user") return <UserBubble key={`u-${i}`} text={m.text} />;
+            return (
+              <AgentBubble key={`a-${i}`} icon={<Brain size={16} />} label="需求分析师">
+                <div>
+                  <AiMessageContent headline={m.headline} detail={m.detail} />
+                  {m.error ? (
+                    <div style={{ marginTop: 4, color: "var(--danger)", fontSize: 12.5 }}>分析遇到问题，请调整描述后重试。</div>
+                  ) : null}
+                </div>
+              </AgentBubble>
+            );
+          })}
+
+          {busy ? <ThinkingIndicator icon={<Brain size={16} />} /> : null}
         </div>
       </div>
 
-      <div className="teaching-intent-summary">
-        <strong>初步理解：</strong>
-        <span>系统已完成录制数据整理，正在把关键步骤、可变参数和执行边界转换成可复用技能。</span>
+      <div className="teaching-composer-wrap">
+        <ChatComposer
+          draft={draft}
+          disabled={disabled}
+          onSend={() => {
+            if (draft.trim()) {
+              void replyIntent(draft);
+              setDraft("");
+            }
+          }}
+          setDraft={setDraft}
+          placeholder="回复需求分析师…"
+        />
       </div>
-
-      <div className="teaching-intent-question">
-        <Sparkles size={15} />
-        <div>
-          <p>是否需要补充目标、边界或期望结果？如果没有，可以直接确认并进入学习阶段。</p>
-          <textarea
-            aria-label="补充意图说明"
-            value={value}
-            onChange={(event) => onChange(event.currentTarget.value)}
-            placeholder="补充目标、边界或期望结果"
-          />
-        </div>
-      </div>
-
-      <div className="teaching-stage-actions teaching-intent-actions">
-        <Button disabled={disabled || !value.trim()} kind="secondary" onClick={onReply}>
-          发送说明
-        </Button>
-        <Button disabled={disabled} onClick={onConfirm}>
-          确认并学习
-        </Button>
-      </div>
-    </section>
+    </div>
   );
 }
 

@@ -22,7 +22,6 @@ describe("TeachingScreen", () => {
       selectedMode: null,
       run: null,
       stage: "selecting",
-      intentReply: "",
       progressLog: [],
       busy: false,
       lastError: null,

@@ -8,6 +8,7 @@ from src.desktop_api.schemas import (
     SkillActionResponse,
     SkillCategoryResponse,
     SkillMetadataUpdateRequest,
+    SkillTrialReplyRequest,
 )
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
@@ -18,7 +19,9 @@ def get_skills_service(
 ) -> SkillsService:
     return SkillsService(
         trial_starter=runtime.start_tool_trial,
+        trial_replier=runtime.continue_tool_trial,
         retry_starter=runtime.retry_teaching_failure,
+        trial_history_loader=runtime.get_trial_history,
     )
 
 
@@ -39,6 +42,26 @@ def start_trial(
 ) -> SkillActionResponse:
     try:
         return SkillActionResponse(**service.start_trial(tool_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{tool_id}/trial/messages")
+def get_trial_messages(
+    tool_id: str,
+    service: SkillsService = Depends(get_skills_service),
+) -> dict:
+    return service.get_trial_history(tool_id)
+
+
+@router.post("/{tool_id}/trial/reply", response_model=SkillActionResponse)
+def reply_trial(
+    tool_id: str,
+    request: SkillTrialReplyRequest,
+    service: SkillsService = Depends(get_skills_service),
+) -> SkillActionResponse:
+    try:
+        return SkillActionResponse(**service.continue_trial(tool_id, request.content))
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 

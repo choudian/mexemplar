@@ -247,6 +247,24 @@ class DuckDBManager:
     def _transaction_depth(self) -> int:
         return getattr(self._transaction_state, "depth", 0)
 
+    def _is_invalidated_error(self, exc: Exception) -> bool:
+        """检测 DuckDB 连接是否因内部错误而失效"""
+        msg = str(exc).lower()
+        return "database has been invalidated" in msg or "fatal error" in msg
+
+    def _reconnect(self) -> Any:
+        """关闭失效连接并重建（线程安全，调用方需持有 _op_lock 或在外层处理）"""
+        logger.warning("[DuckDB] 检测到数据库失效，正在重连...")
+        if self.conn is not None:
+            try:
+                self.conn.close()
+            except Exception:
+                pass
+            self.conn = None
+        self.conn = duckdb.connect(self.db_path)
+        logger.info("[DuckDB] 数据库重连成功")
+        return self.conn
+
     @contextmanager
     def transaction(self):
         """Execute a group of DB operations in one DuckDB transaction."""
@@ -261,10 +279,16 @@ class DuckDBManager:
 
             try:
                 yield conn
-            except Exception:
+            except Exception as exc:
                 self._transaction_state.depth = depth
                 if outermost:
-                    conn.execute("ROLLBACK")
+                    if self._is_invalidated_error(exc):
+                        self._reconnect()
+                    else:
+                        try:
+                            conn.execute("ROLLBACK")
+                        except Exception:
+                            self._reconnect()
                 raise
             else:
                 self._transaction_state.depth = depth
@@ -523,66 +547,37 @@ class DuckDBManager:
             logger.error(f"DuckDB 初始化失败: {e}")
             raise
 
+    def _safe_execute(self, conn: Any, sql: str, parameters: Optional[tuple] = None) -> Any:
+        """执行 SQL，遇到数据库失效时自动重连并重试一次"""
+        args: tuple = (sql, parameters) if parameters else (sql,)
+        try:
+            return conn.execute(*args)
+        except Exception as exc:
+            if self._is_invalidated_error(exc):
+                return self._reconnect().execute(*args)
+            raise
+
     def execute(self, sql: str, parameters: Optional[tuple] = None) -> Any:
-        """
-        执行 SQL 语句（线程安全）
-
-        Args:
-            sql: SQL 语句
-            parameters: 参数元组
-
-        Returns:
-            查询结果
-        """
-        conn = self.connect()
         with self._op_lock:
-            if parameters:
-                return conn.execute(sql, parameters)
-            return conn.execute(sql)
+            return self._safe_execute(self.connect(), sql, parameters)
 
     def fetchall(self, sql: str, parameters: Optional[tuple] = None) -> List[tuple]:
-        """
-        执行 SQL 并返回所有结果（线程安全，fetch 在锁内完成）
-
-        Args:
-            sql: SQL 语句
-            parameters: 参数元组
-
-        Returns:
-            查询结果列表
-        """
-        conn = self.connect()
         with self._op_lock:
-            cursor = conn.execute(sql, parameters) if parameters else conn.execute(sql)
-            return cursor.fetchall()
+            return self._safe_execute(self.connect(), sql, parameters).fetchall()
 
     def fetchone(self, sql: str, parameters: Optional[tuple] = None) -> Optional[tuple]:
-        """
-        执行 SQL 并返回单条结果（线程安全，fetch 在锁内完成）
-
-        Args:
-            sql: SQL 语句
-            parameters: 参数元组
-
-        Returns:
-            查询结果或 None
-        """
-        conn = self.connect()
         with self._op_lock:
-            cursor = conn.execute(sql, parameters) if parameters else conn.execute(sql)
-            return cursor.fetchone()
+            return self._safe_execute(self.connect(), sql, parameters).fetchone()
 
     def execute_and_fetchall(
         self, sql: str, parameters: Optional[tuple] = None
     ) -> tuple[list[str], list[tuple]]:
         """
         在锁内执行 SQL、读取列名和所有行，返回 (columns, rows)。
-
-        避免 execute() 返回 cursor 后锁已释放的线程安全缺口。
         """
         conn = self.connect()
         with self._op_lock:
-            cursor = conn.execute(sql, parameters) if parameters else conn.execute(sql)
+            cursor = self._safe_execute(conn, sql, parameters)
             columns = [desc[0] for desc in cursor.description] if cursor.description else []
             rows = cursor.fetchall()
         return columns, rows
@@ -612,11 +607,11 @@ class DuckDBManager:
 
         conn = self.connect()
         with self._op_lock:
-            result = conn.execute(sql, list(data.values())).fetchone()
+            result = self._safe_execute(conn, sql, tuple(data.values())).fetchone()
 
             # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
             if auto_commit and self._transaction_depth() == 0:
-                conn.execute("CHECKPOINT")
+                self._safe_execute(conn, "CHECKPOINT")
                 logger.debug(f"数据已提交到磁盘: {table}")
 
         # 返回第一列（通常是主键 ID）
@@ -657,24 +652,23 @@ class DuckDBManager:
         with self._op_lock:
             in_outer_transaction = self._transaction_depth() > 0
             if not in_outer_transaction:
-                conn.execute("BEGIN TRANSACTION")
+                self._safe_execute(conn, "BEGIN TRANSACTION")
             try:
                 for data in data_list:
-                    result = conn.execute(sql, list(data.values())).fetchone()
+                    result = self._safe_execute(conn, sql, tuple(data.values())).fetchone()
                     if result:
                         row_ids.append(result[0])
             except Exception:
                 if not in_outer_transaction:
-                    conn.execute("ROLLBACK")
+                    try:
+                        self._safe_execute(conn, "ROLLBACK")
+                    except Exception:
+                        self._reconnect()
                 raise
             else:
                 if not in_outer_transaction:
-                    conn.execute("COMMIT")
+                    self._safe_execute(conn, "COMMIT")
 
-            # ⭐ 自动提交模式：强制写入磁盘，防止断电数据丢失
-            if auto_commit and not in_outer_transaction:
-                conn.execute("CHECKPOINT")
-                logger.debug(f"批量数据已提交到磁盘: {table}, {len(row_ids)} 条")
 
         return row_ids
 

@@ -1,42 +1,262 @@
-import { CheckCircle2, Play } from "lucide-react";
+import { Check, X, Zap } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useTeachingStore } from "../../state/teachingStore";
+import { useShellStore } from "../../state/shellStore";
+import { useSkillsStore } from "../../state/skillsStore";
 import { Button } from "../../components/primitives";
+import { AgentBubble, AiMessageContent, ChatComposer, CollapsibleChevron, ThinkingIndicator, useScrollToBottom, UserBubble, filterAgentMessages } from "./shared";
 
-export function TrialStage({
-  active,
-  disabled,
-  onStart,
-}: {
-  active: boolean;
-  disabled: boolean;
-  onStart: () => void;
-}): JSX.Element {
+const TRIAL_NEED = 3;
+const DONE_COUNTDOWN_SECS = 3;
+
+function TrialChips({ chips, onPick }: { chips: string[]; onPick: (c: string) => void }): JSX.Element {
   return (
-    <section className="teaching-trial-card" aria-labelledby="teaching-trial-heading">
-      <div className="teaching-trial-head">
-        <div>
-          <CheckCircle2 size={20} />
+    <div className="teaching-chips">
+      {chips.map((c) => (
+        <button className="teaching-chip" key={c} onClick={() => onPick(c)} type="button">
+          {c}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function TrialProcessStrip({
+  trace,
+  summary,
+}: {
+  trace: { text: string; detail?: string }[];
+  summary: string;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="teaching-trial-strip">
+      <button className="teaching-trial-strip-header" onClick={() => setOpen((v) => !v)} type="button">
+        <div className="teaching-trial-strip-check">
+          <Check size={13} strokeWidth={2.6} />
         </div>
-        <div>
-          <h3 id="teaching-trial-heading">试用验证</h3>
-          <p>{active ? "正在验证技能。" : "学习完成后开始试用验证。"}</p>
+        <span style={{ fontWeight: 500, color: "var(--text)" }}>已完成</span>
+        <span style={{ color: "var(--text-muted)" }}>· {summary}</span>
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          {open ? "收起" : "查看过程"}
+          <CollapsibleChevron open={open} />
+        </span>
+      </button>
+      {open ? (
+        <div className="teaching-trial-strip-body">
+          {trace.map((step, i) => (
+            <div className="teaching-trial-strip-step" key={i}>
+              <span className="teaching-trial-strip-step-num me-mono">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              <div>
+                <div className="teaching-trial-strip-step-text">
+                  {step.text}
+                  {step.detail ? (
+                    <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2 }}>{step.detail}</div>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────
+
+export function TrialStage(): JSX.Element {
+  const messages = useTeachingStore((s) => s.messages);
+  const busy = useTeachingStore((s) => s.busy);
+  const stage = useTeachingStore((s) => s.stage);
+  const startTrial = useTeachingStore((s) => s.startTrial);
+  const closeSkillTrial = useTeachingStore((s) => s.closeSkillTrial);
+  const isSkillTrial = useTeachingStore((s) => !!s.skillTrialToolId);
+  const trialSuccessCount = useTeachingStore((s) => s.trialSuccessCount);
+
+  const [draft, setDraft] = useState("");
+  const [phase, setPhase] = useState<"idle" | "running" | "verdict">("idle");
+  const [countdown, setCountdown] = useState(3);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const trialMessages = useMemo(() => filterAgentMessages(messages, "trial"), [messages]);
+
+  const done = trialSuccessCount >= TRIAL_NEED || stage === "published";
+
+  useScrollToBottom(scrollRef, [trialMessages.length, busy]);
+
+  useEffect(() => {
+    if (stage === "published") {
+      setPhase("idle");
+    }
+  }, [stage]);
+
+  useEffect(() => {
+    if (!done) return;
+    let remaining = DONE_COUNTDOWN_SECS;
+    setCountdown(remaining);
+    const tick = () => {
+      remaining--;
+      if (remaining <= 0) {
+        setCountdown(0);
+        closeSkillTrial();
+        useShellStore.getState().setRoute("skills");
+        useSkillsStore.getState().setCategory("published");
+        return;
+      }
+      setCountdown(remaining);
+      timer = setTimeout(tick, 1000);
+    };
+    let timer = setTimeout(tick, 1000);
+    return () => clearTimeout(timer);
+  }, [done, closeSkillTrial]);
+
+  useEffect(() => {
+    const last = trialMessages[trialMessages.length - 1];
+    if (last?.from === "ai" && phase === "running") {
+      setPhase("verdict");
+    }
+  }, [trialMessages.length, phase]);
+
+  const handleSend = (text: string) => {
+    const t = text.trim();
+    if (!t || busy) return;
+    setPhase("running");
+    void startTrial(t);
+    setDraft("");
+  };
+
+  const handleVerdict = (ok: boolean) => {
+    void startTrial(ok ? "结果正确" : "不太对，再看看");
+    setPhase("idle");
+  };
+
+  const disabled = busy || phase === "running";
+
+  return (
+    <div className="teaching-chat-stage">
+      {/* Trial header */}
+      <div className="teaching-trial-chat-header">
+        <div className="teaching-trial-chat-icon" data-done={done ? "true" : undefined}>
+          {done ? <Check size={17} strokeWidth={2.4} /> : <Zap size={17} />}
+        </div>
+        <div className="teaching-trial-chat-title">
+          <h4>试用验证</h4>
+          <small>
+            {done
+              ? "已通过考核，技能已发布"
+              : `连续 ${TRIAL_NEED} 次成功后自动发布到「已掌握」`}
+          </small>
+        </div>
+        <div className="teaching-trial-progress-bar">
+          {Array.from({ length: TRIAL_NEED }).map((_, i) => (
+            <div
+              className="teaching-trial-progress-segment"
+              data-filled={i < trialSuccessCount ? "true" : undefined}
+              key={i}
+            />
+          ))}
+          <span className="teaching-trial-progress-count me-mono" data-done={done ? "true" : undefined}>
+            {trialSuccessCount}/{TRIAL_NEED}
+          </span>
         </div>
       </div>
 
-      <div className="teaching-trial-progress" aria-label="试用进度">
-        <span data-active={active} />
-        <span />
-        <span />
+      {/* Chat scroll */}
+      <div className="teaching-chat-scroll me-scroll" ref={scrollRef}>
+        <div className="teaching-chat-thread">
+          {trialMessages.length === 0 && !busy && !isSkillTrial ? (
+            <AgentBubble icon={<Zap size={16} />} label="试用助手">
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <div>你好 — 我是试用助手。给我一个真实任务，我用这个技能跑一遍给你看，验证它能不能正常工作。</div>
+                <TrialChips
+                  chips={["整理上周的客户反馈邮件", "抓取昨天的反馈邮件", "只看 P0 投诉类邮件"]}
+                  onPick={handleSend}
+                />
+              </div>
+            </AgentBubble>
+          ) : null}
+
+          {trialMessages.map((m, i) => {
+            if (m.from === "user") return <UserBubble key={`u-${i}`} text={m.text} />;
+            const isLatest = i === trialMessages.length - 1;
+            const isExecutionResult = m.headline.toLowerCase().includes("complete") || m.headline.includes("完成");
+            return (
+              <AgentBubble key={`a-${i}`} icon={<Zap size={16} />} label="试用助手">
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <AiMessageContent headline={m.headline} detail={m.detail} />
+                  {isExecutionResult && m.detail ? (
+                    <TrialProcessStrip
+                      summary={m.headline}
+                      trace={[{ text: m.detail }]}
+                    />
+                  ) : null}
+                  {isLatest && isExecutionResult && phase === "verdict" ? (
+                    <div className="teaching-trial-verdict">
+                      <Button onClick={() => handleVerdict(true)}>
+                        <Check size={14} />
+                        <span>结果正确</span>
+                      </Button>
+                      <Button kind="secondary" onClick={() => handleVerdict(false)}>
+                        <X size={14} />
+                        <span>不太对</span>
+                      </Button>
+                    </div>
+                  ) : null}
+                </div>
+              </AgentBubble>
+            );
+          })}
+
+          {phase === "running" ? (
+            <div className="teaching-trial-running">
+              <div style={{ width: 30, flexShrink: 0 }} />
+              <div className="teaching-trial-running-card">
+                <div className="teaching-trial-running-pulse">
+                  <i className="teaching-trial-running-dot" />
+                </div>
+                <span style={{ color: "var(--text-2)" }}>正在执行技能…</span>
+              </div>
+            </div>
+          ) : null}
+
+          {busy ? <ThinkingIndicator icon={<Zap size={16} />} /> : null}
+        </div>
       </div>
 
-      <div className="teaching-trial-body">
-        <p>试用通过后，技能会进入待考核或已掌握流程；失败时后端会返回原因并继续修正。</p>
-        <Button disabled={disabled} onClick={onStart}>
-          <Play size={14} />
-          <span>开始试用</span>
-        </Button>
+      {/* Composer */}
+      <div className="teaching-composer-wrap">
+        {done ? (
+          <div className="teaching-chat-done">
+            <div className="teaching-chat-done-hint">
+              试用通过，技能 <strong style={{ color: "var(--ok)" }}>已发布</strong>。
+              <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
+                {countdown}s 后自动返回技能列表
+              </span>
+            </div>
+          </div>
+        ) : (
+          <ChatComposer
+            draft={draft}
+            disabled={disabled}
+            onSend={() => handleSend(draft)}
+            setDraft={setDraft}
+            placeholder="给我一个真实任务…"
+            hint={
+              disabled
+                ? "⏳ 等待技能执行完毕"
+                : <>
+                    <kbd className="teaching-kbd">⏎</kbd> 发送 · 或点上方建议
+                  </>
+            }
+          />
+        )}
       </div>
-    </section>
+    </div>
   );
 }
 

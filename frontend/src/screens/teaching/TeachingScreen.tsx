@@ -1,24 +1,27 @@
 import { useEffect } from "react";
 
-import { useTeachingStore } from "../../state/teachingStore";
+import { useTeachingStore, resetToSelecting } from "../../state/teachingStore";
+import { useShellStore } from "../../state/shellStore";
 import IntentStage from "./IntentStage";
 import LearningStage from "./LearningStage";
 import RecordingModePicker from "./RecordingModePicker";
 import RecordingStage from "./RecordingStage";
-import TrialStage from "./TrialStage";
 import type { TeachingRun, TeachingStage } from "../../api/teaching";
+import { Button } from "../../components/primitives";
+import { RotateCcw } from "lucide-react";
+
+const LEARNING_REDIRECT_MS = 3000;
 
 const teachingSteps = [
   { id: "selecting", label: "选择方式" },
   { id: "recording", label: "操作录制" },
   { id: "intent_confirmation", label: "意图理解" },
   { id: "learning", label: "技能学习" },
-  { id: "trial_validation", label: "技能试用" },
 ] as const;
 
 function normalizeStage(stage: string): (typeof teachingSteps)[number]["id"] {
-  if (stage === "published" || stage === "failed" || stage === "abandoned") {
-    return "trial_validation";
+  if (stage === "published" || stage === "failed" || stage === "abandoned" || stage === "trial_validation") {
+    return "learning";
   }
   return teachingSteps.some((step) => step.id === stage) ? (stage as (typeof teachingSteps)[number]["id"]) : "selecting";
 }
@@ -55,7 +58,6 @@ export function TeachingScreen(): JSX.Element {
   const selectedMode = useTeachingStore((state) => state.selectedMode);
   const run = useTeachingStore((state) => state.run);
   const stage = useTeachingStore((state) => state.stage);
-  const intentReply = useTeachingStore((state) => state.intentReply);
   const progressLog = useTeachingStore((state) => state.progressLog);
   const busy = useTeachingStore((state) => state.busy);
   const lastError = useTeachingStore((state) => state.lastError);
@@ -65,16 +67,21 @@ export function TeachingScreen(): JSX.Element {
   const startRecording = useTeachingStore((state) => state.startRecording);
   const stopRecording = useTeachingStore((state) => state.stopRecording);
   const decideDesktopHealth = useTeachingStore((state) => state.decideDesktopHealth);
-  const setIntentReply = useTeachingStore((state) => state.setIntentReply);
-  const replyIntent = useTeachingStore((state) => state.replyIntent);
-  const confirmIntent = useTeachingStore((state) => state.confirmIntent);
-  const startTrial = useTeachingStore((state) => state.startTrial);
 
   useEffect(() => {
     void loadReadiness();
   }, [loadReadiness]);
 
+  useEffect(() => {
+    if (stage !== "learning") return;
+    const timer = setTimeout(() => {
+      useShellStore.getState().setRoute("assistant");
+    }, LEARNING_REDIRECT_MS);
+    return () => clearTimeout(timer);
+  }, [stage]);
+
   const displayStage = displayStageFor(run, stage);
+  const isChatStage = displayStage === "intent_confirmation";
 
   return (
     <section className="teaching-screen" aria-label="技能教学">
@@ -83,68 +90,61 @@ export function TeachingScreen(): JSX.Element {
           <h2>技能教学</h2>
           <p>演示一遍你想自动化的操作，系统会学会并替你执行。</p>
         </div>
+        {stage !== "selecting" ? (
+          <Button
+            kind="ghost"
+            onClick={() => {
+              useTeachingStore.setState(resetToSelecting());
+            }}
+          >
+            <RotateCcw size={14} />
+            <span>重新开始</span>
+          </Button>
+        ) : null}
       </div>
       <TeachingStepper stage={displayStage} />
-      <div className="teaching-workflow me-scroll" data-stage={stage}>
-        {!run ? (
-          <RecordingModePicker
-            modes={readiness}
-            selectedMode={selectedMode}
-            busy={busy}
-            onSelect={setSelectedMode}
-            onCreate={(mode) => {
-              void createRun(mode);
-            }}
-          />
-        ) : null}
-        {run && displayStage === "recording" ? (
-          <RecordingStage
-            run={run}
-            busy={busy}
-            progressLog={progressLog}
-            onStart={() => {
-              void startRecording();
-            }}
-            onStop={() => {
-              void stopRecording();
-            }}
-            onDesktopDecision={(decision) => {
-              void decideDesktopHealth(decision);
-            }}
-          />
-        ) : null}
-        {run && displayStage === "intent_confirmation" ? (
-          <IntentStage
-            value={intentReply}
-            disabled={busy || !run || stage !== "intent_confirmation"}
-            onChange={setIntentReply}
-            onReply={() => {
-              void replyIntent();
-            }}
-            onConfirm={() => {
-              void confirmIntent();
-            }}
-          />
-        ) : null}
-        {run && displayStage === "learning" ? (
-          <LearningStage
-            active={stage === "learning"}
-            progressLog={progressLog}
-            onStartTrial={() => {
-              void startTrial();
-            }}
-          />
-        ) : null}
-        {run && displayStage === "trial_validation" ? (
-          <TrialStage
-            active={stage === "trial_validation"}
-            disabled={busy || !run || ["selecting", "recording", "intent_confirmation"].includes(stage)}
-            onStart={() => {
-              void startTrial();
-            }}
-          />
-        ) : null}
-      </div>
+
+      {isChatStage ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          {run && displayStage === "intent_confirmation" ? <IntentStage /> : null}
+        </div>
+      ) : (
+        <div className="teaching-workflow me-scroll" data-stage={stage}>
+          {!run ? (
+            <RecordingModePicker
+              busy={busy}
+              modes={readiness}
+              onCreate={(mode) => {
+                void createRun(mode);
+              }}
+              onSelect={setSelectedMode}
+              selectedMode={selectedMode}
+            />
+          ) : null}
+          {run && displayStage === "recording" ? (
+            <RecordingStage
+              busy={busy}
+              onDesktopDecision={(decision) => {
+                void decideDesktopHealth(decision);
+              }}
+              onStart={() => {
+                void startRecording();
+              }}
+              onStop={() => {
+                void stopRecording();
+              }}
+              progressLog={progressLog}
+              run={run}
+            />
+          ) : null}
+          {run && displayStage === "learning" ? (
+            <LearningStage
+              active={stage === "learning"}
+              progressLog={progressLog}
+            />
+          ) : null}
+        </div>
+      )}
       {lastError ? <div className="teaching-error">{lastError}</div> : null}
     </section>
   );

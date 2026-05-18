@@ -70,6 +70,7 @@ class TeachingService:
         browser_recorder_factory: Callable[[], BrowserRecorder] | None = None,
         learning_starter: Callable[[str, str], bool | None] | None = None,
         trial_starter: Callable[[str, str], bool | None] | None = None,
+        learning_replier: Callable[[str, str], bool | None] | None = None,
     ) -> None:
         self._readiness = readiness_service or RecordingReadinessService()
         self._desktop_service = desktop_service
@@ -77,6 +78,7 @@ class TeachingService:
         self._browser_recorders: dict[str, BrowserRecorder] = {}
         self._learning_starter = learning_starter
         self._trial_starter = trial_starter
+        self._learning_replier = learning_replier
 
     def _get_desktop_service(self) -> DesktopRecordingService:
         if self._desktop_service is None:
@@ -141,6 +143,10 @@ class TeachingService:
         run.transition("intent_confirmation")
         run.summary = summary
         emit("recording_stopped", sender=self, workflow_id=workflow_id, recording_mode=run.mode)
+
+        # Auto-start PM Agent analysis so it can converse with the user
+        self._start_pm_analysis(workflow_id, run.mode)
+
         return run.to_dict()
 
     def apply_desktop_health_decision(self, workflow_id: str, decision: str) -> dict[str, object]:
@@ -150,6 +156,7 @@ class TeachingService:
         if decision == "continue":
             self._get_desktop_service().mark_stopped(workflow_id)
             run.transition("intent_confirmation")
+            self._start_pm_analysis(workflow_id, run.mode)
         elif decision == "discard":
             self._get_desktop_service().mark_abandoned(workflow_id)
             run.transition("abandoned")
@@ -164,19 +171,23 @@ class TeachingService:
         run = self._get_run(workflow_id)
         run.transition("intent_confirmation")
         run.summary["lastIntentReply"] = content
-        emit("agent_needs_user_input", sender=self, workflow_id=workflow_id, question=content)
+        if self._learning_replier is not None:
+            self._learning_replier(workflow_id, content)
         return run.to_dict()
+
+    def _start_pm_analysis(self, workflow_id: str, mode: str) -> None:
+        run = self._get_run(workflow_id)
+        if run.summary.get("_pm_started") or self._learning_starter is None:
+            return
+        self._learning_starter(workflow_id, mode)
+        run.summary["_pm_started"] = True
 
     def confirm_intent(self, workflow_id: str) -> dict[str, object]:
         run = self._get_run(workflow_id)
-        if not run.can_transition("learning"):
+        # Start PM Agent if not already running (e.g. if auto-start was skipped)
+        self._start_pm_analysis(workflow_id, run.mode)
+        if run.can_transition("learning"):
             run.transition("learning")
-        if self._learning_starter is None:
-            raise ValueError("teaching learning runner is unavailable")
-        accepted = self._learning_starter(workflow_id, run.mode)
-        if accepted is False:
-            raise ValueError("teaching learning is already running")
-        run.transition("learning")
         return run.to_dict()
 
     def start_trial(self, workflow_id: str) -> dict[str, object]:
@@ -185,7 +196,8 @@ class TeachingService:
             run.transition("trial_validation")
         if self._trial_starter is None:
             raise ValueError("skill trial runner is unavailable")
-        tool = ToolRepository().get_by_workflow_id(workflow_id)
+        with ToolRepository() as repo:
+            tool = repo.get_by_workflow_id(workflow_id)
         if tool is None:
             raise ValueError("no learned skill is available for this teaching run")
         accepted = self._trial_starter(tool.tool_id, workflow_id)

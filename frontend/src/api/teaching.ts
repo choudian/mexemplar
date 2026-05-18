@@ -1,5 +1,4 @@
 import { requestJson } from "./client";
-import type { DesktopApiClient } from "./client";
 
 export type TeachingMode = "browser" | "extension" | "desktop";
 export type TeachingStage =
@@ -75,20 +74,8 @@ export function replyTeachingIntent(workflowId: string, content: string): Promis
   });
 }
 
-export function confirmTeachingIntent(workflowId: string): Promise<TeachingRun> {
-  return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}/intent/confirm`, {
-    method: "POST",
-  });
-}
-
 export function startTeachingTrial(workflowId: string): Promise<TeachingRun> {
   return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}/trial/start`, {
     method: "POST",
   });
-}
-
-export type TeachingResult = Record<string, unknown>;
-
-export async function fetchTeaching(client: DesktopApiClient): Promise<TeachingResult> {
-  return client.request<TeachingResult>("/api/teaching");
 }

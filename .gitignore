@@ -142,6 +142,7 @@ CLAUDE.md
 GEMINI.md
 AI.md
 .agents/
+.codex/
 .cursor/
 .gemini/
 .specify/
