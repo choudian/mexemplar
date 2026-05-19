@@ -108,10 +108,7 @@ describe("skills and compositions screens", () => {
     fireEvent.click(publishedTab);
     await waitFor(() => expect(screen.getByText("Published Skill")).toBeInTheDocument());
 
-    fireEvent.click(screen.getByRole("button", { name: "试用" }));
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("http://desktop.test/api/skills/tool_a/trial", expect.anything()),
-    );
+    expect(screen.queryByRole("button", { name: "试用" })).toBeNull();
 
     fireEvent.click(screen.getByRole("tab", { name: /失败记录/ }));
     await waitFor(() => expect(screen.getByText("Failed Skill")).toBeInTheDocument());

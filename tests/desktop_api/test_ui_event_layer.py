@@ -151,6 +151,21 @@ def test_internal_projection_filters_scope_to_public_event_contract(
     assert skills_event.scope == {"toolId": "tool_1"}
 
 
+def test_trial_failed_does_not_project_raw_failure_message_to_user(
+    desktop_api_client,
+) -> None:
+    install_blinker_event_adapter()
+
+    emit("trial_failed", sender=None, workflow_id="rec_1", tool_id="tool_1")
+
+    event = event_queue.queue.get_nowait()
+    assert event_queue.queue.empty()
+    assert event.type == "teaching.stage_changed"
+    assert event.scope == {"workflowId": "rec_1"}
+    assert event.payload == {"stage": "failed", "failureStage": "trial"}
+    assert "Trial failed." not in str(event.payload)
+
+
 def test_catalog_settings_and_assistant_events_project_to_registered_ui_events(
     desktop_api_client,
 ) -> None:

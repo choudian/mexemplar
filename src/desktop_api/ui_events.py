@@ -479,10 +479,10 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
                     "status": (
                         "failed" if event_name == "desktop_recorder_start_failed" else "degraded"
                     ),
-                    "message": _safe_text(
+                    "message": _safe_short_text(
                         payload.get("message") or payload.get("error") or event_name
                     ),
-                    "error": _safe_text(payload.get("error")) if payload.get("error") else None,
+                    "error": _safe_short_text(payload.get("error")) if payload.get("error") else None,
                     "subsystem": _string_or_none(payload.get("subsystem")),
                     "degraded": event_name == "desktop_recording_degraded",
                 },
@@ -506,7 +506,6 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
             event_payload = {
                 "status": "waiting_for_user",
                 "headline": question,
-                "message": question,
             }
         elif "sessionId" in scope:
             event_type = "assistant.progress"
@@ -535,7 +534,7 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
     if event_name == "agent_error":
         event_type = "assistant.error" if "sessionId" in scope else "teaching.progress"
         status_payload = {
-            "message": _safe_text(
+            "message": _safe_short_text(
                 payload.get("message") or payload.get("error") or "Agent failed."
             ),
             "type": _string_or_none(payload.get("type")),
@@ -586,7 +585,7 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
                 {
                     "status": "failed",
                     "failureStage": _string_or_none(payload.get("failed_stage")),
-                    "error": _safe_text(
+                    "error": _safe_short_text(
                         payload.get("error") or payload.get("message") or "Skill teaching failed."
                     ),
                 },
@@ -650,17 +649,11 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
     if event_name == "trial_failed":
         return [
             UiEventDraft(
-                "trial.progress",
-                {
-                    "status": "failed",
-                    "error": _safe_text(
-                        payload.get("error") or payload.get("message") or "Trial failed."
-                    ),
-                },
+                "teaching.stage_changed",
+                {"stage": "failed", "failureStage": "trial"},
                 scope,
                 causation_id,
             ),
-            UiEventDraft("teaching.stage_changed", {"stage": "failed"}, scope, causation_id),
         ]
     if event_name == "desktop_trial_finished":
         return [
@@ -959,6 +952,13 @@ def _truncate_preview(value: str) -> str:
 
 
 def _safe_text(value: Any) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    return text[:5000]
+
+
+def _safe_short_text(value: Any) -> str:
     if value is None:
         return ""
     text = str(value)
