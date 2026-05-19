@@ -136,6 +136,44 @@ def test_teaching_desktop_flow_routes_through_business_service(desktop_api_clien
     assert trial_calls == [("tool_learned", workflow_id)]
 
 
+def test_teaching_intent_reply_does_not_advance_to_learning(desktop_api_client):
+    fake_recorder = FakeBrowserRecorder()
+    reply_calls: list[tuple[str, str]] = []
+
+    def continue_learning(workflow_id: str, content: str) -> bool:
+        reply_calls.append((workflow_id, content))
+        return True
+
+    service = TeachingService(
+        browser_recorder_factory=lambda: fake_recorder,
+        learning_starter=lambda workflow_id, mode: True,
+        learning_replier=continue_learning,
+    )
+    desktop_api_client.app.dependency_overrides[teaching_router.get_teaching_service] = (
+        lambda: service
+    )
+    try:
+        created = desktop_api_client.post("/api/teaching/runs", json={"mode": "extension"})
+        workflow_id = created.json()["workflowId"]
+
+        desktop_api_client.post(
+            f"/api/teaching/runs/{workflow_id}/recording/start",
+            json={"mode": "extension"},
+        )
+        stopped = desktop_api_client.post(f"/api/teaching/runs/{workflow_id}/recording/stop")
+        reply = desktop_api_client.post(
+            f"/api/teaching/runs/{workflow_id}/intent/reply",
+            json={"content": "我补充一个边界条件"},
+        )
+    finally:
+        desktop_api_client.app.dependency_overrides.clear()
+
+    assert stopped.json()["stage"] == "intent_confirmation"
+    assert reply.status_code == 200
+    assert reply.json()["stage"] == "intent_confirmation"
+    assert reply_calls == [(workflow_id, "我补充一个边界条件")]
+
+
 def test_extension_recording_uses_teaching_workflow_id():
     fake_recorder = FakeBrowserRecorder()
     service = TeachingService(browser_recorder_factory=lambda: fake_recorder)

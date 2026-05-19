@@ -24,9 +24,13 @@ describe("TeachingScreen", () => {
       run: null,
       stage: "selecting",
       progressLog: [],
+      messages: [],
+      toast: null,
       trialPreview: null,
       busy: false,
       lastError: null,
+      skillTrialToolId: null,
+      trialSuccessCount: 0,
     });
   });
 
@@ -91,18 +95,44 @@ describe("TeachingScreen", () => {
     fireEvent.change(intentInput, { target: { value: "确认并学习" } });
     fireEvent.keyDown(intentInput, { key: "Enter", code: "Enter" });
 
-    await waitFor(() => expect(screen.getByRole("heading", { name: "正在学习技能…" })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/teaching/runs/rec_1/intent/reply",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ content: "确认并学习" }),
+        }),
+      ),
+    );
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/teaching/runs/rec_1/intent/confirm")),
+    ).toBe(false);
+    await waitFor(() => expect(screen.getByPlaceholderText("回复需求分析师…")).toBeEnabled());
 
     act(() => {
       useTeachingStore.getState().applyEvent({
-        eventId: "evt_learning_done",
+        eventId: "evt_requirements_confirmed",
         sequence: 1,
         sessionId: "ui_sess_test",
         causationId: "rec_1",
         type: "teaching.stage_changed",
         scope: { workflowId: "rec_1" },
-        payload: { stage: "trial_validation", headline: "Skill learning completed" },
+        payload: { stage: "learning", headline: "Requirements confirmed." },
         createdAt: "2026-05-10T00:00:00Z",
+      });
+    });
+    await waitFor(() => expect(screen.getByRole("heading", { name: "正在学习技能…" })).toBeInTheDocument());
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_learning_done",
+        sequence: 2,
+        sessionId: "ui_sess_test",
+        causationId: "rec_1",
+        type: "teaching.stage_changed",
+        scope: { workflowId: "rec_1" },
+        payload: { stage: "trial_validation", headline: "Skill learning completed" },
+        createdAt: "2026-05-10T00:00:01Z",
       });
     });
     await waitFor(() => expect(screen.getByRole("heading", { name: "试用验证" })).toBeInTheDocument());
@@ -120,7 +150,7 @@ describe("TeachingScreen", () => {
     act(() => {
       useTeachingStore.getState().applyEvent({
         eventId: "evt_preview",
-        sequence: 2,
+        sequence: 3,
         sessionId: "ui_sess_test",
         causationId: "rec_1",
         type: "trial.preview_requested",
@@ -284,6 +314,88 @@ describe("TeachingScreen", () => {
     });
 
     expect(useTeachingStore.getState().trialPreview).toBeNull();
+  });
+
+  test("keeps trial assistant replies visible once when headline and detail match", () => {
+    const reply =
+      "搜索成功！ 工具已将 **20 条搜索结果** 导出到文件 `E:\\code\\Exemplar\\python.txt`。\n\n请问这个结果符合你的预期吗？";
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+      messages: [],
+      progressLog: [],
+    });
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_trial_reply",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "rec_1",
+        type: "trial.progress",
+        scope: { workflowId: "rec_1" },
+        payload: { status: "waiting_for_user", headline: reply, message: reply },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+
+    expect(useTeachingStore.getState().messages).toEqual([
+      {
+        from: "ai",
+        agent: "trial",
+        headline: reply,
+        detail: undefined,
+        error: false,
+      },
+    ]);
+  });
+
+  test("renders the full trial assistant reply including the final question", () => {
+    const reply =
+      "搜索成功！ 工具已将 **19 条搜索结果** 导出到文件 `E:\\code\\Exemplar\\北京天气.txt`。\n\n" +
+      "以下是部分搜索结果预览：\n\n" +
+      "| # | 标题 |\n|---|------|\n| 1 | 北京天气预报15天 - 中国天气网 |\n| 8 | 北京天气预报40天查询 |\n\n" +
+      "共导出 **19 条**结果，包含标题和链接，已保存到 txt 文件中。\n\n" +
+      "请问这个结果符合你的预期吗？";
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+      messages: [{ from: "ai", agent: "trial", headline: reply }],
+      progressLog: [],
+      busy: false,
+    });
+
+    render(<TrialStage />);
+
+    expect(screen.getByText(/共导出/)).toBeInTheDocument();
+    expect(screen.getByText("请问这个结果符合你的预期吗？")).toBeInTheDocument();
+  });
+
+  test("uses trial success progress for counts without showing raw succeeded status", () => {
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+      messages: [],
+      progressLog: [],
+      trialSuccessCount: 0,
+    });
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_trial_success",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "rec_1",
+        type: "trial.progress",
+        scope: { workflowId: "rec_1" },
+        payload: { status: "succeeded", published: false, successCount: 1 },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+
+    expect(useTeachingStore.getState().trialSuccessCount).toBe(1);
+    expect(useTeachingStore.getState().messages).toEqual([]);
+    expect(useTeachingStore.getState().progressLog).toEqual([]);
   });
 
   test("does not treat unrelated skill catalog events as the current teaching run", () => {

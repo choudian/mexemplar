@@ -119,6 +119,7 @@ def test_trial_agent_needs_user_input_routes_to_trial_progress(desktop_api_clien
     assert event.type == "trial.progress"
     assert event.scope == {"workflowId": "rec_xyz789"}
     assert event.payload["headline"] == "试用结果是否符合预期？"
+    assert "message" not in event.payload
 
 
 def test_needs_user_input_without_agent_type_uses_workflow_progress(desktop_api_client):

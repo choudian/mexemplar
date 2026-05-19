@@ -3,7 +3,6 @@ import { create } from "zustand";
 import { getSkillTrialHistory, replySkillTrial, startSkillTrial } from "../api/skills";
 import {
   createTeachingRun,
-  confirmTeachingIntent,
   decideDesktopHealth,
   decideTrialPreview,
   getTeachingReadiness,
@@ -117,14 +116,27 @@ function labelFromPayload(payload: {
   message?: string;
   error?: string;
   result?: string;
-  status?: string;
 }): string {
-  return payload.headline ?? payload.question ?? payload.message ?? payload.error ?? payload.result ?? payload.status ?? "";
+  return payload.headline ?? payload.question ?? payload.message ?? payload.error ?? payload.result ?? "";
 }
 
 function trialSuccessCountFrom(summary: Record<string, unknown>): number | null {
   const value = summary.trialSuccessCount;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function dedupeMessageDetail(headline: string, detail: string | undefined): string | undefined {
+  return detail && detail !== headline ? detail : undefined;
+}
+
+function toastForStage(stage: TeachingStage): TeachingToast | null {
+  if (stage === "trial_validation") {
+    return {
+      title: "技能学习完成",
+      body: "可以开始试用验证，确认它能按预期执行。",
+    };
+  }
+  return null;
 }
 
 export const useTeachingStore = create<TeachingState>((set, get) => ({
@@ -218,10 +230,7 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
       lastError: null,
     });
     try {
-      let updated = await replyTeachingIntent(run.workflowId, text);
-      if (updated.stage === "intent_confirmation") {
-        updated = await confirmTeachingIntent(run.workflowId);
-      }
+      const updated = await replyTeachingIntent(run.workflowId, text);
       set({ run: updated, stage: updated.stage });
     } catch (error) {
       set({ lastError: toErrorMessage(error, "发送失败。") });
@@ -366,11 +375,13 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
     if (event.type === "teaching.stage_changed") {
       const message = event.payload.headline ?? event.payload.message;
       const successCount = event.payload.successCount;
+      const toast = toastForStage(event.payload.stage);
       set({
         stage: event.payload.stage,
         run: { ...currentRun, stage: event.payload.stage },
         progressLog: message ? appendBounded(state.progressLog, message, MAX_PROGRESS_LOG) : state.progressLog,
         ...(typeof successCount === "number" ? { trialSuccessCount: successCount } : {}),
+        ...(toast ? { toast } : {}),
       });
       return;
     }
@@ -393,19 +404,19 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
       }
       if (event.type === "teaching.progress" || event.type === "trial.progress") {
         const agent: ChatAgent = event.type === "teaching.progress" ? "pm" : "trial";
-        const headline = label || (agent === "pm" ? "需求分析更新" : "试用更新");
+        const headline = label;
         const detail =
           event.type === "trial.progress"
             ? event.payload.message ?? event.payload.result
             : event.payload.message;
-        if (!isSystemTrialProgress) {
+        if (headline && !isSystemTrialProgress) {
           patch.messages = appendBounded(
             state.messages,
             {
               from: "ai",
               agent,
               headline,
-              detail,
+              detail: dedupeMessageDetail(headline, detail),
               error: !!payload.error,
             },
             MAX_MESSAGES,

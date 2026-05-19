@@ -1,8 +1,9 @@
 import { ChevronDown, Send } from "lucide-react";
 import type { RefObject } from "react";
-import { useEffect, useState } from "react";
-import { SafeMarkdown } from "../assistant/SafeMarkdown";
+import { useEffect, useLayoutEffect, useState } from "react";
+
 import type { ChatAgent, ChatMessage } from "../../state/teachingStore";
+import { SafeMarkdown } from "../assistant/SafeMarkdown";
 
 export function UserBubble({ text }: { text: string }): JSX.Element {
   return (
@@ -93,10 +94,39 @@ export function ChatComposer({
 }
 
 export function useScrollToBottom(ref: RefObject<HTMLElement | null>, deps: readonly unknown[]): void {
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const scroll = () => {
+      element.scrollTop = element.scrollHeight;
+    };
+
+    let secondFrame = 0;
+    scroll();
+    const firstFrame = window.requestAnimationFrame(() => {
+      scroll();
+      secondFrame = window.requestAnimationFrame(scroll);
+    });
+    const timer = window.setTimeout(scroll, 0);
+
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+      window.clearTimeout(timer);
+    };
+  }, deps);
+
   useEffect(() => {
-    if (ref.current) {
-      ref.current.scrollTop = ref.current.scrollHeight;
-    }
+    const element = ref.current;
+    const content = element?.firstElementChild;
+    if (!element || !content || !("ResizeObserver" in window)) return;
+
+    const observer = new ResizeObserver(() => {
+      element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(content);
+    return () => observer.disconnect();
   }, deps);
 }
 
@@ -114,13 +144,21 @@ export function CollapsibleChevron({ open }: { open: boolean }): JSX.Element {
   );
 }
 
+function TeachingMarkdown({ content }: { content: string }): JSX.Element {
+  return (
+    <div className="teaching-markdown">
+      <SafeMarkdown content={content} />
+    </div>
+  );
+}
+
 export function AiMessageContent({ headline, detail }: { headline: string; detail?: string }): JSX.Element {
   return (
     <div>
-      <SafeMarkdown content={headline} />
+      <TeachingMarkdown content={headline} />
       {detail ? (
         <div className="teaching-ai-detail">
-          <SafeMarkdown content={detail} />
+          <TeachingMarkdown content={detail} />
         </div>
       ) : null}
     </div>

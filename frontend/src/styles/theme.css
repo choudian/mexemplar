@@ -1958,8 +1958,25 @@ select:focus-visible,
   font-size: 14px;
   line-height: 1.65;
   color: var(--text);
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+.teaching-markdown,
+.teaching-markdown .assistant-markdown {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.teaching-markdown .assistant-markdown {
+  border-radius: 12px 12px 12px 4px;
+}
+
+.teaching-markdown .assistant-markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: normal;
 }
 
 .teaching-ai-detail {

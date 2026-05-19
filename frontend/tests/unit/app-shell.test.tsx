@@ -86,9 +86,13 @@ describe("AppShell", () => {
       run: null,
       stage: "selecting",
       progressLog: [],
+      messages: [],
+      toast: null,
       trialPreview: null,
       busy: false,
       lastError: null,
+      skillTrialToolId: null,
+      trialSuccessCount: 0,
     });
     useSkillsStore.setState({
       hydrated: false,
@@ -228,6 +232,8 @@ describe("AppShell", () => {
     render(<AppShell />);
 
     await waitFor(() => expect(useTeachingStore.getState().stage).toBe("trial_validation"));
+    await waitFor(() => expect(screen.getByText("技能学习完成")).toBeInTheDocument());
+    expect(screen.getByText("可以开始试用验证，确认它能按预期执行。")).toBeInTheDocument();
     await waitFor(() => expect(useTeachingStore.getState().trialPreview?.requestId).toBe("preview_1"));
   });
 
