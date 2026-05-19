@@ -29,6 +29,12 @@ def test_skills_categories_metadata_trial_and_delete(desktop_api_client):
             trial_calls.append((tool_id, workflow_id))
             return True
 
+        def continue_tool_trial(self, workflow_id: str, content: str) -> bool:
+            return True
+
+        def get_trial_history(self, workflow_id: str) -> list[dict]:
+            return []
+
         def retry_teaching_failure(self, workflow_id: str) -> bool:
             return True
 
@@ -70,6 +76,12 @@ def test_failure_retry_and_dismiss(desktop_api_client):
     class FakeRuntime:
         def start_tool_trial(self, tool_id: str, workflow_id: str) -> bool:
             return True
+
+        def continue_tool_trial(self, workflow_id: str, content: str) -> bool:
+            return True
+
+        def get_trial_history(self, workflow_id: str) -> list[dict]:
+            return []
 
         def retry_teaching_failure(self, workflow_id: str) -> bool:
             retry_calls.append(workflow_id)

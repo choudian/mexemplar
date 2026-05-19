@@ -10,6 +10,7 @@ from src.business.agents.config import AgentType
 
 
 def drain_events() -> None:
+    event_queue.reset_for_tests()
     while True:
         try:
             event_queue.queue.get_nowait()
@@ -49,11 +50,16 @@ def test_assistant_event_stream_returns_stable_event_shape(desktop_api_client):
     )
 
     async def read_one():
-        stream = event_queue.stream()
+        stream = event_queue.stream(
+            last_seen_sequence=0,
+            event_session_id=event_queue.session_id,
+        )
         return await asyncio.wait_for(anext(stream), timeout=1)
 
     event = asyncio.run(read_one())
     assert event.type == "assistant.confirmation"
+    assert event.sequence > 0
+    assert event.sessionId.startswith("ui_sess_")
     assert event.scope == {"sessionId": "ast_1"}
     assert event.payload["sanitizedSummary"] == "命令首行: npm test"
 
@@ -94,7 +100,7 @@ def test_pm_agent_needs_user_input_routes_to_teaching_progress(desktop_api_clien
     assert event.scope == {"workflowId": "rec_abc123"}
     assert event.payload["headline"] == "这个操作的目标是什么？"
     assert event.payload["question"] == "这个操作的目标是什么？"
-    assert event.payload["sourceEvent"] == "agent_needs_user_input"
+    assert "sourceEvent" not in event.payload
 
 
 def test_trial_agent_needs_user_input_routes_to_trial_progress(desktop_api_client):
@@ -115,7 +121,7 @@ def test_trial_agent_needs_user_input_routes_to_trial_progress(desktop_api_clien
     assert event.payload["headline"] == "试用结果是否符合预期？"
 
 
-def test_needs_user_input_without_agent_type_defaults_to_assistant(desktop_api_client):
+def test_needs_user_input_without_agent_type_uses_workflow_progress(desktop_api_client):
     drain_events()
     install_blinker_event_adapter()
 
@@ -127,5 +133,7 @@ def test_needs_user_input_without_agent_type_defaults_to_assistant(desktop_api_c
     )
 
     event = event_queue.queue.get_nowait()
-    assert event.type == "assistant.progress"
+    assert event.type == "teaching.progress"
+    assert event.scope == {"workflowId": "rec_default"}
+    assert event.payload["headline"] == "generic question"
     assert event.payload["question"] == "generic question"

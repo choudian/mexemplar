@@ -3,7 +3,9 @@ import { Bolt, Clock3, Play, RotateCcw, Trash2, X } from "lucide-react";
 import type { SkillCategory, SkillSummary } from "../../api/skills";
 import { Badge, Button, IconButton } from "../../components/primitives";
 
-export function SkillCards({
+const TRIAL_PROGRESS_STEPS = ["first", "second", "third"] as const;
+
+function SkillCards({
   category,
   skills,
   onTrial,
@@ -44,8 +46,8 @@ export function SkillCards({
               <small>试用进度</small>
               <strong className="me-mono">{skill.trialSuccessCount}/3</strong>
               <div>
-                {[0, 1, 2].map((index) => (
-                  <i data-done={index < skill.trialSuccessCount} key={index} />
+                {TRIAL_PROGRESS_STEPS.map((step, index) => (
+                  <i data-done={index < skill.trialSuccessCount} key={step} />
                 ))}
               </div>
             </div>
@@ -114,6 +116,10 @@ export function SkillCards({
           <div className="skill-card-footer">
             <span>状态：已掌握</span>
             <div className="skill-row-actions">
+              <Button kind="secondary" onClick={() => onTrial(skill.toolId)}>
+                <Play size={14} />
+                <span>试用</span>
+              </Button>
               <IconButton label="删除技能" onClick={() => onDelete(skill.toolId)}>
                 <Trash2 size={14} />
               </IconButton>

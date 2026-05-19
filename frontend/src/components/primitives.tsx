@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode } from "react";
+import type { ButtonHTMLAttributes, PropsWithChildren } from "react";
 
 export function Button({
   children,
@@ -31,16 +31,4 @@ export function Badge({
   tone = "neutral",
 }: PropsWithChildren<{ tone?: "neutral" | "ok" | "warn" | "danger" }>) {
   return <span className={`me-badge me-badge-${tone}`}>{children}</span>;
-}
-
-export function Panel({ title, children, action }: PropsWithChildren<{ title: string; action?: ReactNode }>) {
-  return (
-    <section className="me-panel" aria-labelledby={`${title}-heading`}>
-      <div className="me-panel-header">
-        <h2 id={`${title}-heading`}>{title}</h2>
-        {action}
-      </div>
-      {children}
-    </section>
-  );
 }

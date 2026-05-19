@@ -1,9 +1,11 @@
+import { useMemo } from "react";
 import { CheckCircle2, Monitor, MousePointerClick, Square } from "lucide-react";
 
 import type { TeachingRun } from "../../api/teaching";
+import { MODE_NAMES } from "./RecordingModePicker";
 import { Button } from "../../components/primitives";
 
-export function RecordingStage({
+function RecordingStage({
   run,
   busy,
   progressLog,
@@ -20,7 +22,11 @@ export function RecordingStage({
 }): JSX.Element {
   const active = run?.stage === "recording";
   const capturedCount = progressLog.length;
-  const modeLabel = run?.mode === "desktop" ? "桌面录制" : run?.mode === "extension" ? "插件录制" : "浏览器录制";
+  const visibleProgressLog = useMemo(() => {
+    const startSeq = Math.max(1, progressLog.length - 5);
+    return progressLog.slice(-6).map((item, offset) => ({ item, sequence: startSeq + offset }));
+  }, [progressLog]);
+  const modeLabel = run?.mode ? MODE_NAMES[run.mode] : "浏览器录制";
   return (
     <section className="teaching-recording-view" aria-labelledby="teaching-recording-heading">
       <div className="teaching-recording-surface">
@@ -89,10 +95,10 @@ export function RecordingStage({
         </div>
         {progressLog.length > 0 ? (
           <ul>
-            {progressLog.slice(-6).map((item, index) => (
-              <li key={`${item}-${index}`}>
-                <span className="me-mono">{String(index + 1).padStart(2, "0")}</span>
-                <p>{item}</p>
+            {visibleProgressLog.map((entry) => (
+              <li key={`progress-${entry.sequence}`}>
+                <span className="me-mono">{String(entry.sequence).padStart(2, "0")}</span>
+                <p>{entry.item}</p>
               </li>
             ))}
           </ul>

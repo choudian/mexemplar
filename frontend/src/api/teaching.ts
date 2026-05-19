@@ -1,15 +1,8 @@
 import { requestJson } from "./client";
+import type { TeachingStage, TrialPreviewRequestedEvent } from "./uiEvents";
 
 export type TeachingMode = "browser" | "extension" | "desktop";
-export type TeachingStage =
-  | "selecting"
-  | "recording"
-  | "intent_confirmation"
-  | "learning"
-  | "trial_validation"
-  | "published"
-  | "failed"
-  | "abandoned";
+export type { TeachingStage };
 
 export interface RecordingModeReadiness {
   mode: TeachingMode;
@@ -26,6 +19,19 @@ export interface TeachingRun {
   summary: Record<string, unknown>;
 }
 
+export type TrialPreviewRequest = TrialPreviewRequestedEvent["payload"];
+
+type TrialPreviewDecisionStatus = "approved" | "denied" | "already_resolved" | "conflict" | "expired";
+
+export type TrialPreviewDecisionResponse =
+  | { requestId: string; decision: "approve" | "deny"; accepted: true; status: "approved" | "denied" }
+  | {
+      requestId: string;
+      decision: "approve" | "deny";
+      accepted: false;
+      status: Exclude<TrialPreviewDecisionStatus, "approved" | "denied">;
+    };
+
 export function getTeachingReadiness(): Promise<{ modes: RecordingModeReadiness[] }> {
   return requestJson<{ modes: RecordingModeReadiness[] }>("/api/teaching/readiness");
 }
@@ -35,6 +41,10 @@ export function createTeachingRun(mode: TeachingMode): Promise<TeachingRun> {
     method: "POST",
     body: JSON.stringify({ mode }),
   });
+}
+
+export function getTeachingRun(workflowId: string): Promise<TeachingRun> {
+  return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}`);
 }
 
 export function startTeachingRecording(
@@ -74,8 +84,24 @@ export function replyTeachingIntent(workflowId: string, content: string): Promis
   });
 }
 
+export function confirmTeachingIntent(workflowId: string): Promise<TeachingRun> {
+  return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}/intent/confirm`, {
+    method: "POST",
+  });
+}
+
 export function startTeachingTrial(workflowId: string): Promise<TeachingRun> {
   return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}/trial/start`, {
     method: "POST",
+  });
+}
+
+export function decideTrialPreview(
+  requestId: string,
+  decision: "approve" | "deny",
+): Promise<TrialPreviewDecisionResponse> {
+  return requestJson<TrialPreviewDecisionResponse>(`/api/teaching/trial-preview/${encodeURIComponent(requestId)}/decision`, {
+    method: "POST",
+    body: JSON.stringify({ decision }),
   });
 }

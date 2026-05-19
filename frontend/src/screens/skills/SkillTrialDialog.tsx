@@ -31,5 +31,3 @@ export function SkillTrialDialog(): JSX.Element | null {
     </div>
   );
 }
-
-export default SkillTrialDialog;

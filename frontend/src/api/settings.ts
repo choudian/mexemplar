@@ -1,8 +1,8 @@
 import { requestJson } from "./client";
 
 export type SettingSectionId = "ai" | "recording" | "data" | "about";
-export type SettingValueKind = "string" | "integer" | "number" | "boolean" | "enum" | "path" | "secret" | "action";
-export type SettingStatus = "available" | "missing_secret" | "invalid" | "unavailable";
+type SettingValueKind = "string" | "integer" | "number" | "boolean" | "enum" | "path" | "secret" | "action";
+type SettingStatus = "available" | "missing_secret" | "invalid" | "unavailable";
 export type SettingValue = string | number | boolean | null;
 
 export interface SettingDescriptor {

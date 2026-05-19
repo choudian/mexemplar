@@ -3,20 +3,25 @@ import { create } from "zustand";
 import { getSkillTrialHistory, replySkillTrial, startSkillTrial } from "../api/skills";
 import {
   createTeachingRun,
+  confirmTeachingIntent,
   decideDesktopHealth,
+  decideTrialPreview,
   getTeachingReadiness,
+  getTeachingRun,
   replyTeachingIntent,
   startTeachingRecording,
   startTeachingTrial,
   stopTeachingRecording,
 } from "../api/teaching";
-import type { RecordingModeReadiness, TeachingMode, TeachingRun, TeachingStage } from "../api/teaching";
+import type { RecordingModeReadiness, TeachingMode, TeachingRun, TeachingStage, TrialPreviewRequest } from "../api/teaching";
 import type { UiEvent } from "../api/client";
+import { isTeachingUiEvent, PROGRESS_EVENT_TYPES } from "../api/uiEvents";
 import { minimizeWindowForDesktopRecording } from "../api/window";
-import { useSkillsStore } from "./skillsStore";
 import { toErrorMessage } from "./helpers";
+import { useSkillsStore } from "./skillsStore";
 
-// ── Chat message types ────────────────────────────────────────────────────
+const MAX_PROGRESS_LOG = 200;
+const MAX_MESSAGES = 500;
 
 function makeTrialRun(workflowId: string): TeachingRun {
   return { workflowId, mode: "browser", stage: "trial_validation", summary: {} };
@@ -24,7 +29,7 @@ function makeTrialRun(workflowId: string): TeachingRun {
 
 export type ChatAgent = "pm" | "trial";
 
-export interface AiChatMessage {
+interface AiChatMessage {
   from: "ai";
   agent: ChatAgent;
   headline: string;
@@ -32,31 +37,14 @@ export interface AiChatMessage {
   error?: boolean;
 }
 
-export interface UserChatMessage {
+interface UserChatMessage {
   from: "user";
   text: string;
 }
 
 export type ChatMessage = AiChatMessage | UserChatMessage;
 
-// ── Store ─────────────────────────────────────────────────────────────────
-
-const SYSTEM_TRIAL_EVENTS = new Set(["trial_requested", "trial_failed", "trial_success"]);
-
-const TEACHING_RELEVANT_EVENTS = new Set([
-  "recording.progress",
-  "teaching.progress",
-  "trial.progress",
-  "skills.changed",
-]);
-
-const PROGRESS_EVENTS = new Set([
-  "recording.progress",
-  "teaching.progress",
-  "trial.progress",
-]);
-
-export type TeachingToast = {
+type TeachingToast = {
   title: string;
   body: string;
 };
@@ -70,6 +58,7 @@ export type TeachingState = {
   progressLog: string[];
   messages: ChatMessage[];
   toast: TeachingToast | null;
+  trialPreview: TrialPreviewRequest | null;
   busy: boolean;
   lastError: string | null;
   skillTrialToolId: string | null;
@@ -87,6 +76,8 @@ export type TeachingState = {
   startTrial: (task: string) => Promise<void>;
   openSkillTrial: (toolId: string) => void;
   closeSkillTrial: () => void;
+  refreshCurrentRun: () => Promise<void>;
+  decideTrialPreview: (requestId: string, decision: "approve" | "deny") => Promise<void>;
   applyEvent: (event: UiEvent) => void;
 };
 
@@ -96,9 +87,44 @@ export function resetToSelecting(): Partial<TeachingState> {
     stage: "selecting",
     progressLog: [],
     messages: [],
+    toast: null,
+    trialPreview: null,
     lastError: null,
     busy: false,
   };
+}
+
+function clearPreviewIfRequest(preview: TrialPreviewRequest | null, requestId: string): TrialPreviewRequest | null {
+  return preview?.requestId === requestId ? null : preview;
+}
+
+function previewDecisionError(status: string): string {
+  const labels: Record<string, string> = {
+    already_resolved: "该试用确认已处理。",
+    conflict: "该试用确认已被其它决策处理。",
+    expired: "该试用确认已过期。",
+  };
+  return labels[status] ?? "试用确认未生效。";
+}
+
+function appendBounded<T>(array: T[], item: T, max: number): T[] {
+  return array.length >= max ? [...array.slice(-max + 1), item] : [...array, item];
+}
+
+function labelFromPayload(payload: {
+  headline?: string;
+  question?: string;
+  message?: string;
+  error?: string;
+  result?: string;
+  status?: string;
+}): string {
+  return payload.headline ?? payload.question ?? payload.message ?? payload.error ?? payload.result ?? payload.status ?? "";
+}
+
+function trialSuccessCountFrom(summary: Record<string, unknown>): number | null {
+  const value = summary.trialSuccessCount;
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 export const useTeachingStore = create<TeachingState>((set, get) => ({
@@ -110,6 +136,7 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
   progressLog: [],
   messages: [],
   toast: null,
+  trialPreview: null,
   busy: false,
   lastError: null,
   skillTrialToolId: null,
@@ -133,7 +160,7 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
     set({ busy: true, lastError: null, selectedMode: mode });
     try {
       const run = await createTeachingRun(mode);
-      set({ run, stage: run.stage });
+      set({ run, stage: run.stage, messages: [], progressLog: [], trialPreview: null });
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法创建教学任务。") });
     } finally {
@@ -174,8 +201,12 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
   decideDesktopHealth: async (decision) => {
     const run = get().run;
     if (!run) return;
-    const updated = await decideDesktopHealth(run.workflowId, decision);
-    set({ run: updated, stage: updated.stage });
+    try {
+      const updated = await decideDesktopHealth(run.workflowId, decision);
+      set({ run: updated, stage: updated.stage, lastError: null });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法提交录制处理决定。") });
+    }
   },
   replyIntent: async (content) => {
     const run = get().run;
@@ -187,7 +218,10 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
       lastError: null,
     });
     try {
-      const updated = await replyTeachingIntent(run.workflowId, text);
+      let updated = await replyTeachingIntent(run.workflowId, text);
+      if (updated.stage === "intent_confirmation") {
+        updated = await confirmTeachingIntent(run.workflowId);
+      }
       set({ run: updated, stage: updated.stage });
     } catch (error) {
       set({ lastError: toErrorMessage(error, "发送失败。") });
@@ -233,6 +267,7 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
       stage: "trial_validation",
       messages: [],
       progressLog: [],
+      trialPreview: null,
       lastError: null,
       busy: true,
       trialSuccessCount: initialCount,
@@ -250,7 +285,6 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
 
     (async () => {
       try {
-        // No prior workflow — skip history lookup, start fresh directly
         if (!skillWorkflowId) {
           await startFresh();
           return;
@@ -258,8 +292,6 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
 
         const response = await getSkillTrialHistory(toolId);
         const { messages: rawMessages, workflowId: historyWorkflowId } = response;
-
-        // Backend returns "assistant" role; frontend uses "ai" internally
         const restored: ChatMessage[] = rawMessages.map((msg) =>
           msg.role === "user"
             ? { from: "user" as const, text: msg.content }
@@ -287,102 +319,113 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
       trialSuccessCount: 0,
     });
   },
+  refreshCurrentRun: async () => {
+    const run = get().run;
+    if (!run) return;
+    try {
+      const updated = await getTeachingRun(run.workflowId);
+      const successCount = trialSuccessCountFrom(updated.summary);
+      set({
+        run: updated,
+        stage: updated.stage,
+        lastError: null,
+        ...(successCount === null ? {} : { trialSuccessCount: successCount }),
+      });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法刷新当前教学状态，请稍后重试。") });
+      throw error;
+    }
+  },
+  decideTrialPreview: async (requestId, decision) => {
+    try {
+      const result = await decideTrialPreview(requestId, decision);
+      if (!result.accepted) {
+        set({
+          lastError: previewDecisionError(result.status),
+          trialPreview: clearPreviewIfRequest(get().trialPreview, requestId),
+        });
+        return;
+      }
+      set({
+        lastError: null,
+        trialPreview: clearPreviewIfRequest(get().trialPreview, requestId),
+      });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法提交试用确认，请重试。") });
+    }
+  },
   applyEvent: (event) => {
-    if (!TEACHING_RELEVANT_EVENTS.has(event.type)) {
+    if (!isTeachingUiEvent(event)) {
       return;
     }
     const state = get();
-    const isToolSaved = event.type === "skills.changed" && event.payload.sourceEvent === "tool_saved";
-    const isToolPublished = event.type === "skills.changed" && event.payload.sourceEvent === "tool_published";
+    const currentRun = state.run;
+    const workflowId = event.scope.workflowId;
+    if (!currentRun || !workflowId || workflowId !== currentRun.workflowId) return;
 
-    const isSkillTrial = !!state.skillTrialToolId;
-    if (!isToolSaved && !isToolPublished && !isSkillTrial && event.scope.workflowId && event.scope.workflowId !== state.run?.workflowId) {
+    if (event.type === "teaching.stage_changed") {
+      const message = event.payload.headline ?? event.payload.message;
+      const successCount = event.payload.successCount;
+      set({
+        stage: event.payload.stage,
+        run: { ...currentRun, stage: event.payload.stage },
+        progressLog: message ? appendBounded(state.progressLog, message, MAX_PROGRESS_LOG) : state.progressLog,
+        ...(typeof successCount === "number" ? { trialSuccessCount: successCount } : {}),
+      });
       return;
     }
-
-    const patch: Partial<TeachingState> = {};
-
-    if (isToolPublished) {
-      patch.stage = "published";
+    if (event.type === "trial.preview_requested") {
+      set({ trialPreview: event.payload });
+      return;
     }
-
-    if (isToolSaved && !state.skillTrialToolId) {
-      patch.toast = { title: "技能学习完成", body: "新技能已就绪，可以在 AI 助手中使用。" };
+    if (event.type === "trial.preview_resolved") {
+      set({ trialPreview: clearPreviewIfRequest(state.trialPreview, event.payload.requestId) });
+      return;
     }
+    if (PROGRESS_EVENT_TYPES.has(event.type)) {
+      const payload = event.payload;
+      const label = labelFromPayload(payload);
+      const patch: Partial<TeachingState> = {};
+      const isSystemTrialProgress = event.type === "trial.progress" && payload.status === "running";
 
-    if (PROGRESS_EVENTS.has(event.type)) {
-      if (event.type === "trial.progress" && state.skillTrialToolId && state.busy) {
-        patch.busy = false;
+      if (label && !isSystemTrialProgress) {
+        patch.progressLog = appendBounded(state.progressLog, label, MAX_PROGRESS_LOG);
       }
-      const payload = event.payload as {
-        sourceEvent?: string;
-        status?: string;
-        headline?: string;
-        message?: string;
-        error?: string;
-        published?: boolean;
-        success_count?: number;
-      };
-      const label = payload.headline ?? payload.message ?? payload.error ?? payload.sourceEvent ?? event.type;
-
-      const agent: ChatAgent | null =
-        event.type === "teaching.progress" ? "pm"
-        : event.type === "trial.progress" ? "trial"
-        : null;
-
-      const isTrialSystemEvent = agent === "trial" && (
-        SYSTEM_TRIAL_EVENTS.has(payload.sourceEvent ?? "") ||
-        payload.status === "running"
-      );
-
-      const aiMsg: AiChatMessage | null = agent && !isTrialSystemEvent ? {
-        from: "ai",
-        agent,
-        headline: payload.headline ?? payload.sourceEvent ?? event.type,
-        detail: payload.message ?? undefined,
-        error: !!payload.error,
-      } : null;
-
-      if (aiMsg) {
-        patch.messages = [...state.messages, aiMsg];
-      }
-      if (!isTrialSystemEvent) {
-        patch.progressLog = [...state.progressLog, label];
-      }
-
-      let nextStage = patch.stage ?? state.stage;
-      if (event.type === "recording.progress" && payload.sourceEvent === "recording_started") {
-        nextStage = "recording";
-      }
-      if (event.type === "recording.progress" && payload.sourceEvent === "recording_stopped") {
-        nextStage = "intent_confirmation";
-      }
-      if (
-        event.type === "teaching.progress" &&
-        ["requirement_confirmed"].includes(payload.sourceEvent ?? "")
-      ) {
-        nextStage = "learning";
-      }
-      if (
-        event.type === "teaching.progress" &&
-        ["review_failed", "teaching_failure_updated"].includes(payload.sourceEvent ?? "")
-      ) {
-        nextStage = "failed";
-      }
-
-      if (event.type === "trial.progress" && payload.sourceEvent === "trial_success") {
-        if (typeof payload.success_count === "number") {
-          patch.trialSuccessCount = payload.success_count;
-        }
-        if (payload.published) {
-          nextStage = "published";
+      if (event.type === "teaching.progress" || event.type === "trial.progress") {
+        const agent: ChatAgent = event.type === "teaching.progress" ? "pm" : "trial";
+        const headline = label || (agent === "pm" ? "需求分析更新" : "试用更新");
+        const detail =
+          event.type === "trial.progress"
+            ? event.payload.message ?? event.payload.result
+            : event.payload.message;
+        if (!isSystemTrialProgress) {
+          patch.messages = appendBounded(
+            state.messages,
+            {
+              from: "ai",
+              agent,
+              headline,
+              detail,
+              error: !!payload.error,
+            },
+            MAX_MESSAGES,
+          );
         }
       }
-      patch.stage = nextStage;
-    }
-
-    if (Object.keys(patch).length > 0) {
-      set(patch);
+      if (event.type === "trial.progress") {
+        const trialPayload = event.payload;
+        if (typeof trialPayload.successCount === "number") {
+          patch.trialSuccessCount = trialPayload.successCount;
+        }
+        if (trialPayload.published) {
+          patch.stage = "published";
+          patch.run = { ...currentRun, stage: "published" };
+        }
+        if (state.skillTrialToolId && state.busy) {
+          patch.busy = false;
+        }
+      }
+      if (Object.keys(patch).length > 0) set(patch);
     }
   },
 }));

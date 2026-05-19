@@ -6,7 +6,7 @@ import { AgentBubble, ChatComposer, CollapsibleNumberedList, AiMessageContent, T
 
 // ── Main component ────────────────────────────────────────────────────────
 
-export function IntentStage(): JSX.Element {
+function IntentStage(): JSX.Element {
   const messages = useTeachingStore((s) => s.messages);
   const progressLog = useTeachingStore((s) => s.progressLog);
   const busy = useTeachingStore((s) => s.busy);

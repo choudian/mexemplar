@@ -19,7 +19,9 @@ React UI (frontend/)
 
 - Tauri 负责窗口、custom chrome、sidecar 生命周期、端口/token handoff 和打包。
 - React 负责五个主界面：AI Assistant、Skill Teaching、Skill List、Skill Composition、Settings。
-- `src/desktop_api/` 是 UI adapter，不直接访问 Repository；它只调用 business services，并把 `src/utils/events.py` 的 blinker 事件转成前端事件流。
+- `src/desktop_api/` 是 UI adapter，router 不直接访问 Repository；默认只调用 business services，并把 `src/utils/events.py` 的 blinker 事件投影成受注册表约束的前端 UI event stream。`orchestrator_runtime.py` 里为复用既有 `AgentSessionStore` 组装的 Repository 触点是当前收敛例外，不得扩散到 router 或新 API。
+- UI event stream 由后端 `UI Event Registry` 拥有公开契约；前端只消费注册 UI event type，不使用内部 blinker 事件名或 `sourceEvent` 推断展示行为。事件 envelope 包含 `eventId`、当前桌面事件会话内单调递增的 `sequence`、`sessionId`、`causationId`、`type`、`scope`、安全校验后的 `payload` 和 `createdAt`。
+- sidecar event stream 为每个订阅者维护独立队列，并保留当前进程内的有界 replay buffer。前端重连时携带同一事件会话的 last-seen sequence；buffer 能覆盖缺口时按序回放，不能覆盖或事件会话不匹配时发送 `backend.resync_required`，由前端刷新权威快照恢复状态。
 - sidecar 只绑定本机回环地址，并要求每次启动生成的 session token；token 不写入配置、OpenAPI 或日志。
 - `src/main.py`、`mexemplar_gui.py`、`start.bat` 和 `mexemplar_gui.bat` 是显式失败的 legacy 兼容入口；`src/ui/` 的 PyQt 主 UI 代码已退休。
 
@@ -536,4 +538,5 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 *更新：2026-04-07 — 同步代码现状：精确化 Agent 两层通信机制描述；补全事件列表（teaching_failure 系列、trial_success、recording_started/stopped）；补充 Trial Agent Config 动态构建说明；新增教学失败追踪系统说明；更新优先级表完成状态*
 *更新：2026-04-13 — 新增技能组合架构（第九节）：双模执行、数据模型、Assistant 集成、试用机制、needs_review 标记；删除已完成的优先级跟踪表，保留细化设计文档索引*
 *更新：2026-04-21 — 同步当前实现形态：补充 assistant 后台任务队列为何不走 blinker；更正 AgentOrchestrator 为“对外单一入口 + 内部拆分子模块”的现状*
+*更新：2026-05-16 — 同步前端事件层：新增后端 UI Event Registry、per-subscriber event stream、same-session replay/resync、typed frontend event consumption 和桌面 Trial preview 确认闭环*
 *更新：2026-05-05 — 同步桌面录制：新增桌面 recorder / Service / mode dispatch / 桌面专属工具 / sanity check / Trial runner / syntax gate / DPI 与 blinker 事件边界*

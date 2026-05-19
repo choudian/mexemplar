@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { useState } from "react";
 
-export function ExecutionSummary({
+function ExecutionSummary({
   status,
   headline,
 }: {

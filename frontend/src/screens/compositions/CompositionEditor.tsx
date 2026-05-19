@@ -26,7 +26,7 @@ const modeOptions: Array<{
   },
 ];
 
-export function CompositionEditor({
+function CompositionEditor({
   draft,
   skills,
   busy,

@@ -5,7 +5,7 @@ import type { CompositionMember, CompositionMode } from "../../api/compositions"
 import type { SkillSummary } from "../../api/skills";
 import { Button, IconButton } from "../../components/primitives";
 
-export function MemberSelector({
+function MemberSelector({
   mode,
   members,
   busy,

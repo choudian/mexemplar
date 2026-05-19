@@ -1,14 +1,15 @@
+import { RotateCcw } from "lucide-react";
 import { useEffect } from "react";
 
-import { useTeachingStore, resetToSelecting } from "../../state/teachingStore";
+import { Button } from "../../components/primitives";
+import type { TeachingRun, TeachingStage } from "../../api/teaching";
 import { useShellStore } from "../../state/shellStore";
+import { resetToSelecting, useTeachingStore } from "../../state/teachingStore";
 import IntentStage from "./IntentStage";
 import LearningStage from "./LearningStage";
 import RecordingModePicker from "./RecordingModePicker";
 import RecordingStage from "./RecordingStage";
-import type { TeachingRun, TeachingStage } from "../../api/teaching";
-import { Button } from "../../components/primitives";
-import { RotateCcw } from "lucide-react";
+import TrialStage from "./TrialStage";
 
 const LEARNING_REDIRECT_MS = 3000;
 
@@ -17,11 +18,12 @@ const teachingSteps = [
   { id: "recording", label: "操作录制" },
   { id: "intent_confirmation", label: "意图理解" },
   { id: "learning", label: "技能学习" },
+  { id: "trial_validation", label: "技能试用" },
 ] as const;
 
 function normalizeStage(stage: string): (typeof teachingSteps)[number]["id"] {
-  if (stage === "published" || stage === "failed" || stage === "abandoned" || stage === "trial_validation") {
-    return "learning";
+  if (stage === "published" || stage === "failed" || stage === "abandoned") {
+    return "trial_validation";
   }
   return teachingSteps.some((step) => step.id === stage) ? (stage as (typeof teachingSteps)[number]["id"]) : "selecting";
 }
@@ -81,7 +83,6 @@ export function TeachingScreen(): JSX.Element {
   }, [stage]);
 
   const displayStage = displayStageFor(run, stage);
-  const isChatStage = displayStage === "intent_confirmation";
 
   return (
     <section className="teaching-screen" aria-label="技能教学">
@@ -104,9 +105,10 @@ export function TeachingScreen(): JSX.Element {
       </div>
       <TeachingStepper stage={displayStage} />
 
-      {isChatStage ? (
+      {(displayStage === "intent_confirmation" || displayStage === "trial_validation") ? (
         <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
           {run && displayStage === "intent_confirmation" ? <IntentStage /> : null}
+          {run && displayStage === "trial_validation" ? <TrialStage /> : null}
         </div>
       ) : (
         <div className="teaching-workflow me-scroll" data-stage={stage}>

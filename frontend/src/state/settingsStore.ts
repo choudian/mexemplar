@@ -10,7 +10,7 @@ import {
 } from "../api/settings";
 import type { SettingDescriptor, SettingSection, SettingValue, SettingsActionResponse } from "../api/settings";
 import type { UiEvent } from "../api/client";
-import { toErrorMessage } from "./helpers";
+import { createDebouncedRefresh, toErrorMessage } from "./helpers";
 
 export type SettingsState = {
   hydrated: boolean;
@@ -58,6 +58,8 @@ function validate(descriptor: SettingDescriptor | undefined, value: SettingValue
   }
   return null;
 }
+
+const scheduleRefresh = createDebouncedRefresh();
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
   hydrated: false,
@@ -171,7 +173,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
   applyEvent: (event) => {
     if (event.type === "settings.changed") {
-      void get().load();
+      scheduleRefresh(() => get().load());
     }
   },
 }));

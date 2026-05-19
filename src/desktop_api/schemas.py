@@ -67,6 +67,9 @@ class BootstrapResponse(BaseModel):
 
 class UiEvent(BaseModel):
     eventId: str
+    sequence: int
+    sessionId: str
+    causationId: str | None = None
     type: str
     scope: dict[str, str] = Field(default_factory=dict)
     payload: dict[str, Any] = Field(default_factory=dict)
@@ -181,6 +184,17 @@ class TeachingDesktopHealthDecisionRequest(BaseModel):
 
 class TeachingIntentReplyRequest(BaseModel):
     content: str
+
+
+class TrialPreviewDecisionRequest(BaseModel):
+    decision: Literal["approve", "deny"]
+
+
+class TrialPreviewDecisionResponse(BaseModel):
+    requestId: str
+    decision: Literal["approve", "deny"]
+    accepted: bool
+    status: Literal["approved", "denied", "already_resolved", "conflict", "expired"]
 
 
 class SkillSummary(BaseModel):

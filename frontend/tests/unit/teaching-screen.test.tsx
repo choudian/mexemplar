@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { configureDesktopApi } from "../../src/api/client";
 import { TeachingScreen } from "../../src/screens/teaching/TeachingScreen";
+import { TrialStage } from "../../src/screens/teaching/TrialStage";
 import { useTeachingStore } from "../../src/state/teachingStore";
 
 function jsonResponse(payload: unknown) {
@@ -23,12 +24,14 @@ describe("TeachingScreen", () => {
       run: null,
       stage: "selecting",
       progressLog: [],
+      trialPreview: null,
       busy: false,
       lastError: null,
     });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -58,11 +61,17 @@ describe("TeachingScreen", () => {
           summary: {},
         });
       }
+      if (url.endsWith("/api/teaching/runs/rec_1/intent/reply")) {
+        return jsonResponse({ workflowId: "rec_1", mode: "browser", stage: "intent_confirmation", summary: {} });
+      }
       if (url.endsWith("/api/teaching/runs/rec_1/intent/confirm")) {
         return jsonResponse({ workflowId: "rec_1", mode: "browser", stage: "learning", summary: {} });
       }
       if (url.endsWith("/api/teaching/runs/rec_1/trial/start")) {
         return jsonResponse({ workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} });
+      }
+      if (url.endsWith("/api/teaching/trial-preview/preview_1/decision")) {
+        return jsonResponse({ requestId: "preview_1", decision: "approve", accepted: true, status: "approved" });
       }
       return jsonResponse({});
     });
@@ -78,24 +87,65 @@ describe("TeachingScreen", () => {
     await waitFor(() => expect(screen.getByText("停止录制")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("停止录制"));
-    await waitFor(() => expect(screen.getByText("确认并学习")).toBeEnabled());
+    const intentInput = await screen.findByPlaceholderText("回复需求分析师…");
+    fireEvent.change(intentInput, { target: { value: "确认并学习" } });
+    fireEvent.keyDown(intentInput, { key: "Enter", code: "Enter" });
 
-    fireEvent.click(screen.getByText("确认并学习"));
-    await waitFor(() => expect(screen.getByText("正在学习技能。")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "正在学习技能…" })).toBeInTheDocument());
 
     act(() => {
       useTeachingStore.getState().applyEvent({
         eventId: "evt_learning_done",
-        type: "teaching.progress",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "rec_1",
+        type: "teaching.stage_changed",
         scope: { workflowId: "rec_1" },
-        payload: { sourceEvent: "code_completed", headline: "Skill learning completed" },
+        payload: { stage: "trial_validation", headline: "Skill learning completed" },
         createdAt: "2026-05-10T00:00:00Z",
       });
     });
-    await waitFor(() => expect(screen.getByText("正在验证技能。")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "试用验证" })).toBeInTheDocument());
 
-    fireEvent.click(screen.getByText("开始试用"));
-    await waitFor(() => expect(screen.getByText("正在验证技能。")).toBeInTheDocument());
+    const trialInput = screen.getByPlaceholderText("给我一个真实任务...");
+    fireEvent.change(trialInput, { target: { value: "整理上周的客户反馈邮件" } });
+    fireEvent.keyDown(trialInput, { key: "Enter", code: "Enter" });
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/teaching/runs/rec_1/trial/start",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_preview",
+        sequence: 2,
+        sessionId: "ui_sess_test",
+        causationId: "rec_1",
+        type: "trial.preview_requested",
+        scope: { workflowId: "rec_1" },
+        payload: {
+          requestId: "preview_1",
+          workflowId: "rec_1",
+          trialId: "trial_1",
+          summary: "桌面试用需要确认。",
+          codePreview: "print('safe preview')",
+          riskSummary: "将控制本机桌面。",
+          expires_at: "2099-05-10T00:00:00Z",
+          status: "pending",
+        },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+    await waitFor(() => expect(screen.getByText("桌面试用确认")).toBeInTheDocument());
+    fireEvent.click(screen.getByText("批准"));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/teaching/trial-preview/preview_1/decision",
+        expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "approve" }) }),
+      ),
+    );
   });
 
   test("minimizes the Tauri window before starting desktop recording", async () => {
@@ -121,6 +171,7 @@ describe("TeachingScreen", () => {
         summary: {},
       },
       selectedMode: "desktop",
+      trialPreview: null,
     });
 
     await useTeachingStore.getState().startRecording();
@@ -137,5 +188,123 @@ describe("TeachingScreen", () => {
       mode: "desktop",
       windowMinimized: true,
     });
+  });
+
+  test("disables trial preview decisions when the backend deadline expires", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-10T00:00:00Z"));
+    const onPreviewDecision = vi.fn();
+
+    render(
+      <TrialStage
+        active
+        disabled={false}
+        onStart={vi.fn()}
+        preview={{
+          requestId: "preview_1",
+          workflowId: "rec_1",
+          trialId: "trial_1",
+          summary: "桌面试用需要确认。",
+          codePreview: "print('safe preview')",
+          riskSummary: "将控制本机桌面。",
+          expires_at: "2026-05-10T00:00:01Z",
+          status: "pending",
+        }}
+        onPreviewDecision={onPreviewDecision}
+      />,
+    );
+
+    expect(screen.getByText("批准")).toBeEnabled();
+
+    await act(async () => {
+      vi.advanceTimersByTime(1100);
+    });
+
+    expect(screen.getByText("批准")).toBeDisabled();
+    fireEvent.click(screen.getByText("批准"));
+    expect(onPreviewDecision).not.toHaveBeenCalled();
+  });
+
+  test("shows a clear error when a trial preview decision is no longer accepted", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/teaching/trial-preview/preview_1/decision")) {
+        return jsonResponse({ requestId: "preview_1", decision: "approve", accepted: false, status: "expired" });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useTeachingStore.setState({
+      trialPreview: {
+        requestId: "preview_1",
+        workflowId: "rec_1",
+        trialId: "trial_1",
+        summary: "桌面试用需要确认。",
+        codePreview: "print('safe preview')",
+        riskSummary: "将控制本机桌面。",
+        expires_at: "2026-05-10T00:00:01Z",
+        status: "pending",
+      },
+      lastError: null,
+    });
+
+    await useTeachingStore.getState().decideTrialPreview("preview_1", "approve");
+
+    expect(useTeachingStore.getState().lastError).toBe("该试用确认已过期。");
+    expect(useTeachingStore.getState().trialPreview).toBeNull();
+  });
+
+  test("ignores teaching events that do not match the current workflow scope", () => {
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "learning", summary: {} },
+      stage: "learning",
+      trialPreview: null,
+    });
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_preview",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "rec_2",
+        type: "trial.preview_requested",
+        scope: { workflowId: "rec_2" },
+        payload: {
+          requestId: "preview_1",
+          workflowId: "rec_2",
+          trialId: "trial_1",
+          summary: "桌面试用需要确认。",
+          codePreview: "print('safe preview')",
+          riskSummary: "将控制本机桌面。",
+          expires_at: "2099-05-10T00:00:00Z",
+          status: "pending",
+        },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+
+    expect(useTeachingStore.getState().trialPreview).toBeNull();
+  });
+
+  test("does not treat unrelated skill catalog events as the current teaching run", () => {
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+    });
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_skill",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "tool_2",
+        type: "skills.changed",
+        scope: { toolId: "tool_2" },
+        payload: { reason: "catalog_invalidated", status: "published", toolId: "tool_2" },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+
+    expect(useTeachingStore.getState().stage).toBe("trial_validation");
   });
 });

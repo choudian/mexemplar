@@ -116,6 +116,9 @@ describe("AssistantScreen", () => {
     act(() => {
       useAssistantStore.getState().applyEvent({
         eventId: "evt_1",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "ast_1",
         type: "assistant.confirmation",
         scope: {},
         payload: {

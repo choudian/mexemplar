@@ -12,7 +12,7 @@ async function globalTeardown() {
   }
 
   const state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
-  const { dataDir, pid, port } = state;
+  const { dataDir, pid } = state;
 
   // 终止 sidecar 进程（Windows 兼容：用 taskkill 杀进程树）
   if (pid) {

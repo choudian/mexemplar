@@ -1,7 +1,8 @@
 import { useEffect, useMemo } from "react";
 
 import { configureDesktopApiFromTauri, connectEvents, getBootstrap } from "../api/client";
-import type { BackendConnectionState, UiEvent } from "../api/client";
+import type { BackendConnectionState, EventStreamCursor, UiEvent } from "../api/client";
+import { getUiEventHandlerDomain, isResyncRequiredEvent } from "../api/uiEvents";
 import { useAssistantStore } from "../state/assistantStore";
 import { useCompositionsStore } from "../state/compositionsStore";
 import { useSettingsStore } from "../state/settingsStore";
@@ -16,6 +17,7 @@ import { getRoute } from "./routes";
 const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000, 5000];
 
 const TOAST_AUTO_DISMISS_MS = 8000;
+const SEEN_EVENT_ID_LIMIT = 500;
 
 const FAILED_BACKEND: BackendConnectionState = {
   status: "failed",
@@ -54,38 +56,106 @@ export function AppShell(): JSX.Element {
   const setBackend = useShellStore((state) => state.setBackend);
   const applyAssistantEvent = useAssistantStore((state) => state.applyEvent);
   const applySkillsEvent = useSkillsStore((state) => state.applyEvent);
+  const refreshSkills = useSkillsStore((state) => state.loadCategory);
   const applyCompositionsEvent = useCompositionsStore((state) => state.applyEvent);
+  const refreshCompositions = useCompositionsStore((state) => state.load);
   const applySettingsEvent = useSettingsStore((state) => state.applyEvent);
+  const refreshSettings = useSettingsStore((state) => state.load);
   const applyTeachingEvent = useTeachingStore((state) => state.applyEvent);
+  const refreshTeaching = useTeachingStore((state) => state.refreshCurrentRun);
 
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    let cursor: EventStreamCursor | undefined;
+    let eventProcessing = Promise.resolve();
+    let resyncBlocked = false;
+    const seenEventIds = new Set<string>();
+    const seenEventOrder: string[] = [];
+
+    const rememberEvent = (eventId: string) => {
+      if (seenEventIds.has(eventId)) return false;
+      seenEventIds.add(eventId);
+      seenEventOrder.push(eventId);
+      if (seenEventOrder.length > SEEN_EVENT_ID_LIMIT) {
+        const oldest = seenEventOrder.shift();
+        if (oldest) seenEventIds.delete(oldest);
+      }
+      return true;
+    };
+
+    const refreshAuthoritativeState = async (domains?: string[]) => {
+      if (cancelled) return;
+      if (!domains) {
+        const bootstrap = await getBootstrap();
+        if (cancelled) return;
+        hydrate(bootstrap);
+      }
+      const refreshes: Promise<void>[] = [];
+      if (!domains || domains.includes("teaching")) refreshes.push(refreshTeaching());
+      if (!domains || domains.includes("skills")) refreshes.push(refreshSkills());
+      if (!domains || domains.includes("compositions")) refreshes.push(refreshCompositions());
+      if (!domains || domains.includes("settings")) refreshes.push(refreshSettings());
+      await Promise.all(refreshes);
+    };
+
+    const dispatchUiEvent = (event: UiEvent) => {
+      switch (getUiEventHandlerDomain(event)) {
+        case "assistant":
+          applyAssistantEvent(event);
+          break;
+        case "teaching":
+          applyTeachingEvent(event);
+          break;
+        case "skills":
+          applySkillsEvent(event);
+          break;
+        case "compositions":
+          applyCompositionsEvent(event);
+          break;
+        case "settings":
+          applySettingsEvent(event);
+          break;
+        case "resync":
+          break;
+      }
+    };
 
     const applyUiEvent = (event: UiEvent) => {
-      if (event.type === "backend.health") {
-        setBackend(event.payload as unknown as BackendConnectionState);
-      }
-      if (event.type.startsWith("assistant.")) {
-        applyAssistantEvent(event);
-      }
-      if (
-        event.type === "recording.progress" ||
-        event.type === "teaching.progress" ||
-        event.type === "trial.progress"
-      ) {
-        applyTeachingEvent(event);
-      }
-      if (event.type === "skills.changed") {
-        applySkillsEvent(event);
-        applyTeachingEvent(event);
-      }
-      if (event.type === "compositions.changed") {
-        applyCompositionsEvent(event);
-      }
-      if (event.type === "settings.changed") {
-        applySettingsEvent(event);
-      }
+      if (!rememberEvent(event.eventId)) return;
+      eventProcessing = eventProcessing
+        .then(async () => {
+          if (isResyncRequiredEvent(event)) {
+            try {
+              await refreshAuthoritativeState(event.payload.domains);
+              resyncBlocked = false;
+            } catch {
+              resyncBlocked = true;
+              if (!cancelled) {
+                setBackend({
+                  status: "degraded",
+                  message: "事件流需要重新同步，但权威状态刷新失败。",
+                  checks: [{ name: "events", status: "degraded", message: "Event resync failed." }],
+                  serverTime: new Date().toISOString(),
+                });
+              }
+            }
+            return;
+          }
+          if (resyncBlocked) return;
+          dispatchUiEvent(event);
+        })
+        .catch(() => {
+          resyncBlocked = true;
+          if (!cancelled) {
+            setBackend({
+              status: "degraded",
+              message: "事件流事件处理失败，需要重新同步。",
+              checks: [{ name: "events", status: "degraded", message: "Event processing failed." }],
+              serverTime: new Date().toISOString(),
+            });
+          }
+        });
     };
 
     const connectBackend = async () => {
@@ -98,19 +168,32 @@ export function AppShell(): JSX.Element {
             return;
           }
           hydrate(bootstrap);
-          void connectEvents(applyUiEvent, controller.signal).catch(() => {
-            if (!cancelled) {
-              setBackend({
-                ...bootstrap.connection,
-                status: bootstrap.connection.status === "failed" ? "failed" : "degraded",
-                message: "事件流不可用，后台状态更新可能延迟。",
-                checks: [
-                  ...bootstrap.connection.checks.filter((check) => check.name !== "events"),
-                  { name: "events", status: "degraded", message: "Desktop event stream failed." },
-                ],
-              });
+          void (async () => {
+            while (!cancelled && !controller.signal.aborted) {
+              try {
+                await connectEvents(applyUiEvent, {
+                  signal: controller.signal,
+                  cursor,
+                  onCursor: (nextCursor) => {
+                    cursor = nextCursor;
+                  },
+                });
+              } catch {
+                if (!cancelled) {
+                  setBackend({
+                    ...bootstrap.connection,
+                    status: bootstrap.connection.status === "failed" ? "failed" : "degraded",
+                    message: "事件流不可用，后台状态更新可能延迟。",
+                    checks: [
+                      ...bootstrap.connection.checks.filter((check) => check.name !== "events"),
+                      { name: "events", status: "degraded", message: "Desktop event stream failed." },
+                    ],
+                  });
+                  await waitForRetry(1000, controller.signal);
+                }
+              }
             }
-          });
+          })();
           return;
         } catch {
           if (cancelled || attempt === BOOTSTRAP_RETRY_DELAYS_MS.length) {
@@ -147,6 +230,10 @@ export function AppShell(): JSX.Element {
     applySkillsEvent,
     applyTeachingEvent,
     hydrate,
+    refreshCompositions,
+    refreshSettings,
+    refreshSkills,
+    refreshTeaching,
     setBackend,
   ]);
 
@@ -158,14 +245,12 @@ export function AppShell(): JSX.Element {
   const closeSkillTrial = useTeachingStore((state) => state.closeSkillTrial);
   const skillTrialToolId = useTeachingStore((state) => state.skillTrialToolId);
 
-  // Clean up skill trial state when navigating away from skills page
   useEffect(() => {
     if (activeRoute !== "skills" && skillTrialToolId) {
       closeSkillTrial();
     }
   }, [activeRoute, skillTrialToolId, closeSkillTrial]);
 
-  // Auto-dismiss teaching toast after 8 seconds
   useEffect(() => {
     if (!teachingToast) return;
     const timer = setTimeout(dismissTeachingToast, TOAST_AUTO_DISMISS_MS);
@@ -205,5 +290,3 @@ export function AppShell(): JSX.Element {
     </>
   );
 }
-
-export default AppShell;

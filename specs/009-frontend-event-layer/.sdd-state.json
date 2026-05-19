@@ -1,0 +1,14 @@
+{
+  "feature": "009-frontend-event-layer",
+  "stage": "archived",
+  "project_type": "desktop-app",
+  "a": 0,
+  "b": 1,
+  "c": 1,
+  "d": 0,
+  "gate_passes": 1,
+  "rollback_count": 0,
+  "deferred_path": "",
+  "overflow_warnings": [],
+  "known_issues_path": ""
+}

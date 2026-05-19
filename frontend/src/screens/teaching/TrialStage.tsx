@@ -1,14 +1,43 @@
-import { Check, X, Zap } from "lucide-react";
+import { Check, ShieldAlert, X, Zap } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useTeachingStore } from "../../state/teachingStore";
+import type { TrialPreviewRequest } from "../../api/teaching";
+import { Button } from "../../components/primitives";
 import { useShellStore } from "../../state/shellStore";
 import { useSkillsStore } from "../../state/skillsStore";
-import { Button } from "../../components/primitives";
-import { AgentBubble, AiMessageContent, ChatComposer, CollapsibleChevron, ThinkingIndicator, useScrollToBottom, UserBubble, filterAgentMessages } from "./shared";
+import { useTeachingStore } from "../../state/teachingStore";
+import { AgentBubble, AiMessageContent, ChatComposer, CollapsibleChevron, ThinkingIndicator, UserBubble, filterAgentMessages, useScrollToBottom } from "./shared";
 
 const TRIAL_NEED = 3;
 const DONE_COUNTDOWN_SECS = 3;
+
+type TrialStageProps = {
+  active?: boolean;
+  disabled?: boolean;
+  onStart?: () => void;
+  preview?: TrialPreviewRequest | null;
+  onPreviewDecision?: (requestId: string, decision: "approve" | "deny") => void;
+};
+
+function usePreviewExpired(preview?: TrialPreviewRequest | null): boolean {
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!preview) return;
+    const expiresAt = Date.parse(preview.expires_at);
+    if (Number.isNaN(expiresAt) || expiresAt <= Date.now()) {
+      setNow(Date.now());
+      return;
+    }
+    const delayMs = Math.min(expiresAt - Date.now() + 10, 2_147_483_647);
+    const timeout = window.setTimeout(() => setNow(Date.now()), delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [preview?.expires_at, preview?.requestId]);
+
+  if (!preview) return false;
+  const expiresAt = Date.parse(preview.expires_at);
+  return Number.isNaN(expiresAt) || expiresAt <= now;
+}
 
 function TrialChips({ chips, onPick }: { chips: string[]; onPick: (c: string) => void }): JSX.Element {
   return (
@@ -67,9 +96,12 @@ function TrialProcessStrip({
   );
 }
 
-// ── Main component ────────────────────────────────────────────────────────
-
-export function TrialStage(): JSX.Element {
+export function TrialStage({
+  disabled: disabledOverride,
+  onStart,
+  preview: previewOverride,
+  onPreviewDecision,
+}: TrialStageProps = {}): JSX.Element {
   const messages = useTeachingStore((s) => s.messages);
   const busy = useTeachingStore((s) => s.busy);
   const stage = useTeachingStore((s) => s.stage);
@@ -77,6 +109,8 @@ export function TrialStage(): JSX.Element {
   const closeSkillTrial = useTeachingStore((s) => s.closeSkillTrial);
   const isSkillTrial = useTeachingStore((s) => !!s.skillTrialToolId);
   const trialSuccessCount = useTeachingStore((s) => s.trialSuccessCount);
+  const storePreview = useTeachingStore((s) => s.trialPreview);
+  const decideTrialPreview = useTeachingStore((s) => s.decideTrialPreview);
 
   const [draft, setDraft] = useState("");
   const [phase, setPhase] = useState<"idle" | "running" | "verdict">("idle");
@@ -84,8 +118,10 @@ export function TrialStage(): JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const trialMessages = useMemo(() => filterAgentMessages(messages, "trial"), [messages]);
-
+  const preview = previewOverride !== undefined ? previewOverride : storePreview;
+  const expired = usePreviewExpired(preview);
   const done = trialSuccessCount >= TRIAL_NEED || stage === "published";
+  const composerDisabled = disabledOverride || busy || phase === "running";
 
   useScrollToBottom(scrollRef, [trialMessages.length, busy]);
 
@@ -124,9 +160,13 @@ export function TrialStage(): JSX.Element {
 
   const handleSend = (text: string) => {
     const t = text.trim();
-    if (!t || busy) return;
+    if (!t || composerDisabled) return;
     setPhase("running");
-    void startTrial(t);
+    if (onStart && trialMessages.length === 0) {
+      onStart();
+    } else {
+      void startTrial(t);
+    }
     setDraft("");
   };
 
@@ -135,22 +175,23 @@ export function TrialStage(): JSX.Element {
     setPhase("idle");
   };
 
-  const disabled = busy || phase === "running";
+  const handlePreviewDecision = (requestId: string, decision: "approve" | "deny") => {
+    if (onPreviewDecision) {
+      onPreviewDecision(requestId, decision);
+      return;
+    }
+    void decideTrialPreview(requestId, decision);
+  };
 
   return (
     <div className="teaching-chat-stage">
-      {/* Trial header */}
       <div className="teaching-trial-chat-header">
         <div className="teaching-trial-chat-icon" data-done={done ? "true" : undefined}>
           {done ? <Check size={17} strokeWidth={2.4} /> : <Zap size={17} />}
         </div>
         <div className="teaching-trial-chat-title">
           <h4>试用验证</h4>
-          <small>
-            {done
-              ? "已通过考核，技能已发布"
-              : `连续 ${TRIAL_NEED} 次成功后自动发布到「已掌握」`}
-          </small>
+          <small>{done ? "已通过考核，技能已发布" : `连续 ${TRIAL_NEED} 次成功后自动发布到「已掌握」`}</small>
         </div>
         <div className="teaching-trial-progress-bar">
           {Array.from({ length: TRIAL_NEED }).map((_, i) => (
@@ -166,13 +207,12 @@ export function TrialStage(): JSX.Element {
         </div>
       </div>
 
-      {/* Chat scroll */}
       <div className="teaching-chat-scroll me-scroll" ref={scrollRef}>
         <div className="teaching-chat-thread">
           {trialMessages.length === 0 && !busy && !isSkillTrial ? (
             <AgentBubble icon={<Zap size={16} />} label="试用助手">
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                <div>你好 — 我是试用助手。给我一个真实任务，我用这个技能跑一遍给你看，验证它能不能正常工作。</div>
+                <div>你好，我是试用助手。给我一个真实任务，我用这个技能跑一遍给你看，验证它能不能正常工作。</div>
                 <TrialChips
                   chips={["整理上周的客户反馈邮件", "抓取昨天的反馈邮件", "只看 P0 投诉类邮件"]}
                   onPick={handleSend}
@@ -219,7 +259,7 @@ export function TrialStage(): JSX.Element {
                 <div className="teaching-trial-running-pulse">
                   <i className="teaching-trial-running-dot" />
                 </div>
-                <span style={{ color: "var(--text-2)" }}>正在执行技能…</span>
+                <span style={{ color: "var(--text-2)" }}>正在执行技能...</span>
               </div>
             </div>
           ) : null}
@@ -228,31 +268,58 @@ export function TrialStage(): JSX.Element {
         </div>
       </div>
 
-      {/* Composer */}
+      {preview ? (
+        <div className="teaching-trial-preview" role="alert" aria-live="assertive">
+          <div className="teaching-trial-preview-title">
+            <ShieldAlert size={16} />
+            <span>桌面试用确认</span>
+          </div>
+          <p>{preview.summary}</p>
+          <p>{preview.riskSummary}</p>
+          <pre>{preview.codePreview}</pre>
+          <div className="teaching-trial-preview-actions">
+            <Button
+              kind="secondary"
+              disabled={expired}
+              onClick={() => handlePreviewDecision(preview.requestId, "deny")}
+            >
+              拒绝
+            </Button>
+            <Button
+              kind="primary"
+              disabled={expired}
+              onClick={() => handlePreviewDecision(preview.requestId, "approve")}
+            >
+              批准
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <div className="teaching-composer-wrap">
         {done ? (
           <div className="teaching-chat-done">
             <div className="teaching-chat-done-hint">
               试用通过，技能 <strong style={{ color: "var(--ok)" }}>已发布</strong>。
-              <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>
-                {countdown}s 后自动返回技能列表
-              </span>
+              <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>{countdown}s 后自动返回技能列表</span>
             </div>
           </div>
         ) : (
           <ChatComposer
             draft={draft}
-            disabled={disabled}
-            onSend={() => handleSend(draft)}
-            setDraft={setDraft}
-            placeholder="给我一个真实任务…"
+            disabled={composerDisabled}
             hint={
-              disabled
-                ? "⏳ 等待技能执行完毕"
-                : <>
-                    <kbd className="teaching-kbd">⏎</kbd> 发送 · 或点上方建议
-                  </>
+              composerDisabled ? (
+                "等待技能执行完毕"
+              ) : (
+                <>
+                  <kbd className="teaching-kbd">Enter</kbd> 发送
+                </>
+              )
             }
+            onSend={() => handleSend(draft)}
+            placeholder="给我一个真实任务..."
+            setDraft={setDraft}
           />
         )}
       </div>

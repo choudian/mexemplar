@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { AssistantSession } from "../../api/assistant";
 import { Button, IconButton } from "../../components/primitives";
 
-export function SessionSidebar({
+function SessionSidebar({
   sessions,
   activeSessionId,
   query,

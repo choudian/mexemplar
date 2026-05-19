@@ -7,7 +7,7 @@ const learningSteps = [
   "打包并入库",
 ];
 
-export function LearningStage({
+function LearningStage({
   active,
   progressLog,
 }: {

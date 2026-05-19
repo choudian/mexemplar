@@ -11,7 +11,7 @@ import {
 } from "../api/compositions";
 import type { CompositionInput, CompositionMember, CompositionMode, CompositionSummary } from "../api/compositions";
 import type { UiEvent } from "../api/client";
-import { toErrorMessage } from "./helpers";
+import { createDebouncedRefresh, toErrorMessage } from "./helpers";
 
 const emptyDraft: CompositionInput = {
   name: "",
@@ -54,6 +54,8 @@ function toDraft(item: CompositionSummary): CompositionInput {
     members: item.members,
   };
 }
+
+const scheduleRefresh = createDebouncedRefresh();
 
 export const useCompositionsStore = create<CompositionsState>((set, get) => ({
   hydrated: false,
@@ -117,14 +119,18 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
     });
   },
   removeMember: (toolId) => {
-    const members = get()
-      .draft.members.filter((member) => member.toolId !== toolId)
-      .map((member, index) => ({
+    const draft = get().draft;
+    const members: CompositionMember[] = [];
+    for (const member of draft.members) {
+      if (member.toolId === toolId) continue;
+      const order = members.length + 1;
+      members.push({
         ...member,
-        selectedOrder: index + 1,
-        executionOrder: get().draft.mode === "ordered" ? index + 1 : null,
-      }));
-    set({ draft: { ...get().draft, members } });
+        selectedOrder: order,
+        executionOrder: draft.mode === "ordered" ? order : null,
+      });
+    }
+    set({ draft: { ...draft, members } });
   },
   generateApplicability: async () => {
     set({ busy: true, lastError: null });
@@ -182,7 +188,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
   },
   applyEvent: (event) => {
     if (event.type === "compositions.changed") {
-      void get().load();
+      scheduleRefresh(() => get().load());
     }
   },
 }));

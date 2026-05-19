@@ -1,10 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import { parseEventFrame } from "./uiEvents";
+import type { UiEvent } from "./uiEvents";
 
 export type BackendStatus = "starting" | "ready" | "degraded" | "failed" | "shutting_down";
-export type UiTheme = "light" | "dark" | "system" | "sage";
-export type UiDensity = "compact" | "comfy";
+type UiTheme = "light" | "dark" | "system" | "sage";
+type UiDensity = "compact" | "comfy";
 
-export interface HealthCheck {
+interface HealthCheck {
   name: string;
   status: "ok" | "degraded" | "failed";
   message: string;
@@ -36,21 +38,17 @@ export interface BootstrapResponse {
   };
 }
 
-export interface UiEvent {
-  eventId: string;
-  type: string;
-  scope: Record<string, string>;
-  payload: Record<string, unknown>;
-  createdAt: string;
-}
+export type { UiEvent } from "./uiEvents";
 
-export interface SidecarRuntimeConfig {
+export type EventStreamCursor = { sequence: number; sessionId: string };
+
+interface SidecarRuntimeConfig {
   baseUrl: string;
   port: number;
   sessionToken: string;
 }
 
-export class DesktopApiError extends Error {
+class DesktopApiError extends Error {
   readonly code: string;
   readonly status: number;
   readonly details: Record<string, unknown>;
@@ -127,17 +125,31 @@ export function getBootstrap(): Promise<BootstrapResponse> {
 const SSE_RETRY_DELAYS = [1000, 2000, 4000, 8000];
 const SSE_MAX_RETRIES = 20;
 const SSE_MAX_GRACEFUL_RECONNECTS = 50;
+const SSE_GRACEFUL_RECONNECT_DELAY_MS = 50;
 
 export async function connectEvents(
   onEvent: (event: UiEvent) => void,
-  signal?: AbortSignal,
+  { signal, cursor: initialCursor, onCursor }: {
+    signal?: AbortSignal;
+    cursor?: EventStreamCursor;
+    onCursor?: (cursor: EventStreamCursor) => void;
+  } = {},
 ): Promise<void> {
+  let cursor = initialCursor;
   let retryIndex = 0;
   let gracefulReconnects = 0;
+  let lastStreamError: unknown;
 
   while (!signal?.aborted) {
     try {
-      const response = await fetch(`${baseUrl}/api/events`, {
+      const params = new URLSearchParams();
+      if (cursor) {
+        params.set("lastSeenSequence", String(cursor.sequence));
+        params.set("eventSessionId", cursor.sessionId);
+      }
+      const query = params.toString();
+      const suffix = query ? `?${query}` : "";
+      const response = await fetch(`${baseUrl}/api/events${suffix}`, {
         headers: {
           ...(sessionToken ? { "X-Mexemplar-Session": sessionToken } : {}),
         },
@@ -160,28 +172,43 @@ export async function connectEvents(
         const chunks = buffer.split("\n\n");
         buffer = chunks.pop() ?? "";
         for (const chunk of chunks) {
-          const data = chunk
-            .split("\n")
-            .find((line) => line.startsWith("data: "))
-            ?.slice(6);
-          if (data) {
-            onEvent(JSON.parse(data) as UiEvent);
+          const event = parseEventFrame(chunk);
+          if (!event) {
+            const hasDataLine = chunk.split("\n").some((line) => line.startsWith("data:"));
+            if (hasDataLine) {
+              throw new DesktopApiError(
+                0,
+                "event_stream_parse_failed",
+                "Desktop event stream delivered an invalid event.",
+              );
+            }
+            continue;
           }
+          cursor = { sequence: event.sequence, sessionId: event.sessionId };
+          onCursor?.(cursor);
+          onEvent(event);
         }
       }
 
       if (signal?.aborted) return;
       if (gracefulReconnects >= SSE_MAX_GRACEFUL_RECONNECTS) return;
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => setTimeout(resolve, SSE_GRACEFUL_RECONNECT_DELAY_MS));
     } catch (err) {
       if (signal?.aborted) return;
       if (err instanceof DOMException && err.name === "AbortError") return;
+      if (err instanceof DesktopApiError && err.code === "event_stream_parse_failed") {
+        throw err;
+      }
+      lastStreamError = err;
 
       const delay = SSE_RETRY_DELAYS[Math.min(retryIndex, SSE_RETRY_DELAYS.length - 1)];
       retryIndex++;
-      if (retryIndex >= SSE_MAX_RETRIES) return;
+      if (retryIndex >= SSE_MAX_RETRIES) {
+        throw new DesktopApiError(0, "event_stream_retry_exhausted", "Desktop event stream retry limit reached.", {
+          lastError: lastStreamError instanceof Error ? lastStreamError.name : typeof lastStreamError,
+        });
+      }
       await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
-

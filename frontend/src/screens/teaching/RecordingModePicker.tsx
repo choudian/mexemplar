@@ -9,7 +9,7 @@ const modeLabels: Record<TeachingMode, string> = {
   desktop: "桌面",
 };
 
-const modeNames: Record<TeachingMode, string> = {
+export const MODE_NAMES: Record<TeachingMode, string> = {
   browser: "浏览器录制",
   extension: "插件录制",
   desktop: "桌面录制",
@@ -33,7 +33,7 @@ const modeIcons = {
   desktop: Monitor,
 };
 
-export function RecordingModePicker({
+function RecordingModePicker({
   modes,
   selectedMode,
   busy,
@@ -74,7 +74,7 @@ export function RecordingModePicker({
               type="button"
             >
               <Icon size={15} />
-              <span>{modeNames[mode.mode]}</span>
+              <span>{MODE_NAMES[mode.mode]}</span>
               {mode.mode === "browser" ? <em>推荐</em> : null}
             </button>
           );

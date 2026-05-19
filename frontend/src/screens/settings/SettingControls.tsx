@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { SettingDescriptor, SettingValue } from "../../api/settings";
 import { Badge, Button, IconButton } from "../../components/primitives";
 
-export function SettingControls({
+function SettingControls({
   items,
   values,
   secrets,
@@ -48,7 +48,9 @@ export function SettingControls({
                   type="password"
                   value={draft}
                   placeholder={secret.present ? secret.masked : "未设置"}
-                  onChange={(event) => setSecretDrafts({ ...secretDrafts, [item.key]: event.currentTarget.value })}
+                  onChange={(event) =>
+                    setSecretDrafts((currentDrafts) => ({ ...currentDrafts, [item.key]: event.currentTarget.value }))
+                  }
                 />
               </label>
               <div className="settings-control-meta">
@@ -58,7 +60,7 @@ export function SettingControls({
                   kind="secondary"
                   onClick={() => {
                     onWriteSecret(item.key, draft);
-                    setSecretDrafts({ ...secretDrafts, [item.key]: "" });
+                    setSecretDrafts((currentDrafts) => ({ ...currentDrafts, [item.key]: "" }));
                   }}
                 >
                   <KeyRound size={14} />

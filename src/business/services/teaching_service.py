@@ -96,6 +96,9 @@ class TeachingService:
         payload["readiness"] = self.get_readiness()
         return payload
 
+    def get_run(self, workflow_id: str) -> dict[str, object]:
+        return self._get_run(workflow_id).to_dict()
+
     def _get_run(self, workflow_id: str) -> TeachingRun:
         try:
             return self._runs[workflow_id]
@@ -193,7 +196,7 @@ class TeachingService:
     def start_trial(self, workflow_id: str) -> dict[str, object]:
         run = self._get_run(workflow_id)
         if not run.can_transition("trial_validation"):
-            run.transition("trial_validation")
+            raise ValueError("requirements must be confirmed before starting a skill trial")
         if self._trial_starter is None:
             raise ValueError("skill trial runner is unavailable")
         with ToolRepository() as repo:

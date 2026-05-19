@@ -11,7 +11,7 @@ function tone(status: SettingsActionResponse["status"] | undefined) {
   return "neutral";
 }
 
-export function SettingsActions({
+function SettingsActions({
   actions,
   results,
   busy,

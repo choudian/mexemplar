@@ -3,7 +3,7 @@ import { ShieldAlert } from "lucide-react";
 import type { AssistantConfirmation } from "../../api/assistant";
 import { Button } from "../../components/primitives";
 
-export function ConfirmationToast({
+function ConfirmationToast({
   confirmation,
   onDecision,
 }: {

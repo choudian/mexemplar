@@ -156,22 +156,38 @@ class SkillsService:
         return {"messages": messages, "workflowId": workflow_id}
 
     def start_trial(self, tool_id: str) -> dict[str, object]:
+        workflow_id = self.get_tool_workflow_id(tool_id)
         result = self._invoke_trial_action(
-            tool_id, self._trial_starter, "技能试用执行器", tool_id,
+            tool_id,
+            self._trial_starter,
+            "技能试用执行器",
+            workflow_id,
+            tool_id,
+            workflow_id,
         )
         if result.get("accepted"):
             emit("trial_requested", sender=self, tool_id=tool_id, workflow_id=result["workflowId"])
         return result
 
     def continue_trial(self, tool_id: str, content: str) -> dict[str, object]:
+        workflow_id = self.get_tool_workflow_id(tool_id)
         return self._invoke_trial_action(
-            tool_id, self._trial_replier, "技能试用回复器", tool_id, content,
+            tool_id,
+            self._trial_replier,
+            "技能试用回复器",
+            workflow_id,
+            workflow_id,
+            content,
         )
 
     def _invoke_trial_action(
-        self, tool_id: str, executor: Callable | None, label: str, *args: object,
+        self,
+        tool_id: str,
+        executor: Callable | None,
+        label: str,
+        workflow_id: str | None,
+        *args: object,
     ) -> dict[str, object]:
-        workflow_id = self.get_tool_workflow_id(tool_id)
         if not workflow_id:
             raise ValueError("技能不存在或缺少 workflow_id")
         if executor is None:

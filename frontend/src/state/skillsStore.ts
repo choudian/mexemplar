@@ -10,7 +10,7 @@ import {
 import type { SkillCategory, SkillSummary } from "../api/skills";
 import type { UiEvent } from "../api/client";
 import { useTeachingStore } from "./teachingStore";
-import { toErrorMessage } from "./helpers";
+import { createDebouncedRefresh, toErrorMessage } from "./helpers";
 
 export type SkillsState = {
   hydrated: boolean;
@@ -31,6 +31,8 @@ export type SkillsState = {
   markHydrated: () => void;
   setError: (message: string | null) => void;
 };
+
+const scheduleRefresh = createDebouncedRefresh();
 
 export const useSkillsStore = create<SkillsState>((set, get) => ({
   hydrated: false,
@@ -89,7 +91,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
   },
   applyEvent: (event) => {
     if (event.type === "skills.changed") {
-      void get().loadCategory(get().activeCategory);
+      scheduleRefresh(() => get().loadCategory(get().activeCategory));
     }
   },
 }));

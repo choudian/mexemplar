@@ -37,7 +37,7 @@ export function replySkillTrial(toolId: string, content: string): Promise<{ acce
   });
 }
 
-export interface TrialMessage {
+interface TrialMessage {
   role: "user" | "assistant";
   content: string;
 }

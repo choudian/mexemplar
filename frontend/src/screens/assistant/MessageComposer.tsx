@@ -2,7 +2,7 @@ import { Mic, Paperclip, Send } from "lucide-react";
 
 import { Button, IconButton } from "../../components/primitives";
 
-export function MessageComposer({
+function MessageComposer({
   draft,
   sending,
   onDraftChange,
