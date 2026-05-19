@@ -99,6 +99,7 @@ describe("AppShell", () => {
       activeCategory: "pending",
       query: "",
       categories: { pending: [], published: [], failed: [] },
+      counts: { pending: 0, published: 0, failed: 0 },
       busy: false,
       lastError: null,
     });
@@ -318,6 +319,8 @@ describe("AppShell", () => {
       if (url.includes("/api/events")) return eventStreamResponse(streamFrames);
       if (url.endsWith("/api/teaching/runs/rec_1")) return runRefresh;
       if (url.endsWith("/api/skills?category=pending")) return jsonResponse({ category: "pending", count: 0, items: [] });
+      if (url.endsWith("/api/skills?category=published")) return jsonResponse({ category: "published", count: 0, items: [] });
+      if (url.endsWith("/api/skills?category=failed")) return jsonResponse({ category: "failed", count: 0, items: [] });
       if (url.endsWith("/api/compositions")) return jsonResponse({ items: [] });
       if (url.endsWith("/api/settings/schema")) return jsonResponse({ sections: [] });
       if (url.endsWith("/api/settings/values")) return jsonResponse({ values: {}, secrets: {}, status: {} });
@@ -370,6 +373,8 @@ describe("AppShell", () => {
       if (url.includes("/api/events")) return eventStreamResponse(streamFrames);
       if (url.endsWith("/api/teaching/runs/rec_1")) throw new Error("refresh failed");
       if (url.endsWith("/api/skills?category=pending")) return jsonResponse({ category: "pending", count: 0, items: [] });
+      if (url.endsWith("/api/skills?category=published")) return jsonResponse({ category: "published", count: 0, items: [] });
+      if (url.endsWith("/api/skills?category=failed")) return jsonResponse({ category: "failed", count: 0, items: [] });
       if (url.endsWith("/api/compositions")) return jsonResponse({ items: [] });
       if (url.endsWith("/api/settings/schema")) return jsonResponse({ sections: [] });
       if (url.endsWith("/api/settings/values")) return jsonResponse({ values: {}, secrets: {}, status: {} });
@@ -476,6 +481,8 @@ describe("AppShell", () => {
           ],
         });
       }
+      if (url.endsWith("/api/skills?category=published")) return jsonResponse({ category: "published", count: 0, items: [] });
+      if (url.endsWith("/api/skills?category=failed")) return jsonResponse({ category: "failed", count: 0, items: [] });
       if (url.endsWith("/api/compositions")) return jsonResponse({ items: [] });
       if (url.endsWith("/api/settings/schema")) return jsonResponse({ sections: [] });
       if (url.endsWith("/api/settings/values")) return jsonResponse({ values: {}, secrets: {}, status: {} });

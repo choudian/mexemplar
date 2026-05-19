@@ -855,6 +855,7 @@ select:focus-visible,
   border-radius: 14px 14px 4px;
   background: var(--bubble-user-bg);
   color: var(--bubble-user-fg);
+  white-space: pre-wrap;
 }
 
 .assistant-markdown > *:first-child {
@@ -2050,6 +2051,7 @@ select:focus-visible,
   color: var(--bubble-user-fg);
   font-size: 14px;
   line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 /* Quick reply chips */

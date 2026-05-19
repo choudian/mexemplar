@@ -56,7 +56,7 @@ export function AppShell(): JSX.Element {
   const setBackend = useShellStore((state) => state.setBackend);
   const applyAssistantEvent = useAssistantStore((state) => state.applyEvent);
   const applySkillsEvent = useSkillsStore((state) => state.applyEvent);
-  const refreshSkills = useSkillsStore((state) => state.loadCategory);
+  const refreshSkills = useSkillsStore((state) => state.loadAllCategories);
   const applyCompositionsEvent = useCompositionsStore((state) => state.applyEvent);
   const refreshCompositions = useCompositionsStore((state) => state.load);
   const applySettingsEvent = useSettingsStore((state) => state.applyEvent);

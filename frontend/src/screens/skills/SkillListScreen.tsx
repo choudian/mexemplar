@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { Plus, Search } from "lucide-react";
 
+import { SKILL_CATEGORIES } from "../../api/skills";
 import type { SkillCategory } from "../../api/skills";
 import { Button } from "../../components/primitives";
 import { useSkillsStore } from "../../state/skillsStore";
@@ -8,21 +9,22 @@ import { useShellStore } from "../../state/shellStore";
 import SkillCards from "./SkillCards";
 import { SkillTrialDialog } from "./SkillTrialDialog";
 
-const categories: { id: SkillCategory; label: string }[] = [
-  { id: "pending", label: "待考核" },
-  { id: "published", label: "已掌握" },
-  { id: "failed", label: "失败记录" },
-];
+const CATEGORY_LABELS: Record<SkillCategory, string> = {
+  pending: "待考核",
+  published: "已掌握",
+  failed: "失败记录",
+};
 
 export function SkillListScreen(): JSX.Element {
   const activeCategory = useSkillsStore((state) => state.activeCategory);
   const data = useSkillsStore((state) => state.categories);
+  const counts = useSkillsStore((state) => state.counts);
   const query = useSkillsStore((state) => state.query);
   const busy = useSkillsStore((state) => state.busy);
   const lastError = useSkillsStore((state) => state.lastError);
   const setCategory = useSkillsStore((state) => state.setCategory);
   const setQuery = useSkillsStore((state) => state.setQuery);
-  const loadCategory = useSkillsStore((state) => state.loadCategory);
+  const loadAllCategories = useSkillsStore((state) => state.loadAllCategories);
   const openTrial = useSkillsStore((state) => state.openTrial);
   const deleteSkill = useSkillsStore((state) => state.deleteSkill);
   const retryFailure = useSkillsStore((state) => state.retryFailure);
@@ -30,8 +32,8 @@ export function SkillListScreen(): JSX.Element {
   const setRoute = useShellStore((state) => state.setRoute);
 
   useEffect(() => {
-    void loadCategory(activeCategory);
-  }, [activeCategory, loadCategory]);
+    void loadAllCategories();
+  }, [loadAllCategories]);
 
   const filteredSkills = data[activeCategory].filter((skill) => {
     const needle = query.trim().toLowerCase();
@@ -65,20 +67,20 @@ export function SkillListScreen(): JSX.Element {
         </div>
       </div>
       <div className="skills-tabs" role="tablist" aria-label="技能分类">
-        {categories.map((category) => {
-          const active = activeCategory === category.id;
+        {SKILL_CATEGORIES.map((id) => {
+          const active = activeCategory === id;
           return (
             <button
               aria-selected={active}
               className="skills-tab"
               data-active={active}
-              key={category.id}
-              onClick={() => setCategory(category.id)}
+              key={id}
+              onClick={() => setCategory(id)}
               role="tab"
               type="button"
             >
-              <span>{category.label}</span>
-              <small className="me-mono">{data[category.id].length}</small>
+              <span>{CATEGORY_LABELS[id]}</span>
+              <small className="me-mono">{counts[id]}</small>
             </button>
           );
         })}

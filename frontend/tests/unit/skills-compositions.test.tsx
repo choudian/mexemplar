@@ -30,6 +30,7 @@ describe("skills and compositions screens", () => {
       hydrated: false,
       activeCategory: "pending",
       categories: { pending: [], published: [], failed: [] },
+      counts: { pending: 0, published: 0, failed: 0 },
       busy: false,
       lastError: null,
     });

@@ -2,6 +2,8 @@ import { requestJson } from "./client";
 
 export type SkillCategory = "pending" | "published" | "failed";
 
+export const SKILL_CATEGORIES: SkillCategory[] = ["pending", "published", "failed"];
+
 export interface SkillSummary {
   toolId: string;
   name: string;

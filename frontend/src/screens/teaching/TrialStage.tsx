@@ -12,9 +12,8 @@ const TRIAL_NEED = 3;
 const DONE_COUNTDOWN_SECS = 3;
 
 type TrialStageProps = {
-  active?: boolean;
   disabled?: boolean;
-  onStart?: () => void;
+  onStart?: (text: string) => void;
   preview?: TrialPreviewRequest | null;
   onPreviewDecision?: (requestId: string, decision: "approve" | "deny") => void;
 };
@@ -113,7 +112,7 @@ export function TrialStage({
   const decideTrialPreview = useTeachingStore((s) => s.decideTrialPreview);
 
   const [draft, setDraft] = useState("");
-  const [phase, setPhase] = useState<"idle" | "running" | "verdict">("idle");
+  const [waitingForAi, setWaitingForAi] = useState(false);
   const [countdown, setCountdown] = useState(3);
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -121,15 +120,15 @@ export function TrialStage({
   const preview = previewOverride !== undefined ? previewOverride : storePreview;
   const expired = usePreviewExpired(preview);
   const done = trialSuccessCount >= TRIAL_NEED || stage === "published";
-  const composerDisabled = disabledOverride || busy || phase === "running";
+  const composerDisabled = disabledOverride || busy || waitingForAi;
 
   useScrollToBottom(scrollRef, [trialMessages.length, busy]);
 
   useEffect(() => {
-    if (stage === "published") {
-      setPhase("idle");
+    if (stage === "published" && waitingForAi) {
+      setWaitingForAi(false);
     }
-  }, [stage]);
+  }, [stage, waitingForAi]);
 
   useEffect(() => {
     if (!done) return;
@@ -153,17 +152,17 @@ export function TrialStage({
 
   useEffect(() => {
     const last = trialMessages[trialMessages.length - 1];
-    if (last?.from === "ai" && phase === "running") {
-      setPhase("verdict");
+    if (last?.from === "ai" && waitingForAi) {
+      setWaitingForAi(false);
     }
-  }, [trialMessages.length, phase]);
+  }, [trialMessages.length, waitingForAi]);
 
   const handleSend = (text: string) => {
     const t = text.trim();
     if (!t || composerDisabled) return;
-    setPhase("running");
+    setWaitingForAi(true);
     if (onStart && trialMessages.length === 0) {
-      onStart();
+      onStart(t);
     } else {
       void startTrial(t);
     }
@@ -171,8 +170,8 @@ export function TrialStage({
   };
 
   const handleVerdict = (ok: boolean) => {
+    setWaitingForAi(true);
     void startTrial(ok ? "结果正确" : "不太对，再看看");
-    setPhase("idle");
   };
 
   const handlePreviewDecision = (requestId: string, decision: "approve" | "deny") => {
@@ -235,7 +234,7 @@ export function TrialStage({
                       trace={[{ text: m.detail }]}
                     />
                   ) : null}
-                  {isLatest && isExecutionResult && phase === "verdict" ? (
+                  {isLatest && isExecutionResult && !waitingForAi ? (
                     <div className="teaching-trial-verdict">
                       <Button onClick={() => handleVerdict(true)}>
                         <Check size={14} />
@@ -251,18 +250,6 @@ export function TrialStage({
               </AgentBubble>
             );
           })}
-
-          {phase === "running" ? (
-            <div className="teaching-trial-running">
-              <div style={{ width: 30, flexShrink: 0 }} />
-              <div className="teaching-trial-running-card">
-                <div className="teaching-trial-running-pulse">
-                  <i className="teaching-trial-running-dot" />
-                </div>
-                <span style={{ color: "var(--text-2)" }}>正在执行技能...</span>
-              </div>
-            </div>
-          ) : null}
 
           {busy ? <ThinkingIndicator icon={<Zap size={16} />} /> : null}
         </div>
