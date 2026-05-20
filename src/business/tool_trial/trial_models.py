@@ -61,10 +61,3 @@ class PendingTool:
     updated_at: Optional[datetime] = None
     promoted_at: Optional[datetime] = None  # 提升为正式工具的时间
 
-    def can_trial(self) -> bool:
-        """是否可以继续试用"""
-        return self.trial_count < self.max_trials and self.status in [
-            PendingToolStatus.PENDING_TRIAL,
-            PendingToolStatus.TRIAL_FAILED,
-            PendingToolStatus.AWAITING_REAL_DATA,
-        ]

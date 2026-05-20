@@ -178,9 +178,3 @@ class AgentSessionStore:
             exclude_statuses=("failed", "active"),
         )
 
-    def get_pm_messages(self, workflow_id: str) -> List[dict]:
-        return self.get_agent_messages(
-            workflow_id,
-            agent_type=AgentType.PM,
-            skip_first_user=True,
-        )

@@ -82,10 +82,6 @@ class ChatService:
             result.append(item)
         return result
 
-    def search_sessions(self, query: str, limit: int = 200) -> list[dict]:
-        """按标题或首条用户消息预览搜索 assistant 会话。"""
-        return self.get_sessions_with_preview(limit=limit, query=query)
-
     def rename_session(self, session_id: str, title: str) -> dict:
         """重命名 assistant 会话并返回新的展示 DTO。"""
         title = self._normalize_title(title)
@@ -120,10 +116,6 @@ class ChatService:
     # ------------------------------------------------------------------
     # 消息历史
     # ------------------------------------------------------------------
-
-    def get_session_messages(self, session_id: str) -> list[Message]:
-        """返回会话的非归档消息列表（供 UI 渲染历史记录）"""
-        return MessageRepository().get_context(session_id)
 
     def get_display_messages(
         self,

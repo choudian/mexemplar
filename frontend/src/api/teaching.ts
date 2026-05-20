@@ -84,12 +84,6 @@ export function replyTeachingIntent(workflowId: string, content: string): Promis
   });
 }
 
-export function confirmTeachingIntent(workflowId: string): Promise<TeachingRun> {
-  return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}/intent/confirm`, {
-    method: "POST",
-  });
-}
-
 export function startTeachingTrial(workflowId: string): Promise<TeachingRun> {
   return requestJson<TeachingRun>(`/api/teaching/runs/${encodeURIComponent(workflowId)}/trial/start`, {
     method: "POST",

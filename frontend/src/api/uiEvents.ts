@@ -382,9 +382,6 @@ export function getUiEventHandlerDomain(event: UiEvent): UiEventHandlerDomain {
   return UI_EVENT_HANDLER_DOMAINS[event.type];
 }
 
-export function isAssistantUiEvent(event: UiEvent): boolean {
-  return getUiEventHandlerDomain(event) === "assistant";
-}
 
 export function isResyncRequiredEvent(event: UiEvent): event is ResyncRequiredEvent {
   return event.type === "backend.resync_required";

@@ -120,17 +120,6 @@ class AssistantMemoryManager:
     # 触发入口
     # =========================================================================
 
-    def trigger_on_new_session(self, new_session_id: str):
-        """
-        新建会话时调用：后台异步为所有未摘要的旧会话生成摘要。
-        不阻塞新会话创建。
-        """
-        threading.Thread(
-            target=self._batch_generate_session_summaries,
-            args=(new_session_id,),
-            daemon=True,
-        ).start()
-
     def _batch_generate_session_summaries(self, exclude_session_id: str):
         """批量为未生成摘要的历史会话生成摘要"""
         try:

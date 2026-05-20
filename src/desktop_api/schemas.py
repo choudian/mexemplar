@@ -34,12 +34,6 @@ class BackendConnectionState(BaseModel):
     serverTime: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class PageResult(BaseModel):
-    items: list[dict[str, Any]] = Field(default_factory=list)
-    nextCursor: str | None = None
-    hasMore: bool = False
-
-
 class BootstrapUser(BaseModel):
     displayName: str = ""
     statusLabel: str = "Local ready"

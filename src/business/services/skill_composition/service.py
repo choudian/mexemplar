@@ -138,9 +138,6 @@ class SkillCompositionService:
     def list_compositions(self) -> List[SkillComposition]:
         return self._hydrate_compositions(self._composition_repo.get_all())
 
-    def get_published_tool_choices(self) -> List[Tool]:
-        return [self._to_tool_model(tool) for tool in self._tool_repo.get_all_published()]
-
     def get_composition(self, composition_id: str) -> Optional[SkillComposition]:
         composition = self._composition_repo.get_by_id(composition_id)
         if composition is None:
@@ -191,29 +188,6 @@ class SkillCompositionService:
     ) -> List[SkillComposition]:
         return self._hydrate_compositions(
             self._composition_repo.get_referencing_compositions(tool_id, statuses=statuses)
-        )
-
-    def validate_composition_payload(
-        self,
-        composition_id: str,
-        composition_name: str,
-        description: str,
-        applicability: str,
-        mode: str,
-        status: str,
-        members: List[dict],
-    ) -> None:
-        self._normalize_members(mode, members)
-        self._build_composition_orm(
-            composition_id=composition_id,
-            composition_name=composition_name,
-            description=description,
-            applicability=applicability,
-            mode=mode,
-            status=status,
-            assistant_enabled=self.DEFAULT_ASSISTANT_ENABLED,
-            recommend_order=self.DEFAULT_RECOMMEND_ORDER,
-            needs_review=False,
         )
 
     def create_composition(
@@ -291,23 +265,6 @@ class SkillCompositionService:
         self._composition_repo.update_status(composition_id, "published")
         self._composition_repo.clear_needs_review(composition_id)
         return self.get_composition(composition_id)
-
-    def offline_composition(self, composition_id: str) -> SkillComposition:
-        composition = self._composition_repo.get_by_id(composition_id)
-        if composition is None:
-            raise SkillCompositionError("技能组合不存在")
-        if composition.status != "published":
-            raise SkillCompositionError("只有已发布的技能组合才能下线")
-        self._composition_repo.update_status(composition_id, "offline")
-        return self.get_composition(composition_id)
-
-    def delete_composition(self, composition_id: str) -> None:
-        composition = self._composition_repo.get_by_id(composition_id)
-        if composition is None:
-            return
-        if composition.status == "published":
-            raise SkillCompositionError("已发布的技能组合请先下线再删除")
-        self._composition_repo.delete(composition_id)
 
     def mark_needs_review_by_tool(self, tool_id: str) -> List[SkillComposition]:
         return self._hydrate_compositions(self._composition_repo.mark_needs_review_by_tool(tool_id))

@@ -84,27 +84,5 @@ def setup_logger(
     return logger
 
 
-def get_logger(name: Optional[str] = None) -> logging.Logger:
-    """
-    获取日志记录器
-
-    Args:
-        name: 日志记录器名称，如果为None则使用根记录器
-
-    Returns:
-        日志记录器
-    """
-    if name is None:
-        name = "mexemplar"
-
-    logger = logging.getLogger(name)
-
-    # 如果还没有配置，使用默认配置
-    if not logger.handlers and not logging.getLogger().handlers:
-        setup_logger(name)
-
-    return logger
-
-
 # 初始化根日志记录器
 setup_logger("mexemplar")

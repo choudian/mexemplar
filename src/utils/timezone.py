@@ -60,39 +60,6 @@ def local_naive_to_utc_naive(dt: datetime) -> datetime:
     return to_naive_utc(dt)
 
 
-def normalize_legacy_local_naive_for_display(
-    dt: datetime,
-    *,
-    future_grace_seconds: int = 60,
-) -> datetime:
-    """兜底修正明显仍是 legacy local naive 的显示时间。"""
-    if dt is None or dt.tzinfo is not None:
-        return dt
-    if to_local(dt) <= local_now() + timedelta(seconds=future_grace_seconds):
-        return dt
-    return local_naive_to_utc_naive(dt)
-
-
-def format_relative(dt: datetime) -> str:
-    """将 UTC naive datetime 格式化为相对时间字符串（'刚刚'、'3分钟前' 等）。"""
-    if dt is None:
-        return ""
-    delta = local_now() - to_local(dt)
-    secs = delta.total_seconds()
-    if secs < 0:
-        return "刚刚"
-    days = int(secs // 86400)
-    if days > 0:
-        return f"{days}天前"
-    hours = int(secs // 3600)
-    if hours > 0:
-        return f"{hours}小时前"
-    mins = int(secs // 60)
-    if mins > 0:
-        return f"{mins}分钟前"
-    return "刚刚"
-
-
 def format_local(dt: datetime, fmt: str = "%m/%d %H:%M") -> str:
     """将 UTC naive datetime 转本地后格式化为字符串。"""
     if dt is None:

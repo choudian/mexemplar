@@ -168,11 +168,6 @@ class BrowserRecorder:
         return self._page
 
     @property
-    def playwright_driver(self) -> PlaywrightRecordingDriver:
-        """暴露底层 Playwright 录制驱动。"""
-        return self._playwright_driver
-
-    @property
     def _is_extension_recording(self) -> bool:
         return (
             self._is_recording and self._active_recording_mode == RecordingMode.EXTENSION_TRIGGERED
@@ -218,55 +213,6 @@ class BrowserRecorder:
         self._is_recording = False
         self._playwright_ws_client = None
         self._active_recording_mode = RecordingMode.BROWSER
-
-    def cleanup(self):
-        try:
-            self._ws_coordinator.stop_ingress()
-
-            if self._screenshot_hook:
-                try:
-                    self._screenshot_hook.stop()
-                except Exception as exc:
-                    logger.warning(f"停止截图钩子失败: {exc}")
-                self._screenshot_hook = None
-
-            if self._is_extension_recording:
-                try:
-                    self._stop_sub_recorders()
-                finally:
-                    self._reset_recording_state()
-
-            if self._event_loop and not self._event_loop.is_closed():
-                try:
-                    self._run_async(self._close_browser(), timeout=10)
-                except Exception as exc:
-                    logger.warning(f"关闭浏览器失败: {exc}")
-
-            try:
-                self._cleanup_playwright_extension_bundle()
-            except Exception as exc:
-                logger.warning(f"清理扩展目录失败: {exc}")
-
-            try:
-                self._playwright_driver.cleanup_user_data_dir()
-            except Exception as exc:
-                logger.warning(f"清理用户数据目录失败: {exc}")
-
-            self._ws_coordinator.stop_ws_server()
-
-            try:
-                self._duckdb_persister.close()
-            except Exception as exc:
-                logger.warning(f"关闭数据库连接失败: {exc}")
-
-            try:
-                self._loop_runner.stop()
-            except Exception as exc:
-                logger.warning(f"停止事件循环失败: {exc}")
-
-            logger.info("资源清理完成")
-        except Exception as exc:
-            logger.error(f"清理资源时出错: {exc}", exc_info=True)
 
     def _run_async(self, coro, timeout: float = 120):
         return self._loop_runner.run(coro, timeout=timeout)
