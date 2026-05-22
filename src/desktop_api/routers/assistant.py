@@ -17,6 +17,7 @@ from src.desktop_api.schemas import (
     AssistantSendMessageResponse,
     AssistantSessionListResponse,
     AssistantSessionSummary,
+    SegmentBoundaryRequest,
 )
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
@@ -154,3 +155,30 @@ def decide_confirmation(
         decision=result.decision,
         accepted=result.accepted,
     )
+
+
+@router.post("/sessions/{session_id}/segment-idle")
+def trigger_segment_idle(session_id: str):
+    """前端空闲计时器触发后调用，封存当前 Segment"""
+    from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
+    from src.business.brain.segment_service import SegmentService
+
+    service = SegmentService()
+    segment_id = service.handle_idle_trigger(session_id)
+    if segment_id is None:
+        return {"segment_id": None, "status": None}
+    cleanup_retrieved_context(session_id)
+    return {"segment_id": segment_id, "status": "pending"}
+
+
+@router.post("/segment-boundary")
+def trigger_segment_boundary(body: SegmentBoundaryRequest):
+    """通用 Segment 边界触发端点（window_close / new_session / token_limit）"""
+    from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
+    from src.business.brain.segment_service import SegmentService
+
+    service = SegmentService()
+    segment_id = service.seal_segment(body.session_id, boundary_reason=body.reason)
+    if segment_id:
+        cleanup_retrieved_context(body.session_id)
+    return {"segment_id": segment_id, "status": "pending"} if segment_id else {"segment_id": None, "status": None}

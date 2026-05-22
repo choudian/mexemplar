@@ -568,7 +568,61 @@ class BrowserRecorder:
                     self._cleanup_playwright_extension_bundle()
 
     def stop_recording(self) -> Dict[str, Any]:
-        return self._run_async(self._async_stop_recording())
+        try:
+            return self._run_async(self._async_stop_recording())
+        finally:
+            self.cleanup(stop_active_recording=False)
+
+    def cleanup(self, *, stop_active_recording: bool = True) -> None:
+        """Release recorder-owned resources after a recording/session ends."""
+        if stop_active_recording and self._is_recording:
+            try:
+                self.stop_recording()
+                return
+            except Exception as exc:
+                logger.warning(f"停止活跃浏览器录制失败，继续清理资源: {exc}")
+
+        self._stop_sub_recorders()
+
+        if self._screenshot_hook:
+            try:
+                self._screenshot_hook.stop()
+            except Exception as exc:
+                logger.warning(f"停止截图钩子失败: {exc}")
+            self._screenshot_hook = None
+
+        try:
+            if self._context is not None or self._page is not None:
+                self._run_async(self._close_browser(), timeout=30)
+        except Exception as exc:
+            logger.warning(f"清理浏览器上下文失败: {exc}")
+
+        try:
+            self._cleanup_playwright_extension_bundle()
+        except Exception as exc:
+            logger.warning(f"清理扩展目录失败: {exc}")
+
+        try:
+            self._playwright_driver.cleanup_user_data_dir()
+        except Exception as exc:
+            logger.warning(f"清理用户数据目录失败: {exc}")
+
+        try:
+            self._duckdb_persister.close()
+        except Exception as exc:
+            logger.warning(f"关闭 DuckDB 录制连接失败: {exc}")
+
+        try:
+            self._ws_coordinator.stop_ws_server()
+        except Exception as exc:
+            logger.warning(f"停止 WebSocket 服务器失败: {exc}")
+
+        self._reset_recording_state()
+
+        try:
+            self._loop_runner.stop()
+        except Exception as exc:
+            logger.warning(f"停止浏览器录制事件循环失败: {exc}")
 
     async def _async_stop_recording(self) -> Dict[str, Any]:
         if self._is_extension_recording:

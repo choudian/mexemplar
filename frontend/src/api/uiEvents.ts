@@ -12,6 +12,9 @@ export const UI_EVENT_TYPES = [
   "skills.changed",
   "compositions.changed",
   "settings.changed",
+  "brain_zone_changed",
+  "brain_specialist_recruited",
+  "brain_context_ready",
   "backend.resync_required",
 ] as const;
 
@@ -51,7 +54,15 @@ export const UI_EVENT_EXAMPLES = {
   "skills.changed": { "reason": "catalog_invalidated" },
   "compositions.changed": { "reason": "catalog_invalidated" },
   "settings.changed": { "reason": "settings_invalidated", "keys": [] },
-  "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "skills"] },
+  "brain_zone_changed": { "zone": "hot", "entryId": "entry_1", "changeType": "create" },
+  "brain_specialist_recruited": {
+    "specialistId": "spec_1",
+    "name": "报表专员",
+    "reason": "检测到持续报表委托",
+    "managementUrl": "/brain/specialists",
+  },
+  "brain_context_ready": { "sessionId": "sess_1" },
+  "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "skills", "brain"] },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;
 
 export const UI_EVENT_PAYLOAD_ENUMS = {
@@ -90,7 +101,14 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
   },
 } as const satisfies Partial<Record<UiEventType, Record<string, readonly string[]>>>;
 
-export type UiEventHandlerDomain = "assistant" | "teaching" | "skills" | "compositions" | "settings" | "resync";
+export type UiEventHandlerDomain =
+  | "assistant"
+  | "teaching"
+  | "skills"
+  | "compositions"
+  | "settings"
+  | "brain"
+  | "resync";
 
 export const UI_EVENT_HANDLER_DOMAINS = {
   "assistant.message": "assistant",
@@ -106,6 +124,9 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "skills.changed": "skills",
   "compositions.changed": "compositions",
   "settings.changed": "settings",
+  "brain_zone_changed": "brain",
+  "brain_specialist_recruited": "brain",
+  "brain_context_ready": "brain",
   "backend.resync_required": "resync",
 } as const satisfies Record<UiEventType, UiEventHandlerDomain>;
 
@@ -231,6 +252,32 @@ export type ResyncRequiredEvent = UiEventEnvelope<
   }
 >;
 
+export type BrainZoneChangedEvent = UiEventEnvelope<
+  "brain_zone_changed",
+  {
+    zone: string;
+    entryId?: string;
+    changeType: string;
+  }
+>;
+
+export type BrainSpecialistRecruitedEvent = UiEventEnvelope<
+  "brain_specialist_recruited",
+  {
+    specialistId: string;
+    name: string;
+    reason: string;
+    managementUrl?: string;
+  }
+>;
+
+export type BrainContextReadyEvent = UiEventEnvelope<
+  "brain_context_ready",
+  {
+    sessionId: string;
+  }
+>;
+
 export type UiEvent =
   | TeachingStageChangedEvent
   | RecordingProgressEvent
@@ -239,6 +286,9 @@ export type UiEvent =
   | TrialPreviewRequestedEvent
   | TrialPreviewResolvedEvent
   | ResyncRequiredEvent
+  | BrainZoneChangedEvent
+  | BrainSpecialistRecruitedEvent
+  | BrainContextReadyEvent
   | UiEventEnvelope<
       Exclude<
         UiEventType,
@@ -249,6 +299,9 @@ export type UiEvent =
         | "trial.preview_requested"
         | "trial.preview_resolved"
         | "backend.resync_required"
+        | "brain_zone_changed"
+        | "brain_specialist_recruited"
+        | "brain_context_ready"
       >
     >;
 
@@ -361,6 +414,18 @@ export function parseUiEvent(value: unknown): UiEvent | null {
       return null;
     }
     return event as ResyncRequiredEvent;
+  }
+  if (event.type === "brain_zone_changed") {
+    if (!hasStringPayloadFields(event.payload, ["zone", "changeType"])) return null;
+    return event as BrainZoneChangedEvent;
+  }
+  if (event.type === "brain_specialist_recruited") {
+    if (!hasStringPayloadFields(event.payload, ["specialistId", "name", "reason"])) return null;
+    return event as BrainSpecialistRecruitedEvent;
+  }
+  if (event.type === "brain_context_ready") {
+    if (!hasStringPayloadFields(event.payload, ["sessionId"])) return null;
+    return event as BrainContextReadyEvent;
   }
   return event as UiEvent;
 }

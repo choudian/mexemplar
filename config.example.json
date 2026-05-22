@@ -111,5 +111,25 @@
     "language": "zh_CN",
     "window_width": 1200,
     "window_height": 800
+  },
+  "brain": {
+    "segment": {
+      "idle_threshold_seconds": 300,
+      "max_distillation_retries": 3
+    },
+    "worker": {
+      "tick_interval_seconds": 300,
+      "prediction_verification_retries": 3
+    },
+    "injection": {
+      "hot_zone_top_n": 20,
+      "subconscious_top_n": 10
+    },
+    "decay": {
+      "fading_threshold": 0.3
+    },
+    "recruitment": {
+      "min_delegation_count": 5
+    }
   }
 }

@@ -425,6 +425,40 @@ class UnifiedConfigManager:
                 return text
         return None
 
+    # ===== 便捷方法：大脑架构配置 =====
+
+    def get_brain_segment_idle_threshold(self) -> int:
+        """Segment 空闲防抖阈值（秒）"""
+        return self.get("brain.segment.idle_threshold_seconds", default=300)
+
+    def get_brain_segment_max_distillation_retries(self) -> int:
+        """沉淀最大重试次数"""
+        return self.get("brain.segment.max_distillation_retries", default=3)
+
+    def get_brain_worker_tick_interval(self) -> int:
+        """Background worker 周期扫描间隔（秒）"""
+        return self.get("brain.worker.tick_interval_seconds", default=300)
+
+    def get_brain_worker_prediction_verification_retries(self) -> int:
+        """猜测验证最大重试次数"""
+        return self.get("brain.worker.prediction_verification_retries", default=3)
+
+    def get_brain_injection_hot_zone_top_n(self) -> int:
+        """热区注入 top-N 条目"""
+        return self.get("brain.injection.hot_zone_top_n", default=20)
+
+    def get_brain_injection_subconscious_top_n(self) -> int:
+        """潜意识区注入 top-N 条目"""
+        return self.get("brain.injection.subconscious_top_n", default=10)
+
+    def get_brain_decay_fading_threshold(self) -> float:
+        """relevance_score 低于此值转为 fading"""
+        return self.get("brain.decay.fading_threshold", default=0.3)
+
+    def get_brain_recruitment_min_delegation_count(self) -> int:
+        """触发自动招募的最小委托次数"""
+        return self.get("brain.recruitment.min_delegation_count", default=5)
+
     # ===== 内部方法 =====
 
     def _get_from_file_config(self, key: str) -> Any:

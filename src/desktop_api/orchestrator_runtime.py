@@ -37,7 +37,7 @@ class DesktopAgentRuntime:
         self._orchestrator_factory = orchestrator_factory
         self._orchestrator: AgentOrchestrator | None = None
         self._orchestrator_lock = threading.Lock()
-        self._trial_session_store = None
+        self._trial_history_service = None
         self._workers: dict[str, threading.Thread] = {}
         self._workers_lock = threading.Lock()
 
@@ -80,16 +80,11 @@ class DesktopAgentRuntime:
         )
 
     def get_trial_history(self, workflow_id: str) -> list[dict]:
-        from src.business.orchestration.agent.agent_session_store import AgentSessionStore
-        from src.data.repos import MessageRepository, SessionRepository, WorkflowTransitionRepository
+        from src.business.orchestration.agent.trial_history_service import TrialHistoryService
 
-        if self._trial_session_store is None:
-            self._trial_session_store = AgentSessionStore(
-                SessionRepository(),
-                MessageRepository(),
-                WorkflowTransitionRepository(),
-            )
-        return self._trial_session_store.get_trial_messages(workflow_id)
+        if self._trial_history_service is None:
+            self._trial_history_service = TrialHistoryService()
+        return self._trial_history_service.get_trial_history(workflow_id)
 
     def retry_teaching_failure(self, workflow_id: str) -> bool:
         return self._start_worker(

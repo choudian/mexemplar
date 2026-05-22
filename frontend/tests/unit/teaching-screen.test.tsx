@@ -227,7 +227,6 @@ describe("TeachingScreen", () => {
 
     render(
       <TrialStage
-        active
         disabled={false}
         onStart={vi.fn()}
         preview={{
@@ -253,6 +252,27 @@ describe("TeachingScreen", () => {
     expect(screen.getByText("批准")).toBeDisabled();
     fireEvent.click(screen.getByText("批准"));
     expect(onPreviewDecision).not.toHaveBeenCalled();
+  });
+
+  test("reenables the trial composer when an async onStart callback fails", async () => {
+    const onStart = vi.fn(async () => {
+      throw new Error("start failed");
+    });
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+      messages: [],
+      busy: false,
+    });
+
+    render(<TrialStage onStart={onStart} />);
+
+    const composer = screen.getByPlaceholderText("给我一个真实任务...");
+    fireEvent.change(composer, { target: { value: "执行一次试用" } });
+    fireEvent.keyDown(composer, { key: "Enter", code: "Enter" });
+
+    await waitFor(() => expect(composer).toBeEnabled());
+    expect(onStart).toHaveBeenCalledWith("执行一次试用");
   });
 
   test("shows a clear error when a trial preview decision is no longer accepted", async () => {
@@ -396,6 +416,39 @@ describe("TeachingScreen", () => {
     expect(useTeachingStore.getState().trialSuccessCount).toBe(1);
     expect(useTeachingStore.getState().messages).toEqual([]);
     expect(useTeachingStore.getState().progressLog).toEqual([]);
+  });
+
+  test("shows a fallback message for unlabeled running trial progress", () => {
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+      messages: [],
+      progressLog: [],
+    });
+
+    act(() => {
+      useTeachingStore.getState().applyEvent({
+        eventId: "evt_trial_running",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: "rec_1",
+        type: "trial.progress",
+        scope: { workflowId: "rec_1" },
+        payload: { status: "running" },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+
+    expect(useTeachingStore.getState().progressLog).toEqual(["试用正在执行"]);
+    expect(useTeachingStore.getState().messages).toEqual([
+      {
+        from: "ai",
+        agent: "trial",
+        headline: "试用正在执行",
+        detail: undefined,
+        error: false,
+      },
+    ]);
   });
 
   test("does not treat unrelated skill catalog events as the current teaching run", () => {

@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 _REPLAY_BUFFER_SIZE = 256
 _SUBSCRIBER_QUEUE_SIZE = 100
-_RESYNC_DOMAINS = ["teaching", "skills", "compositions", "settings", "assistant"]
+_RESYNC_DOMAINS = ["teaching", "skills", "compositions", "settings", "assistant", "brain"]
 
 
 @dataclass
@@ -319,6 +319,10 @@ _INTERNAL_EVENT_NAMES = [
     "teaching_failure_updated",
     "teaching_failure_resolved",
     "teaching_failure_retrying",
+    "brain_zone_changed",
+    "brain_specialist_changed",
+    "brain_specialist_recruited",
+    "brain_context_ready",
 ]
 
 

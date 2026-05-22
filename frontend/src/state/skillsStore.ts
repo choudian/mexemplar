@@ -40,6 +40,10 @@ export type SkillsState = {
 
 const scheduleRefresh = createDebouncedRefresh();
 
+function decrementCount(value: number): number {
+  return Math.max(0, value - 1);
+}
+
 function syncNavigationCounts(counts: Record<SkillCategory, number>): void {
   const nav = useShellStore.getState().navigation;
   if (
@@ -140,7 +144,7 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       const filtered = prev.categories[cat].filter((s) => s.toolId !== toolId);
       if (filtered.length !== prev.categories[cat].length) {
         nextCategories[cat] = filtered;
-        nextCounts[cat] = prev.counts[cat] - 1;
+        nextCounts[cat] = decrementCount(prev.counts[cat]);
         break;
       }
     }
@@ -148,11 +152,10 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     syncNavigationCounts(nextCounts);
   },
   retryFailure: async (workflowId) => {
-    set({ busy: true, lastError: null });
     try {
       await retryFailure(workflowId);
     } catch (error) {
-      set({ busy: false, lastError: toErrorMessage(error, "重试失败。") });
+      set({ lastError: toErrorMessage(error, "重试失败。") });
       return;
     }
     await get().loadAllCategories();
@@ -169,7 +172,11 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       ...prev.categories,
       failed: prev.categories.failed.filter((skill) => skill.workflowId !== workflowId),
     };
-    const nextCounts = { ...prev.counts, failed: prev.counts.failed - 1 };
+    const removed = nextCategories.failed.length !== prev.categories.failed.length;
+    const nextFailedCount = removed
+      ? decrementCount(prev.counts.failed)
+      : Math.max(0, Math.min(prev.counts.failed, nextCategories.failed.length));
+    const nextCounts = { ...prev.counts, failed: nextFailedCount };
     set({ categories: nextCategories, counts: nextCounts });
     syncNavigationCounts(nextCounts);
   },

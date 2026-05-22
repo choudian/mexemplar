@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { Plus, Search } from "lucide-react";
 
 import { SKILL_CATEGORIES } from "../../api/skills";
@@ -31,17 +31,22 @@ export function SkillListScreen(): JSX.Element {
   const dismissFailure = useSkillsStore((state) => state.dismissFailure);
   const setRoute = useShellStore((state) => state.setRoute);
 
-  useEffect(() => {
-    void loadAllCategories();
-  }, [loadAllCategories]);
+  const hydrated = useSkillsStore((state) => state.hydrated);
 
-  const filteredSkills = data[activeCategory].filter((skill) => {
+  useEffect(() => {
+    if (hydrated) return;
+    void loadAllCategories();
+  }, [hydrated, loadAllCategories]);
+
+  const filteredSkills = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return true;
-    return [skill.name, skill.description, skill.errorSummary, skill.source]
-      .filter(Boolean)
-      .some((value) => String(value).toLowerCase().includes(needle));
-  });
+    if (!needle) return data[activeCategory];
+    return data[activeCategory].filter((skill) =>
+      [skill.name, skill.description, skill.errorSummary, skill.source]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(needle)),
+    );
+  }, [data, activeCategory, query]);
 
   return (
     <section className="skills-screen" aria-label="技能列表">

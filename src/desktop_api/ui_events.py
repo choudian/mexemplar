@@ -293,8 +293,38 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         "control",
         frozenset({"reason", "domains", "lastAvailableSequence", "eventSessionId"}),
         frozenset({"workflowId", "sessionId", "toolId", "compositionId"}),
-        {"reason": "replay_gap", "domains": ["teaching", "skills"]},
+        {"reason": "replay_gap", "domains": ["teaching", "skills", "brain"]},
         required_payload_keys=frozenset({"reason", "domains"}),
+    ),
+    "brain_zone_changed": UiEventDefinition(
+        "brain_zone_changed",
+        "notification",
+        frozenset({"zone", "entryId", "changeType"}),
+        frozenset(),
+        {"zone": "hot", "entryId": "entry_1", "changeType": "create"},
+        required_payload_keys=frozenset({"zone", "changeType"}),
+    ),
+    "brain_specialist_recruited": UiEventDefinition(
+        "brain_specialist_recruited",
+        "notification",
+        frozenset({"specialistId", "name", "reason", "managementUrl"}),
+        frozenset(),
+        {
+            "specialistId": "spec_1",
+            "name": "报表专员",
+            "reason": "检测到持续报表委托",
+            "managementUrl": "/brain/specialists",
+        },
+        required_payload_keys=frozenset({"specialistId", "name", "reason"}),
+    ),
+    "brain_context_ready": UiEventDefinition(
+        "brain_context_ready",
+        "notification",
+        frozenset({"sessionId"}),
+        frozenset({"sessionId"}),
+        {"sessionId": "sess_1"},
+        required_payload_keys=frozenset({"sessionId"}),
+        required_scope_keys=frozenset({"sessionId"}),
     ),
 }
 
@@ -534,7 +564,7 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
     if event_name == "agent_error":
         event_type = "assistant.error" if "sessionId" in scope else "teaching.progress"
         status_payload = {
-            "message": _safe_short_text(
+            "message": _safe_text(
                 payload.get("message") or payload.get("error") or "Agent failed."
             ),
             "type": _string_or_none(payload.get("type")),
@@ -585,7 +615,7 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
                 {
                     "status": "failed",
                     "failureStage": _string_or_none(payload.get("failed_stage")),
-                    "error": _safe_short_text(
+                    "error": _safe_text(
                         payload.get("error") or payload.get("message") or "Skill teaching failed."
                     ),
                 },
@@ -650,7 +680,10 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
         return [
             UiEventDraft(
                 "teaching.stage_changed",
-                {"stage": "failed", "failureStage": "trial"},
+                {
+                    "stage": "failed",
+                    "failureStage": "trial",
+                },
                 scope,
                 causation_id,
             ),
@@ -702,6 +735,44 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
             UiEventDraft(
                 "settings.changed",
                 {"reason": "settings_invalidated", "keys": _string_list(payload.get("keys"))},
+                scope,
+                causation_id,
+            )
+        ]
+    if event_name == "brain_zone_changed":
+        return [
+            UiEventDraft(
+                "brain_zone_changed",
+                {
+                    "zone": _string_or_none(payload.get("zone")),
+                    "entryId": _string_or_none(payload.get("entry_id")),
+                    "changeType": _string_or_none(
+                        payload.get("change_type") or payload.get("operation")
+                    ),
+                },
+                scope,
+                causation_id,
+            )
+        ]
+    if event_name == "brain_specialist_recruited":
+        return [
+            UiEventDraft(
+                "brain_specialist_recruited",
+                {
+                    "specialistId": _string_or_none(payload.get("specialist_id")),
+                    "name": _string_or_none(payload.get("name")),
+                    "reason": _safe_short_text(payload.get("reason") or ""),
+                    "managementUrl": "/brain/specialists",
+                },
+                scope,
+                causation_id,
+            )
+        ]
+    if event_name == "brain_context_ready":
+        return [
+            UiEventDraft(
+                "brain_context_ready",
+                {"sessionId": _string_or_none(payload.get("session_id"))},
                 scope,
                 causation_id,
             )

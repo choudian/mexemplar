@@ -5,6 +5,7 @@ from src.business.services.desktop_health_service import DesktopHealthService
 from src.desktop_api.events import event_queue
 from src.desktop_api.schemas import (
     BackendConnectionState,
+    BootstrapBrainConfig,
     BootstrapNavigation,
     BootstrapResponse,
     BootstrapSettingsSummary,
@@ -39,4 +40,5 @@ def get_bootstrap() -> BootstrapResponse:
         user=BootstrapUser(**data["user"]),
         navigation=BootstrapNavigation(**data["navigation"]),
         settingsSummary=BootstrapSettingsSummary(**data["settingsSummary"]),
+        brain=BootstrapBrainConfig(**data["brain"]),
     )

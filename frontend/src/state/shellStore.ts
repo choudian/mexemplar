@@ -2,7 +2,14 @@ import { create } from "zustand";
 
 import type { BackendConnectionState, BootstrapResponse } from "../api/client";
 
-export type RouteId = "assistant" | "teaching" | "skills" | "compositions" | "settings";
+export type RouteId =
+  | "assistant"
+  | "teaching"
+  | "skills"
+  | "compositions"
+  | "brain"
+  | "brain-specialists"
+  | "settings";
 
 export interface ShellState {
   activeRoute: RouteId;

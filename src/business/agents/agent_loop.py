@@ -407,7 +407,15 @@ class AgentLoop:
             )
             if result.result_type == ResultType.NEEDS_USER_INPUT:
                 ctx.update_session_status("suspended")
-                question = tool_call.args.get("message", "")
+                question = (
+                    tool_call.args.get("message")
+                    or tool_call.args.get("text")
+                    or result.display_text
+                    or ""
+                )
+                if tool_call.name == "reply_to_user" and result.display_text:
+                    ctx.save_assistant_message(content=result.display_text)
+                    question = ""
                 logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
                 return AgentResult(
                     result_type=ResultType.NEEDS_USER_INPUT,

@@ -16,6 +16,7 @@ from src.business.agents.config import (
     ResultType,
     ToolDefinition,
 )
+from src.business.brain.specialist_service import parse_tool_whitelist
 from src.business.agents.tools.pm_output_tools import report_code_issue, submit_requirements
 from src.business.agents.prompts.desktop_prompts import build_pm_prompt, build_programmer_prompt
 from src.business.agents.tools.desktop_tools import create_desktop_specific_tools
@@ -23,6 +24,7 @@ from src.business.agents.tools.programmer_tools import submit_code, syntax_check
 from src.business.agents.tools.recording_data_tools import create_recording_tools
 from src.business.agents.tools.trial_tools import create_desktop_trial_tools, create_trial_tools
 from src.business.ai.llm_client import LangChainLLMClient
+from src.business.services import SkillCompositionService
 from src.data.repositories import (
     AssistantProfileRepository,
     MessageRepository,
@@ -166,8 +168,6 @@ class AgentOrchestrator:
         self._MAX_DYNAMIC_MANAGERS = 20
         self._desktop_syntax_state: Dict[str, _DesktopSyntaxState] = {}
         self._mode_cache: Dict[str, str] = {}
-        from src.business.services import SkillCompositionService
-
         self._composition_service = SkillCompositionService()
 
         self._event_bus = _EventBusAdapter()
@@ -259,6 +259,24 @@ class AgentOrchestrator:
                 if agent_type == AgentType.ASSISTANT
                 else loop.format_system_prompt(recording_id=workflow_id)
             )
+
+            # Check message limit for assistant segment boundary
+            if agent_type == AgentType.ASSISTANT:
+                try:
+                    from src.data.unified_config import get_unified_config
+                    config = get_unified_config()
+                    msg_threshold = config.get_memory_compression_count_threshold()
+                    if msg_threshold:
+                        msg_count = self._message_repo.count_by_session(session_id)
+                        if msg_count and msg_count >= msg_threshold:
+                            from src.business.brain.segment_service import SegmentService
+                            sealed_id = SegmentService().seal_segment(session_id, boundary_reason="token_limit")
+                            if sealed_id:
+                                from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
+                                cleanup_retrieved_context(session_id)
+                                logger.info("Segment sealed via token_limit: session=%s, msg_count=%d", session_id, msg_count)
+                except Exception as seg_exc:
+                    logger.warning("Token-limit segment boundary check failed: %s", seg_exc)
         except Exception as exc:
             logger.error(f"[Orchestrator] 无法准备 {agent_type} Agent: {exc}", exc_info=True)
             self._emit_agent_error(
@@ -303,6 +321,296 @@ class AgentOrchestrator:
                 result.result_type.value,
             )
         return result
+
+    def _delegate_to_subagent(
+        self,
+        *,
+        parent_session_id: str,
+        task_description: str,
+        execution_context: str = "",
+        tool_whitelist: list[str] | None = None,
+    ) -> dict:
+        task = (task_description or "").strip()
+        if not task:
+            return {
+                "success": False,
+                "message": "task_description must not be empty",
+                "delegation_type": "ephemeral_subagent",
+            }
+
+        workflow_id = self._new_delegation_workflow_id(parent_session_id)
+        child_session_id = self._session_store.create_session(
+            workflow_id,
+            AgentType.EPHEMERAL_SUBAGENT,
+        )
+        allowed_tool_ids = self._resolve_user_tool_ids(
+            parent_session_id=parent_session_id,
+            tool_whitelist=tool_whitelist,
+        )
+        system_prompt = self._build_ephemeral_subagent_prompt(tool_whitelist)
+        user_input = self._format_delegated_task_input(task, execution_context)
+        result = self._run_delegated_executor(
+            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            session_id=child_session_id,
+            workflow_id=workflow_id,
+            parent_session_id=parent_session_id,
+            user_input=user_input,
+            system_prompt=system_prompt,
+            allowed_tool_ids=allowed_tool_ids,
+        )
+        result["delegation_type"] = "ephemeral_subagent"
+        result["task_description"] = task
+        if result.get("success"):
+            self._record_delegation_signal(
+                parent_session_id=parent_session_id,
+                task_pattern=task,
+                result_text=str(result.get("result_text") or ""),
+            )
+        return result
+
+    def _delegate_to_specialist(
+        self,
+        *,
+        parent_session_id: str,
+        specialist_name: str,
+        task: str,
+    ) -> dict:
+        name = (specialist_name or "").strip()
+        task_text = (task or "").strip()
+        if not name or not task_text:
+            return {
+                "success": False,
+                "message": "specialist_name and task must not be empty",
+                "delegation_type": "specialist",
+            }
+
+        from src.data.repos.specialist_repository import SpecialistRepository
+
+        with SpecialistRepository() as repo:
+            specialist = repo.get_specialist_by_name(name)
+        if specialist is None:
+            return {
+                "success": False,
+                "message": f"专员不存在: {name}",
+                "delegation_type": "specialist",
+            }
+        if not getattr(specialist, "is_active", 1):
+            return {
+                "success": False,
+                "message": f"专员已停用: {name}",
+                "specialist_id": specialist.specialist_id,
+                "delegation_type": "specialist",
+            }
+
+        whitelist = parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
+        workflow_id = self._new_delegation_workflow_id(parent_session_id)
+        child_session_id = self._session_store.create_session(workflow_id, AgentType.SPECIALIST)
+        allowed_tool_ids = self._resolve_user_tool_ids(
+            parent_session_id=parent_session_id,
+            tool_whitelist=whitelist,
+        )
+        system_prompt = self._build_specialist_prompt(specialist, whitelist)
+        result = self._run_delegated_executor(
+            agent_type=AgentType.SPECIALIST,
+            session_id=child_session_id,
+            workflow_id=workflow_id,
+            parent_session_id=parent_session_id,
+            user_input=self._format_delegated_task_input(task_text),
+            system_prompt=system_prompt,
+            allowed_tool_ids=allowed_tool_ids,
+        )
+        result["delegation_type"] = "specialist"
+        result["specialist_id"] = specialist.specialist_id
+        result["specialist_name"] = name
+        result["task"] = task_text
+        return result
+
+    def _run_delegated_executor(
+        self,
+        *,
+        agent_type: str,
+        session_id: str,
+        workflow_id: str,
+        parent_session_id: str,
+        user_input: str,
+        system_prompt: str,
+        allowed_tool_ids: set[str] | None,
+    ) -> dict:
+        self._session_store.record_transition(
+            workflow_id,
+            event_type="assistant_delegation_started",
+            from_session_id=parent_session_id,
+            to_session_id=session_id,
+            payload=json.dumps({"agent_type": str(agent_type)}, ensure_ascii=False),
+        )
+
+        try:
+            loop = self._get_loop(agent_type, workflow_id=workflow_id)
+            tools = self._build_delegated_executor_tools(allowed_tool_ids)
+            result = loop.run(
+                session_id,
+                user_input,
+                tools=tools,
+                system_prompt_override=system_prompt,
+            )
+        except Exception as exc:
+            logger.error("[Orchestrator] 委派执行失败: %s", exc, exc_info=True)
+            self._session_store.record_transition(
+                workflow_id,
+                event_type="assistant_delegation_failed",
+                from_session_id=session_id,
+                to_session_id=parent_session_id,
+                payload=json.dumps({"error": str(exc)}, ensure_ascii=False),
+            )
+            return {
+                "success": False,
+                "message": str(exc),
+                "executor_session_id": session_id,
+                "workflow_id": workflow_id,
+            }
+
+        result_text = self._extract_latest_assistant_text(session_id)
+        success = result.result_type == ResultType.COMPLETED and bool(result_text)
+        payload = {
+            "result_type": result.result_type.value,
+            "success": success,
+        }
+        if result.error:
+            payload["error"] = result.error
+        self._session_store.record_transition(
+            workflow_id,
+            event_type="assistant_delegation_completed" if success else "assistant_delegation_failed",
+            from_session_id=session_id,
+            to_session_id=parent_session_id,
+            payload=json.dumps(payload, ensure_ascii=False),
+        )
+
+        response = {
+            "success": success,
+            "message": "委派执行完成" if success else (result.error or "委派执行未返回可用结果"),
+            "executor_session_id": session_id,
+            "workflow_id": workflow_id,
+            "result_type": result.result_type.value,
+            "result_text": result_text,
+        }
+        if result.error:
+            response["error"] = result.error
+        return response
+
+    def _build_delegated_executor_tools(
+        self,
+        allowed_tool_ids: set[str] | None,
+    ) -> Callable[[], List[ToolDefinition]]:
+        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
+        from src.business.agents.tools.dynamic_tool_manager import (
+            DynamicToolManager,
+            create_assistant_search_tools,
+        )
+
+        dynamic_manager = DynamicToolManager(allowed_tool_ids=allowed_tool_ids)
+        search_tools = create_assistant_search_tools(dynamic_manager)
+
+        def tool_factory() -> List[ToolDefinition]:
+            return search_tools + BUILTIN_GENERAL_TOOLS + dynamic_manager.get_activated_tools()
+
+        return tool_factory
+
+    def _resolve_user_tool_ids(
+        self,
+        *,
+        parent_session_id: str,
+        tool_whitelist: list[str] | None,
+    ) -> set[str] | None:
+        parent_session = self._session_store.get_session(parent_session_id)
+        parent_allowed_ids = parent_session.get_tool_id_set() if parent_session else None
+        if tool_whitelist is None:
+            return parent_allowed_ids
+
+        resolved_ids: set[str] = set()
+        for tool_identifier in tool_whitelist:
+            if not isinstance(tool_identifier, str) or not tool_identifier.strip():
+                continue
+            identifier = tool_identifier.strip()
+            tool = self._tool_repo.get_by_id(identifier) or self._tool_repo.get_by_name(identifier)
+            if tool is None or getattr(tool, "status", None) != "published":
+                continue
+            if parent_allowed_ids is not None and tool.tool_id not in parent_allowed_ids:
+                continue
+            resolved_ids.add(tool.tool_id)
+        return resolved_ids
+
+    def _extract_latest_assistant_text(self, session_id: str) -> str:
+        return self._message_repo.get_latest_assistant_text(session_id)
+
+    @staticmethod
+    def _record_delegation_signal(
+        *,
+        parent_session_id: str,
+        task_pattern: str,
+        result_text: str,
+    ) -> None:
+        try:
+            from src.data.repos.brain_repository import BrainRepository
+
+            summary_parts = [task_pattern.strip()[:180]]
+            if result_text.strip():
+                summary_parts.append(result_text.strip()[:220])
+            with BrainRepository() as repo:
+                repo.record_recruitment_signal(
+                    task_pattern=task_pattern,
+                    session_id=parent_session_id,
+                    delegation_summary=" -> ".join(part for part in summary_parts if part),
+                )
+        except Exception as exc:
+            logger.warning("Failed to record delegation recruitment signal: %s", exc)
+
+    @staticmethod
+    def _new_delegation_workflow_id(parent_session_id: str) -> str:
+        return f"dlg_{parent_session_id[:12]}_{uuid.uuid4().hex[:16]}"
+
+    @staticmethod
+    def _format_delegated_task_input(task: str, execution_context: str = "") -> str:
+        lines = [
+            "主助理委派给你的任务如下：",
+            "",
+            task,
+        ]
+        if execution_context.strip():
+            lines.extend(["", "补充上下文：", execution_context.strip()])
+        lines.extend(
+            [
+                "",
+                "请完成任务，并返回可以交给用户的最终结果。"
+                "如果信息不足，请明确说明缺口和你已经完成的部分。",
+            ]
+        )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_ephemeral_subagent_prompt(tool_whitelist: list[str] | None) -> str:
+        whitelist_text = (
+            "、".join(tool_whitelist)
+            if tool_whitelist
+            else "继承主助理当前可用技能池"
+        )
+        return (
+            "你是一个临时子代理，只为当前一次委派任务服务。\n"
+            "你可以使用被授予的工具完成任务，但不要再委派给其他 Agent。\n"
+            f"用户技能白名单：{whitelist_text}\n"
+            "完成后直接输出最终结果，不要向用户闲聊。"
+        )
+
+    @staticmethod
+    def _build_specialist_prompt(specialist, whitelist: list[str]) -> str:
+        whitelist_text = "、".join(whitelist) if whitelist else "无用户技能白名单"
+        return (
+            f"你是固定专员：{getattr(specialist, 'name', '')}\n"
+            f"描述：{getattr(specialist, 'description', '') or '无'}\n\n"
+            "角色定义：\n"
+            f"{getattr(specialist, 'role_definition', '') or '按专员职责完成主助理委派的任务。'}\n\n"
+            f"用户技能白名单：{whitelist_text}\n"
+            "你只能处理主助理委派的任务；完成后直接输出最终结果。"
+        )
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
         initial_input = (
@@ -764,10 +1072,24 @@ class AgentOrchestrator:
     def _build_assistant_tools(self, session_id: str) -> Callable[[], List[ToolDefinition]]:
         from src.business.agents.tools.assistant_tools import (
             CODIFY_AS_TOOL_SCHEMA,
+            CREATE_SPECIALIST_SCHEMA,
+            DELEGATE_TO_SPECIALIST_SCHEMA,
+            DELEGATE_TO_SUBAGENT_SCHEMA,
             DISMISS_SUGGESTION,
+            INVALIDATE_MEMORY_ENTRY_SCHEMA,
             REPORT_TOOL_BUG,
+            REPLY_TO_USER_SCHEMA,
+            RETRIEVE_ARCHIVE_SCHEMA,
+            RETRIEVE_FAILURE_ZONE_SCHEMA,
             SAVE_PROFILE_SCHEMA,
             create_codify_as_tool_handler,
+            create_create_specialist_handler,
+            create_delegate_to_specialist_handler,
+            create_delegate_to_subagent_handler,
+            create_invalidate_memory_entry_handler,
+            create_reply_to_user_handler,
+            create_retrieve_archive_handler,
+            create_retrieve_failure_zone_handler,
             create_save_profile_handler,
         )
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
@@ -807,6 +1129,48 @@ class AgentOrchestrator:
             schema=MEMORY_SEARCH_SCHEMA,
             handler=memory_search_handler,
         )
+        retrieve_archive_tool = ToolDefinition(
+            name="retrieve_archive",
+            schema=RETRIEVE_ARCHIVE_SCHEMA,
+            handler=create_retrieve_archive_handler(session_id),
+        )
+        retrieve_failure_zone_tool = ToolDefinition(
+            name="retrieve_failure_zone",
+            schema=RETRIEVE_FAILURE_ZONE_SCHEMA,
+            handler=create_retrieve_failure_zone_handler(session_id),
+        )
+        reply_to_user_tool = ToolDefinition(
+            name="reply_to_user",
+            schema=REPLY_TO_USER_SCHEMA,
+            handler=create_reply_to_user_handler(session_id),
+            is_interrupting=True,
+        )
+        delegate_to_subagent_tool = ToolDefinition(
+            name="delegate_to_subagent",
+            schema=DELEGATE_TO_SUBAGENT_SCHEMA,
+            handler=create_delegate_to_subagent_handler(
+                session_id,
+                dispatch_callback=self._delegate_to_subagent,
+            ),
+        )
+        delegate_to_specialist_tool = ToolDefinition(
+            name="delegate_to_specialist",
+            schema=DELEGATE_TO_SPECIALIST_SCHEMA,
+            handler=create_delegate_to_specialist_handler(
+                session_id,
+                dispatch_callback=self._delegate_to_specialist,
+            ),
+        )
+        create_specialist_tool = ToolDefinition(
+            name="create_specialist",
+            schema=CREATE_SPECIALIST_SCHEMA,
+            handler=create_create_specialist_handler(session_id),
+        )
+        invalidate_memory_entry_tool = ToolDefinition(
+            name="invalidate_memory_entry",
+            schema=INVALIDATE_MEMORY_ENTRY_SCHEMA,
+            handler=create_invalidate_memory_entry_handler(session_id),
+        )
 
         search_tools = create_assistant_search_tools(dynamic_manager)
         static_tools = [
@@ -815,6 +1179,13 @@ class AgentOrchestrator:
             codify_tool,
             DISMISS_SUGGESTION,
             memory_search_tool,
+            retrieve_archive_tool,
+            retrieve_failure_zone_tool,
+            invalidate_memory_entry_tool,
+            reply_to_user_tool,
+            delegate_to_subagent_tool,
+            delegate_to_specialist_tool,
+            create_specialist_tool,
         ] + BUILTIN_GENERAL_TOOLS
 
         def tool_factory() -> List[ToolDefinition]:
@@ -829,6 +1200,24 @@ class AgentOrchestrator:
 
         if agent_type == AgentType.ASSISTANT:
             return AgentLoop(ASSISTANT_CONFIG, self._llm, self._config)
+
+        if agent_type == AgentType.EPHEMERAL_SUBAGENT:
+            from src.business.agents.config import AgentConfig
+            ephemeral_config = AgentConfig(
+                agent_type=AgentType.EPHEMERAL_SUBAGENT,
+                system_prompt="你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。",
+                max_iterations=20,
+            )
+            return AgentLoop(ephemeral_config, self._llm, self._config)
+
+        if agent_type == AgentType.SPECIALIST:
+            from src.business.agents.config import AgentConfig
+            specialist_config = AgentConfig(
+                agent_type=AgentType.SPECIALIST,
+                system_prompt="你是一个固定专员。根据你的角色定义完成指定工作。",
+                max_iterations=30,
+            )
+            return AgentLoop(specialist_config, self._llm, self._config)
 
         mode = self._recording_mode(workflow_id)
         if agent_type == AgentType.PM:

@@ -20,12 +20,12 @@ async function expectNoPrototypeText(page: Page) {
   }
 }
 
-test("T105 normal five-screen states do not expose prototype sample data or fake counts", async ({ page }) => {
+test("T105 normal primary-screen states do not expose prototype sample data or fake counts", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/");
 
-  await expect(page.getByRole("button", { name: /技能列表 3/ })).toBeVisible();
-  for (const route of [/AI 助手/, /技能教学/, /技能列表/, /技能组合/, /应用设置/]) {
+  await expect(page.getByRole("button", { name: /技能列表/ })).toBeVisible();
+  for (const route of [/AI 助手/, /技能教学/, /技能列表/, /技能组合/, /大脑管理/, /专员管理/, /应用设置/]) {
     await page.getByRole("button", { name: route }).click();
     await expectNoPrototypeText(page);
   }

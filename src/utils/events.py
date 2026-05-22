@@ -104,6 +104,25 @@ composition_review_needed = _signals.signal("composition_review_needed")
 """技能组合需要审核事件"""
 
 trial_requested = _signals.signal("trial_requested")
+
+# 大脑架构事件
+brain_zone_changed = _signals.signal("brain_zone_changed")
+"""大脑分区条目状态变化事件"""
+
+brain_specialist_changed = _signals.signal("brain_specialist_changed")
+"""专员列表变化事件"""
+
+segment_boundary_triggered = _signals.signal("segment_boundary_triggered")
+"""Segment 边界事件：open segment 被封存"""
+
+segment_idle_trigger = _signals.signal("segment_idle_trigger")
+"""前端空闲计时器触发"""
+
+brain_specialist_recruited = _signals.signal("brain_specialist_recruited")
+"""自动招募完成：新专员已创建"""
+
+brain_context_ready = _signals.signal("brain_context_ready")
+"""助理大脑上下文构建完成"""
 """工具试用请求事件"""
 
 # =============================================================================
@@ -235,6 +254,12 @@ _signal_names = [
     "skills_changed",
     "composition_review_needed",
     "trial_requested",
+    "brain_zone_changed",
+    "brain_specialist_changed",
+    "segment_boundary_triggered",
+    "segment_idle_trigger",
+    "brain_specialist_recruited",
+    "brain_context_ready",
 ]
 
 
@@ -281,6 +306,12 @@ __all__ = [
     "skills_changed",
     "composition_review_needed",
     "trial_requested",
+    "brain_zone_changed",
+    "brain_specialist_changed",
+    "segment_boundary_triggered",
+    "segment_idle_trigger",
+    "brain_specialist_recruited",
+    "brain_context_ready",
     # 数据类
     "RecordingEventData",
     # 函数

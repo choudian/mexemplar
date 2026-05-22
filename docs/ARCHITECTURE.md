@@ -514,7 +514,93 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 ---
 
-## 十、细化设计文档索引
+## 十、Brain Service 架构
+
+办公助理的跨对话记忆和专员调度由 `src/business/brain/` 独立业务层提供。该层在已有的 Agent Loop 和编排层之上，为 assistant 注入持久化上下文、Segment 沉淀、zone 衰减、archive 检索、专员管理和自校准能力。
+
+### 业务层模块
+
+| 模块 | 职责 |
+|------|------|
+| `src/business/brain/models.py` | 共享常量、dataclass（Segment 状态、zone 类型、memory entry 类型等） |
+| `src/business/brain/segment_service.py` | Segment 生命周期管理：创建、封存（`window_close` / `idle` / `new_session` / `token_limit`）、崩溃恢复 |
+| `src/business/brain/distillation_service.py` | Phase-aware Segment 沉淀：将消息历史蒸馏为结构化 memory entry 并写入对应 zone |
+| `src/business/brain/context_builder.py` | 会话启动上下文组装：persistent-zone 全量注入 + hot-zone top-N 选择 + zone summary |
+| `src/business/brain/decay_router.py` | Hot-zone 衰减路由：`event` vs `insight` 差异化衰减 |
+| `src/business/brain/archive_service.py` | Archive unit 和 time-layer 聚合任务 |
+| `src/business/brain/retrieval_service.py` | 显式 archive 检索、invalidation fallback、相关性排序 |
+| `src/business/brain/specialist_service.py` | 专员 CRUD、技能白名单子集校验、自动招募扫描 |
+| `src/business/brain/prediction_service.py` | Prediction 生成与验证服务逻辑 |
+| `src/business/brain/background_worker.py` | 后台 Worker：pending Segment 处理、蒸馏崩溃重置、衰减清扫、archive 分层、prediction 周期、事件唤醒 |
+
+### 数据层
+
+| Repository | 职责 |
+|------------|------|
+| `src/data/repos/brain_repository.py`（`BrainRepository`） | Memory Entry 和 Segment CRUD、compare-and-swap 状态转换、事务原子写入、invalidation/soft-delete、feedback signal 持久化 |
+| `src/data/repos/specialist_repository.py`（`SpecialistRepository`） | 专员持久化、软删除停用、版本历史 |
+
+### 数据库表（v11 Migration）
+
+v11 迁移在 SQLite 中新增以下表：
+
+| 表 | 说明 |
+|----|------|
+| `brain_segments` | Segment 记录（`open` 态不持久化，行仅在封存时创建） |
+| `brain_memory_entries` | 六 zone 的 memory entry：hot / persistent / archive / subconscious / failure / prediction |
+| `brain_specialists` | 专员定义（名称、描述、技能白名单、状态） |
+| `brain_specialist_versions` | 专员版本历史 |
+| `brain_recruitment_signals` | 自动招募信号 |
+| `feedback_signals` | 用户反馈信号（prompt injection、silence no-op） |
+
+### 前端路由
+
+| 路由 | 页面 | 说明 |
+|------|------|------|
+| `/brain` | BrainScreen | 六 zone 浏览、过滤、entry 编辑/删除、evolution chain、skill-pool 管理 |
+| `/brain/specialists` | SpecialistScreen | 专员 CRUD、软删除停用、白名单编辑 |
+
+前端对应 Zustand store：`brainStore`（zone/entry/segment/skill-pool 状态）、`specialistStore`（专员列表/编辑草稿/白名单）。
+
+### 事件
+
+| 事件名 | 触发时机 |
+|--------|---------|
+| `brain_zone_changed` | zone entry 新增、更新或删除 |
+| `brain_specialist_changed` | 专员创建、更新、停用 |
+| `segment_boundary_triggered` | Segment 封存触发（window_close / idle / new_session / token_limit） |
+| `segment_idle_trigger` | 前端 idle timer 触发 Segment 边界 |
+| `brain_specialist_recruited` | 自动招募专员成功 |
+| `brain_context_ready` | 会话启动上下文组装完成 |
+
+所有 brain 事件定义在 `src/utils/events.py`，由业务服务发出，经 `src/desktop_api/ui_events.py` 投影为前端 UI event stream。
+
+### 后台 Worker
+
+`BrainBackgroundWorker` 在 desktop API 启动时创建，随 sidecar 生命周期停止。它负责：
+
+1. pending Segment 的蒸馏处理
+2. 蒸馏中崩溃的 Segment 重置
+3. hot-zone 衰减清扫
+4. archive 分层聚合
+5. prediction 生成与验证周期
+6. 自动招募信号扫描
+7. 事件唤醒（`threading.Event`）
+
+Worker 周期由 `brain.*` 配置控制，数值为占位符，待实测后调整。
+
+### 上下文注入
+
+assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入逻辑：
+
+1. 从 `BrainRepository` 读取 persistent-zone 全量 entry
+2. 读取 hot-zone top-N entry（按 relevance + recency + effectiveness 排序）
+3. 组装为 system prompt 中的 brain context section
+4. 冷启动时触发 icebreaker 行为
+
+---
+
+## 十一、细化设计文档索引
 
 各模块的详细设计文档，在架构 v2 基础上做了进一步决策，**以各设计文档为准**。
 
@@ -530,6 +616,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | LLM Review | [llm_review_design.md](design/llm_review_design.md) |
 | 办公助理 Agent | [assistant_agent_design.md](design/assistant_agent_design.md) |
 | 技能组合 | [skill_composition_design.md](design/skill_composition_design.md) |
+| Brain Service | `specs/010-assistant-brain-redesign/` 下的 `spec.md`、`plan.md`、`data-model.md`、`contracts/` |
 
 ---
 

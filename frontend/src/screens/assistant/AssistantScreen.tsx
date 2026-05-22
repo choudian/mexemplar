@@ -35,11 +35,16 @@ export function AssistantScreen(): JSX.Element {
   const setDraft = useAssistantStore((state) => state.setDraft);
   const sendDraft = useAssistantStore((state) => state.sendDraft);
   const decideConfirmation = useAssistantStore((state) => state.decideConfirmation);
+  const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
   const [historyOpen, setHistoryOpen] = useState(true);
 
   useEffect(() => {
     void loadSessions();
   }, [loadSessions, query]);
+
+  useEffect(() => {
+    return () => { clearIdleTimer(); };
+  }, [clearIdleTimer]);
 
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId);
   const conversationTitle = activeSession?.title ?? (messages.length > 0 ? "当前对话" : "新对话");

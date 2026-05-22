@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { AppShell } from "../../src/app/AppShell";
+import { useAssistantStore } from "../../src/state/assistantStore";
 import { useSkillsStore } from "../../src/state/skillsStore";
 import { useShellStore } from "../../src/state/shellStore";
 import { useTeachingStore } from "../../src/state/teachingStore";
@@ -28,12 +30,17 @@ const bootstrapPayload = {
     dark: false,
     density: "comfy",
   },
+  brain: {
+    segmentIdleThresholdSeconds: 123,
+  },
 };
 
 const PRIMARY_ROUTE_EXPECTATIONS = [
   { label: "技能教学", namePattern: /技能教学/ },
   { label: "技能列表", namePattern: /技能列表/ },
   { label: "技能组合", namePattern: /技能组合/ },
+  { label: "大脑管理", namePattern: /大脑管理/ },
+  { label: "专员管理", namePattern: /专员管理/ },
   { label: "应用设置", namePattern: /应用设置/ },
 ] as const;
 
@@ -78,6 +85,25 @@ describe("AppShell", () => {
         failureCount: 0,
         compositionCount: 0,
       },
+    });
+    useAssistantStore.getState().clearIdleTimer();
+    useAssistantStore.setState({
+      hydrated: false,
+      sessions: [],
+      activeSessionId: null,
+      messages: [],
+      query: "",
+      draft: "",
+      loadingSessions: false,
+      loadingMessages: false,
+      sending: false,
+      hasMoreBefore: false,
+      nextBeforeSequence: null,
+      progress: { status: "idle", headline: "" },
+      confirmations: [],
+      lastError: null,
+      idleThresholdMs: null,
+      idleTimerRef: null,
     });
     useTeachingStore.setState({
       hydrated: false,
@@ -125,9 +151,52 @@ describe("AppShell", () => {
         if (url.endsWith("/api/settings/values")) {
           return jsonResponse({ values: {}, secrets: {}, status: {} });
         }
+        if (url.endsWith("/api/brain/zones")) {
+          return jsonResponse({ zones: [{ zone: "hot", label: "热区", entry_count: 1, fading_count: 0 }] });
+        }
+        if (url.includes("/api/brain/zones/hot/entries")) {
+          return jsonResponse({
+            items: [
+              {
+                entry_id: "entry-1",
+                zone: "hot",
+                entry_type: "insight",
+                content: "用户偏好简洁回复",
+                status: "active",
+                origin: "distillation",
+                reason: "对话沉淀",
+                scope: "沟通",
+                loaded_count: 1,
+                referenced_count: 0,
+                superseded_by: null,
+                verification_checkpoint: null,
+                verification_status: null,
+                verification_rationale: null,
+                created_at: null,
+                updated_at: null,
+              },
+            ],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          });
+        }
+        if (url.includes("/api/brain/segments")) {
+          return jsonResponse({ items: [], total: 0, limit: 20, offset: 0 });
+        }
+        if (url.endsWith("/api/brain/skill-pool")) {
+          return jsonResponse({ skills: [{ tool_id: "tool-1", name: "报表分析", description: "分析报表" }] });
+        }
+        if (url.includes("/api/brain/entries/entry-1/evolution")) {
+          return jsonResponse({ chain: [] });
+        }
+        if (url.includes("/api/brain/specialists")) {
+          return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+        }
         return jsonResponse(bootstrapPayload);
       }),
     );
+    vi.mocked(invoke).mockClear();
   });
 
   afterEach(() => {
@@ -180,6 +249,29 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "关闭窗口" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "最小化窗口" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "最大化或还原窗口" })).toBeInTheDocument();
+  });
+
+  test("close control seals the active assistant segment before closing the window", async () => {
+    useAssistantStore.setState({ activeSessionId: "ast_active" });
+    const fetchMock = vi.mocked(fetch);
+
+    render(<AppShell />);
+
+    await waitFor(() => expect(screen.getByText("已就绪")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "关闭窗口" }));
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([input, init]) => {
+        const url = String(input);
+        const body = typeof init?.body === "string" ? JSON.parse(init.body) : {};
+        return (
+          url.endsWith("/api/assistant/segment-boundary")
+          && body.session_id === "ast_active"
+          && body.reason === "window_close"
+        );
+      })).toBe(true),
+    );
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("close"));
   });
 
   test("dispatches teaching stage and trial preview events from the event stream", async () => {

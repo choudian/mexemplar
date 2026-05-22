@@ -10,6 +10,7 @@ interface MockOptions {
 interface MockRequestRecord {
   method: string;
   path: string;
+  body?: unknown;
 }
 
 export interface MockApiHarness {
@@ -33,6 +34,7 @@ function bootstrap(status: BackendStatus, message: string) {
     user: { displayName: "E2E User", statusLabel: "Fixture backend" },
     navigation: { pendingSkillCount: 1, publishedSkillCount: 1, failureCount: 1, compositionCount: 0 },
     settingsSummary: { theme: "light", dark: false, density: "comfy" },
+    brain: { segmentIdleThresholdSeconds: 300 },
   };
 }
 
@@ -51,7 +53,13 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     if (!path.startsWith("/api/")) {
       return route.fallback();
     }
-    requests.push({ method, path });
+    let body: unknown;
+    try {
+      body = request.postData() ? request.postDataJSON() : undefined;
+    } catch {
+      body = undefined;
+    }
+    requests.push({ method, path, body });
     const status = options.backendStatus ?? "ready";
     const message = options.backendMessage ?? (status === "ready" ? "Desktop backend ready." : "Fixture state.");
 
@@ -117,6 +125,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     if (path === "/api/assistant/sessions/ast_1/messages" && method === "POST") {
       assistantMessagePosted = true;
       return json(route, { accepted: true, sessionId: "ast_1" });
+    }
+    if (path === "/api/assistant/segment-boundary" && method === "POST") {
+      return json(route, { segment_id: "seg_new", status: "pending" });
     }
     if (path.includes("/api/assistant/confirmations/")) {
       return json(route, { requestId: "req_1", decision: "approve", accepted: true });
@@ -243,6 +254,132 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         applicability: "When fixture applies",
         members: [{ toolId: "tool_a", selectedOrder: 1, executionOrder: 1 }],
       });
+    }
+
+    if (path === "/api/brain/zones") {
+      return json(route, {
+        zones: [
+          { zone: "hot", label: "热区", entry_count: 1, fading_count: 0 },
+          { zone: "persistent", label: "持久区", entry_count: 1, fading_count: 0 },
+          { zone: "archive", label: "归档区", entry_count: 0, fading_count: 0 },
+          { zone: "subconscious", label: "潜意识区", entry_count: 0, fading_count: 0 },
+          { zone: "failure", label: "失败区", entry_count: 0, fading_count: 0 },
+          { zone: "prediction", label: "猜测区", entry_count: 0, fading_count: 0 },
+        ],
+      });
+    }
+    if (path === "/api/brain/zones/hot/entries") {
+      return json(route, {
+        items: [
+          {
+            entry_id: "entry_hot_1",
+            zone: "hot",
+            entry_type: "insight",
+            content: "用户偏好先给结论",
+            status: "active",
+            origin: "distillation",
+            reason: "多次对话沉淀",
+            scope: "沟通",
+            loaded_count: 1,
+            referenced_count: 1,
+            superseded_by: null,
+            verification_checkpoint: null,
+            verification_status: null,
+            verification_rationale: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      });
+    }
+    if (path.startsWith("/api/brain/zones/") && path.endsWith("/entries")) {
+      return json(route, { items: [], total: 0, limit: 50, offset: 0 });
+    }
+    if (path === "/api/brain/entries/entry_hot_1/evolution") {
+      return json(route, {
+        chain: [
+          {
+            entry_id: "entry_hot_1",
+            zone: "hot",
+            entry_type: "insight",
+            content: "用户偏好先给结论",
+            status: "active",
+            origin: "distillation",
+            reason: "多次对话沉淀",
+            scope: "沟通",
+            loaded_count: 1,
+            referenced_count: 1,
+            superseded_by: null,
+            verification_checkpoint: null,
+            verification_status: null,
+            verification_rationale: null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (path.startsWith("/api/brain/entries/")) {
+      return json(route, { accepted: true });
+    }
+    if (path === "/api/brain/segments") {
+      return json(route, {
+        items: [{ segment_id: "seg_1", session_id: "ast_1", status: "failed", retry_count: 1, boundary_reason: "idle" }],
+        total: 1,
+      });
+    }
+    if (path.startsWith("/api/brain/segments/") && path.endsWith("/retry")) {
+      return json(route, { segment_id: path.split("/")[4], status: "pending" });
+    }
+    if (path === "/api/brain/skill-pool") {
+      return json(route, { skills: [{ tool_id: "tool_a", name: "Published Skill", description: "Ready to reuse" }] });
+    }
+    if (path.startsWith("/api/brain/skill-pool/")) {
+      return json(route, { accepted: true });
+    }
+    if (path === "/api/brain/specialists") {
+      if (method === "POST") {
+        const body = request.postDataJSON() as Record<string, unknown>;
+        return json(route, {
+          specialist_id: "spec_new",
+          origin: "user_management_ui",
+          reason: "通过管理界面创建",
+          current_version: 1,
+          is_active: true,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          ...body,
+        });
+      }
+      return json(route, {
+        items: [
+          {
+            specialist_id: "spec_1",
+            name: "报表专员",
+            description: "处理周期报表",
+            role_definition: "你负责处理报表。",
+            tool_whitelist: ["tool_a"],
+            origin: "auto_recruitment",
+            reason: "检测到持续报表委托",
+            current_version: 1,
+            is_active: true,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      });
+    }
+    if (path === "/api/brain/specialists/spec_1/versions") {
+      return json(route, { items: [{ version_id: "v1", specialist_id: "spec_1", version: 1, name: "报表专员", change_reason: "初始创建" }] });
+    }
+    if (path.startsWith("/api/brain/specialists/")) {
+      return json(route, { accepted: true });
     }
 
     if (path === "/api/settings/schema") {

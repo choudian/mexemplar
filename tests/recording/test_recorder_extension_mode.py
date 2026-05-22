@@ -36,6 +36,37 @@ def test_browser_recorder_init_does_not_start_ws_server():
     mock_ensure.assert_not_called()
 
 
+def test_stop_recording_runs_resource_cleanup():
+    recorder = BrowserRecorder()
+
+    def run_and_close(coro, timeout=120):
+        del timeout
+        coro.close()
+        return {"recording_id": "rec-clean"}
+
+    with patch.object(recorder, "_run_async", side_effect=run_and_close):
+        with patch.object(recorder, "cleanup") as mock_cleanup:
+            result = recorder.stop_recording()
+
+    assert result == {"recording_id": "rec-clean"}
+    mock_cleanup.assert_called_once_with(stop_active_recording=False)
+
+
+def test_cleanup_closes_persister_websocket_and_event_loop():
+    recorder = BrowserRecorder()
+    recorder._duckdb_persister = MagicMock()
+    recorder._ws_coordinator = MagicMock()
+    recorder._loop_runner = MagicMock()
+    recorder._playwright_driver.cleanup_user_data_dir = MagicMock()
+
+    recorder.cleanup()
+
+    recorder._duckdb_persister.close.assert_called_once_with()
+    recorder._ws_coordinator.stop_ws_server.assert_called_once_with()
+    recorder._loop_runner.stop.assert_called_once_with()
+    recorder._playwright_driver.cleanup_user_data_dir.assert_called_once_with()
+
+
 def test_arm_extension_triggered_mode_starts_ws_server():
     recorder = BrowserRecorder()
 

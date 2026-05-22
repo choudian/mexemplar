@@ -36,6 +36,9 @@ export interface BootstrapResponse {
     dark: boolean;
     density: UiDensity;
   };
+  brain: {
+    segmentIdleThresholdSeconds: number;
+  };
 }
 
 export type { UiEvent } from "./uiEvents";
@@ -48,7 +51,7 @@ interface SidecarRuntimeConfig {
   sessionToken: string;
 }
 
-class DesktopApiError extends Error {
+export class DesktopApiError extends Error {
   readonly code: string;
   readonly status: number;
   readonly details: Record<string, unknown>;
@@ -105,17 +108,39 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
     try {
       const payload = (await response.json()) as {
         error?: { code?: string; message?: string; details?: Record<string, unknown> };
+        detail?: string | Record<string, unknown>;
       };
-      code = payload.error?.code ?? code;
-      message = payload.error?.message ?? message;
-      details = payload.error?.details ?? details;
+      if (payload.error) {
+        code = payload.error.code ?? code;
+        message = payload.error.message ?? message;
+        details = payload.error.details ?? details;
+      } else if (typeof payload.detail === "string") {
+        message = payload.detail;
+      } else if (payload.detail && typeof payload.detail === "object") {
+        const detail = payload.detail;
+        code = typeof detail.error === "string"
+          ? detail.error
+          : typeof detail.code === "string"
+            ? detail.code
+            : code;
+        message = typeof detail.message === "string" ? detail.message : message;
+        details = { ...detail };
+      }
     } catch {
       // Keep normalized fallback above.
     }
     throw new DesktopApiError(response.status, code, message, details);
   }
 
-  return (await response.json()) as T;
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
+  try {
+    return (await response.json()) as T;
+  } catch {
+    throw new DesktopApiError(response.status, "parse_error", "响应内容解析失败");
+  }
 }
 
 export function getBootstrap(): Promise<BootstrapResponse> {

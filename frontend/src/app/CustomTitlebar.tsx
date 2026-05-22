@@ -1,7 +1,17 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { CSSProperties, PointerEvent, ReactNode } from "react";
 
-async function runWindowCommand(command: "close" | "minimize" | "toggle_maximize"): Promise<void> {
+async function runWindowCommand(
+  command: "close" | "minimize" | "toggle_maximize",
+  onBeforeClose?: () => Promise<void>,
+): Promise<void> {
+  if (command === "close" && onBeforeClose) {
+    try {
+      await onBeforeClose();
+    } catch {
+      // Closing remains best-effort if the sidecar is already unavailable.
+    }
+  }
   try {
     await invoke(command);
   } catch {
@@ -17,7 +27,15 @@ function startDrag(event: PointerEvent<HTMLElement>): void {
   invoke("start_dragging").catch(() => {});
 }
 
-export function CustomTitlebar({ right, title }: { right?: ReactNode; title: string }): JSX.Element {
+export function CustomTitlebar({
+  onBeforeClose,
+  right,
+  title,
+}: {
+  onBeforeClose?: () => Promise<void>;
+  right?: ReactNode;
+  title: string;
+}): JSX.Element {
   return (
     <header
       className="me-titlebar"
@@ -27,7 +45,7 @@ export function CustomTitlebar({ right, title }: { right?: ReactNode; title: str
         <button
           type="button"
           aria-label="关闭窗口"
-          onClick={() => void runWindowCommand("close")}
+          onClick={() => void runWindowCommand("close", onBeforeClose)}
           style={dotStyle("#ff5f57")}
         />
         <button

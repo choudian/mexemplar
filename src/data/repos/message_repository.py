@@ -108,6 +108,29 @@ class MessageRepository(BaseRepository):
             .all()
         )
 
+    def get_latest_assistant_text(self, session_id: str, max_length: int = 6000) -> str:
+        """获取会话中最后一条 assistant 消息的文本内容。"""
+        row = (
+            self.session.query(Message.content)
+            .filter(
+                and_(
+                    Message.session_id == session_id,
+                    Message.is_archived.is_(False),
+                    Message.role == "assistant",
+                    Message.content.isnot(None),
+                    Message.content != "",
+                )
+            )
+            .order_by(Message.sequence.desc())
+            .first()
+        )
+        if not row:
+            return ""
+        text = str(row[0]).strip()
+        if len(text) > max_length:
+            return text[:max_length] + "\n...[truncated]"
+        return text
+
     def get_all(self, session_id: str) -> List[Message]:
         """获取会话的所有消息"""
         return (
@@ -201,3 +224,11 @@ class MessageRepository(BaseRepository):
         )
         row = self._display_filter(row)
         return row.scalar() or 0
+
+    def count_by_session(self, session_id: str) -> int:
+        """返回会话中非归档消息数量。"""
+        return (
+            self.session.query(func.count(Message.sequence))
+            .filter(Message.session_id == session_id, Message.is_archived.is_(False))
+            .scalar()
+        ) or 0

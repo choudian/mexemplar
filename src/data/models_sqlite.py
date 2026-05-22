@@ -287,3 +287,134 @@ class SchemaVersion(Base):
 
     def __repr__(self) -> str:
         return f"<SchemaVersion(version={self.version!r})>"
+
+
+# ===== 大脑架构相关模型 =====
+
+
+class BrainSegment(Base):
+    """大脑 Segment 表 - 一段连续对话的单位"""
+
+    __tablename__ = "brain_segments"
+
+    segment_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    all_empty_retried: Mapped[bool] = mapped_column(Boolean, default=False)
+    boundary_reason: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    message_id_start: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    message_id_end: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    sealed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    distilling_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<BrainSegment(segment_id={self.segment_id!r}, status={self.status!r})>"
+
+
+class BrainMemoryEntry(Base):
+    """大脑记忆条目表 - 所有 6 个分区统一存储"""
+
+    __tablename__ = "brain_memory_entries"
+
+    entry_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    zone: Mapped[str] = mapped_column(String(20), nullable=False)
+    entry_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="active")
+    origin: Mapped[str] = mapped_column(String(30), nullable=False)
+    scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    source_segment_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    source_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    superseded_by: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    loaded_count: Mapped[int] = mapped_column(Integer, default=0)
+    referenced_count: Mapped[int] = mapped_column(Integer, default=0)
+    relevance_score: Mapped[float] = mapped_column(default=1.0)
+    verification_checkpoint: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    verification_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    verification_rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<BrainMemoryEntry(entry_id={self.entry_id!r}, zone={self.zone!r}, status={self.status!r})>"
+
+
+class BrainSpecialist(Base):
+    """大脑固定专员表"""
+
+    __tablename__ = "brain_specialists"
+
+    specialist_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    role_definition: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_whitelist: Mapped[str] = mapped_column(Text, nullable=False)
+    origin: Mapped[str] = mapped_column(String(30), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    current_version: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<BrainSpecialist(specialist_id={self.specialist_id!r}, name={self.name!r})>"
+
+
+class BrainSpecialistVersion(Base):
+    """专员版本历史表"""
+
+    __tablename__ = "brain_specialist_versions"
+
+    __table_args__ = (
+        UniqueConstraint("specialist_id", "version", name="uq_brain_specialist_version"),
+    )
+
+    version_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    specialist_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    role_definition: Mapped[str] = mapped_column(Text, nullable=False)
+    tool_whitelist: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_by: Mapped[str] = mapped_column(String(20), nullable=False)
+    change_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    changed_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<BrainSpecialistVersion(version_id={self.version_id!r}, version={self.version!r})>"
+
+
+class BrainRecruitmentSignal(Base):
+    """专员自动招募检测信号表"""
+
+    __tablename__ = "brain_recruitment_signals"
+
+    signal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_pattern: Mapped[str] = mapped_column(Text, nullable=False)
+    delegation_count: Mapped[int] = mapped_column(Integer, default=0)
+    example_session_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    example_delegation_summaries: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    specialist_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return f"<BrainRecruitmentSignal(signal_id={self.signal_id!r}, task_pattern={self.task_pattern!r})>"
+
+
+class FeedbackSignal(Base):
+    """用户管理界面的编辑/删除反馈信号表"""
+
+    __tablename__ = "feedback_signals"
+
+    signal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    zone: Mapped[str] = mapped_column(String(20), nullable=False)
+    operation: Mapped[str] = mapped_column(String(20), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    context_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())

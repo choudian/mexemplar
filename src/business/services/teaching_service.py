@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Callable, Literal
@@ -9,6 +10,8 @@ from src.business.services.recording_readiness_service import RecordingReadiness
 from src.data.repositories import ToolRepository
 from src.recording.browser_recorder import BrowserRecorder
 from src.utils.events import emit
+
+logger = logging.getLogger(__name__)
 
 TeachingMode = Literal["browser", "extension", "desktop"]
 TeachingStage = Literal[
@@ -141,7 +144,15 @@ class TeachingService:
         else:
             recorder = self._browser_recorders.pop(workflow_id, None)
             if recorder is not None:
-                summary["recording"] = recorder.stop_recording()
+                try:
+                    summary["recording"] = recorder.stop_recording()
+                finally:
+                    cleanup = getattr(recorder, "cleanup", None)
+                    if callable(cleanup):
+                        try:
+                            cleanup()
+                        except Exception as exc:
+                            logger.warning("浏览器录制器清理失败: %s", exc)
 
         run.transition("intent_confirmation")
         run.summary = summary

@@ -1,13 +1,19 @@
 import { useEffect, useMemo } from "react";
 
+import { useAutoDismissToast } from "../hooks/useAutoDismissToast";
+
+import { triggerAssistantSegmentBoundary } from "../api/assistant";
 import { configureDesktopApiFromTauri, connectEvents, getBootstrap } from "../api/client";
 import type { BackendConnectionState, EventStreamCursor, UiEvent } from "../api/client";
 import { getUiEventHandlerDomain, isResyncRequiredEvent } from "../api/uiEvents";
+import BrainToast from "../components/BrainToast";
 import { useAssistantStore } from "../state/assistantStore";
+import { useBrainStore } from "../state/brainStore";
 import { useCompositionsStore } from "../state/compositionsStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { useShellStore } from "../state/shellStore";
 import { useSkillsStore } from "../state/skillsStore";
+import { useSpecialistStore } from "../state/specialistStore";
 import { useTeachingStore } from "../state/teachingStore";
 import { BackendStatus } from "./BackendStatus";
 import { CustomTitlebar } from "./CustomTitlebar";
@@ -54,6 +60,8 @@ export function AppShell(): JSX.Element {
   const setRoute = useShellStore((state) => state.setRoute);
   const hydrate = useShellStore((state) => state.hydrate);
   const setBackend = useShellStore((state) => state.setBackend);
+  const activeAssistantSessionId = useAssistantStore((state) => state.activeSessionId);
+  const setAssistantIdleThresholdSeconds = useAssistantStore((state) => state.setIdleThresholdSeconds);
   const applyAssistantEvent = useAssistantStore((state) => state.applyEvent);
   const applySkillsEvent = useSkillsStore((state) => state.applyEvent);
   const refreshSkills = useSkillsStore((state) => state.loadAllCategories);
@@ -63,6 +71,13 @@ export function AppShell(): JSX.Element {
   const refreshSettings = useSettingsStore((state) => state.load);
   const applyTeachingEvent = useTeachingStore((state) => state.applyEvent);
   const refreshTeaching = useTeachingStore((state) => state.refreshCurrentRun);
+  const applyBrainEvent = useBrainStore((state) => state.applyEvent);
+  const refreshBrainZones = useBrainStore((state) => state.loadZones);
+  const refreshBrainEntries = useBrainStore((state) => state.loadEntries);
+  const refreshBrainSegments = useBrainStore((state) => state.loadSegments);
+  const refreshBrainSkillPool = useBrainStore((state) => state.loadSkillPool);
+  const applySpecialistEvent = useSpecialistStore((state) => state.applyEvent);
+  const refreshSpecialists = useSpecialistStore((state) => state.load);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -90,12 +105,21 @@ export function AppShell(): JSX.Element {
         const bootstrap = await getBootstrap();
         if (cancelled) return;
         hydrate(bootstrap);
+        setAssistantIdleThresholdSeconds(bootstrap.brain.segmentIdleThresholdSeconds);
       }
       const refreshes: Promise<void>[] = [];
       if (!domains || domains.includes("teaching")) refreshes.push(refreshTeaching());
       if (!domains || domains.includes("skills")) refreshes.push(refreshSkills());
       if (!domains || domains.includes("compositions")) refreshes.push(refreshCompositions());
       if (!domains || domains.includes("settings")) refreshes.push(refreshSettings());
+      if (!domains || domains.includes("brain")) {
+        const activeBrainZone = useBrainStore.getState().activeZone ?? "hot";
+        refreshes.push(refreshBrainZones());
+        refreshes.push(refreshBrainEntries(activeBrainZone));
+        refreshes.push(refreshBrainSegments());
+        refreshes.push(refreshBrainSkillPool());
+        refreshes.push(refreshSpecialists());
+      }
       await Promise.all(refreshes);
     };
 
@@ -115,6 +139,10 @@ export function AppShell(): JSX.Element {
           break;
         case "settings":
           applySettingsEvent(event);
+          break;
+        case "brain":
+          applyBrainEvent(event);
+          applySpecialistEvent(event);
           break;
         case "resync":
           break;
@@ -168,6 +196,7 @@ export function AppShell(): JSX.Element {
             return;
           }
           hydrate(bootstrap);
+          setAssistantIdleThresholdSeconds(bootstrap.brain.segmentIdleThresholdSeconds);
           void (async () => {
             while (!cancelled && !controller.signal.aborted) {
               try {
@@ -229,12 +258,20 @@ export function AppShell(): JSX.Element {
     applySettingsEvent,
     applySkillsEvent,
     applyTeachingEvent,
+    applyBrainEvent,
+    applySpecialistEvent,
     hydrate,
+    refreshBrainEntries,
+    refreshBrainSegments,
+    refreshBrainSkillPool,
+    refreshBrainZones,
     refreshCompositions,
     refreshSettings,
     refreshSkills,
+    refreshSpecialists,
     refreshTeaching,
     setBackend,
+    setAssistantIdleThresholdSeconds,
   ]);
 
   const route = useMemo(() => getRoute(activeRoute), [activeRoute]);
@@ -242,6 +279,8 @@ export function AppShell(): JSX.Element {
 
   const teachingToast = useTeachingStore((state) => state.toast);
   const dismissTeachingToast = useTeachingStore((state) => state.dismissToast);
+  const recruitmentToast = useSpecialistStore((state) => state.recruitmentToast);
+  const dismissRecruitmentToast = useSpecialistStore((state) => state.dismissRecruitmentToast);
   const closeSkillTrial = useTeachingStore((state) => state.closeSkillTrial);
   const skillTrialToolId = useTeachingStore((state) => state.skillTrialToolId);
 
@@ -251,16 +290,13 @@ export function AppShell(): JSX.Element {
     }
   }, [activeRoute, skillTrialToolId, closeSkillTrial]);
 
-  useEffect(() => {
-    if (!teachingToast) return;
-    const timer = setTimeout(dismissTeachingToast, TOAST_AUTO_DISMISS_MS);
-    return () => clearTimeout(timer);
-  }, [teachingToast, dismissTeachingToast]);
+  useAutoDismissToast(teachingToast, dismissTeachingToast, TOAST_AUTO_DISMISS_MS);
+  useAutoDismissToast(recruitmentToast, dismissRecruitmentToast, TOAST_AUTO_DISMISS_MS);
 
   return (
     <>
       <div className="me-page-bg" />
-      <div className="me-shell" data-screen-label={`Mexemplar / ${route.label}`}>
+      <div className="me-shell" data-testid="app-shell" data-screen-label={`Mexemplar / ${route.label}`}>
         <NavRail
           activeRoute={activeRoute}
           counts={navigation}
@@ -270,6 +306,11 @@ export function AppShell(): JSX.Element {
         />
         <main className="me-main-pane">
           <CustomTitlebar
+            onBeforeClose={async () => {
+              if (activeAssistantSessionId) {
+                await triggerAssistantSegmentBoundary(activeAssistantSessionId, "window_close");
+              }
+            }}
             right={<BackendStatus backend={backend} />}
             title={`Mexemplar — ${route.label}`}
           />
@@ -287,6 +328,14 @@ export function AppShell(): JSX.Element {
           <button className="teaching-toast-close" onClick={dismissTeachingToast} type="button">✕</button>
         </div>
       ) : null}
+      <BrainToast
+        onDismiss={dismissRecruitmentToast}
+        onOpen={() => {
+          setRoute("brain-specialists");
+          dismissRecruitmentToast();
+        }}
+        toast={recruitmentToast}
+      />
     </>
   );
 }

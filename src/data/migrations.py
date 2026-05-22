@@ -574,6 +574,181 @@ def migrate_to_v10(engine):
             raise
 
 
+def migrate_to_v11(engine):
+    """迁移到版本 11：大脑架构 - 创建 6 分区 + 支撑表，回填 Profile 数据"""
+    with engine.connect() as conn:
+        try:
+            # 1. brain_segments 表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_segments (
+                    segment_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    retry_count INTEGER DEFAULT 0,
+                    all_empty_retried INTEGER DEFAULT 0,
+                    boundary_reason TEXT,
+                    message_id_start TEXT,
+                    message_id_end TEXT,
+                    sealed_at DATETIME,
+                    distilling_started_at DATETIME,
+                    completed_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 2. brain_memory_entries 表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_memory_entries (
+                    entry_id TEXT PRIMARY KEY,
+                    zone TEXT NOT NULL,
+                    entry_type TEXT,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    origin TEXT NOT NULL,
+                    scope TEXT,
+                    reason TEXT NOT NULL,
+                    source_segment_id TEXT,
+                    source_session_id TEXT,
+                    superseded_by TEXT,
+                    loaded_count INTEGER DEFAULT 0,
+                    referenced_count INTEGER DEFAULT 0,
+                    relevance_score REAL DEFAULT 1.0,
+                    verification_checkpoint TEXT,
+                    verification_status TEXT,
+                    verification_rationale TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 3. brain_specialists 表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_specialists (
+                    specialist_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    role_definition TEXT NOT NULL,
+                    tool_whitelist TEXT NOT NULL,
+                    origin TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    current_version INTEGER DEFAULT 1,
+                    is_active INTEGER DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 4. brain_specialist_versions 表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_specialist_versions (
+                    version_id TEXT PRIMARY KEY,
+                    specialist_id TEXT NOT NULL,
+                    version INTEGER NOT NULL,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    role_definition TEXT NOT NULL,
+                    tool_whitelist TEXT NOT NULL,
+                    changed_by TEXT NOT NULL,
+                    change_reason TEXT,
+                    changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_brain_specialist_version UNIQUE (specialist_id, version)
+                )
+            """))
+
+            # 5. brain_recruitment_signals 表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_recruitment_signals (
+                    signal_id TEXT PRIMARY KEY,
+                    task_pattern TEXT NOT NULL,
+                    delegation_count INTEGER DEFAULT 0,
+                    example_session_ids TEXT,
+                    example_delegation_summaries TEXT,
+                    specialist_id TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 6. feedback_signals 表
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS feedback_signals (
+                    signal_id TEXT PRIMARY KEY,
+                    zone TEXT NOT NULL,
+                    operation TEXT NOT NULL,
+                    target_id TEXT NOT NULL,
+                    context_summary TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 索引
+            for index_name, index_def in [
+                ("idx_brain_segments_session_id", "brain_segments(session_id)"),
+                ("idx_brain_segments_status", "brain_segments(status)"),
+                ("idx_brain_entries_zone_status", "brain_memory_entries(zone, status)"),
+                ("idx_brain_entries_source_segment", "brain_memory_entries(source_segment_id)"),
+                ("idx_brain_entries_superseded_by", "brain_memory_entries(superseded_by)"),
+                ("idx_brain_entries_zone_relevance", "brain_memory_entries(zone, relevance_score DESC)"),
+                ("idx_brain_specialists_is_active", "brain_specialists(is_active)"),
+                ("idx_feedback_signals_target", "feedback_signals(target_id)"),
+                ("idx_feedback_signals_zone", "feedback_signals(zone)"),
+            ]:
+                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}"))
+
+            # 数据回填：Profile → brain_memory_entries 持久区
+            try:
+                profile_columns = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(assistant_profile)")).fetchall()
+                }
+                readable_columns = [
+                    column
+                    for column in ("display_name", "style", "notes")
+                    if column in profile_columns
+                ]
+                if not readable_columns:
+                    profile_rows = []
+                else:
+                    column_sql = ", ".join(readable_columns)
+                    profile_rows = conn.execute(
+                        text(
+                            f"SELECT {column_sql} "
+                            "FROM assistant_profile WHERE profile_id = 'default'"
+                        )
+                    ).mappings()
+                for row in profile_rows:
+                    parts = []
+                    if row.get("display_name"):
+                        parts.append(f"用户名称：{row['display_name']}")
+                    if row.get("style"):
+                        parts.append(f"偏好风格：{row['style']}")
+                    if row.get("notes"):
+                        parts.append(f"备注：{row['notes']}")
+                    if parts:
+                        from uuid import uuid4
+                        content = "\n".join(parts)
+                        conn.execute(text("""
+                            INSERT INTO brain_memory_entries
+                                (entry_id, zone, content, status, origin, reason, created_at, updated_at)
+                            VALUES (:entry_id, 'persistent', :content, 'active', 'system_migration',
+                                    'v11 migration: assistant_profile data backfill',
+                                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        """), {"entry_id": uuid4().hex[:50], "content": content})
+            except Exception as backfill_err:
+                logger.warning(f"Profile 数据回填跳过（assistant_profile 表可能不存在）: {backfill_err}")
+
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 11})
+            conn.commit()
+            logger.info(
+                "数据库迁移到版本 11 完成：大脑架构 6 分区表 + 支撑表 + Profile 数据回填"
+            )
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 11 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -584,6 +759,7 @@ _MIGRATIONS = [
     (8, migrate_to_v8),
     (9, migrate_to_v9),
     (10, migrate_to_v10),
+    (11, migrate_to_v11),
 ]
 
 

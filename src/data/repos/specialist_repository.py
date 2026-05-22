@@ -1,0 +1,232 @@
+"""
+SpecialistRepository -- 专员 + 版本历史数据仓库
+
+负责 BrainSpecialist 和 BrainSpecialistVersion 的 CRUD 操作。
+"""
+
+import json
+import logging
+from typing import Optional
+from uuid import uuid4
+
+from ..models_sqlite import BrainSpecialist, BrainSpecialistVersion
+from .base_repository import BaseRepository
+from src.utils.events import emit
+
+logger = logging.getLogger(__name__)
+
+
+def _new_id() -> str:
+    return (uuid4().hex + uuid4().hex)[:50]
+
+
+class SpecialistRepository(BaseRepository):
+    """专员数据仓库"""
+
+    # ------------------------------------------------------------------
+    # Specialist CRUD
+    # ------------------------------------------------------------------
+
+    def create_specialist(
+        self,
+        name: str,
+        description: str,
+        role_definition: str,
+        tool_whitelist: list[str],
+        origin: str,
+        reason: str,
+    ) -> str:
+        """创建一个新专员，同时创建第一条版本记录。返回 specialist_id。"""
+        specialist_id = _new_id()
+        whitelist_json = json.dumps(tool_whitelist, ensure_ascii=False)
+        specialist = BrainSpecialist(
+            specialist_id=specialist_id,
+            name=name,
+            description=description,
+            role_definition=role_definition,
+            tool_whitelist=whitelist_json,
+            origin=origin,
+            reason=reason,
+            current_version=1,
+            is_active=1,
+        )
+        try:
+            self.session.add(specialist)
+            self.session.flush()
+
+            # 创建版本 1
+            version_id = _new_id()
+            version = BrainSpecialistVersion(
+                version_id=version_id,
+                specialist_id=specialist_id,
+                version=1,
+                name=name,
+                description=description,
+                role_definition=role_definition,
+                tool_whitelist=whitelist_json,
+                changed_by=origin,
+                change_reason=reason,
+            )
+            self.session.add(version)
+            self.session.commit()
+            self.session.expire_all()
+
+            logger.info("Specialist 已创建: %s (name=%s)", specialist_id, name)
+            emit(
+                "brain_specialist_changed",
+                specialist_id=specialist_id,
+                operation="create",
+            )
+            return specialist_id
+        except Exception as e:
+            self.session.rollback()
+            logger.error("创建 Specialist 失败: %s", e)
+            raise
+
+    def get_specialist(self, specialist_id: str) -> Optional[BrainSpecialist]:
+        """按 ID 查询专员。"""
+        return (
+            self.session.query(BrainSpecialist)
+            .filter(BrainSpecialist.specialist_id == specialist_id)
+            .first()
+        )
+
+    def get_specialist_by_name(self, name: str) -> Optional[BrainSpecialist]:
+        """按名称查询专员。"""
+        return (
+            self.session.query(BrainSpecialist)
+            .filter(BrainSpecialist.name == name)
+            .first()
+        )
+
+    def list_specialists(
+        self,
+        active_only: bool = True,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[BrainSpecialist], int]:
+        """列出专员，返回 (specialists, total_count)。"""
+        query = self.session.query(BrainSpecialist)
+        if active_only:
+            query = query.filter(BrainSpecialist.is_active == 1)
+
+        total = query.count()
+        specialists = (
+            query.order_by(BrainSpecialist.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        return specialists, total
+
+    def update_specialist(
+        self,
+        specialist_id: str,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        role_definition: Optional[str] = None,
+        tool_whitelist: Optional[list[str]] = None,
+        changed_by: str = "user",
+        change_reason: Optional[str] = None,
+    ) -> bool:
+        """更新专员信息，同时创建新版本记录。返回 True 表示成功。"""
+        specialist = self.get_specialist(specialist_id)
+        if specialist is None:
+            return False
+
+        new_name = name if name is not None else specialist.name
+        new_description = description if description is not None else specialist.description
+        new_role = role_definition if role_definition is not None else specialist.role_definition
+        new_whitelist_json = (
+            json.dumps(tool_whitelist, ensure_ascii=False)
+            if tool_whitelist is not None
+            else specialist.tool_whitelist
+        )
+
+        new_version = specialist.current_version + 1
+
+        try:
+            specialist.name = new_name
+            specialist.description = new_description
+            specialist.role_definition = new_role
+            specialist.tool_whitelist = new_whitelist_json
+            specialist.current_version = new_version
+
+            version_id = _new_id()
+            version = BrainSpecialistVersion(
+                version_id=version_id,
+                specialist_id=specialist_id,
+                version=new_version,
+                name=new_name,
+                description=new_description,
+                role_definition=new_role,
+                tool_whitelist=new_whitelist_json,
+                changed_by=changed_by,
+                change_reason=change_reason,
+            )
+            self.session.add(version)
+            self.session.commit()
+
+            logger.info("Specialist %s updated to version %d", specialist_id, new_version)
+            emit(
+                "brain_specialist_changed",
+                specialist_id=specialist_id,
+                operation="update",
+            )
+            return True
+        except Exception as e:
+            self.session.rollback()
+            logger.error("更新 Specialist 失败: %s", e)
+            raise
+
+    def deactivate_specialist(self, specialist_id: str) -> bool:
+        """软删除专员（is_active=0）。返回 True 表示成功。"""
+        specialist = self.get_specialist(specialist_id)
+        if specialist is None:
+            return False
+        try:
+            specialist.is_active = 0
+            self.session.commit()
+            logger.info("Specialist %s deactivated", specialist_id)
+            emit(
+                "brain_specialist_changed",
+                specialist_id=specialist_id,
+                operation="deactivate",
+            )
+            return True
+        except Exception as e:
+            self.session.rollback()
+            logger.error("Deactivate specialist 失败: %s", e)
+            raise
+
+    def delete_specialist(self, specialist_id: str) -> bool:
+        """Compatibility alias for deleting a specialist via soft delete."""
+        return self.deactivate_specialist(specialist_id)
+
+    # ------------------------------------------------------------------
+    # Version history
+    # ------------------------------------------------------------------
+
+    def get_version_history(
+        self,
+        specialist_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[BrainSpecialistVersion]:
+        """获取专员的版本历史，按版本号降序。"""
+        return (
+            self.session.query(BrainSpecialistVersion)
+            .filter(BrainSpecialistVersion.specialist_id == specialist_id)
+            .order_by(BrainSpecialistVersion.version.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+
+    def get_version(self, version_id: str) -> Optional[BrainSpecialistVersion]:
+        """按 ID 查询版本记录。"""
+        return (
+            self.session.query(BrainSpecialistVersion)
+            .filter(BrainSpecialistVersion.version_id == version_id)
+            .first()
+        )

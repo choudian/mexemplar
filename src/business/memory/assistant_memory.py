@@ -1,23 +1,16 @@
 """
-助理跨会话记忆
+助理跨会话记忆（legacy 路径 — FTS 搜索 + 全局摘要）
 
-三层摘要体系：
-- 第一层：会话摘要（每个会话结束后生成）
-- 第二层：分组摘要（每 10 个会话摘要合并一次）
-- 第三层：全局摘要（随分组更新）
-
-触发时机：
-- 新建会话时后台异步批量生成未摘要的会话
-- 每积累 10 个第一层摘要自动生成分组摘要
-- 分组摘要更新时重新生成全局摘要
+摘要生成的三层链路（session → group → global）已由 Brain Service 接管。
+本模块仅保留搜索（search）和全局摘要读取（get_global_summary）作为
+Brain Service 不可用时的降级路径。
 """
 
 import json
 import logging
 import threading
-import uuid
 from datetime import datetime
-from src.utils.timezone import utc_now_naive, to_naive_utc, format_local
+from src.utils.timezone import utc_now_naive, to_naive_utc
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -25,53 +18,10 @@ logger = logging.getLogger(__name__)
 SESSION_SUMMARY_LEVEL = 1
 GROUP_SUMMARY_LEVEL = 2
 GLOBAL_SUMMARY_LEVEL = 3
-GROUP_SIZE = 10  # 每 N 个会话摘要合并一次
-
-
-SESSION_SUMMARY_PROMPT = """\
-请为以下助理会话生成摘要。
-
-会话时间：{time_range}
-会话消息：
-{messages_text}
-
-请按以下格式输出（不要添加其他内容）：
-会话时间：{time_range}
-任务记录：
-- [任务描述] → [成功/失败/未完成]（[简短结果说明]）
-（每行一个任务，从用户消息中识别任务意图，最多列 8 个）
-使用工具：[工具名(次数)] 列表，如"web_search(2次)、天气查询(1次)"（无工具调用则写"无"）
-"""
-
-GROUP_SUMMARY_PROMPT = """\
-请将以下会话摘要合并为一个分组摘要，概括这段时期的任务类型和趋势：
-
-{session_summaries}
-
-请按以下格式输出：
-时间范围：[最早] ~ [最晚]
-活跃会话：[数量]个
-高频任务类型：[类型(次数)] 列表
-关键事件：
-- [重要的单个事件或趋势变化]
-（最多 5 条关键事件）
-"""
-
-GLOBAL_SUMMARY_PROMPT = """\
-请将以下分组摘要合并为全局摘要，提炼用户的长期使用习惯：
-
-{group_summaries}
-
-请按以下格式输出（不超过 300 字）：
-整体使用情况：[高度概括]
-常用工具：[最常用的 3-5 个工具]
-典型任务模式：[用户最常做的 2-3 类任务]
-近期变化：[最近一两个月的显著变化（若有）]
-"""
 
 
 class AssistantMemoryManager:
-    """助理跨会话记忆管理器"""
+    """助理跨会话记忆管理器（降级路径）"""
 
     def __init__(self, llm_client=None):
         self._llm = llm_client  # LangChainLLMClient，可为 None（FTS-only 模式）
@@ -115,162 +65,6 @@ class AssistantMemoryManager:
             logger.debug(f"[AssistantMemory] embedding 已存储: {summary_id}")
         except Exception as e:
             logger.warning(f"[AssistantMemory] embedding 存储失败: {e}")
-
-    # =========================================================================
-    # 触发入口
-    # =========================================================================
-
-    def _batch_generate_session_summaries(self, exclude_session_id: str):
-        """批量为未生成摘要的历史会话生成摘要"""
-        try:
-            from src.data.repositories import (
-                SessionRepository,
-                MessageRepository,
-                AssistantSummaryRepository,
-            )
-
-            session_repo = SessionRepository()
-            all_sessions = session_repo.get_by_agent_type("assistant", limit=200)
-
-            summary_repo = AssistantSummaryRepository()
-            summarized_ids = summary_repo.get_summarized_source_ids(SESSION_SUMMARY_LEVEL)
-
-            msg_repo = MessageRepository()
-            new_summary_count = 0
-            for session in all_sessions:
-                if session.session_id == exclude_session_id:
-                    continue
-                if session.session_id in summarized_ids:
-                    continue
-                if session.status == "active":
-                    continue  # 跳过仍在进行的会话
-
-                messages = msg_repo.get_by_session(session.session_id)
-                if len(messages) < 2:  # 太短不值得摘要
-                    continue
-
-                self._generate_session_summary(session, messages)
-                new_summary_count += 1
-
-            if new_summary_count > 0:
-                logger.info(f"[AssistantMemory] 批量生成 {new_summary_count} 个会话摘要")
-                # 检查是否需要生成分组摘要
-                self._maybe_generate_group_summary()
-
-        except Exception as e:
-            logger.error(f"[AssistantMemory] 批量摘要失败: {e}", exc_info=True)
-
-    # =========================================================================
-    # 摘要生成
-    # =========================================================================
-
-    def _generate_session_summary(self, session, messages: list) -> Optional[str]:
-        """为单个会话生成第一层摘要，返回 summary_id"""
-        try:
-            from src.data.repositories import AssistantSummaryRepository
-            from src.data.models_sqlite import AssistantSummary
-
-            content = self._call_llm_for_summary(
-                SESSION_SUMMARY_PROMPT,
-                session=session,
-                messages=messages,
-            )
-            if not content:
-                return None
-
-            summary = AssistantSummary(
-                summary_id=f"ss_{session.session_id[:8]}_{uuid.uuid4().hex[:4]}",
-                level=SESSION_SUMMARY_LEVEL,
-                content=content,
-                source_ids=session.session_id,
-            )
-            repo = AssistantSummaryRepository()
-            repo.create(summary)
-            self._try_embed_summary(summary.summary_id, content)
-            logger.debug(f"[AssistantMemory] 会话摘要已生成: {summary.summary_id}")
-            return summary.summary_id
-        except Exception as e:
-            logger.error(f"[AssistantMemory] 生成会话摘要失败: {e}")
-            return None
-
-    def _maybe_generate_group_summary(self):
-        """检查第一层摘要数量，达到阈值时生成分组摘要"""
-        try:
-            from src.data.repositories import AssistantSummaryRepository
-            from src.data.models_sqlite import AssistantSummary
-
-            repo = AssistantSummaryRepository()
-
-            # 找出尚未被分组的第一层摘要（按时间升序取最老的）
-            all_l1 = repo.get_by_level(SESSION_SUMMARY_LEVEL, limit=500)
-            all_l1_asc = list(reversed(all_l1))  # get_by_level 返回 desc，翻转为 asc
-
-            grouped_ids = repo.get_summarized_source_ids(GROUP_SUMMARY_LEVEL)
-            ungrouped = [s for s in all_l1_asc if s.summary_id not in grouped_ids]
-
-            if len(ungrouped) < GROUP_SIZE:
-                return
-
-            # 取最老的 GROUP_SIZE 个生成分组摘要
-            batch = ungrouped[:GROUP_SIZE]
-            summaries_text = "\n\n".join(f"[{s.summary_id}]\n{s.content}" for s in batch)
-
-            content = self._call_llm_simple(
-                GROUP_SUMMARY_PROMPT.format(session_summaries=summaries_text)
-            )
-            if not content:
-                return
-
-            source_ids = ",".join(s.summary_id for s in batch)
-            group_summary = AssistantSummary(
-                summary_id=f"gs_{uuid.uuid4().hex[:8]}",
-                level=GROUP_SUMMARY_LEVEL,
-                content=content,
-                source_ids=source_ids,
-            )
-            repo.create(group_summary)
-            self._try_embed_summary(group_summary.summary_id, content)
-            logger.info(f"[AssistantMemory] 分组摘要已生成: {group_summary.summary_id}")
-
-            # 更新全局摘要
-            self._refresh_global_summary()
-
-        except Exception as e:
-            logger.error(f"[AssistantMemory] 生成分组摘要失败: {e}")
-
-    def _refresh_global_summary(self):
-        """重新生成第三层全局摘要"""
-        try:
-            from src.data.repositories import AssistantSummaryRepository
-            from src.data.models_sqlite import AssistantSummary
-
-            repo = AssistantSummaryRepository()
-            all_groups = repo.get_by_level(GROUP_SUMMARY_LEVEL, limit=10)
-
-            if not all_groups:
-                return
-
-            group_text = "\n\n".join(f"[{g.summary_id}]\n{g.content}" for g in all_groups)
-            content = self._call_llm_simple(
-                GLOBAL_SUMMARY_PROMPT.format(group_summaries=group_text)
-            )
-            if not content:
-                return
-
-            # 删旧的全局摘要，写新的
-            repo.delete_by_level(GLOBAL_SUMMARY_LEVEL)
-            global_summary = AssistantSummary(
-                summary_id=f"global_{uuid.uuid4().hex[:8]}",
-                level=GLOBAL_SUMMARY_LEVEL,
-                content=content,
-                source_ids=",".join(g.summary_id for g in all_groups),
-            )
-            repo.create(global_summary)
-            self._try_embed_summary(global_summary.summary_id, content)
-            logger.info("[AssistantMemory] 全局摘要已更新")
-
-        except Exception as e:
-            logger.error(f"[AssistantMemory] 更新全局摘要失败: {e}")
 
     # =========================================================================
     # memory_search
@@ -455,72 +249,6 @@ class AssistantMemoryManager:
             logger.error(f"[AssistantMemory] 获取全局摘要失败: {e}")
             return None
 
-    # =========================================================================
-    # LLM 调用辅助
-    # =========================================================================
-
-    def _call_llm_for_summary(
-        self, prompt_template: str, session, messages: list, max_tokens: int = 300
-    ) -> Optional[str]:
-        """为会话生成摘要"""
-        if not self._llm:
-            return self._fallback_session_summary(session, messages)
-
-        try:
-            # 格式化消息文本（只取 role=user/assistant 的消息，最多 50 条）
-            msg_lines = []
-            for msg in messages[-50:]:
-                if msg.role in ("user", "assistant") and msg.content:
-                    role_label = "用户" if msg.role == "user" else "助理"
-                    msg_lines.append(f"[{role_label}] {msg.content[:200]}")
-
-            time_range = self._session_time_range(session, messages)
-            prompt = prompt_template.format(
-                time_range=time_range,
-                messages_text="\n".join(msg_lines[:40]),
-            )
-
-            result = self._llm.chat(prompt, max_tokens=max_tokens)
-            return result if result else None
-        except Exception as e:
-            logger.error(f"[AssistantMemory] LLM 摘要失败: {e}")
-            return self._fallback_session_summary(session, messages)
-
-    def _call_llm_simple(self, prompt: str, max_tokens: int = 500) -> Optional[str]:
-        """调用 LLM 生成文本"""
-        if not self._llm:
-            return None
-        try:
-            result = self._llm.chat(prompt, max_tokens=max_tokens)
-            return result if result else None
-        except Exception as e:
-            logger.error(f"[AssistantMemory] LLM 调用失败: {e}")
-            return None
-
-    def _fallback_session_summary(self, session, messages: list) -> str:
-        """无 LLM 时的降级摘要（基于统计）"""
-        user_msgs = [m for m in messages if m.role == "user" and m.content]
-        time_range = self._session_time_range(session, messages)
-        return (
-            f"会话时间：{time_range}\n"
-            f"消息数量：{len(messages)} 条\n"
-            f"用户消息：{len(user_msgs)} 条\n"
-            f"（摘要生成需要配置 LLM）"
-        )
-
-    def _session_time_range(self, session, messages: list) -> str:
-        """计算会话时间范围"""
-        try:
-            if messages:
-                start = messages[0].created_at
-                end = messages[-1].created_at
-                if start and end:
-                    return f"{format_local(start, '%Y-%m-%d %H:%M')} ~ {format_local(end, '%H:%M')}"
-            if session.created_at:
-                return format_local(session.created_at, "%Y-%m-%d %H:%M")
-        except Exception:
-            pass
-        return "未知时间"
 
 
 # =========================================================================

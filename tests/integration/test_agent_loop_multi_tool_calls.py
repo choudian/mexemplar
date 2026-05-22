@@ -768,6 +768,51 @@ def test_solo_interrupt_success(loop_config, mock_config, in_memory_db):
     assert "[需求已提交]" in tool_results[0].content
 
 
+def test_reply_to_user_interrupt_persists_display_message(loop_config, mock_config, in_memory_db):
+    """reply_to_user ToolSignal should be visible in assistant display history."""
+
+    def _reply_to_user(**kwargs):
+        return ToolSignal(
+            result_type=ResultType.NEEDS_USER_INPUT,
+            display_text=kwargs["text"],
+        )
+
+    tools = [
+        ToolDefinition(
+            name="reply_to_user",
+            schema={"type": "object", "properties": {}},
+            handler=_reply_to_user,
+            is_interrupting=True,
+        ),
+    ]
+
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallInfo(
+                    id="reply-call-1",
+                    name="reply_to_user",
+                    args={"text": "这是用户应看到的回复。"},
+                )
+            ],
+        ),
+    ]
+    llm = MockLLMClient(responses)
+    loop = AgentLoop(loop_config, llm, mock_config)
+
+    result = loop.run(session_id="test-reply-display", user_input="test", tools=tools)
+
+    assert result.result_type == ResultType.NEEDS_USER_INPUT
+    assert result.question == ""
+    ctx = loop._get_context_manager("test-reply-display")
+    messages = ctx._msg_repo.get_context("test-reply-display")
+    assert any(
+        message.role == "assistant" and message.content == "这是用户应看到的回复。"
+        for message in messages
+    )
+
+
 def test_normal_flow_unknown_tool_mixed_with_known(loop_config, mock_config, in_memory_db):
     """LLM returns unknown tool + known tool in same batch -> unknown_tool cascade."""
     call_count = {"tool_a": 0}

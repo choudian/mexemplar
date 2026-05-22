@@ -6,12 +6,16 @@
 
 import json
 import logging
+import threading
 import uuid
 from src.utils.timezone import utc_now
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
+from src.business.brain.specialist_service import SpecialistService
+from src.business.brain.retrieval_service import RetrievalService
 from src.data.models_sqlite import PendingAssistantTask
+from src.data.repos.brain_repository import BrainRepository
 from src.data.repositories import PendingTaskRepository, ToolRepository
 
 # 后台任务 Worker 唤醒回调（由 Orchestrator 注入）
@@ -34,6 +38,52 @@ def _notify_task_worker() -> bool:
 
 
 logger = logging.getLogger(__name__)
+_retrieved_context_lock = threading.RLock()
+_retrieved_context_entry_ids: dict[str, set[str]] = {}
+
+
+def _record_retrieved_context_entry_ids(session_id: str | None, results: list[dict]) -> None:
+    """Track entries explicitly retrieved by assistant tools for later invalidation."""
+    if not session_id:
+        return
+    entry_ids = {
+        str(item.get("entry_id", "")).strip()
+        for item in results
+        if isinstance(item, dict) and str(item.get("entry_id", "")).strip()
+    }
+    if not entry_ids:
+        return
+    with _retrieved_context_lock:
+        _retrieved_context_entry_ids.setdefault(session_id, set()).update(entry_ids)
+
+
+def _retrieved_context_entry_ids_for_session(session_id: str | None) -> set[str]:
+    if not session_id:
+        return set()
+    with _retrieved_context_lock:
+        return set(_retrieved_context_entry_ids.get(session_id, set()))
+
+
+def cleanup_retrieved_context(session_id: str) -> None:
+    """Remove tracked retrieved entry IDs for a closed session to prevent unbounded growth."""
+    with _retrieved_context_lock:
+        _retrieved_context_entry_ids.pop(session_id, None)
+        # Evict stale entries older than 24 hours to bound memory in long-running sidecar
+        _evict_stale_context_entries()
+
+
+def _evict_stale_context_entries(max_age_seconds: int = 86400) -> None:
+    """Remove session entries from _retrieved_context_entry_ids that have no active segment.
+
+    Called internally after cleanup_retrieved_context; also safe to call from any
+    segment-boundary path to bound memory growth for abandoned sessions.
+    """
+    # Defensive upper bound: if the dict exceeds 500 sessions, trim oldest half
+    if len(_retrieved_context_entry_ids) > 500:
+        keys_to_remove = list(_retrieved_context_entry_ids.keys())[:250]
+        for key in keys_to_remove:
+            _retrieved_context_entry_ids.pop(key, None)
+
 
 REPORT_TOOL_BUG_SCHEMA = make_tool_schema(
     name="report_tool_bug",
@@ -343,6 +393,85 @@ DISMISS_SUGGESTION = ToolDefinition(
     handler=dismiss_suggestion_handler,
 )
 
+
+# ===== 归档检索工具 (T057) =====
+
+
+RETRIEVE_ARCHIVE_SCHEMA = make_tool_schema(
+    name="retrieve_archive",
+    description="检索大脑归档区中的历史记忆。当你需要回忆用户之前提到过但现在不在当前上下文中的信息时调用。",
+    properties={
+        "query": {
+            "type": "string",
+            "description": "搜索关键词，用于匹配归档记忆的内容",
+        },
+    },
+    required=["query"],
+)
+
+
+def retrieve_archive_handler(query: str, session_id: str | None = None) -> str:
+    """从归档区检索与查询关键词匹配的记忆条目。"""
+    if not query or not query.strip():
+        return to_json({
+            "success": False,
+            "message": "请提供搜索关键词",
+            "results": [],
+        })
+
+    try:
+        service = RetrievalService()
+        results = service.retrieve_archive(query)
+        _record_retrieved_context_entry_ids(session_id, results)
+
+        if not results:
+            return to_json({
+                "success": True,
+                "message": f"未找到与 '{query}' 相关的归档记忆",
+                "results": [],
+            })
+
+        return to_json({
+            "success": True,
+            "results": [
+                {
+                    "entry_id": r["entry_id"],
+                    "content": r["content"],
+                    "status": r["status"],
+                    "relevance_score": r.get("relevance_score", 0),
+                    "composite_score": r.get("composite_score", 0),
+                    "invalidation_factor": r.get("invalidation_factor", 1.0),
+                }
+                for r in results
+            ],
+        })
+    except Exception as e:
+        logger.error("[retrieve_archive] failed: %s", e)
+        return to_json({
+            "success": False,
+            "message": str(e),
+            "results": [],
+        })
+
+
+RETRIEVE_ARCHIVE = ToolDefinition(
+    name="retrieve_archive",
+    schema=RETRIEVE_ARCHIVE_SCHEMA,
+    handler=retrieve_archive_handler,
+)
+
+
+def _bind_session_id(handler, session_id: str | None):
+    """Create a wrapper that injects session_id into a handler that accepts it as a kwarg."""
+    def bound(*args, **kwargs):
+        return handler(*args, session_id=session_id, **kwargs)
+    return bound
+
+
+def create_retrieve_archive_handler(session_id: str | None = None):
+    return _bind_session_id(retrieve_archive_handler, session_id)
+
+
 __all__ = [
     "REPORT_TOOL_BUG",
     "SAVE_PROFILE_SCHEMA",
@@ -351,4 +480,366 @@ __all__ = [
     "create_codify_as_tool_handler",
     "DISMISS_SUGGESTION",
     "register_task_worker_notify",
+    "cleanup_retrieved_context",
+    "RETRIEVE_ARCHIVE",
+    "RETRIEVE_ARCHIVE_SCHEMA",
+    "create_retrieve_archive_handler",
+    "RETRIEVE_FAILURE_ZONE",
+    "RETRIEVE_FAILURE_ZONE_SCHEMA",
+    "create_retrieve_failure_zone_handler",
+    "INVALIDATE_MEMORY_ENTRY",
+    "create_invalidate_memory_entry_handler",
+    "REPLY_TO_USER_SCHEMA",
+    "create_reply_to_user_handler",
+    "DELEGATE_TO_SUBAGENT_SCHEMA",
+    "create_delegate_to_subagent_handler",
+    "DELEGATE_TO_SPECIALIST_SCHEMA",
+    "create_delegate_to_specialist_handler",
+    "CREATE_SPECIALIST_SCHEMA",
+    "create_create_specialist_handler",
 ]
+
+
+# ===== 大脑检索工具 =====
+
+
+RETRIEVE_FAILURE_ZONE_SCHEMA = make_tool_schema(
+    name="retrieve_failure_zone",
+    description="检索失败区记忆，查找过去类似任务中失败的决策和原因",
+    properties={
+        "context": {"type": "string", "description": "当前任务的上下文描述，用于匹配相关失败记录"},
+    },
+    required=["context"],
+)
+
+
+def retrieve_failure_zone_handler(context: str, session_id: str | None = None) -> str:
+    """从失败区检索与当前上下文相关的记忆条目"""
+    try:
+        service = RetrievalService()
+        entries = service.retrieve_failure_zone(context)
+        _record_retrieved_context_entry_ids(session_id, entries)
+        return to_json({
+            "success": True,
+            "entries": [
+                {
+                    "entry_id": e.get("entry_id"),
+                    "content": e.get("content"),
+                    "reason": e.get("reason"),
+                    "composite_score": e.get("composite_score", 0),
+                    "invalidation_factor": e.get("invalidation_factor", 1.0),
+                }
+                for e in entries
+            ],
+        })
+    except Exception as e:
+        logger.error("[retrieve_failure_zone] failed: %s", e)
+        return error_json(e)
+
+
+RETRIEVE_FAILURE_ZONE = ToolDefinition(
+    name="retrieve_failure_zone",
+    schema=RETRIEVE_FAILURE_ZONE_SCHEMA,
+    handler=retrieve_failure_zone_handler,
+)
+
+
+def create_retrieve_failure_zone_handler(session_id: str | None = None):
+    return _bind_session_id(retrieve_failure_zone_handler, session_id)
+
+
+INVALIDATE_MEMORY_ENTRY_SCHEMA = make_tool_schema(
+    name="invalidate_memory_entry",
+    description="将一条记忆条目标记为失效（降权，不删除）",
+    properties={
+        "entry_id": {"type": "string", "description": "要失效的记忆条目 ID"},
+        "reason": {"type": "string", "description": "失效原因"},
+        "invalidation_type": {
+            "type": "string",
+            "enum": ["reactive", "proactive"],
+            "description": "reactive 表示用户明确纠正；proactive 表示助理主动发现事实冲突，之后必须同轮告知用户",
+        },
+    },
+    required=["entry_id", "reason"],
+)
+
+
+def _context_entry_ids_for_session(session_id: str | None) -> list[str] | None:
+    if not session_id:
+        return None
+    from src.business.brain.context_builder import BrainContextBuilder
+
+    context = BrainContextBuilder().build_context(session_id, track_loaded=False)
+    entry_ids = set(context.injected_entry_ids)
+    entry_ids.update(_retrieved_context_entry_ids_for_session(session_id))
+    return list(entry_ids)
+
+
+def create_invalidate_memory_entry_handler(session_id: str | None = None):
+    """工厂函数：创建绑定当前上下文窗口的 invalidate_memory_entry handler。"""
+
+    def invalidate_memory_entry_handler(
+        entry_id: str,
+        reason: str,
+        invalidation_type: str = "reactive",
+    ) -> str:
+        """将当前上下文窗口内的一条记忆标记为 invalidated。"""
+        try:
+            service = RetrievalService()
+            result = service.invalidate_memory_entry(
+                entry_id,
+                reason,
+                current_context_entry_ids=_context_entry_ids_for_session(session_id),
+            )
+            _annotate_invalidation_disclosure(result, invalidation_type)
+            return to_json(result)
+        except Exception as e:
+            logger.error("[invalidate_memory_entry] failed: %s", e)
+            return error_json(e)
+
+    return invalidate_memory_entry_handler
+
+
+def _annotate_invalidation_disclosure(result: dict, invalidation_type: str) -> None:
+    if not isinstance(result, dict) or invalidation_type != "proactive" or not result.get("success"):
+        return
+    result["requires_user_disclosure"] = True
+    result["disclosure_instruction"] = (
+        "你主动发现了记忆冲突。必须在同一轮 reply_to_user 中告知用户已将这条记忆标记为失效。"
+    )
+
+
+INVALIDATE_MEMORY_ENTRY = ToolDefinition(
+    name="invalidate_memory_entry",
+    schema=INVALIDATE_MEMORY_ENTRY_SCHEMA,
+    handler=create_invalidate_memory_entry_handler(None),
+)
+
+
+# ===== 调度工具 (T069, T070) =====
+
+
+REPLY_TO_USER_SCHEMA = make_tool_schema(
+    name="reply_to_user",
+    description="向用户回复消息。这是你回复用户的主要方式——当你准备好直接回答用户时调用此工具。",
+    properties={
+        "text": {
+            "type": "string",
+            "description": "回复给用户的文本内容",
+        },
+        "memory_entries_referenced": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "本条回复引用的记忆条目 ID 列表，用于更新 referenced_count 计量",
+        },
+    },
+    required=["text"],
+)
+
+
+def create_reply_to_user_handler(session_id: str):
+    """工厂函数：创建绑定了 session_id 的 reply_to_user handler。
+
+    这是中断型工具（is_interrupting=True），返回 ToolSignal 而非 str。
+    同时异步更新 memory_entries_referenced 中引用的条目的 referenced_count。
+    """
+    from src.business.agents.config import ResultType, ToolSignal
+
+    def reply_to_user_handler(
+        text: str,
+        memory_entries_referenced: list[str] | None = None,
+    ) -> ToolSignal:
+        """向用户回复消息（中断型工具）"""
+        referenced_ids: list[str] = []
+        if isinstance(memory_entries_referenced, list) and all(
+            isinstance(entry_id, str) for entry_id in memory_entries_referenced
+        ):
+            referenced_ids = [
+                entry_id.strip()
+                for entry_id in memory_entries_referenced
+                if entry_id.strip()
+            ]
+
+        # 异步更新引用计数；字段缺失或结构错误时静默跳过
+        if referenced_ids:
+            try:
+                repo = BrainRepository()
+                repo.batch_update_referenced_counts(referenced_ids)
+                logger.info(
+                    "[reply_to_user] referenced_count updated for %d entries",
+                    len(referenced_ids),
+                )
+            except Exception as e:
+                logger.warning("[reply_to_user] 更新 referenced_count 失败: %s", e)
+
+        return ToolSignal(
+            result_type=ResultType.NEEDS_USER_INPUT,
+            display_text=text,
+        )
+
+    return reply_to_user_handler
+
+
+DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
+    name="delegate_to_subagent",
+    description="将任务委托给一个临时子代理执行。子代理会独立完成任务并返回结果。",
+    properties={
+        "task_description": {
+            "type": "string",
+            "description": "要委托给子代理执行的任务描述",
+        },
+        "execution_context": {
+            "type": "string",
+            "description": "补充给子代理的执行上下文，例如用户约束、已知背景或输出格式要求",
+        },
+        "tool_whitelist": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "可选工具名称白名单；不传则继承当前助理会话可用技能池",
+        },
+    },
+    required=["task_description"],
+)
+
+
+def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None):
+    """工厂函数：创建 delegate_to_subagent handler。"""
+    def delegate_to_subagent_handler(
+        task_description: str,
+        execution_context: str = "",
+        tool_whitelist: list[str] | None = None,
+    ) -> str:
+        """将任务委托给临时子代理"""
+        try:
+            logger.info(
+                "[delegate_to_subagent] session=%s task=%s",
+                session_id,
+                task_description[:100],
+            )
+            if dispatch_callback is not None:
+                return to_json(
+                    dispatch_callback(
+                        parent_session_id=session_id,
+                        task_description=task_description,
+                        execution_context=execution_context or "",
+                        tool_whitelist=tool_whitelist,
+                    )
+                )
+            return to_json({
+                "success": True,
+                "message": f"任务已委托给临时子代理: {task_description[:100]}",
+                "delegation_type": "ephemeral_subagent",
+            })
+        except Exception as e:
+            logger.error("[delegate_to_subagent] 委派失败: %s", e)
+            return error_json(e)
+
+    return delegate_to_subagent_handler
+
+
+DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
+    name="delegate_to_specialist",
+    description="将任务委托给一个已命名的固定专员。专员拥有特定角色定义和工具白名单。",
+    properties={
+        "specialist_name": {
+            "type": "string",
+            "description": "专员名称",
+        },
+        "task": {
+            "type": "string",
+            "description": "要委托给专员的任务描述",
+        },
+    },
+    required=["specialist_name", "task"],
+)
+
+
+def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=None):
+    """工厂函数：创建 delegate_to_specialist handler。"""
+    def delegate_to_specialist_handler(specialist_name: str, task: str) -> str:
+        """将任务委托给固定专员"""
+        try:
+            logger.info(
+                "[delegate_to_specialist] session=%s specialist=%s task=%s",
+                session_id,
+                specialist_name,
+                task[:100],
+            )
+            if dispatch_callback is not None:
+                return to_json(
+                    dispatch_callback(
+                        parent_session_id=session_id,
+                        specialist_name=specialist_name,
+                        task=task,
+                    )
+                )
+            return to_json({
+                "success": True,
+                "message": f"任务已委托给专员 '{specialist_name}': {task[:100]}",
+                "delegation_type": "specialist",
+            })
+        except Exception as e:
+            logger.error("[delegate_to_specialist] 委派失败: %s", e)
+            return error_json(e)
+
+    return delegate_to_specialist_handler
+
+
+CREATE_SPECIALIST_SCHEMA = make_tool_schema(
+    name="create_specialist",
+    description="创建一个新的固定专员。专员拥有特定角色定义和工具白名单，可以被反复委派任务。",
+    properties={
+        "name": {
+            "type": "string",
+            "description": "专员名称（唯一标识）",
+        },
+        "description": {
+            "type": "string",
+            "description": "专员的简短描述",
+        },
+        "role_definition": {
+            "type": "string",
+            "description": "专员的角色定义（详细说明其职责和工作方式）",
+        },
+        "tool_whitelist": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "专员可以使用的工具名称白名单",
+        },
+    },
+    required=["name", "description", "role_definition", "tool_whitelist"],
+)
+
+
+def create_create_specialist_handler(session_id: str):
+    """工厂函数：创建 create_specialist handler。"""
+    def create_specialist_handler(
+        name: str,
+        description: str,
+        role_definition: str,
+        tool_whitelist: list[str],
+    ) -> str:
+        """创建新专员"""
+        try:
+            service = SpecialistService()
+            specialist = service.create_specialist(
+                name=name,
+                description=description,
+                role_definition=role_definition,
+                tool_whitelist=tool_whitelist,
+                origin="user_conversation",
+                reason=f"由用户在会话 {session_id[:8]}... 中创建",
+            )
+            logger.info("[create_specialist] 专员已创建: name=%s", name)
+            return to_json({
+                "success": True,
+                "message": f"专员 '{name}' 已创建",
+                "specialist_id": specialist["specialist_id"],
+            })
+        except ValueError as e:
+            return error_json(str(e))
+        except Exception as e:
+            logger.error("[create_specialist] 创建失败: %s", e)
+            return error_json(e)
+
+    return create_specialist_handler

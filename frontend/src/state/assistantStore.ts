@@ -8,9 +8,17 @@ import {
   listAssistantSessions,
   renameAssistantSession,
   sendAssistantMessage,
+  triggerAssistantSegmentBoundary,
+  triggerAssistantSegmentIdle,
 } from "../api/assistant";
 import type { AssistantConfirmation, AssistantMessage, AssistantSession } from "../api/assistant";
 import type { UiEvent } from "../api/client";
+
+async function sealPreviousSegment(prevSessionId: string | null): Promise<void> {
+  if (prevSessionId) {
+    try { await triggerAssistantSegmentBoundary(prevSessionId, "new_session"); } catch { /* best-effort */ }
+  }
+}
 import { toErrorMessage } from "./helpers";
 
 type AssistantProgress = {
@@ -33,10 +41,12 @@ export type AssistantState = {
   progress: AssistantProgress;
   confirmations: AssistantConfirmation[];
   lastError: string | null;
+  idleThresholdMs: number | null;
   markHydrated: () => void;
   setError: (message: string | null) => void;
   setQuery: (query: string) => void;
   setDraft: (draft: string) => void;
+  setIdleThresholdSeconds: (seconds: number) => void;
   loadSessions: () => Promise<void>;
   createSession: () => Promise<string>;
   selectSession: (sessionId: string) => Promise<void>;
@@ -46,6 +56,9 @@ export type AssistantState = {
   sendDraft: () => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   decideConfirmation: (requestId: string, decision: "approve" | "deny") => Promise<void>;
+  idleTimerRef: ReturnType<typeof setTimeout> | null;
+  resetIdleTimer: () => void;
+  clearIdleTimer: () => void;
 };
 
 const idleProgress: AssistantProgress = { status: "idle", headline: "" };
@@ -73,10 +86,15 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   progress: idleProgress,
   confirmations: [],
   lastError: null,
+  idleThresholdMs: null,
   markHydrated: () => set({ hydrated: true }),
   setError: (message) => set({ lastError: message }),
   setQuery: (query) => set({ query }),
   setDraft: (draft) => set({ draft }),
+  setIdleThresholdSeconds: (seconds) => {
+    const threshold = Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : null;
+    set({ idleThresholdMs: threshold });
+  },
   loadSessions: async () => {
     set({ loadingSessions: true, lastError: null });
     try {
@@ -89,12 +107,20 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     }
   },
   createSession: async () => {
+    const prevSessionId = get().activeSessionId;
+    await sealPreviousSegment(prevSessionId);
     const sessionId = await createAssistantSession();
     set({ activeSessionId: sessionId, messages: [], draft: "", progress: idleProgress, confirmations: [] });
+    get().clearIdleTimer();
     await get().loadSessions();
     return sessionId;
   },
   selectSession: async (sessionId) => {
+    const prevSessionId = get().activeSessionId;
+    get().clearIdleTimer();
+    if (prevSessionId && prevSessionId !== sessionId) {
+      await sealPreviousSegment(prevSessionId);
+    }
     set({ activeSessionId: sessionId, loadingMessages: true, lastError: null });
     try {
       const page = await listAssistantMessages(sessionId, { limit: 10 });
@@ -192,6 +218,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
     } finally {
       set({ sending: false });
+      get().resetIdleTimer();
     }
   },
   applyEvent: (event) => {
@@ -239,5 +266,29 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     set({
       confirmations: get().confirmations.filter((confirmation) => confirmation.requestId !== requestId),
     });
+  },
+  idleTimerRef: null,
+  resetIdleTimer: () => {
+    const state = get();
+    if (state.idleTimerRef) {
+      clearTimeout(state.idleTimerRef);
+    }
+    const { idleThresholdMs, activeSessionId: sessionId } = state;
+    if (!sessionId || idleThresholdMs === null) return;
+    const timer = setTimeout(async () => {
+      try {
+        await triggerAssistantSegmentIdle(sessionId);
+      } catch {
+        // Idle trigger is best-effort; failures are non-critical
+      }
+    }, idleThresholdMs);
+    set({ idleTimerRef: timer });
+  },
+  clearIdleTimer: () => {
+    const state = get();
+    if (state.idleTimerRef) {
+      clearTimeout(state.idleTimerRef);
+      set({ idleTimerRef: null });
+    }
   },
 }));

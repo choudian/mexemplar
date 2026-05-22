@@ -109,7 +109,13 @@ describe("skills and compositions screens", () => {
     fireEvent.click(publishedTab);
     await waitFor(() => expect(screen.getByText("Published Skill")).toBeInTheDocument());
 
-    expect(screen.queryByRole("button", { name: "试用" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "试用" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/skills/tool_a/trial",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
 
     fireEvent.click(screen.getByRole("tab", { name: /失败记录/ }));
     await waitFor(() => expect(screen.getByText("Failed Skill")).toBeInTheDocument());
@@ -121,6 +127,34 @@ describe("skills and compositions screens", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
+  });
+
+  test("keeps failed count non-negative when dismiss races with a refresh", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ accepted: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    useSkillsStore.setState({
+      categories: {
+        pending: [],
+        published: [],
+        failed: [
+          {
+            toolId: "tool_failed",
+            name: "Failed Skill",
+            description: "Retryable failure",
+            status: "failed",
+            source: "teaching",
+            trialSuccessCount: 0,
+            workflowId: "wf_fail",
+          },
+        ],
+      },
+      counts: { pending: 0, published: 0, failed: 0 },
+    });
+
+    await useSkillsStore.getState().dismissFailure("wf_fail");
+
+    expect(useSkillsStore.getState().counts.failed).toBe(0);
+    expect(useSkillsStore.getState().categories.failed).toEqual([]);
   });
 
   test("creates an ordered composition, reorders members, tries it, and publishes it", async () => {

@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -91,6 +91,37 @@ def test_task_worker_accessible_via_property(mock_config):
         orchestrator.task_worker.start()
 
     mock_start.assert_called_once_with()
+
+
+def test_assistant_prompt_builder_passes_revived_session_signal():
+    from src.business.orchestration.agent.assistant_prompt_builder import AssistantPromptBuilder
+
+    session = SimpleNamespace(get_tool_id_set=lambda: None)
+    session_store = SimpleNamespace(
+        get_session=lambda session_id: session,
+        count_messages=lambda session_id: 2,
+    )
+    tool_repo = SimpleNamespace(get_published_summaries=lambda: [])
+    composition_catalog = SimpleNamespace(get_assistant_published_summaries=lambda: [])
+    profile_repo = SimpleNamespace(get_default=lambda: None)
+
+    with patch("src.business.brain.context_builder.BrainContextBuilder") as MockBuilder:
+        builder_instance = MockBuilder.return_value
+        builder_instance.build_context.return_value = MagicMock()
+        builder_instance.format_context_for_prompt.return_value = "brain context"
+
+        AssistantPromptBuilder(
+            llm_client=SimpleNamespace(),
+            session_store=session_store,
+            tool_repo=tool_repo,
+            composition_catalog=composition_catalog,
+            profile_repo=profile_repo,
+        ).format_assistant_prompt("sess-existing")
+
+    builder_instance.build_context.assert_called_once_with(
+        "sess-existing",
+        is_revived_session=True,
+    )
 
 
 def test_old_shim_import_path_removed():

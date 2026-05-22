@@ -56,8 +56,11 @@ def in_memory_db():
     test_manager = SQLAlchemyManager(":memory:")
     test_manager.initialize()
     sm_module._sqlalchemy_instance = test_manager
-    yield test_manager
-    sm_module._sqlalchemy_instance = original
+    try:
+        yield test_manager
+    finally:
+        test_manager.close()
+        sm_module._sqlalchemy_instance = original
 
 
 @pytest.fixture

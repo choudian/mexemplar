@@ -34,12 +34,16 @@ class FakeDesktopRecordingService:
 class FakeBrowserRecorder:
     def __init__(self) -> None:
         self.armed_recording_id: str | None = None
+        self.cleaned = False
 
     def arm_extension_triggered_mode(self, recording_id: str | None = None) -> None:
         self.armed_recording_id = recording_id
 
     def stop_recording(self) -> dict[str, object]:
         return {"recording_id": self.armed_recording_id}
+
+    def cleanup(self) -> None:
+        self.cleaned = True
 
 
 def test_teaching_readiness_and_run_creation(desktop_api_client):
@@ -169,6 +173,7 @@ def test_teaching_intent_reply_does_not_advance_to_learning(desktop_api_client):
         desktop_api_client.app.dependency_overrides.clear()
 
     assert stopped.json()["stage"] == "intent_confirmation"
+    assert fake_recorder.cleaned is True
     assert reply.status_code == 200
     assert reply.json()["stage"] == "intent_confirmation"
     assert reply_calls == [(workflow_id, "我补充一个边界条件")]

@@ -24,6 +24,8 @@ class AgentType(str, Enum):
     PROGRAMMER = "programmer"
     TRIAL = "trial"
     ASSISTANT = "assistant"
+    EPHEMERAL_SUBAGENT = "ephemeral_subagent"
+    SPECIALIST = "specialist"
 
     @property
     def display_name(self) -> str:
@@ -35,6 +37,8 @@ _AGENT_TYPE_DISPLAY_NAMES = {
     AgentType.PROGRAMMER: "技能学习",
     AgentType.TRIAL: "技能试用",
     AgentType.ASSISTANT: "AI 助手",
+    AgentType.EPHEMERAL_SUBAGENT: "临时子代理",
+    AgentType.SPECIALIST: "固定专员",
 }
 
 

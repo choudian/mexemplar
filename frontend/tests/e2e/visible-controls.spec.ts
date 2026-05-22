@@ -13,7 +13,7 @@ async function expectNamedButtons(page: Page) {
   expect(unnamedButtons).toBe(0);
 }
 
-test("T107 visible controls across five screens invoke real bridge paths or explicit unavailable states", async ({
+test("T107 visible controls across primary screens invoke real bridge paths or explicit unavailable states", async ({
   page,
 }) => {
   const api = await installMockApi(page);
@@ -42,21 +42,20 @@ test("T107 visible controls across five screens invoke real bridge paths or expl
   await page.getByRole("button", { name: "开始" }).first().click();
   await page.getByRole("button", { name: "开始录制" }).click();
   await page.getByRole("button", { name: "停止录制" }).click();
-  await page.getByLabel("补充意图说明").fill("Add a boundary for the workflow");
-  await page.getByRole("button", { name: "发送说明" }).click();
-  await page.getByRole("button", { name: "确认并学习" }).click();
-  await page.getByRole("button", { name: "开始试用" }).click();
+  await page.locator(".teaching-composer textarea").first().fill("Add a boundary for the workflow");
+  await page.locator(".teaching-composer-send").first().click();
   expectRequest(api, "POST", "/api/teaching/runs");
   expectRequest(api, "POST", "/api/teaching/runs/rec_1/recording/start");
   expectRequest(api, "POST", "/api/teaching/runs/rec_1/recording/stop");
   expectRequest(api, "POST", "/api/teaching/runs/rec_1/intent/reply");
-  expectRequest(api, "POST", "/api/teaching/runs/rec_1/intent/confirm");
-  expectRequest(api, "POST", "/api/teaching/runs/rec_1/trial/start");
 
   await page.getByRole("button", { name: /技能列表/ }).click();
   await expectNamedButtons(page);
   await expect(page.getByText("Pending Skill")).toBeVisible();
   await page.getByRole("button", { name: "试用" }).click();
+  const trialDialog = page.getByRole("dialog", { name: "技能试用" });
+  await expect(trialDialog).toBeVisible();
+  await trialDialog.getByRole("button", { name: "关闭" }).click();
   await page.getByRole("button", { name: "删除技能" }).click();
   await page.getByRole("tab", { name: /已掌握/ }).click();
   await expect(page.getByText("Published Skill")).toBeVisible();
@@ -71,6 +70,7 @@ test("T107 visible controls across five screens invoke real bridge paths or expl
 
   await page.getByRole("button", { name: /技能组合/ }).click();
   await expectNamedButtons(page);
+  await page.getByRole("button", { name: /^新建组合$/ }).click();
   await page.getByLabel("名称").fill("Audit composition");
   await page.getByLabel("描述").fill("Visible control audit");
   await page.getByLabel("模式").selectOption("ordered");
@@ -79,8 +79,9 @@ test("T107 visible controls across five screens invoke real bridge paths or expl
   await page.getByRole("button", { name: /Second Skill/ }).click();
   await page.getByRole("button", { name: "下移成员" }).first().click();
   await page.getByRole("button", { name: "移除成员" }).first().click();
-  await page.getByRole("button", { name: /Published Skill/ }).click();
+  await page.getByRole("button", { name: /Second Skill/ }).click();
   await page.getByRole("button", { name: "保存草稿" }).click();
+  await expect(page.getByRole("button", { name: "试用" })).toBeEnabled();
   await page.getByRole("button", { name: "试用" }).click();
   await page.getByRole("button", { name: "发布" }).click();
   expectRequest(api, "POST", "/api/compositions");

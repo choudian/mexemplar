@@ -52,11 +52,16 @@ class BootstrapSettingsSummary(BaseModel):
     density: UiDensity = "comfy"
 
 
+class BootstrapBrainConfig(BaseModel):
+    segmentIdleThresholdSeconds: int = 300
+
+
 class BootstrapResponse(BaseModel):
     connection: BackendConnectionState
     user: BootstrapUser = Field(default_factory=BootstrapUser)
     navigation: BootstrapNavigation = Field(default_factory=BootstrapNavigation)
     settingsSummary: BootstrapSettingsSummary = Field(default_factory=BootstrapSettingsSummary)
+    brain: BootstrapBrainConfig = Field(default_factory=BootstrapBrainConfig)
 
 
 class UiEvent(BaseModel):
@@ -129,6 +134,11 @@ class AssistantConfirmationDecisionResponse(BaseModel):
     requestId: str
     decision: Literal["approve", "deny"]
     accepted: bool
+
+
+class SegmentBoundaryRequest(BaseModel):
+    session_id: str = Field(min_length=1)
+    reason: Literal["window_close", "new_session", "token_limit"] = "window_close"
 
 
 TeachingMode = Literal["browser", "extension", "desktop"]

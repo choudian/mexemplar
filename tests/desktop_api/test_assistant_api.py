@@ -4,7 +4,7 @@ import threading
 import time
 
 from src.business.agents.tools import builtin_general_tools as general_tools
-from src.data.models_sqlite import Message
+from src.data.models_sqlite import BrainSegment, Message
 from src.data.repositories import MessageRepository
 from src.desktop_api.routers import assistant as assistant_router
 
@@ -153,3 +153,30 @@ def test_confirmation_decision_unknown_request_is_stable(desktop_api_client):
         "decision": "deny",
         "accepted": False,
     }
+
+
+def test_segment_boundary_endpoint_seals_with_explicit_reason(desktop_api_client, in_memory_db):
+    created = desktop_api_client.post("/api/assistant/sessions", json={})
+    session_id = created.json()["sessionId"]
+    MessageRepository().create(
+        Message(
+            message_id="msg_boundary",
+            session_id=session_id,
+            sequence=1,
+            role="user",
+            content="需要封存的上下文",
+        )
+    )
+
+    response = desktop_api_client.post(
+        "/api/assistant/segment-boundary",
+        json={"session_id": session_id, "reason": "new_session"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "pending"
+    with in_memory_db.get_session() as session:
+        segment = session.get(BrainSegment, payload["segment_id"])
+        assert segment is not None
+        assert segment.boundary_reason == "new_session"

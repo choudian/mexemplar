@@ -54,6 +54,15 @@
 - `src/main.py`、`mexemplar_gui.py`、`start.bat`、`mexemplar_gui.bat` 只能显式失败并提示 legacy PyQt launcher 已退休；不得恢复可启动 PyQt fallback。
 - `src/ui/`、`tests/ui/` 和旧 Python GUI `tests/e2e/` 不再是维护面；新增 UI 行为覆盖应放在 `frontend/tests/unit/` 或 `frontend/tests/e2e/`，后端桥接覆盖放在 `tests/desktop_api/`、`tests/integration/` 或 `tests/guardrails/`。
 
+## Brain Architecture Constraints
+
+- 大脑相关 `brain.*` 配置占位符（decay 曲线阈值、top-N、重试次数、worker 周期等）通过 `get_unified_config()` 读写，数值为占位符（CC-008），待实测调整后再写入 docs。
+- Settings UI 暂不暴露 `brain.*` tuning knobs；如需在 UI 可调，须先更新 `docs/PROJECT_CONSTRAINTS.md` 和 `frontend/AGENTS.md` 说明暴露字段。
+- Segment 沉淀写入全部 `brain_memory_entries` INSERT 和 Segment 状态转换必须在单个数据库事务内提交；崩溃发生在 commit 前 → 整体回滚，不残留半成品条目。
+- 大脑数据不物理删除，`invalidation` 是降权，`soft-deleted` 物理保留但排除在普通检索外。
+- 专员管理删除是业务层软删除（`brain_specialists.is_active = 0`），版本历史必须保留；不要从 API/router 走物理删除路径。
+- `brain_segments` 表的 `open` 态不持久化——进行中 Segment 由消息表推导，行仅在封存（转入 `pending`）时创建。
+
 ## Review Guardrails
 
 Reviewer 必须拒绝下列改动：

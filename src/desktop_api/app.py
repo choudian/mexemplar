@@ -14,7 +14,7 @@ from fastapi.responses import StreamingResponse
 
 from src.business.services.recording_startup_service import RecordingStartupService
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
-from src.desktop_api.routers import assistant, compositions, health, settings, skills, teaching
+from src.desktop_api.routers import assistant, brain, compositions, health, settings, skills, teaching
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
 
 SESSION_HEADER = "X-Mexemplar-Session"
@@ -28,9 +28,18 @@ def create_app(session_token: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         RecordingStartupService().ensure_recovered()
+        brain_worker = None
+        try:
+            from src.business.brain.background_worker import BrainBackgroundWorker
+            brain_worker = BrainBackgroundWorker()
+            brain_worker.start()
+        except Exception as e:
+            logger.warning("BrainBackgroundWorker failed to start: %s", e)
         try:
             yield
         finally:
+            if brain_worker is not None:
+                brain_worker.stop()
             event_queue.shutdown()
 
     app = FastAPI(title="Mexemplar Desktop API", version="0.1.0", lifespan=lifespan)
@@ -63,6 +72,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(skills.router)
     app.include_router(compositions.router)
     app.include_router(settings.router)
+    app.include_router(brain.router)
 
     @app.get("/api/events", tags=["events"])
     async def events(request: Request) -> StreamingResponse:

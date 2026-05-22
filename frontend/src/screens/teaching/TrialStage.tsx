@@ -13,7 +13,7 @@ const DONE_COUNTDOWN_SECS = 3;
 
 type TrialStageProps = {
   disabled?: boolean;
-  onStart?: (text: string) => void;
+  onStart?: (text: string) => void | Promise<void>;
   preview?: TrialPreviewRequest | null;
   onPreviewDecision?: (requestId: string, decision: "approve" | "deny") => void;
 };
@@ -125,10 +125,10 @@ export function TrialStage({
   useScrollToBottom(scrollRef, [trialMessages.length, busy]);
 
   useEffect(() => {
-    if (stage === "published" && waitingForAi) {
+    if (waitingForAi && (done || stage === "published" || stage === "failed")) {
       setWaitingForAi(false);
     }
-  }, [stage, waitingForAi]);
+  }, [stage, waitingForAi, done]);
 
   useEffect(() => {
     if (!done) return;
@@ -162,16 +162,20 @@ export function TrialStage({
     if (!t || composerDisabled) return;
     setWaitingForAi(true);
     if (onStart && trialMessages.length === 0) {
-      onStart(t);
+      try {
+        void Promise.resolve(onStart(t)).catch(() => setWaitingForAi(false));
+      } catch {
+        setWaitingForAi(false);
+      }
     } else {
-      void startTrial(t);
+      startTrial(t).catch(() => setWaitingForAi(false));
     }
     setDraft("");
   };
 
   const handleVerdict = (ok: boolean) => {
     setWaitingForAi(true);
-    void startTrial(ok ? "结果正确" : "不太对，再看看");
+    startTrial(ok ? "结果正确" : "不太对，再看看").catch(() => setWaitingForAi(false));
   };
 
   const handlePreviewDecision = (requestId: string, decision: "approve" | "deny") => {
@@ -223,18 +227,18 @@ export function TrialStage({
           {trialMessages.map((m, i) => {
             if (m.from === "user") return <UserBubble key={`u-${i}`} text={m.text} />;
             const isLatest = i === trialMessages.length - 1;
-            const isExecutionResult = m.headline.toLowerCase().includes("complete") || m.headline.includes("完成");
+            const showVerdict = isLatest && !m.error && !waitingForAi;
             return (
               <AgentBubble key={`a-${i}`} icon={<Zap size={16} />} label="试用助手">
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <AiMessageContent headline={m.headline} detail={m.detail} />
-                  {isExecutionResult && m.detail ? (
+                  {m.detail && !m.error ? (
                     <TrialProcessStrip
                       summary={m.headline}
                       trace={[{ text: m.detail }]}
                     />
                   ) : null}
-                  {isLatest && isExecutionResult && !waitingForAi ? (
+                  {showVerdict ? (
                     <div className="teaching-trial-verdict">
                       <Button onClick={() => handleVerdict(true)}>
                         <Check size={14} />

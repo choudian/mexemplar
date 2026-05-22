@@ -58,20 +58,44 @@ class AssistantPromptBuilder:
             for comp in compositions
         )
 
+        # Build brain context (new path)
+        brain_context_text = ""
         try:
-            from src.business.memory.assistant_memory import get_memory_manager
-
-            memory_manager = get_memory_manager(llm_client=self._llm)
-            memory_summary = memory_manager.get_global_summary()
+            from src.business.brain.context_builder import BrainContextBuilder
+            builder = BrainContextBuilder()
+            context = builder.build_context(
+                session_id,
+                is_revived_session=self._is_revived_session(session_id),
+            )
+            brain_context_text = builder.format_context_for_prompt(context)
         except Exception as exc:
-            self._logger.warning(f"[Orchestrator] 获取全局摘要失败: {exc}")
-            memory_summary = None
+            self._logger.warning(f"[Orchestrator] 构建大脑上下文失败，使用旧路径: {exc}")
+
+        # Fallback to legacy memory summary if brain context is empty
+        memory_summary = None
+        if not brain_context_text:
+            try:
+                from src.business.memory.assistant_memory import get_memory_manager
+
+                memory_manager = get_memory_manager(llm_client=self._llm)
+                memory_summary = memory_manager.get_global_summary()
+            except Exception as exc:
+                self._logger.warning(f"[Orchestrator] 获取全局摘要失败: {exc}")
 
         return format_assistant_prompt(
             profile=profile,
             tools=tool_list if tool_list else None,
             memory_summary=memory_summary,
+            brain_context=brain_context_text if brain_context_text else None,
         )
+
+    def _is_revived_session(self, session_id: str) -> bool:
+        """Return true when prompt construction is for an existing assistant session."""
+        try:
+            return bool(self._session_store.count_messages(session_id) > 0)
+        except Exception as exc:
+            self._logger.warning("[Orchestrator] 判断复活会话失败: %s", exc)
+            return False
 
     def get_assistant_profile(self) -> Optional[dict]:
         try:

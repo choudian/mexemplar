@@ -156,14 +156,16 @@ def test_trial_failed_does_not_project_raw_failure_message_to_user(
 ) -> None:
     install_blinker_event_adapter()
 
-    emit("trial_failed", sender=None, workflow_id="rec_1", tool_id="tool_1")
+    emit("trial_failed", sender=None, workflow_id="rec_1", tool_id="tool_1", error="internal traceback")
 
     event = event_queue.queue.get_nowait()
     assert event_queue.queue.empty()
     assert event.type == "teaching.stage_changed"
     assert event.scope == {"workflowId": "rec_1"}
-    assert event.payload == {"stage": "failed", "failureStage": "trial"}
-    assert "Trial failed." not in str(event.payload)
+    assert event.payload["stage"] == "failed"
+    assert event.payload["failureStage"] == "trial"
+    assert "headline" not in event.payload
+    assert "internal traceback" not in str(event.payload)
 
 
 def test_catalog_settings_and_assistant_events_project_to_registered_ui_events(

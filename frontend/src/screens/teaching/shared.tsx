@@ -97,31 +97,17 @@ export function useScrollToBottom(ref: RefObject<HTMLElement | null>, deps: read
   useLayoutEffect(() => {
     const element = ref.current;
     if (!element) return;
-
-    const scroll = () => {
+    element.scrollTop = element.scrollHeight;
+    const frame = window.requestAnimationFrame(() => {
       element.scrollTop = element.scrollHeight;
-    };
-
-    let secondFrame = 0;
-    scroll();
-    const firstFrame = window.requestAnimationFrame(() => {
-      scroll();
-      secondFrame = window.requestAnimationFrame(scroll);
     });
-    const timer = window.setTimeout(scroll, 0);
-
-    return () => {
-      window.cancelAnimationFrame(firstFrame);
-      if (secondFrame) window.cancelAnimationFrame(secondFrame);
-      window.clearTimeout(timer);
-    };
+    return () => window.cancelAnimationFrame(frame);
   }, deps);
 
   useEffect(() => {
     const element = ref.current;
     const content = element?.firstElementChild;
     if (!element || !content || !("ResizeObserver" in window)) return;
-
     const observer = new ResizeObserver(() => {
       element.scrollTop = element.scrollHeight;
     });

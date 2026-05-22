@@ -109,6 +109,20 @@ class DesktopBootstrapService:
             "density": density,
         }
 
+    def get_brain_config(self) -> dict[str, Any]:
+        try:
+            config = get_unified_config()
+            idle_threshold = int(config.get_brain_segment_idle_threshold())
+        except Exception as exc:
+            self._record_degraded("bootstrap.brain", "Unable to load brain runtime config", exc)
+            idle_threshold = 300
+
+        if idle_threshold <= 0:
+            idle_threshold = 300
+        return {
+            "segmentIdleThresholdSeconds": idle_threshold,
+        }
+
     def run(self) -> dict[str, Any]:
         counts = self.get_navigation_counts()
         return {
@@ -123,4 +137,5 @@ class DesktopBootstrapService:
                 "compositionCount": counts.compositions,
             },
             "settingsSummary": self.get_settings_summary(),
+            "brain": self.get_brain_config(),
         }

@@ -120,6 +120,13 @@ function labelFromPayload(payload: {
   return payload.headline ?? payload.question ?? payload.message ?? payload.error ?? payload.result ?? "";
 }
 
+function fallbackProgressLabel(eventType: string, status: string | undefined): string {
+  if (eventType === "trial.progress" && status === "running") {
+    return "试用正在执行";
+  }
+  return "";
+}
+
 function trialSuccessCountFrom(summary: Record<string, unknown>): number | null {
   const value = summary.trialSuccessCount;
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -129,14 +136,13 @@ function dedupeMessageDetail(headline: string, detail: string | undefined): stri
   return detail && detail !== headline ? detail : undefined;
 }
 
+const TRIAL_VALIDATION_TOAST: TeachingToast = {
+  title: "技能学习完成",
+  body: "可以开始试用验证，确认它能按预期执行。",
+};
+
 function toastForStage(stage: TeachingStage): TeachingToast | null {
-  if (stage === "trial_validation") {
-    return {
-      title: "技能学习完成",
-      body: "可以开始试用验证，确认它能按预期执行。",
-    };
-  }
-  return null;
+  return stage === "trial_validation" ? TRIAL_VALIDATION_TOAST : null;
 }
 
 export const useTeachingStore = create<TeachingState>((set, get) => ({
@@ -395,9 +401,11 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
     }
     if (PROGRESS_EVENT_TYPES.has(event.type)) {
       const payload = event.payload;
-      const label = labelFromPayload(payload);
+      const rawLabel = labelFromPayload(payload);
+      const label = rawLabel || fallbackProgressLabel(event.type, payload.status);
       const patch: Partial<TeachingState> = {};
-      const isSystemTrialProgress = event.type === "trial.progress" && payload.status === "running";
+      const isSystemTrialProgress =
+        event.type === "trial.progress" && payload.status === "running" && !!rawLabel;
 
       if (label && !isSystemTrialProgress) {
         patch.progressLog = appendBounded(state.progressLog, label, MAX_PROGRESS_LOG);

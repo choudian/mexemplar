@@ -29,6 +29,7 @@ process.env.NO_PROXY = noProxy;
 process.env.no_proxy = noProxy;
 
 const isGrandTour = process.argv.some((a) => a.includes("Grand Tour") || a.includes("grand tour"));
+if (isGrandTour) process.env.MEXEMPLAR_GRAND_TOUR = "1";
 
 const e2eDir = path.resolve(url.fileURLToPath(new URL(".", import.meta.url)), "tests", "e2e");
 

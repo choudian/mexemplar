@@ -105,3 +105,21 @@ export function decideAssistantConfirmation(
   );
 }
 
+export function triggerAssistantSegmentIdle(
+  sessionId: string,
+): Promise<{ segment_id: string | null; status: string | null }> {
+  return requestJson<{ segment_id: string | null; status: string | null }>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/segment-idle`,
+    { method: "POST" },
+  );
+}
+
+export function triggerAssistantSegmentBoundary(
+  sessionId: string,
+  reason: "window_close" | "new_session" | "token_limit",
+): Promise<{ segment_id: string | null; status: string | null }> {
+  return requestJson<{ segment_id: string | null; status: string | null }>("/api/assistant/segment-boundary", {
+    method: "POST",
+    body: JSON.stringify({ session_id: sessionId, reason }),
+  });
+}

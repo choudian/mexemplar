@@ -1,5 +1,7 @@
 import { expect, test } from "@playwright/test";
 
+test.skip(process.env.MEXEMPLAR_GRAND_TOUR !== "1", "Grand Tour requires the dedicated seeded backend setup.");
+
 /** 每个主要操作之间的停顿时间（毫秒），通过 GRAND_TOUR_DELAY 环境变量配置 */
 const S = Number(process.env.GRAND_TOUR_DELAY ?? "0");
 const pause = (ms?: number) => (ms ?? S) > 0 ? page.waitForTimeout(ms ?? S) : Promise.resolve();

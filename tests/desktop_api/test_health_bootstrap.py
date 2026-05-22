@@ -37,6 +37,7 @@ def test_bootstrap_returns_shell_data_without_repository_shape(
         "compositionCount",
     }
     assert payload["settingsSummary"]["theme"]
+    assert payload["brain"]["segmentIdleThresholdSeconds"] > 0
 
 
 def test_health_service_reports_critical_probe_failure(monkeypatch) -> None:
@@ -84,3 +85,15 @@ def test_bootstrap_settings_summary_comes_from_unified_config(monkeypatch) -> No
     summary = DesktopBootstrapService().get_settings_summary()
 
     assert summary == {"theme": "dark", "dark": True, "density": "compact"}
+
+
+def test_bootstrap_brain_config_comes_from_unified_config(monkeypatch) -> None:
+    class FakeConfig:
+        def get_brain_segment_idle_threshold(self):
+            return 42
+
+    monkeypatch.setattr(bootstrap_module, "get_unified_config", lambda: FakeConfig())
+
+    config = DesktopBootstrapService().get_brain_config()
+
+    assert config == {"segmentIdleThresholdSeconds": 42}

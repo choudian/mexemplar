@@ -85,7 +85,7 @@ def test_frontend_declares_handler_domain_for_every_backend_event_type() -> None
 
     assert set(handler_domains) == set(registered_event_types())
     assert set(handler_domains.values()).issubset(
-        {"assistant", "teaching", "skills", "compositions", "settings", "resync"}
+        {"assistant", "teaching", "skills", "compositions", "settings", "brain", "resync"}
     )
 
 
