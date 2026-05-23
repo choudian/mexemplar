@@ -12,7 +12,7 @@ export interface AssistantSession {
 
 export interface AssistantMessage {
   sequence: number;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "summary";
   content: string;
   createdAt: string | null;
   rendering: "plain_text" | "safe_markdown";
@@ -122,4 +122,12 @@ export function triggerAssistantSegmentBoundary(
     method: "POST",
     body: JSON.stringify({ session_id: sessionId, reason }),
   });
+}
+
+export async function setAssistantAutoApprove(enabled: boolean): Promise<boolean> {
+  const response = await requestJson<{ enabled: boolean }>("/api/assistant/confirmations/auto-approve", {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+  return response.enabled;
 }

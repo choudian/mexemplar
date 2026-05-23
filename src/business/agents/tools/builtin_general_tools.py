@@ -368,30 +368,46 @@ WEB_SEARCH_SCHEMA = make_tool_schema(
 )
 
 
-def web_search_handler(query: str, num_results: int = 5) -> str:
-    """使用 DuckDuckGo 进行网页搜索（不需要 API Key）"""
-    try:
-        from duckduckgo_search import DDGS
+_WEB_SEARCH_CODE = """\
+import json
 
-        results = []
-        with DDGS() as ddgs:
-            for r in ddgs.text(query, max_results=num_results):
-                results.append(
-                    {
-                        "title": r.get("title", ""),
-                        "url": r.get("href", ""),
-                        "snippet": r.get("body", ""),
-                    }
-                )
-        return json.dumps(
-            {"success": True, "results": results, "count": len(results)},
-            ensure_ascii=False,
+async def execute(**kwargs):
+    from duckduckgo_search import DDGS
+
+    query = kwargs["query"]
+    num_results = kwargs.get("num_results", 5)
+
+    results = []
+    with DDGS() as ddgs:
+        for r in ddgs.text(query, max_results=num_results):
+            results.append({
+                "title": r.get("title", ""),
+                "url": r.get("href", ""),
+                "snippet": r.get("body", ""),
+            })
+    return {"success": True, "message": json.dumps({"success": True, "results": results, "count": len(results)}, ensure_ascii=False)}
+"""
+
+
+def web_search_handler(query: str, num_results: int = 5) -> str:
+    """使用 DuckDuckGo 进行网页搜索（通过 tool_venv 子进程执行）"""
+    try:
+        from src.execution.tool_executor import run_tool_code
+
+        result = run_tool_code(
+            code=_WEB_SEARCH_CODE,
+            parameters={"query": query, "num_results": num_results},
+            dependencies=["duckduckgo-search"],
         )
-    except ImportError:
-        return error_json("需要安装 duckduckgo-search：pip install duckduckgo-search")
+        if result.get("success"):
+            return result.get("message", json.dumps({"success": False, "error": "空结果"}))
+        error_msg = result.get("message", "搜索执行失败")
+        if "依赖安装失败" in error_msg:
+            error_msg += "。可尝试手动安装: pip install duckduckgo-search"
+        return error_json(error_msg)
     except Exception as e:
         logger.error(f"[web_search] 失败: {e}")
-        return error_json(e)
+        return error_json(f"搜索执行失败: {e}。如持续失败，可尝试: pip install duckduckgo-search")
 
 
 # =========================================================================
@@ -778,13 +794,24 @@ def exec_handler(command: str, timeout: int = 30) -> str:
 # =========================================================================
 
 BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
-    ToolDefinition(name="web_search", schema=WEB_SEARCH_SCHEMA, handler=web_search_handler),
-    ToolDefinition(name="web_fetch", schema=WEB_FETCH_SCHEMA, handler=web_fetch_handler),
+    ToolDefinition(
+        name="web_search",
+        schema=WEB_SEARCH_SCHEMA,
+        handler=web_search_handler,
+        has_side_effects=False,
+    ),
+    ToolDefinition(
+        name="web_fetch",
+        schema=WEB_FETCH_SCHEMA,
+        handler=web_fetch_handler,
+        has_side_effects=False,
+    ),
     ToolDefinition(
         name="read_file",
         schema=READ_FILE_SCHEMA,
         handler=read_file_handler,
         pre_hook=read_file_pre_hook,
+        has_side_effects=False,
     ),
     ToolDefinition(
         name="write_file",
@@ -803,6 +830,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         schema=LIST_DIR_SCHEMA,
         handler=list_dir_handler,
         pre_hook=list_dir_pre_hook,
+        has_side_effects=False,
     ),
     ToolDefinition(name="exec", schema=EXEC_SCHEMA, handler=exec_handler, pre_hook=exec_pre_hook),
 ]

@@ -24,11 +24,16 @@ class TeachingFailureTracker:
     def on_agent_error_for_failure(self, sender, **kwargs):
         del sender
         agent_type = kwargs.get("agent_type", "")
+        workflow_id = kwargs.get("workflow_id", "")
+        self._logger.info(
+            f"[FailureTracker] 收到 agent_error: agent_type={agent_type}, workflow_id={workflow_id}"
+        )
         if agent_type not in (AgentType.PM, AgentType.PROGRAMMER, AgentType.TRIAL):
+            self._logger.debug(f"[FailureTracker] 跳过非教学 agent_type={agent_type}")
             return
 
-        workflow_id = kwargs.get("workflow_id", "")
         if not workflow_id:
+            self._logger.warning("[FailureTracker] agent_error 缺少 workflow_id，跳过")
             return
 
         existing = self._failure_repo.get_by_workflow_id(workflow_id)
@@ -45,8 +50,10 @@ class TeachingFailureTracker:
                 failed_stage=agent_type,
                 error_type=existing.error_type,
             )
+            self._logger.info(f"[FailureTracker] 更新 retrying 记录: workflow={workflow_id}")
             return
 
+        self._logger.info(f"[FailureTracker] 新建失败记录: workflow={workflow_id}, stage={agent_type}")
         self.record_teaching_failure(
             workflow_id=workflow_id,
             failed_stage=agent_type,

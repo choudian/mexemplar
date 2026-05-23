@@ -89,10 +89,13 @@ async def get_entry_evolution(entry_id: str):
 @router.put("/entries/{entry_id}")
 async def edit_entry(entry_id: str, body: dict):
     """用户编辑条目"""
+    content = body.get("content", "")
+    if not content or not content.strip():
+        raise HTTPException(status_code=422, detail={"error": "content must not be empty"})
     try:
         return BrainManagementService().edit_entry(
             entry_id,
-            content=body.get("content", ""),
+            content=content.strip(),
             scope=body.get("scope"),
         )
     except KeyError:
@@ -124,7 +127,8 @@ async def create_specialist(body: dict):
     name = body.get("name", "")
     description = body.get("description", "")
     role_definition = body.get("role_definition", "")
-    tool_whitelist = body.get("tool_whitelist", [])
+    tool_whitelist_raw = body.get("tool_whitelist", [])
+    tool_whitelist = [str(item) for item in tool_whitelist_raw if isinstance(item, str) and item.strip()]
 
     if not name or not description or not role_definition:
         raise HTTPException(status_code=422, detail={"error": "validation_error"})

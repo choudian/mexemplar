@@ -66,7 +66,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"sequence", "role", "content", "rendering"}),
         required_scope_keys=frozenset({"sessionId"}),
         payload_enum_values=(
-            ("role", frozenset({"user", "assistant"})),
+            ("role", frozenset({"user", "assistant", "summary"})),
             ("rendering", frozenset({"plain_text", "safe_markdown"})),
         ),
     ),

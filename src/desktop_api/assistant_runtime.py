@@ -99,6 +99,29 @@ class AssistantRuntime:
                     {"sessionId": session_id},
                 )
                 return
+            if result.result_type == ResultType.NEEDS_USER_INPUT:
+                for message in self._chat_service.get_display_messages_after(
+                    session_id, after_sequence
+                ):
+                    event_queue.publish_nowait(
+                        "assistant.message",
+                        {
+                            "sequence": message.sequence,
+                            "role": message.role,
+                            "content": message.content,
+                            "createdAt": message.created_at.isoformat() if message.created_at else None,
+                            "rendering": (
+                                "safe_markdown" if message.role in ("assistant", "summary") else "plain_text"
+                            ),
+                        },
+                        {"sessionId": session_id},
+                    )
+                event_queue.publish_nowait(
+                    "assistant.progress",
+                    {"status": "waiting_for_user", "headline": result.question or ""},
+                    {"sessionId": session_id},
+                )
+                return
             for message in self._chat_service.get_display_messages_after(
                 session_id, after_sequence
             ):
@@ -110,7 +133,7 @@ class AssistantRuntime:
                         "content": message.content,
                         "createdAt": message.created_at.isoformat() if message.created_at else None,
                         "rendering": (
-                            "safe_markdown" if message.role == "assistant" else "plain_text"
+                            "safe_markdown" if message.role in ("assistant", "summary") else "plain_text"
                         ),
                     },
                     {"sessionId": session_id},

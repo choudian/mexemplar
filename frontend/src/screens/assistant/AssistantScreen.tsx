@@ -35,6 +35,8 @@ export function AssistantScreen(): JSX.Element {
   const setDraft = useAssistantStore((state) => state.setDraft);
   const sendDraft = useAssistantStore((state) => state.sendDraft);
   const decideConfirmation = useAssistantStore((state) => state.decideConfirmation);
+  const autoApprove = useAssistantStore((state) => state.autoApprove);
+  const setAutoApprove = useAssistantStore((state) => state.setAutoApprove);
   const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
   const [historyOpen, setHistoryOpen] = useState(true);
 
@@ -132,19 +134,28 @@ export function AssistantScreen(): JSX.Element {
             </div>
           ) : null}
           <div className="assistant-thread">
-            {messages.map((message) => (
-              <article className="assistant-message" data-role={message.role} key={message.sequence}>
-                {message.role === "assistant" ? <div className="assistant-avatar" aria-hidden="true" /> : null}
-                <div className="assistant-message-content">
-                  <div className="assistant-message-meta">{message.role === "user" ? "你" : "Assistant"}</div>
-                  {message.rendering === "safe_markdown" ? (
+            {messages.map((message) =>
+              message.role === "summary" ? (
+                <details className="assistant-summary" key={message.sequence}>
+                  <summary>之前的对话内容</summary>
+                  <div className="assistant-summary-body">
                     <SafeMarkdown content={message.content} />
-                  ) : (
-                    <p>{message.content}</p>
-                  )}
-                </div>
-              </article>
-            ))}
+                  </div>
+                </details>
+              ) : (
+                <article className="assistant-message" data-role={message.role} key={message.sequence}>
+                  {message.role === "assistant" ? <div className="assistant-avatar" aria-hidden="true" /> : null}
+                  <div className="assistant-message-content">
+                    <div className="assistant-message-meta">{message.role === "user" ? "你" : "Assistant"}</div>
+                    {message.rendering === "safe_markdown" ? (
+                      <SafeMarkdown content={message.content} />
+                    ) : (
+                      <p>{message.content}</p>
+                    )}
+                  </div>
+                </article>
+              ),
+            )}
             <ExecutionSummary status={progress.status} headline={progress.headline} />
             {lastError ? <div className="assistant-error">{lastError}</div> : null}
           </div>
@@ -157,10 +168,18 @@ export function AssistantScreen(): JSX.Element {
               onDecision={(requestId, decision) => {
                 void decideConfirmation(requestId, decision);
               }}
+              onAllowAll={() => void setAutoApprove(true)}
             />
           ))}
         </div>
-        <MessageComposer draft={draft} sending={sending} onDraftChange={setDraft} onSend={sendDraft} />
+        <MessageComposer
+          autoApprove={autoApprove}
+          draft={draft}
+          sending={sending}
+          onDraftChange={setDraft}
+          onSend={sendDraft}
+          onToggleAutoApprove={(newVal) => void setAutoApprove(newVal)}
+        />
       </div>
     </section>
   );

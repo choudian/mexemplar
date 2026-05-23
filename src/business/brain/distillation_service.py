@@ -204,12 +204,10 @@ class DistillationService:
                     to_status=SegmentStatus.FAILED.value,
                 )
                 return {"success": False, "status": "failed"}
-            repo.transition_segment_status(
-                segment_id,
-                from_status=SegmentStatus.DISTILLING.value,
-                to_status=SegmentStatus.COMPLETED.value,
+            self._retry_or_fail_segment(
+                repo, segment, "Empty entries after retry in handle_distillation_result"
             )
-            return {"success": True, "status": "completed", "entries": 0}
+            return {"success": False, "status": "failed"}
 
         created_ids = self._complete_segment_with_entries(repo, segment_id, entries)
         if len(created_ids) != len(entries):
@@ -327,12 +325,14 @@ class DistillationService:
                         all_empty_retried=True,
                     )
                     return False
-                repo.transition_segment(
+                logger.warning(
+                    "Segment %s returned empty after retry, marking FAILED",
                     segment_id,
-                    from_status=SegmentStatus.DISTILLING.value,
-                    to_status=SegmentStatus.COMPLETED.value,
                 )
-                return True
+                self._retry_or_fail_segment(
+                    repo, segment, "LLM returned empty result after retry"
+                )
+                return False
 
             # 验证结构
             entries = self._validate_distillation_output(result, phase=phase)
@@ -353,12 +353,14 @@ class DistillationService:
                         all_empty_retried=True,
                     )
                     return False
-                repo.transition_segment(
+                logger.warning(
+                    "Segment %s has no entries after retry, marking FAILED",
                     segment_id,
-                    from_status=SegmentStatus.DISTILLING.value,
-                    to_status=SegmentStatus.COMPLETED.value,
                 )
-                return True
+                self._retry_or_fail_segment(
+                    repo, segment, "No entries extracted after retry"
+                )
+                return False
 
             # 事务写入：entries + segment completed
             session_id = getattr(segment, 'session_id', '')
@@ -582,7 +584,10 @@ class DistillationService:
                     if not active_zone_keys.issubset(args.keys()):
                         return None
                     if any(key in args for key in all_zone_keys - active_zone_keys):
-                        return None
+                        logger.warning(
+                            "Distillation output contains unexpected zone keys: %s, ignoring extra keys",
+                            [k for k in args if k in (all_zone_keys - active_zone_keys)],
+                        )
                     entries = []
 
                     for zone_key in zone_keys:

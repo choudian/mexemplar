@@ -34,7 +34,26 @@ _PIP_TO_IMPORT = {
     "python-dotenv": "dotenv",
     "pyzmq": "zmq",
     "pyyaml": "yaml",
+    "duckduckgo-search": "duckduckgo_search",
 }
+
+# 内置工具所需的第三方依赖，应用启动时预装到 tool_venv
+BUILTIN_TOOL_DEPS: list[str] = ["duckduckgo-search"]
+
+
+def ensure_builtin_deps() -> None:
+    """应用启动时预装内置工具依赖到 tool_venv。失败仅打 warning，不阻塞启动。"""
+    try:
+        venv_python = _get_venv_python()
+    except RuntimeError as e:
+        logger.warning(f"[ToolExecutor] 跳过内置依赖预装: {e}")
+        return
+
+    ok, err = _ensure_dependencies(venv_python, BUILTIN_TOOL_DEPS)
+    if ok:
+        logger.info(f"[ToolExecutor] 内置工具依赖就绪: {BUILTIN_TOOL_DEPS}")
+    else:
+        logger.warning(f"[ToolExecutor] 内置依赖预装失败: {err}")
 
 # Runner 脚本：以模块方式加载工具代码，调用 execute()，结果写入 JSON 文件
 # 工具代码的 if __name__ == "__main__" 不会被触发（模块名不是 __main__）

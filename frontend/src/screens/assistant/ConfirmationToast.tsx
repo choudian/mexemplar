@@ -1,4 +1,4 @@
-import { ShieldAlert } from "lucide-react";
+import { ShieldAlert, ShieldCheck } from "lucide-react";
 
 import type { AssistantConfirmation } from "../../api/assistant";
 import { Button } from "../../components/primitives";
@@ -6,9 +6,11 @@ import { Button } from "../../components/primitives";
 function ConfirmationToast({
   confirmation,
   onDecision,
+  onAllowAll,
 }: {
   confirmation: AssistantConfirmation;
   onDecision: (requestId: string, decision: "approve" | "deny") => void;
+  onAllowAll?: () => void;
 }): JSX.Element {
   return (
     <div className="assistant-confirmation" role="alert" aria-live="assertive">
@@ -24,6 +26,12 @@ function ConfirmationToast({
         <Button kind="primary" onClick={() => onDecision(confirmation.requestId, "approve")}>
           允许
         </Button>
+        {onAllowAll && (
+          <Button kind="ghost" onClick={onAllowAll}>
+            <ShieldCheck size={14} />
+            <span>全部允许</span>
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -184,13 +184,13 @@ class PredictionService:
         response = llm_client.chat(prompt)
         text = str(response or "").strip()
         lowered = text.lower()
-        if lowered.startswith("hit") or "hit" in lowered:
+        if lowered.startswith("hit"):
             return "hit", text
-        if lowered.startswith("partial") or "partial" in lowered:
+        if lowered.startswith("partial"):
             return "partial", text
-        if lowered.startswith("miss") or "miss" in lowered:
+        if lowered.startswith("miss"):
             return "miss", text
-        if lowered.startswith("expired") or "expired" in lowered:
+        if lowered.startswith("expired"):
             return "expired", text
         raise ValueError(f"unrecognized verification response: {text[:120]}")
 

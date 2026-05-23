@@ -67,7 +67,7 @@ export const UI_EVENT_EXAMPLES = {
 
 export const UI_EVENT_PAYLOAD_ENUMS = {
   "assistant.message": {
-    "role": ["assistant", "user"],
+    "role": ["assistant", "summary", "user"],
     "rendering": ["plain_text", "safe_markdown"],
   },
   "teaching.stage_changed": {

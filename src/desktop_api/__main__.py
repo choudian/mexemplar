@@ -8,6 +8,7 @@ import sys
 import uvicorn
 
 from src.desktop_api.app import create_app
+from src.utils.logger import setup_logger
 
 
 def main() -> None:
@@ -25,9 +26,11 @@ def main() -> None:
     args = parser.parse_args()
     os.environ["MEXEMPLAR_DESKTOP_TOKEN"] = args.token
 
-    if args.verbose:
-        import logging
+    # 激活文件日志（data/logs/mexemplar.log），verbose 时用 DEBUG 级别
+    import logging
+    setup_logger(log_level=logging.DEBUG if args.verbose else logging.INFO)
 
+    if args.verbose:
         handler = logging.StreamHandler(sys.stderr)
         handler.setLevel(logging.DEBUG)
         handler.setFormatter(

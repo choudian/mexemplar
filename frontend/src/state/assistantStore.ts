@@ -8,6 +8,7 @@ import {
   listAssistantSessions,
   renameAssistantSession,
   sendAssistantMessage,
+  setAssistantAutoApprove,
   triggerAssistantSegmentBoundary,
   triggerAssistantSegmentIdle,
 } from "../api/assistant";
@@ -42,6 +43,7 @@ export type AssistantState = {
   confirmations: AssistantConfirmation[];
   lastError: string | null;
   idleThresholdMs: number | null;
+  autoApprove: boolean;
   markHydrated: () => void;
   setError: (message: string | null) => void;
   setQuery: (query: string) => void;
@@ -56,6 +58,7 @@ export type AssistantState = {
   sendDraft: () => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   decideConfirmation: (requestId: string, decision: "approve" | "deny") => Promise<void>;
+  setAutoApprove: (enabled: boolean) => Promise<void>;
   idleTimerRef: ReturnType<typeof setTimeout> | null;
   resetIdleTimer: () => void;
   clearIdleTimer: () => void;
@@ -87,6 +90,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   confirmations: [],
   lastError: null,
   idleThresholdMs: null,
+  autoApprove: false,
   markHydrated: () => set({ hydrated: true }),
   setError: (message) => set({ lastError: message }),
   setQuery: (query) => set({ query }),
@@ -110,7 +114,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     const prevSessionId = get().activeSessionId;
     await sealPreviousSegment(prevSessionId);
     const sessionId = await createAssistantSession();
-    set({ activeSessionId: sessionId, messages: [], draft: "", progress: idleProgress, confirmations: [] });
+    set({ activeSessionId: sessionId, messages: [], draft: "", progress: idleProgress, confirmations: [], autoApprove: false });
     get().clearIdleTimer();
     await get().loadSessions();
     return sessionId;
@@ -267,6 +271,18 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       confirmations: get().confirmations.filter((confirmation) => confirmation.requestId !== requestId),
     });
   },
+  setAutoApprove: async (enabled) => {
+    const previous = get().autoApprove;
+    set({ autoApprove: enabled });
+    try {
+      await setAssistantAutoApprove(enabled);
+      if (enabled) {
+        set({ confirmations: [] });
+      }
+    } catch (error) {
+      set({ autoApprove: previous, lastError: toErrorMessage(error, "设置免确认失败。") });
+    }
+  },
   idleTimerRef: null,
   resetIdleTimer: () => {
     const state = get();
@@ -276,6 +292,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     const { idleThresholdMs, activeSessionId: sessionId } = state;
     if (!sessionId || idleThresholdMs === null) return;
     const timer = setTimeout(async () => {
+      if (get().activeSessionId !== sessionId) return;
       try {
         await triggerAssistantSegmentIdle(sessionId);
       } catch {

@@ -16,6 +16,7 @@ from src.business.services.recording_startup_service import RecordingStartupServ
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
 from src.desktop_api.routers import assistant, brain, compositions, health, settings, skills, teaching
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
+from src.execution.tool_executor import ensure_builtin_deps
 
 SESSION_HEADER = "X-Mexemplar-Session"
 logger = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         RecordingStartupService().ensure_recovered()
+        ensure_builtin_deps()
         brain_worker = None
         try:
             from src.business.brain.background_worker import BrainBackgroundWorker

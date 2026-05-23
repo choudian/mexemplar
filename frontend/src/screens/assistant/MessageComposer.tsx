@@ -1,17 +1,21 @@
-import { Mic, Paperclip, Send } from "lucide-react";
+import { Mic, Paperclip, Send, ShieldCheck } from "lucide-react";
 
-import { Button, IconButton } from "../../components/primitives";
+import { Button, IconButton, Toggle } from "../../components/primitives";
 
 function MessageComposer({
   draft,
   sending,
+  autoApprove,
   onDraftChange,
   onSend,
+  onToggleAutoApprove,
 }: {
   draft: string;
   sending: boolean;
+  autoApprove: boolean;
   onDraftChange: (draft: string) => void;
   onSend: () => void;
+  onToggleAutoApprove: (enabled: boolean) => void;
 }): JSX.Element {
   return (
     <form
@@ -35,6 +39,14 @@ function MessageComposer({
       />
       <div className="assistant-composer-bar">
         <div className="assistant-composer-tools">
+          <Toggle
+            label="全部允许"
+            pressed={autoApprove}
+            onPressedChange={onToggleAutoApprove}
+          >
+            <ShieldCheck size={14} />
+            <span>全部允许</span>
+          </Toggle>
           <IconButton label="附件暂不可用" disabled>
             <Paperclip size={16} />
           </IconButton>

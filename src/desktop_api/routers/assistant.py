@@ -6,6 +6,8 @@ from src.business.services.chat_service import ChatService, DisplayChatMessage
 from src.desktop_api.assistant_runtime import AssistantRuntime
 from src.desktop_api.confirmations import record_confirmation_decision
 from src.desktop_api.schemas import (
+    AssistantAutoApproveRequest,
+    AssistantAutoApproveResponse,
     AssistantConfirmationDecisionRequest,
     AssistantConfirmationDecisionResponse,
     AssistantCreateSessionRequest,
@@ -48,13 +50,16 @@ def _session_to_dto(item: dict) -> AssistantSessionSummary:
 
 
 def _message_to_dto(message: DisplayChatMessage) -> AssistantMessage:
-    role = "assistant" if message.role == "assistant" else "user"
+    if message.role == "summary":
+        role = "summary"
+    else:
+        role = "assistant" if message.role == "assistant" else "user"
     return AssistantMessage(
         sequence=message.sequence,
         role=role,
         content=message.content,
         createdAt=message.created_at,
-        rendering="safe_markdown" if role == "assistant" else "plain_text",
+        rendering="safe_markdown" if role in ("assistant", "summary") else "plain_text",
     )
 
 
@@ -155,6 +160,28 @@ def decide_confirmation(
         decision=result.decision,
         accepted=result.accepted,
     )
+
+
+@router.post(
+    "/confirmations/auto-approve",
+    response_model=AssistantAutoApproveResponse,
+)
+def set_auto_approve(request: AssistantAutoApproveRequest) -> AssistantAutoApproveResponse:
+    from src.business.agents.tools.builtin_general_tools import (
+        CONFIRM_SOURCE_TOAST_ALLOW_ALL,
+        CONFIRM_SOURCE_TOP_TOGGLE,
+        is_auto_approve_enabled,
+        set_auto_approve_enabled,
+        settle_pending_confirmations,
+    )
+
+    if request.enabled:
+        set_auto_approve_enabled(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+        settle_pending_confirmations(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    else:
+        set_auto_approve_enabled(False, CONFIRM_SOURCE_TOP_TOGGLE)
+
+    return AssistantAutoApproveResponse(enabled=is_auto_approve_enabled())
 
 
 @router.post("/sessions/{session_id}/segment-idle")

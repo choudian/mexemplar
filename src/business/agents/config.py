@@ -85,6 +85,7 @@ class ToolDefinition:
     schema: Dict[str, Any]
     handler: Callable[..., Union[str, ToolSignal]]
     is_interrupting: bool = False
+    has_side_effects: bool = True
     pre_hook: Optional[PreHook] = None
     post_hook: Optional[PostHook] = None
 

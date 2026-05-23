@@ -493,12 +493,12 @@ class AgentLoop:
                     tc,
                     ctx,
                     "not_executed",
-                    "前序工具失败，跳过执行。请基于已有结果重新规划。",
+                    "前序副作用工具失败，跳过执行。请基于已有结果重新规划。",
                     upstream_tool_call_id=classified[i - 1][0].id if i > 0 else None,
                 )
                 continue
 
-            # Unknown tool
+            # Unknown tool — 模型幻觉，后续工具参数可能基于错误上下文，触发级联
             if kind == "unknown":
                 self._save_error(tc, ctx, "unknown_tool", f"未知工具 '{tc.name}'，无法执行。")
                 first_failure = i + 1
@@ -510,7 +510,13 @@ class AgentLoop:
             # Persist result (standardized error or success)
             ctx.save_tool_result(tool_call_id=tc.id, tool_name=tc.name, content=result)
             if outcome.failed:
-                first_failure = i + 1
+                # Only cascade failure for tools with side effects
+                if tool_def.has_side_effects:
+                    first_failure = i + 1
+                else:
+                    logger.info(
+                        f"[Agent Loop] 无副作用工具 {tc.name} 失败，继续执行后续调用"
+                    )
             else:
                 logger.debug(f"[Agent Loop] 工具结果: {tc.name} -> {str(result)[:100]}")
 
@@ -641,9 +647,9 @@ class AgentLoop:
                     question=last_msg.content,
                 )
 
-        # 恢复已完成/失败的会话
+        # 恢复已完成/失败/挂起的会话
         session_status = ctx.get_session_status()
-        if session_status in ("completed", "failed"):
+        if session_status in ("completed", "failed", "suspended"):
             ctx.update_session_status("active")
             logger.debug(f"[Agent Loop] 会话恢复（{session_status} → active）: {session_id}")
 

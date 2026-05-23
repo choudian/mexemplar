@@ -105,7 +105,7 @@ class AssistantRenameSessionRequest(BaseModel):
 
 class AssistantMessage(BaseModel):
     sequence: int
-    role: Literal["user", "assistant"]
+    role: Literal["user", "assistant", "summary"]
     content: str
     createdAt: datetime | None = None
     rendering: Literal["plain_text", "safe_markdown"]
@@ -134,6 +134,14 @@ class AssistantConfirmationDecisionResponse(BaseModel):
     requestId: str
     decision: Literal["approve", "deny"]
     accepted: bool
+
+
+class AssistantAutoApproveRequest(BaseModel):
+    enabled: bool
+
+
+class AssistantAutoApproveResponse(BaseModel):
+    enabled: bool
 
 
 class SegmentBoundaryRequest(BaseModel):

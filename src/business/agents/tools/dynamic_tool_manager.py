@@ -282,7 +282,7 @@ class DynamicToolManager:
         short_id = self._make_short_id(tool.tool_id, "utool")
         schema = self._build_tool_schema(tool, short_id)
         handler = self._create_tool_handler(tool)
-        return ToolDefinition(name=short_id, schema=schema, handler=handler)
+        return ToolDefinition(name=short_id, schema=schema, handler=handler, has_side_effects=False)
 
     def _build_tool_schema(self, tool, short_id: str) -> dict:
         properties = {}
@@ -340,7 +340,7 @@ class DynamicToolManager:
             required=["task"],
         )
         handler = self._create_composition_handler(composition)
-        return ToolDefinition(name=short_id, schema=schema, handler=handler)
+        return ToolDefinition(name=short_id, schema=schema, handler=handler, has_side_effects=False)
 
     def _create_composition_handler(self, composition) -> Callable:
 
@@ -561,10 +561,12 @@ def create_assistant_search_tools(manager: "DynamicToolManager") -> List[ToolDef
             name="search_tools",
             schema=SEARCH_TOOLS_SCHEMA,
             handler=lambda query: manager.search_tools(query),
+            has_side_effects=False,
         ),
         ToolDefinition(
             name="get_tool_detail",
             schema=GET_TOOL_DETAIL_SCHEMA,
             handler=lambda tool_name: manager.get_tool_detail(tool_name),
+            has_side_effects=False,
         ),
     ]

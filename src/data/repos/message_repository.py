@@ -5,7 +5,7 @@ MessageRepository -- 消息 Repository
 import logging
 from typing import List, Optional
 
-from sqlalchemy import and_, func
+from sqlalchemy import and_, func, or_
 
 from ..models_sqlite import Message
 from .base_repository import BaseRepository
@@ -174,10 +174,15 @@ class MessageRepository(BaseRepository):
     def _display_filter(self, query):
         return query.filter(
             and_(
-                Message.role.in_(["user", "assistant"]),
+                Message.role.in_(["user", "assistant", "summary"]),
                 Message.content != "",
                 Message.content.isnot(None),
-                Message.message_type != "compressed",
+                or_(
+                    Message.message_type == "normal",
+                    Message.message_type.is_(None),
+                    and_(Message.message_type == "compressed", Message.role == "summary"),
+                ),
+                Message.is_archived.is_(False),
             ),
         )
 
