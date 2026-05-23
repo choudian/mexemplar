@@ -346,3 +346,26 @@ All implementation tasks use the required checklist form `- [ ] T### [P?] [US?] 
 - [ ] TD001 [P] Add typed Pydantic request schemas for brain entry and specialist mutations in `src/desktop_api/routers/brain.py` and `src/desktop_api/schemas.py` - current public API handlers accept raw `dict` bodies, so malformed payloads rely on ad hoc validation instead of the desktop API schema layer.
 - [ ] TD002 Audit and close transient Repository instances in long-running brain services in `src/business/brain/background_worker.py`, `src/business/brain/specialist_service.py`, `src/business/brain/segment_service.py`, and `src/business/brain/distillation_service.py` - worker/service code creates repositories outside context managers, which can leave SQLAlchemy sessions open during repeated background ticks.
 - [ ] TD003 Expose BrainBackgroundWorker degraded startup state through desktop health/bootstrap coverage in `src/desktop_api/app.py` and `tests/desktop_api/test_health_bootstrap.py` - startup failures are currently warning-only and not visible to the frontend or health checks.
+
+---
+
+## Post-Implementation Fixes (2026-05-23)
+
+**Commit**: `1b4777f` — 在 010 文档定稿和全部 T001-T126 完成后的增量修复与增强。
+
+### Bug Fixes
+
+- [X] PF-001 Batch execution cascade fix — `src/business/agents/agent_loop.py`, `src/business/agents/config.py`, `src/business/agents/tools/builtin_general_tools.py`, `src/business/agents/tools/dynamic_tool_manager.py` — Added `has_side_effects: bool = True` to `ToolDefinition`; tools currently marked side-effect-free (`web_search`, `web_fetch`, `read_file`, `list_dir`, dynamic user tools, composition tools, search tools) no longer cascade failure to subsequent calls. Dynamic user/composition tools are classified this way by current implementation only; future per-tool metadata should set `has_side_effects` from the tool's actual behavior.
+- [X] PF-002 Distillation empty-result fix — `src/business/brain/distillation_service.py` — All-empty distillation results now trigger `_retry_or_fail_segment()` instead of silently marking `completed`.
+- [X] PF-003 Distillation zone-key tolerance — `src/business/brain/distillation_service.py` — Unexpected zone keys in distillation output are treated as out-of-schema producer output: runtime logs a warning, ignores the unknown keys, and continues with requested active-zone payload instead of silently dropping the whole result.
+- [X] PF-004 Prediction verification parsing — `src/business/brain/prediction_service.py` — `_parse_verification_response()` tightened to `startswith`-only matching to avoid false positives from keywords appearing mid-text.
+- [X] PF-005 Session suspended recovery — `src/business/agents/agent_loop.py` — `suspended` status added to session recovery conditions alongside `completed` and `failed`.
+- [X] PF-006 Brain router validation — `src/desktop_api/routers/brain.py` — Entry edit rejects empty content; specialist creation sanitizes tool_whitelist to non-empty strings only.
+
+### Enhancements
+
+- [X] PF-007 Auto-approve ("全部允许") — `frontend/src/api/assistant.ts`, `frontend/src/components/primitives.tsx`, `frontend/src/screens/assistant/MessageComposer.tsx`, `frontend/src/screens/assistant/ConfirmationToast.tsx`, `frontend/src/state/assistantStore.ts`, `src/desktop_api/routers/assistant.py`, `src/desktop_api/schemas.py` — Toggle in MessageComposer + button in ConfirmationToast + backend endpoint; session-level memory state per CC-006.
+- [X] PF-008 Summary message role — `frontend/src/screens/assistant/AssistantScreen.tsx`, `frontend/src/api/assistant.ts`, `frontend/src/api/uiEvents.ts`, `src/data/repos/message_repository.py`, `src/desktop_api/assistant_runtime.py`, `src/desktop_api/routers/assistant.py`, `src/desktop_api/schemas.py`, `src/desktop_api/ui_events.py` — `role` expanded to include `"summary"`; rendered as collapsible `<details>` with SafeMarkdown.
+- [X] PF-009 Builtin tool deps via tool_venv — `src/execution/tool_executor.py`, `src/business/agents/tools/builtin_general_tools.py`, `src/desktop_api/app.py` — `BUILTIN_TOOL_DEPS` + `ensure_builtin_deps()` pre-installs on startup; `web_search` runs in tool_venv subprocess.
+- [X] PF-010 Teaching failure tracker logging — `src/business/orchestration/agent/teaching_failure_tracker.py` — Added info/warning logs at key decision points.
+- [X] PF-011 Sidecar file logging — `src/desktop_api/__main__.py` — Activates `setup_logger()` on startup for file-based logging.

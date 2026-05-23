@@ -257,9 +257,13 @@ tool pre_hook
 
 pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCallContext.args` 是递归只读隔离视图。post_hook 只接收 handler 的原始字符串结果或普通 handler 异常转换出的标准化错误字符串；多个 post_hook 不形成结果流水线，最后一个返回非空 `PostHookResult.result` 的 hook 决定最终展示文本。
 
-多工具批处理语义先于 hook 生效：同轮混合中断型工具时直接写入 `invalid_model_output`，不执行 hook 或 handler；普通批次中 hook 拒绝、handler 异常、标准化错误结果或 handler 返回类型与 `is_interrupting` 不匹配都会触发后续工具的 `not_executed`。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。
+多工具批处理语义先于 hook 生效：同轮混合中断型工具时直接写入 `invalid_model_output`，不执行 hook 或 handler；普通批次中 hook 拒绝、handler 异常、标准化错误结果或 handler 返回类型与 `is_interrupting` 不匹配都会触发后续工具的 `not_executed`。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。批次失败级联策略按 `ToolDefinition.has_side_effects` 区分：副作用工具（write_file、exec）失败时中止后续调用，无副作用工具（web_search、web_fetch、read_file、list_dir、用户工具、组合工具）失败时仅记录日志继续执行。
 
 `load_reference` 和 `talk_to_user` 是 AgentLoop 内建注入工具，继续用于上下文引用和用户交互，但不进入 tool/global hook 管线。
+
+### 内置工具依赖预装
+
+需要第三方包的内置工具（如 `web_search` 依赖 `duckduckgo-search`）不在主进程直接 import，而是通过 `tool_executor.run_tool_code()` 在 `data/tool_venv/` 子进程执行。`tool_executor` 暴露 `BUILTIN_TOOL_DEPS` 列表和 `ensure_builtin_deps()` 函数，FastAPI lifespan 启动时调用预装。后续新增内置工具依赖只需往该列表追加包名。
 
 ### 用户交互
 
@@ -317,7 +321,7 @@ PM/程序员/试用 Agent 通过 `workflow_id` 路由到对应教学/试用状�
 AssistantScreen → desktop API → ChatService.get_display_messages() → MessageRepository.get_display_page()
 ```
 
-前端通过 `/api/assistant/sessions/{session_id}/messages` 加载历史消息；API 调用 `ChatService.get_display_messages(session_id, limit=10, before_sequence=None)`，由 `MessageRepository.get_display_page()` 在 SQLite `messages` 表上执行 keyset 分页，过滤掉 `role=tool`、`role=summary`、`message_type=compressed`、空内容和仅工具调用的 assistant 消息，返回 `ChatHistoryPage`（包含 `DisplayChatMessage` DTO 列表和 `has_more_before` 分页标志）。UI 向上滚动时传入 `before_sequence` 加载更早展示消息。
+前端通过 `/api/assistant/sessions/{session_id}/messages` 加载历史消息；API 调用 `ChatService.get_display_messages(session_id, limit=10, before_sequence=None)`，由 `MessageRepository.get_display_page()` 在 SQLite `messages` 表上执行 keyset 分页。展示过滤规则：保留 `role` 为 `user`、`assistant`、`summary` 的消息；`message_type=compressed` 且 `role=summary` 的消息保留展示；其余 compressed 消息过滤掉；排除空内容、已归档和仅工具调用的消息。`summary` 角色在前端以可折叠 `<details>` 元素渲染（"之前的对话内容"）。返回 `ChatHistoryPage`（包含 `DisplayChatMessage` DTO 列表和 `has_more_before` 分页标志）。UI 向上滚动时传入 `before_sequence` 加载更早展示消息。
 
 ### Markdown 渲染边界
 
@@ -325,7 +329,7 @@ assistant 消息在前端通过 `SafeMarkdown` 渲染。渲染前剥离 raw HTML
 
 ### 免确认 Toggle 可见性
 
-前端 assistant store 控制顶栏免确认 Toggle 的显隐：欢迎页/新对话空态时隐藏，当前会话启动过 assistant 运行后显示。高危确认仍由 `builtin_general_tools` 的 `request_id + threading.Event` 等待模型管理，sidecar 用 emit-compatible shim 发布 `assistant.confirmation` 事件，前端通过非模态确认浮层回写决策。
+前端 assistant store 控制输入栏免确认 Toggle 的显隐：欢迎页/新对话空态时隐藏，当前会话启动过 assistant 运行后显示。高危确认仍由 `builtin_general_tools` 的 `request_id + threading.Event` 等待模型管理，sidecar 用 emit-compatible shim 发布 `assistant.confirmation` 事件，前端通过非模态确认浮层回写决策。用户可通过两个入口开启会话级免确认：(1) MessageComposer 输入栏的"全部允许" Toggle；(2) ConfirmationToast 中的"全部允许"按钮。开启后通过 `POST /api/assistant/confirmations/auto-approve` 同步后端状态并放行所有挂起确认。状态仅存于进程会话内存，新建会话时自动复位。
 
 **职责分离：**
 - **Agent Loop** — 纯执行引擎，只负责跑循环和返回 AgentResult，不感知事件系统

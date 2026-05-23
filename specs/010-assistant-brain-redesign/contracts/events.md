@@ -171,6 +171,14 @@ assistant 的首轮 LLM 调用在该同步构建完成后继续。
 | `skills_changed` | `SpecialistService` | 技能池变更时检查专员白名单合规性 |
 | `agent_needs_user_input` | `SegmentService` | 助理等待用户输入期间不封存 segment |
 
+### `assistant.message` role 枚举扩展
+
+`assistant.message` SSE 事件的 `role` 字段已从 `{ "user", "assistant" }` 扩展为 `{ "user", "assistant", "summary" }`。
+
+`summary` 角色用于展示上下文压缩后产生的会话摘要，前端以可折叠 `<details>` 元素渲染（标签为"之前的对话内容"），内容使用 `SafeMarkdown` 渲染。
+
+对应 `rendering` 字段：当 `role` 为 `"assistant"` 或 `"summary"` 时值为 `"safe_markdown"`，`"user"` 时为 `"plain_text"`。
+
 ---
 
 ## 事件命名规范补充
