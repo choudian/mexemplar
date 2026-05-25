@@ -9,6 +9,7 @@ Mock 策略：
 """
 
 import json
+from unittest.mock import patch
 
 from src.business.agents.config import AgentType
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
@@ -161,6 +162,60 @@ class TestAssistantNewSession:
         # 验证 assistant 回复内容
         assistant_msgs = [m for m in messages if m.role == "assistant"]
         assert any("帮你" in (m.content or "") for m in assistant_msgs)
+
+    def test_token_threshold_seals_previous_assistant_turn(self, in_memory_db, mock_config):
+        """token 策略达到阈值时应在下一轮开始前封存已积累消息。"""
+        session_id = _create_assistant_session()
+        mock_config.get_memory_compression_trigger_strategy.return_value = "token"
+        mock_config.get_memory_compression_token_threshold.return_value = 1
+
+        first_turn = AgentOrchestrator(
+            MockLLMClient([_assistant_text_reply("这是一条足够触发 token 阈值的回复。")]),
+            mock_config,
+        )
+        first_turn.run_agent(AgentType.ASSISTANT, "开始", session_id=session_id)
+
+        with (
+            patch(
+                "src.business.brain.segment_service.SegmentService.seal_segment",
+                return_value="seg-token",
+            ) as seal_segment,
+            patch(
+                "src.business.agents.tools.assistant_tools.cleanup_retrieved_context",
+            ) as cleanup_context,
+        ):
+            second_turn = AgentOrchestrator(
+                MockLLMClient([_assistant_text_reply("继续。")]),
+                mock_config,
+            )
+            second_turn.run_agent(AgentType.ASSISTANT, "下一轮", session_id=session_id)
+
+        seal_segment.assert_called_once_with(session_id, boundary_reason="token_limit")
+        cleanup_context.assert_called_once_with(session_id)
+
+    def test_count_threshold_seals_previous_assistant_turn(self, in_memory_db, mock_config):
+        """count 策略达到阈值时也应通过统一边界原因封存 Segment。"""
+        session_id = _create_assistant_session()
+        mock_config.get_memory_compression_trigger_strategy.return_value = "count"
+        mock_config.get_memory_compression_count_threshold.return_value = 1
+
+        first_turn = AgentOrchestrator(
+            MockLLMClient([_assistant_text_reply("第一轮回复。")]),
+            mock_config,
+        )
+        first_turn.run_agent(AgentType.ASSISTANT, "开始", session_id=session_id)
+
+        with patch(
+            "src.business.brain.segment_service.SegmentService.seal_segment",
+            return_value="seg-count",
+        ) as seal_segment:
+            second_turn = AgentOrchestrator(
+                MockLLMClient([_assistant_text_reply("第二轮回复。")]),
+                mock_config,
+            )
+            second_turn.run_agent(AgentType.ASSISTANT, "继续", session_id=session_id)
+
+        seal_segment.assert_called_once_with(session_id, boundary_reason="token_limit")
 
     # -------------------------------------------------------------------------
     # 3. Agent 执行层：AgentLoop 正确处理 assistant 的 talk_to_user

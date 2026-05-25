@@ -604,6 +604,91 @@ class TestSubconsciousAndPredictionContext:
 
         assert [entry["entry_id"] for entry in context.subconscious_entries] == ["new", "mid"]
 
+    def test_subconscious_ranking_blends_effectiveness_for_equal_recency(self):
+        from src.business.brain.context_builder import BrainContextBuilder
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_injection_hot_zone_top_n.return_value = 20
+        mock_config.get_brain_injection_subconscious_top_n.return_value = 1
+
+        entries = [
+            MemoryEntryData(
+                entry_id="unused",
+                zone=Zone.SUBCONSCIOUS.value,
+                content="Never referenced",
+                status=EntryStatus.ACTIVE.value,
+                origin="distillation",
+                reason="test",
+                loaded_count=10,
+                referenced_count=0,
+                updated_at="2026-05-01T00:00:00",
+            ),
+            MemoryEntryData(
+                entry_id="effective",
+                zone=Zone.SUBCONSCIOUS.value,
+                content="Frequently useful",
+                status=EntryStatus.ACTIVE.value,
+                origin="distillation",
+                reason="test",
+                loaded_count=10,
+                referenced_count=8,
+                updated_at="2026-05-01T00:00:00",
+            ),
+        ]
+
+        mock_repo.get_entries_by_zone.side_effect = (
+            lambda zone, status=None, limit=50, offset=0:
+            entries if zone == Zone.SUBCONSCIOUS.value else []
+        )
+
+        context = BrainContextBuilder(repo=mock_repo, config=mock_config).build_context()
+
+        assert [entry["entry_id"] for entry in context.subconscious_entries] == ["effective"]
+
+    def test_subconscious_ranking_explores_candidates_before_top_n_slice(self):
+        from src.business.brain.context_builder import BrainContextBuilder
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_injection_hot_zone_top_n.return_value = 20
+        mock_config.get_brain_injection_subconscious_top_n.return_value = 1
+
+        entries = [
+            MemoryEntryData(
+                entry_id="already-seen",
+                zone=Zone.SUBCONSCIOUS.value,
+                content="Already seen repeatedly",
+                status=EntryStatus.ACTIVE.value,
+                origin="distillation",
+                reason="test",
+                loaded_count=10,
+                referenced_count=0,
+                updated_at="2026-05-01T00:00:00",
+            ),
+            MemoryEntryData(
+                entry_id="unexplored",
+                zone=Zone.SUBCONSCIOUS.value,
+                content="Needs an opportunity",
+                status=EntryStatus.ACTIVE.value,
+                origin="distillation",
+                reason="test",
+                loaded_count=0,
+                referenced_count=0,
+                updated_at="2026-05-01T00:00:00",
+            ),
+        ]
+
+        def get_entries_by_zone(zone, status=None, limit=50, offset=0):
+            if zone != Zone.SUBCONSCIOUS.value:
+                return []
+            return entries[offset:] if limit is None else entries[offset : offset + limit]
+
+        mock_repo.get_entries_by_zone = get_entries_by_zone
+        context = BrainContextBuilder(repo=mock_repo, config=mock_config).build_context()
+
+        assert [entry["entry_id"] for entry in context.subconscious_entries] == ["unexplored"]
+
     def test_prediction_zone_entries_are_not_injected(self):
         from src.business.brain.context_builder import BrainContextBuilder
 

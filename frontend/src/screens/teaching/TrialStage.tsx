@@ -125,7 +125,7 @@ export function TrialStage({
   useScrollToBottom(scrollRef, [trialMessages.length, busy]);
 
   useEffect(() => {
-    if (waitingForAi && (done || stage === "published" || stage === "failed")) {
+    if (waitingForAi && (done || stage === "failed")) {
       setWaitingForAi(false);
     }
   }, [stage, waitingForAi, done]);

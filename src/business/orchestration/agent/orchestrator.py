@@ -24,6 +24,7 @@ from src.business.agents.tools.programmer_tools import submit_code, syntax_check
 from src.business.agents.tools.recording_data_tools import create_recording_tools
 from src.business.agents.tools.trial_tools import create_desktop_trial_tools, create_trial_tools
 from src.business.ai.llm_client import LangChainLLMClient
+from src.business.memory.compression_handler import CompressionHandler
 from src.business.services import SkillCompositionService
 from src.data.repositories import (
     AssistantProfileRepository,
@@ -260,23 +261,8 @@ class AgentOrchestrator:
                 else loop.format_system_prompt(recording_id=workflow_id)
             )
 
-            # Check message limit for assistant segment boundary
             if agent_type == AgentType.ASSISTANT:
-                try:
-                    from src.data.unified_config import get_unified_config
-                    config = get_unified_config()
-                    msg_threshold = config.get_memory_compression_count_threshold()
-                    if msg_threshold:
-                        msg_count = self._message_repo.count_by_session(session_id)
-                        if msg_count and msg_count >= msg_threshold:
-                            from src.business.brain.segment_service import SegmentService
-                            sealed_id = SegmentService().seal_segment(session_id, boundary_reason="token_limit")
-                            if sealed_id:
-                                from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
-                                cleanup_retrieved_context(session_id)
-                                logger.info("Segment sealed via token_limit: session=%s, msg_count=%d", session_id, msg_count)
-                except Exception as seg_exc:
-                    logger.warning("Token-limit segment boundary check failed: %s", seg_exc)
+                self._seal_assistant_segment_at_memory_limit(session_id)
         except Exception as exc:
             logger.error(f"[Orchestrator] 无法准备 {agent_type} Agent: {exc}", exc_info=True)
             self._emit_agent_error(
@@ -321,6 +307,32 @@ class AgentOrchestrator:
                 result.result_type.value,
             )
         return result
+
+    def _seal_assistant_segment_at_memory_limit(self, session_id: str) -> Optional[str]:
+        """Seal accumulated assistant messages when configured memory limits are reached."""
+        try:
+            messages = self._message_repo.get_context(session_id)
+            if not messages or not CompressionHandler(self._config).should_compress(messages):
+                return None
+
+            from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
+            from src.business.brain.segment_service import SegmentService
+
+            sealed_id = SegmentService().seal_segment(
+                session_id,
+                boundary_reason="token_limit",
+            )
+            if sealed_id:
+                cleanup_retrieved_context(session_id)
+                logger.info(
+                    "Segment sealed via memory limit: session=%s, message_count=%d",
+                    session_id,
+                    len(messages),
+                )
+            return sealed_id
+        except Exception as seg_exc:
+            logger.warning("Memory-limit segment boundary check failed: %s", seg_exc)
+            return None
 
     def _delegate_to_subagent(
         self,

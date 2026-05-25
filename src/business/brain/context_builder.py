@@ -4,6 +4,9 @@ Brain Context Builder - 异步构建多分区上下文，注入 assistant prompt
 P2 扩展：
 - 热区排名使用复合评分（relevance + recency + effectiveness + exploration）
 - 复用会话时，之前加载过的条目获得正向加权
+
+P4 扩展：
+- 潜意识区排名使用复合评分（recency + effectiveness + exploration）
 """
 
 import logging
@@ -22,6 +25,11 @@ _HOT_RELEVANCE_WEIGHT = 0.35
 _HOT_RECENCY_WEIGHT = 0.25
 _HOT_EFFECTIVENESS_WEIGHT = 0.25
 _HOT_EXPLORATION_WEIGHT = 0.15
+
+# 潜意识区以新近度为主，效果和探索用于避免无效/新条目长期固定排序
+_SUBCONSCIOUS_RECENCY_WEIGHT = 0.60
+_SUBCONSCIOUS_EFFECTIVENESS_WEIGHT = 0.25
+_SUBCONSCIOUS_EXPLORATION_WEIGHT = 0.15
 
 # 复用会话已加载条目的额外加分
 _REVIVED_LOADED_BONUS = 0.35
@@ -139,17 +147,22 @@ class BrainContextBuilder:
         except Exception as exc:
             logger.warning("Failed to load brain specialists for prompt context: %s", exc)
 
-        # 潜意识区：top-N by recency（仅 active，不含 prediction zone）
+        # 潜意识区：以新近度为主的复合评分 top-N（仅 active，不含 prediction zone）
         subconscious_rows = self._entries_for_zone(
             repo, Zone.SUBCONSCIOUS.value, status=EntryStatus.ACTIVE.value,
-            limit=subconscious_top_n,
+            limit=None,
         )
-        subconscious_rows = sorted(
-            subconscious_rows,
-            key=lambda entry: str(self._entry_attr(entry, "updated_at", "") or ""),
-            reverse=True,
-        )[:subconscious_top_n]
-        for entry in subconscious_rows:
+        scored_subconscious = [
+            (
+                self._compute_subconscious_composite_score(
+                    self._entry_to_scoring_dict(entry),
+                ),
+                entry,
+            )
+            for entry in subconscious_rows
+        ]
+        scored_subconscious.sort(key=lambda item: item[0], reverse=True)
+        for _, entry in scored_subconscious[:subconscious_top_n]:
             subconscious_entries.append(self._entry_to_prompt_dict(entry))
             selected_entries.append(entry)
             injected_ids.append(self._entry_attr(entry, "entry_id", ""))
@@ -223,12 +236,14 @@ class BrainContextBuilder:
 
     def _entry_to_scoring_dict(self, entry) -> dict:
         created_at = self._entry_attr(entry, "created_at", "") or ""
+        updated_at = self._entry_attr(entry, "updated_at", "") or ""
         return {
             "entry_id": self._entry_attr(entry, "entry_id", ""),
             "relevance_score": self._entry_attr(entry, "relevance_score", 0.0) or 0.0,
             "loaded_count": self._entry_attr(entry, "loaded_count", 0) or 0,
             "referenced_count": self._entry_attr(entry, "referenced_count", 0) or 0,
             "created_at": str(created_at),
+            "updated_at": str(updated_at),
         }
 
     def _specialist_to_prompt_dict(self, specialist) -> dict:
@@ -286,6 +301,28 @@ class BrainContextBuilder:
             composite += _REVIVED_LOADED_BONUS * min(loaded_count / 3.0, 1.0)
 
         return round(composite, 4)
+
+    def _compute_subconscious_composite_score(self, entry: dict) -> float:
+        """计算潜意识区复合评分，以更新时间代表隐性特征演化的新近度。"""
+        timestamp = entry.get("updated_at") or entry.get("created_at", "")
+        recency_score = self._compute_recency_score(timestamp)
+
+        loaded_count = entry.get("loaded_count", 0)
+        loaded = max(loaded_count, 1)
+        referenced = entry.get("referenced_count", 0)
+        effectiveness_score = min(referenced / loaded, 1.0)
+
+        if loaded_count < _EXPLORATION_LOADED_THRESHOLD:
+            exploration_bonus = 1.0 - (loaded_count / _EXPLORATION_LOADED_THRESHOLD)
+        else:
+            exploration_bonus = 0.0
+
+        composite = (
+            _SUBCONSCIOUS_RECENCY_WEIGHT * recency_score
+            + _SUBCONSCIOUS_EFFECTIVENESS_WEIGHT * effectiveness_score
+            + _SUBCONSCIOUS_EXPLORATION_WEIGHT * exploration_bonus
+        )
+        return composite
 
     def _compute_recency_score(self, created_at_str: str) -> float:
         """基于创建时间计算新近度评分（0-1）。"""

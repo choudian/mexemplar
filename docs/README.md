@@ -31,7 +31,11 @@
 | `design/programmer_agent_design.md` | 程序员 Agent 工具集与代码规范 |
 | `design/trial_agent_design.md` | 试用 Agent 设计 |
 | `design/llm_review_design.md` | LLM Review 机制 |
+| `design/assistant_agent_design.md` | 办公助理 Agent 设计（动态工具懒加载、跨会话记忆、工具沉淀路径） |
+| `design/skill_composition_design.md` | 技能组合设计（双模执行、Assistant 集成、试用机制、needs_review） |
 | `design/recording_tools_redesign_todo.md` | 录制数据工具重设计 |
+
+> 注：`design/assistant_agent_redesign_draft.md`、`design/assistant_brain_implementation_design.md`、`design/todo-frontend-event-layer.md`、`design/todo-dev-coordinator-agent-integration.md` 是流转中的设计草稿（未 commit / 未归档），不作为本表"已落地的设计决策"引用；相关已实现的内容以 `specs/009-frontend-event-layer/`、`specs/010-assistant-brain-redesign/` 下的 spec/plan/data-model/contracts 为准。
 
 **更新规则**：不修改原文档。设计被推翻时：
 1. 在原文档头部加 `> ⚠️ 此设计已被 [新文档名] 取代`
