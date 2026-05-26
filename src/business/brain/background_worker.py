@@ -3,9 +3,11 @@ Brain Background Worker - daemon thread 处理 pending segments、崩溃恢复�
 """
 
 import logging
+import os
 import threading
 from typing import Optional, Callable
 
+from src.business.debug.context import TraceContext
 from src.utils.events import connect
 
 logger = logging.getLogger(__name__)
@@ -14,6 +16,7 @@ _brain_worker_running = False
 _brain_worker_event: Optional[threading.Event] = None
 _brain_worker_thread: Optional[threading.Thread] = None
 _brain_worker_notify: Optional[Callable] = None
+_brain_worker_lock = threading.Lock()
 
 
 def register_brain_worker_notify(callback: Callable):
@@ -24,8 +27,10 @@ def register_brain_worker_notify(callback: Callable):
 
 def notify_brain_worker():
     """唤醒 worker 立即处理"""
-    if _brain_worker_event is not None:
-        _brain_worker_event.set()
+    with _brain_worker_lock:
+        event = _brain_worker_event
+    if event is not None:
+        event.set()
 
 
 class BrainBackgroundWorker:
@@ -45,6 +50,8 @@ class BrainBackgroundWorker:
         self._llm_client = llm_client
         self._distillation_phase = distillation_phase
         self._tick_event = threading.Event()
+        self._stop_event = threading.Event()
+        self._thread: Optional[threading.Thread] = None
         self._running = False
 
     def _get_config(self):
@@ -73,12 +80,24 @@ class BrainBackgroundWorker:
             return self._llm_client
         try:
             from src.business.ai.llm_client import LangChainLLMClient
+            from src.data.credential_resolver import (
+                get_real_tour_credential_resolver,
+                is_real_tour_runtime,
+            )
 
             config = self._get_config()
+            if (
+                is_real_tour_runtime()
+                and os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_ENABLE_BACKGROUND") != "1"
+            ):
+                logger.info("Brain worker LLM disabled during real-tour runtime")
+                return None
+            resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
+            api_key = resolver.get_ai_api_key() if resolver is not None else config.get_ai_api_key()
             self._llm_client = LangChainLLMClient(
                 provider=config.get_ai_provider(),
                 model=config.get_ai_model(),
-                api_key=config.get_ai_api_key(),
+                api_key=api_key,
                 base_url=config.get_ai_base_url(),
                 temperature=0.7,
                 thinking_level=config.get_ai_thinking_level(),
@@ -92,28 +111,37 @@ class BrainBackgroundWorker:
     def start(self):
         """启动后台工作线程"""
         global _brain_worker_running, _brain_worker_event, _brain_worker_thread
-        if _brain_worker_running:
-            return
+        with _brain_worker_lock:
+            if _brain_worker_thread is not None and _brain_worker_thread.is_alive():
+                return
+            self._stop_event.clear()
+            self._tick_event.clear()
+            _brain_worker_running = True
+            _brain_worker_event = self._tick_event
 
-        _brain_worker_running = True
-        _brain_worker_event = self._tick_event
+            # 监听 segment boundary 事件来唤醒
+            connect("segment_boundary_triggered", self._on_segment_boundary)
 
-        # 监听 segment boundary 事件来唤醒
-        connect("segment_boundary_triggered", self._on_segment_boundary, weak=False)
-
-        _brain_worker_thread = threading.Thread(
-            target=self._worker_loop,
-            daemon=True,
-            name="brain-worker",
-        )
-        _brain_worker_thread.start()
-        logger.info("BrainBackgroundWorker started")
+            self._thread = threading.Thread(
+                target=self._worker_loop,
+                daemon=True,
+                name="brain-worker",
+            )
+            _brain_worker_thread = self._thread
+            self._running = True
+            self._thread.start()
+            logger.info("BrainBackgroundWorker started")
 
     def stop(self):
         """停止后台工作线程"""
-        global _brain_worker_running
-        _brain_worker_running = False
+        with _brain_worker_lock:
+            thread = self._thread
+            self._stop_event.set()
         self._tick_event.set()
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=5)
+            if thread.is_alive():
+                logger.warning("BrainBackgroundWorker is still stopping; restart remains blocked")
         logger.info("BrainBackgroundWorker stopping")
 
     def _on_segment_boundary(self, sender, **kwargs):
@@ -122,24 +150,45 @@ class BrainBackgroundWorker:
 
     def _worker_loop(self):
         """工作线程主循环"""
+        global _brain_worker_running, _brain_worker_event, _brain_worker_thread
         config = self._get_config()
         tick_interval = config.get_brain_worker_tick_interval()
 
-        while _brain_worker_running:
-            try:
-                self._process_pending_segments()
-                self._recover_crashed_segments()
-                self._run_decay_sweep()
-                self._run_archive_layering()
-                self._run_prediction_jobs()
-                self._run_subconscious_distillation()
-                self._run_invalidation_review()
-                self._run_recruitment_scan()
-            except Exception as e:
-                logger.error("Brain worker tick failed: %s", e, exc_info=True)
+        try:
+            while not self._stop_event.is_set():
+                try:
+                    self._process_pending_segments()
+                    self._recover_crashed_segments()
+                    self._run_decay_sweep()
+                    self._run_archive_layering()
+                    self._run_prediction_jobs()
+                    self._run_subconscious_distillation()
+                    self._run_invalidation_review()
+                    self._run_recruitment_scan()
+                except KeyboardInterrupt:
+                    logger.info("Brain worker interrupted, shutting down")
+                    break
+                except Exception as e:
+                    logger.error("Brain worker tick failed: %s", e, exc_info=True)
+                    self._consecutive_tick_errors = getattr(self, "_consecutive_tick_errors", 0) + 1
+                    if self._consecutive_tick_errors >= 10:
+                        logger.critical(
+                            "Brain worker has failed %d consecutive ticks, entering cooldown",
+                            self._consecutive_tick_errors,
+                        )
+                        tick_interval = min(tick_interval * 2, 3600)
+                else:
+                    self._consecutive_tick_errors = 0
 
-            self._tick_event.wait(timeout=tick_interval)
-            self._tick_event.clear()
+                self._tick_event.wait(timeout=tick_interval)
+                self._tick_event.clear()
+        finally:
+            with _brain_worker_lock:
+                if _brain_worker_thread is threading.current_thread():
+                    _brain_worker_running = False
+                    _brain_worker_event = None
+                    _brain_worker_thread = None
+                self._running = False
 
     def _process_pending_segments(self):
         """处理所有 pending segments"""
@@ -150,45 +199,83 @@ class BrainBackgroundWorker:
         except ImportError:
             return
 
-        distillation = self._get_distillation_service()
-        pending = repo.get_pending_segments()
-        llm_client = self._get_llm_client()
-        if llm_client is None:
-            if pending:
-                logger.warning(
-                    "Brain worker found %d pending segment(s), but no LLM client is available",
-                    len(pending),
-                )
+        try:
+            distillation = self._get_distillation_service()
+            pending = repo.get_pending_segments()
+            llm_client = self._get_llm_client()
+            if llm_client is None:
+                if pending:
+                    logger.warning(
+                        "Brain worker found %d pending segment(s), but no LLM client is available",
+                        len(pending),
+                    )
+                return
+
+            for segment in pending:
+                if self._stop_event.is_set():
+                    break
+                segment_id = getattr(segment, "segment_id", "")
+                retry_count = getattr(segment, "retry_count", 0)
+                max_retries = self._get_config().get_brain_segment_max_distillation_retries()
+
+                if retry_count >= max_retries:
+                    logger.warning(
+                        "Segment %s exceeded max retries (%d), marking failed",
+                        segment_id,
+                        max_retries,
+                    )
+                    repo.transition_segment(
+                        segment_id,
+                        from_status="pending",
+                        to_status="failed",
+                    )
+                    continue
+
+                try:
+                    with TraceContext(
+                        source="brain_distillation",
+                        agent_type="brain_worker",
+                        work_unit_id=str(segment_id),
+                    ):
+                        distillation.distill_segment(
+                            segment_id,
+                            llm_client=llm_client,
+                            phase=self._distillation_phase,
+                        )
+                except Exception as e:
+                    logger.error("Failed to distill segment %s: %s", segment_id, e)
+                    self._record_unhandled_distillation_failure(
+                        repo,
+                        segment,
+                        initial_retry_count=retry_count,
+                        max_retries=max_retries,
+                    )
+        finally:
+            repo.close()
+
+    @staticmethod
+    def _record_unhandled_distillation_failure(
+        repo,
+        segment,
+        *,
+        initial_retry_count: int,
+        max_retries: int,
+    ) -> None:
+        """Ensure a service exception consumes retry budget instead of spinning forever."""
+        segment_id = getattr(segment, "segment_id", "")
+        current = repo.get_segment(segment_id)
+        if current is None:
             return
-
-        for segment in pending:
-            if not _brain_worker_running:
-                break
-            segment_id = getattr(segment, "segment_id", "")
-            retry_count = getattr(segment, "retry_count", 0)
-            max_retries = self._get_config().get_brain_segment_max_distillation_retries()
-
-            if retry_count >= max_retries:
-                logger.warning(
-                    "Segment %s exceeded max retries (%d), marking failed",
-                    segment_id,
-                    max_retries,
-                )
-                repo.transition_segment(
-                    segment_id,
-                    from_status="pending",
-                    to_status="failed",
-                )
-                continue
-
-            try:
-                distillation.distill_segment(
-                    segment_id,
-                    llm_client=llm_client,
-                    phase=self._distillation_phase,
-                )
-            except Exception as e:
-                logger.error("Failed to distill segment %s: %s", segment_id, e)
+        status = getattr(current, "status", "")
+        retry_count = int(getattr(current, "retry_count", 0) or 0)
+        if status in {"completed", "failed"} or retry_count > initial_retry_count:
+            return
+        if retry_count + 1 >= max_retries:
+            repo.transition_segment(segment_id, from_status=status, to_status="failed")
+        elif status == "distilling":
+            repo.retry_distilling_segment(segment_id)
+        elif status == "pending":
+            repo.increment_retry_count(segment_id)
 
     def _recover_crashed_segments(self):
         """恢复崩溃时处于 distilling 状态的 segments"""
@@ -199,15 +286,18 @@ class BrainBackgroundWorker:
         except ImportError:
             return
 
-        distilling = repo.get_distilling_segments()
-        for segment in distilling:
-            segment_id = getattr(segment, "segment_id", "")
-            logger.info("Crash recovery: resetting segment %s to pending", segment_id)
-            repo.transition_segment(
-                segment_id,
-                from_status="distilling",
-                to_status="pending",
-            )
+        try:
+            distilling = repo.get_distilling_segments()
+            for segment in distilling:
+                segment_id = getattr(segment, "segment_id", "")
+                logger.info("Crash recovery: resetting segment %s to pending", segment_id)
+                repo.transition_segment(
+                    segment_id,
+                    from_status="distilling",
+                    to_status="pending",
+                )
+        finally:
+            repo.close()
 
     def _run_decay_sweep(self):
         """热区衰减扫描：将低 relevance 的 active 条目转为 fading"""
@@ -244,8 +334,10 @@ class BrainBackgroundWorker:
             if llm_client is None:
                 return
             service = self._get_prediction_service()
-            generated = service.generate_predictions(llm_client)
-            verified = service.verify_predictions(llm_client)
+            with TraceContext(source="brain_prediction", agent_type="brain_worker"):
+                generated = service.generate_predictions(llm_client)
+            with TraceContext(source="brain_prediction_verification", agent_type="brain_worker"):
+                verified = service.verify_predictions(llm_client)
             if generated or verified:
                 logger.info(
                     "Prediction jobs: generated=%d verified=%d",
@@ -263,7 +355,8 @@ class BrainBackgroundWorker:
             llm_client = self._get_llm_client()
             if llm_client is None:
                 return
-            count = self._get_distillation_service().run_subconscious_distillation(llm_client)
+            with TraceContext(source="brain_subconscious", agent_type="brain_worker"):
+                count = self._get_distillation_service().run_subconscious_distillation(llm_client)
             if count:
                 logger.info("Subconscious distillation produced %d entries", count)
         except ImportError:
@@ -276,9 +369,10 @@ class BrainBackgroundWorker:
         try:
             from src.data.repos.brain_repository import BrainRepository
 
-            reviewed = BrainRepository().apply_invalidation_review_decay()
-            if reviewed:
-                logger.info("Invalidation review degraded %d entries", reviewed)
+            with BrainRepository() as repo:
+                reviewed = repo.apply_invalidation_review_decay()
+                if reviewed:
+                    logger.info("Invalidation review degraded %d entries", reviewed)
         except ImportError:
             pass
         except Exception as e:

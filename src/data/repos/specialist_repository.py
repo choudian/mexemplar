@@ -11,7 +11,6 @@ from uuid import uuid4
 
 from ..models_sqlite import BrainSpecialist, BrainSpecialistVersion
 from .base_repository import BaseRepository
-from src.utils.events import emit
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +47,7 @@ class SpecialistRepository(BaseRepository):
             origin=origin,
             reason=reason,
             current_version=1,
-            is_active=1,
+            is_active=True,
         )
         try:
             self.session.add(specialist)
@@ -72,11 +71,6 @@ class SpecialistRepository(BaseRepository):
             self.session.expire_all()
 
             logger.info("Specialist 已创建: %s (name=%s)", specialist_id, name)
-            emit(
-                "brain_specialist_changed",
-                specialist_id=specialist_id,
-                operation="create",
-            )
             return specialist_id
         except Exception as e:
             self.session.rollback()
@@ -93,11 +87,7 @@ class SpecialistRepository(BaseRepository):
 
     def get_specialist_by_name(self, name: str) -> Optional[BrainSpecialist]:
         """按名称查询专员。"""
-        return (
-            self.session.query(BrainSpecialist)
-            .filter(BrainSpecialist.name == name)
-            .first()
-        )
+        return self.session.query(BrainSpecialist).filter(BrainSpecialist.name == name).first()
 
     def list_specialists(
         self,
@@ -108,14 +98,11 @@ class SpecialistRepository(BaseRepository):
         """列出专员，返回 (specialists, total_count)。"""
         query = self.session.query(BrainSpecialist)
         if active_only:
-            query = query.filter(BrainSpecialist.is_active == 1)
+            query = query.filter(BrainSpecialist.is_active.is_(True))
 
         total = query.count()
         specialists = (
-            query.order_by(BrainSpecialist.created_at.desc())
-            .offset(offset)
-            .limit(limit)
-            .all()
+            query.order_by(BrainSpecialist.created_at.desc()).offset(offset).limit(limit).all()
         )
         return specialists, total
 
@@ -168,11 +155,6 @@ class SpecialistRepository(BaseRepository):
             self.session.commit()
 
             logger.info("Specialist %s updated to version %d", specialist_id, new_version)
-            emit(
-                "brain_specialist_changed",
-                specialist_id=specialist_id,
-                operation="update",
-            )
             return True
         except Exception as e:
             self.session.rollback()
@@ -180,19 +162,14 @@ class SpecialistRepository(BaseRepository):
             raise
 
     def deactivate_specialist(self, specialist_id: str) -> bool:
-        """软删除专员（is_active=0）。返回 True 表示成功。"""
+        """软删除专员（is_active=False）。返回 True 表示成功。"""
         specialist = self.get_specialist(specialist_id)
         if specialist is None:
             return False
         try:
-            specialist.is_active = 0
+            specialist.is_active = False
             self.session.commit()
             logger.info("Specialist %s deactivated", specialist_id)
-            emit(
-                "brain_specialist_changed",
-                specialist_id=specialist_id,
-                operation="deactivate",
-            )
             return True
         except Exception as e:
             self.session.rollback()

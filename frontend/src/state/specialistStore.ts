@@ -47,7 +47,7 @@ export interface SpecialistState {
   load: () => Promise<void>;
   select: (specialistId: string | null) => void;
   setDraftField: <K extends keyof SpecialistDraft>(field: K, value: SpecialistDraft[K]) => void;
-  toggleWhitelist: (toolId: string) => void;
+  toggleWhitelist: (toolId: string, skillName?: string) => void;
   saveDraft: () => Promise<void>;
   deleteSelected: () => Promise<void>;
   deleteById: (specialistId: string) => Promise<void>;

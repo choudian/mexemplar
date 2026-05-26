@@ -11,6 +11,7 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import List, NamedTuple, Tuple, Optional
 
+from src.business.debug.context import TraceContext
 from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
 
@@ -181,11 +182,21 @@ class CompressionHandler:
         if self._llm_client is None:
             try:
                 from src.business.ai.llm_client import LangChainLLMClient
+                from src.data.credential_resolver import (
+                    get_real_tour_credential_resolver,
+                    is_real_tour_runtime,
+                )
 
+                resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
+                api_key = (
+                    resolver.get_compression_model_api_key()
+                    if resolver is not None
+                    else self._config.get_compression_model_api_key()
+                )
                 self._llm_client = LangChainLLMClient(
                     provider=self._config.get_compression_model_provider(),
                     model=self._config.get_compression_model_name(),
-                    api_key=self._config.get_compression_model_api_key(),
+                    api_key=api_key,
                     base_url=self._config.get_compression_model_base_url(),
                     temperature=self._config.get_compression_model_temperature(),
                     max_tokens=self._config.get_compression_model_max_tokens(),
@@ -244,7 +255,8 @@ class CompressionHandler:
 
             # 调用压缩 LLM
             logger.info(f"[压缩] 正在压缩 {len(compress_msgs)} 条消息...")
-            summary = llm_client.chat(prompt)
+            with TraceContext(source="compression", session_id=session_id):
+                summary = llm_client.chat(prompt)
 
             # 后处理摘要
             summary = self._post_process_summary(summary, compress_msgs)

@@ -9,6 +9,8 @@ import logging
 from collections import defaultdict
 from datetime import date, datetime
 
+from src.utils.events import emit
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,6 +24,7 @@ class ArchiveService:
     def _get_repo(self):
         if self._repo is None:
             from src.data.repos.brain_repository import BrainRepository
+
             self._repo = BrainRepository()
         return self._repo
 
@@ -184,20 +187,21 @@ class ArchiveService:
         """创建一个归档层级摘要。"""
         summary_text = combined_content[:500] if combined_content else ""
         label = layer_scope.capitalize()
-        repo.create_entry(
+        entry_id = repo.create_entry(
             zone="archive",
             content=summary_text,
             origin="archive_layering",
             reason=f"{label}-layer aggregation for {key} ({entry_count} entries)",
             scope=layer_scope,
         )
+        emit("brain_zone_changed", zone="archive", entry_id=str(entry_id), operation="create")
 
     @staticmethod
     def _layer_key(entry, prefix: str) -> str | None:
         reason = str(getattr(entry, "reason", "") or "")
         if not reason.startswith(prefix):
             return None
-        return reason[len(prefix):].split(" ", 1)[0]
+        return reason[len(prefix) :].split(" ", 1)[0]
 
     @staticmethod
     def _rollup_key(source_key: str | None, target_scope: str) -> str | None:

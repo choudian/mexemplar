@@ -103,7 +103,6 @@ describe("AppShell", () => {
       confirmations: [],
       lastError: null,
       idleThresholdMs: null,
-      idleTimerRef: null,
     });
     useTeachingStore.setState({
       hydrated: false,

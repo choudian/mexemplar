@@ -88,6 +88,9 @@ describe("TeachingScreen", () => {
     await waitFor(() => expect(screen.getByText("开始录制")).toBeEnabled());
 
     fireEvent.click(screen.getByText("开始录制"));
+    await waitFor(() => expect(screen.getByText("录制隐私确认")).toBeInTheDocument());
+    expect(screen.getByText(/可见内容可能会被记录/)).toBeInTheDocument();
+    fireEvent.click(screen.getByText("确认并开始录制"));
     await waitFor(() => expect(screen.getByText("停止录制")).toBeInTheDocument());
 
     fireEvent.click(screen.getByText("停止录制"));

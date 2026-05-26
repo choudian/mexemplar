@@ -104,6 +104,7 @@ composition_review_needed = _signals.signal("composition_review_needed")
 """技能组合需要审核事件"""
 
 trial_requested = _signals.signal("trial_requested")
+"""工具试用请求事件"""
 
 # 大脑架构事件
 brain_zone_changed = _signals.signal("brain_zone_changed")
@@ -123,7 +124,6 @@ brain_specialist_recruited = _signals.signal("brain_specialist_recruited")
 
 brain_context_ready = _signals.signal("brain_context_ready")
 """助理大脑上下文构建完成"""
-"""工具试用请求事件"""
 
 # =============================================================================
 # 事件数据类

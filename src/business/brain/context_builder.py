@@ -10,12 +10,11 @@ P4 扩展：
 """
 
 import logging
-import math
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Optional
 
 from src.business.brain.models import EntryStatus, Zone
+from src.business.brain.scoring import compute_recency_score
 from src.utils.events import emit
 
 logger = logging.getLogger(__name__)
@@ -171,7 +170,7 @@ class BrainContextBuilder:
         if track_loaded and injected_ids:
             repo.batch_increment_loaded_count(injected_ids)
 
-        is_cold_start = len(persistent_entries) == 0 and len(hot_entries) == 0
+        is_cold_start = len(persistent_rows) == 0 and len(hot_rows) == 0
 
         context = BrainContext(
             entries=selected_entries,
@@ -326,18 +325,7 @@ class BrainContextBuilder:
 
     def _compute_recency_score(self, created_at_str: str) -> float:
         """基于创建时间计算新近度评分（0-1）。"""
-        if not created_at_str:
-            return 0.5
-
-        try:
-            created_at_str = created_at_str.replace("T", " ").split(".")[0].split("+")[0]
-            created_at = datetime.fromisoformat(created_at_str)
-            now = datetime.now()
-            age_days = max((now - created_at).days, 0)
-            half_life = 30  # 热区半衰期较短
-            return math.exp(-0.693 * age_days / half_life)
-        except (ValueError, TypeError):
-            return 0.5
+        return compute_recency_score(created_at_str, half_life_days=30)
 
     def compute_composite_scores(
         self,

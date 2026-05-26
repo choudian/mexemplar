@@ -167,4 +167,34 @@ describe("AssistantScreen", () => {
     expect(useAssistantStore.getState().draft).toBe("Second message");
     expect(useAssistantStore.getState().progress.status).toBe("waiting_for_user");
   });
+
+  test("sends the exact draft without trimming leading or trailing whitespace", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/assistant/sessions/ast_1/messages") && init?.method === "POST") {
+        return jsonResponse({ accepted: true, sessionId: "ast_1" });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useAssistantStore.setState({
+      activeSessionId: "ast_1",
+      draft: "  keep me exact\n",
+      messages: [],
+      sending: false,
+      progress: { status: "idle", headline: "" },
+    });
+
+    await act(async () => {
+      await useAssistantStore.getState().sendDraft();
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://desktop.test/api/assistant/sessions/ast_1/messages",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ content: "  keep me exact\n" }),
+      }),
+    );
+  });
 });

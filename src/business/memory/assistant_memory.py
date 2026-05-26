@@ -8,6 +8,7 @@ Brain Service 不可用时的降级路径。
 
 import json
 import logging
+import os
 import threading
 from datetime import datetime
 from src.utils.timezone import utc_now_naive, to_naive_utc
@@ -39,10 +40,31 @@ class AssistantMemoryManager:
         self._embedding_checked = True
         try:
             from langchain_openai import OpenAIEmbeddings
+            from src.data.credential_resolver import (
+                get_real_tour_credential_resolver,
+                is_real_tour_runtime,
+            )
             from src.data.unified_config import get_unified_config
 
-            openai_key = get_unified_config().get_embedding_api_key()
+            if (
+                is_real_tour_runtime()
+                and os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_ENABLE_EMBEDDINGS") != "1"
+            ):
+                logger.info("[AssistantMemory] embedding disabled during real-tour runtime")
+                return None
+            resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
+            openai_key = (
+                resolver.get_embedding_api_key()
+                if resolver is not None
+                else get_unified_config().get_embedding_api_key()
+            )
             if openai_key:
+                try:
+                    from src.business.debug.service import get_debug_service
+
+                    get_debug_service().register_secret(openai_key)
+                except Exception:
+                    pass
                 self._embedding_client = OpenAIEmbeddings(
                     api_key=openai_key, model="text-embedding-3-small"
                 )

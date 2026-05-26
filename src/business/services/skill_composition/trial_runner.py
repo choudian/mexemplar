@@ -5,6 +5,7 @@ import uuid
 from typing import Any, Callable, Optional, Sequence
 
 from src.business.agents.config import ASSISTANT_CONFIG, ResultType
+from src.business.debug.context import TraceContext
 from src.data.models import SkillComposition, SkillCompositionMember, sort_composition_members
 from src.data.models_sqlite import Session
 
@@ -169,12 +170,19 @@ class TrialRunner:
         if session_id is None:
             session_id = self.create_trial_session(composition)
 
-        result = loop.run(
+        with TraceContext(
+            source="skill_composition_trial",
+            agent_type="composition_trial",
             session_id=session_id,
-            user_input=user_input,
-            tools=tool_factory,
-            system_prompt_override=build_trial_system_prompt(composition),
-        )
+            workflow_id=composition.composition_id,
+            work_unit_id=composition.composition_id,
+        ):
+            result = loop.run(
+                session_id=session_id,
+                user_input=user_input,
+                tools=tool_factory,
+                system_prompt_override=build_trial_system_prompt(composition),
+            )
         return self.to_trial_result(result, session_id)
 
     def build_trial_manager(

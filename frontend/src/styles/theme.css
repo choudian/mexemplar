@@ -1585,6 +1585,36 @@ select:focus-visible,
   gap: 8px;
 }
 
+.teaching-recording-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 14px 14px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warn) 10%, var(--surface-1));
+}
+
+.teaching-recording-consent h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.teaching-recording-consent p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.teaching-recording-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .teaching-event-log {
   display: grid;
   gap: 10px;
@@ -4344,6 +4374,400 @@ select:focus-visible,
 
   .teaching-stepper-item i {
     display: none;
+  }
+}
+
+/* ── Long-paste preview ─────────────────────────────────────────────────── */
+
+.long-paste-preview {
+  max-width: 720px;
+  margin: 0 auto;
+  animation: me-fade-in 0.2s ease both;
+}
+
+.long-paste-preview-collapsed,
+.long-paste-preview-expanded {
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  padding: 12px 14px;
+}
+
+.long-paste-preview-text {
+  margin: 0;
+  max-height: 140px;
+  overflow: hidden;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.long-paste-preview-omitted {
+  padding: 8px 0;
+  border-top: 1px solid var(--border-1);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.long-paste-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.long-paste-expand-btn,
+.long-paste-collapse-btn,
+.long-paste-clear-btn,
+.long-paste-send-btn {
+  border: 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  transition: background 120ms ease;
+}
+
+.long-paste-expand-btn,
+.long-paste-collapse-btn {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.long-paste-expand-btn:hover,
+.long-paste-collapse-btn:hover {
+  background: var(--surface-3);
+}
+
+.long-paste-clear-btn {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.long-paste-clear-btn:hover {
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+
+.long-paste-send-btn {
+  margin-left: auto;
+  background: var(--accent);
+  color: white;
+}
+
+.long-paste-send-btn:hover {
+  background: var(--accent-hover);
+}
+
+.long-paste-send-btn:disabled {
+  background: var(--surface-3);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.long-paste-expanded-header {
+  margin-bottom: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.long-paste-expanded-textarea {
+  width: 100%;
+  min-height: 74px;
+  max-height: 240px;
+  resize: vertical;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  outline: 0;
+}
+
+.long-paste-expanded-textarea:focus {
+  border-color: var(--accent);
+}
+
+/* ── Hidden debug inspector ─────────────────────────────────────────────── */
+
+.debug-trace-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid rgba(180, 83, 9, 0.28);
+  background: rgba(255, 247, 237, 0.95);
+  color: #7c2d12;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.debug-trace-banner button,
+.debug-panel-header button,
+.debug-toolbar button,
+.debug-arm-btn {
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 7px 12px;
+}
+
+.debug-trace-banner button {
+  background: #9a3412;
+}
+
+.debug-trace-banner button:disabled,
+.debug-panel-header button:disabled,
+.debug-toolbar button:disabled,
+.debug-arm-btn:disabled {
+  background: var(--surface-3);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.debug-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 100%;
+  padding: 24px;
+}
+
+.debug-header,
+.debug-panel-header,
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.debug-header h1,
+.debug-panel h2,
+.debug-warning-panel h2 {
+  margin: 0;
+  color: var(--text);
+  letter-spacing: 0;
+}
+
+.debug-header h1 {
+  font-size: 24px;
+}
+
+.debug-panel h2,
+.debug-warning-panel h2 {
+  font-size: 15px;
+}
+
+.debug-panel-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.debug-status-badge {
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+  padding: 5px 10px;
+}
+
+.debug-status-badge[data-enabled="true"] {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.debug-error {
+  border: 1px solid rgba(185, 28, 28, 0.22);
+  border-radius: var(--radius-md);
+  background: rgba(254, 242, 242, 0.9);
+  color: #991b1b;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+
+.debug-warning-panel,
+.debug-panel {
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  padding: 16px;
+}
+
+.debug-warning-list {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0;
+  padding-left: 20px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.debug-warning-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.debug-active-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.debug-panels {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.debug-panel:last-child {
+  grid-column: 1 / -1;
+}
+
+.debug-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.debug-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.debug-list-row:hover,
+.debug-list-row:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.debug-list-row span,
+.debug-list-row small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-list-row small {
+  grid-column: 1 / -1;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.debug-empty,
+.debug-detail-empty {
+  color: var(--text-muted);
+  font-size: 13px;
+  padding: 12px 0;
+}
+
+.debug-detail {
+  margin-top: 12px;
+}
+
+.debug-kv {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--border-1);
+  padding: 8px 0;
+  font-size: 12px;
+}
+
+.debug-kv span {
+  color: var(--text-muted);
+}
+
+.debug-kv strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-detail pre {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+  padding: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.debug-flow-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+}
+
+.debug-flow-timeline li {
+  color: var(--text);
+}
+
+.debug-flow-timeline span,
+.debug-flow-timeline small {
+  display: block;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.debug-reference-input {
+  width: 100%;
+  margin-top: 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  padding: 9px 10px;
+}
+
+.debug-reference-input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+@media (max-width: 980px) {
+  .debug-panels {
+    grid-template-columns: 1fr;
   }
 }
 

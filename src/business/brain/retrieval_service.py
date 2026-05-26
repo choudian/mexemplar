@@ -8,8 +8,8 @@ Retrieval Service - 归档区显式检索
 - 检索后递增 loaded_count
 """
 
-import math
-from datetime import datetime
+from src.business.brain.scoring import compute_recency_score
+from src.utils.events import emit
 
 # 复合评分权重
 RELEVANCE_WEIGHT = 0.35
@@ -34,6 +34,7 @@ class RetrievalService:
     def _get_repo(self):
         if self._repo is None:
             from src.data.repos.brain_repository import BrainRepository
+
             self._repo = BrainRepository()
         return self._repo
 
@@ -127,6 +128,13 @@ class RetrievalService:
             }
 
         updated = repo.invalidate_entry(entry_id, reason)
+        if updated:
+            emit(
+                "brain_zone_changed",
+                zone=getattr(entry, "zone", ""),
+                entry_id=entry_id,
+                operation="invalidate",
+            )
         return {
             "success": bool(updated),
             "message": "Entry invalidated" if updated else "Entry was not invalidated",
@@ -150,9 +158,7 @@ class RetrievalService:
             "created_at": str(created_at),
             "updated_at": str(updated_at),
             "invalidation_factor": (
-                INVALIDATED_PENALTY
-                if getattr(entry, "status", "active") == "invalidated"
-                else 1.0
+                INVALIDATED_PENALTY if getattr(entry, "status", "active") == "invalidated" else 1.0
             ),
         }
 
@@ -196,18 +202,5 @@ class RetrievalService:
 
     def _compute_recency_score(self, created_at_str: str) -> float:
         """基于创建时间计算新近度评分（0-1）。"""
-        if not created_at_str:
-            return 0.5
-
-        try:
-            # 处理各种日期格式
-            created_at_str = created_at_str.replace("T", " ").split(".")[0].split("+")[0]
-            created_at = datetime.fromisoformat(created_at_str)
-            now = datetime.now()
-            age_days = max((now - created_at).days, 0)
-            # Archive entries retain value for months; use a long half-life so
-            # recent-but-new entries can surface through the exploration bonus.
-            half_life = 365
-            return math.exp(-0.693 * age_days / half_life)
-        except (ValueError, TypeError):
-            return 0.5
+        # Archive memories intentionally retain value longer than hot-zone context.
+        return compute_recency_score(created_at_str, half_life_days=365)

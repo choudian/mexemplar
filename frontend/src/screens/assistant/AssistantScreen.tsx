@@ -173,6 +173,7 @@ export function AssistantScreen(): JSX.Element {
           ))}
         </div>
         <MessageComposer
+          key={activeSessionId ?? "new"}
           autoApprove={autoApprove}
           draft={draft}
           sending={sending}

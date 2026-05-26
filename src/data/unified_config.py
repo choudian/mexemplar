@@ -459,6 +459,49 @@ class UnifiedConfigManager:
         """触发自动招募的最小委托次数"""
         return self.get("brain.recruitment.min_delegation_count", default=5)
 
+    # ===== 便捷方法：debug trace 配置 =====
+
+    def get_debug_trace_enabled(self) -> bool:
+        """debug trace 是否启用（默认关闭，仅由 authenticated control facade 通过 runtime 设置）"""
+        with self._cache_lock:
+            return self._runtime_cache.get("debug.trace.enabled") is True
+
+    def get_debug_trace_max_records(self) -> int:
+        """进程内 trace 最大记录数（正整数，默认 200）"""
+        val = self.get("debug.trace.max_records", 200)
+        try:
+            v = int(val)
+            return v if v > 0 else 200
+        except (ValueError, TypeError):
+            return 200
+
+    def get_debug_trace_max_record_bytes(self) -> int:
+        """单条 trace 最大字节数（正整数，默认 1 MiB）"""
+        val = self.get("debug.trace.max_record_bytes", 1048576)
+        try:
+            v = int(val)
+            return v if v > 0 else 1048576
+        except (ValueError, TypeError):
+            return 1048576
+
+    def get_debug_trace_max_total_bytes(self) -> int:
+        """trace 合计最大字节数（正整数，默认 16 MiB）"""
+        val = self.get("debug.trace.max_total_bytes", 16777216)
+        try:
+            v = int(val)
+            return v if v > 0 else 16777216
+        except (ValueError, TypeError):
+            return 16777216
+
+    def get_debug_reference_max_response_bytes(self) -> int:
+        """单次 reference expansion 最大响应字节数（正整数，默认 1 MiB）"""
+        val = self.get("debug.reference.max_response_bytes", 1048576)
+        try:
+            v = int(val)
+            return v if v > 0 else 1048576
+        except (ValueError, TypeError):
+            return 1048576
+
     # ===== 内部方法 =====
 
     def _get_from_file_config(self, key: str) -> Any:

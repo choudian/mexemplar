@@ -44,6 +44,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   let secretPresent = false;
   let settingsModel = "claude-sonnet-4-20250514";
   let compositionCounter = 0;
+  let debugTraceEnabled = false;
 
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -71,6 +72,125 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     }
     if (path === "/api/health") {
       return json(route, bootstrap(status, message).connection);
+    }
+
+    if (path === "/api/debug/control" && method === "GET") {
+      return json(route, {
+        enabled: debugTraceEnabled,
+        armedAt: debugTraceEnabled ? "2026-05-24T00:00:00Z" : null,
+        retentionEpoch: debugTraceEnabled ? "epoch_fixture" : null,
+        warning: "调试记录可能包含原始用户文本",
+        limits: { maxRecords: 200, maxRecordBytes: 1048576, maxTotalBytes: 16777216 },
+      });
+    }
+    if (path === "/api/debug/control" && method === "PUT") {
+      const body = request.postDataJSON() as { enabled?: boolean };
+      debugTraceEnabled = Boolean(body.enabled);
+      return json(route, {
+        enabled: debugTraceEnabled,
+        armedAt: debugTraceEnabled ? "2026-05-24T00:00:00Z" : null,
+        retentionEpoch: debugTraceEnabled ? "epoch_fixture" : null,
+        warning: "调试记录可能包含原始用户文本",
+        limits: { maxRecords: 200, maxRecordBytes: 1048576, maxTotalBytes: 16777216 },
+      });
+    }
+    if (path === "/api/debug/traces" && method === "GET") {
+      return json(route, {
+        items: debugTraceEnabled
+          ? [
+              {
+                traceId: "trace_fixture_done",
+                method: "chat",
+                source: "agent_loop",
+                agentType: "assistant",
+                sessionId: "ast_1",
+                workflowId: "wf_fixture",
+                workUnitId: null,
+                iteration: 1,
+                outcome: "succeeded",
+                detailAvailability: "full_text",
+                retainedBytes: 128,
+                createdAt: "2026-05-24T00:00:00Z",
+                completedAt: "2026-05-24T00:00:01Z",
+                summary: "text_chars:14",
+                linkedTransitionIds: ["tr_fixture"],
+              },
+            ]
+          : [],
+        retainedBytes: debugTraceEnabled ? 128 : 0,
+        omittedCount: 0,
+        warning: "armed",
+      });
+    }
+    if (path === "/api/debug/traces" && method === "DELETE") {
+      return route.fulfill({ status: 204, headers: jsonHeaders, body: "" });
+    }
+    if (path === "/api/debug/traces/trace_fixture_done" && method === "GET") {
+      return json(route, {
+        traceId: "trace_fixture_done",
+        method: "chat",
+        source: "agent_loop",
+        agentType: "assistant",
+        sessionId: "ast_1",
+        workflowId: "wf_fixture",
+        workUnitId: null,
+        iteration: 1,
+        inputMessages: [{ role: "user", content: "fixture prompt" }],
+        inputMedia: [],
+        inputTools: null,
+        outputContent: "fixture answer",
+        outputToolCalls: [],
+        outcome: "succeeded",
+        errorSummary: null,
+        detailAvailability: "full_text",
+        retainedBytes: 128,
+        linkedTransitionIds: ["tr_fixture"],
+        createdAt: "2026-05-24T00:00:00Z",
+        completedAt: "2026-05-24T00:00:01Z",
+      });
+    }
+    if (path === "/api/debug/flows" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            workflowId: "wf_fixture",
+            transitionCount: 1,
+            lastEventType: "assistant_delegation_completed",
+            lastCreatedAt: "2026-05-24T00:00:01Z",
+            linkedTraceCount: 1,
+          },
+        ],
+      });
+    }
+    if (path === "/api/debug/flows/wf_fixture" && method === "GET") {
+      return json(route, {
+        workflowId: "wf_fixture",
+        transitions: [
+          {
+            transitionId: "tr_fixture",
+            eventType: "assistant_delegation_completed",
+            status: "completed",
+            fromSession: { sessionId: "child", agentType: "specialist" },
+            toSession: { sessionId: "ast_1", agentType: "assistant" },
+            reason: "completed",
+            detail: { output: { success: true } },
+            detailProvenance: "ephemeral_debug_capture",
+            detailAvailability: "full_text",
+            traceIds: ["trace_fixture_done"],
+            linkStatus: "linked",
+            createdAt: "2026-05-24T00:00:01Z",
+          },
+        ],
+      });
+    }
+    if (path.startsWith("/api/debug/references/") && method === "GET") {
+      return json(route, {
+        referenceId: decodeURIComponent(path.split("/").pop() ?? ""),
+        content: "fixture expanded reference",
+        available: true,
+        truncated: false,
+        nextChunk: null,
+      });
     }
 
     if (path === "/api/assistant/sessions" && method === "GET") {

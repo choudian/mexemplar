@@ -3,6 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from src.data.credential_resolver import (
+    ReadOnlyCredentialResolver,
+    get_real_tour_credential_resolver,
+    is_real_tour_runtime,
+)
 from src.data.config_models import AIConfig, LargeFieldConfig, RecordingConfig, RecordingDesktopConfig, UIConfig
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils import events
@@ -286,8 +291,15 @@ class SettingsValidationError(ValueError):
 
 
 class SettingsService:
-    def __init__(self, config: UnifiedConfigManager | None = None):
+    def __init__(
+        self,
+        config: UnifiedConfigManager | None = None,
+        credential_resolver: ReadOnlyCredentialResolver | None = None,
+    ):
         self._config = config or get_unified_config()
+        self._credential_resolver = credential_resolver or (
+            get_real_tour_credential_resolver() if is_real_tour_runtime() else None
+        )
         self._specs = {spec.key: spec for spec in SETTING_SPECS}
         self._actions = {spec.key: spec for spec in ACTION_SPECS}
 
@@ -338,6 +350,8 @@ class SettingsService:
         return self.get_values()
 
     def write_secret(self, secret_key: str, value: str) -> dict[str, Any]:
+        if is_real_tour_runtime():
+            raise SettingsValidationError(secret_key, "真实验收期间密钥只读。")
         if secret_key != "ai.api_key":
             raise SettingsValidationError(secret_key, "不支持的密钥项。")
         secret = value.strip()
@@ -348,6 +362,8 @@ class SettingsService:
         return self._secret_state(secret_key)
 
     def delete_secret(self, secret_key: str) -> dict[str, Any]:
+        if is_real_tour_runtime():
+            raise SettingsValidationError(secret_key, "真实验收期间密钥只读。")
         if secret_key != "ai.api_key":
             raise SettingsValidationError(secret_key, "不支持的密钥项。")
         self._config.clear_ai_api_key()
@@ -367,7 +383,7 @@ class SettingsService:
         }
 
     def _secret_state(self, secret_key: str) -> dict[str, Any]:
-        present = bool(self._config.get_ai_api_key()) if secret_key == "ai.api_key" else False
+        present = bool(self._get_ai_api_key()) if secret_key == "ai.api_key" else False
         return {
             "secretKey": secret_key,
             "present": present,
@@ -378,14 +394,24 @@ class SettingsService:
         direct_vision_model = self._config.get("recording.desktop.vision_model", default=None)
         if not direct_vision_model:
             vision_status = "unavailable"
-        elif not self._config.get_ai_vision_api_key():
+        elif not self._get_ai_vision_api_key():
             vision_status = "missing_secret"
         else:
             vision_status = "available"
         return {
-            "ai.api_key": "available" if self._config.get_ai_api_key() else "missing_secret",
+            "ai.api_key": "available" if self._get_ai_api_key() else "missing_secret",
             "recording.desktop.vision_model": vision_status,
         }
+
+    def _get_ai_api_key(self) -> str | None:
+        if self._credential_resolver is not None:
+            return self._credential_resolver.get_ai_api_key()
+        return self._config.get_ai_api_key()
+
+    def _get_ai_vision_api_key(self) -> str | None:
+        if self._credential_resolver is not None:
+            return self._credential_resolver.get_ai_vision_api_key()
+        return self._config.get_ai_vision_api_key()
 
     def _normalize_value(self, spec: SettingSpec, value: Any) -> Any:
         if spec.value_kind in {"integer", "number"}:

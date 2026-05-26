@@ -45,7 +45,6 @@ function resetAssistantStore() {
     confirmations: [],
     lastError: null,
     idleThresholdMs: null,
-    idleTimerRef: null,
   });
 }
 
@@ -127,7 +126,6 @@ describe("Assistant idle segment timer", () => {
     await vi.advanceTimersByTimeAsync(IDLE_THRESHOLD_MS);
 
     expect(triggerAssistantSegmentIdle).not.toHaveBeenCalled();
-    expect(useAssistantStore.getState().idleTimerRef).toBeNull();
   });
 
   test("new sessions seal the previous conversation with a new_session boundary", async () => {

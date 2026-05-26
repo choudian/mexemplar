@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from unittest.mock import patch
 
 from src.business.agents.tools import builtin_general_tools as general_tools
 from src.data.models_sqlite import BrainSegment, Message
@@ -180,3 +181,30 @@ def test_segment_boundary_endpoint_seals_with_explicit_reason(desktop_api_client
         segment = session.get(BrainSegment, payload["segment_id"])
         assert segment is not None
         assert segment.boundary_reason == "new_session"
+
+
+def test_segment_idle_endpoint_returns_stable_internal_error(desktop_api_client):
+    with patch(
+        "src.business.brain.segment_service.SegmentService.handle_idle_trigger",
+        side_effect=RuntimeError("private database path"),
+    ):
+        response = desktop_api_client.post("/api/assistant/sessions/ast-1/segment-idle")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == {"error": "internal_error"}
+    assert "private database path" not in response.text
+
+
+def test_segment_boundary_endpoint_returns_stable_internal_error(desktop_api_client):
+    with patch(
+        "src.business.brain.segment_service.SegmentService.seal_segment",
+        side_effect=RuntimeError("private database path"),
+    ):
+        response = desktop_api_client.post(
+            "/api/assistant/segment-boundary",
+            json={"session_id": "ast-1", "reason": "window_close"},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == {"error": "internal_error"}
+    assert "private database path" not in response.text

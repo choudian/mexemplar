@@ -9,12 +9,16 @@ import {
   editBrainEntry,
   getEntryEvolution,
   getSkillPool,
+  isBrainZone,
   removeSkillFromPool,
   SkillPoolRemovalConflict,
 } from "../api/brain";
 import type {
   AffectedSpecialist,
   BrainZoneSummary,
+  BrainZone,
+  BrainEntryStatus,
+  BrainSegmentStatus,
   BrainMemoryEntry,
   BrainSegment,
   SkillPoolItem,
@@ -22,11 +26,13 @@ import type {
 import type { UiEvent } from "../api/client";
 import { toErrorMessage } from "./helpers";
 
+let _entriesSeq = 0;
+
 export interface BrainState {
   zones: BrainZoneSummary[];
   entries: BrainMemoryEntry[];
   entriesTotal: number;
-  activeZone: string | null;
+  activeZone: BrainZone | null;
   segments: BrainSegment[];
   segmentsTotal: number;
   skillPool: SkillPoolItem[];
@@ -43,10 +49,10 @@ export interface BrainState {
   } | null;
 
   loadZones: () => Promise<void>;
-  loadEntries: (zone: string, options?: { limit?: number; offset?: number; status?: string }) => Promise<void>;
-  loadSegments: (options?: { limit?: number; offset?: number; status?: string }) => Promise<void>;
+  loadEntries: (zone: BrainZone, options?: { limit?: number; offset?: number; status?: BrainEntryStatus }) => Promise<void>;
+  loadSegments: (options?: { limit?: number; offset?: number; status?: BrainSegmentStatus | "all" }) => Promise<void>;
   loadSkillPool: () => Promise<void>;
-  setActiveZone: (zone: string) => void;
+  setActiveZone: (zone: BrainZone) => void;
   deleteEntry: (entryId: string) => Promise<void>;
   editEntry: (entryId: string, content: string, scope?: string) => Promise<void>;
   retrySegment: (segmentId: string) => Promise<void>;
@@ -86,14 +92,19 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   },
 
   loadEntries: async (zone, options = {}) => {
+    const seq = ++_entriesSeq;
     set({ loadingEntries: true, lastError: null, activeZone: zone });
     try {
       const response = await getZoneEntries(zone, options);
+      if (_entriesSeq !== seq) return;
       set({ entries: response.items, entriesTotal: response.total });
     } catch (error) {
+      if (_entriesSeq !== seq) return;
       set({ lastError: toErrorMessage(error, "无法加载条目列表。") });
     } finally {
-      set({ loadingEntries: false });
+      if (_entriesSeq === seq) {
+        set({ loadingEntries: false });
+      }
     }
   },
 
@@ -197,7 +208,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
 
   applyEvent: (event) => {
     if (event.type === "brain_zone_changed") {
-      const eventZone = typeof event.payload.zone === "string" ? event.payload.zone : null;
+      const eventZone = isBrainZone(event.payload.zone) ? event.payload.zone : null;
       const activeZone = get().activeZone;
       if (activeZone && (!eventZone || eventZone === activeZone)) {
         void get().loadEntries(activeZone);

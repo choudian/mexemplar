@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from src.business.services.recording_startup_service import RecordingStartupService
+from src.business.services.real_tour_startup_service import RealTourStartupService
 from src.desktop_api.app import SESSION_HEADER, create_app
 
 
@@ -19,4 +20,19 @@ def test_desktop_api_lifespan_runs_recording_startup_recovery(monkeypatch):
         response = client.get("/api/health")
 
     assert response.status_code == 200
+    assert calls == [True]
+
+
+def test_desktop_api_create_app_installs_real_tour_runtime_guards_through_business_service(
+    monkeypatch,
+):
+    calls: list[bool] = []
+    monkeypatch.setattr(
+        RealTourStartupService,
+        "install_runtime_guards",
+        lambda self: calls.append(True),
+    )
+
+    create_app("test-session-token")
+
     assert calls == [True]

@@ -118,7 +118,7 @@ class TestCrashReset:
         stale_segment = MagicMock()
         stale_segment.segment_id = "stale-1"
         stale_segment.status = "distilling"
-        stale_segment.distilling_started_at = datetime.now() - timedelta(hours=2)
+        stale_segment.distilling_started_at = datetime.utcnow() - timedelta(hours=2)
         mock_repo.get_segments_by_status.return_value = [stale_segment]
         mock_repo.transition_segment_status.return_value = True
 
@@ -142,7 +142,7 @@ class TestCrashReset:
         recent_segment = MagicMock()
         recent_segment.segment_id = "recent-1"
         recent_segment.status = "distilling"
-        recent_segment.distilling_started_at = datetime.now() - timedelta(seconds=10)
+        recent_segment.distilling_started_at = datetime.utcnow() - timedelta(seconds=10)
         mock_repo.get_segments_by_status.return_value = [recent_segment]
 
         service = SegmentService()

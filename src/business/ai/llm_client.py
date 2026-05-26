@@ -123,6 +123,13 @@ class LangChainLLMClient:
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout = timeout
 
+        try:
+            from src.business.debug.service import get_debug_service
+
+            get_debug_service().register_secret(self.api_key)
+        except Exception:
+            logger.debug("debug redactor secret registration failed", exc_info=True)
+
         # 初始化 LangChain LLM 实例
         self.llm = self._create_llm()
 
@@ -288,11 +295,17 @@ class LangChainLLMClient:
         Returns:
             模型响应文本
         """
-        try:
+        def _invoke(raw_prompt: str) -> str:
+            try:
+                from src.data.real_tour_audit import record_paid_call
+
+                record_paid_call("llm_chat")
+            except ImportError:
+                pass
             from langchain_core.messages import HumanMessage
 
             # 创建消息
-            message = HumanMessage(content=prompt)
+            message = HumanMessage(content=raw_prompt)
 
             # 调用模型
             response = self.llm.invoke([message], **kwargs)
@@ -300,9 +313,23 @@ class LangChainLLMClient:
             # 返回文本内容
             return response.content
 
-        except Exception as e:
-            logger.error(f"[LLM客户端] 调用失败: {e}")
-            raise
+        try:
+            from src.business.debug.observation import observe_chat
+            from src.business.debug.service import get_active_capture
+
+            buffer, redactor, epoch = get_active_capture()
+        except Exception:
+            logger.debug("debug observation unavailable for chat", exc_info=True)
+            return _invoke(prompt)
+
+        return observe_chat(
+                buffer=buffer,
+                redactor=redactor,
+                epoch=epoch,
+                prompt=prompt,
+                invoke_fn=_invoke,
+                method="chat",
+            )
 
     def chat_with_tools(
         self,
@@ -323,19 +350,34 @@ class LangChainLLMClient:
         Returns:
             LLMResponse 对象
         """
-        try:
-            # 转换为 LangChain 消息对象
-            lc_messages = self._convert_to_langchain_messages(messages)
+        def _invoke_provider(
+            provider_messages: List[Dict[str, Any]],
+            provider_tools: List[Dict[str, Any]] | None,
+        ) -> LLMResponse:
+            try:
+                from src.data.real_tour_audit import record_paid_call
 
-            # DEBUG: 打印消息总数 + 最新一条
-            if logger.isEnabledFor(logging.DEBUG) and messages:
-                last = messages[-1]
+                record_paid_call("llm_chat_with_tools")
+            except ImportError:
+                pass
+            # 转换为 LangChain 消息对象
+            lc_messages = self._convert_to_langchain_messages(provider_messages)
+
+            # DEBUG: 只记录安全摘要，避免 raw prompt/tool args 进入普通日志
+            if logger.isEnabledFor(logging.DEBUG) and provider_messages:
+                last = provider_messages[-1]
                 role = last.get("role", "?")
                 content = str(last.get("content") or "")
-                logger.debug(f"[LLM→] ({len(messages)} msgs) {role}: {content}")
+                logger.debug(
+                    "[LLM→] messages=%s last_role=%s last_content_chars=%s tools=%s",
+                    len(provider_messages),
+                    role,
+                    len(content),
+                    len(provider_tools or []),
+                )
 
             # 绑定工具（单工具调用模式）
-            llm_with_tools = self.llm.bind_tools(tools, parallel_tool_calls=False)
+            llm_with_tools = self.llm.bind_tools(provider_tools or [], parallel_tool_calls=False)
 
             # 调用模型
             ai_message = llm_with_tools.invoke(lc_messages, **kwargs)
@@ -346,19 +388,37 @@ class LangChainLLMClient:
             # DEBUG: 打印 LLM 返回结果
             if logger.isEnabledFor(logging.DEBUG):
                 if response.has_tool_calls:
-                    tc = response.tool_calls[0]
-                    import json as _json
-
-                    args_str = _json.dumps(tc.args, ensure_ascii=False)
-                    logger.debug(f"[←LLM] tool_call={tc.name} args={args_str}")
+                    logger.debug(
+                        "[←LLM] tool_calls=%s first_tool=%s",
+                        len(response.tool_calls),
+                        response.tool_calls[0].name,
+                    )
                 else:
-                    logger.debug(f"[←LLM] text={response.content or ''}")
+                    logger.debug(
+                        "[←LLM] text_chars=%s",
+                        len(response.content or ""),
+                    )
 
             return response
 
-        except Exception as e:
-            logger.error(f"[LLM客户端] 工具调用失败: {e}")
-            raise
+        try:
+            from src.business.debug.observation import observe_chat_with_tools
+            from src.business.debug.service import get_active_capture
+
+            buffer, redactor, epoch = get_active_capture()
+        except Exception:
+            logger.debug("debug observation unavailable for tool chat", exc_info=True)
+            return _invoke_provider(messages, tools)
+
+        return observe_chat_with_tools(
+                buffer=buffer,
+                redactor=redactor,
+                epoch=epoch,
+                messages=messages,
+                tools=tools,
+                invoke_fn=_invoke_provider,
+                method="chat_with_tools",
+            )
 
     def _convert_to_langchain_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         """

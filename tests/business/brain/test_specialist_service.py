@@ -13,7 +13,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 from src.data.models_sqlite import BrainSpecialist, BrainSpecialistVersion
-from src.utils.events import clear_all
+from src.utils.events import clear_all, connect
 
 
 @pytest.fixture(autouse=True)
@@ -231,6 +231,12 @@ class TestSpecialistServiceUpdate:
             MockRepo.return_value = mock_repo
             mock_repo.get_specialist.side_effect = [existing, updated]
             mock_repo.update_specialist.return_value = True
+            received = []
+            connect(
+                "brain_specialist_changed",
+                lambda sender, **kwargs: received.append(kwargs),
+                weak=False,
+            )
 
             service = SpecialistService(repo=mock_repo)
             result = service.update_specialist(
@@ -240,9 +246,10 @@ class TestSpecialistServiceUpdate:
 
             assert result["description"] == "更新后的描述"
             mock_repo.update_specialist.assert_called_once()
+            assert received[-1]["operation"] == "update"
 
     def test_update_rejects_nonexistent(self):
-        """更新不存在的专员应抛出 ValueError"""
+        """更新不存在的专员应抛出稳定的 not-found 异常。"""
         from src.business.brain.specialist_service import SpecialistService
 
         with patch("src.business.brain.specialist_service.SpecialistRepository") as MockRepo:
@@ -251,7 +258,7 @@ class TestSpecialistServiceUpdate:
             mock_repo.get_specialist.return_value = None
 
             service = SpecialistService(repo=mock_repo)
-            with pytest.raises(ValueError, match="不存在"):
+            with pytest.raises(KeyError, match="specialist_not_found"):
                 service.update_specialist(
                     specialist_id="nonexistent",
                     description="新描述",
@@ -266,13 +273,21 @@ class TestSpecialistServiceDelete:
         with patch("src.business.brain.specialist_service.SpecialistRepository") as MockRepo:
             mock_repo = MagicMock()
             MockRepo.return_value = mock_repo
+            mock_repo.get_specialist.return_value = _make_specialist_orm()
             mock_repo.deactivate_specialist.return_value = True
+            received = []
+            connect(
+                "brain_specialist_changed",
+                lambda sender, **kwargs: received.append(kwargs),
+                weak=False,
+            )
 
             service = SpecialistService(repo=mock_repo)
             result = service.delete_specialist("sp-001")
 
             assert result is True
             mock_repo.deactivate_specialist.assert_called_once_with("sp-001")
+            assert received[-1]["operation"] == "deactivate"
 
 
 # ═══════════════════════════════════════════════

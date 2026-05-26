@@ -54,6 +54,25 @@
 - `src/main.py`、`mexemplar_gui.py`、`start.bat`、`mexemplar_gui.bat` 只能显式失败并提示 legacy PyQt launcher 已退休；不得恢复可启动 PyQt fallback。
 - `src/ui/`、`tests/ui/` 和旧 Python GUI `tests/e2e/` 不再是维护面；新增 UI 行为覆盖应放在 `frontend/tests/unit/` 或 `frontend/tests/e2e/`，后端桥接覆盖放在 `tests/desktop_api/`、`tests/integration/` 或 `tests/guardrails/`。
 
+## Debug Inspector Boundaries
+
+- `/debug` 是隐藏诊断路由，不出现在普通导航；只能通过 typed debug API client 调 authenticated `/api/debug`。
+- `debug.trace.enabled` 只能由 DebugInspectorService 以 runtime 配置 arm，不能写入数据库、配置文件、keyring 或前端持久化存储。
+- Raw LLM trace 与 Assistant delegated task/result ephemeral detail 只存在于当前 sidecar 进程内的 epoch buffer；disable、clear、restart 必须销毁它们，mid-flight stale completion 不得回填旧 epoch。
+- Flow 中的既有 `workflow_transitions` 是按业务生命周期保留的持久状态事实，不会因 debug clear/disable 删除；reference content 是鉴权后的按需、`no-store` 响应，不写入 debug buffer。离开 `/debug` 只清理前端内存中的 raw 响应状态。
+- Raw debug endpoints 必须返回 `Cache-Control: no-store`；URL、ordinary UI event payload、localStorage/sessionStorage/indexedDB、普通日志不得出现 diagnostic-only prompt、trace、handoff、media、correlation 或 credential 字段。
+- 模型 text/tool/vision 调用必须走 fail-isolated observation boundary；诊断采集失败不得改变 provider 成功/失败语义。Vision 只保留媒体元数据，不保留 base64/data URL/raw bytes。
+- Embedding/vectorization 不生成 LLMTraceRecord，但 credential/callsite 必须登记在 provider/redaction inventory；新增 `LangChainLLMClient(`、`OpenAIEmbeddings(`、`.invoke(`、`embed_query(` 或 credential getter callsite 必须同步 inventory 和 guard tests。
+- Assistant delegated task/result 只能作为 trace-gated ephemeral debug detail 暂存，不得持久化到 workflow transition payload、UI event 或普通日志。
+
+## Real Grand Tour Boundaries
+
+- 默认 `npm run test:e2e` 必须保持 mock-backed、cost-free、无 live capture；真实验收只走独立 `npm run test:e2e:grand-tour` 和 `MEXEMPLAR_REAL_GRAND_TOUR=1` opt-in。
+- Live capture 场景还必须设置 `MEXEMPLAR_ALLOW_LIVE_CAPTURE=1`，并只能按 `docs/local/real-grand-tour-safe-journey.md` 的固定无敏感 fixture/script 执行。
+- Real-tour credential 只能通过 `src/data/credential_resolver.py` 的 keyring-only read-only resolver 读取；不得触发 plaintext config fallback、config-to-keyring migration、`set_password` 或 `delete_password`。
+- Real-tour provider inventory 必须覆盖 main、vision、background brain、settings validation、skill-composition、compression、embedding 和 diagnostic redactor；未覆盖路径必须在场景前显式 skip 或 fail as unmet prerequisite，不能回退 ordinary getter。
+- Real-tour runtime 使用随机 localhost port/token、临时 `EXEMPLAR_DATA_DIR`、paid-call/time budget、public event watcher 和 sanitized summary report。报告和 Playwright artifacts 不得包含 prompt/response、credential、runtime token、raw media、截图、录制正文或完整敏感本地路径；trace/video/screenshot 默认 off。
+
 ## Brain Architecture Constraints
 
 - 大脑相关 `brain.*` 配置占位符（decay 曲线阈值、top-N、重试次数、worker 周期等）通过 `get_unified_config()` 读写，数值为占位符（CC-008），待实测调整后再写入 docs。

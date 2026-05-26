@@ -12,6 +12,7 @@ Decay Router - 热区衰减路由器
 import logging
 
 from src.business.brain.models import Zone, EntryType
+from src.utils.events import emit
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +69,14 @@ class DecayRouter:
             score = getattr(entry, "relevance_score", 1.0)
             if score < fading_threshold:
                 entry_id = getattr(entry, "entry_id", "")
-                repo.update_entry_status(entry_id, "fading")
-                stats["faded_count"] += 1
+                if repo.update_entry_status(entry_id, "fading"):
+                    emit(
+                        "brain_zone_changed",
+                        zone=Zone.HOT.value,
+                        entry_id=entry_id,
+                        operation="status_update",
+                    )
+                    stats["faded_count"] += 1
                 logger.info(
                     "Entry %s marked as fading (score=%.3f < threshold=%.3f)",
                     entry_id,
@@ -124,7 +131,19 @@ class DecayRouter:
                 source_session_id=source_session_id,
             )
             new_id = new_entry
+            emit(
+                "brain_zone_changed",
+                zone=Zone.ARCHIVE.value,
+                entry_id=str(new_id),
+                operation="create",
+            )
             repo.soft_delete_entry(entry_id, superseded_by=new_id)
+            emit(
+                "brain_zone_changed",
+                zone=Zone.HOT.value,
+                entry_id=entry_id,
+                operation="soft_delete",
+            )
             stats["routed_to_archive"] += 1
             logger.info("Event entry %s routed to archive as %s", entry_id, new_id)
 
@@ -132,6 +151,12 @@ class DecayRouter:
             if relevance_score < INSIGHT_SOFT_DELETE_THRESHOLD:
                 # 极低 relevance 的 insight -> soft-delete
                 repo.soft_delete_entry(entry_id)
+                emit(
+                    "brain_zone_changed",
+                    zone=Zone.HOT.value,
+                    entry_id=entry_id,
+                    operation="soft_delete",
+                )
                 stats["soft_deleted"] += 1
                 logger.info(
                     "Insight entry %s soft-deleted (score=%.3f < %.3f)",
@@ -151,7 +176,19 @@ class DecayRouter:
                     source_session_id=source_session_id,
                 )
                 new_id = new_entry
+                emit(
+                    "brain_zone_changed",
+                    zone=Zone.PERSISTENT.value,
+                    entry_id=str(new_id),
+                    operation="create",
+                )
                 repo.soft_delete_entry(entry_id, superseded_by=new_id)
+                emit(
+                    "brain_zone_changed",
+                    zone=Zone.HOT.value,
+                    entry_id=entry_id,
+                    operation="soft_delete",
+                )
                 stats["routed_to_persistent"] += 1
                 logger.info("Insight entry %s routed to persistent as %s", entry_id, new_id)
         else:
@@ -166,6 +203,18 @@ class DecayRouter:
                 source_session_id=source_session_id,
             )
             new_id = new_entry
+            emit(
+                "brain_zone_changed",
+                zone=Zone.ARCHIVE.value,
+                entry_id=str(new_id),
+                operation="create",
+            )
             repo.soft_delete_entry(entry_id, superseded_by=new_id)
+            emit(
+                "brain_zone_changed",
+                zone=Zone.HOT.value,
+                entry_id=entry_id,
+                operation="soft_delete",
+            )
             stats["routed_to_archive"] += 1
             logger.info("Untyped entry %s routed to archive as %s", entry_id, new_id)

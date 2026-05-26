@@ -2,6 +2,7 @@
 
 from typing import Callable, List
 
+from src.business.debug.context import TraceContext
 from src.data.models import MODE_DISPLAY_TEXT
 from src.utils.llm_helpers import extract_json_from_response
 
@@ -56,7 +57,12 @@ class CompositionLLMHelper:
             "成员技能：\n"
             f"{chr(10).join(tool_lines)}"
         )
-        response = llm.chat(prompt)
+        with TraceContext(
+            source="skill_composition_recommend_order",
+            agent_type="composition_authoring",
+            work_unit_id=composition_name.strip(),
+        ):
+            response = llm.chat(prompt)
         parsed = extract_json_from_response(
             response,
             log_prefix="recommend_execution_order",
@@ -123,7 +129,12 @@ class CompositionLLMHelper:
             "成员技能：\n"
             f"{chr(10).join(tool_lines)}"
         )
-        response = llm.chat(prompt)
+        with TraceContext(
+            source="skill_composition_applicability",
+            agent_type="composition_authoring",
+            work_unit_id=composition_name.strip(),
+        ):
+            response = llm.chat(prompt)
         generated = normalize_generated_text(response)
         if not generated:
             raise SkillCompositionError("生成适用场景失败：模型未返回有效内容")

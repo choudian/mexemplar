@@ -66,7 +66,11 @@ ZONE_LABELS = {
 
 VALID_TRANSITIONS: dict[SegmentStatus, set[SegmentStatus]] = {
     SegmentStatus.PENDING: {SegmentStatus.DISTILLING},
-    SegmentStatus.DISTILLING: {SegmentStatus.COMPLETED, SegmentStatus.FAILED, SegmentStatus.PENDING},
+    SegmentStatus.DISTILLING: {
+        SegmentStatus.COMPLETED,
+        SegmentStatus.FAILED,
+        SegmentStatus.PENDING,
+    },
     SegmentStatus.FAILED: {SegmentStatus.PENDING},
     SegmentStatus.COMPLETED: set(),
 }
@@ -110,18 +114,20 @@ class MemoryEntryData:
     updated_at: Optional[str] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class DistillationZoneOutput:
     """单个分区的沉淀输出"""
+
     content: str
     reason: str
     entry_type: Optional[str] = None
     scope: Optional[str] = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class DistillationOutput:
     """一次沉淀 LLM 调用的完整输出"""
+
     hot_zone: list[DistillationZoneOutput] = field(default_factory=list)
     persistent_zone: list[DistillationZoneOutput] = field(default_factory=list)
     archive_zone: list[DistillationZoneOutput] = field(default_factory=list)

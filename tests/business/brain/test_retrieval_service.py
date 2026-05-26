@@ -10,6 +10,7 @@
 """
 
 import pytest
+from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import MagicMock
 
@@ -244,3 +245,13 @@ class TestExplorationAllowance:
 
         # 新条目因探索加分和 recency 加分应排名较高
         assert results[0]["entry_id"] == "new-low-relevance"
+
+
+def test_recency_scoring_accepts_timezone_aware_timestamp():
+    from src.business.brain.retrieval_service import RetrievalService
+
+    score = RetrievalService(brain_repo=MagicMock())._compute_recency_score(
+        datetime.now(timezone.utc).isoformat()
+    )
+
+    assert score > 0.99

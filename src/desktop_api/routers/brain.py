@@ -6,11 +6,67 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
+from pydantic import BaseModel, Field, field_validator
 from src.business.brain.management_service import BrainManagementService
 from src.business.brain.specialist_service import SpecialistService
 
 router = APIRouter(prefix="/api/brain", tags=["brain"])
 logger = logging.getLogger(__name__)
+
+MAX_TOOL_WHITELIST_LENGTH = 200
+
+
+class EditEntryBody(BaseModel):
+    content: str = Field(..., min_length=1)
+    scope: Optional[str] = None
+
+    @field_validator("content")
+    @classmethod
+    def content_not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("content must not be blank")
+        return v
+
+
+class CreateSpecialistBody(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=1)
+    role_definition: str = Field(..., min_length=1)
+    tool_whitelist: list[str] = Field(default_factory=list, max_length=MAX_TOOL_WHITELIST_LENGTH)
+
+    @field_validator("name", "description", "role_definition")
+    @classmethod
+    def not_blank(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("must not be blank")
+        return v
+
+    @field_validator("tool_whitelist")
+    @classmethod
+    def whitelist_items_not_empty(cls, v: list[str]) -> list[str]:
+        return [item.strip() for item in v if item.strip()]
+
+
+class UpdateSpecialistBody(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1)
+    description: Optional[str] = Field(default=None, min_length=1)
+    role_definition: Optional[str] = Field(default=None, min_length=1)
+    tool_whitelist: Optional[list[str]] = Field(default=None, max_length=MAX_TOOL_WHITELIST_LENGTH)
+    change_reason: Optional[str] = None
+
+    @field_validator("name", "description", "role_definition")
+    @classmethod
+    def optional_text_not_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            raise ValueError("must not be blank")
+        return v.strip() if v is not None else None
+
+    @field_validator("tool_whitelist")
+    @classmethod
+    def optional_whitelist_items_not_empty(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return None
+        return [item.strip() for item in v if item.strip()]
 
 
 @router.get("/zones")
@@ -87,16 +143,13 @@ async def get_entry_evolution(entry_id: str):
 
 
 @router.put("/entries/{entry_id}")
-async def edit_entry(entry_id: str, body: dict):
+async def edit_entry(entry_id: str, body: EditEntryBody):
     """用户编辑条目"""
-    content = body.get("content", "")
-    if not content or not content.strip():
-        raise HTTPException(status_code=422, detail={"error": "content must not be empty"})
     try:
         return BrainManagementService().edit_entry(
             entry_id,
-            content=content.strip(),
-            scope=body.get("scope"),
+            content=body.content.strip(),
+            scope=body.scope,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
@@ -122,30 +175,21 @@ async def delete_entry(entry_id: str):
 
 
 @router.post("/specialists")
-async def create_specialist(body: dict):
+async def create_specialist(body: CreateSpecialistBody):
     """创建新专员"""
-    name = body.get("name", "")
-    description = body.get("description", "")
-    role_definition = body.get("role_definition", "")
-    tool_whitelist_raw = body.get("tool_whitelist", [])
-    tool_whitelist = [str(item) for item in tool_whitelist_raw if isinstance(item, str) and item.strip()]
-
-    if not name or not description or not role_definition:
-        raise HTTPException(status_code=422, detail={"error": "validation_error"})
-
     try:
         service = SpecialistService()
         specialist = service.create_specialist(
-            name=name,
-            description=description,
-            role_definition=role_definition,
-            tool_whitelist=tool_whitelist,
+            name=body.name,
+            description=body.description,
+            role_definition=body.role_definition,
+            tool_whitelist=body.tool_whitelist,
             origin="user_management_ui",
             reason="通过管理界面创建",
         )
         return specialist
-    except ValueError as e:
-        raise HTTPException(status_code=409, detail={"error": str(e)})
+    except ValueError:
+        raise HTTPException(status_code=409, detail={"error": "conflict"})
 
 
 @router.get("/specialists")
@@ -180,24 +224,24 @@ async def get_specialist(specialist_id: str):
 
 
 @router.put("/specialists/{specialist_id}")
-async def update_specialist(specialist_id: str, body: dict):
+async def update_specialist(specialist_id: str, body: UpdateSpecialistBody):
     """更新专员"""
     try:
         service = SpecialistService()
         specialist = service.update_specialist(
             specialist_id=specialist_id,
-            name=body.get("name"),
-            description=body.get("description"),
-            role_definition=body.get("role_definition"),
-            tool_whitelist=body.get("tool_whitelist"),
+            name=body.name,
+            description=body.description,
+            role_definition=body.role_definition,
+            tool_whitelist=body.tool_whitelist,
             changed_by="user_management_ui",
-            change_reason=body.get("change_reason", "通过管理界面更新"),
+            change_reason=body.change_reason or "通过管理界面更新",
         )
         return specialist
-    except ValueError as e:
-        if "不存在" in str(e):
-            raise HTTPException(status_code=404, detail={"error": "not_found"})
-        raise HTTPException(status_code=409, detail={"error": str(e)})
+    except KeyError:
+        raise HTTPException(status_code=404, detail={"error": "not_found"})
+    except ValueError:
+        raise HTTPException(status_code=409, detail={"error": "conflict"})
 
 
 @router.delete("/specialists/{specialist_id}", status_code=204)

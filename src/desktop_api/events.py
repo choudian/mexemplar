@@ -5,7 +5,7 @@ import logging
 import queue
 import threading
 from collections import deque
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
@@ -292,7 +292,8 @@ class DesktopEventQueue:
 
 
 event_queue = DesktopEventQueue()
-_adapter_installed = False
+_adapter_handlers: dict[str, Callable[..., Any]] = {}
+_trial_preview_handler: Callable[..., Any] | None = None
 
 _INTERNAL_EVENT_NAMES = [
     "agent_error",
@@ -326,57 +327,61 @@ _INTERNAL_EVENT_NAMES = [
 ]
 
 
-def install_blinker_event_adapter() -> None:
-    global _adapter_installed
-    if _adapter_installed:
-        return
+def _make_event_handler(signal_name: str) -> Callable[..., None]:
+    def handle_event(_sender: object, **kwargs: Any) -> None:
+        event_name = str(kwargs.pop("event_name", signal_name))
+        payload = dict(kwargs)
+        for draft in project_internal_event(event_name, payload):
+            try:
+                event_queue.publish_draft_nowait(draft)
+            except UiEventValidationError as exc:
+                logger.warning(
+                    "Rejected unsafe UI event projection",
+                    extra={"internal_event": event_name, "ui_event_type": draft.event_type},
+                    exc_info=(type(exc), exc, exc.__traceback__),
+                )
+                event_queue.publish_nowait(
+                    "backend.resync_required",
+                    {
+                        "reason": "unsafe_projection_rejected",
+                        "domains": _RESYNC_DOMAINS,
+                        "eventSessionId": event_queue.session_id,
+                    },
+                )
 
-    def make_handler(signal_name: str):
-        def handle_event(_sender: object, **kwargs: Any) -> None:
-            event_name = str(kwargs.pop("event_name", signal_name))
-            payload = dict(kwargs)
-            for draft in project_internal_event(event_name, payload):
-                try:
-                    event_queue.publish_draft_nowait(draft)
-                except UiEventValidationError as exc:
-                    logger.warning(
-                        "Rejected unsafe UI event projection",
-                        extra={"internal_event": event_name, "ui_event_type": draft.event_type},
-                        exc_info=(type(exc), exc, exc.__traceback__),
-                    )
-                    event_queue.publish_nowait(
-                        "backend.resync_required",
-                        {
-                            "reason": "unsafe_projection_rejected",
-                            "domains": _RESYNC_DOMAINS,
-                            "eventSessionId": event_queue.session_id,
-                        },
-                    )
+    return handle_event
 
-        return handle_event
 
-    def handle_trial_preview(_sender: object, **kwargs: Any) -> bool:
-        kwargs.pop("event_name", None)
-        workflow_id = str(kwargs.get("workflow_id") or "")
-        trial_id = str(kwargs.get("trial_id") or "")
-        if not workflow_id or not trial_id:
-            logger.warning(
-                "Rejected trial preview request without required identifiers",
-                extra={
-                    "has_workflow_id": bool(workflow_id),
-                    "has_trial_id": bool(trial_id),
-                },
-            )
-            return False
-        return trial_preview_manager.create_request(
-            workflow_id=workflow_id,
-            trial_id=trial_id,
-            code_preview=str(kwargs.get("code_preview") or ""),
-            timeout_seconds=float(kwargs.get("timeout_seconds") or 30.0),
-            publish=event_queue.publish_draft_nowait,
+def _handle_trial_preview(_sender: object, **kwargs: Any) -> bool:
+    kwargs.pop("event_name", None)
+    workflow_id = str(kwargs.get("workflow_id") or "")
+    trial_id = str(kwargs.get("trial_id") or "")
+    if not workflow_id or not trial_id:
+        logger.warning(
+            "Rejected trial preview request without required identifiers",
+            extra={
+                "has_workflow_id": bool(workflow_id),
+                "has_trial_id": bool(trial_id),
+            },
         )
+        return False
+    return trial_preview_manager.create_request(
+        workflow_id=workflow_id,
+        trial_id=trial_id,
+        code_preview=str(kwargs.get("code_preview") or ""),
+        timeout_seconds=float(kwargs.get("timeout_seconds") or 30.0),
+        publish=event_queue.publish_draft_nowait,
+    )
 
+
+def install_blinker_event_adapter() -> None:
+    global _trial_preview_handler
     for event_name in _INTERNAL_EVENT_NAMES:
-        backend_events.connect(event_name, make_handler(event_name), weak=False)
-    backend_events.connect("desktop_trial_preview_ready", handle_trial_preview, weak=False)
-    _adapter_installed = True
+        handler = _adapter_handlers.get(event_name)
+        if handler is None:
+            handler = _make_event_handler(event_name)
+            _adapter_handlers[event_name] = handler
+        backend_events.connect(event_name, handler, weak=False)
+    if _trial_preview_handler is None:
+        _trial_preview_handler = _handle_trial_preview
+    backend_events.connect("desktop_trial_preview_ready", _trial_preview_handler, weak=False)

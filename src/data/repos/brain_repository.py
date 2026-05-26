@@ -2,13 +2,11 @@
 BrainRepository -- 大脑架构数据仓库
 
 负责 BrainSegment、BrainMemoryEntry 和 FeedbackSignal 的 CRUD 操作。
-Segment 状态流转使用 CAS (Compare-And-Swap) 保证原子性；
-Memory Entry 写入后发射 brain_zone_changed 事件。
+Segment 状态流转使用 CAS (Compare-And-Swap) 保证原子性。
 """
 
 import json
 import logging
-from datetime import datetime
 from typing import Optional
 from uuid import uuid4
 
@@ -16,10 +14,11 @@ from sqlalchemy import text
 
 from ..models_sqlite import BrainMemoryEntry, BrainRecruitmentSignal, BrainSegment, FeedbackSignal
 from .base_repository import BaseRepository
-from src.business.brain.models import ZONE_LABELS, Zone, ZoneSummary
-from src.utils.events import emit
+from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
+
+_BRAIN_ZONES = ("hot", "persistent", "archive", "subconscious", "failure", "prediction")
 
 
 class _RecordId(str):
@@ -65,7 +64,7 @@ class BrainRepository(BaseRepository):
     ) -> str:
         """创建一个新的 segment（status='pending'），返回可当字符串使用的 segment 快照。"""
         segment_id = segment_id or uuid4().hex[:50]
-        now = datetime.utcnow()
+        now = utc_now_naive()
         segment = BrainSegment(
             segment_id=segment_id,
             session_id=session_id,
@@ -96,9 +95,7 @@ class BrainRepository(BaseRepository):
         """按 ID 查询 Segment。"""
         segment_id = getattr(segment_id, "segment_id", segment_id)
         return (
-            self.session.query(BrainSegment)
-            .filter(BrainSegment.segment_id == segment_id)
-            .first()
+            self.session.query(BrainSegment).filter(BrainSegment.segment_id == segment_id).first()
         )
 
     def get_pending_segments(self) -> list[BrainSegment]:
@@ -143,7 +140,7 @@ class BrainRepository(BaseRepository):
         额外的列更新通过 **updates 传入。
         """
         segment_id = getattr(segment_id, "segment_id", segment_id)
-        now = datetime.utcnow()
+        now = utc_now_naive()
         if to_status == "distilling":
             updates.setdefault("distilling_started_at", now)
         if to_status == "completed":
@@ -187,9 +184,7 @@ class BrainRepository(BaseRepository):
             self.session.commit()
             success = result.rowcount == 1
             if success:
-                logger.info(
-                    "Segment %s: %s -> %s", segment_id, from_status, to_status
-                )
+                logger.info("Segment %s: %s -> %s", segment_id, from_status, to_status)
             else:
                 logger.warning(
                     "Segment CAS 失败: %s (期望 %s, 目标 %s), rowcount=%s",
@@ -326,7 +321,6 @@ class BrainRepository(BaseRepository):
             self.session.commit()
             self.session.refresh(entry)
             logger.info("Memory entry 已创建: %s (zone=%s)", entry_id, zone)
-            emit("brain_zone_changed", zone=zone, entry_id=entry_id, operation="create")
             return _RecordId(entry_id, entry)
         except Exception as e:
             self.session.rollback()
@@ -354,9 +348,7 @@ class BrainRepository(BaseRepository):
         offset: int = 0,
     ) -> list[BrainMemoryEntry]:
         """按 zone 查询记忆条目，默认排除 soft-deleted，返回 entry 列表。"""
-        query = self.session.query(BrainMemoryEntry).filter(
-            BrainMemoryEntry.zone == zone
-        )
+        query = self.session.query(BrainMemoryEntry).filter(BrainMemoryEntry.zone == zone)
         if status is not None:
             if isinstance(status, (list, tuple, set)):
                 query = query.filter(BrainMemoryEntry.status.in_(tuple(status)))
@@ -375,9 +367,7 @@ class BrainRepository(BaseRepository):
         zone: str,
         status: Optional[str | list[str]] = None,
     ) -> int:
-        query = self.session.query(BrainMemoryEntry).filter(
-            BrainMemoryEntry.zone == zone
-        )
+        query = self.session.query(BrainMemoryEntry).filter(BrainMemoryEntry.zone == zone)
         if status is not None:
             if isinstance(status, (list, tuple, set)):
                 query = query.filter(BrainMemoryEntry.status.in_(tuple(status)))
@@ -408,15 +398,10 @@ class BrainRepository(BaseRepository):
         for keyword in keywords:
             pattern = f"%{keyword}%"
             search = search.filter(
-                (BrainMemoryEntry.content.like(pattern))
-                | (BrainMemoryEntry.reason.like(pattern))
+                (BrainMemoryEntry.content.like(pattern)) | (BrainMemoryEntry.reason.like(pattern))
             )
 
-        return (
-            search.order_by(BrainMemoryEntry.relevance_score.desc())
-            .limit(limit)
-            .all()
-        )
+        return search.order_by(BrainMemoryEntry.relevance_score.desc()).limit(limit).all()
 
     def search_entries(
         self,
@@ -440,12 +425,13 @@ class BrainRepository(BaseRepository):
         for keyword in keywords:
             pattern = f"%{keyword}%"
             search = search.filter(
-                (BrainMemoryEntry.content.like(pattern))
-                | (BrainMemoryEntry.reason.like(pattern))
+                (BrainMemoryEntry.content.like(pattern)) | (BrainMemoryEntry.reason.like(pattern))
             )
 
         return (
-            search.order_by(BrainMemoryEntry.relevance_score.desc(), BrainMemoryEntry.created_at.desc())
+            search.order_by(
+                BrainMemoryEntry.relevance_score.desc(), BrainMemoryEntry.created_at.desc()
+            )
             .limit(limit)
             .all()
         )
@@ -460,12 +446,6 @@ class BrainRepository(BaseRepository):
             entry.status = new_status
             self.session.commit()
             logger.info("Entry %s status -> %s", entry_id, new_status)
-            emit(
-                "brain_zone_changed",
-                zone=entry.zone,
-                entry_id=entry_id,
-                operation="status_update",
-            )
             return True
         except Exception as e:
             self.session.rollback()
@@ -480,19 +460,13 @@ class BrainRepository(BaseRepository):
             return False
         try:
             entry.status = "invalidated"
-            entry.updated_at = datetime.utcnow()
+            entry.updated_at = utc_now_naive()
             self.session.commit()
             self.create_feedback_signal(
                 zone=entry.zone,
                 operation="invalidate",
                 target_id=entry_id,
                 context_summary=f"{reason}: {entry.content[:200]}",
-            )
-            emit(
-                "brain_zone_changed",
-                zone=entry.zone,
-                entry_id=entry_id,
-                operation="invalidate",
             )
             return True
         except Exception as e:
@@ -531,8 +505,6 @@ class BrainRepository(BaseRepository):
             old_entry.superseded_by = new_entry_id
             self.session.add(replacement)
             self.session.commit()
-            emit("brain_zone_changed", zone=old_entry.zone, entry_id=old_entry_id, operation="supersede")
-            emit("brain_zone_changed", zone=old_entry.zone, entry_id=new_entry_id, operation="create")
             return new_entry_id
         except Exception as e:
             self.session.rollback()
@@ -564,12 +536,6 @@ class BrainRepository(BaseRepository):
                     context_summary=entry.content[:200],
                 )
             logger.info("Entry %s 已软删除", entry_id)
-            emit(
-                "brain_zone_changed",
-                zone=entry.zone,
-                entry_id=entry_id,
-                operation="soft_delete",
-            )
             return True
         except Exception as e:
             self.session.rollback()
@@ -700,15 +666,6 @@ class BrainRepository(BaseRepository):
                 self.session.add(entry)
                 created_ids.append(entry_id)
             self.session.commit()
-            for entry_id in created_ids:
-                entry = self.get_entry(entry_id)
-                if entry is not None:
-                    emit(
-                        "brain_zone_changed",
-                        zone=entry.zone,
-                        entry_id=entry_id,
-                        operation="create",
-                    )
             return created_ids
         except Exception as e:
             self.session.rollback()
@@ -776,15 +733,6 @@ class BrainRepository(BaseRepository):
                 segment_id,
                 len(created_ids),
             )
-            for entry_id in created_ids:
-                entry = self.get_entry(entry_id)
-                if entry is not None:
-                    emit(
-                        "brain_zone_changed",
-                        zone=entry.zone,
-                        entry_id=entry_id,
-                        operation="create",
-                    )
             return created_ids
         except Exception as e:
             self.session.rollback()
@@ -802,7 +750,7 @@ class BrainRepository(BaseRepository):
     ) -> str:
         """Create a prediction-zone entry."""
         return self.create_entry(
-            zone=Zone.PREDICTION.value,
+            zone="prediction",
             content=content,
             origin="prediction_generation",
             reason=reason,
@@ -820,7 +768,7 @@ class BrainRepository(BaseRepository):
         """Return recent entries used by the prediction service."""
         hot = (
             self.session.query(BrainMemoryEntry)
-            .filter(BrainMemoryEntry.zone == Zone.HOT.value, BrainMemoryEntry.status == "active")
+            .filter(BrainMemoryEntry.zone == "hot", BrainMemoryEntry.status == "active")
             .order_by(BrainMemoryEntry.created_at.desc())
             .limit(hot_limit)
             .all()
@@ -828,7 +776,7 @@ class BrainRepository(BaseRepository):
         persistent = (
             self.session.query(BrainMemoryEntry)
             .filter(
-                BrainMemoryEntry.zone == Zone.PERSISTENT.value,
+                BrainMemoryEntry.zone == "persistent",
                 BrainMemoryEntry.status == "active",
             )
             .order_by(BrainMemoryEntry.created_at.desc())
@@ -838,7 +786,7 @@ class BrainRepository(BaseRepository):
         verified_predictions = (
             self.session.query(BrainMemoryEntry)
             .filter(
-                BrainMemoryEntry.zone == Zone.PREDICTION.value,
+                BrainMemoryEntry.zone == "prediction",
                 BrainMemoryEntry.verification_status.isnot(None),
             )
             .order_by(BrainMemoryEntry.updated_at.desc())
@@ -856,7 +804,7 @@ class BrainRepository(BaseRepository):
         return (
             self.session.query(BrainMemoryEntry)
             .filter(
-                BrainMemoryEntry.zone == Zone.PREDICTION.value,
+                BrainMemoryEntry.zone == "prediction",
                 BrainMemoryEntry.status == "active",
                 BrainMemoryEntry.verification_status.is_(None),
                 BrainMemoryEntry.verification_checkpoint.isnot(None),
@@ -873,34 +821,26 @@ class BrainRepository(BaseRepository):
         """Return non-prediction memories from the prediction's verification period."""
         created_at = getattr(prediction_entry, "created_at", None)
         base_query = self.session.query(BrainMemoryEntry).filter(
-            BrainMemoryEntry.zone != Zone.PREDICTION.value,
+            BrainMemoryEntry.zone != "prediction",
             BrainMemoryEntry.status != "soft-deleted",
         )
         query = base_query
         if created_at is not None:
             query = query.filter(BrainMemoryEntry.created_at >= created_at)
-        rows = (
-            query.order_by(BrainMemoryEntry.created_at.asc())
-            .limit(limit)
-            .all()
-        )
+        rows = query.order_by(BrainMemoryEntry.created_at.asc()).limit(limit).all()
         if rows or created_at is None:
             return rows
         # SQLite timestamp precision can make same-tick test/setup rows appear
         # before the prediction. Fall back to recent non-prediction memories so
         # verification still has evidence instead of silently assessing nothing.
-        return (
-            base_query.order_by(BrainMemoryEntry.created_at.desc())
-            .limit(limit)
-            .all()
-        )
+        return base_query.order_by(BrainMemoryEntry.created_at.desc()).limit(limit).all()
 
     def count_prediction_verification_failures(self, entry_id: str) -> int:
         """Return the number of failed verification attempts recorded for one prediction."""
         return (
             self.session.query(FeedbackSignal)
             .filter(
-                FeedbackSignal.zone == Zone.PREDICTION.value,
+                FeedbackSignal.zone == "prediction",
                 FeedbackSignal.operation == "verification_failed",
                 FeedbackSignal.target_id == entry_id,
             )
@@ -910,7 +850,7 @@ class BrainRepository(BaseRepository):
     def record_prediction_verification_failure(self, entry_id: str, reason: str) -> str:
         """Record one failed prediction-verification attempt for bounded retry handling."""
         return self.create_feedback_signal(
-            zone=Zone.PREDICTION.value,
+            zone="prediction",
             operation="verification_failed",
             target_id=entry_id,
             context_summary=(reason or "verification failed")[:500],
@@ -923,14 +863,13 @@ class BrainRepository(BaseRepository):
         rationale: str = "",
     ) -> bool:
         entry = self.get_entry(entry_id)
-        if entry is None or entry.zone != Zone.PREDICTION.value:
+        if entry is None or entry.zone != "prediction":
             return False
         try:
             entry.verification_status = status
             entry.verification_rationale = rationale
-            entry.updated_at = datetime.utcnow()
+            entry.updated_at = utc_now_naive()
             self.session.commit()
-            emit("brain_zone_changed", zone=Zone.PREDICTION.value, entry_id=entry_id, operation="verify")
             return True
         except Exception as e:
             self.session.rollback()
@@ -973,7 +912,9 @@ class BrainRepository(BaseRepository):
 
         # 第一步：从 entry_id 向旧方向走，找到链头（最旧的 entry）
         head_id = entry_id
-        while True:
+        step1_visited: set[str] = set()
+        while head_id not in step1_visited:
+            step1_visited.add(head_id)
             predecessor = (
                 self.session.query(BrainMemoryEntry)
                 .filter(BrainMemoryEntry.superseded_by == head_id)
@@ -1015,18 +956,17 @@ class BrainRepository(BaseRepository):
                     "fading_count": row[2] or 0,
                 }
             summaries = []
-            for zone in Zone:
+            for zone in _BRAIN_ZONES:
                 zone_counts = counts.get(
-                    zone.value,
+                    zone,
                     {"entry_count": 0, "fading_count": 0},
                 )
                 summaries.append(
-                    ZoneSummary(
-                        zone=zone.value,
-                        label=ZONE_LABELS.get(zone, zone.value),
-                        entry_count=zone_counts["entry_count"],
-                        fading_count=zone_counts["fading_count"],
-                    )
+                    {
+                        "zone": zone,
+                        "entry_count": zone_counts["entry_count"],
+                        "fading_count": zone_counts["fading_count"],
+                    }
                 )
             return summaries
         except Exception as e:

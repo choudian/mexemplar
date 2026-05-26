@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from src.business.brain.models import SegmentStatus, Zone
+from src.business.brain.models import SegmentStatus, ZONE_LABELS, Zone
 from src.data.repos.brain_repository import BrainRepository
+from src.utils.events import emit
 
 
 class BrainManagementService:
@@ -15,7 +16,16 @@ class BrainManagementService:
         self._repo = repo or BrainRepository()
 
     def get_zones(self) -> list[dict]:
-        return self._repo.get_zone_summaries()
+        counts = {summary["zone"]: summary for summary in self._repo.get_zone_summaries()}
+        return [
+            {
+                "zone": zone.value,
+                "label": ZONE_LABELS[zone],
+                "entry_count": counts.get(zone.value, {}).get("entry_count", 0),
+                "fading_count": counts.get(zone.value, {}).get("fading_count", 0),
+            }
+            for zone in Zone
+        ]
 
     def get_zone_entries(
         self,
@@ -83,6 +93,12 @@ class BrainManagementService:
         if new_entry_id is None:
             raise RuntimeError("entry_edit_failed")
         new_entry = self._repo.get_entry(new_entry_id)
+        emit(
+            "brain_zone_changed",
+            zone=getattr(entry, "zone", ""),
+            entry_id=new_entry_id,
+            operation="edit",
+        )
         return self._entry_to_dict(new_entry)
 
     def soft_delete_entry(self, entry_id: str) -> None:
@@ -90,6 +106,12 @@ class BrainManagementService:
         if entry is None:
             raise KeyError("entry_not_found")
         self._repo.soft_delete_entry(entry_id, feedback_operation="delete")
+        emit(
+            "brain_zone_changed",
+            zone=getattr(entry, "zone", ""),
+            entry_id=entry_id,
+            operation="soft_delete",
+        )
 
     @staticmethod
     def _validate_zone(zone: str) -> None:

@@ -348,3 +348,95 @@ class SettingsActionResponse(BaseModel):
     status: Literal["completed", "failed", "unavailable"]
     message: str = ""
     details: dict[str, Any] = Field(default_factory=dict)
+
+
+class DebugLimits(BaseModel):
+    maxRecords: int
+    maxRecordBytes: int
+    maxTotalBytes: int
+
+
+class DebugControlStatus(BaseModel):
+    enabled: bool
+    armedAt: str | None = None
+    retentionEpoch: str | None = None
+    warning: str
+    limits: DebugLimits
+
+
+class DebugControlRequest(BaseModel):
+    enabled: bool
+    warningAcknowledged: bool = False
+
+
+class DebugTraceListItem(BaseModel):
+    traceId: str
+    method: str
+    source: str
+    agentType: str | None = None
+    sessionId: str | None = None
+    workflowId: str | None = None
+    workUnitId: str | None = None
+    iteration: int | None = None
+    outcome: str
+    detailAvailability: str
+    retainedBytes: int
+    createdAt: datetime
+    completedAt: datetime | None = None
+    summary: str | None = None
+    linkedTransitionIds: list[str] = Field(default_factory=list)
+
+
+class DebugTraceListResponse(BaseModel):
+    items: list[DebugTraceListItem] = Field(default_factory=list)
+    retainedBytes: int = 0
+    omittedCount: int = 0
+    warning: str
+
+
+class DebugTraceDetail(BaseModel):
+    traceId: str
+    method: str
+    source: str
+    agentType: str | None = None
+    sessionId: str | None = None
+    workflowId: str | None = None
+    workUnitId: str | None = None
+    iteration: int | None = None
+    inputMessages: Any = None
+    inputMedia: Any = None
+    inputTools: Any = None
+    outputContent: str | None = None
+    outputToolCalls: Any = None
+    outcome: str
+    errorSummary: str | None = None
+    detailAvailability: str
+    retainedBytes: int
+    linkedTransitionIds: list[str] = Field(default_factory=list)
+    createdAt: datetime
+    completedAt: datetime | None = None
+
+
+class DebugFlowListItem(BaseModel):
+    workflowId: str
+    transitionCount: int
+    lastEventType: str
+    lastCreatedAt: datetime | None = None
+    linkedTraceCount: int = 0
+
+
+class DebugFlowListResponse(BaseModel):
+    items: list[DebugFlowListItem] = Field(default_factory=list)
+
+
+class DebugFlowDetailResponse(BaseModel):
+    workflowId: str
+    transitions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DebugReferenceResponse(BaseModel):
+    referenceId: str
+    content: str | None = None
+    available: bool
+    truncated: bool = False
+    nextChunk: str | None = None

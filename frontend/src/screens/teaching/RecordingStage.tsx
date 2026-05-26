@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CheckCircle2, Monitor, MousePointerClick, Square } from "lucide-react";
 
 import type { TeachingRun } from "../../api/teaching";
@@ -20,6 +20,7 @@ function RecordingStage({
   onStop: () => void;
   onDesktopDecision: (decision: "continue" | "discard" | "rerecord") => void;
 }): JSX.Element {
+  const [consentVisible, setConsentVisible] = useState(false);
   const active = run?.stage === "recording";
   const capturedCount = progressLog.length;
   const visibleProgressLog = useMemo(() => {
@@ -27,6 +28,16 @@ function RecordingStage({
     return progressLog.slice(-6).map((item, offset) => ({ item, sequence: startSeq + offset }));
   }, [progressLog]);
   const modeLabel = run?.mode ? MODE_NAMES[run.mode] : "浏览器录制";
+
+  const requestStart = () => {
+    setConsentVisible(true);
+  };
+
+  const confirmStart = () => {
+    setConsentVisible(false);
+    onStart();
+  };
+
   return (
     <section className="teaching-recording-view" aria-labelledby="teaching-recording-heading">
       <div className="teaching-recording-surface">
@@ -71,7 +82,7 @@ function RecordingStage({
               <span>停止录制</span>
             </Button>
           ) : (
-            <Button disabled={busy || !run} onClick={onStart}>
+            <Button disabled={busy || !run} onClick={requestStart}>
               开始录制
             </Button>
           )}
@@ -87,6 +98,24 @@ function RecordingStage({
           ) : null}
         </div>
       </div>
+
+      {consentVisible && !active ? (
+        <div className="teaching-recording-consent" role="alertdialog" aria-modal="true" aria-labelledby="teaching-recording-consent-title">
+          <h4 id="teaching-recording-consent-title">录制隐私确认</h4>
+          <p>
+            当前屏幕或浏览器中的可见内容可能会被记录，并在后续技能教学流程中交给已配置的模型处理。
+            请只录制为本次验收或教学准备的无敏感内容目标。
+          </p>
+          <div className="teaching-recording-consent-actions">
+            <Button kind="ghost" onClick={() => setConsentVisible(false)}>
+              取消
+            </Button>
+            <Button disabled={busy || !run} onClick={confirmStart}>
+              确认并开始录制
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="teaching-event-log">
         <div>

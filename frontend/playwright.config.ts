@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import url from "node:url";
 
 function localChromiumExecutable(): string | undefined {
   const root = process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "ms-playwright") : "";
@@ -28,17 +27,11 @@ const noProxy = Array.from(new Set([...currentNoProxy.split(",").filter(Boolean)
 process.env.NO_PROXY = noProxy;
 process.env.no_proxy = noProxy;
 
-const isGrandTour = process.argv.some((a) => a.includes("Grand Tour") || a.includes("grand tour"));
-if (isGrandTour) process.env.MEXEMPLAR_GRAND_TOUR = "1";
-
-const e2eDir = path.resolve(url.fileURLToPath(new URL(".", import.meta.url)), "tests", "e2e");
-
 export default defineConfig({
   testDir: "tests/e2e",
+  testIgnore: ["grand-tour.real.spec.ts"],
   timeout: 180_000,
   expect: { timeout: 15_000 },
-  globalSetup: isGrandTour ? path.join(e2eDir, "global-setup.ts") : undefined,
-  globalTeardown: isGrandTour ? path.join(e2eDir, "global-teardown.ts") : undefined,
   use: {
     ...devices["Desktop Chrome"],
     baseURL,
@@ -50,11 +43,5 @@ export default defineConfig({
     url: baseURL,
     reuseExistingServer: false,
     timeout: 120_000,
-    env: isGrandTour
-      ? {
-          VITE_MEXEMPLAR_API_BASE_URL: `http://127.0.0.1:18900`,
-          VITE_MEXEMPLAR_SESSION_TOKEN: "e2e-test-token",
-        }
-      : undefined,
   },
 });

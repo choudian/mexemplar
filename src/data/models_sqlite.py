@@ -7,7 +7,17 @@ SQLAlchemy ORM 模型 - SQLite 数据库 (mexemplar.db)
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import String, Integer, Text, DateTime, Boolean, JSON, LargeBinary, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Integer,
+    JSON,
+    LargeBinary,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -296,6 +306,12 @@ class BrainSegment(Base):
     """大脑 Segment 表 - 一段连续对话的单位"""
 
     __tablename__ = "brain_segments"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'distilling', 'completed', 'failed')",
+            name="ck_brain_segments_status",
+        ),
+    )
 
     segment_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     session_id: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -319,6 +335,16 @@ class BrainMemoryEntry(Base):
     """大脑记忆条目表 - 所有 6 个分区统一存储"""
 
     __tablename__ = "brain_memory_entries"
+    __table_args__ = (
+        CheckConstraint(
+            "zone IN ('hot', 'persistent', 'archive', 'subconscious', 'failure', 'prediction')",
+            name="ck_brain_memory_entries_zone",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'fading', 'invalidated', 'soft-deleted')",
+            name="ck_brain_memory_entries_status",
+        ),
+    )
 
     entry_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     zone: Mapped[str] = mapped_column(String(20), nullable=False)
@@ -357,7 +383,7 @@ class BrainSpecialist(Base):
     origin: Mapped[str] = mapped_column(String(30), nullable=False)
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     current_version: Mapped[int] = mapped_column(Integer, default=1)
-    is_active: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 

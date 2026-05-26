@@ -71,8 +71,8 @@ export type TeachingState = {
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   decideDesktopHealth: (decision: "continue" | "discard" | "rerecord") => Promise<void>;
-  replyIntent: (content: string) => Promise<void>;
-  startTrial: (task: string) => Promise<void>;
+  replyIntent: (content: string) => Promise<boolean>;
+  startTrial: (task: string) => Promise<boolean>;
   openSkillTrial: (toolId: string) => void;
   closeSkillTrial: () => void;
   refreshCurrentRun: () => Promise<void>;
@@ -229,7 +229,7 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
   replyIntent: async (content) => {
     const run = get().run;
     const text = content.trim();
-    if (!run || !text) return;
+    if (!run || !text) return false;
     set({
       messages: [...get().messages, { from: "user", text }],
       busy: true,
@@ -238,8 +238,10 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
     try {
       const updated = await replyTeachingIntent(run.workflowId, text);
       set({ run: updated, stage: updated.stage });
+      return true;
     } catch (error) {
       set({ lastError: toErrorMessage(error, "发送失败。") });
+      return false;
     } finally {
       set({ busy: false });
     }
@@ -247,9 +249,9 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
   startTrial: async (task) => {
     const run = get().run;
     const trialToolId = get().skillTrialToolId;
-    if (!run && !trialToolId) return;
+    if (!run && !trialToolId) return false;
     const text = task.trim();
-    if (!text) return;
+    if (!text) return false;
     set({ messages: [...get().messages, { from: "user", text }], busy: true, lastError: null });
     try {
       if (trialToolId && run) {
@@ -264,8 +266,10 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
         const updated = await startTeachingTrial(run.workflowId);
         set({ run: updated, stage: updated.stage });
       }
+      return true;
     } catch (error) {
       set({ lastError: toErrorMessage(error, "试用启动失败。") });
+      return false;
     } finally {
       set({ busy: false });
     }

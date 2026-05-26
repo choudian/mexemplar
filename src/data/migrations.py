@@ -583,7 +583,8 @@ def migrate_to_v11(engine):
                 CREATE TABLE IF NOT EXISTS brain_segments (
                     segment_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
-                    status TEXT NOT NULL,
+                    status TEXT NOT NULL
+                        CHECK (status IN ('pending', 'distilling', 'completed', 'failed')),
                     retry_count INTEGER DEFAULT 0,
                     all_empty_retried INTEGER DEFAULT 0,
                     boundary_reason TEXT,
@@ -601,10 +602,12 @@ def migrate_to_v11(engine):
             conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS brain_memory_entries (
                     entry_id TEXT PRIMARY KEY,
-                    zone TEXT NOT NULL,
+                    zone TEXT NOT NULL
+                        CHECK (zone IN ('hot', 'persistent', 'archive', 'subconscious', 'failure', 'prediction')),
                     entry_type TEXT,
                     content TEXT NOT NULL,
-                    status TEXT NOT NULL DEFAULT 'active',
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'fading', 'invalidated', 'soft-deleted')),
                     origin TEXT NOT NULL,
                     scope TEXT,
                     reason TEXT NOT NULL,
@@ -633,7 +636,7 @@ def migrate_to_v11(engine):
                     origin TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     current_version INTEGER DEFAULT 1,
-                    is_active INTEGER DEFAULT 1,
+                    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
@@ -683,18 +686,18 @@ def migrate_to_v11(engine):
             """))
 
             # 索引
-            for index_name, index_def in [
-                ("idx_brain_segments_session_id", "brain_segments(session_id)"),
-                ("idx_brain_segments_status", "brain_segments(status)"),
-                ("idx_brain_entries_zone_status", "brain_memory_entries(zone, status)"),
-                ("idx_brain_entries_source_segment", "brain_memory_entries(source_segment_id)"),
-                ("idx_brain_entries_superseded_by", "brain_memory_entries(superseded_by)"),
-                ("idx_brain_entries_zone_relevance", "brain_memory_entries(zone, relevance_score DESC)"),
-                ("idx_brain_specialists_is_active", "brain_specialists(is_active)"),
-                ("idx_feedback_signals_target", "feedback_signals(target_id)"),
-                ("idx_feedback_signals_zone", "feedback_signals(zone)"),
+            for index_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_brain_segments_session_id ON brain_segments(session_id)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_segments_status ON brain_segments(status)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_zone_status ON brain_memory_entries(zone, status)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_source_segment ON brain_memory_entries(source_segment_id)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_superseded_by ON brain_memory_entries(superseded_by)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_zone_relevance ON brain_memory_entries(zone, relevance_score DESC)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_specialists_is_active ON brain_specialists(is_active)",
+                "CREATE INDEX IF NOT EXISTS idx_feedback_signals_target ON feedback_signals(target_id)",
+                "CREATE INDEX IF NOT EXISTS idx_feedback_signals_zone ON feedback_signals(zone)",
             ]:
-                conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}"))
+                conn.execute(text(index_sql))
 
             # 数据回填：Profile → brain_memory_entries 持久区
             try:
@@ -702,21 +705,46 @@ def migrate_to_v11(engine):
                     row[1]
                     for row in conn.execute(text("PRAGMA table_info(assistant_profile)")).fetchall()
                 }
-                readable_columns = [
+                readable_columns = frozenset(
                     column
                     for column in ("display_name", "style", "notes")
                     if column in profile_columns
-                ]
-                if not readable_columns:
+                )
+                backfill_queries = {
+                    frozenset({"display_name"}): (
+                        "SELECT display_name, NULL AS style, NULL AS notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                    frozenset({"style"}): (
+                        "SELECT NULL AS display_name, style, NULL AS notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                    frozenset({"notes"}): (
+                        "SELECT NULL AS display_name, NULL AS style, notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                    frozenset({"display_name", "style"}): (
+                        "SELECT display_name, style, NULL AS notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                    frozenset({"display_name", "notes"}): (
+                        "SELECT display_name, NULL AS style, notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                    frozenset({"style", "notes"}): (
+                        "SELECT NULL AS display_name, style, notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                    frozenset({"display_name", "style", "notes"}): (
+                        "SELECT display_name, style, notes "
+                        "FROM assistant_profile WHERE profile_id = 'default'"
+                    ),
+                }
+                backfill_query = backfill_queries.get(readable_columns)
+                if backfill_query is None:
                     profile_rows = []
                 else:
-                    column_sql = ", ".join(readable_columns)
-                    profile_rows = conn.execute(
-                        text(
-                            f"SELECT {column_sql} "
-                            "FROM assistant_profile WHERE profile_id = 'default'"
-                        )
-                    ).mappings()
+                    profile_rows = conn.execute(text(backfill_query)).mappings()
                 for row in profile_rows:
                     parts = []
                     if row.get("display_name"):
@@ -727,22 +755,26 @@ def migrate_to_v11(engine):
                         parts.append(f"备注：{row['notes']}")
                     if parts:
                         from uuid import uuid4
+
                         content = "\n".join(parts)
-                        conn.execute(text("""
+                        conn.execute(
+                            text("""
                             INSERT INTO brain_memory_entries
                                 (entry_id, zone, content, status, origin, reason, created_at, updated_at)
                             VALUES (:entry_id, 'persistent', :content, 'active', 'system_migration',
                                     'v11 migration: assistant_profile data backfill',
                                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """), {"entry_id": uuid4().hex[:50], "content": content})
+                        """),
+                            {"entry_id": uuid4().hex[:50], "content": content},
+                        )
             except Exception as backfill_err:
-                logger.warning(f"Profile 数据回填跳过（assistant_profile 表可能不存在）: {backfill_err}")
+                logger.warning(
+                    f"Profile 数据回填跳过（assistant_profile 表可能不存在）: {backfill_err}"
+                )
 
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 11})
             conn.commit()
-            logger.info(
-                "数据库迁移到版本 11 完成：大脑架构 6 分区表 + 支撑表 + Profile 数据回填"
-            )
+            logger.info("数据库迁移到版本 11 完成：大脑架构 6 分区表 + 支撑表 + Profile 数据回填")
         except Exception as e:
             conn.rollback()
             logger.error(f"迁移到版本 11 失败: {e}")

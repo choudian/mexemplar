@@ -2,7 +2,9 @@ import { ChevronDown, Send } from "lucide-react";
 import type { RefObject } from "react";
 import { useEffect, useLayoutEffect, useState } from "react";
 
+import { LongPastePreview } from "../../components/LongPastePreview";
 import type { ChatAgent, ChatMessage } from "../../state/teachingStore";
+import { useLongPasteCollapse } from "../../hooks/useLongPasteCollapse";
 import { SafeMarkdown } from "../assistant/SafeMarkdown";
 
 export function UserBubble({ text }: { text: string }): JSX.Element {
@@ -61,34 +63,63 @@ export function ChatComposer({
   placeholder?: string;
   hint?: React.ReactNode;
 }): JSX.Element {
+  const collapseState = useLongPasteCollapse({
+    draft,
+    onDraftChange: setDraft,
+    resetWhenEmpty: !disabled,
+  });
+
+  const handleSend = () => {
+    onSend();
+  };
+
   return (
     <div className="teaching-composer" data-disabled={disabled ? "true" : undefined}>
-      <textarea
-        disabled={disabled}
-        onChange={(e) => setDraft(e.currentTarget.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            onSend();
-          }
-        }}
-        placeholder={placeholder ?? "输入消息…"}
-        rows={2}
-        style={{ resize: "none" }}
-        value={draft}
-      />
-      <div className="teaching-composer-bar">
-        <div className="teaching-composer-hint">
-          {hint ?? (
-            <>
-              <kbd className="teaching-kbd">⏎</kbd> 发送 · <kbd className="teaching-kbd">⇧⏎</kbd> 换行
-            </>
-          )}
+      {collapseState.isQualified ? (
+        <LongPastePreview
+          draft={draft}
+          collapseState={collapseState}
+          onDraftChange={setDraft}
+          onSend={handleSend}
+          sendDisabled={!draft.trim() || disabled}
+          editingDisabled={disabled}
+        />
+      ) : (
+        <textarea
+          disabled={disabled}
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
+          onPaste={collapseState.handlePaste}
+          placeholder={placeholder ?? "输入消息…"}
+          rows={2}
+          style={{ resize: "none" }}
+          value={draft}
+        />
+      )}
+      {!collapseState.isCollapsed && (
+        <div className="teaching-composer-bar">
+          <div className="teaching-composer-hint">
+            {hint ?? (
+              <>
+                <kbd className="teaching-kbd">⏎</kbd> 发送 · <kbd className="teaching-kbd">⇧⏎</kbd> 换行
+              </>
+            )}
+          </div>
+          <button
+            className="teaching-composer-send"
+            disabled={!draft.trim() || disabled}
+            onClick={handleSend}
+            type="button"
+          >
+            <Send size={15} />
+          </button>
         </div>
-        <button className="teaching-composer-send" disabled={!draft.trim() || disabled} onClick={onSend} type="button">
-          <Send size={15} />
-        </button>
-      </div>
+      )}
     </div>
   );
 }

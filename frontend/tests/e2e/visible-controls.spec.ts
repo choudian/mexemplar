@@ -41,6 +41,7 @@ test("T107 visible controls across primary screens invoke real bridge paths or e
   await expectNamedButtons(page);
   await page.getByRole("button", { name: "开始" }).first().click();
   await page.getByRole("button", { name: "开始录制" }).click();
+  await page.getByRole("button", { name: "确认并开始录制" }).click();
   await page.getByRole("button", { name: "停止录制" }).click();
   await page.locator(".teaching-composer textarea").first().fill("Add a boundary for the workflow");
   await page.locator(".teaching-composer-send").first().click();

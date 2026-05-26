@@ -39,6 +39,19 @@ class TestBrainLayering:
             ):
                 raise AssertionError(f"Module-level repo import found at line {i}: {line.rstrip()}")
 
+    def test_data_repositories_do_not_import_business_or_emit_domain_events(self):
+        """Repositories persist data; business services own brain notifications."""
+        from pathlib import Path
+
+        for relative_path in (
+            "src/data/repos/brain_repository.py",
+            "src/data/repos/specialist_repository.py",
+        ):
+            content = Path(relative_path).read_text(encoding="utf-8")
+            assert "src.business" not in content
+            assert "src.utils.events" not in content
+            assert "emit(" not in content
+
 
 class TestRecordingAgentsUnchanged:
     """Verify recording-related agents are not modified by brain feature"""

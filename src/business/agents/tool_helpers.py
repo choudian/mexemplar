@@ -101,12 +101,17 @@ _vision_client_lock = threading.Lock()
 
 def get_vision_llm_client(model: str | None = None) -> Any:
     from src.business.ai.llm_client import LangChainLLMClient
+    from src.data.credential_resolver import (
+        get_real_tour_credential_resolver,
+        is_real_tour_runtime,
+    )
     from src.data.unified_config import get_unified_config
 
     config = get_unified_config()
+    resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
     provider = config.get_ai_vision_provider()
     resolved_model = model or config.get_ai_vision_model()
-    api_key = config.get_ai_vision_api_key()
+    api_key = resolver.get_ai_vision_api_key() if resolver is not None else config.get_ai_vision_api_key()
     base_url = config.get_ai_vision_base_url()
     key = (provider, resolved_model, api_key, base_url)
 
@@ -135,8 +140,31 @@ def invoke_vision_model(content: list[dict[str, Any]], model: str | None = None)
     from langchain_core.messages import HumanMessage
 
     vision_client = get_vision_llm_client(model)
-    response = vision_client.llm.invoke([HumanMessage(content=content)])
-    answer = getattr(response, "content", None)
-    if not answer:
-        raise RuntimeError("empty_vision_response")
-    return str(answer)
+
+    def _invoke(provider_content: list[dict[str, Any]]) -> str:
+        try:
+            from src.data.real_tour_audit import record_paid_call
+
+            record_paid_call("vision_multimodal")
+        except ImportError:
+            pass
+        response = vision_client.llm.invoke([HumanMessage(content=provider_content)])
+        answer = getattr(response, "content", None)
+        if not answer:
+            raise RuntimeError("empty_vision_response")
+        return str(answer)
+
+    try:
+        from src.business.debug.observation import observe_multimodal
+        from src.business.debug.service import get_active_capture
+
+        buffer, redactor, epoch = get_active_capture()
+    except Exception:
+        return _invoke(content)
+    return observe_multimodal(
+        buffer=buffer,
+        redactor=redactor,
+        epoch=epoch,
+        content=content,
+        invoke_fn=_invoke,
+    )

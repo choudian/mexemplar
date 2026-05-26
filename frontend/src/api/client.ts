@@ -51,6 +51,12 @@ interface SidecarRuntimeConfig {
   sessionToken: string;
 }
 
+declare global {
+  interface Window {
+    __MEXEMPLAR_E2E_SIDECAR__?: SidecarRuntimeConfig;
+  }
+}
+
 export class DesktopApiError extends Error {
   readonly code: string;
   readonly status: number;
@@ -78,6 +84,17 @@ export function configureDesktopApi(config: { baseUrl?: string; sessionToken?: s
 }
 
 export async function configureDesktopApiFromTauri(): Promise<void> {
+  if (import.meta.env.DEV && window.__MEXEMPLAR_E2E_SIDECAR__) {
+    const cfg = window.__MEXEMPLAR_E2E_SIDECAR__;
+    if (
+      typeof cfg.baseUrl === "string" && cfg.baseUrl.startsWith("http://127.0.0.1:") &&
+      typeof cfg.sessionToken === "string" && cfg.sessionToken.length > 0 &&
+      typeof cfg.port === "number" && cfg.port > 0
+    ) {
+      configureDesktopApi(cfg);
+    }
+    return;
+  }
   try {
     const config = await invoke<SidecarRuntimeConfig>("get_sidecar_config");
     if (config?.baseUrl && config.sessionToken) {

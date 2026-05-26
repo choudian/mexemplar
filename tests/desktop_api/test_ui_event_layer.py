@@ -11,6 +11,7 @@ from src.desktop_api.ui_events import (
     registered_event_types,
     validate_ui_event_payload,
 )
+from src.utils import events as backend_events
 from src.utils.events import emit
 
 
@@ -119,6 +120,16 @@ def test_internal_events_project_to_semantic_ui_events(desktop_api_client) -> No
     assert events[2].payload["stage"] == "learning"
     assert events[4].payload["published"] is True
     assert all("sourceEvent" not in event.payload for event in events)
+
+
+def test_blinker_event_adapter_reinstalls_after_signal_clear() -> None:
+    backend_events.clear_all()
+    install_blinker_event_adapter()
+
+    emit("settings_changed", sender=None, keys=["theme"])
+
+    event = event_queue.queue.get_nowait()
+    assert event.type == "settings.changed"
 
 
 def test_internal_projection_filters_scope_to_public_event_contract(

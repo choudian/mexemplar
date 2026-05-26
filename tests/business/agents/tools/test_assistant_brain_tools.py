@@ -242,3 +242,22 @@ class TestFailureRetrievalAndInvalidationTools:
             result_data = json.loads(result)
 
             assert result_data["success"] is False
+
+
+def test_retrieved_context_eviction_uses_age_threshold(monkeypatch):
+    from src.business.agents.tools import assistant_tools
+
+    with assistant_tools._retrieved_context_lock:
+        assistant_tools._retrieved_context_entry_ids.clear()
+        assistant_tools._context_access_time.clear()
+        assistant_tools._retrieved_context_entry_ids.update(
+            {"stale-session": {"entry-old"}, "recent-session": {"entry-new"}}
+        )
+        assistant_tools._context_access_time.update({"stale-session": 10.0, "recent-session": 95.0})
+
+    monkeypatch.setattr(assistant_tools.time, "monotonic", lambda: 100.0)
+    assistant_tools._evict_stale_context_entries(max_age_seconds=20)
+
+    assert "stale-session" not in assistant_tools._retrieved_context_entry_ids
+    assert assistant_tools._retrieved_context_entry_ids["recent-session"] == {"entry-new"}
+    assistant_tools.cleanup_retrieved_context("recent-session")

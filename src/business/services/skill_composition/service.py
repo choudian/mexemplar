@@ -15,6 +15,10 @@ from src.data.repositories import (
     SkillCompositionRepository,
     ToolRepository,
 )
+from src.data.credential_resolver import (
+    get_real_tour_credential_resolver,
+    is_real_tour_runtime,
+)
 from src.data.unified_config import get_unified_config
 
 from .composition_llm_helper import CompositionLLMHelper
@@ -73,7 +77,8 @@ class SkillCompositionService:
         """创建 LLM 客户端，统一配置读取和 Key 校验。"""
         if config is None:
             config = get_unified_config()
-        api_key = config.get_ai_api_key()
+        resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
+        api_key = resolver.get_ai_api_key() if resolver is not None else config.get_ai_api_key()
         if not api_key:
             raise SkillCompositionError("未配置 AI Key")
         return LangChainLLMClient(

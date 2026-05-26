@@ -30,11 +30,14 @@ export function SpecialistScreen(): JSX.Element {
   const saveDraft = useSpecialistStore((state) => state.saveDraft);
   const deleteById = useSpecialistStore((state) => state.deleteById);
 
+  const loadSkillPool = useBrainStore((state) => state.loadSkillPool);
+
   const [query, setQuery] = useState("");
 
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadSkillPool();
+  }, [load, loadSkillPool]);
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -138,13 +141,12 @@ export function SpecialistScreen(): JSX.Element {
             <div className="specialist-skill-grid">
               {skillPool.map((skill) => {
                 const checked =
-                  draft.tool_whitelist.includes(skill.tool_id) ||
-                  draft.tool_whitelist.includes(skill.name);
+                  draft.tool_whitelist.includes(skill.tool_id);
                 return (
                   <label className="specialist-skill-option" data-active={checked} key={skill.tool_id}>
                     <input
                       checked={checked}
-                      onChange={() => toggleWhitelist(skill.tool_id)}
+                      onChange={() => toggleWhitelist(skill.tool_id, skill.name)}
                       type="checkbox"
                     />
                     <span>

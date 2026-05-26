@@ -1,7 +1,7 @@
 import { RefreshCcw, RotateCcw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { BrainMemoryEntry } from "../../api/brain";
+import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useBrainStore } from "../../state/brainStore";
 import EntryEvolution from "./EntryEvolution";
@@ -23,12 +23,12 @@ const STATUS_OPTIONS = [
   { value: "invalidated", label: "已失效" },
 ] as const;
 
-function entryCountFor(zone: string, summaries: ReturnType<typeof useBrainStore.getState>["zones"]): number {
+function entryCountFor(zone: BrainZone, summaries: ReturnType<typeof useBrainStore.getState>["zones"]): number {
   const summary = summaries.find((item) => item.zone === zone);
-  return summary?.entry_count ?? summary?.active_count ?? 0;
+  return summary?.entry_count ?? 0;
 }
 
-function statusTone(status: string) {
+function statusTone(status: BrainEntryStatus) {
   if (status === "active") return "ok";
   if (status === "fading" || status === "invalidated") return "warn";
   if (status === "soft-deleted") return "danger";
@@ -62,7 +62,7 @@ export function BrainScreen(): JSX.Element {
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState<BrainEntryStatus | "">("");
   const [contentDraft, setContentDraft] = useState("");
   const [scopeDraft, setScopeDraft] = useState("");
 
@@ -73,18 +73,34 @@ export function BrainScreen(): JSX.Element {
     void loadEntries("hot");
   }, [loadEntries, loadSegments, loadSkillPool, loadZones]);
 
+  const lastEvolutionIdRef = useRef<string | null>(null);
+
   useEffect(() => {
-    const selected = entries.find((entry) => entry.entry_id === selectedId) ?? entries[0] ?? null;
-    if (!selected) {
-      setSelectedId(null);
-      setContentDraft("");
-      setScopeDraft("");
+    if (selectedId) {
+      const stillExists = entries.some((entry) => entry.entry_id === selectedId);
+      if (stillExists) return;
+    }
+    if (!selectedId) {
+      const auto = entries[0] ?? null;
+      if (!auto) {
+        setContentDraft("");
+        setScopeDraft("");
+        lastEvolutionIdRef.current = null;
+        return;
+      }
+      setSelectedId(auto.entry_id);
+      setContentDraft(auto.content);
+      setScopeDraft(auto.scope ?? "");
+      if (lastEvolutionIdRef.current !== auto.entry_id) {
+        lastEvolutionIdRef.current = auto.entry_id;
+        void loadEvolution(auto.entry_id);
+      }
       return;
     }
-    setSelectedId(selected.entry_id);
-    setContentDraft(selected.content);
-    setScopeDraft(selected.scope ?? "");
-    void loadEvolution(selected.entry_id);
+    setSelectedId(null);
+    setContentDraft("");
+    setScopeDraft("");
+    lastEvolutionIdRef.current = null;
   }, [entries, loadEvolution, selectedId]);
 
   const selectedEntry = entries.find((entry) => entry.entry_id === selectedId) ?? null;
@@ -97,12 +113,12 @@ export function BrainScreen(): JSX.Element {
     );
   }, [entries, query]);
 
-  const chooseZone = (zone: string) => {
+  const chooseZone = (zone: BrainZone) => {
     setSelectedId(null);
     void loadEntries(zone, { status: status || undefined });
   };
 
-  const chooseStatus = (nextStatus: string) => {
+  const chooseStatus = (nextStatus: BrainEntryStatus | "") => {
     setStatus(nextStatus);
     void loadEntries(activeZone, { status: nextStatus || undefined });
   };
@@ -167,7 +183,7 @@ export function BrainScreen(): JSX.Element {
             </label>
             <select
               aria-label="筛选条目状态"
-              onChange={(event) => chooseStatus(event.currentTarget.value)}
+              onChange={(event) => chooseStatus(event.currentTarget.value as BrainEntryStatus | "")}
               value={status}
             >
               {STATUS_OPTIONS.map((option) => (
@@ -185,7 +201,13 @@ export function BrainScreen(): JSX.Element {
                 onDelete={() => {
                   void deleteEntry(entry.entry_id);
                 }}
-                onSelect={() => setSelectedId(entry.entry_id)}
+                onSelect={() => {
+                  setSelectedId(entry.entry_id);
+                  setContentDraft(entry.content);
+                  setScopeDraft(entry.scope ?? "");
+                  lastEvolutionIdRef.current = entry.entry_id;
+                  void loadEvolution(entry.entry_id);
+                }}
                 selected={entry.entry_id === selectedId}
               />
             ))}

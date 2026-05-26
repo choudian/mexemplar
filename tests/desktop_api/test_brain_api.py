@@ -110,8 +110,14 @@ class TestGetZoneEntries:
         if data["items"]:
             item = data["items"][0]
             required_fields = {
-                "entry_id", "zone", "content", "status", "origin",
-                "reason", "loaded_count", "referenced_count",
+                "entry_id",
+                "zone",
+                "content",
+                "status",
+                "origin",
+                "reason",
+                "loaded_count",
+                "referenced_count",
             }
             assert required_fields.issubset(set(item.keys()))
 
@@ -166,8 +172,12 @@ class TestGetSegments:
         if data["items"]:
             item = data["items"][0]
             required_fields = {
-                "segment_id", "session_id", "status",
-                "retry_count", "boundary_reason", "sealed_at",
+                "segment_id",
+                "session_id",
+                "status",
+                "retry_count",
+                "boundary_reason",
+                "sealed_at",
             }
             assert required_fields.issubset(set(item.keys()))
 
@@ -253,9 +263,7 @@ class TestBrainApiAuth:
 class TestCreateSpecialist:
     def test_create_specialist_success(self, desktop_api_client):
         """POST /api/brain/specialists 创建专员"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.create_specialist.return_value = {
@@ -295,9 +303,7 @@ class TestCreateSpecialist:
 
     def test_create_specialist_duplicate_name(self, desktop_api_client):
         """重复名称应返回 409"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.create_specialist.side_effect = ValueError("专员名称已存在")
@@ -313,14 +319,14 @@ class TestCreateSpecialist:
             )
 
             assert response.status_code == 409
+            assert response.json()["detail"] == {"error": "conflict"}
+            assert "专员名称已存在" not in response.text
 
 
 class TestListSpecialists:
     def test_list_specialists(self, desktop_api_client):
         """GET /api/brain/specialists 返回专员列表"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.list_specialists.return_value = (
@@ -337,16 +343,12 @@ class TestListSpecialists:
 
     def test_list_specialists_with_pagination(self, desktop_api_client):
         """GET /api/brain/specialists 支持分页"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.list_specialists.return_value = ([], 0)
 
-            response = desktop_api_client.get(
-                "/api/brain/specialists?limit=10&offset=0"
-            )
+            response = desktop_api_client.get("/api/brain/specialists?limit=10&offset=0")
 
             assert response.status_code == 200
 
@@ -354,9 +356,7 @@ class TestListSpecialists:
 class TestGetSpecialist:
     def test_get_specialist_by_id(self, desktop_api_client):
         """GET /api/brain/specialists/{id} 返回专员详情"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.get_specialist.return_value = {
@@ -372,16 +372,12 @@ class TestGetSpecialist:
 
     def test_get_specialist_not_found(self, desktop_api_client):
         """GET /api/brain/specialists/{id} 不存在返回 404"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.get_specialist.return_value = None
 
-            response = desktop_api_client.get(
-                "/api/brain/specialists/nonexistent"
-            )
+            response = desktop_api_client.get("/api/brain/specialists/nonexistent")
 
             assert response.status_code == 404
 
@@ -389,9 +385,7 @@ class TestGetSpecialist:
 class TestUpdateSpecialist:
     def test_update_specialist(self, desktop_api_client):
         """PUT /api/brain/specialists/{id} 更新专员"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.update_specialist.return_value = {
@@ -409,12 +403,10 @@ class TestUpdateSpecialist:
 
     def test_update_specialist_not_found(self, desktop_api_client):
         """PUT 不存在的专员返回 404"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
-            mock_service.update_specialist.side_effect = ValueError("专员不存在")
+            mock_service.update_specialist.side_effect = KeyError("specialist_not_found")
 
             response = desktop_api_client.put(
                 "/api/brain/specialists/nonexistent",
@@ -423,35 +415,50 @@ class TestUpdateSpecialist:
 
             assert response.status_code == 404
 
+    def test_update_specialist_validates_request_body(self, desktop_api_client):
+        response = desktop_api_client.put(
+            "/api/brain/specialists/sp-001",
+            json={"name": "  ", "tool_whitelist": "not-a-list"},
+        )
+
+        assert response.status_code == 422
+
+    def test_update_specialist_conflict_does_not_leak_business_message(self, desktop_api_client):
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
+            mock_service = MagicMock()
+            MockService.return_value = mock_service
+            mock_service.update_specialist.side_effect = ValueError("专员名称已存在: 内部名称")
+
+            response = desktop_api_client.put(
+                "/api/brain/specialists/sp-001",
+                json={"name": "重复名称"},
+            )
+
+        assert response.status_code == 409
+        assert response.json()["detail"] == {"error": "conflict"}
+        assert "内部名称" not in response.text
+
 
 class TestDeleteSpecialist:
     def test_delete_specialist(self, desktop_api_client):
         """DELETE /api/brain/specialists/{id} 删除专员"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.delete_specialist.return_value = True
 
-            response = desktop_api_client.delete(
-                "/api/brain/specialists/sp-001"
-            )
+            response = desktop_api_client.delete("/api/brain/specialists/sp-001")
 
             assert response.status_code == 204
 
     def test_delete_specialist_not_found(self, desktop_api_client):
         """DELETE 不存在的专员返回 404"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.delete_specialist.return_value = False
 
-            response = desktop_api_client.delete(
-                "/api/brain/specialists/nonexistent"
-            )
+            response = desktop_api_client.delete("/api/brain/specialists/nonexistent")
 
             assert response.status_code == 404
 
@@ -459,9 +466,7 @@ class TestDeleteSpecialist:
 class TestSpecialistVersions:
     def test_get_specialist_versions(self, desktop_api_client):
         """GET /api/brain/specialists/{id}/versions 返回版本历史"""
-        with patch(
-            "src.desktop_api.routers.brain.SpecialistService"
-        ) as MockService:
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
             mock_service = MagicMock()
             MockService.return_value = mock_service
             mock_service.get_specialist.return_value = {"specialist_id": "sp-001"}
@@ -470,9 +475,7 @@ class TestSpecialistVersions:
                 {"version": 1, "name": "v1"},
             ]
 
-            response = desktop_api_client.get(
-                "/api/brain/specialists/sp-001/versions"
-            )
+            response = desktop_api_client.get("/api/brain/specialists/sp-001/versions")
 
             assert response.status_code == 200
             data = response.json()
@@ -481,7 +484,9 @@ class TestSpecialistVersions:
 
 
 class TestEntryManagement:
-    def test_edit_entry_returns_new_entry_and_evolution_chain(self, desktop_api_client, in_memory_db):
+    def test_edit_entry_returns_new_entry_and_evolution_chain(
+        self, desktop_api_client, in_memory_db
+    ):
         entry_id = uuid4().hex[:50]
         with in_memory_db.get_session() as session:
             session.add(
@@ -511,7 +516,9 @@ class TestEntryManagement:
         assert chain.status_code == 200
         assert [item["content"] for item in chain.json()["chain"]] == ["旧内容", "新内容"]
 
-    def test_delete_entry_soft_deletes_without_physical_removal(self, desktop_api_client, in_memory_db):
+    def test_delete_entry_soft_deletes_without_physical_removal(
+        self, desktop_api_client, in_memory_db
+    ):
         entry_id = uuid4().hex[:50]
         with in_memory_db.get_session() as session:
             session.add(
@@ -593,5 +600,7 @@ class TestSkillPoolEndpoints:
 
         forced = desktop_api_client.delete("/api/brain/skill-pool/tool-report?force=true")
         assert forced.status_code == 204
-        assert SpecialistService().get_specialist(specialist["specialist_id"])["tool_whitelist"] == []
+        assert (
+            SpecialistService().get_specialist(specialist["specialist_id"])["tool_whitelist"] == []
+        )
         assert desktop_api_client.get("/api/brain/skill-pool").json()["skills"] == []

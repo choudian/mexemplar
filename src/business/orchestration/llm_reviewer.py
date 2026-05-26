@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 
 from src.business.ai.llm_client import LangChainLLMClient
+from src.business.debug.context import TraceContext
 from src.business.agents.prompts.trial_prompt import format_parameters_text
 from src.utils.llm_helpers import extract_json_from_response
 from src.utils.helpers import safe_format_template
@@ -88,7 +89,12 @@ class LLMReviewer:
                 parameters_text=format_parameters_text(requirement.get("parameters", [])),
                 code=code,
             )
-            response = self._llm.chat(prompt)
+            with TraceContext(
+                source="llm_review",
+                agent_type="reviewer",
+                workflow_id=str(requirement.get("workflow_id") or requirement.get("recording_id") or ""),
+            ):
+                response = self._llm.chat(prompt)
             return self._parse_result(response)
         except Exception as e:
             logger.error(f"[LLMReviewer] Review 调用失败: {e}")

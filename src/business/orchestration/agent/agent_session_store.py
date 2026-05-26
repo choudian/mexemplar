@@ -79,10 +79,11 @@ class AgentSessionStore:
         from_session_id: str,
         to_session_id: Optional[str],
         payload: Optional[str],
-    ) -> None:
+    ) -> str:
+        transition_id = str(uuid.uuid4())
         self._transition_repo.create(
             WorkflowTransition(
-                transition_id=str(uuid.uuid4()),
+                transition_id=transition_id,
                 workflow_id=workflow_id,
                 event_type=event_type,
                 from_session_id=from_session_id,
@@ -90,6 +91,7 @@ class AgentSessionStore:
                 payload=payload,
             )
         )
+        return transition_id
 
     def get_transition_payload(self, workflow_id: str, event_type: str, key: str):
         transition = self._transition_repo.get_latest_by_workflow_and_event(workflow_id, event_type)

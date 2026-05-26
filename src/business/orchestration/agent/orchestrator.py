@@ -448,12 +448,22 @@ class AgentOrchestrator:
         system_prompt: str,
         allowed_tool_ids: set[str] | None,
     ) -> dict:
-        self._session_store.record_transition(
+        start_transition_id = self._session_store.record_transition(
             workflow_id,
             event_type="assistant_delegation_started",
             from_session_id=parent_session_id,
             to_session_id=session_id,
             payload=json.dumps({"agent_type": str(agent_type)}, ensure_ascii=False),
+        )
+        self._capture_delegation_debug_detail(
+            workflow_id=workflow_id,
+            transition_id=start_transition_id,
+            input_detail={
+                "parentSessionId": parent_session_id,
+                "executorSessionId": session_id,
+                "task": user_input,
+                "allowedToolCount": len(allowed_tool_ids) if allowed_tool_ids is not None else None,
+            },
         )
 
         try:
@@ -467,12 +477,18 @@ class AgentOrchestrator:
             )
         except Exception as exc:
             logger.error("[Orchestrator] 委派执行失败: %s", exc, exc_info=True)
-            self._session_store.record_transition(
+            failed_transition_id = self._session_store.record_transition(
                 workflow_id,
                 event_type="assistant_delegation_failed",
                 from_session_id=session_id,
                 to_session_id=parent_session_id,
                 payload=json.dumps({"error": str(exc)}, ensure_ascii=False),
+            )
+            self._capture_delegation_debug_detail(
+                workflow_id=workflow_id,
+                transition_id=failed_transition_id,
+                input_detail={"parentSessionId": parent_session_id, "executorSessionId": session_id},
+                output_detail={"success": False, "error": str(exc)},
             )
             return {
                 "success": False,
@@ -489,12 +505,23 @@ class AgentOrchestrator:
         }
         if result.error:
             payload["error"] = result.error
-        self._session_store.record_transition(
+        complete_transition_id = self._session_store.record_transition(
             workflow_id,
             event_type="assistant_delegation_completed" if success else "assistant_delegation_failed",
             from_session_id=session_id,
             to_session_id=parent_session_id,
             payload=json.dumps(payload, ensure_ascii=False),
+        )
+        self._capture_delegation_debug_detail(
+            workflow_id=workflow_id,
+            transition_id=complete_transition_id,
+            input_detail={"parentSessionId": parent_session_id, "executorSessionId": session_id},
+            output_detail={
+                "success": success,
+                "resultType": result.result_type.value,
+                "resultText": result_text,
+                "error": result.error,
+            },
         )
 
         response = {
@@ -508,6 +535,26 @@ class AgentOrchestrator:
         if result.error:
             response["error"] = result.error
         return response
+
+    def _capture_delegation_debug_detail(
+        self,
+        *,
+        workflow_id: str,
+        transition_id: str | None,
+        input_detail: dict,
+        output_detail: dict | None = None,
+    ) -> None:
+        try:
+            from src.business.debug.service import get_debug_service
+
+            get_debug_service().capture_delegation_detail(
+                transition_id=transition_id,
+                workflow_id=workflow_id,
+                input_detail=input_detail,
+                output_detail=output_detail,
+            )
+        except Exception:
+            logger.debug("debug delegation detail capture failed", exc_info=True)
 
     def _build_delegated_executor_tools(
         self,

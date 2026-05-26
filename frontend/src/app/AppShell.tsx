@@ -1,10 +1,16 @@
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useAutoDismissToast } from "../hooks/useAutoDismissToast";
 
 import { triggerAssistantSegmentBoundary } from "../api/assistant";
 import { configureDesktopApiFromTauri, connectEvents, getBootstrap } from "../api/client";
 import type { BackendConnectionState, EventStreamCursor, UiEvent } from "../api/client";
+import {
+  DEBUG_CONTROL_STATUS_EVENT,
+  dispatchDebugRawStatePurge,
+  getControlStatus,
+  updateControl,
+} from "../api/debug";
 import { getUiEventHandlerDomain, isResyncRequiredEvent } from "../api/uiEvents";
 import BrainToast from "../components/BrainToast";
 import { useAssistantStore } from "../state/assistantStore";
@@ -18,7 +24,7 @@ import { useTeachingStore } from "../state/teachingStore";
 import { BackendStatus } from "./BackendStatus";
 import { CustomTitlebar } from "./CustomTitlebar";
 import { NavRail } from "./NavRail";
-import { getRoute } from "./routes";
+import { getHiddenRoute, getRoute } from "./routes";
 
 const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000, 5000];
 
@@ -78,6 +84,21 @@ export function AppShell(): JSX.Element {
   const refreshBrainSkillPool = useBrainStore((state) => state.loadSkillPool);
   const applySpecialistEvent = useSpecialistStore((state) => state.applyEvent);
   const refreshSpecialists = useSpecialistStore((state) => state.load);
+  const [debugTraceActive, setDebugTraceActive] = useState(false);
+  const [pathname, setPathname] = useState(() => window.location.pathname);
+  const debugStatusVersion = useRef(0);
+
+  const refreshDebugTraceStatus = useCallback(async () => {
+    const requestVersion = ++debugStatusVersion.current;
+    try {
+      const status = await getControlStatus();
+      if (requestVersion !== debugStatusVersion.current) return;
+      setDebugTraceActive(status.enabled);
+    } catch {
+      if (requestVersion !== debugStatusVersion.current) return;
+      setDebugTraceActive(false);
+    }
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -274,9 +295,6 @@ export function AppShell(): JSX.Element {
     setAssistantIdleThresholdSeconds,
   ]);
 
-  const route = useMemo(() => getRoute(activeRoute), [activeRoute]);
-  const Screen = route.render;
-
   const teachingToast = useTeachingStore((state) => state.toast);
   const dismissTeachingToast = useTeachingStore((state) => state.dismissToast);
   const recruitmentToast = useSpecialistStore((state) => state.recruitmentToast);
@@ -293,27 +311,100 @@ export function AppShell(): JSX.Element {
   useAutoDismissToast(teachingToast, dismissTeachingToast, TOAST_AUTO_DISMISS_MS);
   useAutoDismissToast(recruitmentToast, dismissRecruitmentToast, TOAST_AUTO_DISMISS_MS);
 
+  useEffect(() => {
+    const handleLocationChange = () => setPathname(window.location.pathname);
+    window.addEventListener("popstate", handleLocationChange);
+    return () => window.removeEventListener("popstate", handleLocationChange);
+  }, []);
+
+  const hiddenRoute = useMemo(() => getHiddenRoute(pathname), [pathname]);
+  const visibleRoute = useMemo(() => getRoute(activeRoute), [activeRoute]);
+  const routeForScreen = hiddenRoute ?? visibleRoute;
+  const Screen = routeForScreen.render;
+
+  const changeVisibleRoute = useCallback((nextRoute: Parameters<typeof setRoute>[0]) => {
+    if (hiddenRoute) {
+      dispatchDebugRawStatePurge();
+      window.history.replaceState({}, "", "/");
+      setPathname("/");
+    }
+    setRoute(nextRoute);
+  }, [hiddenRoute, setRoute]);
+
+  useEffect(() => {
+    void refreshDebugTraceStatus();
+  }, [refreshDebugTraceStatus]);
+
+  useEffect(() => {
+    const handleDebugControlStatus = (event: Event) => {
+      const status = (event as CustomEvent<{ enabled?: unknown }>).detail;
+      if (typeof status?.enabled === "boolean") {
+        debugStatusVersion.current += 1;
+        setDebugTraceActive(status.enabled);
+      }
+    };
+    window.addEventListener(DEBUG_CONTROL_STATUS_EVENT, handleDebugControlStatus);
+    return () => window.removeEventListener(DEBUG_CONTROL_STATUS_EVENT, handleDebugControlStatus);
+  }, []);
+
+  const isDebugRoute = hiddenRoute?.id === "debug";
+  useEffect(() => {
+    if (!debugTraceActive && !isDebugRoute) return;
+    const interval = window.setInterval(() => {
+      void refreshDebugTraceStatus();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [debugTraceActive, isDebugRoute, refreshDebugTraceStatus]);
+
+  const stopDebugTrace = useCallback(async () => {
+    const requestVersion = ++debugStatusVersion.current;
+    try {
+      const status = await updateControl({ enabled: false });
+      if (requestVersion !== debugStatusVersion.current) return;
+      setDebugTraceActive(status.enabled);
+      dispatchDebugRawStatePurge();
+    } catch {
+      await refreshDebugTraceStatus();
+    }
+  }, [refreshDebugTraceStatus]);
+
   return (
     <>
       <div className="me-page-bg" />
-      <div className="me-shell" data-testid="app-shell" data-screen-label={`Mexemplar / ${route.label}`}>
+      <div className="me-shell" data-testid="app-shell" data-screen-label={`Mexemplar / ${routeForScreen.label}`}>
         <NavRail
           activeRoute={activeRoute}
           counts={navigation}
           userDisplayName={userDisplayName}
           userStatusLabel={userStatusLabel}
-          onRouteChange={setRoute}
+          onRouteChange={changeVisibleRoute}
         />
         <main className="me-main-pane">
           <CustomTitlebar
             onBeforeClose={async () => {
               if (activeAssistantSessionId) {
-                await triggerAssistantSegmentBoundary(activeAssistantSessionId, "window_close");
+                const CLOSE_TIMEOUT_MS = 5000;
+                try {
+                  await Promise.race([
+                    triggerAssistantSegmentBoundary(activeAssistantSessionId, "window_close"),
+                    new Promise<void>((_, reject) =>
+                      setTimeout(() => reject(new Error("segment boundary timeout")), CLOSE_TIMEOUT_MS),
+                    ),
+                  ]);
+                } catch {
+                  // Segment boundary is best-effort on close; backend recovers via idle timeout.
+                }
               }
             }}
             right={<BackendStatus backend={backend} />}
-            title={`Mexemplar — ${route.label}`}
+            title={`Mexemplar — ${routeForScreen.label}`}
           />
+          {debugTraceActive ? (
+            <div className="debug-trace-banner" role="status">
+              <span>Debug trace capture is active for this sidecar session.</span>
+              <button type="button" onClick={stopDebugTrace}>Stop trace</button>
+            </div>
+          ) : null}
           <div className="me-screen-host">
             <Screen />
           </div>

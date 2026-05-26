@@ -46,6 +46,7 @@ class AssistantRuntime:
         self._orchestrator: AgentOrchestrator | None = None
         self._orchestrator_lock = threading.Lock()
         self._workers: dict[str, threading.Thread] = {}
+        self._workers_lock = threading.Lock()
         register_confirm_mechanism(_SidecarConfirmationSignal())
 
     def _get_orchestrator(self) -> AgentOrchestrator:
@@ -60,19 +61,24 @@ class AssistantRuntime:
         if not content:
             raise ValueError("content must not be empty")
 
-        existing = self._workers.get(session_id)
-        if existing is not None and existing.is_alive():
-            return False
+        with self._workers_lock:
+            existing = self._workers.get(session_id)
+            if existing is not None and existing.is_alive():
+                return False
 
-        after_sequence = self._chat_service.get_latest_display_sequence(session_id)
-        worker = threading.Thread(
-            target=self._run_assistant,
-            args=(session_id, content, after_sequence),
-            name=f"AssistantRuntime-{session_id}",
-            daemon=True,
-        )
-        self._workers[session_id] = worker
-        worker.start()
+            after_sequence = self._chat_service.get_latest_display_sequence(session_id)
+            worker = threading.Thread(
+                target=self._run_assistant,
+                args=(session_id, content, after_sequence),
+                name=f"AssistantRuntime-{session_id}",
+                daemon=True,
+            )
+            self._workers[session_id] = worker
+            try:
+                worker.start()
+            except Exception:
+                self._workers.pop(session_id, None)
+                raise
         return True
 
     def _run_assistant(self, session_id: str, content: str, after_sequence: int) -> None:
@@ -109,9 +115,13 @@ class AssistantRuntime:
                             "sequence": message.sequence,
                             "role": message.role,
                             "content": message.content,
-                            "createdAt": message.created_at.isoformat() if message.created_at else None,
+                            "createdAt": (
+                                message.created_at.isoformat() if message.created_at else None
+                            ),
                             "rendering": (
-                                "safe_markdown" if message.role in ("assistant", "summary") else "plain_text"
+                                "safe_markdown"
+                                if message.role in ("assistant", "summary")
+                                else "plain_text"
                             ),
                         },
                         {"sessionId": session_id},
@@ -133,7 +143,9 @@ class AssistantRuntime:
                         "content": message.content,
                         "createdAt": message.created_at.isoformat() if message.created_at else None,
                         "rendering": (
-                            "safe_markdown" if message.role in ("assistant", "summary") else "plain_text"
+                            "safe_markdown"
+                            if message.role in ("assistant", "summary")
+                            else "plain_text"
                         ),
                     },
                     {"sessionId": session_id},
@@ -157,4 +169,6 @@ class AssistantRuntime:
             )
         finally:
             clear_confirmation_session_context()
-            self._workers.pop(session_id, None)
+            with self._workers_lock:
+                if self._workers.get(session_id) is threading.current_thread():
+                    self._workers.pop(session_id, None)

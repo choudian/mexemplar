@@ -41,7 +41,7 @@ class TestReplyToUser:
 
         with patch("src.business.agents.tools.assistant_tools.BrainRepository") as MockRepo:
             mock_repo = MagicMock()
-            MockRepo.return_value = mock_repo
+            MockRepo.return_value.__enter__.return_value = mock_repo
 
             result = handler(
                 text="基于你的偏好...",
@@ -50,6 +50,7 @@ class TestReplyToUser:
 
             assert isinstance(result, ToolSignal)
             mock_repo.batch_update_referenced_counts.assert_called_once_with(["entry-1", "entry-2"])
+            MockRepo.return_value.__exit__.assert_called_once()
 
     def test_no_referenced_entries_skips_update(self):
         """不传 memory_entries_referenced 时不更新 referenced_count"""

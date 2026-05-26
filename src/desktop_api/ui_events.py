@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -9,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 from uuid import uuid4
 
+from src.business.services.ui_event_safety_service import unsafe_public_ui_event_value_reason
 from src.desktop_api.schemas import UiEvent
 
 logger = logging.getLogger(__name__)
@@ -327,39 +327,6 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_scope_keys=frozenset({"sessionId"}),
     ),
 }
-
-_FORBIDDEN_PAYLOAD_KEYS = {
-    "token",
-    "runtime_token",
-    "session_token",
-    "secret",
-    "password",
-    "api_key",
-    "apikey",
-    "code",
-    "full_code",
-    "command",
-    "command_body",
-    "stack_trace",
-    "traceback",
-    "database_path",
-    "db_path",
-    "query_results",
-    "raw_query_results",
-    "recording_data",
-    "unfiltered_recording_data",
-}
-
-_DB_EXTENSION_PATTERN = r"\.(sqlite3?|duckdb|db)\b"
-
-_FORBIDDEN_VALUE_PATTERNS = [
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    re.compile(r"MEXEMPLAR_DESKTOP_TOKEN", re.IGNORECASE),
-    re.compile(r"Traceback \(most recent call last\):"),
-    re.compile(r"\b(api[_-]?key|password|secret|token)\s*[:=]", re.IGNORECASE),
-    re.compile(r"[A-Za-z]:\\[^\\\n]+\\[^\\\n]+\\[^\\\n]+" + _DB_EXTENSION_PATTERN, re.IGNORECASE),
-]
-
 
 def registered_event_types() -> list[str]:
     return sorted(UI_EVENT_REGISTRY)
@@ -958,39 +925,13 @@ trial_preview_manager = TrialPreviewRequestManager()
 
 
 def _validate_payload_value(key: str, value: Any) -> None:
-    normalized_key = _normalize_key(key)
-    if normalized_key in _FORBIDDEN_PAYLOAD_KEYS:
-        raise UiEventValidationError(f"UI event payload key is forbidden: {key}")
-    if (
-        normalized_key.endswith("path")
-        and isinstance(value, str)
-        and re.search(_DB_EXTENSION_PATTERN, value, re.IGNORECASE)
-    ):
-        raise UiEventValidationError(
-            f"UI event payload path looks like a local database path: {key}"
-        )
-    if isinstance(value, str):
-        if key == "codePreview" and len(value) > _MAX_PREVIEW_CHARS:
-            raise UiEventValidationError("UI event codePreview exceeds the maximum preview length")
-        for pattern in _FORBIDDEN_VALUE_PATTERNS:
-            if pattern.search(value):
-                raise UiEventValidationError(
-                    f"UI event payload value failed safety validation: {key}"
-                )
-    elif isinstance(value, dict):
-        for child_key, child_value in value.items():
-            _validate_payload_value(str(child_key), child_value)
-    elif isinstance(value, list):
-        for item in value:
-            _validate_payload_value(key, item)
-
-
-_CAMEL_CASE_PATTERN = re.compile(r"([a-z0-9])([A-Z])")
-
-
-def _normalize_key(key: str) -> str:
-    value = _CAMEL_CASE_PATTERN.sub(r"\1_\2", key).lower()
-    return value.replace("-", "_")
+    reason = unsafe_public_ui_event_value_reason(
+        key,
+        value,
+        max_preview_chars=_MAX_PREVIEW_CHARS,
+    )
+    if reason is not None:
+        raise UiEventValidationError(reason)
 
 
 def _scope_from_payload(payload: dict[str, Any]) -> dict[str, str]:

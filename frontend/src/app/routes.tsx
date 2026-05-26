@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react";
 import AssistantScreen from "../screens/assistant/AssistantScreen";
 import BrainScreen from "../screens/BrainScreen";
 import CompositionListScreen from "../screens/compositions/CompositionListScreen";
+import DebugScreen from "../screens/debug/DebugScreen";
 import SettingsScreen from "../screens/settings/SettingsScreen";
 import SkillListScreen from "../screens/skills/SkillListScreen";
 import SpecialistScreen from "../screens/SpecialistScreen";
@@ -72,4 +73,21 @@ export const routes: RouteDefinition[] = [
 
 export function getRoute(routeId: RouteId): RouteDefinition {
   return routes.find((route) => route.id === routeId) ?? routes[0];
+}
+
+export interface HiddenRouteDefinition {
+  id: "debug";
+  label: string;
+  render: () => JSX.Element;
+}
+
+export function getHiddenRoute(pathname: string): HiddenRouteDefinition | null {
+  if (pathname === "/debug") {
+    return {
+      id: "debug",
+      label: "Debug Inspector",
+      render: () => <DebugScreen />,
+    };
+  }
+  return null;
 }

@@ -22,6 +22,8 @@ async function sealPreviousSegment(prevSessionId: string | null): Promise<void> 
 }
 import { toErrorMessage } from "./helpers";
 
+let _idleTimerRef: ReturnType<typeof setTimeout> | null = null;
+
 type AssistantProgress = {
   status: "idle" | "running" | "waiting_for_user" | "succeeded" | "failed";
   headline: string;
@@ -59,7 +61,6 @@ export type AssistantState = {
   applyEvent: (event: UiEvent) => void;
   decideConfirmation: (requestId: string, decision: "approve" | "deny") => Promise<void>;
   setAutoApprove: (enabled: boolean) => Promise<void>;
-  idleTimerRef: ReturnType<typeof setTimeout> | null;
   resetIdleTimer: () => void;
   clearIdleTimer: () => void;
 };
@@ -182,8 +183,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     });
   },
   sendDraft: async () => {
-    const content = get().draft.trim();
-    if (!content || get().sending) {
+    const content = get().draft;
+    if (!content.trim() || get().sending) {
       return;
     }
 
@@ -283,15 +284,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       set({ autoApprove: previous, lastError: toErrorMessage(error, "设置免确认失败。") });
     }
   },
-  idleTimerRef: null,
   resetIdleTimer: () => {
-    const state = get();
-    if (state.idleTimerRef) {
-      clearTimeout(state.idleTimerRef);
+    if (_idleTimerRef) {
+      clearTimeout(_idleTimerRef);
     }
+    const state = get();
     const { idleThresholdMs, activeSessionId: sessionId } = state;
     if (!sessionId || idleThresholdMs === null) return;
-    const timer = setTimeout(async () => {
+    _idleTimerRef = setTimeout(async () => {
       if (get().activeSessionId !== sessionId) return;
       try {
         await triggerAssistantSegmentIdle(sessionId);
@@ -299,13 +299,11 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         // Idle trigger is best-effort; failures are non-critical
       }
     }, idleThresholdMs);
-    set({ idleTimerRef: timer });
   },
   clearIdleTimer: () => {
-    const state = get();
-    if (state.idleTimerRef) {
-      clearTimeout(state.idleTimerRef);
-      set({ idleTimerRef: null });
+    if (_idleTimerRef) {
+      clearTimeout(_idleTimerRef);
+      _idleTimerRef = null;
     }
   },
 }));

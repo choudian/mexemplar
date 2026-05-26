@@ -2,6 +2,7 @@
 US4: Prediction generation and verification worker tests.
 """
 
+import threading
 from unittest.mock import MagicMock
 
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
@@ -250,3 +251,74 @@ def test_background_worker_keeps_pending_segments_when_llm_unavailable(in_memory
 
     assert BrainRepository().get_segment_by_id(segment_id).status == "pending"
     distillation_service.distill_segment.assert_not_called()
+
+
+def test_background_worker_unhandled_distillation_failure_consumes_retry_budget(in_memory_db):
+    from src.business.brain.background_worker import BrainBackgroundWorker
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    segment_id = repo.create_segment(
+        session_id="sess-retry",
+        boundary_reason="idle",
+        message_id_start="msg-1",
+        message_id_end="msg-2",
+    )
+    config = MagicMock()
+    config.get_brain_segment_max_distillation_retries.return_value = 2
+    distillation_service = MagicMock()
+    distillation_service.distill_segment.side_effect = RuntimeError("provider failed")
+    worker = BrainBackgroundWorker(
+        config=config,
+        distillation_service=distillation_service,
+        llm_client=object(),
+    )
+
+    worker._process_pending_segments()
+    after_first = BrainRepository().get_segment_by_id(segment_id)
+    assert after_first.status == "pending"
+    assert after_first.retry_count == 1
+
+    worker._process_pending_segments()
+    after_second = BrainRepository().get_segment_by_id(segment_id)
+    assert after_second.status == "failed"
+
+
+def test_background_worker_does_not_restart_before_stopping_thread_exits():
+    from src.business.brain.background_worker import BrainBackgroundWorker
+
+    config = MagicMock()
+    config.get_brain_worker_tick_interval.return_value = 60
+    entered = threading.Event()
+    release = threading.Event()
+    first = BrainBackgroundWorker(config=config)
+
+    def block_first_tick():
+        entered.set()
+        release.wait(timeout=2)
+
+    first._process_pending_segments = block_first_tick
+    for method_name in (
+        "_recover_crashed_segments",
+        "_run_decay_sweep",
+        "_run_archive_layering",
+        "_run_prediction_jobs",
+        "_run_subconscious_distillation",
+        "_run_invalidation_review",
+        "_run_recruitment_scan",
+    ):
+        setattr(first, method_name, MagicMock())
+
+    first.start()
+    assert entered.wait(timeout=1)
+    stopper = threading.Thread(target=first.stop)
+    stopper.start()
+    assert first._stop_event.wait(timeout=1)
+
+    second = BrainBackgroundWorker(config=config)
+    second.start()
+    assert second._thread is None
+
+    release.set()
+    stopper.join(timeout=2)
+    assert not stopper.is_alive()

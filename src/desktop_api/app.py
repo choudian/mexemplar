@@ -12,9 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 
+from src.business.services.real_tour_startup_service import RealTourStartupService
 from src.business.services.recording_startup_service import RecordingStartupService
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
-from src.desktop_api.routers import assistant, brain, compositions, health, settings, skills, teaching
+from src.desktop_api.routers import assistant, brain, compositions, debug, health, settings, skills, teaching
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
 from src.execution.tool_executor import ensure_builtin_deps
 
@@ -25,6 +26,14 @@ logger = logging.getLogger(__name__)
 def create_app(session_token: str | None = None) -> FastAPI:
     token = session_token or os.environ.get("MEXEMPLAR_DESKTOP_TOKEN", "")
     install_blinker_event_adapter()
+    RealTourStartupService().install_runtime_guards()
+    if token:
+        try:
+            from src.business.debug.service import get_debug_service
+
+            get_debug_service().register_secret(token)
+        except Exception:
+            logger.debug("Debug runtime-token registration failed", exc_info=True)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -75,6 +84,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(compositions.router)
     app.include_router(settings.router)
     app.include_router(brain.router)
+    app.include_router(debug.router)
 
     @app.get("/api/events", tags=["events"])
     async def events(request: Request) -> StreamingResponse:

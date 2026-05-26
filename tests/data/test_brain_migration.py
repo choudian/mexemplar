@@ -3,6 +3,7 @@
 import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy import inspect
+from sqlalchemy.exc import IntegrityError
 
 
 @pytest.fixture
@@ -79,6 +80,33 @@ class TestV11MigrationTables:
         assert "偏好风格：简洁直接" in rows[0].content
         assert "备注：偏好中文" in rows[0].content
 
+    def test_profile_backfill_handles_partial_legacy_profile_columns(self, tmp_path):
+        from src.data.migrations import migrate_to_v11
+
+        engine = create_engine(f"sqlite:///{tmp_path / 'partial-legacy.db'}", future=True)
+        with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE schema_version (version INTEGER)"))
+            conn.execute(text("INSERT INTO schema_version (version) VALUES (10)"))
+            conn.execute(text("""
+                CREATE TABLE assistant_profile (
+                    profile_id TEXT PRIMARY KEY DEFAULT 'default',
+                    notes TEXT
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO assistant_profile (profile_id, notes)
+                VALUES ('default', '仅保留旧备注')
+            """))
+
+        migrate_to_v11(engine)
+
+        with engine.connect() as conn:
+            content = conn.execute(
+                text("SELECT content FROM brain_memory_entries WHERE zone = 'persistent'")
+            ).scalar_one()
+
+        assert content == "备注：仅保留旧备注"
+
 
 class TestV11MigrationIndexes:
     """验证关键索引存在"""
@@ -98,6 +126,48 @@ class TestV11MigrationIndexes:
         assert "idx_brain_entries_source_segment" in index_names
         assert "idx_brain_entries_superseded_by" in index_names
         assert "idx_brain_entries_zone_relevance" in index_names
+
+
+class TestV11DomainConstraints:
+    def test_brain_segment_rejects_unknown_status(self, engine_with_v11):
+        with pytest.raises(IntegrityError), engine_with_v11.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO brain_segments (segment_id, session_id, status) "
+                    "VALUES ('seg-invalid', 'sess-1', 'unknown')"
+                )
+            )
+
+    @pytest.mark.parametrize(
+        ("zone", "status"),
+        [("unknown", "active"), ("hot", "unknown")],
+    )
+    def test_brain_memory_entry_rejects_unknown_domain_value(
+        self,
+        engine_with_v11,
+        zone,
+        status,
+    ):
+        with pytest.raises(IntegrityError), engine_with_v11.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO brain_memory_entries "
+                    "(entry_id, zone, content, status, origin, reason) "
+                    "VALUES ('entry-invalid', :zone, 'content', :status, 'manual', 'test')"
+                ),
+                {"zone": zone, "status": status},
+            )
+
+    def test_brain_specialist_rejects_non_boolean_active_value(self, engine_with_v11):
+        with pytest.raises(IntegrityError), engine_with_v11.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO brain_specialists "
+                    "(specialist_id, name, description, role_definition, tool_whitelist, "
+                    "origin, reason, is_active) "
+                    "VALUES ('sp-invalid', 'n', 'd', 'r', '[]', 'manual', 'test', 2)"
+                )
+            )
 
 
 class TestOrmModels:

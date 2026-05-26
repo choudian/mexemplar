@@ -3,7 +3,7 @@ Segment 边界服务 - 管理 Segment 的封存与边界触发
 """
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from src.utils.events import emit
 
@@ -92,9 +92,14 @@ class SegmentService:
             return None, None
 
         try:
+            msg_repo = MessageRepository()
+            try:
+                raw_messages = msg_repo.get_context(session_id)
+            finally:
+                msg_repo.close()
             messages = [
                 msg
-                for msg in MessageRepository().get_context(session_id)
+                for msg in raw_messages
                 if msg.role in {"user", "assistant"} and (msg.content or "").strip()
             ]
         except Exception as exc:
@@ -133,7 +138,8 @@ class SegmentService:
     def crash_reset_stale_segments(self, threshold_seconds: int) -> int:
         """Reset stale distilling segments to pending after a crash/restart."""
         repo = self._get_repo()
-        now = datetime.now()
+        # ORM returns naive UTC datetimes; strip tzinfo for arithmetic compatibility
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         reset_count = 0
         for segment in repo.get_segments_by_status("distilling"):
             started_at = getattr(segment, "distilling_started_at", None)

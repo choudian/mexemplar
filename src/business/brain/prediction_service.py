@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Optional
 
 from src.business.agents.tool_helpers import make_tool_schema
+from src.utils.events import emit
 
 logger = logging.getLogger(__name__)
 
@@ -83,12 +84,14 @@ class PredictionService:
             checkpoint = (item.get("verification_checkpoint") or "").strip()
             if not content or not reason or not checkpoint:
                 continue
-            created_ids.append(
-                repo.create_prediction_entry(
-                    content=content,
-                    reason=reason,
-                    verification_checkpoint=checkpoint,
-                )
+            entry_id = repo.create_prediction_entry(
+                content=content,
+                reason=reason,
+                verification_checkpoint=checkpoint,
+            )
+            created_ids.append(entry_id)
+            emit(
+                "brain_zone_changed", zone="prediction", entry_id=str(entry_id), operation="create"
             )
         return created_ids
 
@@ -115,6 +118,12 @@ class PredictionService:
                     status,
                     rationale,
                 ):
+                    emit(
+                        "brain_zone_changed",
+                        zone="prediction",
+                        entry_id=getattr(entry, "entry_id", ""),
+                        operation="verify",
+                    )
                     verified_count += 1
             except Exception as exc:
                 entry_id = getattr(entry, "entry_id", "")
@@ -216,11 +225,14 @@ class PredictionService:
         attempts = repo.count_prediction_verification_failures(entry_id)
         max_retries = self._verification_retry_limit()
         if attempts + 1 >= max_retries:
-            return repo.update_prediction_verification(
+            updated = repo.update_prediction_verification(
                 entry_id,
                 "expired",
                 "verification call failed — could not be assessed",
             )
+            if updated:
+                emit("brain_zone_changed", zone="prediction", entry_id=entry_id, operation="verify")
+            return updated
         repo.record_prediction_verification_failure(entry_id, reason)
         return False
 

@@ -67,8 +67,12 @@ function IntentStage(): JSX.Element {
           disabled={disabled}
           onSend={() => {
             if (draft.trim()) {
-              void replyIntent(draft);
-              setDraft("");
+              const submittedDraft = draft;
+              void replyIntent(submittedDraft).then((accepted) => {
+                if (accepted) {
+                  setDraft((current) => current === submittedDraft ? "" : current);
+                }
+              });
             }
           }}
           setDraft={setDraft}

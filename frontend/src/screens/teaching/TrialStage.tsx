@@ -158,19 +158,26 @@ export function TrialStage({
   }, [trialMessages.length, waitingForAi]);
 
   const handleSend = (text: string) => {
-    const t = text.trim();
-    if (!t || composerDisabled) return;
+    if (!text.trim() || composerDisabled) return;
     setWaitingForAi(true);
+    const submittedText = text;
+    let submission: Promise<boolean>;
     if (onStart && trialMessages.length === 0) {
       try {
-        void Promise.resolve(onStart(t)).catch(() => setWaitingForAi(false));
+        submission = Promise.resolve(onStart(submittedText)).then(() => true);
       } catch {
-        setWaitingForAi(false);
+        submission = Promise.resolve(false);
       }
     } else {
-      startTrial(t).catch(() => setWaitingForAi(false));
+      submission = startTrial(submittedText);
     }
-    setDraft("");
+    void submission.then((accepted) => {
+      if (accepted) {
+        setDraft((current) => current === text ? "" : current);
+      } else {
+        setWaitingForAi(false);
+      }
+    }).catch(() => setWaitingForAi(false));
   };
 
   const handleVerdict = (ok: boolean) => {

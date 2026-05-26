@@ -7,6 +7,7 @@ import logging
 from typing import Any, Optional
 
 from src.business.brain.models import DistillationOutput, SegmentStatus, Zone
+from src.utils.events import emit
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +57,9 @@ P2_DISTILLATION_TOOL_SCHEMA = {
         "required": ["hot_zone", "persistent_zone", "archive_zone"],
         "properties": {
             "hot_zone": P1_DISTILLATION_TOOL_SCHEMA["input_schema"]["properties"]["hot_zone"],
-            "persistent_zone": P1_DISTILLATION_TOOL_SCHEMA["input_schema"]["properties"]["persistent_zone"],
+            "persistent_zone": P1_DISTILLATION_TOOL_SCHEMA["input_schema"]["properties"][
+                "persistent_zone"
+            ],
             "archive_zone": {
                 "type": "array",
                 "items": {
@@ -88,7 +91,9 @@ P4_DISTILLATION_TOOL_SCHEMA = {
         ],
         "properties": {
             "hot_zone": P1_DISTILLATION_TOOL_SCHEMA["input_schema"]["properties"]["hot_zone"],
-            "persistent_zone": P1_DISTILLATION_TOOL_SCHEMA["input_schema"]["properties"]["persistent_zone"],
+            "persistent_zone": P1_DISTILLATION_TOOL_SCHEMA["input_schema"]["properties"][
+                "persistent_zone"
+            ],
             "archive_zone": {
                 "type": "array",
                 "items": {
@@ -164,12 +169,14 @@ class DistillationService:
     def _get_repo(self):
         if self._repo is None:
             from src.data.repos.brain_repository import BrainRepository
+
             self._repo = BrainRepository()
         return self._repo
 
     def _get_config(self):
         if self._config is None:
             from src.data.unified_config import get_unified_config
+
             self._config = get_unified_config()
         return self._config
 
@@ -212,6 +219,7 @@ class DistillationService:
         created_ids = self._complete_segment_with_entries(repo, segment_id, entries)
         if len(created_ids) != len(entries):
             return {"success": False, "status": "transition_conflict", "entries": 0}
+        self._emit_created_entries(entries, created_ids)
         return {"success": True, "status": "completed", "entries": len(entries)}
 
     def _get_segment(self, repo, segment_id: str):
@@ -315,7 +323,7 @@ class DistillationService:
             )
 
             if result is None:
-                all_empty_retried = getattr(segment, 'all_empty_retried', False)
+                all_empty_retried = getattr(segment, "all_empty_retried", False)
                 if not all_empty_retried:
                     logger.info("Segment %s returned empty, retrying once", segment_id)
                     repo.transition_segment(
@@ -329,9 +337,7 @@ class DistillationService:
                     "Segment %s returned empty after retry, marking FAILED",
                     segment_id,
                 )
-                self._retry_or_fail_segment(
-                    repo, segment, "LLM returned empty result after retry"
-                )
+                self._retry_or_fail_segment(repo, segment, "LLM returned empty result after retry")
                 return False
 
             # 验证结构
@@ -344,7 +350,7 @@ class DistillationService:
                 )
                 return False
             if not entries:
-                all_empty_retried = getattr(segment, 'all_empty_retried', False)
+                all_empty_retried = getattr(segment, "all_empty_retried", False)
                 if not all_empty_retried:
                     repo.transition_segment(
                         segment_id,
@@ -357,13 +363,11 @@ class DistillationService:
                     "Segment %s has no entries after retry, marking FAILED",
                     segment_id,
                 )
-                self._retry_or_fail_segment(
-                    repo, segment, "No entries extracted after retry"
-                )
+                self._retry_or_fail_segment(repo, segment, "No entries extracted after retry")
                 return False
 
             # 事务写入：entries + segment completed
-            session_id = getattr(segment, 'session_id', '')
+            session_id = getattr(segment, "session_id", "")
             entries_with_source = [
                 {
                     **entry,
@@ -381,9 +385,12 @@ class DistillationService:
                 logger.warning("Segment %s completion conflicted after distillation", segment_id)
                 return False
 
+            self._emit_created_entries(entries_with_source, created_ids)
             logger.info(
                 "Segment %s distilled successfully: %d entries (phase=%s)",
-                segment_id, len(entries), phase,
+                segment_id,
+                len(entries),
+                phase,
             )
             return True
 
@@ -403,11 +410,16 @@ class DistillationService:
     def _get_segment_messages(self, segment) -> list[dict]:
         """获取 segment 覆盖范围内的消息"""
         from src.data.repositories import MessageRepository
-        msg_start = getattr(segment, 'message_id_start', None)
-        msg_end = getattr(segment, 'message_id_end', None)
-        session_id = getattr(segment, 'session_id', '')
 
-        messages = MessageRepository().get_context(session_id)
+        msg_start = getattr(segment, "message_id_start", None)
+        msg_end = getattr(segment, "message_id_end", None)
+        session_id = getattr(segment, "session_id", "")
+
+        msg_repo = MessageRepository()
+        try:
+            messages = msg_repo.get_context(session_id)
+        finally:
+            msg_repo.close()
         messages = [
             msg
             for msg in messages
@@ -499,12 +511,18 @@ class DistillationService:
             reason = str(item.get("reason", "") or "").strip()
             if not content or not reason:
                 continue
-            repo.create_entry(
+            entry_id = repo.create_entry(
                 zone=Zone.SUBCONSCIOUS.value,
                 content=content,
                 origin="subconscious_distillation",
                 reason=reason,
                 scope=item.get("scope"),
+            )
+            emit(
+                "brain_zone_changed",
+                zone=Zone.SUBCONSCIOUS.value,
+                entry_id=str(entry_id),
+                operation="create",
             )
             created += 1
         return created
@@ -562,7 +580,13 @@ class DistillationService:
             if phase == "p2":
                 zone_keys = ["hot_zone", "persistent_zone", "archive_zone"]
             elif phase == "p4":
-                zone_keys = ["hot_zone", "persistent_zone", "archive_zone", "subconscious_zone", "failure_zone"]
+                zone_keys = [
+                    "hot_zone",
+                    "persistent_zone",
+                    "archive_zone",
+                    "subconscious_zone",
+                    "failure_zone",
+                ]
             else:
                 zone_keys = ["hot_zone", "persistent_zone"]
             active_zone_keys = set(zone_keys)
@@ -599,7 +623,10 @@ class DistillationService:
                                 return None
                             if not item.get("content") or not item.get("reason"):
                                 return None
-                            if zone_key == "hot_zone" and item.get("entry_type") not in {"event", "insight"}:
+                            if zone_key == "hot_zone" and item.get("entry_type") not in {
+                                "event",
+                                "insight",
+                            }:
                                 return None
                             entry = {
                                 "zone": zone_key.replace("_zone", ""),
@@ -636,13 +663,42 @@ class DistillationService:
     ) -> list[str]:
         if hasattr(type(repo), "complete_segment_with_entries"):
             return repo.complete_segment_with_entries(segment_id, entries)
-        repo.create_entries_for_segment(entries)
-        repo.transition_segment_status(
+        # CAS first: if another worker already completed this segment, don't insert duplicate entries
+        ok = repo.transition_segment_status(
             segment_id,
             from_status=SegmentStatus.DISTILLING.value,
             to_status=SegmentStatus.COMPLETED.value,
         )
+        if not ok:
+            logger.warning(
+                "Segment %s CAS failed in fallback path, skipping entry creation", segment_id
+            )
+            return []
+        try:
+            repo.create_entries_for_segment(entries)
+        except Exception:
+            logger.error(
+                "Segment %s entry creation failed after CAS, rolling back to DISTILLING",
+                segment_id,
+                exc_info=True,
+            )
+            repo.transition_segment_status(
+                segment_id,
+                from_status=SegmentStatus.COMPLETED.value,
+                to_status=SegmentStatus.DISTILLING.value,
+            )
+            raise
         return [entry.get("entry_id", "") for entry in entries]
+
+    @staticmethod
+    def _emit_created_entries(entries: list[dict], entry_ids: list[str]) -> None:
+        for entry, entry_id in zip(entries, entry_ids):
+            emit(
+                "brain_zone_changed",
+                zone=str(entry.get("zone", "")),
+                entry_id=str(entry_id),
+                operation="create",
+            )
 
     def _retry_or_fail_segment(self, repo, segment, reason: str) -> None:
         """Retry a failed distillation unit until the configured retry budget is exhausted."""

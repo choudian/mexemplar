@@ -204,7 +204,7 @@ class TestDeleteSpecialist:
         assert result is True
         specialist = repo.get_specialist(sid)
         assert specialist is not None
-        assert specialist.is_active == 0
+        assert specialist.is_active is False
 
     def test_delete_preserves_versions(self, in_memory_db):
         """删除专员保留版本历史。"""
@@ -270,8 +270,8 @@ class TestListSpecialists:
 
 
 class TestDeactivateSpecialist:
-    def test_deactivate_sets_is_active_zero(self, in_memory_db):
-        """停用专员设置 is_active=0"""
+    def test_deactivate_sets_is_active_false(self, in_memory_db):
+        """停用专员设置 is_active=False。"""
         repo = SpecialistRepository()
         sid = _create_specialist_via_repo(repo, name="待停用")
 
@@ -279,7 +279,7 @@ class TestDeactivateSpecialist:
         assert result is True
 
         specialist = repo.get_specialist(sid)
-        assert specialist.is_active == 0
+        assert specialist.is_active is False
 
     def test_deactivate_nonexistent_returns_false(self, in_memory_db):
         """停用不存在的专员返回 False"""

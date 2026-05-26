@@ -1,19 +1,23 @@
 import { DesktopApiError, requestJson } from './client';
 
+export type BrainZone = 'hot' | 'persistent' | 'archive' | 'subconscious' | 'failure' | 'prediction';
+export type BrainEntryStatus = 'active' | 'fading' | 'invalidated' | 'soft-deleted';
+export type BrainSegmentStatus = 'pending' | 'distilling' | 'completed' | 'failed';
+export type BrainVerificationStatus = 'hit' | 'partial' | 'miss' | 'expired';
+
 export interface BrainZoneSummary {
-  zone: string;
-  label?: string;
-  entry_count?: number;
-  active_count?: number;
+  zone: BrainZone;
+  label: string;
+  entry_count: number;
   fading_count: number;
 }
 
 export interface BrainMemoryEntry {
   entry_id: string;
-  zone: string;
+  zone: BrainZone;
   entry_type: string | null;
   content: string;
-  status: string;
+  status: BrainEntryStatus;
   origin: string;
   reason: string;
   scope: string | null;
@@ -21,7 +25,7 @@ export interface BrainMemoryEntry {
   referenced_count: number;
   superseded_by: string | null;
   verification_checkpoint: string | null;
-  verification_status: string | null;
+  verification_status: BrainVerificationStatus | null;
   verification_rationale: string | null;
   created_at: string | null;
   updated_at: string | null;
@@ -30,7 +34,7 @@ export interface BrainMemoryEntry {
 export interface BrainSegment {
   segment_id: string;
   session_id: string;
-  status: string;
+  status: BrainSegmentStatus;
   retry_count: number;
   boundary_reason: string | null;
   sealed_at: string | null;
@@ -62,6 +66,8 @@ export interface ZoneEntriesResponse {
 export interface SegmentsResponse {
   items: BrainSegment[];
   total: number;
+  limit: number;
+  offset: number;
 }
 
 export interface SpecialistsResponse {
@@ -124,8 +130,8 @@ export function getBrainZones(): Promise<{ zones: BrainZoneSummary[] }> {
 }
 
 export function getZoneEntries(
-  zone: string,
-  options: { limit?: number; offset?: number; status?: string } = {},
+  zone: BrainZone,
+  options: { limit?: number; offset?: number; status?: BrainEntryStatus } = {},
 ): Promise<ZoneEntriesResponse> {
   const params = new URLSearchParams({
     limit: String(options.limit ?? 50),
@@ -167,7 +173,7 @@ export function getEntryEvolution(entryId: string): Promise<EvolutionChainRespon
 // ═══════════════════════════════════════════════
 
 export function getBrainSegments(
-  options: { limit?: number; offset?: number; status?: string } = {},
+  options: { limit?: number; offset?: number; status?: BrainSegmentStatus | 'all' } = {},
 ): Promise<SegmentsResponse> {
   const params = new URLSearchParams({
     limit: String(options.limit ?? 20),
@@ -177,10 +183,21 @@ export function getBrainSegments(
   return requestJson<SegmentsResponse>(`/api/brain/segments?${params}`);
 }
 
-export function retryBrainSegment(segmentId: string): Promise<{ segment_id: string; status: string }> {
-  return requestJson<{ segment_id: string; status: string }>(
+export function retryBrainSegment(segmentId: string): Promise<{ segment_id: string; status: BrainSegmentStatus }> {
+  return requestJson<{ segment_id: string; status: BrainSegmentStatus }>(
     `/api/brain/segments/${encodeURIComponent(segmentId)}/retry`,
     { method: 'POST' },
+  );
+}
+
+export function isBrainZone(value: unknown): value is BrainZone {
+  return (
+    value === 'hot' ||
+    value === 'persistent' ||
+    value === 'archive' ||
+    value === 'subconscious' ||
+    value === 'failure' ||
+    value === 'prediction'
   );
 }
 

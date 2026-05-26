@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.business.services.chat_service import ChatService, DisplayChatMessage
@@ -24,6 +26,7 @@ from src.desktop_api.schemas import (
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
 _runtime: AssistantRuntime | None = None
+logger = logging.getLogger(__name__)
 
 
 def get_chat_service() -> ChatService:
@@ -191,7 +194,11 @@ def trigger_segment_idle(session_id: str):
     from src.business.brain.segment_service import SegmentService
 
     service = SegmentService()
-    segment_id = service.handle_idle_trigger(session_id)
+    try:
+        segment_id = service.handle_idle_trigger(session_id)
+    except Exception as exc:
+        logger.error("Segment idle trigger failed for session %s: %s", session_id, exc)
+        raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
     if segment_id is None:
         return {"segment_id": None, "status": None}
     cleanup_retrieved_context(session_id)
@@ -205,7 +212,15 @@ def trigger_segment_boundary(body: SegmentBoundaryRequest):
     from src.business.brain.segment_service import SegmentService
 
     service = SegmentService()
-    segment_id = service.seal_segment(body.session_id, boundary_reason=body.reason)
+    try:
+        segment_id = service.seal_segment(body.session_id, boundary_reason=body.reason)
+    except Exception as exc:
+        logger.error("Segment boundary trigger failed for session %s: %s", body.session_id, exc)
+        raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
     if segment_id:
         cleanup_retrieved_context(body.session_id)
-    return {"segment_id": segment_id, "status": "pending"} if segment_id else {"segment_id": None, "status": None}
+    return (
+        {"segment_id": segment_id, "status": "pending"}
+        if segment_id
+        else {"segment_id": None, "status": None}
+    )

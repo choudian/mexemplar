@@ -105,7 +105,7 @@ class SpecialistService:
         """更新专员信息，自动创建新版本记录。"""
         specialist = self._repo.get_specialist(specialist_id)
         if specialist is None:
-            raise ValueError(f"专员不存在: {specialist_id}")
+            raise KeyError("specialist_not_found")
 
         # 如果修改了名称，检查新名称唯一性
         if name is not None and name != specialist.name:
@@ -128,7 +128,7 @@ class SpecialistService:
         )
 
         if not success:
-            raise ValueError(f"更新专员失败: {specialist_id}")
+            raise KeyError("specialist_not_found")
 
         updated = self._repo.get_specialist(specialist_id)
         self._record_specialist_feedback(
@@ -136,6 +136,7 @@ class SpecialistService:
             specialist_id=specialist_id,
             context_summary=self._specialist_feedback_summary(specialist),
         )
+        emit("brain_specialist_changed", specialist_id=specialist_id, operation="update")
         return self._to_dict(updated)
 
     def delete_specialist(self, specialist_id: str) -> bool:
@@ -148,6 +149,7 @@ class SpecialistService:
                 specialist_id=specialist_id,
                 context_summary=self._specialist_feedback_summary(specialist),
             )
+            emit("brain_specialist_changed", specialist_id=specialist_id, operation="deactivate")
         return success
 
     def get_specialist(self, specialist_id: str) -> Optional[dict]:
@@ -231,19 +233,22 @@ class SpecialistService:
         except ImportError:
             return []
 
-        threshold = self._recruitment_threshold()
-        signals = brain_repo.get_recruitment_signals_for_scan(threshold)
+        try:
+            threshold = self._recruitment_threshold()
+            signals = brain_repo.get_recruitment_signals_for_scan(threshold)
 
-        created: list[dict] = []
-        for signal in signals:
-            try:
-                specialist_dict = self._recruit_from_signal(signal)
-                if specialist_dict is not None:
-                    created.append(specialist_dict)
-            except Exception as e:
-                logger.error("Auto-recruitment failed for signal %s: %s", signal.signal_id, e)
+            created: list[dict] = []
+            for signal in signals:
+                try:
+                    specialist_dict = self._recruit_from_signal(signal)
+                    if specialist_dict is not None:
+                        created.append(specialist_dict)
+                except Exception as e:
+                    logger.error("Auto-recruitment failed for signal %s: %s", signal.signal_id, e)
 
-        return created
+            return created
+        finally:
+            brain_repo.close()
 
     def _recruit_from_signal(self, signal) -> Optional[dict]:
         """
@@ -278,19 +283,25 @@ class SpecialistService:
         )
 
         # 更新 signal 记录关联 specialist_id
-        brain_repo = BrainRepository()
-        brain_repo.mark_recruitment_signal_consumed(
-            signal.signal_id,
-            specialist_dict["specialist_id"],
-        )
+        signal_repo = BrainRepository()
+        try:
+            signal_repo.mark_recruitment_signal_consumed(
+                signal.signal_id,
+                specialist_dict["specialist_id"],
+            )
+        finally:
+            signal_repo.close()
 
         return specialist_dict
 
     @staticmethod
     def _generate_specialist_name(task_pattern: str) -> str:
-        """根据任务模式生成专员名称。"""
+        """根据任务模式生成专员名称。添加短哈希后缀避免截断碰撞。"""
+        import hashlib
+
         pattern = task_pattern[:50]
-        return f"{pattern}专员"
+        suffix = hashlib.sha256(task_pattern.encode()).hexdigest()[:6]
+        return f"{pattern}专员_{suffix}"
 
     @staticmethod
     def _generate_role_definition(task_pattern: str, summaries: list[str]) -> str:
@@ -330,7 +341,11 @@ class SpecialistService:
         try:
             from src.data.repos.brain_repository import BrainRepository
 
-            signals = BrainRepository().get_recent_feedback_signals(zone="specialist", limit=5)
+            fb_repo = BrainRepository()
+            try:
+                signals = fb_repo.get_recent_feedback_signals(zone="specialist", limit=5)
+            finally:
+                fb_repo.close()
         except Exception as exc:
             logger.warning("Failed to load feedback signals for recruitment prompt: %s", exc)
             return ""

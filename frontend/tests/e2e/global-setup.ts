@@ -19,6 +19,11 @@ let sidecarProcess: ReturnType<typeof spawn> | null = null;
 let dataDir = "";
 
 async function globalSetup() {
+  if (process.env.MEXEMPLAR_REAL_GRAND_TOUR === "1") {
+    console.log("[e2e setup] Real Grand Tour uses its dedicated runtime; skipping default setup.");
+    return;
+  }
+
   // 0. 清理残留 sidecar 进程（Windows 上 taskkill 杀进程树）
   if (process.platform === "win32") {
     try {

@@ -9,6 +9,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:grand-tour": "playwright test --config playwright.real-grand-tour.config.ts",
     "tauri": "cd .. && npx --prefix frontend tauri",
     "tauri:dev": "cd .. && npx --prefix frontend tauri dev",
     "tauri:build": "cd .. && npx --prefix frontend tauri build"

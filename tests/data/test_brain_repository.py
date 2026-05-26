@@ -502,11 +502,11 @@ class TestZoneSummaries:
         summaries = repo.get_zone_summaries()
 
         assert len(summaries) >= 2
-        hot_summary = next(s for s in summaries if s.zone == "hot")
-        persistent_summary = next(s for s in summaries if s.zone == "persistent")
+        hot_summary = next(s for s in summaries if s["zone"] == "hot")
+        persistent_summary = next(s for s in summaries if s["zone"] == "persistent")
 
-        assert hot_summary.entry_count == 5
-        assert persistent_summary.entry_count == 3
+        assert hot_summary["entry_count"] == 5
+        assert persistent_summary["entry_count"] == 3
 
     def test_zone_summaries_exclude_soft_deleted(self, repo):
         eid = uuid4().hex[:50]
@@ -520,10 +520,10 @@ class TestZoneSummaries:
         repo.soft_delete_entry(eid)
 
         summaries = repo.get_zone_summaries()
-        hot_summary = next((s for s in summaries if s.zone == "hot"), None)
+        hot_summary = next((s for s in summaries if s["zone"] == "hot"), None)
 
         if hot_summary is not None:
-            assert hot_summary.entry_count == 0
+            assert hot_summary["entry_count"] == 0
 
     def test_zone_summaries_count_fading(self, repo):
         eid = uuid4().hex[:50]
@@ -540,9 +540,9 @@ class TestZoneSummaries:
         repo.session.commit()
 
         summaries = repo.get_zone_summaries()
-        hot_summary = next(s for s in summaries if s.zone == "hot")
-        assert hot_summary.fading_count == 1
-        assert hot_summary.entry_count == 1
+        hot_summary = next(s for s in summaries if s["zone"] == "hot")
+        assert hot_summary["fading_count"] == 1
+        assert hot_summary["entry_count"] == 1
 
 
 # ────────────────────────────────────────────

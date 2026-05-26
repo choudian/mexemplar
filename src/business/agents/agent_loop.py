@@ -10,9 +10,10 @@ import time
 from typing import Callable, Dict, List, Optional, Union
 
 from src.business.ai.llm_client import LangChainLLMClient, LLMResponse, ToolCallInfo
+from src.business.debug.context import TraceContext
 from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
-from src.data.repositories import MessageRepository
+from src.data.repositories import MessageRepository, SessionRepository
 from src.utils.helpers import safe_format_template
 
 from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
@@ -90,6 +91,7 @@ class AgentLoop:
         self._max_ctx_cache = 20  # 限制缓存大小，防止内存泄漏
         self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
         self._msg_repo = MessageRepository()  # 复用 MessageRepository，避免每次重建
+        self._session_repo = SessionRepository()
 
         logger.debug(
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
@@ -148,6 +150,8 @@ class AgentLoop:
         messages: list,
         tools: list,
         iteration: int,
+        session_id: str = "",
+        workflow_id: str | None = None,
     ) -> Optional[LLMResponse]:
         """
         调用 LLM（带重试机制）
@@ -167,9 +171,19 @@ class AgentLoop:
 
         for retry_count in range(retry_config.max_retries + 1):
             try:
-                response = self._llm.chat_with_tools(messages, tools)
+                with TraceContext(
+                    source="agent_loop",
+                    agent_type=self._config.agent_type.value,
+                    session_id=session_id,
+                    workflow_id=workflow_id or "",
+                    iteration=iteration,
+                ):
+                    response = self._llm.chat_with_tools(messages, tools)
                 logger.debug(
-                    f"[Agent Loop] LLM 回复 (iteration={iteration}): {response.content or ''}"
+                    "[Agent Loop] LLM 回复: iteration=%s text_chars=%s tool_calls=%s",
+                    iteration,
+                    len(response.content or ""),
+                    len(response.tool_calls),
                 )
                 if response.has_tool_calls:
                     logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
@@ -177,16 +191,26 @@ class AgentLoop:
 
             except Exception as e:
                 if retry_count >= retry_config.max_retries:
-                    logger.error(f"[Agent Loop] LLM 调用最终失败: {e}")
+                    logger.error(
+                        "[Agent Loop] LLM 调用最终失败: error_type=%s",
+                        type(e).__name__,
+                    )
                     return None
                 delay = retry_config.retry_delay * (retry_count + 1)
                 logger.warning(
-                    f"[Agent Loop] LLM 调用失败: {e}, "
-                    f"等待 {delay}s 后重试 ({retry_count + 1}/{retry_config.max_retries})"
+                    "[Agent Loop] LLM 调用失败: error_type=%s, 等待 %ss 后重试 (%s/%s)",
+                    type(e).__name__,
+                    delay,
+                    retry_count + 1,
+                    retry_config.max_retries,
                 )
                 time.sleep(delay)
 
         return None
+
+    def _get_workflow_id(self, session_id: str) -> str | None:
+        session = self._session_repo.get_by_id(session_id)
+        return getattr(session, "workflow_id", None) if session else None
 
     def _execute_tool_call(
         self,
@@ -222,7 +246,11 @@ class AgentLoop:
             failure_code = "handler_exception"
             failed = True
             message = f"工具 '{tool_call.name}' 执行异常: {exc}"
-            logger.warning("[Agent Loop] 工具执行异常: %s -> %s", tool_call.name, exc)
+            logger.warning(
+                "[Agent Loop] 工具执行异常: tool=%s error_type=%s",
+                tool_call.name,
+                type(exc).__name__,
+            )
             handler_result = make_error_result(failure_code, message)
 
         if isinstance(handler_result, ToolSignal):
@@ -416,7 +444,7 @@ class AgentLoop:
                 if tool_call.name == "reply_to_user" and result.display_text:
                     ctx.save_assistant_message(content=result.display_text)
                     question = ""
-                logger.info(f"[Agent Loop] 需要用户输入: {question[:50]}...")
+                logger.info("[Agent Loop] 需要用户输入: chars=%s", len(question))
                 return AgentResult(
                     result_type=ResultType.NEEDS_USER_INPUT,
                     question=question,
@@ -435,7 +463,11 @@ class AgentLoop:
             tool_name=tool_call.name,
             content=result,
         )
-        logger.debug(f"[Agent Loop] 工具结果: {tool_call.name} -> {result}")
+        logger.debug(
+            "[Agent Loop] 工具结果: tool=%s result_chars=%s",
+            tool_call.name,
+            len(str(result)),
+        )
         return None
 
     def _execute_tool_batch(
@@ -518,7 +550,11 @@ class AgentLoop:
                         f"[Agent Loop] 无副作用工具 {tc.name} 失败，继续执行后续调用"
                     )
             else:
-                logger.debug(f"[Agent Loop] 工具结果: {tc.name} -> {str(result)[:100]}")
+                logger.debug(
+                    "[Agent Loop] 工具结果: tool=%s result_chars=%s",
+                    tc.name,
+                    len(str(result)),
+                )
 
         if first_failure is not None:
             logger.info(f"[Agent Loop] 批次执行中断: 在第 {first_failure} 个调用处失败")
@@ -660,17 +696,18 @@ class AgentLoop:
                 content = user_input.get("content")
                 if not role or not content:
                     logger.warning(
-                        f"[Agent Loop] dict user_input 缺少 'role' 或 'content': {user_input}"
+                        "[Agent Loop] dict user_input 缺少 'role' 或 'content': keys=%s",
+                        sorted(str(key) for key in user_input),
                     )
                     return AgentResult(
                         result_type=ResultType.ERROR,
                         error="user_input dict 缺少 'role' 或 'content'",
                     )
                 ctx.save_message(role=role, content=content)
-                logger.debug(f"[Agent Loop] 输入({role}): {content[:50]}...")
+                logger.debug("[Agent Loop] 输入: role=%s chars=%s", role, len(content))
             else:
                 ctx.save_user_message(user_input)
-                logger.debug(f"[Agent Loop] 用户输入: {user_input[:50]}...")
+                logger.debug("[Agent Loop] 用户输入: chars=%s", len(user_input))
 
         return None
 
@@ -720,6 +757,7 @@ class AgentLoop:
         """
         # 使用缓存的 ContextManager
         ctx = self._get_context_manager(session_id)
+        workflow_id = self._get_workflow_id(session_id)
 
         # 会话初始化（设置 prompt、处理输入、恢复状态）
         init_result = self._initialize_session(ctx, session_id, user_input, system_prompt_override)
@@ -804,7 +842,13 @@ class AgentLoop:
                 messages = ctx.assemble_context()
                 logger.debug(f"[Agent Loop] 迭代 {iteration}: 组装了 {len(messages)} 条消息")
 
-                response = self._call_llm_with_retry(messages, all_tool_schemas, iteration)
+                response = self._call_llm_with_retry(
+                    messages,
+                    all_tool_schemas,
+                    iteration,
+                    session_id,
+                    workflow_id,
+                )
                 if response is None:
                     ctx.update_session_status("failed")
                     return AgentResult(result_type=ResultType.ERROR, error="LLM 调用失败")
