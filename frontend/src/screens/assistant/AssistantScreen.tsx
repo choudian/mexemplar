@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useAssistantStore } from "../../state/assistantStore";
+import type { PendingAssistantMessage } from "../../state/assistantStore";
 import { useShellStore } from "../../state/shellStore";
 import ConfirmationToast from "./ConfirmationToast";
 import ExecutionSummary from "./ExecutionSummary";
@@ -10,10 +11,19 @@ import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
 
+type AssistantDisplayMessage =
+  | ReturnType<typeof useAssistantStore.getState>["messages"][number]
+  | PendingAssistantMessage;
+
+function messageKey(message: AssistantDisplayMessage): string | number {
+  return "optimisticId" in message ? message.optimisticId : message.sequence;
+}
+
 export function AssistantScreen(): JSX.Element {
   const sessions = useAssistantStore((state) => state.sessions);
   const activeSessionId = useAssistantStore((state) => state.activeSessionId);
   const messages = useAssistantStore((state) => state.messages);
+  const pendingOptimisticMessages = useAssistantStore((state) => state.pendingOptimisticMessages);
   const query = useAssistantStore((state) => state.query);
   const draft = useAssistantStore((state) => state.draft);
   const loadingSessions = useAssistantStore((state) => state.loadingSessions);
@@ -49,7 +59,13 @@ export function AssistantScreen(): JSX.Element {
   }, [clearIdleTimer]);
 
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId);
-  const conversationTitle = activeSession?.title ?? (messages.length > 0 ? "当前对话" : "新对话");
+  const visibleMessages: AssistantDisplayMessage[] = activeSessionId
+    ? [
+        ...messages,
+        ...pendingOptimisticMessages.filter((message) => message.sessionId === activeSessionId),
+      ]
+    : messages;
+  const conversationTitle = activeSession?.title ?? (visibleMessages.length > 0 ? "当前对话" : "新对话");
 
   return (
     <section className={`assistant-screen${historyOpen ? "" : " assistant-screen-collapsed"}`} aria-label="AI 助手">
@@ -115,7 +131,7 @@ export function AssistantScreen(): JSX.Element {
             </div>
           ) : null}
           {loadingMessages ? <div className="assistant-empty">正在加载消息</div> : null}
-          {!loadingMessages && messages.length === 0 ? (
+          {!loadingMessages && visibleMessages.length === 0 ? (
             <div className="assistant-welcome">
               <div className="assistant-welcome-mark" aria-hidden="true" />
               <h2>今天想完成什么？</h2>
@@ -134,16 +150,16 @@ export function AssistantScreen(): JSX.Element {
             </div>
           ) : null}
           <div className="assistant-thread">
-            {messages.map((message) =>
+            {visibleMessages.map((message) =>
               message.role === "summary" ? (
-                <details className="assistant-summary" key={message.sequence}>
+                <details className="assistant-summary" key={messageKey(message)}>
                   <summary>之前的对话内容</summary>
                   <div className="assistant-summary-body">
                     <SafeMarkdown content={message.content} />
                   </div>
                 </details>
               ) : (
-                <article className="assistant-message" data-role={message.role} key={message.sequence}>
+                <article className="assistant-message" data-role={message.role} key={messageKey(message)}>
                   {message.role === "assistant" ? <div className="assistant-avatar" aria-hidden="true" /> : null}
                   <div className="assistant-message-content">
                     <div className="assistant-message-meta">{message.role === "user" ? "你" : "Assistant"}</div>

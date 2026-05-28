@@ -17,7 +17,7 @@ import {
 } from "../e2e/helpers/real-grand-tour-runtime";
 
 describe("real Grand Tour controlled failures", () => {
-  test("missing opt-in skips before starting sidecar runtime", async () => {
+  test("explicit disabled config skips before starting sidecar runtime", async () => {
     const result = await startRealGrandTourRuntime({
       projectRoot: process.cwd(),
       config: {
@@ -31,10 +31,12 @@ describe("real Grand Tour controlled failures", () => {
     expect(result).toEqual({ status: "skipped", reason: "real_tour_opt_in_missing" });
   });
 
-  test("reports missing opt-in as a skip, not a mock pass", () => {
-    const config = readRealGrandTourConfig({ MEXEMPLAR_ALLOW_LIVE_CAPTURE: "1" });
+  test("dedicated runtime config does not require external opt-in variables", () => {
+    const config = readRealGrandTourConfig({});
 
-    expect(realGrandTourSkipReason(config)).toBe("real_tour_opt_in_missing");
+    expect(config.optIn).toBe(true);
+    expect(config.allowLiveCapture).toBe(true);
+    expect(realGrandTourSkipReason(config)).toBeNull();
   });
 
   test("credential mutation attempts fail the audit while preserving zero secret output", () => {
@@ -104,6 +106,22 @@ describe("real Grand Tour controlled failures", () => {
     );
 
     expect(status).toBe("failed");
+  });
+
+  test("cleanup accepts taskkill failure after sidecar process already exited", async () => {
+    const status = await cleanupRealGrandTourRuntime(
+      { pid: 1234, exitCode: 0, signalCode: null } as never,
+      "unused-real-grand-tour-dir",
+      {
+        platform: "win32",
+        execFileSync: (() => {
+          throw new Error("process not found");
+        }) as never,
+        rmSync: vi.fn(),
+      },
+    );
+
+    expect(status).toBe("completed");
   });
 
   test("budget exhaustion stops subsequent paid work and writes a safe report reason", () => {

@@ -34,6 +34,9 @@ describe("real Grand Tour event watcher", () => {
 
     watcher.apply(event("evt_resync", 1, "backend.resync_required", { reason: "replay_gap" }));
     watcher.apply(event("evt_ignored", 2, "teaching.stage_changed", { stage: "published" }));
+    expect(watcher.find((candidate) => candidate.eventId === "evt_resync")).toMatchObject({
+      type: "backend.resync_required",
+    });
     expect(watcher.find((candidate) => candidate.eventId === "evt_ignored")).toBeUndefined();
 
     watcher.markResynced();

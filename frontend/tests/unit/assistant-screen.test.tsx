@@ -65,6 +65,7 @@ describe("AssistantScreen", () => {
       progress: { status: "idle", headline: "" },
       confirmations: [],
       lastError: null,
+      pendingOptimisticMessages: [],
     });
   });
 
@@ -157,6 +158,7 @@ describe("AssistantScreen", () => {
       messages: [],
       sending: false,
       progress: { status: "idle", headline: "" },
+      pendingOptimisticMessages: [],
     });
 
     await act(async () => {
@@ -165,6 +167,87 @@ describe("AssistantScreen", () => {
 
     expect(useAssistantStore.getState().messages).toEqual([]);
     expect(useAssistantStore.getState().draft).toBe("Second message");
+    expect(useAssistantStore.getState().pendingOptimisticMessages).toEqual([]);
+    expect(useAssistantStore.getState().progress.status).toBe("waiting_for_user");
+  });
+
+  test("keeps authoritative assistant reply when a later optimistic send is rejected", async () => {
+    let resolvePost!: (response: Response) => void;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/assistant/sessions/ast_1/messages") && init?.method === "POST") {
+        return new Promise<Response>((resolve) => {
+          resolvePost = resolve;
+        });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useAssistantStore.setState({
+      activeSessionId: "ast_1",
+      draft: "Second question",
+      messages: [
+        {
+          sequence: 1,
+          role: "user",
+          content: "First question",
+          createdAt: "2026-05-10T00:00:00Z",
+          rendering: "plain_text",
+        },
+      ],
+      sending: false,
+      progress: { status: "idle", headline: "" },
+      pendingOptimisticMessages: [],
+    });
+
+    let sendPromise!: Promise<void>;
+    await act(async () => {
+      sendPromise = useAssistantStore.getState().sendDraft();
+      await Promise.resolve();
+    });
+
+    expect(useAssistantStore.getState().pendingOptimisticMessages).toMatchObject([
+      { content: "Second question", sessionId: "ast_1" },
+    ]);
+
+    act(() => {
+      useAssistantStore.getState().applyEvent({
+        eventId: "evt_a1",
+        sequence: 2,
+        sessionId: "ui_sess_test",
+        causationId: "ast_1",
+        type: "assistant.message",
+        scope: { sessionId: "ast_1" },
+        payload: {
+          sequence: 2,
+          role: "assistant",
+          content: "First answer",
+          createdAt: "2026-05-10T00:00:01Z",
+          rendering: "safe_markdown",
+        },
+        createdAt: "2026-05-10T00:00:01Z",
+      });
+    });
+
+    expect(useAssistantStore.getState().messages.map((message) => message.content)).toEqual([
+      "First question",
+      "First answer",
+    ]);
+    expect(useAssistantStore.getState().pendingOptimisticMessages).toMatchObject([
+      { content: "Second question", sessionId: "ast_1" },
+    ]);
+
+    await act(async () => {
+      resolvePost(jsonResponse({ accepted: false, sessionId: "ast_1" }) as Response);
+      await sendPromise;
+    });
+
+    expect(useAssistantStore.getState().messages.map((message) => message.content)).toEqual([
+      "First question",
+      "First answer",
+    ]);
+    expect(useAssistantStore.getState().draft).toBe("Second question");
+    expect(useAssistantStore.getState().pendingOptimisticMessages).toEqual([]);
     expect(useAssistantStore.getState().progress.status).toBe("waiting_for_user");
   });
 
@@ -183,6 +266,7 @@ describe("AssistantScreen", () => {
       messages: [],
       sending: false,
       progress: { status: "idle", headline: "" },
+      pendingOptimisticMessages: [],
     });
 
     await act(async () => {

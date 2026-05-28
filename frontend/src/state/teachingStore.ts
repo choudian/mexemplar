@@ -385,7 +385,8 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
     if (event.type === "teaching.stage_changed") {
       const message = event.payload.headline ?? event.payload.message;
       const successCount = event.payload.successCount;
-      const toast = toastForStage(event.payload.stage);
+      const stageChanged = state.stage !== event.payload.stage;
+      const toast = stageChanged ? toastForStage(event.payload.stage) : null;
       set({
         stage: event.payload.stage,
         run: { ...currentRun, stage: event.payload.stage },

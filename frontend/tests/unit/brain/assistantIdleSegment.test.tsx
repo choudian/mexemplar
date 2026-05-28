@@ -45,6 +45,7 @@ function resetAssistantStore() {
     confirmations: [],
     lastError: null,
     idleThresholdMs: null,
+    pendingOptimisticMessages: [],
   });
 }
 

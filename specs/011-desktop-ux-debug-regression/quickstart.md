@@ -84,12 +84,10 @@ npm run build
 
 ## Manual Real Grand Tour
 
-Real Grand Tour 仅在开发者明确接受费用与现场录制风险后执行。实现合同定义的命令形态为：
+Real Grand Tour 仅在开发者明确接受费用与现场录制风险后执行。独立命令会默认启用真实链路和 live capture，不再要求在 shell 里注入 opt-in 环境变量：
 
 ```powershell
 cd frontend
-$env:MEXEMPLAR_REAL_GRAND_TOUR = "1"
-$env:MEXEMPLAR_ALLOW_LIVE_CAPTURE = "1"
 npm run test:e2e:grand-tour -- --headed
 ```
 

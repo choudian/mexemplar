@@ -13,25 +13,25 @@ import {
 } from "../e2e/helpers/real-grand-tour-runtime";
 
 describe("real Grand Tour runtime gates and budget", () => {
-  test("stays skipped unless explicitly opted in", () => {
+  test("enables the dedicated real suite and live capture without shell env gates", () => {
     const config = readRealGrandTourConfig({});
 
-    expect(config.optIn).toBe(false);
-    expect(realGrandTourSkipReason(config)).toBe("real_tour_opt_in_missing");
+    expect(config.optIn).toBe(true);
+    expect(config.allowLiveCapture).toBe(true);
+    expect(realGrandTourSkipReason(config)).toBeNull();
   });
 
   test("caps configured run budgets at the documented acceptance maximums", () => {
     const config = readRealGrandTourConfig({
-      MEXEMPLAR_REAL_GRAND_TOUR: "1",
       MEXEMPLAR_REAL_GRAND_TOUR_MAX_MINUTES: "120",
       MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS: "500",
     });
 
     expect(config.maxElapsedMinutes).toBe(20);
-    expect(config.maxPaidCalls).toBe(30);
+    expect(config.maxPaidCalls).toBe(50);
   });
 
-  test("creates random local runtime state only after opt-in", async () => {
+  test("creates random local runtime state for the dedicated real suite", async () => {
     const result = await startRealGrandTourRuntime({
       projectRoot: process.cwd(),
       config: {
@@ -46,6 +46,8 @@ describe("real Grand Tour runtime gates and budget", () => {
     expect(result.status).toBe("started");
     expect(result.runtime?.baseUrl).toContain("http://127.0.0.1:");
     expect(result.runtime?.auditFile).toContain("real-grand-tour-audit.json");
+    expect(result.runtime?.stdoutLogFile).toContain("sidecar.stdout.log");
+    expect(result.runtime?.stderrLogFile).toContain("sidecar.stderr.log");
     expect(result.runtime?.token).toHaveLength(32);
     expect(fs.existsSync(result.runtime?.dataDir ?? "")).toBe(true);
     expect(await result.runtime?.cleanup()).toBe("completed");
@@ -84,5 +86,16 @@ describe("real Grand Tour runtime gates and budget", () => {
     expect(suite).toContain("test.afterAll");
     expect(suite.match(/await startRealGrandTourRuntime/g)).toHaveLength(1);
     expect(suite).toContain("scenarios: activeRun.scenarios.map");
+  });
+
+  test("allows a longer sidecar health window for first-run data rebuilds", () => {
+    const helper = fs.readFileSync(
+      path.resolve(process.cwd(), "tests/e2e/helpers/real-grand-tour-runtime.ts"),
+      "utf-8",
+    );
+
+    expect(helper).toContain("timeoutMs = 120_000");
+    expect(helper).toContain('PYTHONIOENCODING: "utf-8"');
+    expect(helper).toContain('PYTHONUTF8: "1"');
   });
 });

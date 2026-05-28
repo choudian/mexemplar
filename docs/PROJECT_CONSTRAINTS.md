@@ -67,8 +67,8 @@
 
 ## Real Grand Tour Boundaries
 
-- 默认 `npm run test:e2e` 必须保持 mock-backed、cost-free、无 live capture；真实验收只走独立 `npm run test:e2e:grand-tour` 和 `MEXEMPLAR_REAL_GRAND_TOUR=1` opt-in。
-- Live capture 场景还必须设置 `MEXEMPLAR_ALLOW_LIVE_CAPTURE=1`，并只能按 `docs/local/real-grand-tour-safe-journey.md` 的固定无敏感 fixture/script 执行。
+- 默认 `npm run test:e2e` 必须保持 mock-backed、cost-free、无 live capture；真实验收只走独立 `npm run test:e2e:grand-tour`。
+- 独立 Real Grand Tour 命令内置启用 real-tour runtime 和 live capture；执行时只能按 `docs/local/real-grand-tour-safe-journey.md` 的固定无敏感 fixture/script 执行，不再要求 shell opt-in 环境变量。
 - Real-tour credential 只能通过 `src/data/credential_resolver.py` 的 keyring-only read-only resolver 读取；不得触发 plaintext config fallback、config-to-keyring migration、`set_password` 或 `delete_password`。
 - Real-tour provider inventory 必须覆盖 main、vision、background brain、settings validation、skill-composition、compression、embedding 和 diagnostic redactor；未覆盖路径必须在场景前显式 skip 或 fail as unmet prerequisite，不能回退 ordinary getter。
 - Real-tour runtime 使用随机 localhost port/token、临时 `EXEMPLAR_DATA_DIR`、paid-call/time budget、public event watcher 和 sanitized summary report。报告和 Playwright artifacts 不得包含 prompt/response、credential、runtime token、raw media、截图、录制正文或完整敏感本地路径；trace/video/screenshot 默认 off。

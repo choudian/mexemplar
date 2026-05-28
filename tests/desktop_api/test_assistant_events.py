@@ -122,6 +122,48 @@ def test_trial_agent_needs_user_input_routes_to_trial_progress(desktop_api_clien
     assert "message" not in event.payload
 
 
+def test_pm_agent_error_routes_to_teaching_progress_not_assistant_error(desktop_api_client):
+    drain_events()
+    install_blinker_event_adapter()
+
+    emit(
+        "agent_error",
+        sender=None,
+        workflow_id="rec_pm_error",
+        session_id="pm_session",
+        agent_type=AgentType.PM,
+        error="PM failed",
+        error_type="runtime",
+    )
+
+    event = event_queue.queue.get_nowait()
+    assert event.type == "teaching.progress"
+    assert event.scope == {"workflowId": "rec_pm_error", "sessionId": "pm_session"}
+    assert event.payload["status"] == "failed"
+    assert event.payload["error"] == "PM failed"
+
+
+def test_trial_agent_error_routes_to_trial_progress_not_assistant_error(desktop_api_client):
+    drain_events()
+    install_blinker_event_adapter()
+
+    emit(
+        "agent_error",
+        sender=None,
+        workflow_id="rec_trial_error",
+        session_id="trial_session",
+        agent_type=AgentType.TRIAL,
+        error="Trial failed",
+        error_type="runtime",
+    )
+
+    event = event_queue.queue.get_nowait()
+    assert event.type == "trial.progress"
+    assert event.scope == {"workflowId": "rec_trial_error"}
+    assert event.payload["status"] == "failed"
+    assert event.payload["error"] == "Trial failed"
+
+
 def test_needs_user_input_without_agent_type_uses_workflow_progress(desktop_api_client):
     drain_events()
     install_blinker_event_adapter()

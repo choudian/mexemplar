@@ -102,6 +102,7 @@ describe("AppShell debug route and banner", () => {
       confirmations: [],
       lastError: null,
       idleThresholdMs: null,
+      pendingOptimisticMessages: [],
     });
     useTeachingStore.setState({
       hydrated: false,

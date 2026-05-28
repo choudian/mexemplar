@@ -504,14 +504,14 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
                 "status": "waiting_for_user",
                 "headline": question,
             }
-        elif "sessionId" in scope:
+        elif scope.get("sessionId"):
             event_type = "assistant.progress"
             event_payload = {
                 "status": "waiting_for_user",
                 "headline": question,
                 "question": question,
             }
-        elif "workflowId" in scope:
+        elif scope.get("workflowId"):
             event_type = "teaching.progress"
             event_payload = {
                 "status": "waiting_for_user",
@@ -529,16 +529,44 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
             )
         ]
     if event_name == "agent_error":
-        event_type = "assistant.error" if "sessionId" in scope else "teaching.progress"
+        raw_agent_type = payload.get("agent_type")
+        agent_type = str(getattr(raw_agent_type, "value", raw_agent_type or "")).lower()
         status_payload = {
             "message": _safe_text(
                 payload.get("message") or payload.get("error") or "Agent failed."
             ),
             "type": _string_or_none(payload.get("type")),
         }
-        if event_type == "teaching.progress":
-            status_payload = {"status": "failed", "error": status_payload["message"]}
-        return [UiEventDraft(event_type, status_payload, scope, causation_id)]
+        if agent_type == "trial":
+            return [
+                UiEventDraft(
+                    "trial.progress",
+                    {
+                        "status": "failed",
+                        "error": status_payload["message"],
+                        "type": status_payload["type"],
+                    },
+                    scope,
+                    causation_id,
+                )
+            ]
+        if agent_type in {"pm", "programmer"} or (scope.get("workflowId") and scope.get("sessionId")):
+            return [
+                UiEventDraft(
+                    "teaching.progress",
+                    {
+                        "status": "failed",
+                        "error": status_payload["message"],
+                        "type": status_payload["type"],
+                    },
+                    scope,
+                    causation_id,
+                )
+            ]
+        if scope.get("sessionId"):
+            return [UiEventDraft("assistant.error", status_payload, scope, causation_id)]
+        status_payload = {"status": "failed", "error": status_payload["message"]}
+        return [UiEventDraft("teaching.progress", status_payload, scope, causation_id)]
     if event_name == "requirement_confirmed":
         return [
             UiEventDraft(

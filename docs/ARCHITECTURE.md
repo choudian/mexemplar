@@ -25,7 +25,7 @@ React UI (frontend/)
 - sidecar 只绑定本机回环地址，并要求每次启动生成的 session token；token 不写入配置、OpenAPI 或日志。
 - Debug Inspector 只通过 authenticated `/api/debug` 暴露，trace arm 是运行时状态，不持久化。Trace buffer 以进程内 epoch 隔离，受 record/bytes 限制；disable、clear、restart 都会销毁 raw detail。Raw debug endpoints 使用 `Cache-Control: no-store`，前端 raw trace/flow/reference state 只保存在组件内存，离开 `/debug` 或 clear/stop 时清理。模型 text/tool/vision 调用统一走 fail-isolated observation boundary；vision 只保留媒体元数据，embedding 不进入 LLM trace record，但必须在 provider/redaction inventory 中登记。
 - Agent Flow 以持久 `workflow_transitions` 为权威，Debug Inspector 只在 armed epoch 中叠加临时 trace link 和 Assistant delegation task/result debug detail；UI 必须标出 linked/unlinked 与 provenance，不能把临时 detail 写回业务事实。
-- Manual Real Grand Tour 是独立 opt-in Playwright 套件，默认 E2E 仍为 mock/controlled/cost-free。真实套件使用随机 localhost port/token、临时数据目录、只读 keyring credential resolver、paid-call/time budget、public event watcher 和 sanitized summary report；trace/video/screenshot 默认关闭，live capture 需要额外 opt-in 和固定安全旅程。
+- Manual Real Grand Tour 是独立 Playwright 套件，默认 E2E 仍为 mock/controlled/cost-free。真实套件只通过 `npm run test:e2e:grand-tour` 运行，并内置启用 real-tour runtime 和 live capture；运行时使用随机 localhost port/token、临时数据目录、只读 keyring credential resolver、paid-call/time budget、public event watcher 和 sanitized summary report；trace/video/screenshot 默认关闭，现场录制只能按固定安全旅程执行。
 - `src/main.py`、`mexemplar_gui.py`、`start.bat` 和 `mexemplar_gui.bat` 是显式失败的 legacy 兼容入口；`src/ui/` 的 PyQt 主 UI 代码已退休。
 
 ---

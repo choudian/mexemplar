@@ -5,6 +5,11 @@ import { readRealGrandTourConfig } from "./tests/e2e/helpers/real-grand-tour-run
 const port = Number(process.env.PLAYWRIGHT_REAL_GRAND_TOUR_DEV_SERVER_PORT ?? "5175");
 const baseURL = `http://127.0.0.1:${port}`;
 const maxRunMs = readRealGrandTourConfig().maxElapsedMinutes * 60 * 1000;
+const sidecarPort = Number(process.env.MEXEMPLAR_REAL_GRAND_TOUR_PORT);
+const configuredSidecarBaseUrl =
+  Number.isInteger(sidecarPort) && sidecarPort > 0
+    ? `http://127.0.0.1:${sidecarPort}`
+    : process.env.MEXEMPLAR_REAL_GRAND_TOUR_BASE_URL ?? "";
 const noProxyHosts = ["127.0.0.1", "localhost", "::1"];
 const currentNoProxy = process.env.NO_PROXY ?? process.env.no_proxy ?? "";
 const noProxy = Array.from(
@@ -32,10 +37,10 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
     url: baseURL,
-    reuseExistingServer: false,
+    reuseExistingServer: true,
     timeout: 120_000,
     env: {
-      VITE_MEXEMPLAR_API_BASE_URL: process.env.MEXEMPLAR_REAL_GRAND_TOUR_BASE_URL ?? "",
+      VITE_MEXEMPLAR_API_BASE_URL: configuredSidecarBaseUrl,
       VITE_MEXEMPLAR_SESSION_TOKEN: process.env.MEXEMPLAR_REAL_GRAND_TOUR_TOKEN ?? "",
     },
   },

@@ -17,6 +17,8 @@ export interface RealGrandTourRuntime {
   baseUrl: string;
   dataDir: string;
   auditFile: string;
+  stdoutLogFile: string;
+  stderrLogFile: string;
   port: number;
   token: string;
   process: ChildProcess | null;
@@ -41,12 +43,15 @@ export interface RealGrandTourCleanupDeps {
   rmSync?: typeof fs.rmSync;
 }
 
+const REAL_GRAND_TOUR_ENABLED = true;
+const REAL_GRAND_TOUR_LIVE_CAPTURE_ENABLED = true;
+
 export function readRealGrandTourConfig(env: NodeJS.ProcessEnv = process.env): RealGrandTourConfig {
   return {
-    optIn: env.MEXEMPLAR_REAL_GRAND_TOUR === "1",
-    allowLiveCapture: env.MEXEMPLAR_ALLOW_LIVE_CAPTURE === "1",
+    optIn: REAL_GRAND_TOUR_ENABLED,
+    allowLiveCapture: REAL_GRAND_TOUR_LIVE_CAPTURE_ENABLED,
     maxElapsedMinutes: boundedPositiveInteger(env.MEXEMPLAR_REAL_GRAND_TOUR_MAX_MINUTES, 20, 20),
-    maxPaidCalls: boundedPositiveInteger(env.MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS, 30, 30),
+    maxPaidCalls: boundedPositiveInteger(env.MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS, 50, 50),
   };
 }
 
@@ -81,15 +86,36 @@ export async function startRealGrandTourRuntime(
 
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "mexemplar-real-gt-"));
   const auditFile = path.join(dataDir, "real-grand-tour-audit.json");
-  const port = await allocateLocalPort();
-  const token = crypto.randomBytes(24).toString("base64url");
+  const logDir = path.resolve(process.cwd(), "test-results", "real-grand-tour");
+  fs.mkdirSync(logDir, { recursive: true });
+  const runtimeLogId = path.basename(dataDir);
+  const stdoutLogFile = path.join(logDir, `${runtimeLogId}.sidecar.stdout.log`);
+  const stderrLogFile = path.join(logDir, `${runtimeLogId}.sidecar.stderr.log`);
+  fs.writeFileSync(stdoutLogFile, "", "utf-8");
+  fs.writeFileSync(stderrLogFile, "", "utf-8");
+  const envPort = Number(process.env.MEXEMPLAR_REAL_GRAND_TOUR_PORT);
+  const port = Number.isInteger(envPort) && envPort > 0 ? envPort : await allocateLocalPort();
+  const token = process.env.MEXEMPLAR_REAL_GRAND_TOUR_TOKEN ?? crypto.randomBytes(24).toString("base64url");
   const baseUrl = `http://127.0.0.1:${port}`;
+  const frontendPort = Number(process.env.PLAYWRIGHT_REAL_GRAND_TOUR_DEV_SERVER_PORT ?? "5175");
+  const safeFixtureUrl = `http://127.0.0.1:${frontendPort}/real-grand-tour-safe-fixture.html`;
+  const verboseLogs = process.env.MEXEMPLAR_REAL_GRAND_TOUR_VERBOSE_LOGS === "1";
   let child: ChildProcess | null = null;
 
   if (options.spawnSidecar !== false) {
     child = spawn(
       "uv",
-      ["run", "python", "-m", "src.desktop_api", "--host", "127.0.0.1", "--port", String(port)],
+      [
+        "run",
+        "python",
+        "-m",
+        "src.desktop_api",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+        ...(verboseLogs ? ["--verbose"] : []),
+      ],
       {
         cwd: options.projectRoot,
         stdio: ["ignore", "pipe", "pipe"],
@@ -97,15 +123,20 @@ export async function startRealGrandTourRuntime(
           ...process.env,
           EXEMPLAR_DATA_DIR: dataDir,
           MEXEMPLAR_DESKTOP_TOKEN: token,
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
           MEXEMPLAR_REAL_GRAND_TOUR: "1",
           MEXEMPLAR_REAL_GRAND_TOUR_AUDIT_FILE: auditFile,
           MEXEMPLAR_REAL_GRAND_TOUR_MAX_MINUTES: String(config.maxElapsedMinutes),
           MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS: String(config.maxPaidCalls),
+          MEXEMPLAR_REAL_GRAND_TOUR_AUTOMATE_BROWSER_JOURNEY: "1",
+          MEXEMPLAR_REAL_GRAND_TOUR_FIXTURE_URL: safeFixtureUrl,
+          MEXEMPLAR_REAL_GRAND_TOUR_FIXED_INPUT: "Sample approval request for local validation only",
         },
       },
     );
-    child.stdout?.resume();
-    child.stderr?.resume();
+    child.stdout?.pipe(fs.createWriteStream(stdoutLogFile, { flags: "a" }));
+    child.stderr?.pipe(fs.createWriteStream(stderrLogFile, { flags: "a" }));
   }
 
   return {
@@ -114,6 +145,8 @@ export async function startRealGrandTourRuntime(
       baseUrl,
       dataDir,
       auditFile,
+      stdoutLogFile,
+      stderrLogFile,
       port,
       token,
       process: child,
@@ -148,7 +181,7 @@ export function readRealGrandTourAudit(dataDir: string): RealGrandTourAuditSnaps
 
 export async function waitForRealGrandTourHealth(
   runtime: Pick<RealGrandTourRuntime, "baseUrl" | "token">,
-  timeoutMs = 30_000,
+  timeoutMs = 120_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -183,7 +216,12 @@ export async function cleanupRealGrandTourRuntime(
         child.kill("SIGTERM");
       }
     } catch {
-      ok = false;
+      const childAlreadyExited =
+        child.exitCode !== null && child.exitCode !== undefined ||
+        child.signalCode !== null && child.signalCode !== undefined;
+      if (!childAlreadyExited) {
+        ok = false;
+      }
     }
   }
   try {

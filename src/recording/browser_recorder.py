@@ -6,6 +6,7 @@
 
 import asyncio
 import logging
+import os
 import threading
 import time
 import uuid
@@ -534,6 +535,8 @@ class BrowserRecorder:
             self._active_recording_mode = RecordingMode.BROWSER
             startup_succeeded = True
 
+            await self._run_real_grand_tour_safe_browser_journey()
+
             # 启动截图钩子
             browser_pid = self._playwright_driver.resolve_browser_pid()
             from .browser_screenshot_hook import BrowserScreenshotHook
@@ -566,6 +569,49 @@ class BrowserRecorder:
                 self._reset_recording_state()
                 if self._context is None:
                     self._cleanup_playwright_extension_bundle()
+
+    async def _run_real_grand_tour_safe_browser_journey(self) -> None:
+        """Drive the dedicated recorder browser through the safe fixture in real-tour runs."""
+        if os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR") != "1":
+            return
+        if os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_AUTOMATE_BROWSER_JOURNEY") != "1":
+            return
+
+        fixture_url = os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_FIXTURE_URL")
+        fixed_text = os.environ.get(
+            "MEXEMPLAR_REAL_GRAND_TOUR_FIXED_INPUT",
+            "Sample approval request for local validation only",
+        )
+        if not fixture_url or self._page is None:
+            self._emit_real_tour_browser_journey_degraded("safe fixture unavailable")
+            return
+
+        try:
+            await asyncio.sleep(0.5)
+            await self._page.goto(fixture_url, wait_until="domcontentloaded", timeout=30_000)
+            await self._page.get_by_label("Request").fill(fixed_text, timeout=10_000)
+            await self._page.get_by_role("button", name="Submit").click(timeout=10_000)
+            await self._page.wait_for_function(
+                "document.body.dataset.done === '1'",
+                timeout=10_000,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[BrowserRecorder] Real Grand Tour safe browser journey failed: %s",
+                exc,
+            )
+            self._emit_real_tour_browser_journey_degraded("safe browser journey failed")
+
+    def _emit_real_tour_browser_journey_degraded(self, message: str) -> None:
+        if not self._recording_id:
+            return
+        emit(
+            "desktop_recording_degraded",
+            sender=self,
+            workflow_id=self._recording_id,
+            subsystem="browser_safe_journey",
+            message=message,
+        )
 
     def stop_recording(self) -> Dict[str, Any]:
         try:

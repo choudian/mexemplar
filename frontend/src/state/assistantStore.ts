@@ -23,10 +23,16 @@ async function sealPreviousSegment(prevSessionId: string | null): Promise<void> 
 import { toErrorMessage } from "./helpers";
 
 let _idleTimerRef: ReturnType<typeof setTimeout> | null = null;
+let _optimisticMessageCounter = 0;
 
 type AssistantProgress = {
   status: "idle" | "running" | "waiting_for_user" | "succeeded" | "failed";
   headline: string;
+};
+
+export type PendingAssistantMessage = Omit<AssistantMessage, "sequence"> & {
+  optimisticId: string;
+  sessionId: string;
 };
 
 export type AssistantState = {
@@ -46,6 +52,7 @@ export type AssistantState = {
   lastError: string | null;
   idleThresholdMs: number | null;
   autoApprove: boolean;
+  pendingOptimisticMessages: PendingAssistantMessage[];
   markHydrated: () => void;
   setError: (message: string | null) => void;
   setQuery: (query: string) => void;
@@ -75,6 +82,49 @@ function uniqueMessages(messages: AssistantMessage[]): AssistantMessage[] {
   return Array.from(bySequence.values()).sort((a, b) => a.sequence - b.sequence);
 }
 
+function nextOptimisticId(): string {
+  _optimisticMessageCounter += 1;
+  return `optimistic_${_optimisticMessageCounter}`;
+}
+
+function removePendingOptimisticMessage(
+  messages: PendingAssistantMessage[],
+  optimisticId: string | null,
+): PendingAssistantMessage[] {
+  if (optimisticId === null) {
+    return messages;
+  }
+  return messages.filter((message) => message.optimisticId !== optimisticId);
+}
+
+function isPendingEcho(
+  pending: PendingAssistantMessage,
+  sessionId: string,
+  message: AssistantMessage,
+): boolean {
+  return (
+    pending.sessionId === sessionId
+    && message.role === "user"
+    && pending.content.trim() === message.content.trim()
+  );
+}
+
+function reconcilePendingMessages(
+  pendingMessages: PendingAssistantMessage[],
+  sessionId: string,
+  authoritativeMessages: AssistantMessage[],
+): PendingAssistantMessage[] {
+  let remaining = pendingMessages;
+  for (const message of authoritativeMessages) {
+    const index = remaining.findIndex((pending) => isPendingEcho(pending, sessionId, message));
+    if (index === -1) {
+      continue;
+    }
+    remaining = remaining.filter((_, currentIndex) => currentIndex !== index);
+  }
+  return remaining;
+}
+
 export const useAssistantStore = create<AssistantState>((set, get) => ({
   hydrated: false,
   sessions: [],
@@ -92,6 +142,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   lastError: null,
   idleThresholdMs: null,
   autoApprove: false,
+  pendingOptimisticMessages: [],
   markHydrated: () => set({ hydrated: true }),
   setError: (message) => set({ lastError: message }),
   setQuery: (query) => set({ query }),
@@ -115,7 +166,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     const prevSessionId = get().activeSessionId;
     await sealPreviousSegment(prevSessionId);
     const sessionId = await createAssistantSession();
-    set({ activeSessionId: sessionId, messages: [], draft: "", progress: idleProgress, confirmations: [], autoApprove: false });
+    set({
+      activeSessionId: sessionId,
+      messages: [],
+      draft: "",
+      progress: idleProgress,
+      confirmations: [],
+      autoApprove: false,
+    });
     get().clearIdleTimer();
     await get().loadSessions();
     return sessionId;
@@ -134,6 +192,11 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         hasMoreBefore: page.hasMoreBefore,
         nextBeforeSequence: page.nextBeforeSequence,
         progress: idleProgress,
+        pendingOptimisticMessages: reconcilePendingMessages(
+          get().pendingOptimisticMessages,
+          sessionId,
+          page.items,
+        ),
         confirmations: get().confirmations.filter((item) => item.sessionId === sessionId),
       });
     } catch (error) {
@@ -176,6 +239,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       sessions: get().sessions.filter((session) => session.sessionId !== sessionId),
       activeSessionId: get().activeSessionId === sessionId ? null : get().activeSessionId,
       messages: get().activeSessionId === sessionId ? [] : get().messages,
+      pendingOptimisticMessages: get().pendingOptimisticMessages.filter(
+        (message) => message.sessionId !== sessionId,
+      ),
       confirmations:
         get().activeSessionId === sessionId
           ? []
@@ -189,36 +255,45 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     }
 
     let sessionId = get().activeSessionId;
-    let optimisticSequence: number | null = null;
+    let optimisticId: string | null = null;
     set({ sending: true, lastError: null, progress: { status: "running", headline: "正在处理" } });
     try {
       if (!sessionId) {
         sessionId = await get().createSession();
       }
-      optimisticSequence = -Date.now();
-      const optimistic: AssistantMessage = {
-        sequence: optimisticSequence,
+      optimisticId = nextOptimisticId();
+      const optimistic: PendingAssistantMessage = {
+        optimisticId,
+        sessionId,
         role: "user",
         content,
         createdAt: new Date().toISOString(),
         rendering: "plain_text",
       };
-      set({ draft: "", messages: uniqueMessages([...get().messages, optimistic]) });
+      set({
+        draft: "",
+        pendingOptimisticMessages: [...get().pendingOptimisticMessages, optimistic],
+      });
       const result = await sendAssistantMessage(sessionId, content);
       if (!result.accepted) {
+        const state = get();
         set({
-          draft: content,
-          messages: get().messages.filter((message) => message.sequence !== optimisticSequence),
+          draft: state.activeSessionId === sessionId ? content : state.draft,
+          pendingOptimisticMessages: removePendingOptimisticMessage(
+            state.pendingOptimisticMessages,
+            optimisticId,
+          ),
           progress: { status: "waiting_for_user", headline: "上一条消息仍在处理中" },
         });
       }
     } catch (error) {
+      const state = get();
       set({
-        draft: content,
-        messages:
-          optimisticSequence === null
-            ? get().messages
-            : get().messages.filter((message) => message.sequence !== optimisticSequence),
+        draft: state.activeSessionId === sessionId ? content : state.draft,
+        pendingOptimisticMessages: removePendingOptimisticMessage(
+          state.pendingOptimisticMessages,
+          optimisticId,
+        ),
         lastError: toErrorMessage(error, "消息发送失败。"),
       });
     } finally {
@@ -232,10 +307,15 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     }
     if (event.type === "assistant.message") {
       const message = event.payload as unknown as AssistantMessage;
-      const current = get().messages.filter(
-        (item) => !(item.sequence < 0 && item.role === message.role && item.content === message.content),
-      );
-      set({ messages: uniqueMessages([...current, message]) });
+      const eventSessionId = event.scope.sessionId ?? "";
+      set({
+        messages: uniqueMessages([...get().messages, message]),
+        pendingOptimisticMessages: reconcilePendingMessages(
+          get().pendingOptimisticMessages,
+          eventSessionId,
+          [message],
+        ),
+      });
       return;
     }
     if (event.type === "assistant.progress") {

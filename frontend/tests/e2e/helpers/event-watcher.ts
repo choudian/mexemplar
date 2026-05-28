@@ -26,6 +26,7 @@ export class EventWatcher {
     this.seen.add(event.eventId);
     if (event.type === "backend.resync_required") {
       this.blockedForResync = true;
+      this.events.push(event);
       this.lastState = { type: event.type, sequence: event.sequence };
       return;
     }

@@ -10,15 +10,13 @@ Real Grand Tour 是发布前人工发起的真实链路验收，不替换默认 
 
 ```powershell
 cd frontend
-$env:MEXEMPLAR_REAL_GRAND_TOUR = "1"
-$env:MEXEMPLAR_ALLOW_LIVE_CAPTURE = "1"
 npm run test:e2e:grand-tour -- --headed
 ```
 
 Contract requirements:
 
-- 未设置 real-tour opt-in 时，真实套件 skip 且不启动 sidecar/model/recording。
-- Teaching live-capture 场景还需单独显式 opt-in；缺少时只跳过该场景，不把 mock 当作通过。
+- 真实套件只通过独立 `test:e2e:grand-tour` 命令运行；该入口内置启用 real-tour runtime 和 live capture，不依赖 shell opt-in 环境变量。
+- 默认 `npm run test:e2e` 仍必须保持 mock-backed、cost-free、无 live capture；任何将真实套件并入默认 E2E 的改动均为回归。
 - 在首个付费调用前输出/展示费用提示。
 - 在开始当前桌面或浏览器捕获前输出/展示隐私提示并要求本次确认。
 - 每次运行初始预算为最多 `20` 分钟和 `30` 次付费模型请求；达到任一上限即终止后续付费步骤、执行 cleanup 并报告 `budget_exceeded`。
@@ -82,7 +80,7 @@ Inventory guard 应由静态扫描和运行时 prereq 双重实现：新增或�
 |-------------|-------|--------------------------------|
 | `readiness` | 启动真实 sidecar、鉴权、健康检查和应用壳加载 | sidecar ready、runtime token 有效、普通导航可用；失败只报告 readiness |
 | `assistant-real-reply` | Assistant 发起一次真实模型响应 | 观察到 public progress 和非空 assistant 结果；不校验固定措辞 |
-| `teaching-live-recording` | 手动确认隐私提示后执行固定安全现场录制 | 只在 live-capture opt-in 后录制，观察 recording start/stop/cleanup；失败报告最后 recording 状态 |
+| `teaching-live-recording` | 手动确认隐私提示后执行固定安全现场录制 | 只在独立 real-tour 命令内录制，观察 recording start/stop/cleanup；失败报告最后 recording 状态 |
 | `teaching-workflow-progress` | Teaching 真实流程进入后续阶段 | 依据 public Teaching stage/progress 推进，断言阶段/角色/非空结果或明确失败状态 |
 | `skills-compositions-visibility` | Skills/compositions 可见性或隔离数据 create/read | 默认不触发 LLM generation/trial；若触发，必须计入 paid-call budget 并通过 provider inventory |
 | `settings-non-secret-interaction` | 非密钥设置交互和连接验证边界 | 只写隔离非密钥配置，credential fingerprint/presence 和 mutation count 不变 |
@@ -186,7 +184,7 @@ Teaching real-capture 场景在以下每种结束方式都必须执行 stop/clea
 
 | Injection | Required assertion |
 |-----------|--------------------|
-| Missing real-tour/live-capture opt-in | Suite/scenario skip 且不启动 sidecar/model/recorder |
+| Default E2E separation | 默认 `npm run test:e2e` 不启动 real sidecar/model/recorder，真实链路只在独立命令中运行 |
 | Model failure or event timeout | 报告最后安全公开状态并执行 cleanup |
 | Cancellation/test interruption | 录制 stop/cleanup 在 finally 路径执行 |
 | Stop failure | 场景失败且 cleanup outcome 明确标红，不伪装成功 |
