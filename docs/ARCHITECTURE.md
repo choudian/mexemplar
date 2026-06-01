@@ -18,7 +18,7 @@ React UI (frontend/)
 ```
 
 - Tauri 负责窗口、custom chrome、sidecar 生命周期、端口/token handoff 和打包。
-- React 负责七个普通主界面：AI Assistant、Skill Teaching、Skill List、Skill Composition、Settings、Brain Management、Specialist Management；`/debug` 是隐藏的 Debug Inspector 直达路由，不进入普通导航。
+- React 负责普通主界面：AI Assistant、Tool Teaching、Tool List、Tool Composition、Skill Methodology、Settings、Brain Management、Specialist Management；`/debug` 是隐藏的 Debug Inspector 直达路由，不进入普通导航。
 - `src/desktop_api/` 是 UI adapter，router 不直接访问 Repository；默认只调用 business services，并把 `src/utils/events.py` 的 blinker 事件投影成受注册表约束的前端 UI event stream。`orchestrator_runtime.py` 里为复用既有 `AgentSessionStore` 组装的 Repository 触点是当前收敛例外，不得扩散到 router 或新 API。
 - UI event stream 由后端 `UI Event Registry` 拥有公开契约；前端只消费注册 UI event type，不使用内部 blinker 事件名或 `sourceEvent` 推断展示行为。事件 envelope 包含 `eventId`、当前桌面事件会话内单调递增的 `sequence`、`sessionId`、`causationId`、`type`、`scope`、安全校验后的 `payload` 和 `createdAt`。
 - sidecar event stream 为每个订阅者维护独立队列，并保留当前进程内的有界 replay buffer。前端重连时携带同一事件会话的 last-seen sequence；buffer 能覆盖缺口时按序回放，不能覆盖或事件会话不匹配时发送 `backend.resync_required`，由前端刷新权威快照恢复状态。
@@ -538,6 +538,11 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | `src/business/brain/retrieval_service.py` | 显式 archive 检索、invalidation fallback、相关性排序 |
 | `src/business/brain/specialist_service.py` | 专员 CRUD、技能白名单子集校验、自动招募扫描 |
 | `src/business/brain/prediction_service.py` | Prediction 生成与验证服务逻辑 |
+| `src/business/brain/management_service.py` | Brain 管理界面 facade：zone、entry、Segment 重试和演化链 |
+| `src/business/brain/skill_service.py` | 方法论资产创建、接力、用户编辑、软删除、列表和审计 |
+| `src/business/brain/skill_equipment_service.py` | assistant/specialist 方法论装备关系、默认装备传播和 token budget 估算 |
+| `src/business/brain/skill_bootstrap_service.py` | 内置"如何创建方法论" seed 读取、fallback bootstrap 和系统链根保护 |
+| `src/business/brain/skill_reference_counter.py` | assistant/specialist 回复元数据中的方法论引用计数 |
 | `src/business/brain/background_worker.py` | 后台 Worker：pending Segment 处理、蒸馏崩溃重置、衰减清扫、archive 分层、prediction 周期、事件唤醒 |
 
 ### 数据层
@@ -546,6 +551,8 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 |------------|------|
 | `src/data/repos/brain_repository.py`（`BrainRepository`） | Memory Entry 和 Segment CRUD、compare-and-swap 状态转换、事务原子写入、invalidation/soft-delete、feedback signal 持久化 |
 | `src/data/repos/specialist_repository.py`（`SpecialistRepository`） | 专员持久化、软删除停用、版本历史 |
+| `src/data/repos/skill_repository.py`（`SkillRepository`） | 方法论资产、来源 Segment、supersede 链、软删除和引用/加载计数 |
+| `src/data/repos/skill_equipment_repository.py`（`SkillEquipmentRepository`） | assistant/specialist 方法论装备 N:M 状态、顺序、用户卸载与审计 |
 
 ### 数据库表（v11 Migration）
 
@@ -560,14 +567,51 @@ v11 迁移在 SQLite 中新增以下表：
 | `brain_recruitment_signals` | 自动招募信号 |
 | `feedback_signals` | 用户反馈信号（prompt injection、silence no-op） |
 
+### 方法论资产层（v12 Migration）
+
+012 在 Brain Service 内新增“方法论资产”层。方法论与 specialist 平级，是 assistant 本体或 specialist 可装备的操作步骤与判断规则；UI 上原“工具技能”统一称为 Tool，Skill 词位只指方法论。
+
+| 表 | 说明 |
+|----|------|
+| `brain_skills` | 方法论资产与版本链：`active → superseded / soft_deleted`，含 `origin`、`chain_root_id`、`loaded_count`、`referenced_count`、`change_reason` |
+| `brain_skill_source_segments` | 方法论来源 Segment，只允许 archive / failure zone |
+| `brain_skill_equipment` | assistant 本体 / specialist 与方法论的状态化装备关系，`active → unequipped` 留历史行 |
+
+v12 表与普通大脑 entry 一样不允许物理删除：方法论删除走 `status = soft_deleted`，装备移除走 `status = unequipped` + `unequipped_reason`。`brain_skill_equipment` 使用 partial unique index 保证同一装备者与同一方法论最多一条 active 关系；SQLite trigger 阻断 `brain_skills` 与 `brain_skill_equipment` 的直连 DELETE。
+
+业务入口：
+
+- `SkillService` 管理 create / supersede / user edit / soft delete / history。supersede 使用 SQLite `BEGIN IMMEDIATE` 起始写锁，并始终按链根解析当前 active 作为新基线，避免版本链分叉。
+- `SkillEquipmentService` 管理 equip / unequip / reorder / default propagation / supersede transfer；`system_bootstrap` 链根默认只装备 assistant 本体，用户主动装备过的 specialist 在后续 supersede 中继续跟随新版本。
+- `SkillBootstrapService` 负责 seed 文件加载、fail-open fallback 和“如何创建方法论”内置方法论首装 assistant 本体。
+
+Agent 与 prompt：
+
+- assistant 与 specialist system prompt 只注入装备清单轻量段：id、name、description、trigger_conditions，不注入 `body_markdown`。
+- 完整正文必须由 `load_skill_methodology(skill_id)` 按需加载，工具结果以 SKILL.md 形态进入 messages 序列，并触发 `loaded_count +1`。
+- specialist 派活决策本身不读取方法论或 trigger_conditions；派活时冻结装备清单，本轮 `load_skill_methodology` 鉴权按冻结快照执行，装备变更最快下一轮生效。
+
+事件：
+
+- 后端 blinker：`brain_skill_changed`、`brain_skill_equipment_changed`、`brain_skill_supersede_completed`、`brain_skill_bootstrap_fallback_used`。
+- 前端公开 UI event：`skill.changed`、`skill.equipment.changed`。旧 Tool 域事件为 `tools.changed`，不得恢复 `skills.changed`。
+
+公开 UI event payload 以 `src/desktop_api/ui_events.py` Registry 为准：
+
+| Event type | 必填 payload | 可选 payload | Scope |
+|------------|--------------|--------------|-------|
+| `skill.changed` | `reason`、`skillId`、`chainRootId` | `newSkillId`、`callerType`、`callerId`、`bootstrapFallbackUsed`、`bootstrapFallbackInfo` | `skillId` |
+| `skill.equipment.changed` | `changeType`、`entityType`、`entityId`、`skillId` | `unequippedReason` | `entityId`、`skillId` |
+
 ### 前端路由
 
 | 路由 | 页面 | 说明 |
 |------|------|------|
-| `/brain` | BrainScreen | 六 zone 浏览、过滤、entry 编辑/删除、evolution chain、skill-pool 管理 |
-| `/brain/specialists` | SpecialistScreen | 专员 CRUD、软删除停用、白名单编辑 |
+| `/skills/methodology` | SkillMethodologyScreen | 方法论 active 列表、排序/筛选、编辑器、版本链与装备审计 |
+| `/brain` | BrainScreen | 六 zone 浏览、过滤、entry 编辑/删除、evolution chain |
+| `/brain/specialists` | SpecialistScreen | 专员 CRUD、软删除停用、白名单编辑、assistant 本体与 specialist 方法论装备 |
 
-前端对应 Zustand store：`brainStore`（zone/entry/segment/skill-pool 状态）、`specialistStore`（专员列表/编辑草稿/白名单）。
+前端对应 Zustand store：`brainStore`（zone/entry/segment/skill-pool 状态，skill-pool 供 SpecialistScreen 白名单编辑复用）、`specialistStore`（专员列表/编辑草稿/白名单）、`skillMethodologyStore`（方法论列表、排序筛选、编辑草稿、装备关系、token budget thresholds）。
 
 ### 事件
 
@@ -579,8 +623,12 @@ v11 迁移在 SQLite 中新增以下表：
 | `segment_idle_trigger` | 前端 idle timer 触发 Segment 边界 |
 | `brain_specialist_recruited` | 自动招募专员成功 |
 | `brain_context_ready` | 会话启动上下文组装完成 |
+| `brain_skill_changed` | 方法论创建、接力、用户编辑、软删除 |
+| `brain_skill_equipment_changed` | 方法论装备、卸下、调序、默认传播、接力转移 |
+| `brain_skill_supersede_completed` | 方法论 supersede 链路提交完成 |
+| `brain_skill_bootstrap_fallback_used` | 内置方法论 seed fail-open fallback 被使用 |
 
-所有 brain 事件定义在 `src/utils/events.py`，由业务服务发出，经 `src/desktop_api/ui_events.py` 投影为前端 UI event stream。
+所有 brain 事件定义在 `src/utils/events.py`，由业务服务发出，经 `src/desktop_api/ui_events.py` 的公开 Registry 与 `src/desktop_api/ui_event_projector.py` 的投影层转为前端 UI event stream。
 
 ### 后台 Worker
 
@@ -591,8 +639,9 @@ v11 迁移在 SQLite 中新增以下表：
 3. hot-zone 衰减清扫
 4. archive 分层聚合
 5. prediction 生成与验证周期
-6. 自动招募信号扫描
-7. 事件唤醒（`threading.Event`）
+6. subconscious distillation
+7. invalidation review
+8. 自动招募信号扫描与事件唤醒（`threading.Event`）
 
 Worker 周期由 `brain.*` 配置控制，数值为占位符，待实测后调整。
 

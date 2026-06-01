@@ -5,21 +5,9 @@ import DebugScreen from "../../src/screens/debug/DebugScreen";
 import * as debugApi from "../../src/api/debug";
 
 vi.mock("../../src/api/debug", () => {
-  class DebugApiError extends Error {
-    constructor(
-      public readonly status: number,
-      public readonly code: string,
-      message: string,
-    ) {
-      super(message);
-      this.name = "DebugApiError";
-    }
-  }
-
   return {
     DEBUG_RAW_STATE_PURGE_EVENT: "mexemplar:debug-raw-state-purge",
     dispatchDebugControlStatus: vi.fn(),
-    DebugApiError,
     getControlStatus: vi.fn(),
     updateControl: vi.fn(),
     listTraces: vi.fn(),

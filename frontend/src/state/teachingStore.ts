@@ -137,7 +137,7 @@ function dedupeMessageDetail(headline: string, detail: string | undefined): stri
 }
 
 const TRIAL_VALIDATION_TOAST: TeachingToast = {
-  title: "技能学习完成",
+  title: "工具学习完成",
   body: "可以开始试用验证，确认它能按预期执行。",
 };
 

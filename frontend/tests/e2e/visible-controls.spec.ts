@@ -37,7 +37,7 @@ test("T107 visible controls across primary screens invoke real bridge paths or e
   expectRequest(api, "PATCH", "/api/assistant/sessions/ast_1");
   expectRequest(api, "DELETE", "/api/assistant/sessions/ast_1");
 
-  await page.getByRole("button", { name: /技能教学/ }).click();
+  await page.getByRole("button", { name: /工具教学/ }).click();
   await expectNamedButtons(page);
   await page.getByRole("button", { name: "开始" }).first().click();
   await page.getByRole("button", { name: "开始录制" }).click();
@@ -50,14 +50,14 @@ test("T107 visible controls across primary screens invoke real bridge paths or e
   expectRequest(api, "POST", "/api/teaching/runs/rec_1/recording/stop");
   expectRequest(api, "POST", "/api/teaching/runs/rec_1/intent/reply");
 
-  await page.getByRole("button", { name: /技能列表/ }).click();
+  await page.getByRole("button", { name: /工具列表/ }).click();
   await expectNamedButtons(page);
   await expect(page.getByText("Pending Skill")).toBeVisible();
   await page.getByRole("button", { name: "试用" }).click();
-  const trialDialog = page.getByRole("dialog", { name: "技能试用" });
+  const trialDialog = page.getByRole("dialog", { name: "工具试用" });
   await expect(trialDialog).toBeVisible();
   await trialDialog.getByRole("button", { name: "关闭" }).click();
-  await page.getByRole("button", { name: "删除技能" }).click();
+  await page.getByRole("button", { name: "删除工具" }).click();
   await page.getByRole("tab", { name: /已掌握/ }).click();
   await expect(page.getByText("Published Skill")).toBeVisible();
   await page.getByRole("tab", { name: /失败记录/ }).click();
@@ -69,7 +69,7 @@ test("T107 visible controls across primary screens invoke real bridge paths or e
   expectRequest(api, "POST", "/api/skills/failures/wf_failed/retry");
   expectRequest(api, "POST", "/api/skills/failures/wf_failed/dismiss");
 
-  await page.getByRole("button", { name: /技能组合/ }).click();
+  await page.getByRole("button", { name: /工具组合/ }).click();
   await expectNamedButtons(page);
   await page.getByRole("button", { name: /^新建组合$/ }).click();
   await page.getByLabel("名称").fill("Audit composition");

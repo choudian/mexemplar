@@ -103,7 +103,7 @@ function RecordingStage({
         <div className="teaching-recording-consent" role="alertdialog" aria-modal="true" aria-labelledby="teaching-recording-consent-title">
           <h4 id="teaching-recording-consent-title">录制隐私确认</h4>
           <p>
-            当前屏幕或浏览器中的可见内容可能会被记录，并在后续技能教学流程中交给已配置的模型处理。
+            当前屏幕或浏览器中的可见内容可能会被记录，并在后续工具教学流程中交给已配置的模型处理。
             请只录制为本次验收或教学准备的无敏感内容目标。
           </p>
           <div className="teaching-recording-consent-actions">

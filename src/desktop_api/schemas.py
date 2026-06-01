@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 BackendStatus = Literal["starting", "ready", "degraded", "failed", "shutting_down"]
 SessionStatus = Literal["active", "suspended", "completed", "failed", "archived"]
@@ -209,7 +209,7 @@ class TrialPreviewDecisionResponse(BaseModel):
     status: Literal["approved", "denied", "already_resolved", "conflict", "expired"]
 
 
-class SkillSummary(BaseModel):
+class ToolSummary(BaseModel):
     toolId: str
     name: str
     description: str = ""
@@ -219,12 +219,176 @@ class SkillSummary(BaseModel):
     workflowId: str | None = None
     failureStage: str | None = None
     errorSummary: str = ""
+    is_builtin: bool = False
 
 
 class SkillCategoryResponse(BaseModel):
     category: Literal["pending", "published", "failed"]
     count: int = 0
+    items: list[ToolSummary] = Field(default_factory=list)
+
+
+SkillOrigin = Literal[
+    "system_bootstrap",
+    "user_edit",
+    "assistant_tool_call",
+    "specialist_tool_call",
+    "external_import",
+]
+SkillStatus = Literal["active", "superseded", "soft_deleted"]
+BrainEntryStatus = Literal["active", "fading", "invalidated", "soft-deleted"]
+EquipmentStatus = Literal["active", "unequipped"]
+EquipmentEntityType = Literal["assistant", "specialist"]
+UnequippedReason = Literal["user_unequip", "force_remove_on_soft_delete", "supersede_transfer"]
+
+
+class SkillSummary(BaseModel):
+    skill_id: str
+    name: str
+    description: str
+    trigger_conditions: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    version: int = 1
+    chain_root_id: str
+    origin: SkillOrigin
+    is_protected: bool = False
+    loaded_count: int = 0
+    referenced_count: int = 0
+    equipped_count: int = 0
+    last_referenced_at: datetime | None = None
+    created_at: datetime | None = None
+
+
+class SkillSourceSegment(BaseModel):
+    segment_id: str
+    source_zone: Literal["archive", "failure"]
+    segment_summary: str = ""
+    segment_status: BrainEntryStatus = "active"
+
+
+class SkillDetail(SkillSummary):
+    body_markdown: str
+    parent_skill_id: str | None = None
+    status: SkillStatus = "active"
+    source_segments: list[SkillSourceSegment] = Field(default_factory=list)
+
+
+class SkillListResponse(BaseModel):
     items: list[SkillSummary] = Field(default_factory=list)
+
+
+class SkillSoftDeleteResponse(BaseModel):
+    deleted_skill_id: str
+    pruned_equipment_count: int = 0
+    affected_specialist_ids: list[str] = Field(default_factory=list)
+
+
+class SkillVersionNode(BaseModel):
+    skill_id: str
+    version: int
+    name: str
+    description: str
+    trigger_conditions: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    body_markdown: str
+    diff_from_previous: str | None = None
+    origin: SkillOrigin
+    changed_by: str | None = None
+    change_reason: str | None = None
+    created_at: datetime | None = None
+
+
+class SkillHistoryResponse(BaseModel):
+    chain_root_id: str
+    nodes: list[SkillVersionNode] = Field(default_factory=list)
+
+
+class SkillEquipmentItem(BaseModel):
+    skill_id: str
+    chain_root_id: str
+    name: str
+    description: str
+    trigger_conditions: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    missing_required_tools: list[str] = Field(default_factory=list)
+    equipped_order: int = 0
+    equipped_at: datetime | None = None
+
+
+class SkillEquipmentAuditRow(BaseModel):
+    equipped_entity_type: EquipmentEntityType
+    equipped_entity_id: str
+    equipped_entity_name: str = ""
+    status: EquipmentStatus
+    equipped_at: datetime | None = None
+    unequipped_at: datetime | None = None
+    unequipped_reason: UnequippedReason | None = None
+
+    @model_validator(mode="after")
+    def status_fields_consistent(self) -> "SkillEquipmentAuditRow":
+        if self.status == "unequipped":
+            if self.unequipped_at is None or self.unequipped_reason is None:
+                raise ValueError(
+                    "unequipped rows must have both unequipped_at and unequipped_reason"
+                )
+        elif self.status == "active":
+            if self.unequipped_at is not None or self.unequipped_reason is not None:
+                raise ValueError(
+                    "active rows must not have unequipped_at or unequipped_reason"
+                )
+        return self
+
+
+class SkillEquipmentAuditResponse(BaseModel):
+    skill_id: str
+    rows: list[SkillEquipmentAuditRow] = Field(default_factory=list)
+
+
+class EquipmentUpdateItem(BaseModel):
+    skill_id: str = Field(min_length=1)
+    equipped_order: int = 0
+
+
+class EquipmentUpdateRequest(BaseModel):
+    skills: list[EquipmentUpdateItem] = Field(default_factory=list)
+
+
+class EquipmentUpdateResponse(BaseModel):
+    active_equipment_count: int = 0
+    newly_equipped: list[str] = Field(default_factory=list)
+    newly_unequipped: list[str] = Field(default_factory=list)
+    reordered: list[str] = Field(default_factory=list)
+
+
+class BootstrapStatusResponse(BaseModel):
+    bootstrap_active_skill_id: str | None = None
+    fallback_used: bool = False
+    seed_file_path: str = ""
+    last_seed_check_at: datetime | None = None
+
+
+class TokenBudgetThresholds(BaseModel):
+    warn_threshold: int = Field(gt=0)
+    danger_threshold: int = Field(gt=0)
+
+    @model_validator(mode="after")
+    def warn_below_danger(self) -> "TokenBudgetThresholds":
+        if self.warn_threshold >= self.danger_threshold:
+            raise ValueError(
+                f"warn_threshold ({self.warn_threshold}) must be less than "
+                f"danger_threshold ({self.danger_threshold})"
+            )
+        return self
+
+
+class EntityEquipmentResponse(BaseModel):
+    entity_type: EquipmentEntityType
+    entity_id: str
+    entity_name: str
+    tool_whitelist: list[str] = Field(default_factory=list)
+    active_equipment: list[SkillEquipmentItem] = Field(default_factory=list)
+    token_budget_estimate: int = 0
+    token_budget_thresholds: TokenBudgetThresholds
 
 
 class CompositionSummary(BaseModel):

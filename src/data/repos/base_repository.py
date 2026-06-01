@@ -5,6 +5,7 @@ BaseRepository -- Repository 基类，提供统一的会话初始化
 import logging
 from typing import Optional
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from ..sqlalchemy_manager import get_sqlalchemy_manager
@@ -38,3 +39,12 @@ class BaseRepository:
 
     def __exit__(self, *_):
         self.close()
+
+    def ensure_immediate_transaction(self) -> None:
+        """Start a SQLite IMMEDIATE transaction when the session has not begun one yet."""
+        bind = self.session.get_bind()
+        if getattr(getattr(bind, "dialect", None), "name", None) != "sqlite":
+            return
+        if self.session.in_transaction():
+            return
+        self.session.execute(text("BEGIN IMMEDIATE"))

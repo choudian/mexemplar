@@ -43,13 +43,10 @@ export interface RealGrandTourCleanupDeps {
   rmSync?: typeof fs.rmSync;
 }
 
-const REAL_GRAND_TOUR_ENABLED = true;
-const REAL_GRAND_TOUR_LIVE_CAPTURE_ENABLED = true;
-
 export function readRealGrandTourConfig(env: NodeJS.ProcessEnv = process.env): RealGrandTourConfig {
   return {
-    optIn: REAL_GRAND_TOUR_ENABLED,
-    allowLiveCapture: REAL_GRAND_TOUR_LIVE_CAPTURE_ENABLED,
+    optIn: env.MEXEMPLAR_REAL_GRAND_TOUR === "1",
+    allowLiveCapture: env.MEXEMPLAR_ALLOW_LIVE_CAPTURE === "1",
     maxElapsedMinutes: boundedPositiveInteger(env.MEXEMPLAR_REAL_GRAND_TOUR_MAX_MINUTES, 20, 20),
     maxPaidCalls: boundedPositiveInteger(env.MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS, 50, 50),
   };
@@ -94,15 +91,17 @@ export async function startRealGrandTourRuntime(
   fs.writeFileSync(stdoutLogFile, "", "utf-8");
   fs.writeFileSync(stderrLogFile, "", "utf-8");
   const envPort = Number(process.env.MEXEMPLAR_REAL_GRAND_TOUR_PORT);
-  const port = Number.isInteger(envPort) && envPort > 0 ? envPort : await allocateLocalPort();
+  const envBaseUrl = process.env.MEXEMPLAR_REAL_GRAND_TOUR_BASE_URL ?? "";
+  const useExternalSidecar = envBaseUrl.trim() !== "";
+  const port = useExternalSidecar ? 0 : (Number.isInteger(envPort) && envPort > 0 ? envPort : await allocateLocalPort());
   const token = process.env.MEXEMPLAR_REAL_GRAND_TOUR_TOKEN ?? crypto.randomBytes(24).toString("base64url");
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const baseUrl = useExternalSidecar ? envBaseUrl : `http://127.0.0.1:${port}`;
   const frontendPort = Number(process.env.PLAYWRIGHT_REAL_GRAND_TOUR_DEV_SERVER_PORT ?? "5175");
   const safeFixtureUrl = `http://127.0.0.1:${frontendPort}/real-grand-tour-safe-fixture.html`;
   const verboseLogs = process.env.MEXEMPLAR_REAL_GRAND_TOUR_VERBOSE_LOGS === "1";
   let child: ChildProcess | null = null;
 
-  if (options.spawnSidecar !== false) {
+  if (options.spawnSidecar !== false && !useExternalSidecar) {
     child = spawn(
       "uv",
       [

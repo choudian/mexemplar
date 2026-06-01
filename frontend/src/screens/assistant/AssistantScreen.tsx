@@ -1,7 +1,8 @@
 import { PanelLeft, Plus, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
+import type { AssistantMessage } from "../../api/assistant";
 import { useAssistantStore } from "../../state/assistantStore";
 import type { PendingAssistantMessage } from "../../state/assistantStore";
 import { useShellStore } from "../../state/shellStore";
@@ -11,9 +12,7 @@ import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
 
-type AssistantDisplayMessage =
-  | ReturnType<typeof useAssistantStore.getState>["messages"][number]
-  | PendingAssistantMessage;
+type AssistantDisplayMessage = AssistantMessage | PendingAssistantMessage;
 
 function messageKey(message: AssistantDisplayMessage): string | number {
   return "optimisticId" in message ? message.optimisticId : message.sequence;
@@ -59,12 +58,16 @@ export function AssistantScreen(): JSX.Element {
   }, [clearIdleTimer]);
 
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId);
-  const visibleMessages: AssistantDisplayMessage[] = activeSessionId
-    ? [
-        ...messages,
-        ...pendingOptimisticMessages.filter((message) => message.sessionId === activeSessionId),
-      ]
-    : messages;
+  const visibleMessages = useMemo<AssistantDisplayMessage[]>(
+    () =>
+      activeSessionId
+        ? [
+            ...messages,
+            ...pendingOptimisticMessages.filter((message) => message.sessionId === activeSessionId),
+          ]
+        : messages,
+    [activeSessionId, messages, pendingOptimisticMessages],
+  );
   const conversationTitle = activeSession?.title ?? (visibleMessages.length > 0 ? "当前对话" : "新对话");
 
   return (
@@ -116,7 +119,7 @@ export function AssistantScreen(): JSX.Element {
             <small>{activeSession?.dateLabel ?? "开始一个新的对话"}</small>
           </div>
           <div className="assistant-toolbar-actions">
-            <Badge tone={publishedSkillCount > 0 ? "ok" : "neutral"}>已掌握技能 {publishedSkillCount}</Badge>
+            <Badge tone={publishedSkillCount > 0 ? "ok" : "neutral"}>已掌握工具 {publishedSkillCount}</Badge>
             <IconButton label="展开会话搜索" onClick={() => setHistoryOpen(true)}>
               <Search size={16} />
             </IconButton>
@@ -135,13 +138,13 @@ export function AssistantScreen(): JSX.Element {
             <div className="assistant-welcome">
               <div className="assistant-welcome-mark" aria-hidden="true" />
               <h2>今天想完成什么？</h2>
-              <p>直接描述任务即可，也可以让已掌握的技能上场。</p>
+              <p>直接描述任务即可，也可以让已掌握的工具上场。</p>
               <div className="assistant-suggestion-row">
                 <Button kind="secondary" onClick={() => setDraft("总结当前任务的目标、约束和下一步。")}>
                   总结当前任务
                 </Button>
                 <Button kind="secondary" onClick={() => setRoute("teaching")}>
-                  教学新技能
+                  教学新工具
                 </Button>
                 <Button kind="secondary" onClick={() => setRoute("compositions")}>
                   新建组合

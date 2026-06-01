@@ -31,8 +31,17 @@ describe("real Grand Tour controlled failures", () => {
     expect(result).toEqual({ status: "skipped", reason: "real_tour_opt_in_missing" });
   });
 
-  test("dedicated runtime config does not require external opt-in variables", () => {
-    const config = readRealGrandTourConfig({});
+  test("dedicated runtime config requires explicit opt-in variables", () => {
+    const disabled = readRealGrandTourConfig({});
+
+    expect(disabled.optIn).toBe(false);
+    expect(disabled.allowLiveCapture).toBe(false);
+    expect(realGrandTourSkipReason(disabled)).toBe("real_tour_opt_in_missing");
+
+    const config = readRealGrandTourConfig({
+      MEXEMPLAR_REAL_GRAND_TOUR: "1",
+      MEXEMPLAR_ALLOW_LIVE_CAPTURE: "1",
+    });
 
     expect(config.optIn).toBe(true);
     expect(config.allowLiveCapture).toBe(true);

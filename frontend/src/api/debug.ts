@@ -5,7 +5,7 @@
  * Raw debug endpoints use Cache-Control: no-store.
  */
 
-import { DesktopApiError, requestJson } from "./client";
+import { requestJson } from "./client";
 
 export const DEBUG_RAW_STATE_PURGE_EVENT = "mexemplar:debug-raw-state-purge";
 export const DEBUG_CONTROL_STATUS_EVENT = "mexemplar:debug-control-status";
@@ -18,28 +18,6 @@ export function dispatchDebugRawStatePurge(): void {
 export function dispatchDebugControlStatus(status: DebugControlStatus): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(DEBUG_CONTROL_STATUS_EVENT, { detail: status }));
-}
-
-async function debugFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  try {
-    return await requestJson<T>(path, init);
-  } catch (error) {
-    if (error instanceof DesktopApiError) {
-      throw new DebugApiError(error.status, error.code, error.message);
-    }
-    throw error;
-  }
-}
-
-export class DebugApiError extends Error {
-  constructor(
-    public readonly status: number,
-    public readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = "DebugApiError";
-  }
 }
 
 export interface DebugControlStatus {
@@ -162,11 +140,11 @@ export interface FlowListParams {
 }
 
 export async function getControlStatus(): Promise<DebugControlStatus> {
-  return debugFetch<DebugControlStatus>("/api/debug/control");
+  return requestJson<DebugControlStatus>("/api/debug/control");
 }
 
 export async function updateControl(request: DebugControlRequest): Promise<DebugControlStatus> {
-  return debugFetch<DebugControlStatus>("/api/debug/control", {
+  return requestJson<DebugControlStatus>("/api/debug/control", {
     method: "PUT",
     body: JSON.stringify(request),
   });
@@ -180,15 +158,15 @@ export async function listTraces(params?: TraceListParams): Promise<TraceListRes
   if (params?.workflowId) query.set("workflowId", params.workflowId);
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();
-  return debugFetch<TraceListResponse>(`/api/debug/traces${qs ? `?${qs}` : ""}`);
+  return requestJson<TraceListResponse>(`/api/debug/traces${qs ? `?${qs}` : ""}`);
 }
 
 export async function getTraceDetail(traceId: string): Promise<TraceDetail> {
-  return debugFetch<TraceDetail>(`/api/debug/traces/${encodeURIComponent(traceId)}`);
+  return requestJson<TraceDetail>(`/api/debug/traces/${encodeURIComponent(traceId)}`);
 }
 
 export async function clearTraces(): Promise<void> {
-  await debugFetch<void>("/api/debug/traces", { method: "DELETE" });
+  await requestJson<void>("/api/debug/traces", { method: "DELETE" });
 }
 
 export async function listFlows(params?: FlowListParams): Promise<FlowListResponse> {
@@ -197,13 +175,13 @@ export async function listFlows(params?: FlowListParams): Promise<FlowListRespon
   if (params?.sessionId) query.set("sessionId", params.sessionId);
   if (params?.limit) query.set("limit", String(params.limit));
   const qs = query.toString();
-  return debugFetch<FlowListResponse>(`/api/debug/flows${qs ? `?${qs}` : ""}`);
+  return requestJson<FlowListResponse>(`/api/debug/flows${qs ? `?${qs}` : ""}`);
 }
 
 export async function getFlowDetail(workflowId: string): Promise<FlowDetailResponse> {
-  return debugFetch<FlowDetailResponse>(`/api/debug/flows/${encodeURIComponent(workflowId)}`);
+  return requestJson<FlowDetailResponse>(`/api/debug/flows/${encodeURIComponent(workflowId)}`);
 }
 
 export async function expandReference(referenceId: string): Promise<ReferenceResponse> {
-  return debugFetch<ReferenceResponse>(`/api/debug/references/${encodeURIComponent(referenceId)}`);
+  return requestJson<ReferenceResponse>(`/api/debug/references/${encodeURIComponent(referenceId)}`);
 }

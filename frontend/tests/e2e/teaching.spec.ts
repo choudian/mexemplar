@@ -6,7 +6,7 @@ test("T060 drives a teaching fixture through recording and intent handoff under 
   const start = Date.now();
   const api = await installMockApi(page);
   await page.goto("/");
-  await page.getByRole("button", { name: /技能教学/ }).click();
+  await page.getByRole("button", { name: /工具教学/ }).click();
 
   await expect(page.getByRole("heading", { name: "浏览器", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "开始" }).first().click();

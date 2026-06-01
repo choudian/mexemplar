@@ -19,6 +19,18 @@ from src.utils.timezone import utc_now_naive
 logger = logging.getLogger(__name__)
 
 _BRAIN_ZONES = ("hot", "persistent", "archive", "subconscious", "failure", "prediction")
+_SEGMENT_UPDATE_COLUMNS = frozenset(
+    {
+        "all_empty_retried",
+        "completed_at",
+        "distilling_started_at",
+        "message_id_end",
+        "message_id_start",
+        "retry_count",
+        "sealed_at",
+        "updated_at",
+    }
+)
 
 
 class _RecordId(str):
@@ -98,6 +110,17 @@ class BrainRepository(BaseRepository):
             self.session.query(BrainSegment).filter(BrainSegment.segment_id == segment_id).first()
         )
 
+    def get_segment_zone(self, segment_id: str) -> Optional[str]:
+        """Return the visible zone for a distilled segment source, if any."""
+        segment_id = getattr(segment_id, "segment_id", segment_id)
+        row = (
+            self.session.query(BrainMemoryEntry.zone)
+            .filter(BrainMemoryEntry.source_segment_id == segment_id)
+            .order_by(BrainMemoryEntry.created_at.desc())
+            .first()
+        )
+        return row[0] if row else None
+
     def get_pending_segments(self) -> list[BrainSegment]:
         """返回所有 status='pending' 的 segment，按 created_at 升序。"""
         return (
@@ -156,6 +179,11 @@ class BrainRepository(BaseRepository):
                 "to_status": to_status,
             }
             for key, value in updates.items():
+                if key not in _SEGMENT_UPDATE_COLUMNS:
+                    allowed = ", ".join(sorted(_SEGMENT_UPDATE_COLUMNS))
+                    raise ValueError(
+                        f"Disallowed column in segment update: {key}. Allowed columns: {allowed}"
+                    )
                 if hasattr(value, "text"):
                     set_parts.append(f"{key} = {value.text}")
                 else:
@@ -296,6 +324,7 @@ class BrainRepository(BaseRepository):
         verification_checkpoint: Optional[str] = None,
         verification_status: Optional[str] = None,
         verification_rationale: Optional[str] = None,
+        commit: bool = True,
     ) -> str:
         """创建一条记忆条目，返回可当字符串使用的 entry 快照。"""
         entry_id = entry_id or uuid4().hex[:50]
@@ -318,8 +347,11 @@ class BrainRepository(BaseRepository):
         )
         try:
             self.session.add(entry)
-            self.session.commit()
-            self.session.refresh(entry)
+            if commit:
+                self.session.commit()
+                self.session.refresh(entry)
+            else:
+                self.session.flush()
             logger.info("Memory entry 已创建: %s (zone=%s)", entry_id, zone)
             return _RecordId(entry_id, entry)
         except Exception as e:
@@ -516,6 +548,7 @@ class BrainRepository(BaseRepository):
         entry_id: str,
         superseded_by: Optional[str] = None,
         feedback_operation: Optional[str] = None,
+        commit: bool = True,
     ) -> bool:
         """软删除 entry（status='soft-deleted'），可选设置 superseded_by。返回 True 表示成功。"""
         entry_id = getattr(entry_id, "entry_id", entry_id)
@@ -527,8 +560,13 @@ class BrainRepository(BaseRepository):
             entry.status = "soft-deleted"
             if superseded_by is not None:
                 entry.superseded_by = superseded_by
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
             if feedback_operation:
+                if not commit:
+                    raise ValueError("feedback_operation requires commit=True")
                 self.create_feedback_signal(
                     zone=entry.zone,
                     operation=feedback_operation,
@@ -1023,6 +1061,8 @@ class BrainRepository(BaseRepository):
         self,
         tool_id: str,
         identifiers: set[str] | list[str] | tuple[str, ...],
+        *,
+        commit: bool = True,
     ) -> str:
         """Persist an assistant skill-pool exclusion."""
         tool_id = str(tool_id or "").strip()
@@ -1053,7 +1093,10 @@ class BrainRepository(BaseRepository):
                 self.session.add(signal)
             else:
                 signal.context_summary = payload
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
             return signal.signal_id
         except Exception as e:
             self.session.rollback()
@@ -1152,6 +1195,8 @@ class BrainRepository(BaseRepository):
         self,
         signal_id: str,
         specialist_id: str,
+        *,
+        commit: bool = True,
     ) -> bool:
         signal = (
             self.session.query(BrainRecruitmentSignal)
@@ -1162,7 +1207,10 @@ class BrainRepository(BaseRepository):
             return False
         try:
             signal.specialist_id = specialist_id
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
             return True
         except Exception as e:
             self.session.rollback()

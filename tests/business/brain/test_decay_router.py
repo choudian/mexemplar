@@ -10,6 +10,7 @@
 """
 
 import pytest
+import logging
 from unittest.mock import MagicMock
 
 from src.business.brain.models import Zone
@@ -155,7 +156,7 @@ class TestEventRouting:
 
         # 验证旧条目被软删除
         mock_repo.soft_delete_entry.assert_called_with(
-            "fading-event", superseded_by=mock_repo.create_entry.return_value
+            "fading-event", superseded_by=mock_repo.create_entry.return_value, commit=False
         )
 
 
@@ -232,7 +233,7 @@ class TestInsightRouting:
         router.run_decay_sweep()
 
         # 极低 relevance 的 insight 应被软删除，不创建新条目
-        mock_repo.soft_delete_entry.assert_called_with("very-low-insight")
+        mock_repo.soft_delete_entry.assert_called_with("very-low-insight", commit=False)
         # 不应创建到持久区
         persistent_calls = [
             c
@@ -262,3 +263,120 @@ class TestNonHotZoneUnaffected:
         mock_repo.update_entry_status.assert_not_called()
         mock_repo.create_entry.assert_not_called()
         mock_repo.soft_delete_entry.assert_not_called()
+
+
+class TestDecayErrorIsolation:
+    def test_mark_fading_error_does_not_stop_other_entries(self):
+        from src.business.brain.decay_router import DecayRouter
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_decay_fading_threshold.return_value = 0.5
+        entries = [
+            MagicMock(entry_id="bad-active", relevance_score=0.1),
+            MagicMock(entry_id="good-active", relevance_score=0.2),
+        ]
+        mock_repo.get_entries_by_zone.side_effect = lambda zone, status=None, limit=50, offset=0: (
+            (entries, 2) if status == "active" else ([], 0)
+        )
+
+        def update_status(entry_id, status):
+            if entry_id == "bad-active":
+                raise RuntimeError("write failed")
+            return True
+
+        mock_repo.update_entry_status.side_effect = update_status
+
+        stats = DecayRouter(brain_repo=mock_repo, config=mock_config).run_decay_sweep()
+
+        assert stats["errors"] == 1
+        assert stats["faded_count"] == 1
+        mock_repo.update_entry_status.assert_any_call("good-active", "fading")
+
+    def test_failed_fading_cas_does_not_log_marked_as_fading(self, caplog):
+        from src.business.brain.decay_router import DecayRouter
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_decay_fading_threshold.return_value = 0.5
+        mock_repo.get_entries_by_zone.side_effect = lambda zone, status=None, limit=50, offset=0: (
+            ([MagicMock(entry_id="cas-miss", relevance_score=0.1)], 1)
+            if status == "active"
+            else ([], 0)
+        )
+        mock_repo.update_entry_status.return_value = False
+
+        with caplog.at_level(logging.INFO):
+            stats = DecayRouter(brain_repo=mock_repo, config=mock_config).run_decay_sweep()
+
+        assert stats["faded_count"] == 0
+        assert "marked as fading" not in caplog.text
+        assert "kept active because the fading status update did not match" in caplog.text
+
+    def test_route_error_does_not_stop_later_fading_entries(self):
+        from src.business.brain.decay_router import DecayRouter
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_decay_fading_threshold.return_value = 0.5
+        fading_entries = [
+            MagicMock(
+                entry_id="bad-fading",
+                relevance_score=0.2,
+                entry_type="event",
+                content="bad",
+                reason="test",
+            ),
+            MagicMock(
+                entry_id="good-fading",
+                relevance_score=0.2,
+                entry_type="event",
+                content="good",
+                reason="test",
+            ),
+        ]
+        mock_repo.get_entries_by_zone.side_effect = lambda zone, status=None, limit=50, offset=0: (
+            ([], 0) if status == "active" else (fading_entries, 2)
+        )
+
+        def create_entry(**kwargs):
+            if kwargs["content"] == "bad":
+                raise RuntimeError("archive write failed")
+            return "new-good"
+
+        mock_repo.create_entry.side_effect = create_entry
+
+        stats = DecayRouter(brain_repo=mock_repo, config=mock_config).run_decay_sweep()
+
+        assert stats["errors"] == 1
+        assert stats["routed_to_archive"] == 1
+        mock_repo.soft_delete_entry.assert_called_with(
+            "good-fading", superseded_by="new-good", commit=False
+        )
+
+    def test_route_create_rolls_back_when_soft_delete_fails(self):
+        from src.business.brain.decay_router import DecayRouter
+        from src.data.repos.brain_repository import BrainRepository
+
+        repo = BrainRepository()
+        mock_config = MagicMock()
+        mock_config.get_brain_decay_fading_threshold.return_value = 0.5
+        entry_id = repo.create_entry(
+            zone=Zone.HOT.value,
+            content="needs archive",
+            origin="distillation",
+            reason="test",
+            entry_type="event",
+            status="fading",
+        )
+
+        def fail_soft_delete(*_args, **_kwargs):
+            raise RuntimeError("soft delete failed")
+
+        repo.soft_delete_entry = fail_soft_delete
+
+        stats = DecayRouter(brain_repo=repo, config=mock_config).run_decay_sweep()
+
+        assert stats["errors"] == 1
+        assert repo.count_entries_by_zone(Zone.ARCHIVE.value, status="active") == 0
+        assert repo.get_entry(entry_id).status == "fading"

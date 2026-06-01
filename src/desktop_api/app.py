@@ -14,8 +14,19 @@ from fastapi.responses import StreamingResponse
 
 from src.business.services.real_tour_startup_service import RealTourStartupService
 from src.business.services.recording_startup_service import RecordingStartupService
+from src.desktop_api.confirmations import install_confirmation_signal
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
-from src.desktop_api.routers import assistant, brain, compositions, debug, health, settings, skills, teaching
+from src.desktop_api.routers import (
+    assistant,
+    brain,
+    compositions,
+    debug,
+    health,
+    settings,
+    skills,
+    skills_methodology,
+    teaching,
+)
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
 from src.execution.tool_executor import ensure_builtin_deps
 
@@ -26,6 +37,7 @@ logger = logging.getLogger(__name__)
 def create_app(session_token: str | None = None) -> FastAPI:
     token = session_token or os.environ.get("MEXEMPLAR_DESKTOP_TOKEN", "")
     install_blinker_event_adapter()
+    install_confirmation_signal()
     RealTourStartupService().install_runtime_guards()
     if token:
         try:
@@ -42,10 +54,21 @@ def create_app(session_token: str | None = None) -> FastAPI:
         brain_worker = None
         try:
             from src.business.brain.background_worker import BrainBackgroundWorker
-            brain_worker = BrainBackgroundWorker()
-            brain_worker.start()
+            from src.business.brain.skill_bootstrap_service import SkillBootstrapService
         except Exception as e:
-            logger.warning("BrainBackgroundWorker failed to start: %s", e)
+            logger.warning("Brain startup imports failed: %s", e)
+        else:
+            try:
+                SkillBootstrapService().ensure_bootstrap_skill()
+            except Exception as e:
+                logger.warning("Skill methodology bootstrap failed: %s", e)
+
+            try:
+                brain_worker = BrainBackgroundWorker()
+                brain_worker.start()
+            except Exception as e:
+                brain_worker = None
+                logger.warning("BrainBackgroundWorker failed to start: %s", e)
         try:
             yield
         finally:
@@ -81,6 +104,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(assistant.router)
     app.include_router(teaching.router)
     app.include_router(skills.router)
+    app.include_router(skills_methodology.router)
     app.include_router(compositions.router)
     app.include_router(settings.router)
     app.include_router(brain.router)

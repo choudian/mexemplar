@@ -130,6 +130,13 @@
     },
     "recruitment": {
       "min_delegation_count": 5
+    },
+    "skill": {
+      "token_budget": {
+        "warn_threshold": 4096,
+        "danger_threshold": 8192
+      },
+      "seed_file_path": "src/business/brain/seed/how_to_create_skill_methodology.md"
     }
   }
 }

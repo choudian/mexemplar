@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react";
 
 import { routes } from "./routes";
 import type { RouteId } from "../state/shellStore";
+import { useSkillMethodologyStore } from "../state/skillMethodologyStore";
 
 interface NavRailProps {
   activeRoute: RouteId;
@@ -16,9 +17,12 @@ interface NavRailProps {
   onRouteChange: (route: RouteId) => void;
 }
 
-function badgeForRoute(route: RouteId, counts: NavRailProps["counts"]): number | null {
+function badgeForRoute(route: RouteId, counts: NavRailProps["counts"], methodologyUnread: number): number | null {
   if (route === "skills") {
     return counts.pendingSkillCount || null;
+  }
+  if (route === "skill-methodology") {
+    return methodologyUnread || null;
   }
   return null;
 }
@@ -30,6 +34,7 @@ export function NavRail({
   userStatusLabel,
   onRouteChange,
 }: NavRailProps): JSX.Element {
+  const methodologyUnread = useSkillMethodologyStore((state) => state.unreadBadgeCount);
   return (
     <nav
       aria-label="主导航"
@@ -50,7 +55,7 @@ export function NavRail({
         {routes.map((route) => {
           const Icon = route.icon;
           const active = route.id === activeRoute;
-          const badge = badgeForRoute(route.id, counts);
+          const badge = badgeForRoute(route.id, counts, methodologyUnread);
           return (
             <button
               className="me-nav-item"

@@ -56,7 +56,7 @@ function SkillCards({
                 <Play size={14} />
                 <span>试用</span>
               </Button>
-              <IconButton label="删除技能" onClick={() => onDelete(skill.toolId)}>
+              <IconButton label="删除工具" onClick={() => onDelete(skill.toolId)}>
                 <Trash2 size={14} />
               </IconButton>
             </div>
@@ -99,6 +99,7 @@ function SkillCards({
   return (
     <div className="skills-mastered-grid me-scroll">
       {skills.map((skill) => {
+        const isBuiltin = skill.is_builtin === true;
         const needsMoreTrials = skill.trialSuccessCount < 3;
         return (
           <article className="skill-mastered-card" key={`${category}-${skill.toolId}`}>
@@ -113,22 +114,24 @@ function SkillCards({
             </div>
             <div className="skill-tags">
               {skill.source ? <span>{skill.source}</span> : null}
-              <span>成功 {skill.trialSuccessCount}/3</span>
+              {!isBuiltin ? <span>成功 {skill.trialSuccessCount}/3</span> : null}
             </div>
-            <div className="skill-card-footer">
-              <span>状态：已掌握</span>
-              <div className="skill-row-actions">
-                {needsMoreTrials ? (
-                  <Button kind="secondary" onClick={() => onTrial(skill.toolId)}>
-                    <Play size={14} />
-                    <span>试用</span>
-                  </Button>
-                ) : null}
-                <IconButton label="删除技能" onClick={() => onDelete(skill.toolId)}>
-                  <Trash2 size={14} />
-                </IconButton>
+            {!isBuiltin ? (
+              <div className="skill-card-footer">
+                <span>状态：已掌握</span>
+                <div className="skill-row-actions">
+                  {needsMoreTrials ? (
+                    <Button kind="secondary" onClick={() => onTrial(skill.toolId)}>
+                      <Play size={14} />
+                      <span>试用</span>
+                    </Button>
+                  ) : null}
+                  <IconButton label="删除工具" onClick={() => onDelete(skill.toolId)}>
+                    <Trash2 size={14} />
+                  </IconButton>
+                </div>
               </div>
-            </div>
+            ) : null}
           </article>
         );
       })}

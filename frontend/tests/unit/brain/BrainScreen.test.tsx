@@ -9,10 +9,6 @@ function jsonResponse(payload: unknown): Response {
   return { ok: true, json: async () => payload } as Response;
 }
 
-function errorResponse(status: number, payload: unknown): Response {
-  return { ok: false, status, json: async () => payload } as Response;
-}
-
 async function settleAsyncUpdates(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -122,44 +118,4 @@ describe("BrainScreen", () => {
     );
   });
 
-  test("shows affected specialists before force-removing a skill", async () => {
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.endsWith("/api/brain/zones")) return jsonResponse({ zones: [] });
-      if (url.includes("/api/brain/zones/hot/entries")) return jsonResponse({ items: [], total: 0 });
-      if (url.includes("/api/brain/segments")) return jsonResponse({ items: [], total: 0 });
-      if (url.endsWith("/api/brain/skill-pool")) {
-        return jsonResponse({ skills: [{ tool_id: "tool-1", name: "报表分析", description: "分析报表" }] });
-      }
-      if (url.endsWith("/api/brain/skill-pool/tool-1?force=false")) {
-        return errorResponse(409, {
-          detail: {
-            error: "skill_in_use",
-            affected_specialists: [{ specialist_id: "spec-1", name: "财务专员" }],
-          },
-        });
-      }
-      return jsonResponse(null);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    render(<BrainScreen />);
-    await settleAsyncUpdates();
-
-    await waitFor(() => expect(screen.getByText("报表分析")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("搜索技能池"), { target: { value: "报表" } });
-    fireEvent.click(screen.getByRole("button", { name: "移除 报表分析" }));
-    await waitFor(() => expect(screen.getByText("财务专员")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "强制移除" }));
-    await settleAsyncUpdates();
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://desktop.test/api/brain/skill-pool/tool-1?force=false",
-      expect.objectContaining({ method: "DELETE" }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "http://desktop.test/api/brain/skill-pool/tool-1?force=true",
-      expect.objectContaining({ method: "DELETE" }),
-    );
-  });
 });

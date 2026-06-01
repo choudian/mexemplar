@@ -45,6 +45,96 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   let settingsModel = "claude-sonnet-4-20250514";
   let compositionCounter = 0;
   let debugTraceEnabled = false;
+  let methodologyCreated = false;
+  let methodologyEdited = false;
+  let createdMethodologyName = "E2E 新建方法论";
+  let createdMethodologyDescription = "把刚才的邮件处理流程沉淀成方法论";
+  let createdMethodologyTrigger = "用户要求处理周期邮件";
+  const equipmentByEntity: Record<string, string[]> = {
+    _assistant: ["sk_bootstrap"],
+    spec_1: [],
+  };
+
+  const bootstrapMethodology = {
+    skill_id: "sk_bootstrap",
+    name: "如何创建方法论",
+    description: "系统内置方法论创建指引",
+    trigger_conditions: ["用户要求把流程沉淀为方法论"],
+    required_tools: [],
+    version: 1,
+    chain_root_id: "sk_bootstrap",
+    origin: "system_bootstrap",
+    is_protected: true,
+    loaded_count: 0,
+    referenced_count: 0,
+    equipped_count: 1,
+    last_referenced_at: null,
+    created_at: "2026-05-20T00:00:00Z",
+  };
+
+  function createdMethodology() {
+    return {
+      skill_id: "sk_created",
+      name: createdMethodologyName,
+      description: createdMethodologyDescription,
+      trigger_conditions: [createdMethodologyTrigger],
+      required_tools: ["tool_a"],
+      version: methodologyEdited ? 2 : 1,
+      chain_root_id: "sk_created",
+      origin: methodologyEdited ? "user_edit" : "assistant_tool_call",
+      is_protected: false,
+      loaded_count: 2,
+      referenced_count: 1,
+      equipped_count: [equipmentByEntity._assistant, equipmentByEntity.spec_1].filter((list) => list.includes("sk_created")).length,
+      last_referenced_at: "2026-05-27T00:00:00Z",
+      created_at: methodologyEdited ? "2026-05-28T00:00:00Z" : "2026-05-27T00:00:00Z",
+    };
+  }
+
+  function activeMethodologies() {
+    return methodologyCreated ? [createdMethodology(), bootstrapMethodology] : [bootstrapMethodology];
+  }
+
+  function methodologyDetail(skillId: string) {
+    const summary = skillId === "sk_bootstrap" ? bootstrapMethodology : createdMethodology();
+    return {
+      ...summary,
+      status: "active",
+      parent_skill_id: methodologyEdited && skillId === "sk_created" ? "sk_created_v1" : null,
+      body_markdown:
+        skillId === "sk_bootstrap"
+          ? "# 如何创建方法论\n\n按 trigger_conditions 选择性 load，不应单轮无差别 load 全清单。"
+          : "# E2E 新建方法论\n\n1. 收集输入。\n2. 调用可用工具。\n3. 汇总结果。",
+      source_segments: [{ segment_id: "seg_1", source_zone: "archive", segment_summary: "邮件处理复盘", segment_status: "active" }],
+    };
+  }
+
+  function equipmentResponse(entityId: string) {
+    const activeIds = equipmentByEntity[entityId] ?? [];
+    return {
+      entity_type: entityId === "_assistant" ? "assistant" : "specialist",
+      entity_id: entityId,
+      entity_name: entityId === "_assistant" ? "Assistant 本体" : "报表专员",
+      tool_whitelist: ["tool_a"],
+      active_equipment: activeIds
+        .map((skillId, equipped_order) => {
+          const summary = methodologyDetail(skillId);
+          return {
+            skill_id: summary.skill_id,
+            chain_root_id: summary.chain_root_id,
+            name: summary.name,
+            description: summary.description,
+            trigger_conditions: summary.trigger_conditions,
+            required_tools: summary.required_tools,
+            missing_required_tools: [],
+            equipped_order,
+            equipped_at: "2026-05-28T00:00:00Z",
+          };
+        }),
+      token_budget_estimate: 256,
+      token_budget_thresholds: { warn_threshold: 4096, danger_threshold: 8192 },
+    };
+  }
 
   await page.route("**/api/**", async (route) => {
     const request = route.request();
@@ -244,6 +334,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     }
     if (path === "/api/assistant/sessions/ast_1/messages" && method === "POST") {
       assistantMessagePosted = true;
+      methodologyCreated = true;
+      if (!equipmentByEntity._assistant.includes("sk_created")) equipmentByEntity._assistant.push("sk_created");
+      if (!equipmentByEntity.spec_1.includes("sk_created")) equipmentByEntity.spec_1.push("sk_created");
       return json(route, { accepted: true, sessionId: "ast_1" });
     }
     if (path === "/api/assistant/segment-boundary" && method === "POST") {
@@ -279,6 +372,126 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     }
     if (path.endsWith("/trial/start")) {
       return json(route, { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} });
+    }
+
+    if (path === "/api/skills/methodology" && method === "GET") {
+      return json(route, { items: activeMethodologies() });
+    }
+    if (path === "/api/skills/methodology/bootstrap-status" && method === "GET") {
+      return json(route, {
+        bootstrap_active_skill_id: "sk_bootstrap",
+        fallback_used: false,
+        seed_file_path: "src/business/brain/seed/how_to_create_skill_methodology.md",
+        last_seed_check_at: "2026-05-28T00:00:00Z",
+      });
+    }
+    if (path === "/api/skills/methodology/sk_created" && method === "PUT") {
+      const body = request.postDataJSON() as {
+        name?: string;
+        description?: string;
+        trigger_conditions?: string[];
+      };
+      methodologyEdited = true;
+      createdMethodologyName = body.name ?? createdMethodologyName;
+      createdMethodologyDescription = body.description ?? createdMethodologyDescription;
+      createdMethodologyTrigger = body.trigger_conditions?.[0] ?? createdMethodologyTrigger;
+      return json(route, methodologyDetail("sk_created"));
+    }
+    if (path === "/api/skills/methodology/sk_created/soft-delete" && method === "POST") {
+      methodologyCreated = false;
+      equipmentByEntity._assistant = equipmentByEntity._assistant.filter((skillId) => skillId !== "sk_created");
+      equipmentByEntity.spec_1 = equipmentByEntity.spec_1.filter((skillId) => skillId !== "sk_created");
+      return json(route, { deleted_skill_id: "sk_created", pruned_equipment_count: 2, affected_specialist_ids: ["spec_1"] });
+    }
+    if (path === "/api/skills/methodology/sk_created/history" && method === "GET") {
+      return json(route, {
+        chain_root_id: "sk_created",
+        nodes: [
+          {
+            ...methodologyDetail("sk_created"),
+            skill_id: "sk_created_v1",
+            version: 1,
+            origin: "assistant_tool_call",
+            changed_by: "assistant",
+            change_reason: "Assistant 从对话中创建",
+            diff_from_previous: null,
+            created_at: "2026-05-27T00:00:00Z",
+          },
+          {
+            ...methodologyDetail("sk_created"),
+            version: 2,
+            origin: "user_edit",
+            changed_by: "user",
+            change_reason: "E2E edit reason",
+            diff_from_previous: "+ updated",
+            created_at: "2026-05-28T00:00:00Z",
+          },
+        ],
+      });
+    }
+    if (path === "/api/skills/methodology/sk_bootstrap/history" && method === "GET") {
+      return json(route, {
+        chain_root_id: "sk_bootstrap",
+        nodes: [
+          {
+            ...methodologyDetail("sk_bootstrap"),
+            version: 1,
+            changed_by: "system",
+            change_reason: "系统内置",
+            diff_from_previous: null,
+          },
+        ],
+      });
+    }
+    if (path.endsWith("/audit-equipment") && path.startsWith("/api/skills/methodology/") && method === "GET") {
+      const skillId = path.split("/")[4];
+      return json(route, {
+        skill_id: skillId,
+        rows: [
+          {
+            equipped_entity_type: "assistant",
+            equipped_entity_id: "_assistant",
+            equipped_entity_name: "Assistant 本体",
+            status: "active",
+            equipped_at: "2026-05-28T00:00:00Z",
+            unequipped_at: null,
+            unequipped_reason: null,
+          },
+          ...(skillId === "sk_created"
+            ? [
+                {
+                  equipped_entity_type: "specialist",
+                  equipped_entity_id: "spec_1",
+                  equipped_entity_name: "报表专员",
+                  status: "active",
+                  equipped_at: "2026-05-28T00:00:00Z",
+                  unequipped_at: null,
+                  unequipped_reason: null,
+                },
+              ]
+            : []),
+        ],
+      });
+    }
+    if (path === "/api/skills/methodology/sk_created" && method === "GET") {
+      return json(route, methodologyDetail("sk_created"));
+    }
+    if (path === "/api/skills/methodology/sk_bootstrap" && method === "GET") {
+      return json(route, methodologyDetail("sk_bootstrap"));
+    }
+    if (path.startsWith("/api/specialists/") && path.endsWith("/equipment") && method === "GET") {
+      const entityId = decodeURIComponent(path.split("/")[3]);
+      return json(route, equipmentResponse(entityId));
+    }
+    if (path.startsWith("/api/specialists/") && path.endsWith("/equipment") && method === "PUT") {
+      const entityId = decodeURIComponent(path.split("/")[3]);
+      const body = request.postDataJSON() as { skills?: Array<{ skill_id: string }> };
+      equipmentByEntity[entityId] = body.skills?.map((item) => item.skill_id) ?? [];
+      return json(route, {
+        active_equipment_count: equipmentByEntity[entityId].length,
+        newly_equipped: equipmentByEntity[entityId],
+        newly_unequipped: [],
+      });
     }
 
     if (path === "/api/skills") {

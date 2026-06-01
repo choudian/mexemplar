@@ -15,7 +15,7 @@ const modeOptions: Array<{
   {
     id: "range",
     title: "范围型",
-    description: "定义技能池，AI 自主选择调用，不限定顺序。",
+    description: "定义工具池，AI 自主选择调用，不限定顺序。",
     icon: Shuffle,
   },
   {

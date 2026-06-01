@@ -6,14 +6,14 @@ test("T076 inspects skill states and creates range plus ordered compositions", a
   await installMockApi(page);
   await page.goto("/");
 
-  await page.getByRole("button", { name: /技能列表/ }).click();
+  await page.getByRole("button", { name: /工具列表/ }).click();
   await expect(page.getByText("Pending Skill")).toBeVisible();
   await page.getByRole("tab", { name: /已掌握/ }).click();
   await expect(page.getByText("Published Skill")).toBeVisible();
   await page.getByRole("tab", { name: /失败记录/ }).click();
   await expect(page.getByText("Failed Skill")).toBeVisible();
 
-  await page.getByRole("button", { name: /技能组合/ }).click();
+  await page.getByRole("button", { name: /工具组合/ }).click();
   await page.getByRole("button", { name: /新建组合/ }).first().click();
   await expect(page.getByText("Published Skill")).toBeVisible();
   await page.getByLabel("名称").fill("Range fixture");

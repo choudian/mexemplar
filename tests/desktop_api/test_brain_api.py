@@ -560,11 +560,14 @@ class TestSkillPoolEndpoints:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["skills"] == [
+        assert data["skills"][0]["tool_id"] == "web_search"
+        assert data["skills"][0]["is_builtin"] is True
+        assert [skill for skill in data["skills"] if not skill.get("is_builtin")] == [
             {
                 "tool_id": "tool-report",
                 "name": "报表分析",
                 "description": "分析报表",
+                "is_builtin": False,
             }
         ]
 
@@ -603,4 +606,6 @@ class TestSkillPoolEndpoints:
         assert (
             SpecialistService().get_specialist(specialist["specialist_id"])["tool_whitelist"] == []
         )
-        assert desktop_api_client.get("/api/brain/skill-pool").json()["skills"] == []
+        remaining = desktop_api_client.get("/api/brain/skill-pool").json()["skills"]
+        assert remaining
+        assert all(skill["is_builtin"] for skill in remaining)

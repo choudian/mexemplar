@@ -85,6 +85,7 @@ export interface SkillPoolItem {
   tool_id: string;
   name: string;
   description: string;
+  is_builtin?: boolean;
 }
 
 export interface SkillPoolResponse {

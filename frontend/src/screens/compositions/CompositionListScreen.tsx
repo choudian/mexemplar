@@ -72,11 +72,11 @@ export function CompositionListScreen(): JSX.Element {
   };
 
   return (
-    <section className="compositions-screen" aria-label="技能组合">
+    <section className="compositions-screen" aria-label="工具组合">
       <header className="compositions-page-header">
         <div>
-          <h2>技能组合</h2>
-          <p>把多个已掌握的技能编排成一个组合，AI 可一次调度协作完成复杂任务</p>
+          <h2>工具组合</h2>
+          <p>把多个已掌握的工具编排成一个组合，AI 可一次调度协作完成复杂任务</p>
         </div>
         <div className="composition-header-actions">
           {view === "create" ? (
@@ -195,7 +195,7 @@ function CompositionCardGrid({
       {items.length === 0 ? (
         <div className="composition-list-empty">
           <strong>暂无组合</strong>
-          <span>从已发布的技能中编排一个新的组合。</span>
+          <span>从已发布的工具中编排一个新的组合。</span>
         </div>
       ) : null}
       {items.map((item) => (
@@ -212,7 +212,7 @@ function CompositionCardGrid({
           <Plus size={18} />
         </span>
         <strong>新建组合</strong>
-        <span>从已发布的技能中编排</span>
+        <span>从已发布的工具中编排</span>
       </button>
     </div>
   );
@@ -254,7 +254,7 @@ function CompositionCard({
           <span>{item.members.length} 个成员</span>
         </div>
         {item.members.length === 0 ? (
-          <p className="composition-muted">暂无成员技能</p>
+          <p className="composition-muted">暂无成员工具</p>
         ) : item.mode === "ordered" ? (
           <div className="composition-member-flow">
             {item.members.map((member, index) => (

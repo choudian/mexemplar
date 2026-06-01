@@ -199,7 +199,7 @@ class SkillCompositionRepository(BaseRepository):
         """更新技能组合状态"""
         composition = self.get_by_id(composition_id)
         if not composition:
-            return
+            raise KeyError("composition_not_found")
         try:
             composition.status = status
             composition.updated_at = utc_now_naive()
@@ -213,7 +213,7 @@ class SkillCompositionRepository(BaseRepository):
         """清除待复核标记"""
         composition = self.get_by_id(composition_id)
         if not composition:
-            return
+            raise KeyError("composition_not_found")
         try:
             composition.needs_review = False
             composition.updated_at = utc_now_naive()

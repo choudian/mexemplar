@@ -13,6 +13,7 @@ import json
 import logging
 from typing import Optional
 
+from src.business.brain.builtin_tools import BUILTIN_TOOL_CATALOG
 from src.data.repositories import ToolRepository
 from src.data.repos.specialist_repository import SpecialistRepository
 from src.utils.events import emit
@@ -70,6 +71,30 @@ class SpecialistService:
         Raises:
             ValueError: 名称已存在或白名单验证失败
         """
+        return self._create_specialist_record(
+            name=name,
+            description=description,
+            role_definition=role_definition,
+            tool_whitelist=tool_whitelist,
+            origin=origin,
+            reason=reason,
+            commit=True,
+            emit_events=True,
+        )
+
+    def _create_specialist_record(
+        self,
+        *,
+        name: str,
+        description: str,
+        role_definition: str,
+        tool_whitelist: list[str],
+        origin: str,
+        reason: str,
+        commit: bool,
+        emit_events: bool,
+    ) -> dict:
+        """Create a specialist using this service repository and optional outer transaction."""
         # 检查名称唯一性
         existing = self._repo.get_specialist_by_name(name)
         if existing is not None:
@@ -78,17 +103,44 @@ class SpecialistService:
         # 验证白名单子集
         self._validate_whitelist(tool_whitelist)
 
-        specialist_id = self._repo.create_specialist(
-            name=name,
-            description=description,
-            role_definition=role_definition,
-            tool_whitelist=tool_whitelist,
-            origin=origin,
-            reason=reason,
-        )
+        try:
+            specialist_id = self._repo.create_specialist(
+                name=name,
+                description=description,
+                role_definition=role_definition,
+                tool_whitelist=tool_whitelist,
+                origin=origin,
+                reason=reason,
+                commit=False,
+            )
+            specialist = self._repo.get_specialist(specialist_id)
+            from src.business.brain.skill_equipment_service import SkillEquipmentService
 
-        specialist = self._repo.get_specialist(specialist_id)
-        emit("brain_specialist_changed", specialist_id=specialist_id, operation="create")
+            equipped_skill_ids = SkillEquipmentService(
+                session=self._repo.session
+            ).default_equip_all(
+                specialist_id,
+                commit=False,
+                emit_events=False,
+            )
+        except Exception as exc:
+            if commit:
+                self._repo.session.rollback()
+            logger.error("默认装备方法论失败，已取消创建 Specialist: %s", exc)
+            raise
+        if commit:
+            self._repo.session.commit()
+        if emit_events:
+            emit("brain_specialist_changed", specialist_id=specialist_id, operation="create")
+            for skill_id in equipped_skill_ids:
+                emit(
+                    "brain_skill_equipment_changed",
+                    change_type="default_propagate",
+                    entity_type="specialist",
+                    entity_id=specialist_id,
+                    skill_id=skill_id,
+                    unequipped_reason=None,
+                )
 
         return self._to_dict(specialist)
 
@@ -195,27 +247,27 @@ class SpecialistService:
         return [self._version_to_dict(v) for v in versions]
 
     def list_skill_pool(self) -> list[dict]:
-        """Return the assistant skill pool used as the specialist whitelist superset."""
-        tool_repo = ToolRepository()
-        try:
+        """Return the assistant skill pool: built-in tools followed by user-created tools."""
+        with ToolRepository() as tool_repo:
             all_tools = tool_repo.get_all_published()
-        finally:
-            tool_repo.close()
-        removed_identifiers = self._removed_skill_pool_identifiers()
-        return [
+            removed_identifiers = self._removed_skill_pool_identifiers(session=tool_repo.session)
+        user_tools = [
             {
                 "tool_id": getattr(tool, "tool_id", ""),
                 "name": getattr(tool, "tool_name", "") or getattr(tool, "name", ""),
                 "description": getattr(tool, "description", ""),
+                "is_builtin": False,
             }
             for tool in all_tools
             if getattr(tool, "tool_id", "") not in removed_identifiers
             and (getattr(tool, "tool_name", "") or getattr(tool, "name", ""))
             not in removed_identifiers
         ]
+        builtin_tools = [{**entry, "is_builtin": True} for entry in BUILTIN_TOOL_CATALOG]
+        return builtin_tools + user_tools
 
     # ------------------------------------------------------------------
-    # Auto Recruitment (T102)
+    # Auto Recruitment
     # ------------------------------------------------------------------
 
     def scan_and_recruit(self) -> list[dict]:
@@ -240,7 +292,7 @@ class SpecialistService:
             created: list[dict] = []
             for signal in signals:
                 try:
-                    specialist_dict = self._recruit_from_signal(signal)
+                    specialist_dict = self._recruit_from_signal(signal, brain_repo=brain_repo)
                     if specialist_dict is not None:
                         created.append(specialist_dict)
                 except Exception as e:
@@ -250,18 +302,17 @@ class SpecialistService:
         finally:
             brain_repo.close()
 
-    def _recruit_from_signal(self, signal) -> Optional[dict]:
+    def _recruit_from_signal(self, signal, brain_repo) -> Optional[dict]:
         """
         从招募信号生成专员。使用模式摘要直接构建专员定义。
 
         Args:
             signal: BrainRecruitmentSignal ORM 对象
+            brain_repo: 调用方持有的 BrainRepository，共享同一事务
 
         Returns:
             创建的专员信息 dict，如果跳过则返回 None
         """
-        from src.data.repos.brain_repository import BrainRepository
-
         task_pattern = signal.task_pattern
         summaries = self._decode_examples(signal.example_delegation_summaries)
         reason = f"检测到持续委托模式: {task_pattern} (委托次数: {signal.delegation_count})"
@@ -269,28 +320,44 @@ class SpecialistService:
         name = self._generate_specialist_name(task_pattern)
         description = f"自动招募的专员，负责处理: {task_pattern}"
         role_definition = self._generate_role_definition(task_pattern, summaries)
-        feedback_guidance = self._recent_feedback_guidance()
+        feedback_guidance = self._recent_feedback_guidance(brain_repo=brain_repo)
         if feedback_guidance:
             role_definition += "\n\n近期用户反馈参考：\n" + feedback_guidance
 
-        specialist_dict = self.create_specialist(
-            name=name,
-            description=description,
-            role_definition=role_definition,
-            tool_whitelist=[],
-            origin="auto_recruitment",
-            reason=reason,
-        )
-
-        # 更新 signal 记录关联 specialist_id
-        signal_repo = BrainRepository()
+        specialist_repo = SpecialistRepository(session=brain_repo.session)
+        recruitment_service = SpecialistService(repo=specialist_repo)
         try:
-            signal_repo.mark_recruitment_signal_consumed(
+            specialist_dict = recruitment_service._create_specialist_record(
+                name=name,
+                description=description,
+                role_definition=role_definition,
+                tool_whitelist=[],
+                origin="auto_recruitment",
+                reason=reason,
+                commit=False,
+                emit_events=False,
+            )
+            brain_repo.mark_recruitment_signal_consumed(
                 signal.signal_id,
                 specialist_dict["specialist_id"],
+                commit=False,
             )
-        finally:
-            signal_repo.close()
+            brain_repo.session.commit()
+        except Exception as exc:
+            brain_repo.session.rollback()
+            logger.error(
+                "Auto-recruitment transaction failed for signal %s: %s",
+                getattr(signal, "signal_id", ""),
+                exc,
+                exc_info=True,
+            )
+            raise
+
+        emit(
+            "brain_specialist_changed",
+            specialist_id=specialist_dict["specialist_id"],
+            operation="create",
+        )
 
         return specialist_dict
 
@@ -333,19 +400,28 @@ class SpecialistService:
         try:
             from src.data.unified_config import get_unified_config
 
-            return int(get_unified_config().get_brain_recruitment_min_delegation_count())
-        except Exception:
+            config = get_unified_config()
+        except (ImportError, AttributeError) as exc:
+            logger.warning("Failed to load recruitment config, using default: %s", exc)
+            return RECRUITMENT_DELEGATION_THRESHOLD
+        try:
+            return int(config.get_brain_recruitment_min_delegation_count())
+        except (AttributeError, TypeError, ValueError) as exc:
+            logger.warning("Invalid recruitment threshold config, using default: %s", exc)
             return RECRUITMENT_DELEGATION_THRESHOLD
 
-    def _recent_feedback_guidance(self) -> str:
+    def _recent_feedback_guidance(self, brain_repo=None) -> str:
         try:
-            from src.data.repos.brain_repository import BrainRepository
+            if brain_repo is not None:
+                signals = brain_repo.get_recent_feedback_signals(zone="specialist", limit=5)
+            else:
+                from src.data.repos.brain_repository import BrainRepository
 
-            fb_repo = BrainRepository()
-            try:
-                signals = fb_repo.get_recent_feedback_signals(zone="specialist", limit=5)
-            finally:
-                fb_repo.close()
+                owned = BrainRepository()
+                try:
+                    signals = owned.get_recent_feedback_signals(zone="specialist", limit=5)
+                finally:
+                    owned.close()
         except Exception as exc:
             logger.warning("Failed to load feedback signals for recruitment prompt: %s", exc)
             return ""
@@ -375,17 +451,21 @@ class SpecialistService:
         try:
             from src.data.repos.brain_repository import BrainRepository
 
-            BrainRepository().create_feedback_signal(
-                zone="specialist",
-                operation=operation,
-                target_id=specialist_id,
-                context_summary=context_summary,
-            )
+            fb_repo = BrainRepository()
+            try:
+                fb_repo.create_feedback_signal(
+                    zone="specialist",
+                    operation=operation,
+                    target_id=specialist_id,
+                    context_summary=context_summary,
+                )
+            finally:
+                fb_repo.close()
         except Exception as exc:
             logger.warning("Failed to record specialist feedback signal: %s", exc)
 
     # ------------------------------------------------------------------
-    # Skill Pool Management (T117)
+    # Skill Pool Management
     # ------------------------------------------------------------------
 
     def force_remove_skill_from_pool(self, tool_id: str) -> dict:
@@ -400,27 +480,38 @@ class SpecialistService:
         affected = self._find_specialists_using_tool(tool_id, identifiers=identifiers)
         pruned_specialists: list[dict] = []
 
-        for specialist_info in affected:
-            specialist_id = specialist_info["specialist_id"]
-            try:
+        try:
+            for specialist_info in affected:
+                specialist_id = specialist_info["specialist_id"]
                 current_whitelist = specialist_info["tool_whitelist"]
                 new_whitelist = [t for t in current_whitelist if t not in identifiers]
-                self.update_specialist(
+                success = self._repo.update_specialist(
                     specialist_id=specialist_id,
                     tool_whitelist=new_whitelist,
                     changed_by="system_skill_pool_removal",
                     change_reason=f"技能 {tool_id} 已从技能池移除，自动裁剪白名单",
+                    commit=False,
                 )
+                if not success:
+                    raise KeyError("specialist_not_found")
                 pruned_specialists.append(specialist_info)
-            except Exception as e:
-                logger.error(
-                    "Failed to prune tool %s from specialist %s: %s",
-                    tool_id,
-                    specialist_id,
-                    e,
-                )
-
-        self._mark_skill_pool_removed(tool_id, identifiers)
+            self._mark_skill_pool_removed(
+                tool_id,
+                identifiers,
+                session=self._repo.session,
+                commit=False,
+            )
+            self._repo.session.commit()
+        except Exception as exc:
+            self._repo.session.rollback()
+            logger.error("Failed to force-remove tool %s from skill pool: %s", tool_id, exc)
+            raise
+        for specialist_info in pruned_specialists:
+            emit(
+                "brain_specialist_changed",
+                specialist_id=specialist_info["specialist_id"],
+                operation="update",
+            )
         return {
             "removed": True,
             "pruned_specialists": pruned_specialists,
@@ -457,17 +548,10 @@ class SpecialistService:
     ) -> list[dict]:
         """查找白名单中包含指定工具的活跃专员。"""
         identifiers = identifiers or {tool_id}
-        specialists_by_id: dict[str, dict] = {
-            specialist["specialist_id"]: specialist
-            for specialist in self.list_specialists(active_only=True)[0]
-        }
-        repo = SpecialistRepository()
-        try:
-            for specialist in repo.list_specialists(active_only=True)[0]:
-                specialist_dict = self._to_dict(specialist)
-                specialists_by_id[specialist_dict["specialist_id"]] = specialist_dict
-        finally:
-            repo.close()
+        specialists_by_id: dict[str, dict] = {}
+        for specialist in self._repo.list_specialists(active_only=True)[0]:
+            specialist_dict = self._to_dict(specialist)
+            specialists_by_id[specialist_dict["specialist_id"]] = specialist_dict
         affected: list[dict] = []
         for s in specialists_by_id.values():
             whitelist = s.get("tool_whitelist", [])
@@ -495,31 +579,38 @@ class SpecialistService:
             if tool is not None:
                 identifiers.add(getattr(tool, "tool_id", ""))
                 identifiers.add(getattr(tool, "tool_name", ""))
-        except Exception:
-            logger.warning("Failed to resolve skill identifiers for %s", tool_id_or_name)
+        except Exception as exc:
+            logger.warning(
+                "Failed to resolve skill identifiers for %s: %s",
+                tool_id_or_name,
+                exc,
+            )
         return {item for item in identifiers if item}
 
     @staticmethod
-    def _removed_skill_pool_identifiers() -> set[str]:
+    def _removed_skill_pool_identifiers(session=None) -> set[str]:
         try:
             from src.data.repos.brain_repository import BrainRepository
 
-            repo = BrainRepository()
-            try:
+            with BrainRepository(session=session) as repo:
                 return repo.get_removed_skill_pool_identifiers()
-            finally:
-                repo.close()
         except Exception as exc:
             logger.warning("Failed to load skill-pool exclusions: %s", exc)
             return set()
 
     @staticmethod
-    def _mark_skill_pool_removed(tool_id: str, identifiers: set[str]) -> None:
+    def _mark_skill_pool_removed(
+        tool_id: str,
+        identifiers: set[str],
+        *,
+        session=None,
+        commit: bool = True,
+    ) -> None:
         from src.data.repos.brain_repository import BrainRepository
 
-        repo = BrainRepository()
+        repo = BrainRepository(session=session)
         try:
-            repo.mark_skill_pool_removed(tool_id, identifiers)
+            repo.mark_skill_pool_removed(tool_id, identifiers, commit=commit)
         finally:
             repo.close()
 

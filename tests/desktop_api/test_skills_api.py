@@ -49,7 +49,10 @@ def test_skills_categories_metadata_trial_and_delete(desktop_api_client):
 
         published = desktop_api_client.get("/api/skills?category=published")
         assert published.status_code == 200
-        assert published.json()["items"][0]["toolId"] == "tool_published"
+        published_items = published.json()["items"]
+        assert published_items[0]["toolId"] == "web_search"
+        assert published_items[0]["is_builtin"] is True
+        assert any(item["toolId"] == "tool_published" for item in published_items)
 
         trial = desktop_api_client.post("/api/skills/tool_published/trial")
         assert trial.status_code == 200

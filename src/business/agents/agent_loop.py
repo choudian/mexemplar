@@ -497,7 +497,7 @@ class AgentLoop:
             f"(中断型={interrupting_count}, 普通={batch_size - interrupting_count})"
         )
 
-        # T007: Invalid-output batch check
+        # Invalid-output batch check.
         if batch_size > 1 and interrupting_count > 0:
             logger.info(
                 f"[Agent Loop] 非法混合工具调用: {batch_size} 个调用中有 "
@@ -546,9 +546,7 @@ class AgentLoop:
                 if tool_def.has_side_effects:
                     first_failure = i + 1
                 else:
-                    logger.info(
-                        f"[Agent Loop] 无副作用工具 {tc.name} 失败，继续执行后续调用"
-                    )
+                    logger.info(f"[Agent Loop] 无副作用工具 {tc.name} 失败，继续执行后续调用")
             else:
                 logger.debug(
                     "[Agent Loop] 工具结果: tool=%s result_chars=%s",

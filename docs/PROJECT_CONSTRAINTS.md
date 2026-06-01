@@ -82,6 +82,15 @@
 - 专员管理删除是业务层软删除（`brain_specialists.is_active = 0`），版本历史必须保留；不要从 API/router 走物理删除路径。
 - `brain_segments` 表的 `open` 态不持久化——进行中 Segment 由消息表推导，行仅在封存（转入 `pending`）时创建。
 
+## Skill Methodology Constraints
+
+- 方法论资产属于 Brain Service 数据安全边界：`brain_skills` 不物理删除，软删除只写 `status = soft_deleted`；`brain_skill_equipment` 与方法论本体同等保护，卸下、强制裁剪、supersede 转移都只写 `status = unequipped` 与 `unequipped_reason`。
+- 所有方法论写入走 `SkillService` / `SkillEquipmentService` / `SkillBootstrapService` 与对应 Repository；desktop API 只做 DTO 和错误映射，不直接写 SQLite。
+- `brain.skill.token_budget.warn_threshold`、`brain.skill.token_budget.danger_threshold`、`brain.skill.seed_file_path` 通过 `get_unified_config()` 读取；前端 token 计量条只消费 API DTO 下发阈值，不内置 4096/8192 常量。
+- UI 术语中旧录制/列表/组合能力统一称 Tool；旧 UI 事件 `skills.*` 直接改为 `tools.*`，无双发窗口。`skill.*` 事件名只保留给方法论资产。
+- 装备者 system prompt 只能注入方法论轻量清单（id、name、description、trigger_conditions），不得注入 `body_markdown`；正文只能由 `load_skill_methodology` 工具 result 以 SKILL.md 形态进入 messages。
+- assistant 派活决策路径不得读取方法论清单、正文或 trigger_conditions；specialist 派活时冻结装备清单，本轮 `load_skill_methodology` 鉴权只看该快照，装备改动最快下一轮生效。
+
 ## Review Guardrails
 
 Reviewer 必须拒绝下列改动：

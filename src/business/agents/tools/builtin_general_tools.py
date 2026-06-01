@@ -13,10 +13,14 @@
 
 import json
 import logging
+import ipaddress
 import re
+import socket
 import subprocess
 import threading
 import time
+import urllib.parse
+import urllib.request
 import uuid
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -58,6 +62,12 @@ _SUMMARY_TOTAL_MAX = 240
 
 # web_fetch 返回内容最大字符数
 _WEB_FETCH_MAX_LENGTH = 5000
+_WEB_FETCH_ALLOWED_SCHEMES = {"http", "https"}
+_WEB_FETCH_LOCALHOST_NAMES = {"localhost", "localhost.localdomain"}
+# Short TTL prevents SSRF via DNS rebinding while reducing blocking DNS calls per agent turn.
+_DNS_CACHE: dict[str, tuple[float, list]] = {}
+_DNS_CACHE_LOCK = threading.Lock()
+_DNS_CACHE_TTL = 30.0
 
 # read_file 最大读取字节数
 _READ_FILE_MAX_BYTES = 50000
@@ -115,6 +125,7 @@ class PendingConfirmation:
     summary: str
     created_at: float
     event: threading.Event
+    extra_payload: dict[str, object] | None = None
     result: bool = False
     decision: str | None = None
     source: str | None = None
@@ -223,7 +234,11 @@ def reset_confirmation_state_for_tests() -> None:
     _confirm_signal = None
 
 
-def _ask_user_confirm(message: str, tool_name: str = "unknown") -> bool:
+def _ask_user_confirm(
+    message: str,
+    tool_name: str = "unknown",
+    extra_payload: dict[str, object] | None = None,
+) -> bool:
     """
     请求用户确认高危操作（线程安全，支持多 worker 并发）。
 
@@ -241,6 +256,7 @@ def _ask_user_confirm(message: str, tool_name: str = "unknown") -> bool:
         summary=_truncate_summary(message),
         created_at=time.monotonic(),
         event=event,
+        extra_payload=extra_payload,
     )
     with _confirm_lock:
         _pending_confirms[request_id] = pending
@@ -268,6 +284,7 @@ def _ask_user_confirm(message: str, tool_name: str = "unknown") -> bool:
 
 
 def _decision_from_result_source(result: bool, source: str) -> str:
+    """Normalize UI confirmation result/source pairs into the persisted audit decision."""
     if source in {CONFIRM_SOURCE_TOAST_TIMEOUT, CONFIRM_SOURCE_NEW_CHAT_RESET}:
         return CONFIRM_DECISION_TIMEOUT
     if source in {
@@ -431,21 +448,95 @@ WEB_FETCH_SCHEMA = make_tool_schema(
 def web_fetch_handler(url: str, max_length: int = _WEB_FETCH_MAX_LENGTH) -> str:
     """抓取网页文本内容"""
     try:
-        import urllib.request
-
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        safe_url = _validate_web_fetch_url(url)
+        max_length = _normalize_web_fetch_max_length(max_length)
+        opener = urllib.request.build_opener(_SafeWebFetchRedirectHandler)
+        req = urllib.request.Request(safe_url, headers={"User-Agent": "Mozilla/5.0"})
+        with opener.open(req, timeout=15) as resp:
             html = resp.read().decode("utf-8", errors="replace")
 
         text = _extract_text_from_html(html)[:max_length]
 
         return json.dumps(
-            {"success": True, "url": url, "content": text, "truncated": len(text) == max_length},
+            {
+                "success": True,
+                "url": safe_url,
+                "content": text,
+                "truncated": len(text) == max_length,
+            },
             ensure_ascii=False,
         )
     except Exception as e:
         logger.error(f"[web_fetch] 失败: {e}")
         return error_json(e)
+
+
+class _SafeWebFetchRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _validate_web_fetch_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _normalize_web_fetch_max_length(max_length: int) -> int:
+    try:
+        parsed = int(max_length)
+    except (TypeError, ValueError):
+        return _WEB_FETCH_MAX_LENGTH
+    return max(1, min(parsed, _WEB_FETCH_MAX_LENGTH))
+
+
+def _validate_web_fetch_url(url: str) -> str:
+    candidate = str(url or "").strip()
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme.lower() not in _WEB_FETCH_ALLOWED_SCHEMES:
+        raise ValueError("web_fetch 只允许 http/https URL")
+    if not parsed.hostname:
+        raise ValueError("web_fetch URL 缺少主机名")
+    _reject_private_web_fetch_host(parsed.hostname)
+    return urllib.parse.urlunparse(parsed)
+
+
+def _cached_dns_lookup(host: str) -> list:
+    now = time.monotonic()
+    with _DNS_CACHE_LOCK:
+        entry = _DNS_CACHE.get(host)
+        if entry is not None and now < entry[0]:
+            return entry[1]
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise ValueError(f"web_fetch 无法解析主机名: {host}") from exc
+    addresses = []
+    for info in infos:
+        sockaddr = info[4]
+        if not sockaddr:
+            continue
+        try:
+            addresses.append(ipaddress.ip_address(sockaddr[0]))
+        except ValueError:
+            continue
+    with _DNS_CACHE_LOCK:
+        _DNS_CACHE[host] = (now + _DNS_CACHE_TTL, addresses)
+    return addresses
+
+
+def _reject_private_web_fetch_host(hostname: str) -> None:
+    host = hostname.strip("[]").rstrip(".").lower()
+    if host in _WEB_FETCH_LOCALHOST_NAMES or host.endswith(".localhost"):
+        raise ValueError("web_fetch 不允许访问本机地址")
+
+    try:
+        addresses = [ipaddress.ip_address(host)]
+    except ValueError:
+        addresses = _cached_dns_lookup(host)
+
+    if not addresses:
+        raise ValueError(f"web_fetch 无法解析主机名: {hostname}")
+    for address in addresses:
+        if hasattr(address, "ipv4_mapped") and address.ipv4_mapped is not None:
+            address = address.ipv4_mapped
+        if not address.is_global:
+            raise ValueError("web_fetch 不允许访问内网、本机或保留地址")
 
 
 class _HtmlTextExtractor(HTMLParser):

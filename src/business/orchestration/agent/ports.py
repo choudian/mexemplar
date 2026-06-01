@@ -1,5 +1,7 @@
 from typing import Any, Optional, Protocol, Union
 
+from src.business.agents.config import AgentResult
+
 
 class EventBusPort(Protocol):
     def connect(self, event_name: str, handler) -> Any: ...
@@ -14,7 +16,7 @@ class AgentExecutionPort(Protocol):
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
-    ) -> None: ...
+    ) -> AgentResult | None: ...
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None: ...
 

@@ -5,13 +5,37 @@
 新增列时应同时在 models_sqlite.py 的 ORM 模型和对应的迁移步骤中添加。
 """
 
+import json
 import logging
 from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from src.data.skill_bootstrap_seed import (
+    BOOTSTRAP_DESCRIPTION,
+    BOOTSTRAP_HOW_TO_SKILL_ID,
+    BOOTSTRAP_NAME,
+    BOOTSTRAP_REQUIRED_TOOLS,
+    BOOTSTRAP_TRIGGERS,
+    DEFAULT_SEED_FILE_PATH,
+    FALLBACK_BODY,
+)
 from src.utils.timezone import local_naive_to_utc_naive
 
 logger = logging.getLogger(__name__)
+
+
+def _column_exists(conn, table_name: str, column_name: str) -> bool:
+    rows = conn.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    return any(row[1] == column_name for row in rows)
+
+
+def _add_column_if_missing(conn, table_name: str, column_name: str, definition: str) -> None:
+    if _column_exists(conn, table_name, column_name):
+        logger.debug("迁移跳过已存在列: %s.%s", table_name, column_name)
+        return
+    conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"))
 
 
 def _coerce_datetime(value) -> datetime | None:
@@ -35,7 +59,7 @@ def get_schema_version(engine) -> int:
             result = conn.execute(text("SELECT version FROM schema_version"))
             row = result.fetchone()
             return row[0] if row else 0
-        except Exception:
+        except OperationalError:
             return 0
 
 
@@ -117,16 +141,13 @@ def migrate_to_v2(engine):
             """))
 
             # tools 表补充字段（如果不存在）
-            result = conn.execute(text("PRAGMA table_info(tools)"))
-            existing_columns = {row[1] for row in result.fetchall()}
             for col, definition in [
                 ("source_intent_id", "TEXT"),
                 ("source", "TEXT DEFAULT 'manual'"),
                 ("trial_count", "INTEGER DEFAULT 0"),
                 ("pending_tool_id", "TEXT"),
             ]:
-                if col not in existing_columns:
-                    conn.execute(text(f"ALTER TABLE tools ADD COLUMN {col} {definition}"))
+                _add_column_if_missing(conn, "tools", col, definition)
 
             # 索引
             for index_name, index_def in [
@@ -224,10 +245,7 @@ def migrate_to_v4(engine):
                 ("trial_success_count", "INTEGER DEFAULT 0"),
                 ("status", "TEXT DEFAULT 'pending'"),
             ]:
-                try:
-                    conn.execute(text(f"ALTER TABLE tools ADD COLUMN {col} {definition}"))
-                except Exception:
-                    pass  # 列已存在，忽略
+                _add_column_if_missing(conn, "tools", col, definition)
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 4})
             conn.commit()
             logger.info(
@@ -418,10 +436,7 @@ def migrate_to_v7(engine):
                 ("trial_success_count", "INTEGER DEFAULT 0"),
                 ("status", "TEXT DEFAULT 'pending'"),
             ]:
-                try:
-                    conn.execute(text(f"ALTER TABLE tools ADD COLUMN {col} {definition}"))
-                except Exception:
-                    pass  # 列已存在，忽略
+                _add_column_if_missing(conn, "tools", col, definition)
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 7})
             conn.commit()
             logger.info(
@@ -561,10 +576,7 @@ def migrate_to_v10(engine):
                 logger.info("数据库迁移到版本 10 完成：sessions 表不存在，跳过 title")
                 return
 
-            result = conn.execute(text("PRAGMA table_info(sessions)"))
-            existing_columns = {row[1] for row in result.fetchall()}
-            if "title" not in existing_columns:
-                conn.execute(text("ALTER TABLE sessions ADD COLUMN title TEXT"))
+            _add_column_if_missing(conn, "sessions", "title", "TEXT")
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 10})
             conn.commit()
             logger.info("数据库迁移到版本 10 完成：sessions 表新增 title")
@@ -781,6 +793,202 @@ def migrate_to_v11(engine):
             raise
 
 
+def _load_v12_bootstrap_body() -> str:
+    path = Path(DEFAULT_SEED_FILE_PATH)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    try:
+        body = path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError) as exc:
+        logger.warning("v12 bootstrap seed 加载失败，使用 fallback: path=%s error=%s", path, exc)
+        return FALLBACK_BODY.strip()
+    if not body:
+        logger.warning("v12 bootstrap seed 为空，使用 fallback: path=%s", path)
+        return FALLBACK_BODY.strip()
+    return body
+
+
+def _seed_v12_bootstrap(conn) -> None:
+    """Insert the migration-safe bootstrap row without importing business services."""
+    params = {
+        "skill_id": BOOTSTRAP_HOW_TO_SKILL_ID,
+        "name": BOOTSTRAP_NAME,
+        "description": BOOTSTRAP_DESCRIPTION,
+        "trigger_conditions": json.dumps(BOOTSTRAP_TRIGGERS, ensure_ascii=False),
+        "required_tools": json.dumps(BOOTSTRAP_REQUIRED_TOOLS, ensure_ascii=False),
+        "body_markdown": _load_v12_bootstrap_body(),
+    }
+    conn.execute(
+        text("""
+            INSERT INTO brain_skills (
+                skill_id, name, description, trigger_conditions, required_tools,
+                body_markdown, status, origin, chain_root_id, version,
+                created_at, updated_at, loaded_count, referenced_count,
+                last_changed_by, change_reason
+            )
+            SELECT
+                :skill_id, :name, :description, :trigger_conditions, :required_tools,
+                :body_markdown, 'active', 'system_bootstrap', :skill_id, 1,
+                CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 0, 0, 'system', 'bootstrap'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM brain_skills WHERE skill_id = :skill_id
+            )
+            """),
+        params,
+    )
+    conn.execute(
+        text("""
+            INSERT INTO brain_skill_equipment (
+                equipped_entity_type, equipped_entity_id, skill_id, status,
+                equipped_order, equipped_at, created_at
+            )
+            SELECT 'assistant', '_assistant', :skill_id, 'active', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+            WHERE EXISTS (
+                SELECT 1 FROM brain_skills WHERE skill_id = :skill_id AND status = 'active'
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM brain_skill_equipment
+                WHERE equipped_entity_type = 'assistant'
+                  AND equipped_entity_id = '_assistant'
+                  AND skill_id = :skill_id
+                  AND status = 'active'
+            )
+            """),
+        params,
+    )
+
+
+def migrate_to_v12(engine):
+    """迁移到版本 12：方法论资产层三表 + bootstrap 内置方法论。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_skills (
+                    skill_id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    trigger_conditions TEXT NOT NULL,
+                    required_tools TEXT NOT NULL DEFAULT '[]',
+                    body_markdown TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'superseded', 'soft_deleted')),
+                    origin TEXT NOT NULL
+                        CHECK (origin IN ('system_bootstrap', 'user_edit', 'assistant_tool_call',
+                                          'specialist_tool_call', 'external_import')),
+                    parent_skill_id TEXT REFERENCES brain_skills(skill_id),
+                    superseded_by TEXT REFERENCES brain_skills(skill_id),
+                    version INTEGER NOT NULL DEFAULT 1,
+                    chain_root_id TEXT NOT NULL REFERENCES brain_skills(skill_id),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    last_changed_by TEXT,
+                    change_reason TEXT,
+                    loaded_count INTEGER DEFAULT 0,
+                    referenced_count INTEGER DEFAULT 0,
+                    last_referenced_at DATETIME,
+                    CHECK ((status = 'superseded') = (superseded_by IS NOT NULL))
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_skill_source_segments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    skill_id TEXT NOT NULL REFERENCES brain_skills(skill_id),
+                    segment_id TEXT NOT NULL REFERENCES brain_segments(segment_id),
+                    source_zone TEXT NOT NULL CHECK (source_zone IN ('archive', 'failure')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT uq_brain_skill_source_segment UNIQUE (skill_id, segment_id)
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_skill_equipment (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    equipped_entity_type TEXT NOT NULL
+                        CHECK (equipped_entity_type IN ('assistant', 'specialist')),
+                    equipped_entity_id TEXT NOT NULL,
+                    skill_id TEXT NOT NULL REFERENCES brain_skills(skill_id),
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'unequipped')),
+                    equipped_order INTEGER NOT NULL DEFAULT 0,
+                    equipped_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    unequipped_at DATETIME,
+                    unequipped_reason TEXT
+                        CHECK (unequipped_reason IS NULL OR unequipped_reason IN
+                               ('user_unequip', 'force_remove_on_soft_delete', 'supersede_transfer')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    CHECK (
+                        (status = 'active' AND unequipped_at IS NULL AND unequipped_reason IS NULL)
+                        OR
+                        (status = 'unequipped' AND unequipped_at IS NOT NULL AND unequipped_reason IS NOT NULL)
+                    )
+                )
+            """))
+
+            for index_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_brain_skills_status ON brain_skills(status)",
+                (
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_brain_skills_active_name "
+                    "ON brain_skills(name) WHERE status = 'active'"
+                ),
+                "CREATE INDEX IF NOT EXISTS idx_brain_skills_chain_root ON brain_skills(chain_root_id)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_skills_parent ON brain_skills(parent_skill_id)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_skills_origin ON brain_skills(origin)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_skills_last_referenced ON brain_skills(last_referenced_at)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_skill_source_skill ON brain_skill_source_segments(skill_id)",
+                (
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_brain_skill_equipment_active "
+                    "ON brain_skill_equipment(equipped_entity_type, equipped_entity_id, skill_id) "
+                    "WHERE status = 'active'"
+                ),
+                (
+                    "CREATE INDEX IF NOT EXISTS idx_brain_skill_equipment_entity_status "
+                    "ON brain_skill_equipment(equipped_entity_type, equipped_entity_id, status)"
+                ),
+                (
+                    "CREATE INDEX IF NOT EXISTS idx_brain_skill_equipment_skill_status "
+                    "ON brain_skill_equipment(skill_id, status)"
+                ),
+                (
+                    "CREATE INDEX IF NOT EXISTS idx_brain_skill_equipment_entity_order "
+                    "ON brain_skill_equipment(equipped_entity_type, equipped_entity_id, equipped_order)"
+                ),
+            ]:
+                conn.execute(text(index_sql))
+
+            for trigger_sql in [
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_brain_skills_no_delete
+                BEFORE DELETE ON brain_skills
+                BEGIN
+                    SELECT RAISE(ABORT, 'brain_skills_no_physical_delete');
+                END
+                """,
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_brain_skill_equipment_no_delete
+                BEFORE DELETE ON brain_skill_equipment
+                BEGIN
+                    SELECT RAISE(ABORT, 'brain_skill_equipment_no_physical_delete');
+                END
+                """,
+            ]:
+                conn.execute(text(trigger_sql))
+
+            try:
+                _seed_v12_bootstrap(conn)
+            except Exception as exc:
+                logger.warning(
+                    "v12 bootstrap seed 插入跳过，将在启动时由 SkillBootstrapService 补全: %s", exc
+                )
+
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 12})
+            conn.commit()
+            logger.info("数据库迁移到版本 12 完成：方法论资产表 + bootstrap")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 12 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -792,6 +1000,7 @@ _MIGRATIONS = [
     (9, migrate_to_v9),
     (10, migrate_to_v10),
     (11, migrate_to_v11),
+    (12, migrate_to_v12),
 ]
 
 

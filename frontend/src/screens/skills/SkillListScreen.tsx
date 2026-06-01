@@ -49,29 +49,29 @@ export function SkillListScreen(): JSX.Element {
   }, [data, activeCategory, query]);
 
   return (
-    <section className="skills-screen" aria-label="技能列表">
+    <section className="skills-screen" aria-label="工具列表">
       <div className="skills-header">
         <div>
-          <h2>技能列表</h2>
-          <p>管理所有学习到的技能</p>
+          <h2>工具列表</h2>
+          <p>管理所有学习到的工具</p>
         </div>
         <div className="skills-header-actions">
           <label className="skills-search">
             <Search size={14} />
             <input
-              aria-label="搜索技能"
-              placeholder="搜索技能"
+              aria-label="搜索工具"
+              placeholder="搜索工具"
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
             />
           </label>
           <Button kind="primary" onClick={() => setRoute("teaching")}>
             <Plus size={15} />
-            <span>教学新技能</span>
+            <span>教学新工具</span>
           </Button>
         </div>
       </div>
-      <div className="skills-tabs" role="tablist" aria-label="技能分类">
+      <div className="skills-tabs" role="tablist" aria-label="工具分类">
         {SKILL_CATEGORIES.map((id) => {
           const active = activeCategory === id;
           return (

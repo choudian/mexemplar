@@ -23,7 +23,6 @@ async function sealPreviousSegment(prevSessionId: string | null): Promise<void> 
 import { toErrorMessage } from "./helpers";
 
 let _idleTimerRef: ReturnType<typeof setTimeout> | null = null;
-let _optimisticMessageCounter = 0;
 
 type AssistantProgress = {
   status: "idle" | "running" | "waiting_for_user" | "succeeded" | "failed";
@@ -59,7 +58,7 @@ export type AssistantState = {
   setDraft: (draft: string) => void;
   setIdleThresholdSeconds: (seconds: number) => void;
   loadSessions: () => Promise<void>;
-  createSession: () => Promise<string>;
+  createSession: () => Promise<string | null>;
   selectSession: (sessionId: string) => Promise<void>;
   loadMoreBefore: () => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
@@ -83,8 +82,7 @@ function uniqueMessages(messages: AssistantMessage[]): AssistantMessage[] {
 }
 
 function nextOptimisticId(): string {
-  _optimisticMessageCounter += 1;
-  return `optimistic_${_optimisticMessageCounter}`;
+  return `optimistic_${crypto.randomUUID()}`;
 }
 
 function removePendingOptimisticMessage(
@@ -109,20 +107,31 @@ function isPendingEcho(
   );
 }
 
+function revertSend(
+  state: AssistantState,
+  sessionId: string | null,
+  content: string,
+  optimisticId: string | null,
+): { draft: string; pendingOptimisticMessages: PendingAssistantMessage[] } {
+  return {
+    draft: state.activeSessionId === sessionId ? content : state.draft,
+    pendingOptimisticMessages: removePendingOptimisticMessage(state.pendingOptimisticMessages, optimisticId),
+  };
+}
+
 function reconcilePendingMessages(
   pendingMessages: PendingAssistantMessage[],
   sessionId: string,
   authoritativeMessages: AssistantMessage[],
 ): PendingAssistantMessage[] {
-  let remaining = pendingMessages;
+  const removedIndices = new Set<number>();
   for (const message of authoritativeMessages) {
-    const index = remaining.findIndex((pending) => isPendingEcho(pending, sessionId, message));
-    if (index === -1) {
-      continue;
-    }
-    remaining = remaining.filter((_, currentIndex) => currentIndex !== index);
+    const idx = pendingMessages.findIndex(
+      (p, i) => !removedIndices.has(i) && isPendingEcho(p, sessionId, message),
+    );
+    if (idx !== -1) removedIndices.add(idx);
   }
-  return remaining;
+  return pendingMessages.filter((_, i) => !removedIndices.has(i));
 }
 
 export const useAssistantStore = create<AssistantState>((set, get) => ({
@@ -164,19 +173,28 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   },
   createSession: async () => {
     const prevSessionId = get().activeSessionId;
-    await sealPreviousSegment(prevSessionId);
-    const sessionId = await createAssistantSession();
-    set({
-      activeSessionId: sessionId,
-      messages: [],
-      draft: "",
-      progress: idleProgress,
-      confirmations: [],
-      autoApprove: false,
-    });
-    get().clearIdleTimer();
-    await get().loadSessions();
-    return sessionId;
+    set({ lastError: null });
+    try {
+      await sealPreviousSegment(prevSessionId);
+      const sessionId = await createAssistantSession();
+      set({
+        activeSessionId: sessionId,
+        messages: [],
+        draft: "",
+        progress: idleProgress,
+        confirmations: [],
+        autoApprove: false,
+      });
+      get().clearIdleTimer();
+      await get().loadSessions();
+      return sessionId;
+    } catch (error) {
+      set({
+        lastError: toErrorMessage(error, "无法新建对话。"),
+        progress: idleProgress,
+      });
+      return null;
+    }
   },
   selectSession: async (sessionId) => {
     const prevSessionId = get().activeSessionId;
@@ -228,13 +246,22 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     }
   },
   renameSession: async (sessionId, title) => {
-    const updated = await renameAssistantSession(sessionId, title);
-    set({
-      sessions: get().sessions.map((session) => (session.sessionId === sessionId ? updated : session)),
-    });
+    try {
+      const updated = await renameAssistantSession(sessionId, title);
+      set({
+        sessions: get().sessions.map((session) => (session.sessionId === sessionId ? updated : session)),
+      });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "重命名对话失败。") });
+    }
   },
   deleteSession: async (sessionId) => {
-    await deleteAssistantSession(sessionId);
+    try {
+      await deleteAssistantSession(sessionId);
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "删除对话失败。") });
+      return;
+    }
     set({
       sessions: get().sessions.filter((session) => session.sessionId !== sessionId),
       activeSessionId: get().activeSessionId === sessionId ? null : get().activeSessionId,
@@ -260,6 +287,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     try {
       if (!sessionId) {
         sessionId = await get().createSession();
+        if (!sessionId) return;
       }
       optimisticId = nextOptimisticId();
       const optimistic: PendingAssistantMessage = {
@@ -276,24 +304,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
       const result = await sendAssistantMessage(sessionId, content);
       if (!result.accepted) {
-        const state = get();
         set({
-          draft: state.activeSessionId === sessionId ? content : state.draft,
-          pendingOptimisticMessages: removePendingOptimisticMessage(
-            state.pendingOptimisticMessages,
-            optimisticId,
-          ),
+          ...revertSend(get(), sessionId, content, optimisticId),
           progress: { status: "waiting_for_user", headline: "上一条消息仍在处理中" },
         });
       }
     } catch (error) {
-      const state = get();
       set({
-        draft: state.activeSessionId === sessionId ? content : state.draft,
-        pendingOptimisticMessages: removePendingOptimisticMessage(
-          state.pendingOptimisticMessages,
-          optimisticId,
-        ),
+        ...revertSend(get(), sessionId, content, optimisticId),
         lastError: toErrorMessage(error, "消息发送失败。"),
       });
     } finally {
@@ -303,10 +321,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   },
   applyEvent: (event) => {
     if (event.scope.sessionId && event.scope.sessionId !== get().activeSessionId) {
-      return;
+      if (event.type !== "assistant.confirmation") return;
+      const { actionType } = event.payload;
+      if (actionType !== "skill.edit_protected" && actionType !== "skill.soft_delete") {
+        return;
+      }
     }
     if (event.type === "assistant.message") {
-      const message = event.payload as unknown as AssistantMessage;
+      const message: AssistantMessage = event.payload;
       const eventSessionId = event.scope.sessionId ?? "";
       set({
         messages: uniqueMessages([...get().messages, message]),
@@ -319,25 +341,26 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       return;
     }
     if (event.type === "assistant.progress") {
-      const payload = event.payload as { status?: AssistantProgress["status"]; headline?: string };
+      const payload = event.payload;
       set({
         progress: {
-          status: payload.status ?? "running",
-          headline: payload.headline ?? "",
+          status: (typeof payload["status"] === "string" ? payload["status"] : "running") as AssistantProgress["status"],
+          headline: typeof payload["headline"] === "string" ? payload["headline"] : "",
         },
       });
       return;
     }
     if (event.type === "assistant.error") {
-      const payload = event.payload as { message?: string };
+      const payload = event.payload;
+      const message = typeof payload["message"] === "string" ? payload["message"] : "Assistant 处理失败";
       set({
-        progress: { status: "failed", headline: payload.message ?? "Assistant 处理失败" },
-        lastError: payload.message ?? "Assistant 处理失败",
+        progress: { status: "failed", headline: message },
+        lastError: message,
       });
       return;
     }
     if (event.type === "assistant.confirmation") {
-      const confirmation = event.payload as unknown as AssistantConfirmation;
+      const confirmation: AssistantConfirmation = event.payload;
       set({
         confirmations: [
           ...get().confirmations.filter((item) => item.requestId !== confirmation.requestId),
@@ -347,10 +370,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     }
   },
   decideConfirmation: async (requestId, decision) => {
-    await decideAssistantConfirmation(requestId, decision);
-    set({
-      confirmations: get().confirmations.filter((confirmation) => confirmation.requestId !== requestId),
-    });
+    try {
+      await decideAssistantConfirmation(requestId, decision);
+      set({
+        confirmations: get().confirmations.filter((confirmation) => confirmation.requestId !== requestId),
+      });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "操作确认失败。") });
+    }
   },
   setAutoApprove: async (enabled) => {
     const previous = get().autoApprove;

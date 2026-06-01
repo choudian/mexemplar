@@ -148,3 +148,78 @@ class TestArchiveRetrievalIntegration:
 
         matching = [r for r in results if r["entry_id"] == entry_id]
         assert len(matching) >= 1
+
+
+class TestInvalidateMemoryEntryContextBoundary:
+    """invalidate_memory_entry 的上下文窗口安全边界。"""
+
+    def test_invalidate_rejects_entry_outside_context_window(self, in_memory_db, mock_config):
+        """entry 不在当前上下文窗口内时拒绝 invalidation。"""
+        from src.data.repos.brain_repository import BrainRepository
+        from src.business.brain.retrieval_service import RetrievalService
+
+        repo = BrainRepository()
+        entry_id = repo.create_entry(
+            zone=Zone.ARCHIVE.value,
+            content="测试归档条目",
+            origin="decay",
+            reason="test",
+        )
+
+        service = RetrievalService(brain_repo=repo)
+        result = service.invalidate_memory_entry(
+            entry_id,
+            reason="过期",
+            current_context_entry_ids=["other-id-1", "other-id-2"],
+        )
+
+        assert result["success"] is False
+        assert "outside the current context window" in result["message"]
+        entry = repo.get_entry(entry_id)
+        assert entry.status != "invalidated"
+
+    def test_invalidate_allows_entry_within_context_window(self, in_memory_db, mock_config):
+        """entry 在当前上下文窗口内时允许 invalidation。"""
+        from src.data.repos.brain_repository import BrainRepository
+        from src.business.brain.retrieval_service import RetrievalService
+
+        repo = BrainRepository()
+        entry_id = repo.create_entry(
+            zone=Zone.ARCHIVE.value,
+            content="可被 invalidate 的条目",
+            origin="decay",
+            reason="test",
+        )
+
+        service = RetrievalService(brain_repo=repo)
+        result = service.invalidate_memory_entry(
+            entry_id,
+            reason="信息已过期",
+            current_context_entry_ids=[entry_id, "other-id"],
+        )
+
+        assert result["success"] is True
+        entry = repo.get_entry(entry_id)
+        assert entry.status == "invalidated"
+
+    def test_invalidate_with_no_context_restriction_succeeds(self, in_memory_db, mock_config):
+        """current_context_entry_ids=None 表示不限制上下文，允许 invalidation。"""
+        from src.data.repos.brain_repository import BrainRepository
+        from src.business.brain.retrieval_service import RetrievalService
+
+        repo = BrainRepository()
+        entry_id = repo.create_entry(
+            zone=Zone.ARCHIVE.value,
+            content="无限制 invalidation 测试",
+            origin="decay",
+            reason="test",
+        )
+
+        service = RetrievalService(brain_repo=repo)
+        result = service.invalidate_memory_entry(
+            entry_id,
+            reason="不限制上下文",
+            current_context_entry_ids=None,
+        )
+
+        assert result["success"] is True

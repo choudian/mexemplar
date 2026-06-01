@@ -36,9 +36,9 @@ const bootstrapPayload = {
 };
 
 const PRIMARY_ROUTE_EXPECTATIONS = [
-  { label: "技能教学", namePattern: /技能教学/ },
-  { label: "技能列表", namePattern: /技能列表/ },
-  { label: "技能组合", namePattern: /技能组合/ },
+  { label: "工具教学", namePattern: /工具教学/ },
+  { label: "工具列表", namePattern: /工具列表/ },
+  { label: "工具组合", namePattern: /工具组合/ },
   { label: "大脑管理", namePattern: /大脑管理/ },
   { label: "专员管理", namePattern: /专员管理/ },
   { label: "应用设置", namePattern: /应用设置/ },
@@ -288,7 +288,7 @@ describe("AppShell", () => {
         causationId: "rec_1",
         type: "teaching.stage_changed",
         scope: { workflowId: "rec_1" },
-        payload: { stage: "trial_validation", headline: "Skill learning completed" },
+        payload: { stage: "trial_validation", headline: "Tool learning completed" },
         createdAt: "2026-05-10T00:00:00Z",
       }),
       eventFrame({
@@ -325,7 +325,7 @@ describe("AppShell", () => {
     render(<AppShell />);
 
     await waitFor(() => expect(useTeachingStore.getState().stage).toBe("trial_validation"));
-    await waitFor(() => expect(screen.getByText("技能学习完成")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("工具学习完成")).toBeInTheDocument());
     expect(screen.getByText("可以开始试用验证，确认它能按预期执行。")).toBeInTheDocument();
     await waitFor(() => expect(useTeachingStore.getState().trialPreview?.requestId).toBe("preview_1"));
   });
@@ -344,7 +344,7 @@ describe("AppShell", () => {
       causationId: "rec_1",
       type: "teaching.progress",
       scope: { workflowId: "rec_1" },
-      payload: { status: "running", headline: "Skill learning update" },
+      payload: { status: "running", headline: "Tool learning update" },
       createdAt: "2026-05-10T00:00:00Z",
     };
     vi.stubGlobal(
@@ -363,7 +363,7 @@ describe("AppShell", () => {
 
     render(<AppShell />);
 
-    await waitFor(() => expect(useTeachingStore.getState().progressLog).toEqual(["Skill learning update"]));
+    await waitFor(() => expect(useTeachingStore.getState().progressLog).toEqual(["Tool learning update"]));
   });
 
   test("applies events that arrive after resync only after authoritative refresh completes", async () => {
@@ -402,7 +402,7 @@ describe("AppShell", () => {
         causationId: "rec_1",
         type: "teaching.stage_changed",
         scope: { workflowId: "rec_1" },
-        payload: { stage: "published", headline: "Skill published" },
+        payload: { stage: "published", headline: "Tool published" },
         createdAt: "2026-05-10T00:00:01Z",
       }),
     ];
@@ -456,7 +456,7 @@ describe("AppShell", () => {
         causationId: "rec_1",
         type: "teaching.stage_changed",
         scope: { workflowId: "rec_1" },
-        payload: { stage: "published", headline: "Skill published" },
+        payload: { stage: "published", headline: "Tool published" },
         createdAt: "2026-05-10T00:00:01Z",
       }),
     ];
@@ -537,7 +537,7 @@ describe("AppShell", () => {
               scope: {},
               payload: {
                 reason: "replay_gap",
-                domains: ["teaching", "skills"],
+                domains: ["teaching", "tools"],
                 eventSessionId: "ui_sess_test",
               },
               createdAt: "2026-05-10T00:00:00Z",
@@ -564,7 +564,7 @@ describe("AppShell", () => {
             {
               toolId: "tool_1",
               name: "稳定技能",
-              description: "由权威技能列表刷新。",
+              description: "由权威工具列表刷新。",
               status: "pending",
               source: "teaching",
               trialSuccessCount: skillRefreshes,

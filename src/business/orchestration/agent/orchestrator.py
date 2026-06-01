@@ -26,6 +26,7 @@ from src.business.agents.tools.trial_tools import create_desktop_trial_tools, cr
 from src.business.ai.llm_client import LangChainLLMClient
 from src.business.memory.compression_handler import CompressionHandler
 from src.business.services import SkillCompositionService
+from src.data.repos.skill_equipment_repository import ASSISTANT_ENTITY_ID
 from src.data.repositories import (
     AssistantProfileRepository,
     MessageRepository,
@@ -90,7 +91,7 @@ class _AgentExecutionAdapter(AgentExecutionPort):
         workflow_id: str = None,
         session_id: str = None,
     ) -> AgentResult | None:
-        self._run_agent(
+        return self._run_agent(
             agent_type,
             user_input,
             workflow_id=workflow_id,
@@ -230,7 +231,7 @@ class AgentOrchestrator:
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
-    ) -> None:
+    ) -> AgentResult | None:
         if agent_type == AgentType.ASSISTANT:
             assert session_id, "assistant 类型必须传 session_id"
         elif not session_id:
@@ -239,15 +240,16 @@ class AgentOrchestrator:
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
         except Exception as exc:
-            logger.error(f"[Orchestrator] 无法创建 {agent_type} Loop: {exc}")
+            message = f"无法创建 {agent_type} Loop"
+            logger.error("[Orchestrator] %s: %s", message, exc, exc_info=True)
             self._emit_agent_error(
                 workflow_id or "",
                 session_id,
                 agent_type,
-                str(exc),
+                message,
                 "setup_error",
             )
-            return None
+            return AgentResult(result_type=ResultType.ERROR, error=message)
 
         logger.info(
             f"[Orchestrator] 启动 {agent_type} Agent: session={session_id}, workflow={workflow_id}"
@@ -264,22 +266,35 @@ class AgentOrchestrator:
             if agent_type == AgentType.ASSISTANT:
                 self._seal_assistant_segment_at_memory_limit(session_id)
         except Exception as exc:
-            logger.error(f"[Orchestrator] 无法准备 {agent_type} Agent: {exc}", exc_info=True)
+            message = f"无法准备 {agent_type} Agent"
+            logger.error("[Orchestrator] %s: %s", message, exc, exc_info=True)
             self._emit_agent_error(
                 workflow_id or "",
                 session_id,
                 agent_type,
-                str(exc),
+                message,
                 "setup_error",
             )
-            return None
+            return AgentResult(result_type=ResultType.ERROR, error=message)
 
-        result = loop.run(
-            session_id,
-            user_input,
-            tools=tools,
-            system_prompt_override=formatted_prompt,
-        )
+        try:
+            result = loop.run(
+                session_id,
+                user_input,
+                tools=tools,
+                system_prompt_override=formatted_prompt,
+            )
+        except Exception as exc:
+            message = f"{agent_type} Agent 执行失败"
+            logger.error("[Orchestrator] %s: %s", message, exc, exc_info=True)
+            self._emit_agent_error(
+                workflow_id or "",
+                session_id,
+                agent_type,
+                message,
+                "runtime_error",
+            )
+            return AgentResult(result_type=ResultType.ERROR, error=message)
 
         if result.result_type == ResultType.COMPLETED:
             if agent_type != AgentType.ASSISTANT:
@@ -421,7 +436,38 @@ class AgentOrchestrator:
             parent_session_id=parent_session_id,
             tool_whitelist=whitelist,
         )
-        system_prompt = self._build_specialist_prompt(specialist, whitelist)
+        try:
+            equipped_skills_snapshot = self._specialist_equipped_skills_snapshot(specialist)
+        except RuntimeError as exc:
+            logger.error("[Orchestrator] 专员方法论装备快照加载失败: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "message": "专员方法论装备加载失败，已取消委派。",
+                "delegation_type": "specialist",
+                "specialist_id": specialist.specialist_id,
+                "specialist_name": name,
+            }
+        try:
+            system_prompt = self._build_specialist_prompt(
+                specialist,
+                whitelist,
+                equipped_skills=equipped_skills_snapshot,
+            )
+        except RuntimeError as exc:
+            logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
+            return {
+                "success": False,
+                "message": "专员方法论提示词构建失败，已取消委派。",
+                "delegation_type": "specialist",
+                "specialist_id": specialist.specialist_id,
+                "specialist_name": name,
+            }
+        allowed_methodology_skill_ids = {
+            str(item.get("skill_id") or "")
+            for item in equipped_skills_snapshot
+            if str(item.get("skill_id") or "")
+        }
+        methodology_snapshot = self._extract_methodology_equipment_snapshot(system_prompt)
         result = self._run_delegated_executor(
             agent_type=AgentType.SPECIALIST,
             session_id=child_session_id,
@@ -430,6 +476,9 @@ class AgentOrchestrator:
             user_input=self._format_delegated_task_input(task_text),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
+            specialist_id=specialist.specialist_id,
+            allowed_methodology_skill_ids=allowed_methodology_skill_ids,
+            methodology_equipment_snapshot=methodology_snapshot,
         )
         result["delegation_type"] = "specialist"
         result["specialist_id"] = specialist.specialist_id
@@ -447,6 +496,9 @@ class AgentOrchestrator:
         user_input: str,
         system_prompt: str,
         allowed_tool_ids: set[str] | None,
+        specialist_id: str | None = None,
+        allowed_methodology_skill_ids: set[str] | None = None,
+        methodology_equipment_snapshot: str = "",
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -463,12 +515,18 @@ class AgentOrchestrator:
                 "executorSessionId": session_id,
                 "task": user_input,
                 "allowedToolCount": len(allowed_tool_ids) if allowed_tool_ids is not None else None,
+                "methodologyEquipmentPromptSnapshot": methodology_equipment_snapshot,
             },
         )
 
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
-            tools = self._build_delegated_executor_tools(allowed_tool_ids)
+            tools = self._build_delegated_executor_tools(
+                allowed_tool_ids,
+                agent_type=agent_type,
+                specialist_id=specialist_id,
+                allowed_methodology_skill_ids=allowed_methodology_skill_ids,
+            )
             result = loop.run(
                 session_id,
                 user_input,
@@ -487,7 +545,10 @@ class AgentOrchestrator:
             self._capture_delegation_debug_detail(
                 workflow_id=workflow_id,
                 transition_id=failed_transition_id,
-                input_detail={"parentSessionId": parent_session_id, "executorSessionId": session_id},
+                input_detail={
+                    "parentSessionId": parent_session_id,
+                    "executorSessionId": session_id,
+                },
                 output_detail={"success": False, "error": str(exc)},
             )
             return {
@@ -507,7 +568,9 @@ class AgentOrchestrator:
             payload["error"] = result.error
         complete_transition_id = self._session_store.record_transition(
             workflow_id,
-            event_type="assistant_delegation_completed" if success else "assistant_delegation_failed",
+            event_type=(
+                "assistant_delegation_completed" if success else "assistant_delegation_failed"
+            ),
             from_session_id=session_id,
             to_session_id=parent_session_id,
             payload=json.dumps(payload, ensure_ascii=False),
@@ -556,9 +619,35 @@ class AgentOrchestrator:
         except Exception:
             logger.debug("debug delegation detail capture failed", exc_info=True)
 
+    @staticmethod
+    def _make_load_skill_tool(
+        caller_type: str,
+        caller_id: str,
+        allowed_skill_ids: set[str] | None = None,
+    ) -> ToolDefinition:
+        from src.business.agents.tools.skill_methodology_tools import (
+            LOAD_SKILL_METHODOLOGY_SCHEMA,
+            create_load_skill_methodology_handler,
+        )
+
+        return ToolDefinition(
+            name="load_skill_methodology",
+            schema=LOAD_SKILL_METHODOLOGY_SCHEMA,
+            handler=create_load_skill_methodology_handler(
+                caller_type=caller_type,
+                caller_id=caller_id,
+                allowed_skill_ids=allowed_skill_ids,
+            ),
+            has_side_effects=False,
+        )
+
     def _build_delegated_executor_tools(
         self,
         allowed_tool_ids: set[str] | None,
+        *,
+        agent_type: str | None = None,
+        specialist_id: str | None = None,
+        allowed_methodology_skill_ids: set[str] | None = None,
     ) -> Callable[[], List[ToolDefinition]]:
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
@@ -568,9 +657,19 @@ class AgentOrchestrator:
 
         dynamic_manager = DynamicToolManager(allowed_tool_ids=allowed_tool_ids)
         search_tools = create_assistant_search_tools(dynamic_manager)
+        load_skill_tool = self._make_load_skill_tool(
+            caller_type="specialist" if agent_type == AgentType.SPECIALIST else "assistant",
+            caller_id=specialist_id or ASSISTANT_ENTITY_ID,
+            allowed_skill_ids=allowed_methodology_skill_ids,
+        )
 
         def tool_factory() -> List[ToolDefinition]:
-            return search_tools + BUILTIN_GENERAL_TOOLS + dynamic_manager.get_activated_tools()
+            return (
+                search_tools
+                + [load_skill_tool]
+                + BUILTIN_GENERAL_TOOLS
+                + dynamic_manager.get_activated_tools()
+            )
 
         return tool_factory
 
@@ -647,11 +746,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _build_ephemeral_subagent_prompt(tool_whitelist: list[str] | None) -> str:
-        whitelist_text = (
-            "、".join(tool_whitelist)
-            if tool_whitelist
-            else "继承主助理当前可用技能池"
-        )
+        whitelist_text = "、".join(tool_whitelist) if tool_whitelist else "继承主助理当前可用技能池"
         return (
             "你是一个临时子代理，只为当前一次委派任务服务。\n"
             "你可以使用被授予的工具完成任务，但不要再委派给其他 Agent。\n"
@@ -660,8 +755,29 @@ class AgentOrchestrator:
         )
 
     @staticmethod
-    def _build_specialist_prompt(specialist, whitelist: list[str]) -> str:
+    def _build_specialist_prompt(
+        specialist,
+        whitelist: list[str],
+        equipped_skills: list[dict] | None = None,
+    ) -> str:
         whitelist_text = "、".join(whitelist) if whitelist else "无用户技能白名单"
+        equipment_section = ""
+        try:
+            from src.business.brain.context_builder import BrainContextBuilder
+
+            if equipped_skills is None:
+                equipped_skills = BrainContextBuilder().equipped_skills_for_entity(
+                    getattr(specialist, "specialist_id", "")
+                )
+            if equipped_skills:
+                equipment_section = "\n\n" + BrainContextBuilder.format_equipped_skills_for_prompt(
+                    equipped_skills
+                )
+        except Exception as exc:
+            logger.error(
+                "specialist methodology equipment prompt injection failed: %s", exc, exc_info=True
+            )
+            raise RuntimeError("specialist_methodology_equipment_prompt_unavailable") from exc
         return (
             f"你是固定专员：{getattr(specialist, 'name', '')}\n"
             f"描述：{getattr(specialist, 'description', '') or '无'}\n\n"
@@ -669,7 +785,26 @@ class AgentOrchestrator:
             f"{getattr(specialist, 'role_definition', '') or '按专员职责完成主助理委派的任务。'}\n\n"
             f"用户技能白名单：{whitelist_text}\n"
             "你只能处理主助理委派的任务；完成后直接输出最终结果。"
+            f"{equipment_section}"
         )
+
+    @staticmethod
+    def _specialist_equipped_skills_snapshot(specialist) -> list[dict]:
+        try:
+            from src.business.brain.context_builder import BrainContextBuilder
+
+            return BrainContextBuilder().equipped_skills_for_entity(
+                getattr(specialist, "specialist_id", "")
+            )
+        except Exception as exc:
+            logger.error("specialist methodology equipment snapshot failed: %s", exc, exc_info=True)
+            raise RuntimeError("specialist_methodology_equipment_snapshot_unavailable") from exc
+
+    @staticmethod
+    def _extract_methodology_equipment_snapshot(prompt: str) -> str:
+        marker = "## 你已装备的方法论清单"
+        marker_index = str(prompt or "").find(marker)
+        return str(prompt or "")[marker_index:] if marker_index >= 0 else ""
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
         initial_input = (
@@ -995,7 +1130,18 @@ class AgentOrchestrator:
             "parameters": code_data.get("parameters", []),
         }
         retry_count = self._review_state.get_retry_count(workflow_id)
-        review_result: ReviewResult = self._llm_reviewer.review(code, requirement)
+        try:
+            review_result: ReviewResult = self._llm_reviewer.review(code, requirement)
+        except Exception as exc:
+            logger.error("LLM review failed for workflow %s: %s", workflow_id, exc, exc_info=True)
+            self._emit_agent_error(
+                workflow_id,
+                from_session_id,
+                AgentType.PROGRAMMER,
+                "LLM Review 调用失败",
+                "review_error",
+            )
+            return
 
         if review_result.passed:
             self._emit_and_log(
@@ -1151,6 +1297,10 @@ class AgentOrchestrator:
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
         )
+        from src.business.agents.tools.skill_methodology_tools import (
+            CREATE_SKILL_METHODOLOGY_SCHEMA,
+            create_create_skill_methodology_handler,
+        )
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
@@ -1230,6 +1380,18 @@ class AgentOrchestrator:
             schema=INVALIDATE_MEMORY_ENTRY_SCHEMA,
             handler=create_invalidate_memory_entry_handler(session_id),
         )
+        create_skill_methodology_tool = ToolDefinition(
+            name="create_skill_methodology",
+            schema=CREATE_SKILL_METHODOLOGY_SCHEMA,
+            handler=create_create_skill_methodology_handler(
+                caller_type="assistant",
+                caller_id=ASSISTANT_ENTITY_ID,
+            ),
+        )
+        load_skill_methodology_tool = self._make_load_skill_tool(
+            caller_type="assistant",
+            caller_id=ASSISTANT_ENTITY_ID,
+        )
 
         search_tools = create_assistant_search_tools(dynamic_manager)
         static_tools = [
@@ -1245,6 +1407,8 @@ class AgentOrchestrator:
             delegate_to_subagent_tool,
             delegate_to_specialist_tool,
             create_specialist_tool,
+            create_skill_methodology_tool,
+            load_skill_methodology_tool,
         ] + BUILTIN_GENERAL_TOOLS
 
         def tool_factory() -> List[ToolDefinition]:
@@ -1262,6 +1426,7 @@ class AgentOrchestrator:
 
         if agent_type == AgentType.EPHEMERAL_SUBAGENT:
             from src.business.agents.config import AgentConfig
+
             ephemeral_config = AgentConfig(
                 agent_type=AgentType.EPHEMERAL_SUBAGENT,
                 system_prompt="你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。",
@@ -1271,6 +1436,7 @@ class AgentOrchestrator:
 
         if agent_type == AgentType.SPECIALIST:
             from src.business.agents.config import AgentConfig
+
             specialist_config = AgentConfig(
                 agent_type=AgentType.SPECIALIST,
                 system_prompt="你是一个固定专员。根据你的角色定义完成指定工作。",

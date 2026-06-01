@@ -9,7 +9,6 @@ import {
   editBrainEntry,
   getEntryEvolution,
   getSkillPool,
-  isBrainZone,
   removeSkillFromPool,
   SkillPoolRemovalConflict,
 } from "../api/brain";
@@ -24,9 +23,10 @@ import type {
   SkillPoolItem,
 } from "../api/brain";
 import type { UiEvent } from "../api/client";
-import { toErrorMessage } from "./helpers";
+import { createDebouncedRefresh, toErrorMessage } from "./helpers";
 
 let _entriesSeq = 0;
+const scheduleBrainRefresh = createDebouncedRefresh();
 
 export interface BrainState {
   zones: BrainZoneSummary[];
@@ -126,7 +126,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       const response = await getSkillPool();
       set({ skillPool: response.skills ?? [] });
     } catch (error) {
-      set({ lastError: toErrorMessage(error, "无法加载技能池。") });
+      set({ lastError: toErrorMessage(error, "无法加载工具池。") });
     } finally {
       set({ loadingSkillPool: false });
     }
@@ -200,7 +200,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
         });
         return;
       }
-      set({ lastError: toErrorMessage(error, "无法移除技能。") });
+      set({ lastError: toErrorMessage(error, "无法移除工具。") });
     }
   },
 
@@ -208,14 +208,19 @@ export const useBrainStore = create<BrainState>((set, get) => ({
 
   applyEvent: (event) => {
     if (event.type === "brain_zone_changed") {
-      const eventZone = isBrainZone(event.payload.zone) ? event.payload.zone : null;
-      const activeZone = get().activeZone;
-      if (activeZone && (!eventZone || eventZone === activeZone)) {
-        void get().loadEntries(activeZone);
-      }
+      scheduleBrainRefresh(async () => {
+        const activeZone = get().activeZone;
+        await Promise.all([
+          get().loadZones(),
+          activeZone ? get().loadEntries(activeZone) : Promise.resolve(),
+        ]);
+      });
+    }
+    if (event.type === "brain_context_ready") {
       void get().loadZones();
-    } else if (event.type === "brain_context_ready") {
-      void get().loadZones();
+    }
+    if (event.type === "tools.changed") {
+      void get().loadSkillPool();
     }
   },
 }));

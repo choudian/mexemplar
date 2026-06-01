@@ -101,7 +101,7 @@ export function SkillPicker({
         <input aria-label="搜索技能" value={query} onChange={(event) => setQuery(event.currentTarget.value)} />
       </label>
       <div className="composition-skill-pool">
-        {availableSkills.length === 0 ? <span className="composition-muted">没有匹配的已掌握技能</span> : null}
+        {availableSkills.length === 0 ? <span className="composition-muted">没有匹配的已掌握工具</span> : null}
         {availableSkills.map((skill) => {
           const selected = selectedToolIds.has(skill.toolId);
           return (

@@ -2,7 +2,6 @@
 Archive Service - 归档区时间分层聚合
 
 负责将 unit 级别的归档条目聚合为 day/week/month 级别的摘要。
-P2 范围内提供基础的聚合任务框架。
 """
 
 import logging
@@ -201,7 +200,9 @@ class ArchiveService:
         reason = str(getattr(entry, "reason", "") or "")
         if not reason.startswith(prefix):
             return None
-        return reason[len(prefix) :].split(" ", 1)[0]
+        rest = reason[len(prefix) :]
+        paren = rest.rfind(" (")
+        return rest[:paren] if paren > 0 else rest
 
     @staticmethod
     def _rollup_key(source_key: str | None, target_scope: str) -> str | None:
