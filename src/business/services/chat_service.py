@@ -18,7 +18,7 @@ from src.business.agents.tools.builtin_general_tools import (
     reset_auto_approve,
     settle_pending_confirmations,
 )
-from src.data.models_sqlite import Message, Session
+from src.data.models_sqlite import Session
 from src.data.repositories import AssistantProfileRepository, MessageRepository, SessionRepository
 from src.utils.timezone import format_local
 
@@ -77,7 +77,11 @@ class ChatService:
         for s in sessions:
             first_user_msg = first_messages.get(s.session_id, "")
             item = self._build_session_preview(s, first_user_msg)
-            if query_text and query_text not in item["title"].lower() and query_text not in item["preview"].lower():
+            if (
+                query_text
+                and query_text not in item["title"].lower()
+                and query_text not in item["preview"].lower()
+            ):
                 continue
             result.append(item)
         return result
@@ -179,7 +183,8 @@ class ChatService:
         try:
             profile = AssistantProfileRepository().get_default()
             return profile.display_name if profile and profile.display_name else ""
-        except Exception:
+        except Exception as exc:
+            logger.warning("读取用户显示名称失败: %s", exc, exc_info=True)
             return ""
 
     # ------------------------------------------------------------------

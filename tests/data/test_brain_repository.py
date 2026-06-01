@@ -115,6 +115,24 @@ class TestSegmentStatusTransition:
         assert segment.status == "completed"
         assert segment.completed_at is not None
 
+    def test_transition_rejects_unknown_update_column(self, repo):
+        segment_id = uuid4().hex[:50]
+        repo.create_segment(
+            segment_id=segment_id,
+            session_id=uuid4().hex[:50],
+            boundary_reason="idle",
+        )
+
+        with pytest.raises(ValueError, match="Disallowed column"):
+            repo.transition_segment_status(
+                segment_id,
+                from_status="pending",
+                to_status="distilling",
+                **{"retry_count = retry_count + 1 --": 1},
+            )
+
+        assert repo.get_segment_by_id(segment_id).status == "pending"
+
     def test_transition_distilling_to_failed(self, repo):
         segment_id = uuid4().hex[:50]
         repo.create_segment(

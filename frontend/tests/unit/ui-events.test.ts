@@ -40,6 +40,18 @@ const EXAMPLE_SCOPES: Partial<Record<UiEventType, Record<string, string>>> = {
   "trial.preview_resolved": { workflowId: "rec_1" },
 };
 
+function enveloped(type: UiEventType, payload: Record<string, unknown>, scope: Record<string, string> = {}) {
+  return {
+    eventId: `evt_${type}`,
+    sequence: 1,
+    sessionId: "ui_sess_1",
+    type,
+    scope,
+    payload,
+    createdAt: "2026-05-16T00:00:00Z",
+  };
+}
+
 describe("uiEvents", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -114,6 +126,42 @@ describe("uiEvents", () => {
     ).toBeNull();
   });
 
+  test("rejects malformed assistant message and confirmation payloads", () => {
+    expect(
+      parseUiEvent({
+        eventId: "evt_bad_message",
+        sequence: 1,
+        sessionId: "ui_sess_1",
+        type: "assistant.message",
+        scope: { sessionId: "ast_1" },
+        payload: {
+          sequence: 1,
+          role: "system",
+          content: "bad role",
+          createdAt: "2026-05-16T00:00:00Z",
+          rendering: "safe_markdown",
+        },
+        createdAt: "2026-05-16T00:00:00Z",
+      }),
+    ).toBeNull();
+    expect(
+      parseUiEvent({
+        eventId: "evt_bad_confirmation",
+        sequence: 2,
+        sessionId: "ui_sess_1",
+        type: "assistant.confirmation",
+        scope: { sessionId: "ast_1" },
+        payload: {
+          requestId: "req_1",
+          actionType: "exec",
+          sanitizedSummary: "命令首行: npm test",
+          status: "pending",
+        },
+        createdAt: "2026-05-16T00:00:00Z",
+      }),
+    ).toBeNull();
+  });
+
   test("connectEvents rejects invalid data frames and keeps session token out of the URL", async () => {
     configureDesktopApi({ baseUrl: "http://desktop.test", sessionToken: "secret-token" });
     const fetchMock = vi.fn(async () => eventStreamResponse(["event: settings.changed\ndata: {broken}\n\n"]));
@@ -144,6 +192,63 @@ describe("uiEvents", () => {
   test("frontend contract includes trial preview events", () => {
     expect(UI_EVENT_TYPES).toContain("trial.preview_requested");
     expect(UI_EVENT_TYPES).toContain("trial.preview_resolved");
+  });
+
+  test("parses skill.changed and rejects malformed methodology payloads", () => {
+    const event = parseUiEvent(enveloped(
+      "skill.changed",
+      {
+        reason: "supersede",
+        skillId: "sk_1",
+        chainRootId: "sk_root",
+        newSkillId: "sk_2",
+        callerType: "assistant",
+        callerId: "ast_1",
+      },
+      { skillId: "sk_1" },
+    ));
+
+    if (event?.type !== "skill.changed") {
+      throw new Error("Expected skill.changed event");
+    }
+    expect(event.payload.skillId).toBe("sk_1");
+    expect(parseUiEvent(enveloped("skill.changed", { reason: "rename", skillId: "sk_1", chainRootId: "sk_root" }))).toBeNull();
+    expect(parseUiEvent(enveloped("skill.changed", { reason: "create", skillId: "sk_1" }))).toBeNull();
+    expect(parseUiEvent(enveloped("skill.changed", {
+      reason: "create",
+      skillId: "sk_1",
+      chainRootId: "sk_root",
+      callerType: "operator",
+    }))).toBeNull();
+  });
+
+  test("parses skill.equipment.changed and rejects malformed equipment payloads", () => {
+    const event = parseUiEvent(enveloped(
+      "skill.equipment.changed",
+      {
+        changeType: "equipped",
+        entityType: "specialist",
+        entityId: "spec_1",
+        skillId: "sk_1",
+      },
+      { entityId: "spec_1", skillId: "sk_1" },
+    ));
+
+    if (event?.type !== "skill.equipment.changed") {
+      throw new Error("Expected skill.equipment.changed event");
+    }
+    expect(event.payload.entityId).toBe("spec_1");
+    expect(parseUiEvent(enveloped("skill.equipment.changed", {
+      changeType: "attached",
+      entityType: "specialist",
+      entityId: "spec_1",
+      skillId: "sk_1",
+    }))).toBeNull();
+    expect(parseUiEvent(enveloped("skill.equipment.changed", {
+      changeType: "equipped",
+      entityType: "assistant",
+      skillId: "sk_1",
+    }))).toBeNull();
   });
 
   test("parses exported registry payload examples", () => {

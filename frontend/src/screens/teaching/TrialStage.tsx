@@ -299,7 +299,7 @@ export function TrialStage({
           <div className="teaching-chat-done">
             <div className="teaching-chat-done-hint">
               试用通过，技能 <strong style={{ color: "var(--ok)" }}>已发布</strong>。
-              <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>{countdown}s 后自动返回技能列表</span>
+              <span style={{ color: "var(--text-muted)", marginLeft: 8 }}>{countdown}s 后自动返回工具列表</span>
             </div>
           </div>
         ) : (

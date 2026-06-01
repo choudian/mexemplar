@@ -5,6 +5,8 @@ import type { BrainSpecialist } from "../../api/brain";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useBrainStore } from "../../state/brainStore";
 import { useSpecialistStore } from "../../state/specialistStore";
+import AssistantEquipmentCard from "./AssistantEquipmentCard";
+import EquipmentPanel from "./EquipmentPanel";
 
 function originLabel(origin: string): string {
   if (origin === "auto_recruitment") return "自动招募";
@@ -53,13 +55,15 @@ export function SpecialistScreen(): JSX.Element {
       <header className="specialist-header">
         <div>
           <h2>专员管理</h2>
-          <p>管理固定专员的职责、版本和可用技能白名单</p>
+          <p>管理固定专员的职责、版本、可用工具白名单和方法论装备</p>
         </div>
         <Button kind="primary" onClick={() => select(null)}>
           <Plus size={14} />
           新建专员
         </Button>
       </header>
+
+      <AssistantEquipmentCard />
 
       <div className="specialist-workspace">
         <aside className="specialist-list-pane">
@@ -132,12 +136,12 @@ export function SpecialistScreen(): JSX.Element {
             ) : null}
           </div>
 
-          <section className="specialist-whitelist" aria-label="技能白名单">
+          <section className="specialist-whitelist" aria-label="工具白名单">
             <div className="brain-section-title">
-              <span>技能白名单</span>
+              <span>工具白名单</span>
               <small>{draft.tool_whitelist.length} 个已选</small>
             </div>
-            {loadingSkillPool ? <div className="brain-empty">正在加载技能池</div> : null}
+            {loadingSkillPool ? <div className="brain-empty">正在加载工具池</div> : null}
             <div className="specialist-skill-grid">
               {skillPool.map((skill) => {
                 const checked =
@@ -146,19 +150,24 @@ export function SpecialistScreen(): JSX.Element {
                   <label className="specialist-skill-option" data-active={checked} key={skill.tool_id}>
                     <input
                       checked={checked}
-                      onChange={() => toggleWhitelist(skill.tool_id, skill.name)}
+                      onChange={() => toggleWhitelist(skill.tool_id)}
                       type="checkbox"
                     />
                     <span>
-                      <strong>{skill.name || skill.tool_id}</strong>
+                      <div className="tool-card-title">
+                        <strong>{skill.name || skill.tool_id}</strong>
+                        {skill.is_builtin ? <Badge tone="neutral">内置</Badge> : null}
+                      </div>
                       <small>{skill.description || "无描述"}</small>
                     </span>
                   </label>
                 );
               })}
-              {!loadingSkillPool && skillPool.length === 0 ? <div className="brain-empty">暂无可授予技能</div> : null}
+              {!loadingSkillPool && skillPool.length === 0 ? <div className="brain-empty">暂无可授予工具</div> : null}
             </div>
           </section>
+
+          {draft.specialist_id ? <EquipmentPanel entityId={draft.specialist_id} /> : null}
 
           <div className="specialist-editor-actions">
             <Button kind="primary" disabled={saving} onClick={() => {

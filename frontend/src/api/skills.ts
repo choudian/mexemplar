@@ -14,6 +14,7 @@ export interface SkillSummary {
   workflowId?: string | null;
   failureStage?: string | null;
   errorSummary?: string;
+  is_builtin?: boolean;
 }
 
 export interface SkillCategoryResponse {

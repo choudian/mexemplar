@@ -17,8 +17,8 @@ const teachingSteps = [
   { id: "selecting", label: "选择方式" },
   { id: "recording", label: "操作录制" },
   { id: "intent_confirmation", label: "意图理解" },
-  { id: "learning", label: "技能学习" },
-  { id: "trial_validation", label: "技能试用" },
+  { id: "learning", label: "工具学习" },
+  { id: "trial_validation", label: "工具试用" },
 ] as const;
 
 function normalizeStage(stage: string): (typeof teachingSteps)[number]["id"] {
@@ -85,10 +85,10 @@ export function TeachingScreen(): JSX.Element {
   const displayStage = displayStageFor(run, stage);
 
   return (
-    <section className="teaching-screen" aria-label="技能教学">
+    <section className="teaching-screen" aria-label="工具教学">
       <div className="teaching-header">
         <div>
-          <h2>技能教学</h2>
+          <h2>工具教学</h2>
           <p>演示一遍你想自动化的操作，系统会学会并替你执行。</p>
         </div>
         {stage !== "selecting" ? (

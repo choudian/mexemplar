@@ -138,15 +138,16 @@ def report_tool_bug_handler(
     3. 唤醒后台 Worker 处理（Orchestrator 轮询消费）
     4. 返回确认消息
     """
-    tool_repo = ToolRepository()
-    tool = tool_repo.get_by_name(tool_name)
+    with ToolRepository() as tool_repo:
+        tool = tool_repo.get_by_name(tool_name)
+        tool_id = tool.tool_id if tool else ""
     if not tool:
         return error_json(f"找不到工具 '{tool_name}'")
 
     task_id = str(uuid.uuid4())
     payload = to_json(
         {
-            "tool_id": tool.tool_id,
+            "tool_id": tool_id,
             "tool_name": tool_name,
             "error_message": error_message,
             "user_input": user_input,
@@ -154,20 +155,24 @@ def report_tool_bug_handler(
         }
     )
 
-    task_repo = PendingTaskRepository()
-    task_repo.create(
-        PendingAssistantTask(
-            task_id=task_id,
-            task_type="fix_tool_bug",
-            payload=payload,
-            status="pending",
+    with PendingTaskRepository() as task_repo:
+        task_repo.create(
+            PendingAssistantTask(
+                task_id=task_id,
+                task_type="fix_tool_bug",
+                payload=payload,
+                status="pending",
+            )
         )
-    )
 
     # 通知后台 Worker 立即处理（不用 blinker 事件，避免线程嵌套）
     worker_notified = _notify_task_worker()
 
-    logger.info(f"[report_tool_bug] 已提交 Bug 报告: tool={tool_name}, task={task_id}")
+    logger.info(
+        "[report_tool_bug] 已提交 Bug 报告: tool_chars=%d task_id=%s",
+        len(tool_name or ""),
+        task_id,
+    )
     return to_json(
         {
             "success": True,
@@ -263,7 +268,8 @@ def create_codify_as_tool_handler(session_id: str):
         from src.data.models_sqlite import PendingAssistantTask
 
         # 提取执行记录
-        messages = MessageRepository().get_by_session(session_id)
+        with MessageRepository() as message_repo:
+            messages = message_repo.get_by_session(session_id)
         if not messages:
             return error_json("未找到会话消息，请先执行一次该任务再要求做成工具")
 
@@ -281,19 +287,23 @@ def create_codify_as_tool_handler(session_id: str):
             }
         )
 
-        repo = PendingTaskRepository()
-        repo.create(
-            PendingAssistantTask(
-                task_id=task_id,
-                task_type="codify_tool",
-                payload=payload,
-                status="pending",
+        with PendingTaskRepository() as repo:
+            repo.create(
+                PendingAssistantTask(
+                    task_id=task_id,
+                    task_type="codify_tool",
+                    payload=payload,
+                    status="pending",
+                )
             )
-        )
 
         # 通知后台 Worker 立即处理（不用 blinker 事件，避免线程嵌套）
         worker_notified = _notify_task_worker()
-        logger.info(f"[codify_as_tool] 已提交工具创建请求: {task_description}, task={task_id}")
+        logger.info(
+            "[codify_as_tool] 已提交工具创建请求: task_chars=%d task_id=%s",
+            len(task_description or ""),
+            task_id,
+        )
 
         return to_json(
             {
@@ -341,38 +351,40 @@ def create_save_profile_handler(session_id: str):
         try:
             from src.data.repositories import AssistantProfileRepository, MessageRepository
 
-            repo = AssistantProfileRepository()
-            repo.save(display_name=display_name, style=style, notes=notes)
+            with AssistantProfileRepository() as repo:
+                repo.save(display_name=display_name, style=style, notes=notes)
 
             # 就地替换当前会话 system prompt 中的 ## 关于用户 / ## 首次见面指引 段落
-            msg_repo = MessageRepository()
-            system_msg = msg_repo.get_first(session_id)
-            if system_msg and system_msg.role == "system" and system_msg.content:
-                new_section = "## 关于用户\n\n"
-                if display_name:
-                    new_section += f"- 称呼：{display_name}\n"
-                if style:
-                    new_section += f"- 沟通风格偏好：{style}\n"
-                if notes:
-                    new_section += f"- 特别注意：{notes}\n"
+            with MessageRepository() as msg_repo:
+                system_msg = msg_repo.get_first(session_id)
+                if system_msg and system_msg.role == "system" and system_msg.content:
+                    new_section = "## 关于用户\n\n"
+                    if display_name:
+                        new_section += f"- 称呼：{display_name}\n"
+                    if style:
+                        new_section += f"- 沟通风格偏好：{style}\n"
+                    if notes:
+                        new_section += f"- 特别注意：{notes}\n"
 
-                new_content = re.sub(
-                    r"## (?:关于用户|首次见面指引).*?(?=\n\n## |\Z)",
-                    new_section.rstrip("\n"),
-                    system_msg.content,
-                    flags=re.DOTALL,
-                )
-                if new_content != system_msg.content:
-                    msg_repo.update_content(system_msg.message_id, new_content)
-                    logger.info(f"[save_profile] 当前会话 system prompt 已更新: {session_id}")
+                    new_content = re.sub(
+                        r"## (?:关于用户|首次见面指引).*?(?=\n\n## |\Z)",
+                        new_section.rstrip("\n"),
+                        system_msg.content,
+                        flags=re.DOTALL,
+                    )
+                    if new_content != system_msg.content:
+                        msg_repo.update_content(system_msg.message_id, new_content)
+                        logger.info("[save_profile] 当前会话 system prompt 已更新: %s", session_id)
 
             logger.info(
-                f"[save_profile] 用户偏好已保存: display_name={display_name}, style={style}"
+                "[save_profile] 用户偏好已保存: display_name=%s, style=%s",
+                display_name,
+                style,
             )
             return to_json({"success": True, "message": "偏好已保存"})
         except Exception as e:
-            logger.error(f"[save_profile] 保存失败: {e}")
-            return error_json(e)
+            logger.error("[save_profile] 保存失败: %s", e, exc_info=True)
+            return error_json("偏好保存失败，请稍后重试。")
 
     return save_profile_handler
 
@@ -413,7 +425,7 @@ DISMISS_SUGGESTION = ToolDefinition(
 )
 
 
-# ===== 归档检索工具 (T057) =====
+# ===== 归档检索工具 =====
 
 
 RETRIEVE_ARCHIVE_SCHEMA = make_tool_schema(
@@ -625,8 +637,7 @@ def create_invalidate_memory_entry_handler(session_id: str | None = None):
                     reason,
                     current_context_entry_ids=_context_entry_ids_for_session(session_id),
                 )
-                _annotate_invalidation_disclosure(result, invalidation_type)
-                return to_json(result)
+                return to_json(_annotate_invalidation_disclosure(result, invalidation_type))
         except Exception as e:
             logger.error("[invalidate_memory_entry] failed: %s", e)
             return error_json(e)
@@ -634,17 +645,20 @@ def create_invalidate_memory_entry_handler(session_id: str | None = None):
     return invalidate_memory_entry_handler
 
 
-def _annotate_invalidation_disclosure(result: dict, invalidation_type: str) -> None:
+def _annotate_invalidation_disclosure(result: dict, invalidation_type: str) -> dict:
     if (
         not isinstance(result, dict)
         or invalidation_type != "proactive"
         or not result.get("success")
     ):
-        return
-    result["requires_user_disclosure"] = True
-    result["disclosure_instruction"] = (
-        "你主动发现了记忆冲突。必须在同一轮 reply_to_user 中告知用户已将这条记忆标记为失效。"
-    )
+        return result
+    return {
+        **result,
+        "requires_user_disclosure": True,
+        "disclosure_instruction": (
+            "你主动发现了记忆冲突。必须在同一轮 reply_to_user 中告知用户已将这条记忆标记为失效。"
+        ),
+    }
 
 
 INVALIDATE_MEMORY_ENTRY = ToolDefinition(
@@ -654,7 +668,7 @@ INVALIDATE_MEMORY_ENTRY = ToolDefinition(
 )
 
 
-# ===== 调度工具 (T069, T070) =====
+# ===== 调度工具 =====
 
 
 REPLY_TO_USER_SCHEMA = make_tool_schema(
@@ -669,6 +683,11 @@ REPLY_TO_USER_SCHEMA = make_tool_schema(
             "type": "array",
             "items": {"type": "string"},
             "description": "本条回复引用的记忆条目 ID 列表，用于更新 referenced_count 计量",
+        },
+        "skills_referenced": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "本条回复实际按步骤执行过的方法论 skill_id 列表，用于更新 referenced_count 计量",
         },
     },
     required=["text"],
@@ -686,6 +705,7 @@ def create_reply_to_user_handler(session_id: str):
     def reply_to_user_handler(
         text: str,
         memory_entries_referenced: list[str] | None = None,
+        skills_referenced: list[str] | None = None,
     ) -> ToolSignal:
         """向用户回复消息（中断型工具）"""
         referenced_ids: list[str] = []
@@ -707,6 +727,18 @@ def create_reply_to_user_handler(session_id: str):
                 )
             except Exception as e:
                 logger.warning("[reply_to_user] 更新 referenced_count 失败: %s", e)
+
+        if isinstance(skills_referenced, list):
+            try:
+                from src.business.brain.skill_reference_counter import SkillReferenceCounterService
+                from src.data.repos.skill_repository import SkillRepository
+
+                with SkillRepository() as skill_repo:
+                    SkillReferenceCounterService(repo=skill_repo).process_reply_metadata(
+                        skills_referenced
+                    )
+            except Exception as e:
+                logger.warning("[reply_to_user] 更新方法论 referenced_count 失败: %s", e)
 
         return ToolSignal(
             result_type=ResultType.NEEDS_USER_INPUT,

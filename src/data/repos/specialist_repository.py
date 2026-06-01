@@ -34,6 +34,8 @@ class SpecialistRepository(BaseRepository):
         tool_whitelist: list[str],
         origin: str,
         reason: str,
+        *,
+        commit: bool = True,
     ) -> str:
         """创建一个新专员，同时创建第一条版本记录。返回 specialist_id。"""
         specialist_id = _new_id()
@@ -67,8 +69,10 @@ class SpecialistRepository(BaseRepository):
                 change_reason=reason,
             )
             self.session.add(version)
-            self.session.commit()
-            self.session.expire_all()
+            self.session.flush()
+            if commit:
+                self.session.commit()
+                self.session.expire_all()
 
             logger.info("Specialist 已创建: %s (name=%s)", specialist_id, name)
             return specialist_id
@@ -115,6 +119,8 @@ class SpecialistRepository(BaseRepository):
         tool_whitelist: Optional[list[str]] = None,
         changed_by: str = "user",
         change_reason: Optional[str] = None,
+        *,
+        commit: bool = True,
     ) -> bool:
         """更新专员信息，同时创建新版本记录。返回 True 表示成功。"""
         specialist = self.get_specialist(specialist_id)
@@ -152,7 +158,10 @@ class SpecialistRepository(BaseRepository):
                 change_reason=change_reason,
             )
             self.session.add(version)
-            self.session.commit()
+            if commit:
+                self.session.commit()
+            else:
+                self.session.flush()
 
             logger.info("Specialist %s updated to version %d", specialist_id, new_version)
             return True

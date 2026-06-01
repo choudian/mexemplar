@@ -97,7 +97,7 @@ teaching_failure_retrying = _signals.signal("teaching_failure_retrying")
 settings_changed = _signals.signal("settings_changed")
 """设置变更事件"""
 
-skills_changed = _signals.signal("skills_changed")
+tools_changed = _signals.signal("tools_changed")
 """工具增删变更事件"""
 
 composition_review_needed = _signals.signal("composition_review_needed")
@@ -124,6 +124,18 @@ brain_specialist_recruited = _signals.signal("brain_specialist_recruited")
 
 brain_context_ready = _signals.signal("brain_context_ready")
 """助理大脑上下文构建完成"""
+
+brain_skill_changed = _signals.signal("brain_skill_changed")
+"""方法论资产状态变化事件"""
+
+brain_skill_equipment_changed = _signals.signal("brain_skill_equipment_changed")
+"""方法论装备关系变化事件"""
+
+brain_skill_supersede_completed = _signals.signal("brain_skill_supersede_completed")
+"""方法论 supersede 事务完成事件"""
+
+brain_skill_bootstrap_fallback_used = _signals.signal("brain_skill_bootstrap_fallback_used")
+"""内置方法论 seed 读取失败并启用 fallback"""
 
 # =============================================================================
 # 事件数据类
@@ -251,7 +263,7 @@ _signal_names = [
     "teaching_failure_resolved",
     "teaching_failure_retrying",
     "settings_changed",
-    "skills_changed",
+    "tools_changed",
     "composition_review_needed",
     "trial_requested",
     "brain_zone_changed",
@@ -260,6 +272,10 @@ _signal_names = [
     "segment_idle_trigger",
     "brain_specialist_recruited",
     "brain_context_ready",
+    "brain_skill_changed",
+    "brain_skill_equipment_changed",
+    "brain_skill_supersede_completed",
+    "brain_skill_bootstrap_fallback_used",
 ]
 
 
@@ -303,7 +319,7 @@ __all__ = [
     "teaching_failure_resolved",
     "teaching_failure_retrying",
     "settings_changed",
-    "skills_changed",
+    "tools_changed",
     "composition_review_needed",
     "trial_requested",
     "brain_zone_changed",
@@ -312,6 +328,10 @@ __all__ = [
     "segment_idle_trigger",
     "brain_specialist_recruited",
     "brain_context_ready",
+    "brain_skill_changed",
+    "brain_skill_equipment_changed",
+    "brain_skill_supersede_completed",
+    "brain_skill_bootstrap_fallback_used",
     # 数据类
     "RecordingEventData",
     # 函数

@@ -107,17 +107,21 @@ async def get_segments(
     status: str = Query(default="all"),
 ):
     """列出 Segments"""
-    items, total = BrainManagementService().get_segments(
-        status=status,
-        limit=limit,
-        offset=offset,
-    )
-    return {
-        "items": items,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+    try:
+        items, total = BrainManagementService().get_segments(
+            status=status,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "items": items,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception:
+        logger.exception("Failed to list segments")
+        raise HTTPException(status_code=500, detail={"error": "internal_error"})
 
 
 @router.post("/segments/{segment_id}/retry")
@@ -170,7 +174,7 @@ async def delete_entry(entry_id: str):
 
 
 # ═══════════════════════════════════════════════
-# Specialist CRUD (T077)
+# Specialist CRUD
 # ═══════════════════════════════════════════════
 
 
@@ -199,18 +203,22 @@ async def list_specialists(
     active_only: bool = Query(default=True),
 ):
     """列出专员"""
-    service = SpecialistService()
-    specialists, total = service.list_specialists(
-        active_only=active_only,
-        limit=limit,
-        offset=offset,
-    )
-    return {
-        "items": specialists,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
+    try:
+        service = SpecialistService()
+        specialists, total = service.list_specialists(
+            active_only=active_only,
+            limit=limit,
+            offset=offset,
+        )
+        return {
+            "items": specialists,
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+    except Exception:
+        logger.exception("Failed to list specialists")
+        raise HTTPException(status_code=500, detail={"error": "internal_error"})
 
 
 @router.get("/specialists/{specialist_id}")
@@ -275,7 +283,7 @@ async def get_specialist_versions(
 
 
 # ═══════════════════════════════════════════════
-# Skill Pool (T116)
+# Skill Pool
 # ═══════════════════════════════════════════════
 
 

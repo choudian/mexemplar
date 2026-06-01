@@ -86,7 +86,7 @@ async function withBusy(
   try {
     return await fn();
   } catch (error) {
-    set({ lastError: toErrorMessage(error, "无法加载技能列表。") });
+    set({ lastError: toErrorMessage(error, "无法加载工具列表。") });
     return null;
   } finally {
     set({ busy: false });
@@ -127,14 +127,18 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     useTeachingStore.getState().openSkillTrial(toolId);
   },
   updateMetadata: async (toolId, name, description) => {
-    await updateSkillMetadata(toolId, { name, description });
-    await get().loadCategory("published");
+    try {
+      await updateSkillMetadata(toolId, { name, description });
+      await get().loadCategory("published");
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "更新工具信息失败。") });
+    }
   },
   deleteSkill: async (toolId) => {
     try {
       await deleteSkill(toolId);
     } catch (error) {
-      set({ lastError: toErrorMessage(error, "删除技能失败。") });
+      set({ lastError: toErrorMessage(error, "删除工具失败。") });
       return;
     }
     const prev = get();
@@ -152,13 +156,15 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
     syncNavigationCounts(nextCounts);
   },
   retryFailure: async (workflowId) => {
+    set({ busy: true, lastError: null });
     try {
       await retryFailure(workflowId);
+      await get().loadAllCategories();
     } catch (error) {
       set({ lastError: toErrorMessage(error, "重试失败。") });
-      return;
+    } finally {
+      set({ busy: false });
     }
-    await get().loadAllCategories();
   },
   dismissFailure: async (workflowId) => {
     try {
@@ -173,15 +179,13 @@ export const useSkillsStore = create<SkillsState>((set, get) => ({
       failed: prev.categories.failed.filter((skill) => skill.workflowId !== workflowId),
     };
     const removed = nextCategories.failed.length !== prev.categories.failed.length;
-    const nextFailedCount = removed
-      ? decrementCount(prev.counts.failed)
-      : Math.max(0, Math.min(prev.counts.failed, nextCategories.failed.length));
+    const nextFailedCount = removed ? decrementCount(prev.counts.failed) : prev.counts.failed;
     const nextCounts = { ...prev.counts, failed: nextFailedCount };
     set({ categories: nextCategories, counts: nextCounts });
     syncNavigationCounts(nextCounts);
   },
   applyEvent: (event) => {
-    if (event.type === "skills.changed") {
+    if (event.type === "tools.changed") {
       scheduleRefresh(() => get().loadAllCategories());
     }
   },

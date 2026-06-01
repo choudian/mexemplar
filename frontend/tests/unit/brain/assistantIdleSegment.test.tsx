@@ -138,6 +138,16 @@ describe("Assistant idle segment timer", () => {
     expect(triggerAssistantSegmentIdle).not.toHaveBeenCalled();
   });
 
+  test("new session failures are captured in store state", async () => {
+    vi.mocked(createAssistantSession).mockRejectedValueOnce(new Error("backend unavailable"));
+
+    const sessionId = await useAssistantStore.getState().createSession();
+
+    expect(sessionId).toBeNull();
+    expect(useAssistantStore.getState().activeSessionId).toBeNull();
+    expect(useAssistantStore.getState().lastError).toBe("backend unavailable");
+  });
+
   test("selecting a different session seals the previous conversation with a new_session boundary", async () => {
     useAssistantStore.setState({ activeSessionId: "ast_existing" });
 

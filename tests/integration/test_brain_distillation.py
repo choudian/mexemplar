@@ -11,6 +11,7 @@ Segment 沉淀集成冒烟测试 (T027)
 import pytest
 from uuid import uuid4
 
+from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.brain.models import (
     DistillationOutput,
     DistillationZoneOutput,
@@ -141,6 +142,100 @@ class TestDistillationIntegration:
             assert entry.source_segment_id == segment_id
             assert entry.source_session_id == session_id
             assert entry.status == "active"
+
+    def test_distill_segment_runs_llm_tool_flow_and_completes_segment(
+        self, in_memory_db, mock_config
+    ):
+        """distill_segment() 应覆盖 CAS、消息读取、LLM tool output、原子完成整条编排路径。"""
+        from src.business.brain.segment_service import SegmentService
+        from src.business.brain.distillation_service import DistillationService
+        from src.data.repos.brain_repository import BrainRepository
+        from tests.conftest import MockLLMClient
+
+        session_id = uuid4().hex[:50]
+        first_message_id = uuid4().hex[:50]
+        second_message_id = uuid4().hex[:50]
+        with in_memory_db.get_session() as session:
+            session.add(
+                Session(
+                    session_id=session_id,
+                    agent_type="assistant",
+                    status="active",
+                )
+            )
+            session.add_all(
+                [
+                    Message(
+                        message_id=first_message_id,
+                        session_id=session_id,
+                        sequence=1,
+                        role="user",
+                        content="请记住我偏好简短回复。",
+                    ),
+                    Message(
+                        message_id=second_message_id,
+                        session_id=session_id,
+                        sequence=2,
+                        role="assistant",
+                        content="已记录。",
+                    ),
+                ]
+            )
+            session.commit()
+
+        repo = BrainRepository()
+        segment_service = SegmentService()
+        segment_service._repo = repo
+        segment_id = segment_service.seal_segment(
+            session_id=session_id,
+            boundary_reason=BoundaryReason.IDLE.value,
+            message_id_start=first_message_id,
+            message_id_end=second_message_id,
+        )
+        mock_config.get_brain_segment_max_distillation_retries.return_value = 3
+        llm = MockLLMClient(
+            [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[
+                        ToolCallInfo(
+                            id="call_1",
+                            name="distillation_output",
+                            args={
+                                "hot_zone": [
+                                    {
+                                        "content": "用户要求记住简短回复偏好",
+                                        "reason": "近期对话偏好",
+                                        "entry_type": "event",
+                                    }
+                                ],
+                                "persistent_zone": [
+                                    {
+                                        "content": "用户偏好简短回复",
+                                        "reason": "稳定表达偏好",
+                                    }
+                                ],
+                            },
+                        )
+                    ],
+                )
+            ]
+        )
+
+        result = DistillationService(repo=repo, config=mock_config).distill_segment(
+            segment_id,
+            llm_client=llm,
+            phase="p1",
+        )
+
+        assert result is True
+        assert repo.get_segment_by_id(segment_id).status == SegmentStatus.COMPLETED.value
+        assert [entry.content for entry in repo.get_entries_by_zone(Zone.HOT.value)] == [
+            "用户要求记住简短回复偏好"
+        ]
+        assert [entry.content for entry in repo.get_entries_by_zone(Zone.PERSISTENT.value)] == [
+            "用户偏好简短回复"
+        ]
 
     def test_distillation_failure_marks_segment_failed(self, in_memory_db, mock_config):
         """沉淀失败时应将 segment 标记为 failed。"""

@@ -27,10 +27,13 @@ export interface AssistantMessagesResponse {
 export interface AssistantConfirmation {
   requestId: string;
   sessionId?: string;
-  actionType: "write_file" | "edit_file" | "exec" | "unknown";
+  actionType: "write_file" | "edit_file" | "exec" | "skill.edit_protected" | "skill.soft_delete" | "unknown";
   sanitizedSummary: string;
   status: "queued" | "active" | "approved" | "denied" | "timed_out" | "cancelled";
   expiresAt?: string | null;
+  affectedSkillId?: string;
+  affectedEquipmentCount?: number;
+  affectedSpecialistNames?: string[];
 }
 
 export async function listAssistantSessions(query = "", limit = 200): Promise<AssistantSession[]> {

@@ -11,12 +11,16 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    DDL,
+    event,
+    Index,
     Integer,
     JSON,
     LargeBinary,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
@@ -431,6 +435,153 @@ class BrainRecruitmentSignal(Base):
 
     def __repr__(self) -> str:
         return f"<BrainRecruitmentSignal(signal_id={self.signal_id!r}, task_pattern={self.task_pattern!r})>"
+
+
+class BrainSkill(Base):
+    """方法论资产表。"""
+
+    __tablename__ = "brain_skills"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'superseded', 'soft_deleted')",
+            name="ck_brain_skills_status",
+        ),
+        CheckConstraint(
+            "origin IN ('system_bootstrap', 'user_edit', 'assistant_tool_call', "
+            "'specialist_tool_call', 'external_import')",
+            name="ck_brain_skills_origin",
+        ),
+        CheckConstraint(
+            "(status = 'superseded') = (superseded_by IS NOT NULL)",
+            name="ck_brain_skills_superseded_by_status",
+        ),
+    )
+
+    skill_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    trigger_conditions: Mapped[str] = mapped_column(Text, nullable=False)
+    required_tools: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    body_markdown: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    origin: Mapped[str] = mapped_column(String(30), nullable=False)
+    parent_skill_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    superseded_by: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    chain_root_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    last_changed_by: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    change_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    loaded_count: Mapped[int] = mapped_column(Integer, default=0)
+    referenced_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_referenced_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<BrainSkill(skill_id={self.skill_id!r}, name={self.name!r}, status={self.status!r})>"
+        )
+
+
+class BrainSkillSourceSegment(Base):
+    """方法论素材来源关联表。"""
+
+    __tablename__ = "brain_skill_source_segments"
+    __table_args__ = (
+        CheckConstraint(
+            "source_zone IN ('archive', 'failure')",
+            name="ck_brain_skill_source_segments_zone",
+        ),
+        UniqueConstraint("skill_id", "segment_id", name="uq_brain_skill_source_segment"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    skill_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    segment_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_zone: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<BrainSkillSourceSegment(skill_id={self.skill_id!r}, "
+            f"segment_id={self.segment_id!r})>"
+        )
+
+
+class BrainSkillEquipment(Base):
+    """装备者与方法论之间的状态化关系。"""
+
+    __tablename__ = "brain_skill_equipment"
+    __table_args__ = (
+        CheckConstraint(
+            "equipped_entity_type IN ('assistant', 'specialist')",
+            name="ck_brain_skill_equipment_entity_type",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'unequipped')",
+            name="ck_brain_skill_equipment_status",
+        ),
+        CheckConstraint(
+            "unequipped_reason IS NULL OR unequipped_reason IN "
+            "('user_unequip', 'force_remove_on_soft_delete', 'supersede_transfer')",
+            name="ck_brain_skill_equipment_reason",
+        ),
+        CheckConstraint(
+            "(status = 'active' AND unequipped_at IS NULL AND unequipped_reason IS NULL) OR "
+            "(status = 'unequipped' AND unequipped_at IS NOT NULL AND unequipped_reason IS NOT NULL)",
+            name="ck_brain_skill_equipment_status_fields",
+        ),
+        Index(
+            "uq_brain_skill_equipment_active",
+            "equipped_entity_type",
+            "equipped_entity_id",
+            "skill_id",
+            unique=True,
+            sqlite_where=text("status = 'active'"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    equipped_entity_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    equipped_entity_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    skill_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    equipped_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    equipped_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    unequipped_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    unequipped_reason: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<BrainSkillEquipment(entity={self.equipped_entity_type}:"
+            f"{self.equipped_entity_id}, skill_id={self.skill_id!r}, status={self.status!r})>"
+        )
+
+
+event.listen(
+    BrainSkill.__table__,
+    "after_create",
+    DDL("""
+        CREATE TRIGGER IF NOT EXISTS trg_brain_skills_no_delete
+        BEFORE DELETE ON brain_skills
+        BEGIN
+            SELECT RAISE(ABORT, 'brain_skills_no_physical_delete');
+        END
+        """),
+)
+
+event.listen(
+    BrainSkillEquipment.__table__,
+    "after_create",
+    DDL("""
+        CREATE TRIGGER IF NOT EXISTS trg_brain_skill_equipment_no_delete
+        BEFORE DELETE ON brain_skill_equipment
+        BEGIN
+            SELECT RAISE(ABORT, 'brain_skill_equipment_no_physical_delete');
+        END
+        """),
+)
 
 
 class FeedbackSignal(Base):

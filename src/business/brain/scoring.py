@@ -3,6 +3,23 @@
 import math
 from datetime import datetime, timezone
 
+# 复合评分权重（热区 / 归档区检索公用）
+HOT_RELEVANCE_WEIGHT = 0.35
+HOT_RECENCY_WEIGHT = 0.25
+HOT_EFFECTIVENESS_WEIGHT = 0.25
+HOT_EXPLORATION_WEIGHT = 0.15
+
+# 潜意识区权重
+SUBCONSCIOUS_RECENCY_WEIGHT = 0.60
+SUBCONSCIOUS_EFFECTIVENESS_WEIGHT = 0.25
+SUBCONSCIOUS_EXPLORATION_WEIGHT = 0.15
+
+# 新条目探索加分阈值
+EXPLORATION_LOADED_THRESHOLD = 3
+
+# 复用会话已加载条目的额外加分
+HOT_REVIVED_SESSION_BONUS = 0.35
+
 
 def compute_recency_score(created_at_value: object, *, half_life_days: float) -> float:
     """Return a timezone-safe exponential recency score with an explicit policy half-life."""

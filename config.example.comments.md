@@ -33,3 +33,11 @@
 - `first_party_whitelist`: 额外视为 first-party 的站点键列表，填写 registrable domain / eTLD+1，例如 `example.com`、`example.co.uk`。
 - `static_extensions`: 通过 URL 后缀识别静态资源的扩展名白名单。
 - `static_content_type_prefixes`: 通过响应 `Content-Type` 识别静态资源的前缀白名单。
+
+## `brain.skill`
+
+方法论资产层配置。运行时读取必须走 `get_unified_config()`；Settings UI 本期不暴露这些 tuning knob。
+
+- `token_budget.warn_threshold`: 方法论装备清单 token 计量条黄色阈值，默认 4096。
+- `token_budget.danger_threshold`: 方法论装备清单 token 计量条红色阈值，默认 8192。
+- `seed_file_path`: "如何创建方法论"内置 seed 文件路径，默认 `src/business/brain/seed/how_to_create_skill_methodology.md`。

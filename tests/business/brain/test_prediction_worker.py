@@ -284,6 +284,35 @@ def test_background_worker_unhandled_distillation_failure_consumes_retry_budget(
     assert after_second.status == "failed"
 
 
+def test_background_worker_recover_crashed_segments_resets_distilling_segments(in_memory_db):
+    from src.business.brain.background_worker import BrainBackgroundWorker
+    from src.business.brain.models import SegmentStatus
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    segment_id = repo.create_segment(
+        session_id="sess-crashed",
+        boundary_reason="idle",
+        message_id_start="msg-1",
+        message_id_end="msg-2",
+    )
+    assert repo.transition_segment_status(
+        segment_id,
+        from_status=SegmentStatus.PENDING.value,
+        to_status=SegmentStatus.DISTILLING.value,
+    )
+
+    BrainBackgroundWorker()._recover_crashed_segments()
+
+    assert BrainRepository().get_segment_by_id(segment_id).status == SegmentStatus.PENDING.value
+
+
+def test_background_worker_initializes_consecutive_tick_errors():
+    from src.business.brain.background_worker import BrainBackgroundWorker
+
+    assert BrainBackgroundWorker()._consecutive_tick_errors == 0
+
+
 def test_background_worker_does_not_restart_before_stopping_thread_exits():
     from src.business.brain.background_worker import BrainBackgroundWorker
 

@@ -9,11 +9,9 @@ import {
 } from "../api/brain";
 import type {
   BrainSpecialist,
-  SkillPoolItem,
   SpecialistVersion,
 } from "../api/brain";
 import type { UiEvent } from "../api/client";
-import { useBrainStore } from "./brainStore";
 import { toErrorMessage } from "./helpers";
 
 export interface SpecialistDraft {
@@ -47,9 +45,8 @@ export interface SpecialistState {
   load: () => Promise<void>;
   select: (specialistId: string | null) => void;
   setDraftField: <K extends keyof SpecialistDraft>(field: K, value: SpecialistDraft[K]) => void;
-  toggleWhitelist: (toolId: string, skillName?: string) => void;
+  toggleWhitelist: (toolId: string) => void;
   saveDraft: () => Promise<void>;
-  deleteSelected: () => Promise<void>;
   deleteById: (specialistId: string) => Promise<void>;
   loadVersions: (specialistId: string) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
@@ -74,10 +71,6 @@ function draftFromSpecialist(item: BrainSpecialist): SpecialistDraft {
     tool_whitelist: [...item.tool_whitelist],
     change_reason: "",
   };
-}
-
-export function useSpecialistSkillPool(): SkillPoolItem[] {
-  return useBrainStore((state) => state.skillPool);
 }
 
 export const useSpecialistStore = create<SpecialistState>((set, get) => ({
@@ -176,12 +169,6 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
     } finally {
       set({ saving: false });
     }
-  },
-
-  deleteSelected: async () => {
-    const selectedId = get().selectedId;
-    if (!selectedId) return;
-    await get().deleteById(selectedId);
   },
 
   deleteById: async (specialistId) => {

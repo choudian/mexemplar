@@ -1,27 +1,27 @@
 """
-Retrieval Service - 归档区显式检索
+Retrieval Service - 归档区/失败区显式检索与记忆失效
 
 负责：
 - 关键词检索归档区条目
+- 检索失败区 active/invalidated 避坑记忆
 - 复合评分：relevance + recency + effectiveness + exploration
 - invalidated 条目降权但仍可检索
 - 检索后递增 loaded_count
+- 当前上下文内记忆 invalidation
 """
 
-from src.business.brain.scoring import compute_recency_score
+from src.business.brain.scoring import (
+    EXPLORATION_LOADED_THRESHOLD,
+    HOT_EFFECTIVENESS_WEIGHT as EFFECTIVENESS_WEIGHT,
+    HOT_EXPLORATION_WEIGHT as EXPLORATION_WEIGHT,
+    HOT_RECENCY_WEIGHT as RECENCY_WEIGHT,
+    HOT_RELEVANCE_WEIGHT as RELEVANCE_WEIGHT,
+    compute_recency_score,
+)
 from src.utils.events import emit
-
-# 复合评分权重
-RELEVANCE_WEIGHT = 0.35
-RECENCY_WEIGHT = 0.25
-EFFECTIVENESS_WEIGHT = 0.25
-EXPLORATION_WEIGHT = 0.15
 
 # invalidated 降权系数
 INVALIDATED_PENALTY = 0.5
-
-# 新条目探索加分阈值
-EXPLORATION_LOADED_THRESHOLD = 3
 
 
 class RetrievalService:

@@ -9,6 +9,7 @@ export type RouteId =
   | "compositions"
   | "brain"
   | "brain-specialists"
+  | "skill-methodology"
   | "settings";
 
 export interface ShellState {

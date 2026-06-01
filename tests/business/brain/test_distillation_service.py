@@ -8,6 +8,7 @@ P1 热区/持久区沉淀 schema 验证测试 (T025)
 - 事务性写入（所有 entry + segment 状态在同一事务内）
 """
 
+import logging
 import pytest
 from uuid import uuid4
 from unittest.mock import MagicMock
@@ -217,6 +218,30 @@ class TestDistillationOutputValidation:
 
         assert entries is None
 
+    def test_invalid_distillation_output_log_includes_raw_sample(self, caplog):
+        from src.business.ai.llm_client import LLMResponse, ToolCallInfo
+        from src.business.brain.distillation_service import DistillationService
+
+        response = LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallInfo(
+                    id="call-1",
+                    name="distillation_output",
+                    args={"hot_zone": [{"content": "", "reason": "missing"}]},
+                )
+            ],
+        )
+
+        with caplog.at_level(logging.WARNING):
+            entries = DistillationService(
+                repo=MagicMock(), config=MagicMock()
+            )._validate_distillation_output(response)
+
+        assert entries is None
+        assert "raw_sample=" in caplog.text
+        assert "hot_zone" in caplog.text
+
     def test_validate_distillation_output_accepts_structural_all_empty(self):
         """结构合法但各分区为空时返回空列表，由上层触发一次 all-empty 重试。"""
         from src.business.ai.llm_client import LLMResponse, ToolCallInfo
@@ -334,18 +359,26 @@ class TestAllEmptyRetryLogic:
         """有内容的输出不应触发 all-empty 重试。"""
         from src.business.brain.distillation_service import DistillationService
 
-        mock_repo = MagicMock()
         mock_config = MagicMock()
 
-        service = DistillationService(repo=mock_repo, config=mock_config)
-
         segment_id = uuid4().hex[:50]
-        mock_repo.get_segment_by_id.return_value = MagicMock(
-            segment_id=segment_id,
-            status="distilling",
-            retry_count=0,
-            all_empty_retried=False,
-        )
+
+        class AtomicRepo:
+            def __init__(self):
+                self.segment = MagicMock(
+                    segment_id=segment_id,
+                    status="distilling",
+                    retry_count=0,
+                    all_empty_retried=False,
+                )
+
+            def get_segment_by_id(self, _segment_id):
+                return self.segment
+
+            def complete_segment_with_entries(self, _segment_id, entries):
+                return [entry.get("entry_id") or uuid4().hex[:50] for entry in entries]
+
+        service = DistillationService(repo=AtomicRepo(), config=mock_config)
 
         non_empty_output = DistillationOutput(
             hot_zone=[
@@ -368,23 +401,34 @@ class TestTransactionalWrites:
     """验证所有 entry 写入和 segment 状态转换在同一事务内。"""
 
     def test_write_entries_and_complete_segment_in_transaction(self):
-        """沉淀成功时应在一个事务内写入所有 entry 并将 segment 设为 completed。"""
+        """沉淀成功时应委托 Repository 的单事务完成方法。"""
         from src.business.brain.distillation_service import DistillationService
 
-        mock_repo = MagicMock()
         mock_config = MagicMock()
-
-        service = DistillationService(repo=mock_repo, config=mock_config)
-
         segment_id = uuid4().hex[:50]
         session_id = uuid4().hex[:50]
-        mock_repo.get_segment_by_id.return_value = MagicMock(
-            segment_id=segment_id,
-            session_id=session_id,
-            status="distilling",
-            retry_count=0,
-            all_empty_retried=False,
-        )
+
+        class AtomicRepo:
+            def __init__(self):
+                self.complete_segment_with_entries_mock = MagicMock(
+                    return_value=["entry-1", "entry-2", "entry-3"]
+                )
+                self.segment = MagicMock(
+                    segment_id=segment_id,
+                    session_id=session_id,
+                    status="distilling",
+                    retry_count=0,
+                    all_empty_retried=False,
+                )
+
+            def get_segment_by_id(self, _segment_id):
+                return self.segment
+
+            def complete_segment_with_entries(self, _segment_id, entries):
+                return self.complete_segment_with_entries_mock(_segment_id, entries)
+
+        repo = AtomicRepo()
+        service = DistillationService(repo=repo, config=mock_config)
 
         output = DistillationOutput(
             hot_zone=[
@@ -410,15 +454,10 @@ class TestTransactionalWrites:
 
         service.handle_distillation_result(segment_id, output)
 
-        # 验证 entry 写入被调用
-        mock_repo.create_entries_for_segment.assert_called_once()
-
-        # 验证 segment 状态转换到 completed
-        mock_repo.transition_segment_status.assert_called_once_with(
-            segment_id,
-            from_status="distilling",
-            to_status="completed",
-        )
+        repo.complete_segment_with_entries_mock.assert_called_once()
+        called_segment_id, entries = repo.complete_segment_with_entries_mock.call_args.args
+        assert called_segment_id == segment_id
+        assert len(entries) == 3
 
     def test_distillation_failure_does_not_write_entries(self):
         """沉淀失败时不应写入任何 entry。"""

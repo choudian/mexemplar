@@ -223,6 +223,72 @@ class UIConfig:
 
 
 @dataclass
+class BrainSegmentConfig:
+    """大脑 Segment 配置"""
+
+    idle_threshold_seconds: int = 300
+    max_distillation_retries: int = 3
+
+
+@dataclass
+class BrainWorkerConfig:
+    """大脑后台 Worker 配置"""
+
+    tick_interval_seconds: int = 300
+    prediction_verification_retries: int = 3
+
+
+@dataclass
+class BrainInjectionConfig:
+    """大脑上下文注入配置"""
+
+    hot_zone_top_n: int = 20
+    subconscious_top_n: int = 10
+
+
+@dataclass
+class BrainDecayConfig:
+    """大脑衰减配置"""
+
+    fading_threshold: float = 0.3
+
+
+@dataclass
+class BrainRecruitmentConfig:
+    """专员自动招募配置"""
+
+    min_delegation_count: int = 5
+
+
+@dataclass
+class BrainSkillTokenBudgetConfig:
+    """方法论装备清单 token 预算阈值。"""
+
+    warn_threshold: int = 4096
+    danger_threshold: int = 8192
+
+
+@dataclass
+class BrainSkillConfig:
+    """方法论资产配置。"""
+
+    token_budget: BrainSkillTokenBudgetConfig = field(default_factory=BrainSkillTokenBudgetConfig)
+    seed_file_path: str = "src/business/brain/seed/how_to_create_skill_methodology.md"
+
+
+@dataclass
+class BrainConfig:
+    """大脑配置"""
+
+    segment: BrainSegmentConfig = field(default_factory=BrainSegmentConfig)
+    worker: BrainWorkerConfig = field(default_factory=BrainWorkerConfig)
+    injection: BrainInjectionConfig = field(default_factory=BrainInjectionConfig)
+    decay: BrainDecayConfig = field(default_factory=BrainDecayConfig)
+    recruitment: BrainRecruitmentConfig = field(default_factory=BrainRecruitmentConfig)
+    skill: BrainSkillConfig = field(default_factory=BrainSkillConfig)
+
+
+@dataclass
 class AppConfig:
     """应用配置"""
 
@@ -232,6 +298,7 @@ class AppConfig:
     ai: AIConfig = field(default_factory=AIConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    brain: BrainConfig = field(default_factory=BrainConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（不包含敏感信息）"""
@@ -264,6 +331,30 @@ class AppConfig:
 
         if "ui" in data:
             config.ui = UIConfig(**_filter_dataclass_fields(data["ui"], UIConfig))
+
+        if "brain" in data:
+            brain_data = _filter_dataclass_fields(data["brain"], BrainConfig)
+            for key, sub_cls in (
+                ("segment", BrainSegmentConfig),
+                ("worker", BrainWorkerConfig),
+                ("injection", BrainInjectionConfig),
+                ("decay", BrainDecayConfig),
+                ("recruitment", BrainRecruitmentConfig),
+            ):
+                val = brain_data.get(key)
+                if isinstance(val, dict):
+                    brain_data[key] = sub_cls(**_filter_dataclass_fields(val, sub_cls))
+            skill_data = brain_data.get("skill")
+            if isinstance(skill_data, dict):
+                token_budget = skill_data.get("token_budget")
+                if isinstance(token_budget, dict):
+                    skill_data["token_budget"] = BrainSkillTokenBudgetConfig(
+                        **_filter_dataclass_fields(token_budget, BrainSkillTokenBudgetConfig)
+                    )
+                brain_data["skill"] = BrainSkillConfig(
+                    **_filter_dataclass_fields(skill_data, BrainSkillConfig)
+                )
+            config.brain = BrainConfig(**brain_data)
 
         if "app_name" in data:
             config.app_name = data["app_name"]

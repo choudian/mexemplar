@@ -19,6 +19,7 @@ class SegmentService:
     def _get_repo(self):
         if self._repo is None:
             from src.data.repos.brain_repository import BrainRepository
+
             self._repo = BrainRepository()
         return self._repo
 
@@ -68,7 +69,9 @@ class SegmentService:
         )
         logger.info(
             "Segment sealed: %s, session=%s, reason=%s",
-            segment_id, session_id, boundary_reason,
+            segment_id,
+            session_id,
+            boundary_reason,
         )
         return segment_id
 
@@ -85,9 +88,9 @@ class SegmentService:
         return self.seal_segment(session_id, boundary_reason="idle")
 
     def _infer_message_range(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
-        """Infer the unsealed user-visible message range for the session."""
+        """Infer the contiguous user-visible message range not covered by sealed segments."""
         try:
-            from src.data.repositories import MessageRepository
+            from src.data.repos.message_repository import MessageRepository
         except ImportError:
             return None, None
 
@@ -110,8 +113,7 @@ class SegmentService:
             return None, None
 
         sequence_by_id = {
-            getattr(msg, "message_id", ""): getattr(msg, "sequence", 0)
-            for msg in messages
+            getattr(msg, "message_id", ""): getattr(msg, "sequence", 0) for msg in messages
         }
         last_sealed_sequence = 0
         repo = self._get_repo()
@@ -123,11 +125,7 @@ class SegmentService:
         except Exception as exc:
             logger.warning("Failed to inspect previous Segments for %s: %s", session_id, exc)
 
-        unsealed = [
-            msg
-            for msg in messages
-            if getattr(msg, "sequence", 0) > last_sealed_sequence
-        ]
+        unsealed = [msg for msg in messages if getattr(msg, "sequence", 0) > last_sealed_sequence]
         if not unsealed:
             return None, None
         return (

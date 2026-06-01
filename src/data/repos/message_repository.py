@@ -174,15 +174,13 @@ class MessageRepository(BaseRepository):
     def _display_filter(self, query):
         return query.filter(
             and_(
-                Message.role.in_(["user", "assistant", "summary"]),
+                Message.role.in_(["user", "assistant"]),
                 Message.content != "",
                 Message.content.isnot(None),
                 or_(
                     Message.message_type == "normal",
                     Message.message_type.is_(None),
-                    and_(Message.message_type == "compressed", Message.role == "summary"),
                 ),
-                Message.is_archived.is_(False),
             ),
         )
 

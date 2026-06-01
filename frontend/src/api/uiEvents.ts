@@ -9,7 +9,9 @@ export const UI_EVENT_TYPES = [
   "trial.progress",
   "trial.preview_requested",
   "trial.preview_resolved",
-  "skills.changed",
+  "tools.changed",
+  "skill.changed",
+  "skill.equipment.changed",
   "compositions.changed",
   "settings.changed",
   "brain_zone_changed",
@@ -31,8 +33,8 @@ export const UI_EVENT_EXAMPLES = {
     "status": "active",
   },
   "recording.progress": { "status": "recording", "message": "Recording started.", "recordingMode": "desktop" },
-  "teaching.stage_changed": { "stage": "learning", "message": "Skill learning started." },
-  "teaching.progress": { "status": "running", "headline": "Skill learning started" },
+  "teaching.stage_changed": { "stage": "learning", "message": "Tool learning started." },
+  "teaching.progress": { "status": "running", "headline": "Tool learning started" },
   "trial.progress": { "status": "succeeded", "published": false, "successCount": 1 },
   "trial.preview_requested": {
     "requestId": "preview_1",
@@ -51,7 +53,18 @@ export const UI_EVENT_EXAMPLES = {
     "decision": "deny",
     "status": "timeout",
   },
-  "skills.changed": { "reason": "catalog_invalidated" },
+  "tools.changed": { "reason": "catalog_invalidated" },
+  "skill.changed": {
+    "reason": "create",
+    "skillId": "skl_abc",
+    "chainRootId": "skl_abc",
+  },
+  "skill.equipment.changed": {
+    "changeType": "equipped",
+    "entityType": "assistant",
+    "entityId": "_assistant",
+    "skillId": "skl_abc",
+  },
   "compositions.changed": { "reason": "catalog_invalidated" },
   "settings.changed": { "reason": "settings_invalidated", "keys": [] },
   "brain_zone_changed": { "zone": "hot", "entryId": "entry_1", "changeType": "create" },
@@ -62,13 +75,24 @@ export const UI_EVENT_EXAMPLES = {
     "managementUrl": "/brain/specialists",
   },
   "brain_context_ready": { "sessionId": "sess_1" },
-  "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "skills", "brain"] },
+  "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"] },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;
 
 export const UI_EVENT_PAYLOAD_ENUMS = {
   "assistant.message": {
     "role": ["assistant", "summary", "user"],
     "rendering": ["plain_text", "safe_markdown"],
+  },
+  "assistant.confirmation": {
+    "actionType": [
+      "edit_file",
+      "exec",
+      "skill.edit_protected",
+      "skill.soft_delete",
+      "unknown",
+      "write_file",
+    ],
+    "status": ["active"],
   },
   "teaching.stage_changed": {
     "stage": [
@@ -99,12 +123,34 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
       "timeout",
     ],
   },
+  "skill.changed": {
+    "reason": [
+      "bootstrap_fallback_used",
+      "create",
+      "soft_delete",
+      "supersede",
+      "user_edit",
+    ],
+    "callerType": ["assistant", "specialist", "system", "user"],
+  },
+  "skill.equipment.changed": {
+    "changeType": [
+      "default_propagate",
+      "equipped",
+      "force_remove_on_soft_delete",
+      "reorder",
+      "supersede_transfer",
+      "unequipped",
+    ],
+    "entityType": ["assistant", "specialist"],
+  },
 } as const satisfies Partial<Record<UiEventType, Record<string, readonly string[]>>>;
 
 export type UiEventHandlerDomain =
   | "assistant"
   | "teaching"
   | "skills"
+  | "skill"
   | "compositions"
   | "settings"
   | "brain"
@@ -121,7 +167,9 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "trial.progress": "teaching",
   "trial.preview_requested": "teaching",
   "trial.preview_resolved": "teaching",
-  "skills.changed": "skills",
+  "tools.changed": "skills",
+  "skill.changed": "skill",
+  "skill.equipment.changed": "skill",
   "compositions.changed": "compositions",
   "settings.changed": "settings",
   "brain_zone_changed": "brain",
@@ -140,6 +188,12 @@ export type TeachingStage =
   | "failed"
   | "abandoned";
 
+type AssistantMessageRole = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.message"]["role"][number];
+type AssistantMessageRendering = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.message"]["rendering"][number];
+type AssistantConfirmationActionType =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.confirmation"]["actionType"][number];
+type AssistantConfirmationStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.confirmation"]["status"][number];
+
 interface UiEventEnvelope<TType extends UiEventType = UiEventType, TPayload = Record<string, unknown>> {
   eventId: string;
   sequence: number;
@@ -150,6 +204,32 @@ interface UiEventEnvelope<TType extends UiEventType = UiEventType, TPayload = Re
   payload: TPayload;
   createdAt: string;
 }
+
+export type AssistantMessageEvent = UiEventEnvelope<
+  "assistant.message",
+  {
+    sequence: number;
+    role: AssistantMessageRole;
+    content: string;
+    createdAt: string | null;
+    rendering: AssistantMessageRendering;
+  }
+>;
+
+export type AssistantConfirmationEvent = UiEventEnvelope<
+  "assistant.confirmation",
+  {
+    requestId: string;
+    sessionId?: string;
+    actionType: AssistantConfirmationActionType;
+    sanitizedSummary: string;
+    status: AssistantConfirmationStatus;
+    expiresAt?: string | null;
+    affectedSkillId?: string;
+    affectedEquipmentCount?: number;
+    affectedSpecialistNames?: string[];
+  }
+>;
 
 type TeachingStageChangedEvent = UiEventEnvelope<
   "teaching.stage_changed",
@@ -278,7 +358,39 @@ export type BrainContextReadyEvent = UiEventEnvelope<
   }
 >;
 
+type SkillChangedReason = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["reason"][number];
+type SkillChangedCallerType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["callerType"][number];
+type SkillEquipmentChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.equipment.changed"]["changeType"][number];
+type SkillEquipmentEntityType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.equipment.changed"]["entityType"][number];
+
+export type SkillChangedEvent = UiEventEnvelope<
+  "skill.changed",
+  {
+    reason: SkillChangedReason;
+    skillId: string;
+    chainRootId: string;
+    newSkillId?: string | null;
+    callerType?: SkillChangedCallerType | null;
+    callerId?: string | null;
+    bootstrapFallbackUsed?: boolean;
+    bootstrapFallbackInfo?: { reason: string | null; seedFilePath: string | null } | null;
+  }
+>;
+
+export type SkillEquipmentChangedEvent = UiEventEnvelope<
+  "skill.equipment.changed",
+  {
+    changeType: SkillEquipmentChangeType;
+    entityType: SkillEquipmentEntityType;
+    entityId: string;
+    skillId: string;
+    unequippedReason?: string | null;
+  }
+>;
+
 export type UiEvent =
+  | AssistantMessageEvent
+  | AssistantConfirmationEvent
   | TeachingStageChangedEvent
   | RecordingProgressEvent
   | TeachingProgressEvent
@@ -289,9 +401,13 @@ export type UiEvent =
   | BrainZoneChangedEvent
   | BrainSpecialistRecruitedEvent
   | BrainContextReadyEvent
+  | SkillChangedEvent
+  | SkillEquipmentChangedEvent
   | UiEventEnvelope<
       Exclude<
         UiEventType,
+        | "assistant.message"
+        | "assistant.confirmation"
         | "recording.progress"
         | "teaching.stage_changed"
         | "teaching.progress"
@@ -302,14 +418,24 @@ export type UiEvent =
         | "brain_zone_changed"
         | "brain_specialist_recruited"
         | "brain_context_ready"
+        | "skill.changed"
+        | "skill.equipment.changed"
       >
     >;
 
 const UI_EVENT_TYPE_SET = new Set<string>(UI_EVENT_TYPES);
+const ASSISTANT_MESSAGE_ROLE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.message"].role);
+const ASSISTANT_MESSAGE_RENDERING_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.message"].rendering);
+const ASSISTANT_CONFIRMATION_ACTION_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.confirmation"].actionType);
+const ASSISTANT_CONFIRMATION_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.confirmation"].status);
 const TEACHING_STAGE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["teaching.stage_changed"].stage);
 const TRIAL_PREVIEW_REQUEST_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["trial.preview_requested"].status);
 const TRIAL_PREVIEW_DECISION_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["trial.preview_resolved"].decision);
 const TRIAL_PREVIEW_RESOLUTION_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["trial.preview_resolved"].status);
+const SKILL_CHANGED_REASON_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.changed"].reason);
+const SKILL_CHANGED_CALLER_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.changed"].callerType);
+const SKILL_EQUIPMENT_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.equipment.changed"].changeType);
+const SKILL_EQUIPMENT_ENTITY_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.equipment.changed"].entityType);
 
 function isUiEventType(value: string): value is UiEventType {
   return UI_EVENT_TYPE_SET.has(value);
@@ -343,6 +469,149 @@ function hasStringPayloadFields(payload: Record<string, unknown>, fields: string
   return fields.every((field) => typeof payload[field] === "string" && String(payload[field]).length > 0);
 }
 
+function isOptionalString(value: unknown): value is string | undefined {
+  return value === undefined || typeof value === "string";
+}
+
+function isOptionalNullableString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === "string";
+}
+
+function isOptionalNumber(value: unknown): value is number | undefined {
+  return value === undefined || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isEnumMember<T extends string>(set: Set<string>, value: unknown): value is T {
+  return typeof value === "string" && set.has(value);
+}
+
+function isOptionalNullableEnumMember<T extends string>(set: Set<string>, value: unknown): value is T | null | undefined {
+  return value === undefined || value === null || isEnumMember<T>(set, value);
+}
+
+function makeEnumGuard<T extends string>(set: Set<string>) {
+  return (v: unknown): v is T => isEnumMember<T>(set, v);
+}
+
+const isAssistantMessageRole = makeEnumGuard<AssistantMessageRole>(ASSISTANT_MESSAGE_ROLE_SET);
+const isAssistantMessageRendering = makeEnumGuard<AssistantMessageRendering>(ASSISTANT_MESSAGE_RENDERING_SET);
+const isAssistantConfirmationActionType = makeEnumGuard<AssistantConfirmationActionType>(ASSISTANT_CONFIRMATION_ACTION_SET);
+const isAssistantConfirmationStatus = makeEnumGuard<AssistantConfirmationStatus>(ASSISTANT_CONFIRMATION_STATUS_SET);
+const isSkillChangedReason = makeEnumGuard<SkillChangedReason>(SKILL_CHANGED_REASON_SET);
+const isSkillEquipmentChangeType = makeEnumGuard<SkillEquipmentChangeType>(SKILL_EQUIPMENT_CHANGE_TYPE_SET);
+const isSkillEquipmentEntityType = makeEnumGuard<SkillEquipmentEntityType>(SKILL_EQUIPMENT_ENTITY_TYPE_SET);
+const isOptionalSkillChangedCallerType = (v: unknown): v is SkillChangedCallerType | null | undefined =>
+  isOptionalNullableEnumMember<SkillChangedCallerType>(SKILL_CHANGED_CALLER_TYPE_SET, v);
+
+function parseAssistantMessagePayload(payload: Record<string, unknown>): AssistantMessageEvent["payload"] | null {
+  if (
+    typeof payload.sequence !== "number" ||
+    !Number.isInteger(payload.sequence) ||
+    payload.sequence < 0 ||
+    !isAssistantMessageRole(payload.role) ||
+    typeof payload.content !== "string" ||
+    !isOptionalNullableString(payload.createdAt) ||
+    !isAssistantMessageRendering(payload.rendering)
+  ) {
+    return null;
+  }
+  return {
+    sequence: payload.sequence,
+    role: payload.role,
+    content: payload.content,
+    createdAt: payload.createdAt ?? null,
+    rendering: payload.rendering,
+  };
+}
+
+function parseAssistantConfirmationPayload(
+  payload: Record<string, unknown>,
+): AssistantConfirmationEvent["payload"] | null {
+  if (
+    typeof payload.requestId !== "string" ||
+    !isAssistantConfirmationActionType(payload.actionType) ||
+    typeof payload.sanitizedSummary !== "string" ||
+    !isAssistantConfirmationStatus(payload.status) ||
+    !isOptionalString(payload.sessionId) ||
+    !isOptionalNullableString(payload.expiresAt) ||
+    !isOptionalString(payload.affectedSkillId) ||
+    !isOptionalNumber(payload.affectedEquipmentCount)
+  ) {
+    return null;
+  }
+  const affectedSpecialistNames = payload.affectedSpecialistNames;
+  if (affectedSpecialistNames !== undefined && !isStringArray(affectedSpecialistNames)) return null;
+  return {
+    requestId: payload.requestId,
+    sessionId: payload.sessionId,
+    actionType: payload.actionType,
+    sanitizedSummary: payload.sanitizedSummary,
+    status: payload.status,
+    expiresAt: payload.expiresAt,
+    affectedSkillId: payload.affectedSkillId,
+    affectedEquipmentCount: payload.affectedEquipmentCount,
+    affectedSpecialistNames,
+  };
+}
+
+function parseSkillChangedPayload(payload: Record<string, unknown>): SkillChangedEvent["payload"] | null {
+  if (
+    !isSkillChangedReason(payload.reason) ||
+    !hasStringPayloadFields(payload, ["skillId", "chainRootId"]) ||
+    !isOptionalNullableString(payload.newSkillId) ||
+    !isOptionalSkillChangedCallerType(payload.callerType) ||
+    !isOptionalNullableString(payload.callerId) ||
+    (payload.bootstrapFallbackUsed !== undefined && typeof payload.bootstrapFallbackUsed !== "boolean")
+  ) {
+    return null;
+  }
+  let bootstrapFallbackInfo: SkillChangedEvent["payload"]["bootstrapFallbackInfo"];
+  if (payload.bootstrapFallbackInfo === undefined) {
+    bootstrapFallbackInfo = undefined;
+  } else if (payload.bootstrapFallbackInfo === null) {
+    bootstrapFallbackInfo = null;
+  } else if (
+    isRecord(payload.bootstrapFallbackInfo) &&
+    isOptionalNullableString(payload.bootstrapFallbackInfo.reason) &&
+    isOptionalNullableString(payload.bootstrapFallbackInfo.seedFilePath)
+  ) {
+    bootstrapFallbackInfo = {
+      reason: payload.bootstrapFallbackInfo.reason ?? null,
+      seedFilePath: payload.bootstrapFallbackInfo.seedFilePath ?? null,
+    };
+  } else {
+    return null;
+  }
+  return {
+    reason: payload.reason,
+    skillId: payload.skillId as string,
+    chainRootId: payload.chainRootId as string,
+    newSkillId: payload.newSkillId ?? null,
+    callerType: payload.callerType ?? null,
+    callerId: payload.callerId ?? null,
+    bootstrapFallbackUsed: payload.bootstrapFallbackUsed,
+    bootstrapFallbackInfo,
+  };
+}
+
+function parseSkillEquipmentChangedPayload(payload: Record<string, unknown>): SkillEquipmentChangedEvent["payload"] | null {
+  if (
+    !isSkillEquipmentChangeType(payload.changeType) ||
+    !isSkillEquipmentEntityType(payload.entityType) ||
+    !hasStringPayloadFields(payload, ["entityId", "skillId"]) ||
+    !isOptionalNullableString(payload.unequippedReason)
+  ) {
+    return null;
+  }
+  return {
+    changeType: payload.changeType,
+    entityType: payload.entityType,
+    entityId: payload.entityId as string,
+    skillId: payload.skillId as string,
+    unequippedReason: payload.unequippedReason ?? null,
+  };
+}
+
 export function parseUiEvent(value: unknown): UiEvent | null {
   if (!isRecord(value)) return null;
   const candidate = value as Partial<UiEventEnvelope>;
@@ -371,6 +640,16 @@ export function parseUiEvent(value: unknown): UiEvent | null {
     payload: candidate.payload,
     createdAt: typeof candidate.createdAt === "string" ? candidate.createdAt : new Date().toISOString(),
   };
+  if (event.type === "assistant.message") {
+    const payload = parseAssistantMessagePayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as AssistantMessageEvent;
+  }
+  if (event.type === "assistant.confirmation") {
+    const payload = parseAssistantConfirmationPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as AssistantConfirmationEvent;
+  }
   if (event.type === "teaching.stage_changed") {
     if (!hasWorkflowScope(event) || !TEACHING_STAGE_SET.has(String(event.payload.stage))) return null;
     return event as TeachingStageChangedEvent;
@@ -426,6 +705,16 @@ export function parseUiEvent(value: unknown): UiEvent | null {
   if (event.type === "brain_context_ready") {
     if (!hasStringPayloadFields(event.payload, ["sessionId"])) return null;
     return event as BrainContextReadyEvent;
+  }
+  if (event.type === "skill.changed") {
+    const payload = parseSkillChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as SkillChangedEvent;
+  }
+  if (event.type === "skill.equipment.changed") {
+    const payload = parseSkillEquipmentChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as SkillEquipmentChangedEvent;
   }
   return event as UiEvent;
 }

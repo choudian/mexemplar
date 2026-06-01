@@ -11,12 +11,12 @@ from typing import Any
 from uuid import uuid4
 
 from src.desktop_api.schemas import UiEvent
+from src.desktop_api.ui_event_projector import project_internal_event
+from src.desktop_api.ui_event_types import UiEventDraft
 from src.desktop_api.ui_events import (
-    UiEventDraft,
     UiEventValidationError,
     build_ui_event,
     normalize_draft,
-    project_internal_event,
     trial_preview_manager,
 )
 from src.utils import events as backend_events
@@ -25,7 +25,15 @@ logger = logging.getLogger(__name__)
 
 _REPLAY_BUFFER_SIZE = 256
 _SUBSCRIBER_QUEUE_SIZE = 100
-_RESYNC_DOMAINS = ["teaching", "skills", "compositions", "settings", "assistant", "brain"]
+_RESYNC_DOMAINS = [
+    "teaching",
+    "tools",
+    "compositions",
+    "settings",
+    "assistant",
+    "brain",
+    "skill",
+]
 
 
 @dataclass
@@ -243,9 +251,10 @@ class DesktopEventQueue:
         )
 
     def _remember_non_replayable_sequence_locked(self, sequence: int) -> None:
-        if self._non_replayable_sequences.maxlen is not None and len(
-            self._non_replayable_sequences
-        ) == self._non_replayable_sequences.maxlen:
+        if (
+            self._non_replayable_sequences.maxlen is not None
+            and len(self._non_replayable_sequences) == self._non_replayable_sequences.maxlen
+        ):
             dropped = self._non_replayable_sequences.popleft()
             self._non_replayable_sequence_set.discard(dropped)
         self._non_replayable_sequences.append(sequence)
@@ -311,7 +320,7 @@ _INTERNAL_EVENT_NAMES = [
     "desktop_trial_finished",
     "tool_saved",
     "tool_published",
-    "skills_changed",
+    "tools_changed",
     "composition_review_needed",
     "settings_changed",
     "trial_requested",
@@ -324,6 +333,10 @@ _INTERNAL_EVENT_NAMES = [
     "brain_specialist_changed",
     "brain_specialist_recruited",
     "brain_context_ready",
+    "brain_skill_changed",
+    "brain_skill_equipment_changed",
+    "brain_skill_supersede_completed",
+    "brain_skill_bootstrap_fallback_used",
 ]
 
 

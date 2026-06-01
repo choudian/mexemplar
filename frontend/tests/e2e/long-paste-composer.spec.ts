@@ -47,7 +47,7 @@ test.describe("Long-paste composer E2E", () => {
   });
 
   test("CP-002: Teaching — same collapse behavior as Assistant", async () => {
-    await page.getByRole("button", { name: /技能教学/ }).click();
+    await page.getByRole("button", { name: /工具教学/ }).click();
     await page.getByRole("button", { name: "开始" }).first().click();
     await page.getByRole("button", { name: "开始录制" }).click();
     await page.getByRole("button", { name: "确认并开始录制" }).click();

@@ -84,6 +84,25 @@ def test_retry_coordinator_accessible_via_property(mock_config):
     mock_retry.assert_called_once_with("wf_retry_delegate")
 
 
+def test_agent_execution_adapter_returns_delegate_result():
+    from src.business.agents.config import AgentResult, ResultType
+    from src.business.orchestration.agent.orchestrator import _AgentExecutionAdapter
+
+    expected = AgentResult(result_type=ResultType.COMPLETED)
+    calls = []
+
+    def run_agent(agent_type, user_input, workflow_id=None, session_id=None):
+        calls.append((agent_type, user_input, workflow_id, session_id))
+        return expected
+
+    adapter = _AgentExecutionAdapter(run_agent, start_analysis=lambda *_: None)
+
+    result = adapter.run_agent("pm", "input", workflow_id="wf_1", session_id="sess_1")
+
+    assert result is expected
+    assert calls == [("pm", "input", "wf_1", "sess_1")]
+
+
 def test_task_worker_accessible_via_property(mock_config):
     orchestrator = _build_orchestrator(mock_config)
 

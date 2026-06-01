@@ -155,6 +155,39 @@ class TestSpecialistServiceCreate:
             call_kwargs = mock_repo.create_specialist.call_args[1]
             assert call_kwargs["origin"] == "user_conversation"
 
+    def test_create_fails_closed_when_default_equipment_fails(self):
+        """默认装备方法论失败时不应静默创建无装备专员。"""
+        from src.business.brain.specialist_service import SpecialistService
+
+        with (
+            patch("src.business.brain.specialist_service.SpecialistRepository") as MockRepo,
+            patch("src.business.brain.specialist_service.ToolRepository") as MockToolRepo,
+            patch(
+                "src.business.brain.skill_equipment_service.SkillEquipmentService"
+            ) as MockEquipmentService,
+        ):
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get_specialist_by_name.return_value = None
+            mock_repo.create_specialist.return_value = "sp-001"
+            mock_repo.get_specialist.return_value = _make_specialist_orm()
+            MockToolRepo.return_value.get_all_published.return_value = []
+            MockEquipmentService.return_value.default_equip_all.side_effect = RuntimeError(
+                "equipment failed"
+            )
+
+            service = SpecialistService(repo=mock_repo)
+            with pytest.raises(RuntimeError, match="equipment failed"):
+                service.create_specialist(
+                    name="装备失败专员",
+                    description="测试",
+                    role_definition="测试",
+                    tool_whitelist=[],
+                )
+
+            mock_repo.session.rollback.assert_called_once()
+            mock_repo.session.commit.assert_not_called()
+
 
 class TestSpecialistServiceRead:
     def test_get_specialist_by_id(self):

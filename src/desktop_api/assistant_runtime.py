@@ -6,31 +6,17 @@ from collections.abc import Callable
 from typing import Optional
 
 from src.business.agents.config import AgentType, ResultType
-from src.business.agents.tools.builtin_general_tools import register_confirm_mechanism
 from src.business.orchestration.agent import AgentOrchestrator
 from src.business.services.chat_service import ChatService
 from src.desktop_api.confirmations import (
     clear_confirmation_session_context,
-    confirmation_event_payload,
+    install_confirmation_signal,
     set_confirmation_session_context,
 )
 from src.desktop_api.events import event_queue
 from src.desktop_api.orchestrator_runtime import build_default_orchestrator
 
 logger = logging.getLogger(__name__)
-
-
-class _SidecarConfirmationSignal:
-    """Small signal shim matching the builtin high-risk confirmation protocol."""
-
-    def emit(self, request_id: str, _message: str) -> None:
-        payload = confirmation_event_payload(request_id)
-        session_id = str(payload.get("sessionId") or "")
-        event_queue.publish_nowait(
-            "assistant.confirmation",
-            payload,
-            {"sessionId": session_id} if session_id else None,
-        )
 
 
 class AssistantRuntime:
@@ -47,7 +33,7 @@ class AssistantRuntime:
         self._orchestrator_lock = threading.Lock()
         self._workers: dict[str, threading.Thread] = {}
         self._workers_lock = threading.Lock()
-        register_confirm_mechanism(_SidecarConfirmationSignal())
+        install_confirmation_signal()
 
     def _get_orchestrator(self) -> AgentOrchestrator:
         with self._orchestrator_lock:
@@ -94,14 +80,18 @@ class AssistantRuntime:
                 content,
                 session_id=session_id,
             )
-            if result is None or result.result_type in (
-                ResultType.ERROR,
-                ResultType.MAX_ITERATIONS_REACHED,
-            ):
+            if result is None or result.result_type == ResultType.MAX_ITERATIONS_REACHED:
                 message = result.error if result is not None else "Assistant did not complete."
                 event_queue.publish_nowait(
                     "assistant.progress",
                     {"status": "failed", "headline": message},
+                    {"sessionId": session_id},
+                )
+                return
+            if result.result_type == ResultType.ERROR:
+                event_queue.publish_nowait(
+                    "assistant.progress",
+                    {"status": "failed", "headline": result.error or "Assistant failed."},
                     {"sessionId": session_id},
                 )
                 return
@@ -158,6 +148,11 @@ class AssistantRuntime:
         except Exception as exc:
             logger.error(
                 "Assistant runtime failed for session %s: %s", session_id, exc, exc_info=True
+            )
+            event_queue.publish_nowait(
+                "assistant.progress",
+                {"status": "failed", "headline": "Assistant failed to complete the request."},
+                {"sessionId": session_id},
             )
             event_queue.publish_nowait(
                 "assistant.error",

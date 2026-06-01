@@ -18,13 +18,15 @@ import { useBrainStore } from "../state/brainStore";
 import { useCompositionsStore } from "../state/compositionsStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { useShellStore } from "../state/shellStore";
+import { useSkillMethodologyStore } from "../state/skillMethodologyStore";
 import { useSkillsStore } from "../state/skillsStore";
 import { useSpecialistStore } from "../state/specialistStore";
 import { useTeachingStore } from "../state/teachingStore";
 import { BackendStatus } from "./BackendStatus";
 import { CustomTitlebar } from "./CustomTitlebar";
 import { NavRail } from "./NavRail";
-import { getHiddenRoute, getRoute } from "./routes";
+import { getHiddenRoute, getRoute, redirectPathFor, routeIdFromPath, routePaths } from "./routes";
+import { isToolRenameToastDismissed, markToolRenameToastDismissed } from "./toolRenameToastStorage";
 
 const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000, 5000];
 
@@ -71,6 +73,11 @@ export function AppShell(): JSX.Element {
   const applyAssistantEvent = useAssistantStore((state) => state.applyEvent);
   const applySkillsEvent = useSkillsStore((state) => state.applyEvent);
   const refreshSkills = useSkillsStore((state) => state.loadAllCategories);
+  const applySkillMethodologyEvent = useSkillMethodologyStore((state) => state.applyEvent);
+  const refreshSkillMethodologies = useSkillMethodologyStore((state) => state.load);
+  const loadSkillBootstrapStatus = useSkillMethodologyStore((state) => state.loadBootstrapStatus);
+  const skillBootstrapWarning = useSkillMethodologyStore((state) => state.bootstrapWarning);
+  const dismissSkillBootstrapWarning = useSkillMethodologyStore((state) => state.dismissBootstrapWarning);
   const applyCompositionsEvent = useCompositionsStore((state) => state.applyEvent);
   const refreshCompositions = useCompositionsStore((state) => state.load);
   const applySettingsEvent = useSettingsStore((state) => state.applyEvent);
@@ -86,6 +93,9 @@ export function AppShell(): JSX.Element {
   const refreshSpecialists = useSpecialistStore((state) => state.load);
   const [debugTraceActive, setDebugTraceActive] = useState(false);
   const [pathname, setPathname] = useState(() => window.location.pathname);
+  const [toolRenameToastOpen, setToolRenameToastOpen] = useState(
+    () => !isToolRenameToastDismissed(),
+  );
   const debugStatusVersion = useRef(0);
 
   const refreshDebugTraceStatus = useCallback(async () => {
@@ -130,7 +140,8 @@ export function AppShell(): JSX.Element {
       }
       const refreshes: Promise<void>[] = [];
       if (!domains || domains.includes("teaching")) refreshes.push(refreshTeaching());
-      if (!domains || domains.includes("skills")) refreshes.push(refreshSkills());
+      if (!domains || domains.includes("tools")) refreshes.push(refreshSkills());
+      if (!domains || domains.includes("skill")) refreshes.push(refreshSkillMethodologies());
       if (!domains || domains.includes("compositions")) refreshes.push(refreshCompositions());
       if (!domains || domains.includes("settings")) refreshes.push(refreshSettings());
       if (!domains || domains.includes("brain")) {
@@ -154,6 +165,9 @@ export function AppShell(): JSX.Element {
           break;
         case "skills":
           applySkillsEvent(event);
+          break;
+        case "skill":
+          applySkillMethodologyEvent(event);
           break;
         case "compositions":
           applyCompositionsEvent(event);
@@ -218,6 +232,7 @@ export function AppShell(): JSX.Element {
           }
           hydrate(bootstrap);
           setAssistantIdleThresholdSeconds(bootstrap.brain.segmentIdleThresholdSeconds);
+          void loadSkillBootstrapStatus();
           void (async () => {
             while (!cancelled && !controller.signal.aborted) {
               try {
@@ -278,6 +293,7 @@ export function AppShell(): JSX.Element {
     applyCompositionsEvent,
     applySettingsEvent,
     applySkillsEvent,
+    applySkillMethodologyEvent,
     applyTeachingEvent,
     applyBrainEvent,
     applySpecialistEvent,
@@ -288,11 +304,13 @@ export function AppShell(): JSX.Element {
     refreshBrainZones,
     refreshCompositions,
     refreshSettings,
+    refreshSkillMethodologies,
     refreshSkills,
     refreshSpecialists,
     refreshTeaching,
     setBackend,
     setAssistantIdleThresholdSeconds,
+    loadSkillBootstrapStatus,
   ]);
 
   const teachingToast = useTeachingStore((state) => state.toast);
@@ -301,6 +319,10 @@ export function AppShell(): JSX.Element {
   const dismissRecruitmentToast = useSpecialistStore((state) => state.dismissRecruitmentToast);
   const closeSkillTrial = useTeachingStore((state) => state.closeSkillTrial);
   const skillTrialToolId = useTeachingStore((state) => state.skillTrialToolId);
+  const dismissToolRenameToast = useCallback(() => {
+    markToolRenameToastDismissed();
+    setToolRenameToastOpen(false);
+  }, []);
 
   useEffect(() => {
     if (activeRoute !== "skills" && skillTrialToolId) {
@@ -310,12 +332,28 @@ export function AppShell(): JSX.Element {
 
   useAutoDismissToast(teachingToast, dismissTeachingToast, TOAST_AUTO_DISMISS_MS);
   useAutoDismissToast(recruitmentToast, dismissRecruitmentToast, TOAST_AUTO_DISMISS_MS);
+  useAutoDismissToast(toolRenameToastOpen, dismissToolRenameToast, TOAST_AUTO_DISMISS_MS);
+  useAutoDismissToast(skillBootstrapWarning, dismissSkillBootstrapWarning, TOAST_AUTO_DISMISS_MS);
 
   useEffect(() => {
     const handleLocationChange = () => setPathname(window.location.pathname);
     window.addEventListener("popstate", handleLocationChange);
     return () => window.removeEventListener("popstate", handleLocationChange);
   }, []);
+
+  useEffect(() => {
+    const curPath = window.location.pathname;
+    const redirect = redirectPathFor(curPath, window.location.search);
+    if (redirect) {
+      window.history.replaceState({}, "", redirect);
+      setPathname(window.location.pathname);
+      return;
+    }
+    const routeId = routeIdFromPath(curPath);
+    if (routeId && routeId !== activeRoute) {
+      setRoute(routeId);
+    }
+  }, [activeRoute, setRoute, pathname]);
 
   const hiddenRoute = useMemo(() => getHiddenRoute(pathname), [pathname]);
   const visibleRoute = useMemo(() => getRoute(activeRoute), [activeRoute]);
@@ -325,6 +363,17 @@ export function AppShell(): JSX.Element {
   const changeVisibleRoute = useCallback((nextRoute: Parameters<typeof setRoute>[0]) => {
     if (hiddenRoute) {
       dispatchDebugRawStatePurge();
+    }
+    const nextPath = routePaths[nextRoute];
+    const currentPath = window.location.pathname;
+    if (nextPath && (currentPath !== nextPath || hiddenRoute)) {
+      if (hiddenRoute) {
+        window.history.replaceState({}, "", nextPath);
+      } else {
+        window.history.pushState({}, "", nextPath);
+      }
+      setPathname(nextPath);
+    } else if (hiddenRoute && !nextPath) {
       window.history.replaceState({}, "", "/");
       setPathname("/");
     }
@@ -417,6 +466,26 @@ export function AppShell(): JSX.Element {
             <span>{teachingToast.body}</span>
           </div>
           <button className="teaching-toast-close" onClick={dismissTeachingToast} type="button">✕</button>
+        </div>
+      ) : null}
+      {toolRenameToastOpen ? (
+        <div className="teaching-toast tool-rename-toast">
+          <div className="teaching-toast-body">
+            <strong>Skill 已重命名为 Tool</strong>
+            <span>教学、列表和组合屏现在使用 Tool 命名；方法论屏继续使用 Skill。</span>
+          </div>
+          <button className="teaching-toast-close" onClick={dismissToolRenameToast} type="button">✕</button>
+        </div>
+      ) : null}
+      {skillBootstrapWarning ? (
+        <div className="teaching-toast skill-bootstrap-toast" role="status">
+          <div className="teaching-toast-body">
+            <strong>方法论 seed 加载失败</strong>
+            <span>
+              已启用 fallback。请检查 {skillBootstrapWarning.seedFilePath || "seed 文件"}，或在方法论屏编辑修复。
+            </span>
+          </div>
+          <button className="teaching-toast-close" onClick={dismissSkillBootstrapWarning} type="button">✕</button>
         </div>
       ) : null}
       <BrainToast

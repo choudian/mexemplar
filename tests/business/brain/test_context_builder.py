@@ -241,7 +241,7 @@ class TestHotZoneTopNInjection:
 
         mock_repo.get_entries_by_zone = get_entries_by_zone
 
-        BrainContextBuilder(repo=mock_repo, config=mock_config)
+        BrainContextBuilder(repo=mock_repo, config=mock_config).build_context()
 
         # 验证 builder 使用了正确的 top_n 配置
         mock_config.get_brain_injection_hot_zone_top_n.assert_called()
@@ -327,6 +327,18 @@ class TestPromptFormatting:
         assert "[entry_id: persistent-1]" in prompt_text
         assert "[entry_id: hot-1]" in prompt_text
         assert "[entry_id: subconscious-1]" in prompt_text
+
+    def test_formatted_context_includes_degraded_capability_warning(self):
+        from src.business.brain.context_builder import BrainContext, BrainContextBuilder
+
+        context = BrainContext(
+            context_warnings=["方法论装备清单暂时不可用；本轮不要假定自己没有可用方法论。"]
+        )
+
+        prompt_text = BrainContextBuilder().format_context_for_prompt(context)
+
+        assert "上下文加载警告" in prompt_text
+        assert "方法论装备清单暂时不可用" in prompt_text
 
 
 # ═══════════════════════════════════════════════
@@ -552,6 +564,73 @@ class TestRevivedSessionPositiveWeighting:
             assert s["composite_score"] > 0
 
 
+class TestBrainContextCompositeScoring:
+    """直接锁定 BrainContextBuilder 的热区 / 潜意识复合评分公式。"""
+
+    def test_hot_score_formula_includes_all_terms_and_revived_bonus(self, monkeypatch):
+        from src.business.brain.context_builder import BrainContextBuilder
+        from src.business.brain.scoring import (
+            HOT_EFFECTIVENESS_WEIGHT,
+            HOT_EXPLORATION_WEIGHT,
+            HOT_RECENCY_WEIGHT,
+            HOT_RELEVANCE_WEIGHT,
+        )
+
+        builder = BrainContextBuilder()
+        monkeypatch.setattr(builder, "_compute_recency_score", lambda _: 0.8)
+
+        score = builder._compute_hot_composite_score(
+            {
+                "relevance_score": 0.6,
+                "created_at": "fixed",
+                "loaded_count": 1,
+                "referenced_count": 1,
+            },
+            is_revived_session=True,
+        )
+
+        exploration = 1.0 - (1 / 3)
+        revived_bonus = 0.35 * (1 / 3)
+        expected = round(
+            HOT_RELEVANCE_WEIGHT * 0.6
+            + HOT_RECENCY_WEIGHT * 0.8
+            + HOT_EFFECTIVENESS_WEIGHT * 1.0
+            + HOT_EXPLORATION_WEIGHT * exploration
+            + revived_bonus,
+            4,
+        )
+        assert score == pytest.approx(expected)
+
+    def test_subconscious_score_formula_uses_updated_recency_effectiveness_and_exploration(
+        self, monkeypatch
+    ):
+        from src.business.brain.context_builder import BrainContextBuilder
+        from src.business.brain.scoring import (
+            SUBCONSCIOUS_EFFECTIVENESS_WEIGHT,
+            SUBCONSCIOUS_EXPLORATION_WEIGHT,
+            SUBCONSCIOUS_RECENCY_WEIGHT,
+        )
+
+        builder = BrainContextBuilder()
+        monkeypatch.setattr(builder, "_compute_recency_score", lambda _: 0.75)
+
+        score = builder._compute_subconscious_composite_score(
+            {
+                "created_at": "older",
+                "updated_at": "newer",
+                "loaded_count": 2,
+                "referenced_count": 1,
+            }
+        )
+
+        expected = (
+            SUBCONSCIOUS_RECENCY_WEIGHT * 0.75
+            + SUBCONSCIOUS_EFFECTIVENESS_WEIGHT * 0.5
+            + SUBCONSCIOUS_EXPLORATION_WEIGHT * (1.0 - (2 / 3))
+        )
+        assert score == pytest.approx(expected)
+
+
 class TestSubconsciousAndPredictionContext:
     """US4: 潜意识注入与猜测区不可见。"""
 
@@ -637,8 +716,7 @@ class TestSubconsciousAndPredictionContext:
             ),
         ]
 
-        mock_repo.get_entries_by_zone.side_effect = (
-            lambda zone, status=None, limit=50, offset=0:
+        mock_repo.get_entries_by_zone.side_effect = lambda zone, status=None, limit=50, offset=0: (
             entries if zone == Zone.SUBCONSCIOUS.value else []
         )
 

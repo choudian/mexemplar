@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 import src.business.agents.tools.builtin_general_tools as general_tools
+from src.desktop_api.confirmations import confirmation_event_payload
 
 
 @pytest.fixture(autouse=True)
@@ -48,6 +49,31 @@ def test_set_confirm_result_ignores_unknown_request_id():
 
     with general_tools._confirm_lock:
         assert general_tools._pending_confirms == {}
+
+
+def test_skill_confirmation_payload_carries_safe_metadata():
+    pending = _make_pending(
+        request_id="req-skill-delete",
+        tool_name="skill.soft_delete",
+        summary="将软删除方法论 Demo，并从 2 个装备者身上裁剪。",
+    )
+    pending.extra_payload = {
+        "affectedSkillId": "skl_123",
+        "affectedEquipmentCount": 2,
+        "affectedSpecialistNames": ["Assistant 本体", "报表专员"],
+        "body_markdown": "must not leak",
+    }
+    with general_tools._confirm_lock:
+        general_tools._pending_confirms[pending.request_id] = pending
+
+    payload = confirmation_event_payload(pending.request_id)
+
+    assert payload["sessionId"] == "_global_confirmation"
+    assert payload["actionType"] == "skill.soft_delete"
+    assert payload["affectedSkillId"] == "skl_123"
+    assert payload["affectedEquipmentCount"] == 2
+    assert payload["affectedSpecialistNames"] == ["Assistant 本体", "报表专员"]
+    assert "body_markdown" not in payload
 
 
 def test_write_summary_only_contains_target_path():

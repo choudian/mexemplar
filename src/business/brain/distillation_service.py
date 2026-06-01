@@ -77,6 +77,7 @@ P2_DISTILLATION_TOOL_SCHEMA = {
 }
 
 
+# P3 只增加归档分层任务，不改变 LLM 沉淀输出 schema；P4 才扩展新分区。
 P4_DISTILLATION_TOOL_SCHEMA = {
     "name": "distillation_output",
     "description": "输出对该 Segment 的多分区记忆沉淀结果（含潜意识区和失败区）",
@@ -409,7 +410,7 @@ class DistillationService:
 
     def _get_segment_messages(self, segment) -> list[dict]:
         """获取 segment 覆盖范围内的消息"""
-        from src.data.repositories import MessageRepository
+        from src.data.repos.message_repository import MessageRepository
 
         msg_start = getattr(segment, "message_id_start", None)
         msg_end = getattr(segment, "message_id_end", None)
@@ -574,7 +575,7 @@ class DistillationService:
         try:
             tool_calls = self._tool_calls_from_result(result)
             if not tool_calls:
-                return None
+                return self._invalid_distillation_output("missing tool_calls", result)
 
             # 根据 phase 决定处理的 zone 列表
             if phase == "p2":
@@ -604,9 +605,12 @@ class DistillationService:
                 if name == "distillation_output":
                     args = getattr(tc, "args", None) or tc.get("args", {})
                     if not isinstance(args, dict):
-                        return None
+                        return self._invalid_distillation_output("tool args is not object", result)
                     if not active_zone_keys.issubset(args.keys()):
-                        return None
+                        return self._invalid_distillation_output(
+                            "missing required zone keys",
+                            result,
+                        )
                     if any(key in args for key in all_zone_keys - active_zone_keys):
                         logger.warning(
                             "Distillation output contains unexpected zone keys: %s, ignoring extra keys",
@@ -617,17 +621,29 @@ class DistillationService:
                     for zone_key in zone_keys:
                         zone_items = args.get(zone_key, [])
                         if not isinstance(zone_items, list):
-                            return None
+                            return self._invalid_distillation_output(
+                                f"{zone_key} is not a list",
+                                result,
+                            )
                         for item in zone_items:
                             if not isinstance(item, dict):
-                                return None
+                                return self._invalid_distillation_output(
+                                    f"{zone_key} item is not object",
+                                    result,
+                                )
                             if not item.get("content") or not item.get("reason"):
-                                return None
+                                return self._invalid_distillation_output(
+                                    f"{zone_key} item missing content or reason",
+                                    result,
+                                )
                             if zone_key == "hot_zone" and item.get("entry_type") not in {
                                 "event",
                                 "insight",
                             }:
-                                return None
+                                return self._invalid_distillation_output(
+                                    "hot_zone item has invalid entry_type",
+                                    result,
+                                )
                             entry = {
                                 "zone": zone_key.replace("_zone", ""),
                                 "content": item["content"],
@@ -642,9 +658,13 @@ class DistillationService:
 
                     return entries
 
-            return None
+            return self._invalid_distillation_output("missing distillation_output call", result)
         except (KeyError, TypeError, json.JSONDecodeError) as e:
-            logger.error("Failed to validate distillation output: %s", e)
+            logger.error(
+                "Failed to validate distillation output: %s raw_sample=%s",
+                e,
+                self._distillation_output_sample(result),
+            )
             return None
 
     @staticmethod
@@ -655,6 +675,32 @@ class DistillationService:
             return result.get("tool_calls", []) or []
         return list(getattr(result, "tool_calls", []) or [])
 
+    def _invalid_distillation_output(self, reason: str, result: Any) -> Optional[list[dict]]:
+        logger.warning(
+            "Invalid distillation output: %s raw_sample=%s",
+            reason,
+            self._distillation_output_sample(result),
+        )
+        return None
+
+    @staticmethod
+    def _distillation_output_sample(result: Any, *, max_chars: int = 1200) -> str:
+        try:
+            if isinstance(result, dict):
+                serializable = result
+            else:
+                serializable = {
+                    "type": type(result).__name__,
+                    "content": getattr(result, "content", None),
+                    "tool_calls": getattr(result, "tool_calls", None),
+                }
+            sample = json.dumps(serializable, ensure_ascii=False, default=str)
+        except Exception:
+            sample = repr(result)
+        if len(sample) > max_chars:
+            return sample[:max_chars] + "...<truncated>"
+        return sample
+
     def _complete_segment_with_entries(
         self,
         repo,
@@ -663,32 +709,7 @@ class DistillationService:
     ) -> list[str]:
         if hasattr(type(repo), "complete_segment_with_entries"):
             return repo.complete_segment_with_entries(segment_id, entries)
-        # CAS first: if another worker already completed this segment, don't insert duplicate entries
-        ok = repo.transition_segment_status(
-            segment_id,
-            from_status=SegmentStatus.DISTILLING.value,
-            to_status=SegmentStatus.COMPLETED.value,
-        )
-        if not ok:
-            logger.warning(
-                "Segment %s CAS failed in fallback path, skipping entry creation", segment_id
-            )
-            return []
-        try:
-            repo.create_entries_for_segment(entries)
-        except Exception:
-            logger.error(
-                "Segment %s entry creation failed after CAS, rolling back to DISTILLING",
-                segment_id,
-                exc_info=True,
-            )
-            repo.transition_segment_status(
-                segment_id,
-                from_status=SegmentStatus.COMPLETED.value,
-                to_status=SegmentStatus.DISTILLING.value,
-            )
-            raise
-        return [entry.get("entry_id", "") for entry in entries]
+        raise TypeError("Atomic segment completion requires repo.complete_segment_with_entries")
 
     @staticmethod
     def _emit_created_entries(entries: list[dict], entry_ids: list[str]) -> None:

@@ -13,6 +13,7 @@ from src.data.repositories import TeachingFailureRepository, ToolRepository
 from src.utils.events import emit
 
 logger = logging.getLogger(__name__)
+_BUILTIN_SUMMARIES_CACHE: list[dict] | None = None
 
 
 class SkillsService:
@@ -66,7 +67,8 @@ class SkillsService:
         if category == "pending":
             items = [self._pending_tool_to_summary(t) for t in self.get_tools()[0]]
         elif category == "published":
-            items = [self._tool_to_summary(t, status="published") for t in self.get_tools()[1]]
+            user_items = [self._tool_to_summary(t, status="published") for t in self.get_tools()[1]]
+            items = self._builtin_summaries() + user_items
         elif category == "failed":
             items = [self._failure_to_summary(r) for r in self.get_active_failures()]
         else:
@@ -76,6 +78,7 @@ class SkillsService:
     def get_all_categories(self) -> list[dict[str, object]]:
         pending_tools, published_tools = self.get_tools()
         failures = self.get_active_failures()
+        builtin_items = self._builtin_summaries()
         return [
             {
                 "category": "pending",
@@ -84,8 +87,9 @@ class SkillsService:
             },
             {
                 "category": "published",
-                "count": len(published_tools),
-                "items": [self._tool_to_summary(t, status="published") for t in published_tools],
+                "count": len(builtin_items) + len(published_tools),
+                "items": builtin_items
+                + [self._tool_to_summary(t, status="published") for t in published_tools],
             },
             {
                 "category": "failed",
@@ -122,7 +126,7 @@ class SkillsService:
 
         with ToolRepository() as repo:
             repo.delete(tool_id)
-        emit("skills_changed", sender=self, tool_id=tool_id, action="deleted")
+        emit("tools_changed", sender=self, tool_id=tool_id, action="deleted")
 
     def update_tool_metadata(self, tool_id: str, name: str, description: str) -> list[str]:
         """更新技能名称与描述，返回引用它的组合名称列表。"""
@@ -194,11 +198,21 @@ class SkillsService:
             raise ValueError(f"{label}不可用")
         accepted = executor(*args)
         if accepted is False:
-            return {"accepted": False, "toolId": tool_id, "workflowId": workflow_id, "message": "技能试用已在运行"}
+            return {
+                "accepted": False,
+                "toolId": tool_id,
+                "workflowId": workflow_id,
+                "message": "技能试用已在运行",
+            }
         return {"accepted": True, "toolId": tool_id, "workflowId": workflow_id}
 
     def _invoke_action(
-        self, executor: Callable | None, label: str, busy_message: str, workflow_id: str, *args: object,
+        self,
+        executor: Callable | None,
+        label: str,
+        busy_message: str,
+        workflow_id: str,
+        *args: object,
     ) -> dict[str, object]:
         if executor is None:
             raise ValueError(f"{label}不可用")
@@ -219,7 +233,11 @@ class SkillsService:
                     "message": "失败记录当前不可重试",
                 }
         return self._invoke_action(
-            self._retry_starter, "教学重试执行器", "教学重试已在运行", workflow_id, workflow_id,
+            self._retry_starter,
+            "教学重试执行器",
+            "教学重试已在运行",
+            workflow_id,
+            workflow_id,
         )
 
     def dismiss_failure(self, workflow_id: str) -> dict[str, object]:
@@ -231,6 +249,26 @@ class SkillsService:
             repo.update(record)
         emit("teaching_failure_updated", sender=self, workflow_id=workflow_id, status="dismissed")
         return {"accepted": True, "workflowId": workflow_id}
+
+    @staticmethod
+    def _builtin_summaries() -> list[dict]:
+        global _BUILTIN_SUMMARIES_CACHE
+        if _BUILTIN_SUMMARIES_CACHE is None:
+            from src.business.brain.builtin_tools import BUILTIN_TOOL_CATALOG
+
+            _BUILTIN_SUMMARIES_CACHE = [
+                {
+                    "toolId": t["tool_id"],
+                    "name": t["name"],
+                    "description": t["description"],
+                    "status": "published",
+                    "source": "内置",
+                    "trialSuccessCount": 0,
+                    "is_builtin": True,
+                }
+                for t in BUILTIN_TOOL_CATALOG
+            ]
+        return _BUILTIN_SUMMARIES_CACHE
 
     @staticmethod
     def _tool_to_summary(tool, status: str | None = None) -> dict[str, object]:

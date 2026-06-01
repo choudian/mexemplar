@@ -64,6 +64,7 @@ class TeachingRun:
 class TeachingService:
     """Workflow facade for teaching a skill through the redesigned API."""
 
+    # Runs are process-local teaching workflows; they intentionally reset on sidecar restart.
     _runs: dict[str, TeachingRun] = {}
 
     def __init__(

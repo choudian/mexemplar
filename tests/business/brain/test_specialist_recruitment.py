@@ -5,8 +5,12 @@ from uuid import uuid4
 
 import pytest
 
-from src.data.models_sqlite import BrainRecruitmentSignal, Tool
+from src.data.models_sqlite import BrainRecruitmentSignal, BrainSpecialist, Tool
 from src.utils.events import clear_all, connect
+
+
+def _user_skill_ids(skills: list[dict]) -> list[str]:
+    return [skill["tool_id"] for skill in skills if not skill.get("is_builtin")]
 
 
 @pytest.fixture(autouse=True)
@@ -73,11 +77,47 @@ def test_scan_and_recruit_creates_specialist_from_threshold_signal(in_memory_db)
         assert signal.specialist_id == specialist["specialist_id"]
 
 
+def test_scan_and_recruit_rolls_back_specialist_when_signal_consume_fails(
+    in_memory_db,
+    monkeypatch,
+):
+    from src.business.brain.specialist_service import SpecialistService
+    from src.data.repos.brain_repository import BrainRepository
+
+    signal_id = uuid4().hex[:50]
+    with in_memory_db.get_session() as session:
+        session.add(
+            BrainRecruitmentSignal(
+                signal_id=signal_id,
+                task_pattern="失败回滚验证",
+                delegation_count=5,
+                example_session_ids="[]",
+                example_delegation_summaries="[]",
+            )
+        )
+        session.commit()
+
+    def fail_mark_consumed(self, signal_id, specialist_id, *, commit=True):
+        raise RuntimeError("consume failed")
+
+    monkeypatch.setattr(BrainRepository, "mark_recruitment_signal_consumed", fail_mark_consumed)
+
+    created = SpecialistService().scan_and_recruit()
+
+    assert created == []
+    with in_memory_db.get_session() as session:
+        signal = session.get(BrainRecruitmentSignal, signal_id)
+        assert signal.specialist_id is None
+        assert session.query(BrainSpecialist).count() == 0
+
+
 def test_worker_emits_recruited_event_after_auto_recruitment():
     from src.business.brain.background_worker import BrainBackgroundWorker
 
     received = []
-    connect("brain_specialist_recruited", lambda sender, **kwargs: received.append(kwargs), weak=False)
+    connect(
+        "brain_specialist_recruited", lambda sender, **kwargs: received.append(kwargs), weak=False
+    )
 
     class StubService:
         def scan_and_recruit(self):
@@ -133,14 +173,55 @@ def test_force_remove_skill_prunes_specialist_whitelists(in_memory_db):
         tool_whitelist=["tool-report"],
     )
 
-    assert service.check_skill_in_use("tool-report")[0]["specialist_id"] == specialist["specialist_id"]
+    assert (
+        service.check_skill_in_use("tool-report")[0]["specialist_id"] == specialist["specialist_id"]
+    )
 
     result = service.force_remove_skill_from_pool("tool-report")
 
     assert result["removed"] is True
     assert result["pruned_specialists"][0]["specialist_id"] == specialist["specialist_id"]
     assert SpecialistService().get_specialist(specialist["specialist_id"])["tool_whitelist"] == []
-    assert SpecialistService().list_skill_pool() == []
+    assert _user_skill_ids(SpecialistService().list_skill_pool()) == []
+
+
+def test_force_remove_skill_does_not_remove_pool_when_prune_fails(in_memory_db, monkeypatch):
+    from src.business.brain.specialist_service import SpecialistService
+    from src.data.repos.brain_repository import BrainRepository
+    from src.data.repos.specialist_repository import SpecialistRepository
+
+    with in_memory_db.get_session() as session:
+        session.add(
+            Tool(
+                tool_id="tool-report",
+                tool_name="报表分析",
+                description="分析报表",
+                status="published",
+            )
+        )
+        session.commit()
+
+    service = SpecialistService()
+    specialist = service.create_specialist(
+        name="报表专员",
+        description="处理周期报表",
+        role_definition="你负责处理报表。",
+        tool_whitelist=["tool-report"],
+    )
+
+    def fail_update(self, *_args, **_kwargs):
+        raise RuntimeError("prune failed")
+
+    monkeypatch.setattr(SpecialistRepository, "update_specialist", fail_update)
+
+    with pytest.raises(RuntimeError, match="prune failed"):
+        service.force_remove_skill_from_pool("tool-report")
+
+    assert SpecialistService().get_specialist(specialist["specialist_id"])["tool_whitelist"] == [
+        "tool-report"
+    ]
+    assert _user_skill_ids(SpecialistService().list_skill_pool()) == ["tool-report"]
+    assert "tool-report" not in BrainRepository().get_removed_skill_pool_identifiers()
 
 
 def test_remove_unreferenced_skill_excludes_it_from_skill_pool(in_memory_db):
@@ -159,12 +240,12 @@ def test_remove_unreferenced_skill_excludes_it_from_skill_pool(in_memory_db):
         session.commit()
 
     service = SpecialistService()
-    assert [skill["tool_id"] for skill in service.list_skill_pool()] == ["tool-report"]
+    assert _user_skill_ids(service.list_skill_pool()) == ["tool-report"]
 
     result = service.remove_skill_from_pool("tool-report")
 
     assert result == {"removed": True, "pruned_specialists": []}
-    assert SpecialistService().list_skill_pool() == []
+    assert _user_skill_ids(SpecialistService().list_skill_pool()) == []
     assert "tool-report" in BrainRepository().get_removed_skill_pool_identifiers()
     with pytest.raises(ValueError):
         SpecialistService().create_specialist(

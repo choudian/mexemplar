@@ -459,6 +459,32 @@ class UnifiedConfigManager:
         """触发自动招募的最小委托次数"""
         return self.get("brain.recruitment.min_delegation_count", default=5)
 
+    def _get_positive_int(self, key: str, default: int) -> int:
+        raw = self.get(key, default=default)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("[配置] %s 非法，回退到 %d", key, default)
+            return default
+        return value if value > 0 else default
+
+    def get_brain_skill_token_budget_warn_threshold(self) -> int:
+        """方法论装备清单 token 计量警示阈值。"""
+        return self._get_positive_int("brain.skill.token_budget.warn_threshold", 4096)
+
+    def get_brain_skill_token_budget_danger_threshold(self) -> int:
+        """方法论装备清单 token 计量危险阈值。"""
+        return self._get_positive_int("brain.skill.token_budget.danger_threshold", 8192)
+
+    def get_brain_skill_seed_file_path(self) -> str:
+        """内置'如何创建方法论' seed 文件路径。"""
+        value = self.get(
+            "brain.skill.seed_file_path",
+            default="src/business/brain/seed/how_to_create_skill_methodology.md",
+        )
+        text = str(value or "").strip()
+        return text or "src/business/brain/seed/how_to_create_skill_methodology.md"
+
     # ===== 便捷方法：debug trace 配置 =====
 
     def get_debug_trace_enabled(self) -> bool:

@@ -35,12 +35,12 @@ class TestV11MigrationTables:
         for table in self.EXPECTED_TABLES:
             assert table in existing, f"Table {table} not found after v11 migration"
 
-    def test_schema_version_is_11(self, engine_with_v11):
+    def test_schema_version_is_current(self, engine_with_v11):
         with engine_with_v11.connect() as conn:
             result = conn.execute(text("SELECT version FROM schema_version"))
             row = result.fetchone()
             assert row is not None
-            assert row[0] == 11
+            assert row[0] == 12
 
     def test_profile_backfill_handles_legacy_profile_without_raw_answers(self, tmp_path):
         from src.data.migrations import migrate_to_v11

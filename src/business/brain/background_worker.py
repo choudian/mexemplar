@@ -1,5 +1,7 @@
 """
-Brain Background Worker - daemon thread 处理 pending segments、崩溃恢复等周期任务
+Brain Background Worker - daemon thread for pending Segment distillation, crash recovery,
+hot-zone decay, archive layering, prediction jobs, subconscious distillation, invalidation
+review, and specialist recruitment.
 """
 
 import logging
@@ -34,7 +36,7 @@ def notify_brain_worker():
 
 
 class BrainBackgroundWorker:
-    """大脑后台工作线程 - 处理 pending segments 的沉淀"""
+    """大脑后台工作线程，负责所有周期性 brain maintenance jobs。"""
 
     def __init__(
         self,
@@ -53,6 +55,8 @@ class BrainBackgroundWorker:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._running = False
+        self._consecutive_tick_errors = 0
+        self._llm_unavailable_logged_jobs: set[str] = set()
 
     def _get_config(self):
         if self._config is None:
@@ -179,6 +183,7 @@ class BrainBackgroundWorker:
                         tick_interval = min(tick_interval * 2, 3600)
                 else:
                     self._consecutive_tick_errors = 0
+                    tick_interval = config.get_brain_worker_tick_interval()
 
                 self._tick_event.wait(timeout=tick_interval)
                 self._tick_event.clear()
@@ -332,7 +337,9 @@ class BrainBackgroundWorker:
         try:
             llm_client = self._get_llm_client()
             if llm_client is None:
+                self._log_llm_skip_once("prediction jobs")
                 return
+            self._llm_unavailable_logged_jobs.discard("prediction jobs")
             service = self._get_prediction_service()
             with TraceContext(source="brain_prediction", agent_type="brain_worker"):
                 generated = service.generate_predictions(llm_client)
@@ -354,7 +361,9 @@ class BrainBackgroundWorker:
         try:
             llm_client = self._get_llm_client()
             if llm_client is None:
+                self._log_llm_skip_once("subconscious distillation")
                 return
+            self._llm_unavailable_logged_jobs.discard("subconscious distillation")
             with TraceContext(source="brain_subconscious", agent_type="brain_worker"):
                 count = self._get_distillation_service().run_subconscious_distillation(llm_client)
             if count:
@@ -378,8 +387,14 @@ class BrainBackgroundWorker:
         except Exception as e:
             logger.error("Invalidation review failed: %s", e)
 
+    def _log_llm_skip_once(self, job_name: str) -> None:
+        if job_name in self._llm_unavailable_logged_jobs:
+            return
+        self._llm_unavailable_logged_jobs.add(job_name)
+        logger.warning("Brain worker skipped %s because no LLM client is available", job_name)
+
     def _run_recruitment_scan(self):
-        """扫描持续委托模式并自动招募专员 (T103)"""
+        """扫描持续委托模式并自动招募专员。"""
         try:
             from src.business.brain.specialist_service import SpecialistService
 

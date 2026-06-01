@@ -25,7 +25,6 @@ import {
   listFlows,
   getFlowDetail,
   expandReference,
-  DebugApiError,
   dispatchDebugControlStatus,
   DEBUG_RAW_STATE_PURGE_EVENT,
 } from "../../api/debug";
@@ -108,7 +107,7 @@ export default function DebugScreen(): JSX.Element {
       setStatus(s);
       dispatchDebugControlStatus(s);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to arm trace");
+      setError(e instanceof Error ? e.message : "Failed to arm trace");
     } finally {
       setLoading(false);
     }
@@ -126,7 +125,7 @@ export default function DebugScreen(): JSX.Element {
       purgeLocalState();
       setWarningAcknowledged(false);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to stop trace");
+      setError(e instanceof Error ? e.message : "Failed to stop trace");
     } finally {
       setLoading(false);
     }
@@ -139,7 +138,7 @@ export default function DebugScreen(): JSX.Element {
       await clearTraces();
       purgeLocalState();
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to clear");
+      setError(e instanceof Error ? e.message : "Failed to clear");
     } finally {
       setLoading(false);
     }
@@ -150,7 +149,7 @@ export default function DebugScreen(): JSX.Element {
       const result = await listTraces({ limit: 50 });
       setTraces(result.items);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to load traces");
+      setError(e instanceof Error ? e.message : "Failed to load traces");
     }
   }, []);
 
@@ -159,7 +158,7 @@ export default function DebugScreen(): JSX.Element {
       const detail = await getTraceDetail(traceId);
       setSelectedTrace(detail);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to load trace detail");
+      setError(e instanceof Error ? e.message : "Failed to load trace detail");
     }
   }, []);
 
@@ -168,7 +167,7 @@ export default function DebugScreen(): JSX.Element {
       const result = await listFlows({ limit: 20 });
       setFlows(result.items);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to load flows");
+      setError(e instanceof Error ? e.message : "Failed to load flows");
     }
   }, []);
 
@@ -177,7 +176,7 @@ export default function DebugScreen(): JSX.Element {
       const detail = await getFlowDetail(workflowId);
       setSelectedFlow(detail);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to load flow detail");
+      setError(e instanceof Error ? e.message : "Failed to load flow detail");
     }
   }, []);
 
@@ -186,7 +185,7 @@ export default function DebugScreen(): JSX.Element {
       const result = await expandReference(referenceId);
       setReferenceResult(result);
     } catch (e) {
-      setError(e instanceof DebugApiError ? e.message : "Failed to expand reference");
+      setError(e instanceof Error ? e.message : "Failed to expand reference");
     }
   }, []);
 

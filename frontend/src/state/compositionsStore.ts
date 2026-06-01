@@ -71,7 +71,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
     try {
       set({ items: await listCompositions(), hydrated: true });
     } catch (error) {
-      set({ lastError: toErrorMessage(error, "无法加载技能组合。") });
+      set({ lastError: toErrorMessage(error, "无法加载工具组合。") });
     } finally {
       set({ busy: false });
     }
@@ -168,7 +168,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
         : [saved, ...get().items];
       set({ items, selectedId: saved.compositionId, draft: toDraft(saved) });
     } catch (error) {
-      set({ lastError: toErrorMessage(error, "无法保存技能组合。") });
+      set({ lastError: toErrorMessage(error, "无法保存工具组合。") });
     } finally {
       set({ busy: false });
     }

@@ -247,6 +247,76 @@ class TestExplorationAllowance:
         assert results[0]["entry_id"] == "new-low-relevance"
 
 
+class TestFailureZoneRetrieval:
+    """失败区检索应复用复合评分和 invalidated 降权规则。"""
+
+    def test_failure_zone_empty_context_returns_empty_without_querying_repo(self):
+        from src.business.brain.retrieval_service import RetrievalService
+
+        mock_repo = MagicMock()
+        assert RetrievalService(brain_repo=mock_repo).retrieve_failure_zone("  ") == []
+        mock_repo.search_entries.assert_not_called()
+
+    def test_failure_zone_searches_active_and_invalidated_entries(self):
+        from src.business.brain.retrieval_service import RetrievalService
+
+        mock_repo = MagicMock()
+        mock_repo.search_entries.return_value = [
+            MagicMock(
+                entry_id="failure-1",
+                zone=Zone.FAILURE.value,
+                content="先备份再改配置",
+                status="active",
+                relevance_score=0.8,
+                loaded_count=1,
+                referenced_count=1,
+                created_at="2026-05-01T00:00:00+00:00",
+            )
+        ]
+
+        results = RetrievalService(brain_repo=mock_repo).retrieve_failure_zone("  配置  ")
+
+        assert results[0]["entry_id"] == "failure-1"
+        mock_repo.search_entries.assert_called_once_with(
+            "failure",
+            "配置",
+            statuses=("active", "invalidated"),
+        )
+        mock_repo.batch_increment_loaded_counts.assert_called_once_with(["failure-1"])
+
+    def test_failure_zone_invalidated_entries_are_degraded_but_returned(self):
+        from src.business.brain.retrieval_service import RetrievalService
+
+        mock_repo = MagicMock()
+        mock_repo.search_entries.return_value = [
+            MagicMock(
+                entry_id="old-failure",
+                zone=Zone.FAILURE.value,
+                content="旧避坑",
+                status="invalidated",
+                relevance_score=0.9,
+                loaded_count=1,
+                referenced_count=1,
+                created_at="2026-05-01T00:00:00+00:00",
+            ),
+            MagicMock(
+                entry_id="active-failure",
+                zone=Zone.FAILURE.value,
+                content="新避坑",
+                status="active",
+                relevance_score=0.7,
+                loaded_count=1,
+                referenced_count=1,
+                created_at="2026-05-01T00:00:00+00:00",
+            ),
+        ]
+
+        results = RetrievalService(brain_repo=mock_repo).retrieve_failure_zone("避坑")
+
+        assert [item["entry_id"] for item in results] == ["active-failure", "old-failure"]
+        assert results[1]["invalidation_factor"] == 0.5
+
+
 def test_recency_scoring_accepts_timezone_aware_timestamp():
     from src.business.brain.retrieval_service import RetrievalService
 
@@ -255,3 +325,16 @@ def test_recency_scoring_accepts_timezone_aware_timestamp():
     )
 
     assert score > 0.99
+
+
+def test_shared_recency_scoring_handles_empty_invalid_and_future_timestamps():
+    from datetime import timedelta
+
+    from src.business.brain.scoring import compute_recency_score
+
+    assert compute_recency_score(None, half_life_days=30) == 0.5
+    assert compute_recency_score("not-a-date", half_life_days=30) == 0.5
+    assert compute_recency_score(
+        (datetime.now(timezone.utc) + timedelta(days=1)).isoformat(),
+        half_life_days=30,
+    ) == pytest.approx(1.0)

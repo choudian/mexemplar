@@ -5,7 +5,6 @@ import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/br
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useBrainStore } from "../../state/brainStore";
 import EntryEvolution from "./EntryEvolution";
-import SkillPoolPanel from "./SkillPoolPanel";
 
 const ZONES = [
   { id: "hot", label: "热区", hint: "近期工作记忆" },
@@ -40,25 +39,19 @@ export function BrainScreen(): JSX.Element {
   const entries = useBrainStore((state) => state.entries);
   const activeZone = useBrainStore((state) => state.activeZone) ?? "hot";
   const segments = useBrainStore((state) => state.segments);
-  const skillPool = useBrainStore((state) => state.skillPool);
   const evolutionChain = useBrainStore((state) => state.evolutionChain);
   const loadingZones = useBrainStore((state) => state.loadingZones);
   const loadingEntries = useBrainStore((state) => state.loadingEntries);
   const loadingSegments = useBrainStore((state) => state.loadingSegments);
-  const loadingSkillPool = useBrainStore((state) => state.loadingSkillPool);
   const loadingEvolution = useBrainStore((state) => state.loadingEvolution);
   const lastError = useBrainStore((state) => state.lastError);
-  const pendingSkillRemoval = useBrainStore((state) => state.pendingSkillRemoval);
   const loadZones = useBrainStore((state) => state.loadZones);
   const loadEntries = useBrainStore((state) => state.loadEntries);
   const loadSegments = useBrainStore((state) => state.loadSegments);
-  const loadSkillPool = useBrainStore((state) => state.loadSkillPool);
   const deleteEntry = useBrainStore((state) => state.deleteEntry);
   const editEntry = useBrainStore((state) => state.editEntry);
   const retrySegment = useBrainStore((state) => state.retrySegment);
   const loadEvolution = useBrainStore((state) => state.loadEvolution);
-  const removeSkill = useBrainStore((state) => state.removeSkill);
-  const clearPendingSkillRemoval = useBrainStore((state) => state.clearPendingSkillRemoval);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -69,9 +62,8 @@ export function BrainScreen(): JSX.Element {
   useEffect(() => {
     void loadZones();
     void loadSegments();
-    void loadSkillPool();
     void loadEntries("hot");
-  }, [loadEntries, loadSegments, loadSkillPool, loadZones]);
+  }, [loadEntries, loadSegments, loadZones]);
 
   const lastEvolutionIdRef = useRef<string | null>(null);
 
@@ -139,7 +131,6 @@ export function BrainScreen(): JSX.Element {
           void loadZones();
           void loadEntries(activeZone, { status: status || undefined });
           void loadSegments();
-          void loadSkillPool();
         }}>
           <RefreshCcw size={14} />
           刷新
@@ -268,15 +259,6 @@ export function BrainScreen(): JSX.Element {
           <SegmentPanel loading={loadingSegments} segments={segments} onRetry={(segmentId) => {
             void retrySegment(segmentId);
           }} />
-          <SkillPoolPanel
-            loading={loadingSkillPool}
-            onRemove={(toolId, force) => {
-              void removeSkill(toolId, force);
-            }}
-            onCancelPending={clearPendingSkillRemoval}
-            pendingRemoval={pendingSkillRemoval}
-            skills={skillPool}
-          />
         </aside>
       </div>
       {lastError ? <div className="brain-error">{lastError}</div> : null}

@@ -1,4 +1,5 @@
 import pytest
+import logging
 
 from src.business.agents.config import AgentType
 from src.business.services.chat_service import ChatService, ChatHistoryPage, DisplayChatMessage
@@ -142,3 +143,21 @@ class TestSessionListAndRename:
             ChatService().rename_session(session_id, "Should not write")
 
         assert SessionRepository().get_by_id(session_id).title == "Original PM title"
+
+
+def test_get_display_name_logs_profile_store_failure(monkeypatch, caplog):
+    from src.business.services import chat_service as chat_module
+
+    def fail_get_default(self):
+        raise RuntimeError("profile unavailable")
+
+    monkeypatch.setattr(
+        chat_module.AssistantProfileRepository,
+        "get_default",
+        fail_get_default,
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert ChatService().get_display_name() == ""
+
+    assert "读取用户显示名称失败" in caplog.text

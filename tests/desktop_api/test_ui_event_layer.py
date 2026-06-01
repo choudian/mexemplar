@@ -40,7 +40,9 @@ def test_unregistered_direct_publication_is_rejected() -> None:
 
 def test_unsafe_payload_is_rejected_before_publication() -> None:
     with pytest.raises(UiEventValidationError):
-        event_queue.publish_nowait("assistant.progress", {"message": "MEXEMPLAR_DESKTOP_TOKEN=secret"})
+        event_queue.publish_nowait(
+            "assistant.progress", {"message": "MEXEMPLAR_DESKTOP_TOKEN=secret"}
+        )
     with pytest.raises(UiEventValidationError):
         event_queue.publish_nowait("assistant.progress", {"token": "secret"})
 
@@ -155,11 +157,11 @@ def test_internal_projection_filters_scope_to_public_event_contract(
     )
 
     trial_event = event_queue.queue.get_nowait()
-    skills_event = event_queue.queue.get_nowait()
+    tools_event = event_queue.queue.get_nowait()
     assert trial_event.type == "trial.progress"
     assert trial_event.scope == {"workflowId": "rec_1", "toolId": "tool_1"}
-    assert skills_event.type == "skills.changed"
-    assert skills_event.scope == {"toolId": "tool_1"}
+    assert tools_event.type == "tools.changed"
+    assert tools_event.scope == {"toolId": "tool_1"}
 
 
 def test_trial_failed_does_not_project_raw_failure_message_to_user(
@@ -167,7 +169,13 @@ def test_trial_failed_does_not_project_raw_failure_message_to_user(
 ) -> None:
     install_blinker_event_adapter()
 
-    emit("trial_failed", sender=None, workflow_id="rec_1", tool_id="tool_1", error="internal traceback")
+    emit(
+        "trial_failed",
+        sender=None,
+        workflow_id="rec_1",
+        tool_id="tool_1",
+        error="internal traceback",
+    )
 
     event = event_queue.queue.get_nowait()
     assert event_queue.queue.empty()
@@ -184,7 +192,7 @@ def test_catalog_settings_and_assistant_events_project_to_registered_ui_events(
 ) -> None:
     install_blinker_event_adapter()
 
-    emit("skills_changed", sender=None, tool_id="tool_1")
+    emit("tools_changed", sender=None, tool_id="tool_1")
     emit("composition_review_needed", sender=None, composition_id="comp_1")
     emit("settings_changed", sender=None, keys=["theme"])
     emit(
@@ -196,7 +204,7 @@ def test_catalog_settings_and_assistant_events_project_to_registered_ui_events(
 
     events = [event_queue.queue.get_nowait() for _ in range(4)]
     assert [event.type for event in events] == [
-        "skills.changed",
+        "tools.changed",
         "compositions.changed",
         "settings.changed",
         "assistant.progress",

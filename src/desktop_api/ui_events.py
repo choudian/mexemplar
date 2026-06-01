@@ -10,6 +10,7 @@ from uuid import uuid4
 
 from src.business.services.ui_event_safety_service import unsafe_public_ui_event_value_reason
 from src.desktop_api.schemas import UiEvent
+from src.desktop_api.ui_event_types import UiEventDraft
 
 logger = logging.getLogger(__name__)
 
@@ -44,17 +45,13 @@ class UiEventDefinition:
     payload_enum_values: tuple[tuple[str, frozenset[str]], ...] = ()
 
 
-@dataclass(frozen=True)
-class UiEventDraft:
-    event_type: str
-    payload: dict[str, Any]
-    scope: dict[str, str]
-    causation_id: str | None = None
-
-
 class UiEventValidationError(ValueError):
     """Raised when a public UI event violates the registered contract."""
 
+
+CONFIRMATION_VALID_ACTION_TYPES: frozenset[str] = frozenset(
+    {"write_file", "edit_file", "exec", "unknown", "skill.edit_protected", "skill.soft_delete"}
+)
 
 UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     "assistant.message": UiEventDefinition(
@@ -100,6 +97,9 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                 "sessionId",
                 "remainingMs",
                 "expiresAt",
+                "affectedSkillId",
+                "affectedEquipmentCount",
+                "affectedSpecialistNames",
             }
         ),
         frozenset({"sessionId"}),
@@ -111,6 +111,10 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         },
         required_payload_keys=frozenset({"requestId", "actionType", "sanitizedSummary", "status"}),
         required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(
+            ("actionType", CONFIRMATION_VALID_ACTION_TYPES),
+            ("status", frozenset({"active"})),
+        ),
     ),
     "recording.progress": UiEventDefinition(
         "recording.progress",
@@ -139,7 +143,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             {"stage", "status", "message", "headline", "failureStage", "successCount", "published"}
         ),
         frozenset({"workflowId"}),
-        {"stage": "learning", "message": "Skill learning started."},
+        {"stage": "learning", "message": "Tool learning started."},
         required_payload_keys=frozenset({"stage"}),
         required_scope_keys=frozenset({"workflowId"}),
         payload_enum_values=(
@@ -165,7 +169,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         "notification",
         frozenset({"status", "message", "headline", "question", "failureStage", "error", "type"}),
         frozenset({"workflowId", "sessionId"}),
-        {"status": "running", "headline": "Skill learning started"},
+        {"status": "running", "headline": "Tool learning started"},
         required_payload_keys=frozenset({"status"}),
         required_scope_keys=frozenset({"workflowId"}),
     ),
@@ -266,12 +270,88 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "skills.changed": UiEventDefinition(
-        "skills.changed",
+    "tools.changed": UiEventDefinition(
+        "tools.changed",
         "notification",
         frozenset({"reason", "toolId", "status"}),
         frozenset({"toolId"}),
         {"reason": "catalog_invalidated"},
+    ),
+    "skill.changed": UiEventDefinition(
+        "skill.changed",
+        "notification",
+        frozenset(
+            {
+                "reason",
+                "skillId",
+                "chainRootId",
+                "newSkillId",
+                "callerType",
+                "callerId",
+                "bootstrapFallbackUsed",
+                "bootstrapFallbackInfo",
+            }
+        ),
+        frozenset({"skillId"}),
+        {
+            "reason": "create",
+            "skillId": "skl_abc",
+            "chainRootId": "skl_abc",
+        },
+        required_payload_keys=frozenset({"reason", "skillId", "chainRootId"}),
+        required_scope_keys=frozenset({"skillId"}),
+        payload_enum_values=(
+            (
+                "reason",
+                frozenset(
+                    {
+                        "create",
+                        "supersede",
+                        "user_edit",
+                        "soft_delete",
+                        "bootstrap_fallback_used",
+                    }
+                ),
+            ),
+            ("callerType", frozenset({"assistant", "specialist", "user", "system"})),
+        ),
+    ),
+    "skill.equipment.changed": UiEventDefinition(
+        "skill.equipment.changed",
+        "notification",
+        frozenset(
+            {
+                "changeType",
+                "entityType",
+                "entityId",
+                "skillId",
+                "unequippedReason",
+            }
+        ),
+        frozenset({"entityId", "skillId"}),
+        {
+            "changeType": "equipped",
+            "entityType": "assistant",
+            "entityId": "_assistant",
+            "skillId": "skl_abc",
+        },
+        required_payload_keys=frozenset({"changeType", "entityType", "entityId", "skillId"}),
+        payload_enum_values=(
+            (
+                "changeType",
+                frozenset(
+                    {
+                        "equipped",
+                        "unequipped",
+                        "reorder",
+                        "supersede_transfer",
+                        "force_remove_on_soft_delete",
+                        "default_propagate",
+                    }
+                ),
+            ),
+            ("entityType", frozenset({"assistant", "specialist"})),
+        ),
     ),
     "compositions.changed": UiEventDefinition(
         "compositions.changed",
@@ -293,7 +373,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         "control",
         frozenset({"reason", "domains", "lastAvailableSequence", "eventSessionId"}),
         frozenset({"workflowId", "sessionId", "toolId", "compositionId"}),
-        {"reason": "replay_gap", "domains": ["teaching", "skills", "brain"]},
+        {"reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"]},
         required_payload_keys=frozenset({"reason", "domains"}),
     ),
     "brain_zone_changed": UiEventDefinition(
@@ -328,6 +408,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     ),
 }
 
+
 def registered_event_types() -> list[str]:
     return sorted(UI_EVENT_REGISTRY)
 
@@ -340,10 +421,7 @@ def exported_registry_examples() -> dict[str, dict[str, Any]]:
 
 def exported_registry_payload_enums() -> dict[str, dict[str, list[str]]]:
     return {
-        event_type: {
-            key: sorted(values)
-            for key, values in definition.payload_enum_values
-        }
+        event_type: {key: sorted(values) for key, values in definition.payload_enum_values}
         for event_type, definition in UI_EVENT_REGISTRY.items()
         if definition.payload_enum_values
     }
@@ -359,7 +437,9 @@ def validate_ui_event_payload(event_type: str, payload: dict[str, Any]) -> None:
             f"UI event {event_type} contains non-allowlisted payload keys: {sorted(extra_keys)}"
         )
     missing_keys = {
-        key for key in definition.required_payload_keys if key not in payload or payload[key] is None
+        key
+        for key in definition.required_payload_keys
+        if key not in payload or payload[key] is None
     }
     if missing_keys:
         raise UiEventValidationError(
@@ -414,365 +494,6 @@ def build_ui_event(
         payload=payload,
         createdAt=datetime.now(timezone.utc),
     )
-
-
-def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiEventDraft]:
-    scope = _scope_from_payload(payload)
-    causation_id = _causation_id(scope, payload)
-
-    if event_name == "recording_started":
-        return [
-            UiEventDraft(
-                "recording.progress",
-                {
-                    "status": "recording",
-                    "message": "Recording started.",
-                    "recordingMode": _string_or_none(payload.get("recording_mode")),
-                },
-                scope,
-                causation_id,
-            ),
-            UiEventDraft("teaching.stage_changed", {"stage": "recording"}, scope, causation_id),
-        ]
-    if event_name == "recording_stopped":
-        return [
-            UiEventDraft(
-                "recording.progress",
-                {
-                    "status": "stopped",
-                    "message": "Recording stopped.",
-                    "recordingMode": _string_or_none(payload.get("recording_mode")),
-                },
-                scope,
-                causation_id,
-            ),
-            UiEventDraft(
-                "teaching.stage_changed", {"stage": "intent_confirmation"}, scope, causation_id
-            ),
-        ]
-    if event_name == "recording_completed":
-        return [
-            UiEventDraft(
-                "recording.progress",
-                {"status": "completed", "message": "Recording completed."},
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "desktop_action_count_changed":
-        return [
-            UiEventDraft(
-                "recording.progress",
-                {"status": "recording", "actionCount": _int_or_zero(payload.get("action_count"))},
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name in {"desktop_recording_degraded", "desktop_recorder_start_failed"}:
-        return [
-            UiEventDraft(
-                "recording.progress",
-                {
-                    "status": (
-                        "failed" if event_name == "desktop_recorder_start_failed" else "degraded"
-                    ),
-                    "message": _safe_short_text(
-                        payload.get("message") or payload.get("error") or event_name
-                    ),
-                    "error": _safe_short_text(payload.get("error")) if payload.get("error") else None,
-                    "subsystem": _string_or_none(payload.get("subsystem")),
-                    "degraded": event_name == "desktop_recording_degraded",
-                },
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "agent_needs_user_input":
-        question = _safe_text(payload.get("question") or payload.get("message"))
-        raw_agent_type = payload.get("agent_type")
-        agent_type = str(getattr(raw_agent_type, "value", raw_agent_type or "")).lower()
-        if agent_type == "pm":
-            event_type = "teaching.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-                "question": question,
-            }
-        elif agent_type == "trial":
-            event_type = "trial.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-            }
-        elif scope.get("sessionId"):
-            event_type = "assistant.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-                "question": question,
-            }
-        elif scope.get("workflowId"):
-            event_type = "teaching.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-                "question": question,
-            }
-        else:
-            return []
-        return [
-            UiEventDraft(
-                event_type,
-                event_payload,
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "agent_error":
-        raw_agent_type = payload.get("agent_type")
-        agent_type = str(getattr(raw_agent_type, "value", raw_agent_type or "")).lower()
-        status_payload = {
-            "message": _safe_text(
-                payload.get("message") or payload.get("error") or "Agent failed."
-            ),
-            "type": _string_or_none(payload.get("type")),
-        }
-        if agent_type == "trial":
-            return [
-                UiEventDraft(
-                    "trial.progress",
-                    {
-                        "status": "failed",
-                        "error": status_payload["message"],
-                        "type": status_payload["type"],
-                    },
-                    scope,
-                    causation_id,
-                )
-            ]
-        if agent_type in {"pm", "programmer"} or (scope.get("workflowId") and scope.get("sessionId")):
-            return [
-                UiEventDraft(
-                    "teaching.progress",
-                    {
-                        "status": "failed",
-                        "error": status_payload["message"],
-                        "type": status_payload["type"],
-                    },
-                    scope,
-                    causation_id,
-                )
-            ]
-        if scope.get("sessionId"):
-            return [UiEventDraft("assistant.error", status_payload, scope, causation_id)]
-        status_payload = {"status": "failed", "error": status_payload["message"]}
-        return [UiEventDraft("teaching.progress", status_payload, scope, causation_id)]
-    if event_name == "requirement_confirmed":
-        return [
-            UiEventDraft(
-                "teaching.stage_changed",
-                {"stage": "learning", "message": "Requirements confirmed."},
-                scope,
-                causation_id,
-            ),
-            UiEventDraft(
-                "teaching.progress",
-                {"status": "running", "headline": "Skill learning started"},
-                scope,
-                causation_id,
-            ),
-        ]
-    if event_name in {"code_completed", "review_passed"}:
-        return [
-            UiEventDraft(
-                "teaching.stage_changed",
-                {"stage": "trial_validation", "message": "Skill learning completed."},
-                scope,
-                causation_id,
-            ),
-            UiEventDraft(
-                "teaching.progress",
-                {"status": "succeeded", "headline": "Skill learning completed"},
-                scope,
-                causation_id,
-            ),
-        ]
-    if event_name in {"review_failed", "teaching_failure_updated"}:
-        return [
-            UiEventDraft(
-                "teaching.stage_changed",
-                {"stage": "failed", "failureStage": _string_or_none(payload.get("failed_stage"))},
-                scope,
-                causation_id,
-            ),
-            UiEventDraft(
-                "teaching.progress",
-                {
-                    "status": "failed",
-                    "failureStage": _string_or_none(payload.get("failed_stage")),
-                    "error": _safe_text(
-                        payload.get("error") or payload.get("message") or "Skill teaching failed."
-                    ),
-                },
-                scope,
-                causation_id,
-            ),
-        ]
-    if event_name == "teaching_failure_resolved":
-        return [
-            UiEventDraft(
-                "teaching.progress",
-                {"status": "succeeded", "headline": "Teaching failure resolved"},
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "teaching_failure_retrying":
-        return [
-            UiEventDraft(
-                "teaching.progress",
-                {"status": "running", "headline": "Skill teaching retry started"},
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "trial_requested":
-        return [
-            UiEventDraft(
-                "trial.progress",
-                {"status": "running", "headline": "Skill trial requested"},
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "trial_success":
-        published = bool(payload.get("published", False))
-        drafts = [
-            UiEventDraft(
-                "trial.progress",
-                {
-                    "status": "succeeded",
-                    "published": published,
-                    "successCount": _int_or_none(
-                        payload.get("success_count") or payload.get("trial_success_count")
-                    ),
-                },
-                scope,
-                causation_id,
-            )
-        ]
-        if published:
-            drafts.append(
-                UiEventDraft(
-                    "teaching.stage_changed",
-                    {"stage": "published", "published": True},
-                    scope,
-                    causation_id,
-                )
-            )
-        return drafts
-    if event_name == "trial_failed":
-        return [
-            UiEventDraft(
-                "teaching.stage_changed",
-                {
-                    "stage": "failed",
-                    "failureStage": "trial",
-                },
-                scope,
-                causation_id,
-            ),
-        ]
-    if event_name == "desktop_trial_finished":
-        return [
-            UiEventDraft(
-                "trial.progress",
-                {
-                    "status": "succeeded",
-                    "trialId": _string_or_none(payload.get("trial_id")),
-                    "result": _safe_text(payload.get("result")),
-                },
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name in {"tool_saved", "tool_published", "skills_changed"}:
-        skill_payload = {
-            "reason": "catalog_invalidated",
-            "toolId": _string_or_none(payload.get("tool_id")),
-        }
-        if event_name == "tool_saved":
-            skill_payload["status"] = "saved"
-        elif event_name == "tool_published":
-            skill_payload["status"] = "published"
-        return [
-            UiEventDraft(
-                "skills.changed",
-                skill_payload,
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "composition_review_needed":
-        return [
-            UiEventDraft(
-                "compositions.changed",
-                {
-                    "reason": "catalog_invalidated",
-                    "compositionId": _string_or_none(payload.get("composition_id")),
-                },
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "settings_changed":
-        return [
-            UiEventDraft(
-                "settings.changed",
-                {"reason": "settings_invalidated", "keys": _string_list(payload.get("keys"))},
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "brain_zone_changed":
-        return [
-            UiEventDraft(
-                "brain_zone_changed",
-                {
-                    "zone": _string_or_none(payload.get("zone")),
-                    "entryId": _string_or_none(payload.get("entry_id")),
-                    "changeType": _string_or_none(
-                        payload.get("change_type") or payload.get("operation")
-                    ),
-                },
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "brain_specialist_recruited":
-        return [
-            UiEventDraft(
-                "brain_specialist_recruited",
-                {
-                    "specialistId": _string_or_none(payload.get("specialist_id")),
-                    "name": _string_or_none(payload.get("name")),
-                    "reason": _safe_short_text(payload.get("reason") or ""),
-                    "managementUrl": "/brain/specialists",
-                },
-                scope,
-                causation_id,
-            )
-        ]
-    if event_name == "brain_context_ready":
-        return [
-            UiEventDraft(
-                "brain_context_ready",
-                {"sessionId": _string_or_none(payload.get("session_id"))},
-                scope,
-                causation_id,
-            )
-        ]
-    return []
 
 
 @dataclass
@@ -962,73 +683,10 @@ def _validate_payload_value(key: str, value: Any) -> None:
         raise UiEventValidationError(reason)
 
 
-def _scope_from_payload(payload: dict[str, Any]) -> dict[str, str]:
-    scope: dict[str, str] = {}
-    for source_key, target_key in [
-        ("session_id", "sessionId"),
-        ("workflow_id", "workflowId"),
-        ("recording_id", "workflowId"),
-        ("tool_id", "toolId"),
-        ("composition_id", "compositionId"),
-    ]:
-        value = payload.get(source_key)
-        if value is not None:
-            scope[target_key] = str(value)
-    return scope
-
-
-def _causation_id(scope: dict[str, str], payload: dict[str, Any]) -> str | None:
-    for key in ("workflowId", "sessionId", "toolId", "compositionId"):
-        if scope.get(key):
-            return scope[key]
-    value = payload.get("trial_id") or payload.get("request_id")
-    return str(value) if value is not None else None
-
-
 def _truncate_preview(value: str) -> str:
     if len(value) <= _MAX_PREVIEW_CHARS:
         return value
     return value[: _MAX_PREVIEW_CHARS - 1] + "…"
-
-
-def _safe_text(value: Any) -> str:
-    if value is None:
-        return ""
-    text = str(value)
-    return text[:5000]
-
-
-def _safe_short_text(value: Any) -> str:
-    if value is None:
-        return ""
-    text = str(value)
-    return text[:300]
-
-
-def _string_or_none(value: Any) -> str | None:
-    if value is None:
-        return None
-    return str(value)
-
-
-def _int_or_none(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _int_or_zero(value: Any) -> int:
-    result = _int_or_none(value)
-    return result if result is not None else 0
-
-
-def _string_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    return [str(value)]
 
 
 def _without_none(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1042,9 +700,7 @@ def normalize_draft(draft: UiEventDraft) -> UiEventDraft:
         event_type=draft.event_type,
         payload=_without_none(draft.payload),
         scope={
-            key: value
-            for key, value in draft.scope.items()
-            if value and key in allowed_scope_keys
+            key: value for key, value in draft.scope.items() if value and key in allowed_scope_keys
         },
         causation_id=draft.causation_id,
     )

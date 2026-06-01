@@ -53,6 +53,40 @@ class TestBrainLayering:
             assert "emit(" not in content
 
 
+class TestScoringWeightInvariants:
+    """Verify composite scoring weights sum to 1.0 so scores stay in [0, 1]."""
+
+    def test_hot_zone_weights_sum_to_one(self):
+        from src.business.brain.scoring import (
+            HOT_EFFECTIVENESS_WEIGHT,
+            HOT_EXPLORATION_WEIGHT,
+            HOT_RECENCY_WEIGHT,
+            HOT_RELEVANCE_WEIGHT,
+        )
+
+        total = (
+            HOT_RELEVANCE_WEIGHT
+            + HOT_RECENCY_WEIGHT
+            + HOT_EFFECTIVENESS_WEIGHT
+            + HOT_EXPLORATION_WEIGHT
+        )
+        assert abs(total - 1.0) < 1e-9, f"Hot zone weights sum to {total}, expected 1.0"
+
+    def test_subconscious_zone_weights_sum_to_one(self):
+        from src.business.brain.scoring import (
+            SUBCONSCIOUS_EFFECTIVENESS_WEIGHT,
+            SUBCONSCIOUS_EXPLORATION_WEIGHT,
+            SUBCONSCIOUS_RECENCY_WEIGHT,
+        )
+
+        total = (
+            SUBCONSCIOUS_RECENCY_WEIGHT
+            + SUBCONSCIOUS_EFFECTIVENESS_WEIGHT
+            + SUBCONSCIOUS_EXPLORATION_WEIGHT
+        )
+        assert abs(total - 1.0) < 1e-9, f"Subconscious zone weights sum to {total}, expected 1.0"
+
+
 class TestRecordingAgentsUnchanged:
     """Verify recording-related agents are not modified by brain feature"""
 

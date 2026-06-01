@@ -134,7 +134,7 @@ describe("TeachingScreen", () => {
         causationId: "rec_1",
         type: "teaching.stage_changed",
         scope: { workflowId: "rec_1" },
-        payload: { stage: "trial_validation", headline: "Skill learning completed" },
+        payload: { stage: "trial_validation", headline: "Tool learning completed" },
         createdAt: "2026-05-10T00:00:01Z",
       });
     });
@@ -466,7 +466,7 @@ describe("TeachingScreen", () => {
         sequence: 1,
         sessionId: "ui_sess_test",
         causationId: "tool_2",
-        type: "skills.changed",
+        type: "tools.changed",
         scope: { toolId: "tool_2" },
         payload: { reason: "catalog_invalidated", status: "published", toolId: "tool_2" },
         createdAt: "2026-05-10T00:00:01Z",
