@@ -3591,6 +3591,7 @@ select:focus-visible,
   display: grid;
   min-height: 0;
   grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-rows: auto 1fr;
   background: var(--surface-1);
 }
 
@@ -3634,6 +3635,7 @@ select:focus-visible,
 .settings-detail {
   display: grid;
   min-width: 0;
+  min-height: 0;
   align-content: start;
   gap: 16px;
   padding: 0 32px 32px;
@@ -5093,7 +5095,7 @@ select:focus-visible,
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
   gap: 10px;
   overflow: auto;
-  padding-right: 2px;
+  padding: 2px 2px 0 0;
 }
 
 .methodology-card {
