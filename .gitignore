@@ -146,11 +146,15 @@ AI.md
 .cursor/
 .gemini/
 .specify/
+!.specify/
+.specify/*
+!.specify/archive/
+!.specify/archive/**
 
 # Scripts (local development tools)
-scripts/*
-!scripts/
-!scripts/build_desktop_sidecar.ps1
+/scripts/*
+!/scripts/
+!/scripts/build_desktop_sidecar.ps1
 
 # Browser extension private key (DO NOT COMMIT)
 extension_key.txt
