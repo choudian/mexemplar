@@ -199,6 +199,18 @@ def connect(signal_name: str, callback: Callable, *, weak: bool = True) -> Calla
     return signal.connect(callback, weak=weak)
 
 
+def disconnect(signal_name: str, callback: Callable) -> None:
+    """
+    断开信号和回调函数的连接
+
+    Args:
+        signal_name: 信号名称
+        callback: 之前注册的回调函数
+    """
+    signal = _signals.signal(signal_name)
+    signal.disconnect(callback)
+
+
 def emit(signal_name: str, sender: Any = None, **kwargs) -> None:
     """
     发送信号
@@ -337,6 +349,7 @@ __all__ = [
     # 函数
     "event_value",
     "connect",
+    "disconnect",
     "emit",
     "emit_collect",
     # 测试辅助

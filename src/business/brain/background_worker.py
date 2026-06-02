@@ -10,7 +10,7 @@ import threading
 from typing import Optional, Callable
 
 from src.business.debug.context import TraceContext
-from src.utils.events import connect
+from src.utils.events import connect, disconnect, emit
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +104,7 @@ class BrainBackgroundWorker:
                 api_key=api_key,
                 base_url=config.get_ai_base_url(),
                 temperature=0.7,
+                max_tokens=config.get_ai_max_tokens(),
                 thinking_level=config.get_ai_thinking_level(),
                 timeout=config.get_ai_request_timeout(),
             )
@@ -123,8 +124,8 @@ class BrainBackgroundWorker:
             _brain_worker_running = True
             _brain_worker_event = self._tick_event
 
-            # 监听 segment boundary 事件来唤醒
-            connect("segment_boundary_triggered", self._on_segment_boundary)
+            # 监听 segment boundary 事件来唤醒；weak=False 防止 bound method 被 GC 回收
+            connect("segment_boundary_triggered", self._on_segment_boundary, weak=False)
 
             self._thread = threading.Thread(
                 target=self._worker_loop,
@@ -139,6 +140,7 @@ class BrainBackgroundWorker:
     def stop(self):
         """停止后台工作线程"""
         with _brain_worker_lock:
+            disconnect("segment_boundary_triggered", self._on_segment_boundary)
             thread = self._thread
             self._stop_event.set()
         self._tick_event.set()
@@ -158,29 +160,60 @@ class BrainBackgroundWorker:
         config = self._get_config()
         tick_interval = config.get_brain_worker_tick_interval()
 
+        _JOBS = (
+            "process_segments",
+            "recover_crashes",
+            "decay_sweep",
+            "archive_layering",
+            "prediction_jobs",
+            "subconscious_distillation",
+            "invalidation_review",
+            "recruitment_scan",
+        )
+        _JOB_FNS = (
+            self._process_pending_segments,
+            self._recover_crashed_segments,
+            self._run_decay_sweep,
+            self._run_archive_layering,
+            self._run_prediction_jobs,
+            self._run_subconscious_distillation,
+            self._run_invalidation_review,
+            self._run_recruitment_scan,
+        )
+        n_jobs = len(_JOBS)
         try:
             while not self._stop_event.is_set():
-                try:
-                    self._process_pending_segments()
-                    self._recover_crashed_segments()
-                    self._run_decay_sweep()
-                    self._run_archive_layering()
-                    self._run_prediction_jobs()
-                    self._run_subconscious_distillation()
-                    self._run_invalidation_review()
-                    self._run_recruitment_scan()
-                except KeyboardInterrupt:
-                    logger.info("Brain worker interrupted, shutting down")
-                    break
-                except Exception as e:
-                    logger.error("Brain worker tick failed: %s", e, exc_info=True)
-                    self._consecutive_tick_errors = getattr(self, "_consecutive_tick_errors", 0) + 1
+                tick_job_errors = 0
+                for job_name, job_fn in zip(_JOBS, _JOB_FNS):
+                    if self._stop_event.is_set():
+                        break
+                    try:
+                        job_fn()
+                    except KeyboardInterrupt:
+                        logger.info("Brain worker interrupted, shutting down")
+                        return
+                    except Exception as e:
+                        logger.error("Brain worker job %s failed: %s", job_name, e, exc_info=True)
+                        tick_job_errors += 1
+
+                if tick_job_errors >= n_jobs:
+                    # 整个 tick 所有 job 均失败 → 累计连续失败计数，触发 cooldown
+                    self._consecutive_tick_errors += 1
                     if self._consecutive_tick_errors >= 10:
                         logger.critical(
                             "Brain worker has failed %d consecutive ticks, entering cooldown",
                             self._consecutive_tick_errors,
                         )
                         tick_interval = min(tick_interval * 2, 3600)
+                elif tick_job_errors > 0:
+                    # 部分 job 失败 → worker 整体仍健康，重置计数，只记录警告
+                    logger.warning(
+                        "Brain worker tick: %d/%d jobs failed, worker remains healthy",
+                        tick_job_errors,
+                        n_jobs,
+                    )
+                    self._consecutive_tick_errors = 0
+                    tick_interval = config.get_brain_worker_tick_interval()
                 else:
                     self._consecutive_tick_errors = 0
                     tick_interval = config.get_brain_worker_tick_interval()
@@ -199,11 +232,10 @@ class BrainBackgroundWorker:
         """处理所有 pending segments"""
         try:
             from src.data.repos.brain_repository import BrainRepository
-
-            repo = BrainRepository()
         except ImportError:
             return
 
+        repo = BrainRepository()
         try:
             distillation = self._get_distillation_service()
             pending = repo.get_pending_segments()
@@ -283,109 +315,79 @@ class BrainBackgroundWorker:
             repo.increment_retry_count(segment_id)
 
     def _recover_crashed_segments(self):
-        """恢复崩溃时处于 distilling 状态的 segments"""
+        """恢复崩溃时卡在 distilling 状态超过阈值的 segments"""
         try:
-            from src.data.repos.brain_repository import BrainRepository
-
-            repo = BrainRepository()
+            from src.business.brain.segment_service import SegmentService
         except ImportError:
             return
-
-        try:
-            distilling = repo.get_distilling_segments()
-            for segment in distilling:
-                segment_id = getattr(segment, "segment_id", "")
-                logger.info("Crash recovery: resetting segment %s to pending", segment_id)
-                repo.transition_segment(
-                    segment_id,
-                    from_status="distilling",
-                    to_status="pending",
-                )
-        finally:
-            repo.close()
+        threshold = self._get_config().get_brain_worker_tick_interval() * 3
+        count = SegmentService().crash_reset_stale_segments(threshold_seconds=max(threshold, 60))
+        if count:
+            logger.info("Crash recovery: reset %d stale distilling segment(s) to pending", count)
 
     def _run_decay_sweep(self):
         """热区衰减扫描：将低 relevance 的 active 条目转为 fading"""
         try:
             from src.business.brain.decay_router import DecayRouter
-
-            router = DecayRouter()
-            stats = router.run_decay_sweep()
-            if stats and (stats.get("faded_count", 0) > 0 or stats.get("routed_to_archive", 0) > 0):
-                logger.info("Decay sweep: %s", stats)
         except ImportError:
-            pass
-        except Exception as e:
-            logger.error("Decay sweep failed: %s", e)
+            return
+        router = DecayRouter()
+        stats = router.run_decay_sweep()
+        if stats and (stats.get("faded_count", 0) > 0 or stats.get("routed_to_archive", 0) > 0):
+            logger.info("Decay sweep: %s", stats)
 
     def _run_archive_layering(self):
         """归档分层：聚合 unit 条目为时间层级摘要"""
         try:
             from src.business.brain.archive_service import ArchiveService
-
-            service = ArchiveService()
-            stats = service.run_layering_job()
-            if stats and stats.get("day_layers_created", 0) > 0:
-                logger.info("Archive layering: %s", stats)
         except ImportError:
-            pass
-        except Exception as e:
-            logger.error("Archive layering failed: %s", e)
+            return
+        service = ArchiveService()
+        stats = service.run_layering_job()
+        if stats and stats.get("day_layers_created", 0) > 0:
+            logger.info("Archive layering: %s", stats)
 
     def _run_prediction_jobs(self):
         """运行猜测生成和验证周期任务"""
-        try:
-            llm_client = self._get_llm_client()
-            if llm_client is None:
-                self._log_llm_skip_once("prediction jobs")
-                return
-            self._llm_unavailable_logged_jobs.discard("prediction jobs")
-            service = self._get_prediction_service()
-            with TraceContext(source="brain_prediction", agent_type="brain_worker"):
-                generated = service.generate_predictions(llm_client)
-            with TraceContext(source="brain_prediction_verification", agent_type="brain_worker"):
-                verified = service.verify_predictions(llm_client)
-            if generated or verified:
-                logger.info(
-                    "Prediction jobs: generated=%d verified=%d",
-                    len(generated),
-                    verified,
-                )
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.error("Prediction jobs failed: %s", e)
+        llm_client = self._get_llm_client()
+        if llm_client is None:
+            self._log_llm_skip_once("prediction jobs")
+            return
+        self._llm_unavailable_logged_jobs.discard("prediction jobs")
+        service = self._get_prediction_service()
+        with TraceContext(source="brain_prediction", agent_type="brain_worker"):
+            generated = service.generate_predictions(llm_client)
+        with TraceContext(source="brain_prediction_verification", agent_type="brain_worker"):
+            verified = service.verify_predictions(llm_client)
+        if generated or verified:
+            logger.info(
+                "Prediction jobs: generated=%d verified=%d",
+                len(generated),
+                verified,
+            )
 
     def _run_subconscious_distillation(self):
         """运行潜意识深层沉淀周期任务。"""
-        try:
-            llm_client = self._get_llm_client()
-            if llm_client is None:
-                self._log_llm_skip_once("subconscious distillation")
-                return
-            self._llm_unavailable_logged_jobs.discard("subconscious distillation")
-            with TraceContext(source="brain_subconscious", agent_type="brain_worker"):
-                count = self._get_distillation_service().run_subconscious_distillation(llm_client)
-            if count:
-                logger.info("Subconscious distillation produced %d entries", count)
-        except ImportError:
-            pass
-        except Exception as e:
-            logger.error("Subconscious distillation failed: %s", e)
+        llm_client = self._get_llm_client()
+        if llm_client is None:
+            self._log_llm_skip_once("subconscious distillation")
+            return
+        self._llm_unavailable_logged_jobs.discard("subconscious distillation")
+        with TraceContext(source="brain_subconscious", agent_type="brain_worker"):
+            count = self._get_distillation_service().run_subconscious_distillation(llm_client)
+        if count:
+            logger.info("Subconscious distillation produced %d entries", count)
 
     def _run_invalidation_review(self):
         """运行失效记忆复审周期任务。"""
         try:
             from src.data.repos.brain_repository import BrainRepository
-
-            with BrainRepository() as repo:
-                reviewed = repo.apply_invalidation_review_decay()
-                if reviewed:
-                    logger.info("Invalidation review degraded %d entries", reviewed)
         except ImportError:
-            pass
-        except Exception as e:
-            logger.error("Invalidation review failed: %s", e)
+            return
+        with BrainRepository() as repo:
+            reviewed = repo.apply_invalidation_review_decay()
+            if reviewed:
+                logger.info("Invalidation review degraded %d entries", reviewed)
 
     def _log_llm_skip_once(self, job_name: str) -> None:
         if job_name in self._llm_unavailable_logged_jobs:
@@ -397,27 +399,19 @@ class BrainBackgroundWorker:
         """扫描持续委托模式并自动招募专员。"""
         try:
             from src.business.brain.specialist_service import SpecialistService
-
-            service = SpecialistService()
-            recruited = service.scan_and_recruit()
-            for specialist in recruited:
-                specialist_id = specialist.get("specialist_id", "")
-                name = specialist.get("name", "")
-                reason = specialist.get("reason", "")
-                from src.utils.events import emit
-
-                emit(
-                    "brain_specialist_recruited",
-                    specialist_id=specialist_id,
-                    name=name,
-                    reason=reason,
-                )
-                logger.info(
-                    "Auto-recruited specialist: %s (%s)",
-                    name,
-                    specialist_id,
-                )
         except ImportError:
-            pass
-        except Exception as e:
-            logger.error("Recruitment scan failed: %s", e)
+            return
+
+        service = SpecialistService()
+        recruited = service.scan_and_recruit()
+        for specialist in recruited:
+            specialist_id = specialist.get("specialist_id", "")
+            name = specialist.get("name", "")
+            reason = specialist.get("reason", "")
+            emit(
+                "brain_specialist_recruited",
+                specialist_id=specialist_id,
+                name=name,
+                reason=reason,
+            )
+            logger.info("Auto-recruited specialist: %s (%s)", name, specialist_id)

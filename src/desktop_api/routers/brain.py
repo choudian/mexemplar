@@ -8,7 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel, Field, field_validator
 from src.business.brain.management_service import BrainManagementService
-from src.business.brain.specialist_service import SpecialistService
+from src.business.brain.specialist_service import SpecialistService, WhitelistValidationError
 
 router = APIRouter(prefix="/api/brain", tags=["brain"])
 logger = logging.getLogger(__name__)
@@ -192,6 +192,8 @@ async def create_specialist(body: CreateSpecialistBody):
             reason="通过管理界面创建",
         )
         return specialist
+    except WhitelistValidationError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_whitelist", "message": str(exc)})
     except ValueError:
         raise HTTPException(status_code=409, detail={"error": "conflict"})
 
@@ -248,6 +250,8 @@ async def update_specialist(specialist_id: str, body: UpdateSpecialistBody):
         return specialist
     except KeyError:
         raise HTTPException(status_code=404, detail={"error": "not_found"})
+    except WhitelistValidationError as exc:
+        raise HTTPException(status_code=400, detail={"error": "invalid_whitelist", "message": str(exc)})
     except ValueError:
         raise HTTPException(status_code=409, detail={"error": "conflict"})
 

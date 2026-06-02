@@ -65,7 +65,7 @@ class AIConfig:
     vision_api_key: Optional[str] = None  # 视觉模型专用 API key（为空则跟随主模型）
     vision_base_url: Optional[str] = None  # 视觉模型专用 endpoint（为空则跟随主模型）
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 32000
     timeout: int = 180
     base_url: Optional[str] = None  # 自定义 API endpoint（用于代理或兼容 API）
 

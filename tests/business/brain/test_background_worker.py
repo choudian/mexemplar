@@ -63,6 +63,7 @@ def test_worker_loop_runs_maintenance_jobs_in_order() -> None:
 
 
 def test_worker_loop_retries_after_tick_failure() -> None:
+    """job 级别异常不应停止同一 tick 内的其他 job；部分失败不累计 _consecutive_tick_errors。"""
     worker = BrainBackgroundWorker(config=_Config())
     calls: list[str] = []
     wait_count = 0
@@ -84,8 +85,7 @@ def test_worker_loop_retries_after_tick_failure() -> None:
 
     worker._worker_loop()
 
-    assert calls == [
-        "_process_pending_segments",
+    all_jobs = [
         "_process_pending_segments",
         "_recover_crashed_segments",
         "_run_decay_sweep",
@@ -95,11 +95,16 @@ def test_worker_loop_retries_after_tick_failure() -> None:
         "_run_invalidation_review",
         "_run_recruitment_scan",
     ]
+    # tick 1: 所有 job 均运行（process_pending 失败但不中断其余 job）
+    # tick 2: 所有 job 均成功
+    assert calls == all_jobs + all_jobs
+    # 部分失败（<全部 job）不累计连续失败计数，两 tick 后计数仍为 0
     assert worker._consecutive_tick_errors == 0
 
 
 def test_start_and_stop_manage_worker_thread(monkeypatch) -> None:
     monkeypatch.setattr(worker_module, "connect", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(worker_module, "disconnect", lambda *_args, **_kwargs: None)
     worker = BrainBackgroundWorker(config=_Config())
     _replace_jobs(worker, [])
 

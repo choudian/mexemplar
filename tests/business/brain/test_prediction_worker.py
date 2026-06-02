@@ -84,6 +84,7 @@ def test_verify_predictions_updates_status_and_rationale():
     entry = repo.get_entry(entry_id)
     assert count == 1
     assert entry.verification_status == "hit"
+    assert entry.status == "fading"
     assert "预算审核" in entry.verification_rationale
 
 
@@ -129,7 +130,9 @@ def test_verify_predictions_uses_distilled_memory_evidence():
 
     assert count == 1
     assert "用户再次询问了预算审核" in llm.chat.call_args.args[0]
-    assert repo.get_entry(prediction_id).verification_status == "hit"
+    verified = repo.get_entry(prediction_id)
+    assert verified.verification_status == "hit"
+    assert verified.status == "fading"
 
 
 def test_verify_predictions_expires_after_failed_retry_budget():
@@ -152,6 +155,7 @@ def test_verify_predictions_expires_after_failed_retry_budget():
     entry = repo.get_entry(entry_id)
     assert count == 1
     assert entry.verification_status == "expired"
+    assert entry.status == "fading"
     assert "could not be assessed" in entry.verification_rationale
 
 
@@ -285,9 +289,17 @@ def test_background_worker_unhandled_distillation_failure_consumes_retry_budget(
 
 
 def test_background_worker_recover_crashed_segments_resets_distilling_segments(in_memory_db):
+    from datetime import timedelta
+
     from src.business.brain.background_worker import BrainBackgroundWorker
     from src.business.brain.models import SegmentStatus
     from src.data.repos.brain_repository import BrainRepository
+    from src.utils.timezone import utc_now_naive
+
+    class _FastConfig:
+        # tick_interval=20s → threshold=max(60,60)=60s，远低于 2 小时，确保恢复触发
+        def get_brain_worker_tick_interval(self) -> float:
+            return 20.0
 
     repo = BrainRepository()
     segment_id = repo.create_segment(
@@ -301,8 +313,12 @@ def test_background_worker_recover_crashed_segments_resets_distilling_segments(i
         from_status=SegmentStatus.PENDING.value,
         to_status=SegmentStatus.DISTILLING.value,
     )
+    # 手动将 distilling_started_at 设为 2 小时前，使其超过崩溃恢复阈值
+    seg = repo.get_segment_by_id(segment_id)
+    seg.distilling_started_at = utc_now_naive() - timedelta(hours=2)
+    repo.session.commit()
 
-    BrainBackgroundWorker()._recover_crashed_segments()
+    BrainBackgroundWorker(config=_FastConfig())._recover_crashed_segments()
 
     assert BrainRepository().get_segment_by_id(segment_id).status == SegmentStatus.PENDING.value
 

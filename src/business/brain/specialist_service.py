@@ -19,6 +19,10 @@ from src.data.repos.specialist_repository import SpecialistRepository
 from src.utils.events import emit
 
 
+class WhitelistValidationError(ValueError):
+    """白名单验证失败：工具不在技能池中。"""
+
+
 def parse_tool_whitelist(raw) -> list[str]:
     """Parse a tool_whitelist value from JSON string or list to a clean list of strings."""
     if isinstance(raw, list):
@@ -159,8 +163,8 @@ class SpecialistService:
         if specialist is None:
             raise KeyError("specialist_not_found")
 
-        # 如果修改了名称，检查新名称唯一性
-        if name is not None and name != specialist.name:
+        # 如果修改了名称（忽略大小写后确实不同），检查新名称唯一性
+        if name is not None and name.lower() != specialist.name.lower():
             existing = self._repo.get_specialist_by_name(name)
             if existing is not None:
                 raise ValueError(f"专员名称已存在: {name}")
@@ -635,11 +639,19 @@ class SpecialistService:
             for identifier in (getattr(tool, "tool_name", None), getattr(tool, "tool_id", None))
             if identifier
         }
+        # 先移除已从技能池移除的工具，再并入 builtin（builtin 不受技能池移除影响）
         published_names -= self._removed_skill_pool_identifiers()
+        builtin_names = {
+            identifier
+            for entry in BUILTIN_TOOL_CATALOG
+            for identifier in (entry.get("name"), entry.get("tool_id"))
+            if identifier
+        }
+        published_names |= builtin_names
 
         invalid_tools = [t for t in tool_whitelist if t not in published_names]
         if invalid_tools:
-            raise ValueError(f"白名单包含不存在的工具: {', '.join(invalid_tools)}")
+            raise WhitelistValidationError(f"白名单包含不存在的工具: {', '.join(invalid_tools)}")
 
     @staticmethod
     def _to_dict(specialist) -> dict:

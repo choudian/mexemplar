@@ -72,11 +72,13 @@ class SkillCompositionService:
         self,
         config=None,
         temperature: float = 0.4,
-        max_tokens: int = 800,
+        max_tokens: int | None = None,
     ) -> LangChainLLMClient:
         """创建 LLM 客户端，统一配置读取和 Key 校验。"""
         if config is None:
             config = get_unified_config()
+        if max_tokens is None:
+            max_tokens = config.get_ai_max_tokens()
         resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
         api_key = resolver.get_ai_api_key() if resolver is not None else config.get_ai_api_key()
         if not api_key:

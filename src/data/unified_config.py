@@ -286,6 +286,19 @@ class UnifiedConfigManager:
             return 1.0
         return value
 
+    def get_ai_max_tokens(self) -> int:
+        """LLM 单次回复最大 output tokens。非法值回退到 32000。"""
+        raw = self.get("ai.max_tokens", default=32000)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning(f"[配置] ai.max_tokens 非法值 {raw!r}，回退到 32000")
+            return 32000
+        if value <= 0:
+            logger.warning(f"[配置] ai.max_tokens 必须为正 {value}，回退到 32000")
+            return 32000
+        return value
+
     def get_embedding_api_key(self) -> Optional[str]:
         """获取 embedding 服务 API 密钥（用于向量搜索）"""
         # 优先从配置文件获取

@@ -18,6 +18,12 @@ from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
+
+def _new_id() -> str:
+    """生成 50 字符的唯一 ID（两个 UUID4 hex 拼接后截取）。"""
+    return (uuid4().hex + uuid4().hex)[:50]
+
+
 _BRAIN_ZONES = ("hot", "persistent", "archive", "subconscious", "failure", "prediction")
 _SEGMENT_UPDATE_COLUMNS = frozenset(
     {
@@ -75,7 +81,7 @@ class BrainRepository(BaseRepository):
         segment_id: Optional[str] = None,
     ) -> str:
         """创建一个新的 segment（status='pending'），返回可当字符串使用的 segment 快照。"""
-        segment_id = segment_id or uuid4().hex[:50]
+        segment_id = segment_id or _new_id()
         now = utc_now_naive()
         segment = BrainSegment(
             segment_id=segment_id,
@@ -327,7 +333,7 @@ class BrainRepository(BaseRepository):
         commit: bool = True,
     ) -> str:
         """创建一条记忆条目，返回可当字符串使用的 entry 快照。"""
-        entry_id = entry_id or uuid4().hex[:50]
+        entry_id = entry_id or _new_id()
         entry = BrainMemoryEntry(
             entry_id=entry_id,
             zone=zone,
@@ -494,17 +500,27 @@ class BrainRepository(BaseRepository):
             entry.status = "invalidated"
             entry.updated_at = utc_now_naive()
             self.session.commit()
-            self.create_feedback_signal(
-                zone=entry.zone,
-                operation="invalidate",
-                target_id=entry_id,
-                context_summary=f"{reason}: {entry.content[:200]}",
-            )
-            return True
         except Exception as e:
             self.session.rollback()
             logger.error("Entry invalidation failed: %s", e)
             raise
+        # 信号写失败不回滚已完成的 invalidation，独立处理
+        try:
+            signal_id = _new_id()
+            self.session.add(
+                FeedbackSignal(
+                    signal_id=signal_id,
+                    zone=entry.zone,
+                    operation="invalidate",
+                    target_id=entry_id,
+                    context_summary=f"{reason}: {entry.content[:200]}",
+                )
+            )
+            self.session.commit()
+        except Exception as e:
+            self.session.rollback()
+            logger.warning("Feedback signal for invalidation failed (entry already invalidated): %s", e)
+        return True
 
     def supersede_entry(
         self,
@@ -518,7 +534,7 @@ class BrainRepository(BaseRepository):
         old_entry = self.get_entry(old_entry_id)
         if old_entry is None:
             return None
-        new_entry_id = uuid4().hex[:50]
+        new_entry_id = _new_id()
         try:
             replacement = BrainMemoryEntry(
                 entry_id=new_entry_id,
@@ -595,7 +611,7 @@ class BrainRepository(BaseRepository):
         if old_entry is None:
             return None
 
-        new_entry_id = uuid4().hex[:50]
+        new_entry_id = _new_id()
         try:
             old_entry.status = "soft-deleted"
             old_entry.superseded_by = new_entry_id
@@ -683,7 +699,7 @@ class BrainRepository(BaseRepository):
         created_ids: list[str] = []
         try:
             for entry_data in entries:
-                entry_id = entry_data.get("entry_id") or uuid4().hex[:50]
+                entry_id = entry_data.get("entry_id") or _new_id()
                 entry = BrainMemoryEntry(
                     entry_id=entry_id,
                     zone=entry_data.get("zone", "hot"),
@@ -744,7 +760,7 @@ class BrainRepository(BaseRepository):
                 return []
 
             for entry_data in entries:
-                entry_id = entry_data.get("entry_id") or uuid4().hex[:50]
+                entry_id = entry_data.get("entry_id") or _new_id()
                 entry = BrainMemoryEntry(
                     entry_id=entry_id,
                     zone=entry_data.get("zone", "hot"),
@@ -906,6 +922,8 @@ class BrainRepository(BaseRepository):
         try:
             entry.verification_status = status
             entry.verification_rationale = rationale
+            if entry.status == "active":  # 只从 active 降级，不覆盖 invalidated/archived 等状态
+                entry.status = "fading"
             entry.updated_at = utc_now_naive()
             self.session.commit()
             return True
@@ -1023,7 +1041,7 @@ class BrainRepository(BaseRepository):
         context_summary: str,
     ) -> str:
         """创建一条反馈信号，返回 signal_id。"""
-        signal_id = uuid4().hex[:50]
+        signal_id = _new_id()
         signal = FeedbackSignal(
             signal_id=signal_id,
             zone=zone,
@@ -1084,7 +1102,7 @@ class BrainRepository(BaseRepository):
         try:
             if signal is None:
                 signal = FeedbackSignal(
-                    signal_id=uuid4().hex[:50],
+                    signal_id=_new_id(),
                     zone="specialist",
                     operation="skill_pool_remove",
                     target_id=tool_id,
@@ -1164,7 +1182,7 @@ class BrainRepository(BaseRepository):
         try:
             if signal is None:
                 signal = BrainRecruitmentSignal(
-                    signal_id=uuid4().hex[:50],
+                    signal_id=_new_id(),
                     task_pattern=normalized_pattern,
                     delegation_count=0,
                     example_session_ids="[]",

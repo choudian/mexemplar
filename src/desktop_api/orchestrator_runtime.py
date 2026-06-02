@@ -32,6 +32,7 @@ def build_default_orchestrator(
         api_key=api_key,
         base_url=config.get_ai_base_url(),
         temperature=0.7,
+        max_tokens=config.get_ai_max_tokens(),
         thinking_level=config.get_ai_thinking_level(),
         timeout=config.get_ai_request_timeout(),
     )

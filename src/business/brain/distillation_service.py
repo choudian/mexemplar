@@ -302,6 +302,10 @@ class DistillationService:
 
             # 获取 segment 对应的消息
             messages = self._get_segment_messages(segment)
+            if messages is None:
+                # 边界 ID 缺失或消息已被清除，不能静默完成
+                self._retry_or_fail_segment(repo, segment, "segment message boundary unresolvable")
+                return False
             if not messages:
                 logger.info("Segment %s has no messages, marking completed", segment_id)
                 repo.transition_segment(
@@ -384,6 +388,7 @@ class DistillationService:
             )
             if len(created_ids) != len(entries_with_source):
                 logger.warning("Segment %s completion conflicted after distillation", segment_id)
+                self._retry_or_fail_segment(repo, segment, "Completion CAS conflict")
                 return False
 
             self._emit_created_entries(entries_with_source, created_ids)
@@ -408,7 +413,7 @@ class DistillationService:
             return P4_DISTILLATION_TOOL_SCHEMA
         return P1_DISTILLATION_TOOL_SCHEMA
 
-    def _get_segment_messages(self, segment) -> list[dict]:
+    def _get_segment_messages(self, segment) -> list[dict] | None:
         """获取 segment 覆盖范围内的消息"""
         from src.data.repos.message_repository import MessageRepository
 
@@ -418,24 +423,25 @@ class DistillationService:
 
         msg_repo = MessageRepository()
         try:
-            messages = msg_repo.get_context(session_id)
+            all_messages = msg_repo.get_context(session_id)
         finally:
             msg_repo.close()
-        messages = [
-            msg
-            for msg in messages
+
+        if msg_start is None or msg_end is None:
+            return None  # 边界 ID 缺失是数据错误，应走 retry/fail 而非静默 COMPLETED
+
+        # 边界序号查找必须在内容过滤之前执行，避免空内容边界消息（如纯工具调用轮次）被过滤掉
+        start_seq = next((m.sequence for m in all_messages if m.message_id == msg_start), None)
+        end_seq = next((m.sequence for m in all_messages if m.message_id == msg_end), None)
+        if start_seq is None or end_seq is None:
+            return None  # 边界消息已被清除，同上
+
+        selected = [m for m in all_messages if start_seq <= m.sequence <= end_seq]
+        return [
+            {"role": msg.role, "content": msg.content}
+            for msg in selected
             if msg.role in {"user", "assistant"} and (msg.content or "").strip()
         ]
-        if not msg_start or not msg_end:
-            selected = messages
-        else:
-            start_seq = next((m.sequence for m in messages if m.message_id == msg_start), None)
-            end_seq = next((m.sequence for m in messages if m.message_id == msg_end), None)
-            if start_seq is None or end_seq is None:
-                selected = messages
-            else:
-                selected = [m for m in messages if start_seq <= m.sequence <= end_seq]
-        return [{"role": msg.role, "content": msg.content} for msg in selected]
 
     def _build_distillation_prompt(self, phase: str = "p1") -> str:
         base = (

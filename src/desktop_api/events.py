@@ -179,7 +179,8 @@ class DesktopEventQueue:
             self._subscribers.pop(subscriber_id, None)
             if self._subscribers:
                 return []
-        return trial_preview_manager.fail_pending("disconnect")
+            # fail_pending 在锁内调用，避免新订阅者在锁释放后加入时收到虚假拒绝事件
+            return trial_preview_manager.fail_pending("disconnect")
 
     def _replay_or_resync_locked(
         self,

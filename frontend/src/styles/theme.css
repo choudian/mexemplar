@@ -4687,6 +4687,8 @@ select:focus-visible,
   border-radius: var(--radius-lg);
   background: var(--surface-1);
   padding: 16px;
+  display: flex;
+  flex-direction: column;
 }
 
 .debug-warning-list {
@@ -4728,6 +4730,8 @@ select:focus-visible,
   display: grid;
   gap: 6px;
   margin-top: 12px;
+  overflow-y: auto;
+  max-height: 30vh;
 }
 
 .debug-list-row {
@@ -4848,8 +4852,7 @@ select:focus-visible,
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: 14px;
-  padding: 26px;
+  background: var(--surface-1);
 }
 
 .methodology-header,
@@ -4867,19 +4870,23 @@ select:focus-visible,
 }
 
 .methodology-header {
+  align-items: flex-end;
   justify-content: space-between;
   gap: 18px;
+  padding: 24px 32px 18px;
 }
 
 .methodology-header h2 {
   margin: 0;
-  font-size: 24px;
+  font-size: 22px;
+  font-weight: 650;
   letter-spacing: 0;
 }
 
 .methodology-header p {
   margin: 6px 0 0;
   color: var(--text-muted);
+  font-size: 13px;
 }
 
 .methodology-header-actions {
@@ -4900,6 +4907,11 @@ select:focus-visible,
   padding: 10px 12px;
 }
 
+.methodology-bootstrap-warning,
+.methodology-empty-state {
+  margin: 0 26px;
+}
+
 .methodology-bootstrap-warning span {
   flex: 1;
 }
@@ -4910,6 +4922,7 @@ select:focus-visible,
   gap: 14px;
   min-height: 0;
   flex: 1;
+  padding: 0 26px 26px;
   transition: grid-template-columns 0.2s ease;
 }
 
@@ -5558,8 +5571,17 @@ select:focus-visible,
     grid-template-columns: 1fr;
   }
 
-  .methodology-screen {
-    padding: 16px;
+  .methodology-header {
+    padding: 16px 16px 14px;
+  }
+
+  .methodology-bootstrap-warning,
+  .methodology-empty-state {
+    margin: 0 16px;
+  }
+
+  .methodology-workspace {
+    padding: 0 16px 16px;
   }
 }
 

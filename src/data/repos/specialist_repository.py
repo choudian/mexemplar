@@ -90,8 +90,16 @@ class SpecialistRepository(BaseRepository):
         )
 
     def get_specialist_by_name(self, name: str) -> Optional[BrainSpecialist]:
-        """按名称查询专员。"""
-        return self.session.query(BrainSpecialist).filter(BrainSpecialist.name == name).first()
+        """按名称查询活跃专员（大小写不敏感）。软删除专员不参与重名检查。
+        Python 侧 lower() 对比以正确处理 Unicode 字符，避免 SQLite lower() 仅支持 ASCII 的限制。
+        """
+        name_lower = name.lower()
+        candidates = (
+            self.session.query(BrainSpecialist)
+            .filter(BrainSpecialist.is_active.is_(True))
+            .all()
+        )
+        return next((s for s in candidates if s.name.lower() == name_lower), None)
 
     def list_specialists(
         self,
