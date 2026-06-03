@@ -538,6 +538,10 @@ __all__ = [
     "create_delegate_to_specialist_handler",
     "CREATE_SPECIALIST_SCHEMA",
     "create_create_specialist_handler",
+    "CONTINUE_SUBAGENT_SCHEMA",
+    "create_continue_subagent_handler",
+    "INSPECT_SUBAGENT_SCHEMA",
+    "create_inspect_subagent_handler",
 ]
 
 
@@ -808,6 +812,106 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
             return error_json(e)
 
     return delegate_to_subagent_handler
+
+
+CONTINUE_SUBAGENT_SCHEMA = make_tool_schema(
+    name="continue_subagent",
+    description=(
+        "继续执行一个已暂停或已结束的子代理。子代理达到迭代上限或调用失败时会暂停，"
+        "用此工具给它续跑配额、从断点接着跑；也可对已完成但未达标的子代理带追加指令返工。"
+    ),
+    properties={
+        "subagent_id": {
+            "type": "string",
+            "description": "delegate_to_subagent 返回的 subagent_id",
+        },
+        "instruction": {
+            "type": "string",
+            "description": "可选追加指令（例如指出还差什么、要避开的弯路）；不传则让子代理纯接着跑",
+        },
+        "extra_iterations": {
+            "type": "integer",
+            "description": "本次续跑额外允许的迭代次数，默认 20",
+        },
+    },
+    required=["subagent_id"],
+)
+
+
+def create_continue_subagent_handler(session_id: str, continue_callback=None):
+    """工厂函数：创建 continue_subagent handler。"""
+
+    def continue_subagent_handler(
+        subagent_id: str,
+        instruction: str = "",
+        extra_iterations: int = 20,
+    ) -> str:
+        """唤回子代理续跑"""
+        try:
+            logger.info(
+                "[continue_subagent] session=%s subagent=%s instruction_chars=%d extra_iterations=%s",
+                session_id,
+                subagent_id,
+                len(instruction or ""),
+                extra_iterations,
+            )
+            if continue_callback is not None:
+                return to_json(
+                    continue_callback(
+                        parent_session_id=session_id,
+                        subagent_id=subagent_id,
+                        instruction=instruction or "",
+                        extra_iterations=extra_iterations,
+                    )
+                )
+            return to_json({"success": False, "error": "续跑回调未注册"})
+        except Exception as e:
+            logger.error("[continue_subagent] 续跑失败: %s", e)
+            return error_json(e)
+
+    return continue_subagent_handler
+
+
+INSPECT_SUBAGENT_SCHEMA = make_tool_schema(
+    name="inspect_subagent",
+    description=(
+        "查看一个子代理的工作概览（迭代轮数、调用过的工具及次数、最后产出、状态），"
+        "用于判断它是任务复杂该续跑、还是走弯路该新开。只读，不消耗额外模型调用。"
+    ),
+    properties={
+        "subagent_id": {
+            "type": "string",
+            "description": "delegate_to_subagent 返回的 subagent_id",
+        },
+    },
+    required=["subagent_id"],
+)
+
+
+def create_inspect_subagent_handler(session_id: str, inspect_callback=None):
+    """工厂函数：创建 inspect_subagent handler。"""
+
+    def inspect_subagent_handler(subagent_id: str) -> str:
+        """查看子代理工作概览"""
+        try:
+            logger.info(
+                "[inspect_subagent] session=%s subagent=%s",
+                session_id,
+                subagent_id,
+            )
+            if inspect_callback is not None:
+                return to_json(
+                    inspect_callback(
+                        parent_session_id=session_id,
+                        subagent_id=subagent_id,
+                    )
+                )
+            return to_json({"success": False, "error": "查看回调未注册"})
+        except Exception as e:
+            logger.error("[inspect_subagent] 查看失败: %s", e)
+            return error_json(e)
+
+    return inspect_subagent_handler
 
 
 DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
