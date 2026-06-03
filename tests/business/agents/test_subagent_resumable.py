@@ -136,6 +136,27 @@ class TestAgentLoopPause:
         assert result.result_type == ResultType.ERROR
         assert loop._get_context_manager(sid).get_session_status() == "failed"
 
+    def test_400_error_with_connection_text_is_not_recoverable(self, mock_config, in_memory_db):
+        """错误消息里的普通 connection 文案不能把 400 永久错误误判为可恢复。"""
+        mock_config.get_ai_retry_max_retries.return_value = 0
+        mock_config.get_ai_retry_delay.return_value = 0
+        config = AgentConfig(
+            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            system_prompt="sub",
+            max_iterations=5,
+            resumable_on_failure=True,
+        )
+        sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
+        llm = MagicMock()
+        llm.chat_with_tools.side_effect = RuntimeError(
+            "Error code: 400 - invalid request: connection field is malformed"
+        )
+        loop = AgentLoop(config, llm, mock_config)
+        with patch("src.business.agents.agent_loop.time.sleep"):
+            result = loop.run(sid, user_input="go", tools=[_noop_tool()])
+        assert result.result_type == ResultType.ERROR
+        assert loop._get_context_manager(sid).get_session_status() == "failed"
+
     def test_llm_failure_default_still_error(self, mock_config, in_memory_db):
         """默认 + LLM 调用最终失败 → 仍 ERROR（回归保护）。"""
         mock_config.get_ai_retry_max_retries.return_value = 0
@@ -189,12 +210,12 @@ def _patch_loop(orch, run_result):
 class TestDelegateReturnsHandle:
     def test_delegate_returns_subagent_id_on_complete(self, orch):
         """委派完成 → 返回里带 subagent_id（= executor_session_id），供后续 inspect/continue。"""
-        patches, mock_loop_cls = _patch_loop(
-            orch, AgentResult(result_type=ResultType.COMPLETED)
-        )
+        patches, mock_loop_cls = _patch_loop(orch, AgentResult(result_type=ResultType.COMPLETED))
         try:
-            with patch.object(orch, "_extract_latest_assistant_text", return_value="done"), \
-                 patch.object(orch, "_record_delegation_signal"):
+            with (
+                patch.object(orch, "_extract_latest_assistant_text", return_value="done"),
+                patch.object(orch, "_record_delegation_signal"),
+            ):
                 res = orch._delegate_to_subagent(
                     parent_session_id="parent-D", task_description="做点事"
                 )
@@ -252,14 +273,78 @@ class TestInspectSubagent:
         res = orch._inspect_subagent(parent_session_id="parent-A", subagent_id=foreign)
         assert res["success"] is False
 
+    def test_inspect_rejects_old_prefix_collision_without_transition(self, orch):
+        from src.data.models_sqlite import Session
+        from src.data.repositories import SessionRepository
+
+        parent_a = "123456789012-A"
+        parent_b = "123456789012-B"
+        repo = SessionRepository()
+        repo.create(
+            Session(
+                session_id=parent_a,
+                workflow_id="assistant-a",
+                agent_type=AgentType.ASSISTANT,
+                status="active",
+            )
+        )
+        repo.create(
+            Session(
+                session_id=parent_b,
+                workflow_id="assistant-b",
+                agent_type=AgentType.ASSISTANT,
+                status="active",
+            )
+        )
+        workflow_id = f"dlg_{parent_a[:12]}_{uuid.uuid4().hex[:16]}"
+        child = orch._session_store.create_session(workflow_id, AgentType.EPHEMERAL_SUBAGENT)
+        ContextManager(child, orch._config).update_session_status("suspended")
+
+        res = orch._inspect_subagent(parent_session_id=parent_b, subagent_id=child)
+
+        assert res["success"] is False
+
+    def test_inspect_accepts_unique_legacy_prefix_without_transition(self, orch):
+        from src.data.models_sqlite import Session
+        from src.data.repositories import SessionRepository
+
+        parent = "legacyparent-001"
+        repo = SessionRepository()
+        repo.create(
+            Session(
+                session_id=parent,
+                workflow_id="assistant-legacy",
+                agent_type=AgentType.ASSISTANT,
+                status="active",
+            )
+        )
+        workflow_id = f"dlg_{parent[:12]}_{uuid.uuid4().hex[:16]}"
+        child = orch._session_store.create_session(workflow_id, AgentType.EPHEMERAL_SUBAGENT)
+        ContextManager(child, orch._config).update_session_status("suspended")
+
+        res = orch._inspect_subagent(parent_session_id=parent, subagent_id=child)
+
+        assert res["success"] is True
+
+    def test_inspect_rejects_when_transition_lookup_fails(self, orch):
+        parent = "parent-lookup-error"
+        child = _make_child_subagent(orch, parent)
+        orch._transition_repo.get_by_workflow = MagicMock(side_effect=RuntimeError("db locked"))
+
+        res = orch._inspect_subagent(parent_session_id=parent, subagent_id=child)
+
+        assert res["success"] is False
+
+    def test_delegation_parent_hash_rejects_missing_parent_id(self):
+        with pytest.raises(ValueError, match="parent_session_id"):
+            AgentOrchestrator._delegation_parent_hash(None)
+
 
 class TestContinueSubagent:
     def test_continue_completed_with_instruction(self, orch):
         parent = "parent-B"
         child = _make_child_subagent(orch, parent)
-        patches, mock_loop_cls = _patch_loop(
-            orch, AgentResult(result_type=ResultType.COMPLETED)
-        )
+        patches, mock_loop_cls = _patch_loop(orch, AgentResult(result_type=ResultType.COMPLETED))
         try:
             with patch.object(orch, "_extract_latest_assistant_text", return_value="done"):
                 res = orch._continue_subagent(
@@ -300,8 +385,10 @@ class TestContinueSubagent:
         ctx.save_user_message("原任务")
         ctx.save_assistant_message(content="最终答案（部分达标）", tool_calls=None)
 
-        with patch.object(orch, "_build_delegated_executor_tools", return_value=[]), \
-             patch.object(orch, "_resolve_user_tool_ids", return_value=set()):
+        with (
+            patch.object(orch, "_build_delegated_executor_tools", return_value=[]),
+            patch.object(orch, "_resolve_user_tool_ids", return_value=set()),
+        ):
             res = orch._continue_subagent(parent_session_id=parent, subagent_id=child)
 
         assert res["success"] is False

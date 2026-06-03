@@ -13,14 +13,15 @@
 
 import json
 import logging
+import http.client
 import ipaddress
 import re
 import socket
+import ssl
 import subprocess
 import threading
 import time
 import urllib.parse
-import urllib.request
 import uuid
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -64,6 +65,10 @@ _SUMMARY_TOTAL_MAX = 240
 _WEB_FETCH_MAX_LENGTH = 5000
 _WEB_FETCH_ALLOWED_SCHEMES = {"http", "https"}
 _WEB_FETCH_LOCALHOST_NAMES = {"localhost", "localhost.localdomain"}
+_WEB_FETCH_MAX_REDIRECTS = 5
+_WEB_FETCH_MAX_BYTES = 1_000_000
+_WEB_FETCH_REDIRECT_DRAIN_BYTES = 64 * 1024
+_WEB_FETCH_SSL_CONTEXT = ssl.create_default_context()
 # Short TTL prevents SSRF via DNS rebinding while reducing blocking DNS calls per agent turn.
 _DNS_CACHE: dict[str, tuple[float, list]] = {}
 _DNS_CACHE_LOCK = threading.Lock()
@@ -450,17 +455,14 @@ def web_fetch_handler(url: str, max_length: int = _WEB_FETCH_MAX_LENGTH) -> str:
     try:
         safe_url = _validate_web_fetch_url(url)
         max_length = _normalize_web_fetch_max_length(max_length)
-        opener = urllib.request.build_opener(_SafeWebFetchRedirectHandler)
-        req = urllib.request.Request(safe_url, headers={"User-Agent": "Mozilla/5.0"})
-        with opener.open(req, timeout=15) as resp:
-            html = resp.read().decode("utf-8", errors="replace")
+        final_url, html = _fetch_validated_web_url(safe_url)
 
         text = _extract_text_from_html(html)[:max_length]
 
         return json.dumps(
             {
                 "success": True,
-                "url": safe_url,
+                "url": final_url,
                 "content": text,
                 "truncated": len(text) == max_length,
             },
@@ -471,10 +473,48 @@ def web_fetch_handler(url: str, max_length: int = _WEB_FETCH_MAX_LENGTH) -> str:
         return error_json(e)
 
 
-class _SafeWebFetchRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        _validate_web_fetch_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+class _ResolvedHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection that connects to a pre-validated address, not a fresh DNS result."""
+
+    def __init__(
+        self, host: str, port: int, resolved_address: ipaddress._BaseAddress, timeout: float
+    ):
+        super().__init__(host, port=port, timeout=timeout)
+        self._resolved_address = str(resolved_address)
+
+    def connect(self) -> None:
+        self.sock = _create_resolved_web_fetch_socket(
+            (self._resolved_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _ResolvedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that preserves SNI while dialing a pre-validated address."""
+
+    def __init__(
+        self, host: str, port: int, resolved_address: ipaddress._BaseAddress, timeout: float
+    ):
+        super().__init__(host, port=port, timeout=timeout, context=_WEB_FETCH_SSL_CONTEXT)
+        self._resolved_address = str(resolved_address)
+
+    def connect(self) -> None:
+        sock = _create_resolved_web_fetch_socket(
+            (self._resolved_address, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+
+
+def _create_resolved_web_fetch_socket(address, timeout, source_address):
+    sock = socket.create_connection(address, timeout, source_address)
+    try:
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    except (AttributeError, OSError):
+        pass
+    return sock
 
 
 def _normalize_web_fetch_max_length(max_length: int) -> int:
@@ -492,8 +532,78 @@ def _validate_web_fetch_url(url: str) -> str:
         raise ValueError("web_fetch 只允许 http/https URL")
     if not parsed.hostname:
         raise ValueError("web_fetch URL 缺少主机名")
-    _reject_private_web_fetch_host(parsed.hostname)
-    return urllib.parse.urlunparse(parsed)
+    _web_fetch_port(parsed)
+    return urllib.parse.urlunparse(parsed._replace(scheme=parsed.scheme.lower()))
+
+
+def _fetch_validated_web_url(
+    url: str, *, redirects_remaining: int = _WEB_FETCH_MAX_REDIRECTS
+) -> tuple[str, str]:
+    parsed = urllib.parse.urlparse(_validate_web_fetch_url(url))
+    addresses = _validated_web_fetch_addresses(parsed.hostname or "")
+    address = addresses[0]
+    port = _web_fetch_port(parsed)
+    conn_cls = _ResolvedHTTPSConnection if parsed.scheme == "https" else _ResolvedHTTPConnection
+    conn = conn_cls(parsed.hostname or "", port, address, timeout=15)
+    path = urllib.parse.urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Host": _web_fetch_host_header(parsed),
+        "Connection": "close",
+    }
+    try:
+        conn.request("GET", path, headers=headers)
+        resp = conn.getresponse()
+        if resp.status in {301, 302, 303, 307, 308}:
+            if redirects_remaining <= 0:
+                raise ValueError("web_fetch 重定向次数过多")
+            location = resp.getheader("Location")
+            if not location:
+                raise ValueError("web_fetch 重定向响应缺少 Location")
+            next_url = urllib.parse.urljoin(urllib.parse.urlunparse(parsed), location)
+            _drain_redirect_response_body(resp)
+            conn.close()
+            return _fetch_validated_web_url(next_url, redirects_remaining=redirects_remaining - 1)
+        if resp.status >= 400:
+            raise ValueError(f"web_fetch HTTP 请求失败: {resp.status}")
+        raw = resp.read(_WEB_FETCH_MAX_BYTES + 1)
+        if len(raw) > _WEB_FETCH_MAX_BYTES:
+            raw = raw[:_WEB_FETCH_MAX_BYTES]
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return urllib.parse.urlunparse(parsed), raw.decode(charset, errors="replace")
+    finally:
+        conn.close()
+
+
+def _web_fetch_port(parsed: urllib.parse.ParseResult) -> int:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("web_fetch URL 端口非法") from exc
+    if port is not None:
+        return port
+    return 443 if parsed.scheme.lower() == "https" else 80
+
+
+def _web_fetch_host_header(parsed: urllib.parse.ParseResult) -> str:
+    host = (parsed.hostname or "").strip("[]")
+    if ":" in host:
+        host = f"[{host}]"
+    port = _web_fetch_port(parsed)
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    return host if port == default_port else f"{host}:{port}"
+
+
+def _drain_redirect_response_body(resp: http.client.HTTPResponse) -> None:
+    try:
+        if getattr(resp, "chunked", False):
+            resp.read()
+            return
+        remaining = getattr(resp, "length", None)
+        if isinstance(remaining, int) and remaining > 0:
+            resp.read(min(remaining, _WEB_FETCH_REDIRECT_DRAIN_BYTES))
+    except Exception as exc:
+        logger.debug("Failed to drain redirect response body: %s", exc)
 
 
 def _cached_dns_lookup(host: str) -> list:
@@ -520,7 +630,7 @@ def _cached_dns_lookup(host: str) -> list:
     return addresses
 
 
-def _reject_private_web_fetch_host(hostname: str) -> None:
+def _validated_web_fetch_addresses(hostname: str) -> list[ipaddress._BaseAddress]:
     host = hostname.strip("[]").rstrip(".").lower()
     if host in _WEB_FETCH_LOCALHOST_NAMES or host.endswith(".localhost"):
         raise ValueError("web_fetch 不允许访问本机地址")
@@ -532,11 +642,14 @@ def _reject_private_web_fetch_host(hostname: str) -> None:
 
     if not addresses:
         raise ValueError(f"web_fetch 无法解析主机名: {hostname}")
+    validated = []
     for address in addresses:
         if hasattr(address, "ipv4_mapped") and address.ipv4_mapped is not None:
             address = address.ipv4_mapped
         if not address.is_global:
             raise ValueError("web_fetch 不允许访问内网、本机或保留地址")
+        validated.append(address)
+    return validated
 
 
 class _HtmlTextExtractor(HTMLParser):

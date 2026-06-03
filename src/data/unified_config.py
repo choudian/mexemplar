@@ -456,6 +456,10 @@ class UnifiedConfigManager:
         """猜测验证最大重试次数"""
         return self.get("brain.worker.prediction_verification_retries", default=3)
 
+    def get_brain_injection_persistent_top_n(self) -> int:
+        """持久区注入 top-N 条目"""
+        return self.get("brain.injection.persistent_top_n", default=50)
+
     def get_brain_injection_hot_zone_top_n(self) -> int:
         """热区注入 top-N 条目"""
         return self.get("brain.injection.hot_zone_top_n", default=20)

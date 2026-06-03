@@ -42,8 +42,6 @@ _RECOVERABLE_LLM_ERROR_MARKERS = (
     "overloaded",
     "529",
     "timeout",
-    "connection",
-    "network",
     "temporarily unavailable",
     "service unavailable",
     "502",
@@ -508,7 +506,6 @@ class AgentLoop:
                 )
                 if tool_call.name == "reply_to_user" and result.display_text:
                     ctx.save_assistant_message(content=result.display_text)
-                    question = ""
                 logger.info("[Agent Loop] 需要用户输入: chars=%s", len(question))
                 return AgentResult(
                     result_type=ResultType.NEEDS_USER_INPUT,

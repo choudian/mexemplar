@@ -2,7 +2,7 @@
 热区和持久区上下文注入测试 (T026)
 
 覆盖：
-- 持久区：全量注入（所有 active entries）
+- 持久区：按配置上限注入 active entries
 - 热区：active + fading 均可见，并按 relevance_score 降序 top-N 选择
 - 空脑：返回空上下文（冷启动）
 - loaded_count 递增验证
@@ -32,15 +32,16 @@ def _cleanup_events():
 
 
 class TestPersistentZoneInjection:
-    """持久区应全量注入所有 active 条目。"""
+    """持久区应按配置上限注入 active 条目。"""
 
-    def test_persistent_zone_full_injection(self):
-        """持久区所有 active 条目应全部注入到上下文。"""
+    def test_persistent_zone_uses_configured_limit(self):
+        """持久区条目应按 persistent_top_n 上限注入到上下文。"""
         from src.business.brain.context_builder import BrainContextBuilder
 
         mock_repo = MagicMock()
         mock_config = MagicMock()
         mock_config.get_brain_injection_hot_zone_top_n.return_value = 20
+        mock_config.get_brain_injection_persistent_top_n.return_value = 50
 
         persistent_entries = [
             MemoryEntryData(
@@ -66,9 +67,8 @@ class TestPersistentZoneInjection:
         builder = BrainContextBuilder(repo=mock_repo, config=mock_config)
         context = builder.build_context()
 
-        # 持久区条目全部包含
         persistent_in_context = [e for e in context.entries if e.zone == Zone.PERSISTENT.value]
-        assert len(persistent_in_context) == 75
+        assert len(persistent_in_context) == 50
 
     def test_persistent_zone_excludes_soft_deleted(self):
         """软删除的持久区条目不应被注入。"""
@@ -77,6 +77,7 @@ class TestPersistentZoneInjection:
         mock_repo = MagicMock()
         mock_config = MagicMock()
         mock_config.get_brain_injection_hot_zone_top_n.return_value = 20
+        mock_config.get_brain_injection_persistent_top_n.return_value = 50
 
         # 只返回 active 条目
         active_entries = [
@@ -104,6 +105,29 @@ class TestPersistentZoneInjection:
         persistent_in_context = [e for e in context.entries if e.zone == Zone.PERSISTENT.value]
         assert len(persistent_in_context) == 1
         assert persistent_in_context[0].status == EntryStatus.ACTIVE.value
+
+    def test_persistent_zone_accepts_zero_config_limit(self):
+        """persistent_top_n=0 应禁用持久区注入，而不是回退到默认值。"""
+        from src.business.brain.context_builder import BrainContextBuilder
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_injection_hot_zone_top_n.return_value = 0
+        mock_config.get_brain_injection_persistent_top_n.return_value = 0
+        mock_config.get_brain_injection_subconscious_top_n.return_value = 0
+
+        calls: list[tuple[str, int | None]] = []
+
+        def get_entries_by_zone(zone, status=None, limit=50, offset=0):
+            calls.append((zone, limit))
+            return []
+
+        mock_repo.get_entries_by_zone = get_entries_by_zone
+
+        context = BrainContextBuilder(repo=mock_repo, config=mock_config).build_context()
+
+        assert context.persistent_entries == []
+        assert (Zone.PERSISTENT.value, 0) in calls
 
 
 # ═══════════════════════════════════════════════
@@ -408,6 +432,37 @@ class TestLoadedCountIncrement:
         mock_repo.batch_increment_loaded_count.assert_called_once()
         called_ids = mock_repo.batch_increment_loaded_count.call_args[0][0]
         assert set(called_ids) == set(expected_ids)
+
+    def test_loaded_count_failure_does_not_block_context_build(self, caplog):
+        """loaded_count 是非关键指标，更新失败不能阻断上下文构建。"""
+        from src.business.brain.context_builder import BrainContextBuilder
+
+        mock_repo = MagicMock()
+        mock_config = MagicMock()
+        mock_config.get_brain_injection_hot_zone_top_n.return_value = 20
+        mock_config.get_brain_injection_persistent_top_n.return_value = 50
+        entry = MemoryEntryData(
+            entry_id="persistent-1",
+            zone=Zone.PERSISTENT.value,
+            content="Persistent",
+            status=EntryStatus.ACTIVE.value,
+            origin="distillation",
+            reason="test",
+        )
+
+        def get_entries_by_zone(zone, status=None, limit=50, offset=0):
+            if zone == Zone.PERSISTENT.value:
+                return [entry]
+            return []
+
+        mock_repo.get_entries_by_zone = get_entries_by_zone
+        mock_repo.batch_increment_loaded_count.side_effect = RuntimeError("db locked")
+
+        with caplog.at_level("WARNING"):
+            context = BrainContextBuilder(repo=mock_repo, config=mock_config).build_context()
+
+        assert [item.entry_id for item in context.entries] == ["persistent-1"]
+        assert "Failed to update brain loaded_count" in caplog.text
 
 
 # ═══════════════════════════════════════════════

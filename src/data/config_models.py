@@ -242,6 +242,7 @@ class BrainWorkerConfig:
 class BrainInjectionConfig:
     """大脑上下文注入配置"""
 
+    persistent_top_n: int = 50
     hot_zone_top_n: int = 20
     subconscious_top_n: int = 10
 

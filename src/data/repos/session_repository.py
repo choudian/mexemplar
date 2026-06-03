@@ -36,6 +36,30 @@ class SessionRepository(BaseRepository):
         """根据 ID 获取会话"""
         return self.session.query(Session).filter(Session.session_id == session_id).first()
 
+    def list_ids_by_prefix(
+        self,
+        prefix: str,
+        *,
+        agent_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[str]:
+        """Return session ids whose id starts with prefix.
+
+        This keeps prefix ownership checks inside the repository boundary instead
+        of making orchestration code reach into SQLAlchemy models directly.
+        """
+        prefix = str(prefix or "")
+        if not prefix:
+            return []
+        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        query = self.session.query(Session.session_id).filter(
+            Session.session_id.like(f"{escaped}%", escape="\\")
+        )
+        if agent_type:
+            query = query.filter(Session.agent_type == agent_type)
+        rows = query.order_by(Session.created_at.asc()).limit(max(1, int(limit))).all()
+        return [row[0] for row in rows]
+
     def get_by_workflow(
         self,
         workflow_id: str,

@@ -103,18 +103,23 @@ class BrainContextBuilder:
 
         config = self._get_config()
         hot_top_n = self._config_int(config, "get_brain_injection_hot_zone_top_n", 20)
+        persistent_top_n = self._config_int(
+            config,
+            "get_brain_injection_persistent_top_n",
+            50,
+        )
         subconscious_top_n = self._config_int(
             config,
             "get_brain_injection_subconscious_top_n",
             10,
         )
 
-        # 持久区：全量注入 active 条目
+        # 持久区：长期事实也要有上限，避免高频沉淀撑爆 prompt。
         persistent_rows = self._entries_for_zone(
             repo,
             Zone.PERSISTENT.value,
             status=EntryStatus.ACTIVE.value,
-            limit=None,
+            limit=persistent_top_n,
         )
         for entry in persistent_rows:
             persistent_entries.append(self._entry_to_prompt_dict(entry))
@@ -187,7 +192,13 @@ class BrainContextBuilder:
 
         # 批量更新 loaded_count
         if track_loaded and injected_ids:
-            repo.batch_increment_loaded_count(injected_ids)
+            try:
+                repo.batch_increment_loaded_count(injected_ids)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to update brain loaded_count; continuing without metric update: %s",
+                    exc,
+                )
 
         is_cold_start = len(persistent_rows) == 0 and len(hot_rows) == 0
 
@@ -245,7 +256,10 @@ class BrainContextBuilder:
             return default
         try:
             value = getter()
-            return int(value)
+            if not isinstance(value, (int, float, str)):
+                return default
+            parsed = int(value)
+            return parsed if parsed >= 0 else default
         except (TypeError, ValueError):
             return default
 

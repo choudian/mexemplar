@@ -121,6 +121,7 @@ class BrainBackgroundWorker:
                 return
             self._stop_event.clear()
             self._tick_event.clear()
+            self._consecutive_tick_errors = 0
             _brain_worker_running = True
             _brain_worker_event = self._tick_event
 
@@ -355,16 +356,33 @@ class BrainBackgroundWorker:
             return
         self._llm_unavailable_logged_jobs.discard("prediction jobs")
         service = self._get_prediction_service()
-        with TraceContext(source="brain_prediction", agent_type="brain_worker"):
-            generated = service.generate_predictions(llm_client)
-        with TraceContext(source="brain_prediction_verification", agent_type="brain_worker"):
-            verified = service.verify_predictions(llm_client)
+        generated = []
+        verified = 0
+        errors: list[Exception] = []
+        try:
+            with TraceContext(source="brain_prediction", agent_type="brain_worker"):
+                generated = service.generate_predictions(llm_client)
+        except Exception as exc:
+            logger.error("Prediction generation failed: %s", exc, exc_info=True)
+            errors.append(exc)
+        if not errors:
+            try:
+                with TraceContext(
+                    source="brain_prediction_verification", agent_type="brain_worker"
+                ):
+                    verified = service.verify_predictions(llm_client)
+            except Exception as exc:
+                logger.error("Prediction verification failed: %s", exc, exc_info=True)
+                errors.append(exc)
         if generated or verified:
             logger.info(
                 "Prediction jobs: generated=%d verified=%d",
                 len(generated),
                 verified,
             )
+        if errors:
+            detail = "; ".join(f"{type(error).__name__}: {error}" for error in errors)
+            raise RuntimeError(f"prediction jobs failed: {detail}") from errors[0]
 
     def _run_subconscious_distillation(self):
         """运行潜意识深层沉淀周期任务。"""

@@ -108,6 +108,16 @@ export async function configureDesktopApiFromTauri(): Promise<void> {
   }
 }
 
+function normalizeErrorResponseText(rawText: string): string {
+  const compact = rawText
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return compact.slice(0, 500);
+}
+
 export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, {
     ...init,
@@ -122,8 +132,9 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
     let code = "desktop_api_error";
     let message = `Desktop API request failed with ${response.status}`;
     let details: Record<string, unknown> = {};
+    const rawText = await response.text();
     try {
-      const payload = (await response.json()) as {
+      const payload = JSON.parse(rawText) as {
         error?: { code?: string; message?: string; details?: Record<string, unknown> };
         detail?: string | Record<string, unknown>;
       };
@@ -144,7 +155,11 @@ export async function requestJson<T>(path: string, init: RequestInit = {}): Prom
         details = { ...detail };
       }
     } catch {
-      // Keep normalized fallback above.
+      const fallbackText = normalizeErrorResponseText(rawText);
+      if (fallbackText) {
+        message = fallbackText;
+        details = { responseText: rawText.slice(0, 2000) };
+      }
     }
     throw new DesktopApiError(response.status, code, message, details);
   }

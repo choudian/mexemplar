@@ -134,6 +134,17 @@ def test_blinker_event_adapter_reinstalls_after_signal_clear() -> None:
     assert event.type == "settings.changed"
 
 
+def test_blinker_event_adapter_install_is_idempotent(desktop_api_client) -> None:
+    install_blinker_event_adapter()
+    install_blinker_event_adapter()
+
+    emit("settings_changed", sender=None, keys=["theme"])
+
+    event = event_queue.queue.get_nowait()
+    assert event.type == "settings.changed"
+    assert event_queue.queue.empty()
+
+
 def test_internal_projection_filters_scope_to_public_event_contract(
     desktop_api_client,
 ) -> None:
@@ -218,6 +229,21 @@ def test_catalog_settings_and_assistant_events_project_to_registered_ui_events(
     assert events[3].scope == {"sessionId": "ast_1"}
     assert events[3].payload["question"] == "Need more detail"
     assert all("sourceEvent" not in event.payload for event in events)
+
+
+def test_brain_specialist_changed_projects_to_registered_event(desktop_api_client) -> None:
+    install_blinker_event_adapter()
+
+    emit(
+        "brain_specialist_changed",
+        sender=None,
+        specialist_id="spec_1",
+        operation="update",
+    )
+
+    event = event_queue.queue.get_nowait()
+    assert event.type == "brain_specialist_changed"
+    assert event.payload == {"specialistId": "spec_1", "changeType": "update"}
 
 
 def test_registry_contains_contract_event_types() -> None:

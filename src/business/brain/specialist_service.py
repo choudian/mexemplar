@@ -225,7 +225,7 @@ class SpecialistService:
     def list_specialists(
         self,
         active_only: bool = True,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> tuple[list[dict], int]:
         """列出专员，返回 (specialist_dicts, total_count)。"""
@@ -329,6 +329,31 @@ class SpecialistService:
             role_definition += "\n\n近期用户反馈参考：\n" + feedback_guidance
 
         specialist_repo = SpecialistRepository(session=brain_repo.session)
+        existing = specialist_repo.get_specialist_by_name(name)
+        if existing is not None:
+            try:
+                brain_repo.mark_recruitment_signal_consumed(
+                    signal.signal_id,
+                    existing.specialist_id,
+                    commit=False,
+                )
+                brain_repo.session.commit()
+            except Exception as exc:
+                brain_repo.session.rollback()
+                logger.error(
+                    "Auto-recruitment signal consume failed for existing specialist %s: %s",
+                    getattr(signal, "signal_id", ""),
+                    exc,
+                    exc_info=True,
+                )
+                raise
+            logger.info(
+                "Auto-recruitment signal %s consumed by existing specialist %s",
+                getattr(signal, "signal_id", ""),
+                existing.specialist_id,
+            )
+            return None
+
         recruitment_service = SpecialistService(repo=specialist_repo)
         try:
             specialist_dict = recruitment_service._create_specialist_record(
@@ -553,7 +578,7 @@ class SpecialistService:
         """查找白名单中包含指定工具的活跃专员。"""
         identifiers = identifiers or {tool_id}
         specialists_by_id: dict[str, dict] = {}
-        for specialist in self._repo.list_specialists(active_only=True)[0]:
+        for specialist in self._repo.list_specialists(active_only=True, limit=None)[0]:
             specialist_dict = self._to_dict(specialist)
             specialists_by_id[specialist_dict["specialist_id"]] = specialist_dict
         affected: list[dict] = []

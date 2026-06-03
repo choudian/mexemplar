@@ -513,25 +513,35 @@ class DistillationService:
             return 0
         repo = self._get_repo()
         created = 0
-        for item in items:
-            content = str(item.get("content", "") or "").strip()
-            reason = str(item.get("reason", "") or "").strip()
-            if not content or not reason:
-                continue
-            entry_id = repo.create_entry(
-                zone=Zone.SUBCONSCIOUS.value,
-                content=content,
-                origin="subconscious_distillation",
-                reason=reason,
-                scope=item.get("scope"),
-            )
+        created_entry_ids: list[str] = []
+        try:
+            for item in items:
+                content = str(item.get("content", "") or "").strip()
+                reason = str(item.get("reason", "") or "").strip()
+                if not content or not reason:
+                    continue
+                entry_id = repo.create_entry(
+                    zone=Zone.SUBCONSCIOUS.value,
+                    content=content,
+                    origin="subconscious_distillation",
+                    reason=reason,
+                    scope=item.get("scope"),
+                    commit=False,
+                )
+                created_entry_ids.append(str(entry_id))
+                created += 1
+            repo.session.commit()
+        except Exception:
+            repo.session.rollback()
+            raise
+
+        for entry_id in created_entry_ids:
             emit(
                 "brain_zone_changed",
                 zone=Zone.SUBCONSCIOUS.value,
-                entry_id=str(entry_id),
+                entry_id=entry_id,
                 operation="create",
             )
-            created += 1
         return created
 
     def _build_subconscious_context(self) -> str:

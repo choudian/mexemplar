@@ -804,7 +804,7 @@ def test_reply_to_user_interrupt_persists_display_message(loop_config, mock_conf
     result = loop.run(session_id="test-reply-display", user_input="test", tools=tools)
 
     assert result.result_type == ResultType.NEEDS_USER_INPUT
-    assert result.question == ""
+    assert result.question == "这是用户应看到的回复。"
     ctx = loop._get_context_manager("test-reply-display")
     messages = ctx._msg_repo.get_context("test-reply-display")
     assert any(

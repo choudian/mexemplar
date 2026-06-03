@@ -397,6 +397,14 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         },
         required_payload_keys=frozenset({"specialistId", "name", "reason"}),
     ),
+    "brain_specialist_changed": UiEventDefinition(
+        "brain_specialist_changed",
+        "notification",
+        frozenset({"specialistId", "changeType"}),
+        frozenset(),
+        {"specialistId": "spec_1", "changeType": "update"},
+        required_payload_keys=frozenset({"specialistId", "changeType"}),
+    ),
     "brain_context_ready": UiEventDefinition(
         "brain_context_ready",
         "notification",

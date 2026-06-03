@@ -304,6 +304,8 @@ class DesktopEventQueue:
 event_queue = DesktopEventQueue()
 _adapter_handlers: dict[str, Callable[..., Any]] = {}
 _trial_preview_handler: Callable[..., Any] | None = None
+_PERSISTENT_ADAPTER_HANDLERS_ATTR = "_desktop_api_event_adapter_handlers"
+_PERSISTENT_TRIAL_HANDLER_ATTR = "_desktop_api_trial_preview_handler"
 
 _INTERNAL_EVENT_NAMES = [
     "agent_error",
@@ -390,6 +392,20 @@ def _handle_trial_preview(_sender: object, **kwargs: Any) -> bool:
 
 def install_blinker_event_adapter() -> None:
     global _trial_preview_handler
+    previous_handlers = getattr(backend_events, _PERSISTENT_ADAPTER_HANDLERS_ATTR, {})
+    if isinstance(previous_handlers, dict):
+        for event_name, handler in previous_handlers.items():
+            try:
+                backend_events.disconnect(event_name, handler)
+            except Exception:
+                pass
+    previous_trial_handler = getattr(backend_events, _PERSISTENT_TRIAL_HANDLER_ATTR, None)
+    if previous_trial_handler is not None:
+        try:
+            backend_events.disconnect("desktop_trial_preview_ready", previous_trial_handler)
+        except Exception:
+            pass
+
     for event_name in _INTERNAL_EVENT_NAMES:
         handler = _adapter_handlers.get(event_name)
         if handler is None:
@@ -399,3 +415,5 @@ def install_blinker_event_adapter() -> None:
     if _trial_preview_handler is None:
         _trial_preview_handler = _handle_trial_preview
     backend_events.connect("desktop_trial_preview_ready", _trial_preview_handler, weak=False)
+    setattr(backend_events, _PERSISTENT_ADAPTER_HANDLERS_ATTR, dict(_adapter_handlers))
+    setattr(backend_events, _PERSISTENT_TRIAL_HANDLER_ATTR, _trial_preview_handler)

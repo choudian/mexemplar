@@ -534,7 +534,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 | `src/business/brain/models.py` | 共享常量、dataclass（Segment 状态、zone 类型、memory entry 类型等） |
 | `src/business/brain/segment_service.py` | Segment 生命周期管理：创建、封存（`window_close` / `idle` / `new_session` / `token_limit`）、崩溃恢复 |
 | `src/business/brain/distillation_service.py` | Phase-aware Segment 沉淀：将消息历史蒸馏为结构化 memory entry 并写入对应 zone |
-| `src/business/brain/context_builder.py` | 会话启动上下文组装：persistent-zone 全量注入 + hot-zone top-N 选择 + zone summary |
+| `src/business/brain/context_builder.py` | 会话启动上下文组装：persistent-zone 按配置上限注入 + hot/subconscious top-N 选择 + zone summary |
 | `src/business/brain/decay_router.py` | Hot-zone 衰减路由：`event` vs `insight` 差异化衰减 |
 | `src/business/brain/archive_service.py` | Archive unit 和 time-layer 聚合任务 |
 | `src/business/brain/retrieval_service.py` | 显式 archive 检索、invalidation fallback、相关性排序 |
@@ -651,10 +651,11 @@ Worker 周期由 `brain.*` 配置控制，数值为占位符，待实测后调�
 
 assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入逻辑：
 
-1. 从 `BrainRepository` 读取 persistent-zone 全量 entry
+1. 从 `BrainRepository` 读取 persistent-zone top-N entry（按配置上限）
 2. 读取 hot-zone top-N entry（按 relevance + recency + effectiveness 排序）
-3. 组装为 system prompt 中的 brain context section
-4. 冷启动时触发 icebreaker 行为
+3. 读取 subconscious-zone top-N entry（按新近度 + effectiveness + 探索权重排序）
+4. 组装为 system prompt 中的 brain context section
+5. 冷启动时触发 icebreaker 行为
 
 ---
 

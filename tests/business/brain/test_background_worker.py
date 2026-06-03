@@ -126,3 +126,28 @@ def test_start_and_stop_manage_worker_thread(monkeypatch) -> None:
     assert worker_module._brain_worker_running is False
     assert worker_module._brain_worker_event is None
     assert worker_module._brain_worker_thread is None
+
+
+def test_start_resets_consecutive_tick_errors(monkeypatch) -> None:
+    monkeypatch.setattr(worker_module, "connect", lambda *_args, **_kwargs: None)
+
+    class FakeThread:
+        def __init__(self, *args, **kwargs) -> None:
+            self.started = False
+
+        def start(self) -> None:
+            self.started = True
+
+        def is_alive(self) -> bool:
+            return False
+
+        def join(self, timeout=None) -> None:
+            return None
+
+    monkeypatch.setattr(worker_module.threading, "Thread", FakeThread)
+    worker = BrainBackgroundWorker(config=_Config())
+    worker._consecutive_tick_errors = 9
+
+    worker.start()
+
+    assert worker._consecutive_tick_errors == 0

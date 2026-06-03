@@ -1,5 +1,6 @@
 import json
 import logging
+import hashlib
 import threading
 import uuid
 from collections import OrderedDict
@@ -55,6 +56,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _EPHEMERAL_SUBAGENT_PROMPT = "你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。"
+_LEGACY_DELEGATION_PARENT_PREFIX_LENGTH = 12
 
 
 class _EventBusAdapter(EventBusPort):
@@ -647,6 +649,9 @@ class AgentOrchestrator:
         返回 Session（合法）或 None（不存在 / 类型不符 / 非本主代理派出），
         防止主代理传入任意 session_id 唤回或窥探他人会话。
         """
+        parent_id = parent_session_id.strip() if isinstance(parent_session_id, str) else ""
+        if not parent_id:
+            return None
         sid = (subagent_id or "").strip()
         if not sid:
             return None
@@ -655,11 +660,71 @@ class AgentOrchestrator:
             return None
         if getattr(session, "agent_type", None) != AgentType.EPHEMERAL_SUBAGENT:
             return None
-        # workflow_id 形如 dlg_{parent[:12]}_{rand}（见 _new_delegation_workflow_id），校验归属
         workflow_id = getattr(session, "workflow_id", "") or ""
-        if not workflow_id.startswith(f"dlg_{parent_session_id[:12]}_"):
+        transition_match = self._subagent_transition_belongs_to_parent(workflow_id, parent_id, sid)
+        if transition_match is True:
+            return session
+        if transition_match is None:
             return None
-        return session
+        if self._delegation_workflow_belongs_to_parent_hash(workflow_id, parent_id):
+            return session
+        if self._legacy_delegation_workflow_belongs_to_unique_parent(workflow_id, parent_id):
+            return session
+        return None
+
+    def _subagent_transition_belongs_to_parent(
+        self,
+        workflow_id: str,
+        parent_session_id: str,
+        subagent_id: str,
+    ) -> bool | None:
+        if not workflow_id:
+            return False
+        try:
+            transitions = self._transition_repo.get_by_workflow(workflow_id)
+        except Exception as exc:
+            logger.warning("Subagent ownership transition lookup failed: %s", exc)
+            return None
+        return any(
+            getattr(transition, "event_type", "") == "assistant_delegation_started"
+            and getattr(transition, "from_session_id", None) == parent_session_id
+            and getattr(transition, "to_session_id", None) == subagent_id
+            for transition in transitions
+        )
+
+    @classmethod
+    def _delegation_workflow_belongs_to_parent_hash(
+        cls,
+        workflow_id: str,
+        parent_session_id: str,
+    ) -> bool:
+        try:
+            parent_hash = cls._delegation_parent_hash(parent_session_id)
+        except ValueError:
+            return False
+        return workflow_id.startswith(f"dlg_{parent_hash}_")
+
+    def _legacy_delegation_workflow_belongs_to_unique_parent(
+        self,
+        workflow_id: str,
+        parent_session_id: str,
+    ) -> bool:
+        """Compatibility for old dlg_{parent[:12]} ids without transition rows.
+
+        The legacy prefix is ambiguous, so it is accepted only when exactly one
+        stored assistant session has that prefix and it is the current parent.
+        """
+        legacy_prefix = parent_session_id[:_LEGACY_DELEGATION_PARENT_PREFIX_LENGTH]
+        if len(legacy_prefix) < _LEGACY_DELEGATION_PARENT_PREFIX_LENGTH:
+            return False
+        if not workflow_id.startswith(f"dlg_{legacy_prefix}_"):
+            return False
+        parent_ids = self._session_store.list_session_ids_by_prefix(
+            legacy_prefix,
+            agent_type=AgentType.ASSISTANT,
+            limit=2,
+        )
+        return parent_ids == [parent_session_id]
 
     def _continue_subagent(
         self,
@@ -711,7 +776,11 @@ class AgentOrchestrator:
             result = loop.run(subagent_id, user_input, tools=tools)
         except Exception as exc:
             logger.error("[Orchestrator] 子代理续跑失败: %s", exc, exc_info=True)
-            return {"success": False, "error": "续跑执行内部错误，已记录详情", "subagent_id": subagent_id}
+            return {
+                "success": False,
+                "error": "续跑执行内部错误，已记录详情",
+                "subagent_id": subagent_id,
+            }
 
         result_text = self._extract_latest_assistant_text(subagent_id)
         if result.result_type == ResultType.PAUSED:
@@ -764,11 +833,17 @@ class AgentOrchestrator:
         success = result.result_type == ResultType.COMPLETED and bool(result_text)
         self._session_store.record_transition(
             workflow_id,
-            event_type="assistant_delegation_completed" if success else "assistant_delegation_failed",
+            event_type=(
+                "assistant_delegation_completed" if success else "assistant_delegation_failed"
+            ),
             from_session_id=subagent_id,
             to_session_id=parent_session_id,
             payload=json.dumps(
-                {"subagent_id": subagent_id, "success": success, "result_type": result.result_type.value},
+                {
+                    "subagent_id": subagent_id,
+                    "success": success,
+                    "result_type": result.result_type.value,
+                },
                 ensure_ascii=False,
             ),
         )
@@ -947,7 +1022,14 @@ class AgentOrchestrator:
 
     @staticmethod
     def _new_delegation_workflow_id(parent_session_id: str) -> str:
-        return f"dlg_{parent_session_id[:12]}_{uuid.uuid4().hex[:16]}"
+        return f"dlg_{AgentOrchestrator._delegation_parent_hash(parent_session_id)}_{uuid.uuid4().hex[:16]}"
+
+    @staticmethod
+    def _delegation_parent_hash(parent_session_id: str) -> str:
+        parent_id = parent_session_id.strip() if isinstance(parent_session_id, str) else ""
+        if not parent_id:
+            raise ValueError("parent_session_id is required")
+        return hashlib.sha256(parent_id.encode("utf-8")).hexdigest()[:20]
 
     @staticmethod
     def _format_delegated_task_input(task: str, execution_context: str = "") -> str:

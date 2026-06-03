@@ -95,16 +95,14 @@ class SpecialistRepository(BaseRepository):
         """
         name_lower = name.lower()
         candidates = (
-            self.session.query(BrainSpecialist)
-            .filter(BrainSpecialist.is_active.is_(True))
-            .all()
+            self.session.query(BrainSpecialist).filter(BrainSpecialist.is_active.is_(True)).all()
         )
         return next((s for s in candidates if s.name.lower() == name_lower), None)
 
     def list_specialists(
         self,
         active_only: bool = True,
-        limit: int = 50,
+        limit: Optional[int] = 50,
         offset: int = 0,
     ) -> tuple[list[BrainSpecialist], int]:
         """列出专员，返回 (specialists, total_count)。"""
@@ -113,9 +111,10 @@ class SpecialistRepository(BaseRepository):
             query = query.filter(BrainSpecialist.is_active.is_(True))
 
         total = query.count()
-        specialists = (
-            query.order_by(BrainSpecialist.created_at.desc()).offset(offset).limit(limit).all()
-        )
+        query = query.order_by(BrainSpecialist.created_at.desc()).offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        specialists = query.all()
         return specialists, total
 
     def update_specialist(

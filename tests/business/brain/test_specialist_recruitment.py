@@ -111,6 +111,38 @@ def test_scan_and_recruit_rolls_back_specialist_when_signal_consume_fails(
         assert session.query(BrainSpecialist).count() == 0
 
 
+def test_scan_and_recruit_consumes_duplicate_name_signal(in_memory_db):
+    from src.business.brain.specialist_service import SpecialistService
+
+    pattern = "每周生成周报"
+    existing = SpecialistService().create_specialist(
+        name=SpecialistService._generate_specialist_name(pattern),
+        description="已存在的专员",
+        role_definition="你负责周报。",
+        tool_whitelist=[],
+    )
+    signal_id = uuid4().hex[:50]
+    with in_memory_db.get_session() as session:
+        session.add(
+            BrainRecruitmentSignal(
+                signal_id=signal_id,
+                task_pattern=pattern,
+                delegation_count=5,
+                example_session_ids="[]",
+                example_delegation_summaries="[]",
+            )
+        )
+        session.commit()
+
+    created = SpecialistService().scan_and_recruit()
+
+    assert created == []
+    with in_memory_db.get_session() as session:
+        signal = session.get(BrainRecruitmentSignal, signal_id)
+        assert signal.specialist_id == existing["specialist_id"]
+        assert session.query(BrainSpecialist).count() == 1
+
+
 def test_worker_emits_recruited_event_after_auto_recruitment():
     from src.business.brain.background_worker import BrainBackgroundWorker
 
@@ -183,6 +215,37 @@ def test_force_remove_skill_prunes_specialist_whitelists(in_memory_db):
     assert result["pruned_specialists"][0]["specialist_id"] == specialist["specialist_id"]
     assert SpecialistService().get_specialist(specialist["specialist_id"])["tool_whitelist"] == []
     assert _user_skill_ids(SpecialistService().list_skill_pool()) == []
+
+
+def test_force_remove_skill_scans_all_active_specialists(in_memory_db):
+    from src.business.brain.specialist_service import SpecialistService
+
+    with in_memory_db.get_session() as session:
+        session.add(
+            Tool(
+                tool_id="tool-report",
+                tool_name="报表分析",
+                description="分析报表",
+                status="published",
+            )
+        )
+        session.commit()
+
+    service = SpecialistService()
+    target_id = ""
+    for index in range(55):
+        specialist = service.create_specialist(
+            name=f"专员-{index}",
+            description="处理任务",
+            role_definition="你负责处理任务。",
+            tool_whitelist=["tool-report"] if index == 54 else [],
+        )
+        if index == 54:
+            target_id = specialist["specialist_id"]
+
+    affected = service.check_skill_in_use("tool-report")
+
+    assert [item["specialist_id"] for item in affected] == [target_id]
 
 
 def test_force_remove_skill_does_not_remove_pool_when_prune_fails(in_memory_db, monkeypatch):

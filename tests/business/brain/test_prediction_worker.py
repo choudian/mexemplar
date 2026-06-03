@@ -5,6 +5,8 @@ US4: Prediction generation and verification worker tests.
 import threading
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.brain.models import Zone
 from src.utils.events import clear_all
@@ -174,6 +176,37 @@ def test_background_worker_schedules_prediction_jobs():
     prediction_service.verify_predictions.assert_called_once_with(llm)
 
 
+def test_prediction_verification_is_skipped_when_generation_fails():
+    from src.business.brain.background_worker import BrainBackgroundWorker
+
+    prediction_service = MagicMock()
+    prediction_service.generate_predictions.side_effect = RuntimeError("bad generation")
+    prediction_service.verify_predictions.return_value = 1
+    llm = object()
+
+    worker = BrainBackgroundWorker(prediction_service=prediction_service, llm_client=llm)
+
+    with pytest.raises(RuntimeError, match="prediction jobs failed"):
+        worker._run_prediction_jobs()
+
+    prediction_service.generate_predictions.assert_called_once_with(llm)
+    prediction_service.verify_predictions.assert_not_called()
+
+
+def test_prediction_job_error_message_includes_failure_detail():
+    from src.business.brain.background_worker import BrainBackgroundWorker
+
+    prediction_service = MagicMock()
+    prediction_service.generate_predictions.return_value = []
+    prediction_service.verify_predictions.side_effect = RuntimeError("bad verification")
+    llm = object()
+
+    worker = BrainBackgroundWorker(prediction_service=prediction_service, llm_client=llm)
+
+    with pytest.raises(RuntimeError, match="RuntimeError: bad verification"):
+        worker._run_prediction_jobs()
+
+
 def test_subconscious_distillation_writes_entries():
     from src.business.brain.distillation_service import DistillationService
     from src.data.repos.brain_repository import BrainRepository
@@ -213,6 +246,60 @@ def test_subconscious_distillation_writes_entries():
 
     assert count == 1
     assert entries[0].content == "用户偏好先结论后细节。"
+
+
+def test_subconscious_distillation_rolls_back_partial_batch(monkeypatch):
+    from src.business.brain.distillation_service import DistillationService
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    repo.create_entry(
+        zone=Zone.HOT.value,
+        content="用户多次要求先给结论再展开。",
+        origin="distillation",
+        reason="近期重复表达",
+    )
+    llm = _MockLLM(
+        [
+            LLMResponse(
+                content=None,
+                tool_calls=[
+                    ToolCallInfo(
+                        id="sub-1",
+                        name="subconscious_distillation_output",
+                        args={
+                            "subconscious_zone": [
+                                {
+                                    "content": "用户偏好先结论后细节。",
+                                    "reason": "多次要求先给结论",
+                                },
+                                {
+                                    "content": "用户偏好短句。",
+                                    "reason": "多次要求简洁",
+                                },
+                            ]
+                        },
+                    )
+                ],
+            )
+        ]
+    )
+    original_create_entry = repo.create_entry
+    calls = 0
+
+    def failing_create_entry(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("insert failed")
+        return original_create_entry(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "create_entry", failing_create_entry)
+
+    with pytest.raises(RuntimeError, match="insert failed"):
+        DistillationService(repo=repo).run_subconscious_distillation(llm)
+
+    assert repo.get_entries_by_zone(Zone.SUBCONSCIOUS.value, status="active") == []
 
 
 def test_invalidation_review_degrades_invalidated_entries():

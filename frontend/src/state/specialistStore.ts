@@ -94,6 +94,16 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
         const selected = state.selectedId
           ? items.find((item) => item.specialist_id === state.selectedId)
           : null;
+        if (state.selectedId && !selected) {
+          return {
+            items,
+            total: response.total,
+            selectedId: null,
+            draft: { ...EMPTY_DRAFT },
+            versions: [],
+            loadingVersions: false,
+          };
+        }
         return {
           items,
           total: response.total,
@@ -109,7 +119,7 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
 
   select: (specialistId) => {
     if (!specialistId) {
-      set({ selectedId: null, draft: { ...EMPTY_DRAFT }, versions: [] });
+      set({ selectedId: null, draft: { ...EMPTY_DRAFT }, versions: [], loadingVersions: false });
       return;
     }
     const item = get().items.find((candidate) => candidate.specialist_id === specialistId);
@@ -175,7 +185,7 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
     set({ lastError: null });
     try {
       await deleteSpecialist(specialistId);
-      set({ selectedId: null, draft: { ...EMPTY_DRAFT }, versions: [] });
+      set({ selectedId: null, draft: { ...EMPTY_DRAFT }, versions: [], loadingVersions: false });
       await get().load();
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法删除专员。") });
@@ -186,25 +196,42 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
     set({ loadingVersions: true, lastError: null });
     try {
       const response = await getSpecialistVersions(specialistId);
-      set({ versions: response.items ?? [] });
+      if (get().selectedId === specialistId) {
+        set({ versions: response.items ?? [] });
+      }
     } catch (error) {
-      set({ lastError: toErrorMessage(error, "无法加载版本历史。") });
+      if (get().selectedId === specialistId) {
+        set({ lastError: toErrorMessage(error, "无法加载版本历史。") });
+      }
     } finally {
-      set({ loadingVersions: false });
+      if (get().selectedId === specialistId) {
+        set({ loadingVersions: false });
+      }
     }
   },
 
   applyEvent: (event) => {
-    if (event.type !== "brain_specialist_recruited") return;
-    set({
-      recruitmentToast: {
-        specialistId: String(event.payload.specialistId ?? ""),
-        name: String(event.payload.name ?? "新专员"),
-        reason: String(event.payload.reason ?? ""),
-        managementUrl: String(event.payload.managementUrl ?? "/brain/specialists"),
-      },
-    });
-    void get().load();
+    if (event.type === "brain_specialist_recruited") {
+      set({
+        recruitmentToast: {
+          specialistId: String(event.payload.specialistId ?? ""),
+          name: String(event.payload.name ?? "新专员"),
+          reason: String(event.payload.reason ?? ""),
+          managementUrl: String(event.payload.managementUrl ?? "/brain/specialists"),
+        },
+      });
+      void get().load();
+      return;
+    }
+    if (event.type === "brain_specialist_changed") {
+      void (async () => {
+        await get().load();
+        const selectedId = get().selectedId;
+        if (selectedId) {
+          await get().loadVersions(selectedId);
+        }
+      })();
+    }
   },
 
   dismissRecruitmentToast: () => {

@@ -65,6 +65,14 @@ def _append_json_list_item(raw: Optional[str], item: Optional[str], *, limit: in
     return json.dumps(values[-limit:], ensure_ascii=False)
 
 
+def _like_contains_pattern(keyword: str) -> str:
+    term = str(keyword or "").strip()
+    if not term:
+        raise ValueError("keyword must not be empty")
+    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 class BrainRepository(BaseRepository):
     """大脑架构数据仓库"""
 
@@ -434,9 +442,10 @@ class BrainRepository(BaseRepository):
             BrainMemoryEntry.status.in_(("active", "invalidated")),
         )
         for keyword in keywords:
-            pattern = f"%{keyword}%"
+            pattern = _like_contains_pattern(keyword)
             search = search.filter(
-                (BrainMemoryEntry.content.like(pattern)) | (BrainMemoryEntry.reason.like(pattern))
+                (BrainMemoryEntry.content.like(pattern, escape="\\"))
+                | (BrainMemoryEntry.reason.like(pattern, escape="\\"))
             )
 
         return search.order_by(BrainMemoryEntry.relevance_score.desc()).limit(limit).all()
@@ -461,9 +470,10 @@ class BrainRepository(BaseRepository):
             search = search.filter(BrainMemoryEntry.status.in_(tuple(statuses)))
 
         for keyword in keywords:
-            pattern = f"%{keyword}%"
+            pattern = _like_contains_pattern(keyword)
             search = search.filter(
-                (BrainMemoryEntry.content.like(pattern)) | (BrainMemoryEntry.reason.like(pattern))
+                (BrainMemoryEntry.content.like(pattern, escape="\\"))
+                | (BrainMemoryEntry.reason.like(pattern, escape="\\"))
             )
 
         return (
@@ -519,7 +529,9 @@ class BrainRepository(BaseRepository):
             self.session.commit()
         except Exception as e:
             self.session.rollback()
-            logger.warning("Feedback signal for invalidation failed (entry already invalidated): %s", e)
+            logger.warning(
+                "Feedback signal for invalidation failed (entry already invalidated): %s", e
+            )
         return True
 
     def supersede_entry(

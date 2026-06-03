@@ -23,6 +23,19 @@ class AgentSessionStore:
     def get_session(self, session_id: str):
         return self._session_repo.get_by_id(session_id)
 
+    def list_session_ids_by_prefix(
+        self,
+        prefix: str,
+        *,
+        agent_type: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[str]:
+        return self._session_repo.list_ids_by_prefix(
+            prefix,
+            agent_type=agent_type,
+            limit=limit,
+        )
+
     def count_messages(self, session_id: str) -> int:
         return self._message_repo.count_by_session(session_id)
 

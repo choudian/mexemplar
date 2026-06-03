@@ -16,6 +16,7 @@ export const UI_EVENT_TYPES = [
   "settings.changed",
   "brain_zone_changed",
   "brain_specialist_recruited",
+  "brain_specialist_changed",
   "brain_context_ready",
   "backend.resync_required",
 ] as const;
@@ -74,6 +75,7 @@ export const UI_EVENT_EXAMPLES = {
     "reason": "检测到持续报表委托",
     "managementUrl": "/brain/specialists",
   },
+  "brain_specialist_changed": { "specialistId": "spec_1", "changeType": "update" },
   "brain_context_ready": { "sessionId": "sess_1" },
   "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"] },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;
@@ -174,6 +176,7 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "settings.changed": "settings",
   "brain_zone_changed": "brain",
   "brain_specialist_recruited": "brain",
+  "brain_specialist_changed": "brain",
   "brain_context_ready": "brain",
   "backend.resync_required": "resync",
 } as const satisfies Record<UiEventType, UiEventHandlerDomain>;
@@ -351,6 +354,14 @@ export type BrainSpecialistRecruitedEvent = UiEventEnvelope<
   }
 >;
 
+export type BrainSpecialistChangedEvent = UiEventEnvelope<
+  "brain_specialist_changed",
+  {
+    specialistId: string;
+    changeType: string;
+  }
+>;
+
 export type BrainContextReadyEvent = UiEventEnvelope<
   "brain_context_ready",
   {
@@ -400,6 +411,7 @@ export type UiEvent =
   | ResyncRequiredEvent
   | BrainZoneChangedEvent
   | BrainSpecialistRecruitedEvent
+  | BrainSpecialistChangedEvent
   | BrainContextReadyEvent
   | SkillChangedEvent
   | SkillEquipmentChangedEvent
@@ -417,6 +429,7 @@ export type UiEvent =
         | "backend.resync_required"
         | "brain_zone_changed"
         | "brain_specialist_recruited"
+        | "brain_specialist_changed"
         | "brain_context_ready"
         | "skill.changed"
         | "skill.equipment.changed"
@@ -701,6 +714,10 @@ export function parseUiEvent(value: unknown): UiEvent | null {
   if (event.type === "brain_specialist_recruited") {
     if (!hasStringPayloadFields(event.payload, ["specialistId", "name", "reason"])) return null;
     return event as BrainSpecialistRecruitedEvent;
+  }
+  if (event.type === "brain_specialist_changed") {
+    if (!hasStringPayloadFields(event.payload, ["specialistId", "changeType"])) return null;
+    return event as BrainSpecialistChangedEvent;
   }
   if (event.type === "brain_context_ready") {
     if (!hasStringPayloadFields(event.payload, ["sessionId"])) return null;

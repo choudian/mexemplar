@@ -194,6 +194,15 @@ describe("uiEvents", () => {
     expect(UI_EVENT_TYPES).toContain("trial.preview_resolved");
   });
 
+  test("parses brain specialist changed event", () => {
+    const event = parseUiEvent(enveloped("brain_specialist_changed", {
+      specialistId: "spec_1",
+      changeType: "update",
+    }));
+
+    expect(event?.type).toBe("brain_specialist_changed");
+  });
+
   test("parses skill.changed and rejects malformed methodology payloads", () => {
     const event = parseUiEvent(enveloped(
       "skill.changed",

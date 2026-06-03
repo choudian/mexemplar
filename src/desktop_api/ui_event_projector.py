@@ -421,6 +421,20 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
                 causation_id,
             )
         ]
+    if event_name == "brain_specialist_changed":
+        return [
+            UiEventDraft(
+                "brain_specialist_changed",
+                {
+                    "specialistId": _string_or_none(payload.get("specialist_id")),
+                    "changeType": _string_or_none(
+                        payload.get("change_type") or payload.get("operation")
+                    ),
+                },
+                scope,
+                causation_id,
+            )
+        ]
     if event_name == "brain_context_ready":
         return [
             UiEventDraft(
