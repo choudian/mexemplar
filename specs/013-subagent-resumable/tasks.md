@@ -9,7 +9,7 @@ description: "Task list for 013-subagent-resumable"
 
 **Tests**: 已请求（宪法 IV 可验证交付 + 改静默失败/恢复逻辑必须补行为契约测试）。测试任务包含在内。
 
-> **状态说明（2026-06-03）**：代码实现已落地并经核对；T026（失败分类收敛）与 T028（活文档）已补做。`test_subagent_resumable.py` **14 例全过**、相关回归 69 例全过、py_compile/flake8 通过。**真正剩余的可执行工作**：T027（LOW，可选边界）、T029（可选 ARCHITECTURE.md）、T031（提交——`specs/013-subagent-resumable/` 与源码改动当前仍未提交 git）。
+> **状态说明（2026-06-03）**：**全部任务已完成**。`test_subagent_resumable.py` **15 例全过**、相关回归全过、py_compile/flake8 通过。改动已提交到 `013-subagent-resumable` 分支（commit `4b7d84f`，15 files）。
 
 ## Project Paths
 
@@ -131,11 +131,11 @@ description: "Task list for 013-subagent-resumable"
 
 - [X] T025 在 `src/business/agents/prompts/assistant_prompt.py` 新增"子代理暂停（可唤回）时的处理"引导段：账单/网络等恢复后再 continue、迭代超限先 inspect 诊断、复杂则 continue/走弯路则重新 delegate、已完成未达标带 instruction 返工（FR-010）
 - [X] T026 **[MEDIUM / research R3]** 收敛 `agent_loop.py` 失败分类：新增 `_is_recoverable_llm_failure`（遍历异常链匹配配额/限流/网络标记），仅可恢复失败转 PAUSED（reason 标"账单或网络"），其余不可恢复错误（400/认证/校验等）仍走 `ERROR` 置会话 `failed`；补契约测试 `test_llm_failure_nonrecoverable_still_error_when_resumable`（14 例全过）
-- [ ] T027 **[LOW / review L1]** 处理"对已完成子代理不带 instruction 调 `continue_subagent`"：当前 `_initialize_session` 因末条 assistant 正文返回 `NEEDS_USER_INPUT`，`_continue_subagent` 未识别该类型→空操作回"续跑未返回可用结果"。要么在 `_continue_subagent` 显式处理 `NEEDS_USER_INPUT`，要么在工具描述中明确返工需带 instruction（可选改进）
+- [X] T027 **[LOW / review L1]** `_continue_subagent` 显式处理 `NEEDS_USER_INPUT`：对已完成子代理不带 instruction 唤回时回明确提示"需带 instruction 说明要补齐/修正什么"，不再含糊失败；补测试 `test_continue_completed_without_instruction_asks_for_instruction`（含 `chat_with_tools.assert_not_called()`）
 - [X] T028 [P] 更新 `src/AGENTS.md`（及同目录 `CLAUDE.md` / `GEMINI.md` 镜像）「Agent 与工具约束」：临时子代理撞迭代上限/调用失败转可唤回暂停、可恢复失败分类、新增 `inspect_subagent`/`continue_subagent`、归属校验、100% 调度不变
-- [ ] T029 [P] 视情况在 `docs/ARCHITECTURE.md` Agent 编排小节补一句子代理可唤回语义（若该处描述了委派/终止行为）
+- [X] T029 [P] 在 `docs/ARCHITECTURE.md` Agent 编排通信小节补"临时子代理可唤回"段（PAUSED 终止、可唤回句柄、内部 transition、inspect/continue 调度、不可恢复失败仍 ERROR）
 - [X] T030 运行 quickstart 验证：`uv run python -m pytest tests/business/agents/test_subagent_resumable.py -q`（13 passed）+ 回归套件（69 passed）
-- [ ] T031 在 feature 分支提交 spec 三件套 + 源码改动（`/speckit-git-commit` 或手动）；当前 `specs/013-subagent-resumable/` 仍 untracked
+- [X] T031 在 `013-subagent-resumable` 分支提交 spec 全套 + 源码 + 测试 + docs（commit `4b7d84f`，15 files）。注：根/`src` 的 `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` 被 gitignore，属本地状态，不进提交
 
 ---
 
@@ -175,9 +175,9 @@ description: "Task list for 013-subagent-resumable"
 
 US1（MVP）→ US2（失败保活，复用恢复路径）→ US3（诊断概览）→ US4（返工）；每步独立加值不破坏前者。
 
-### 当前剩余（actionable）
+### 完成状态
 
-实现、测试、T026 失败分类收敛与 T028 活文档均已完成并通过验证；剩 T027（可选边界）、T029（可选 ARCHITECTURE.md）、T031（提交）。
+T001–T031 全部完成并验证（15 契约 + 回归全过、py_compile/flake8 通过），已提交 `4b7d84f`。本特性可进入 `/speckit-analyze` / `/speckit-verify` 或合并流程。
 
 ---
 
