@@ -289,6 +289,8 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 **事件不用于 Agent 间调度**。Orchestrator 收到 AgentResult 后通过 `_dispatch_next` 显式调用下一个 Agent，blinker 事件只发给 UI / 日志 / WorkflowTransition，不通过事件监听器触发下一步。
 
+**临时子代理可唤回**：办公助理派出的临时子代理（`resumable_on_failure=True`）撞迭代上限或遇可恢复的 LLM 失败（账户配额/限流/网络）时，AgentLoop 返回 `ResultType.PAUSED` 并将会话置 `suspended`，Orchestrator 据此回传带 `subagent_id` 的可唤回句柄并记一条内部 `assistant_delegation_paused` workflow transition（非公开 UI 事件）。主助理可用 `inspect_subagent`（只读概览、零模型调用）与 `continue_subagent`（凭 `subagent_id` 从持久化会话历史恢复续跑，经归属校验）调度，工作历史零丢失且不引入主助理直接执行路径。不可恢复的 LLM 失败仍返回 `ERROR`。
+
 **完整事件列表**（定义在 `src/utils/events.py`）。其中 workflow/agent 事件由 AgentOrchestrator 发出；录制生命周期事件（`recording_started`、`recording_stopped`、`recording_completed`）由 Recorder 层发出：
 
 | 类别 | 事件名 | 触发时机 |

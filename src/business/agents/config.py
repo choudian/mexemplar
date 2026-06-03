@@ -49,6 +49,9 @@ class ResultType(str, Enum):
     NEEDS_USER_INPUT = "needs_user_input"
     MAX_ITERATIONS_REACHED = "max_iterations_reached"
     ERROR = "error"
+    # resumable_on_failure=True 的 Agent（如临时子代理）撞迭代上限或 LLM 调用最终失败时
+    # 返回该状态：会话置为 suspended、工作历史完整保留，主代理可唤回续跑。
+    PAUSED = "paused"
 
 
 @dataclass
@@ -104,6 +107,10 @@ class AgentConfig:
     # 为 True 时，LLM 直接返回文字（未调用任何工具）视为隐式 talk_to_user，
     # loop 返回 NEEDS_USER_INPUT 而非 COMPLETED。
     # 适用于需要持续与用户对话、不能自然结束的 Agent（如 PM Agent）。
+    resumable_on_failure: bool = False
+    # 为 True 时，撞 max_iterations 或 LLM 调用经重试仍最终失败，
+    # loop 不返回 MAX_ITERATIONS_REACHED/ERROR，而是把会话置 suspended 并返回 PAUSED，
+    # 保留工作历史供主代理唤回续跑。用于临时子代理。
     global_pre_hooks: List[PreHook] = field(default_factory=list)
     global_post_hooks: List[PostHook] = field(default_factory=list)
 

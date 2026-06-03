@@ -25,6 +25,65 @@ logger = logging.getLogger(__name__)
 
 _INJECTED_TOOL_NAMES = frozenset({"load_reference", "talk_to_user"})
 
+# LLM 调用最终失败的"可恢复性"分类标记。
+# 仅账户配额/限流/网络这类"需等外部恢复"的失败才允许转可唤回暂停（见 spec Assumptions）；
+# 不可恢复错误（400 bad request、认证/校验、序列化或代码 bug）仍按既有 ERROR 处理，
+# 避免把永久性错误误标为"等账单/网络恢复后续跑"，造成主代理无效等待。
+_RECOVERABLE_LLM_ERROR_MARKERS = (
+    "429",
+    "rate limit",
+    "ratelimit",
+    "too many requests",
+    "quota",
+    "insufficient_quota",
+    "billing",
+    "credit balance",
+    "insufficient credit",
+    "overloaded",
+    "529",
+    "timeout",
+    "timed out",
+    "connection",
+    "network",
+    "temporarily unavailable",
+    "service unavailable",
+    "502",
+    "503",
+    "504",
+)
+_RECOVERABLE_LLM_ERROR_TYPES = (
+    "ratelimiterror",
+    "apiconnectionerror",
+    "apitimeouterror",
+    "internalservererror",
+    "serviceunavailable",
+    "overloadederror",
+    "connectionerror",
+    "connecttimeout",
+    "readtimeout",
+    "timeout",
+)
+
+
+def _is_recoverable_llm_failure(exc: BaseException) -> bool:
+    """判断 LLM 调用最终失败是否属于"需等外部恢复"的账户配额/限流/网络类。
+
+    遍历异常链（`__cause__` / `__context__`），按异常类型名与消息文本做标记匹配。
+    无法确定时保守返回 False（按不可恢复处理），宁可如实失败也不误导主代理等待。
+    """
+    seen: set[int] = set()
+    cur: Optional[BaseException] = exc
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        type_name = type(cur).__name__.lower()
+        if any(marker in type_name for marker in _RECOVERABLE_LLM_ERROR_TYPES):
+            return True
+        message = str(cur).lower()
+        if any(marker in message for marker in _RECOVERABLE_LLM_ERROR_MARKERS):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
 
 def classify_tool_calls(
     tool_calls: List,
@@ -92,6 +151,9 @@ class AgentLoop:
         self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
         self._msg_repo = MessageRepository()  # 复用 MessageRepository，避免每次重建
         self._session_repo = SessionRepository()
+        # 最近一次 LLM 调用最终失败是否可恢复（账单/网络类）。仅在 _call_llm_with_retry
+        # 返回 None 时由其设置、并被紧随其后的 None 分支立即读取，不跨迭代复用。
+        self._last_llm_failure_recoverable = False
 
         logger.debug(
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
@@ -191,9 +253,11 @@ class AgentLoop:
 
             except Exception as e:
                 if retry_count >= retry_config.max_retries:
+                    self._last_llm_failure_recoverable = _is_recoverable_llm_failure(e)
                     logger.error(
-                        "[Agent Loop] LLM 调用最终失败: error_type=%s",
+                        "[Agent Loop] LLM 调用最终失败: error_type=%s recoverable=%s",
                         type(e).__name__,
+                        self._last_llm_failure_recoverable,
                     )
                     return None
                 delay = retry_config.retry_delay * (retry_count + 1)
@@ -848,6 +912,18 @@ class AgentLoop:
                     workflow_id,
                 )
                 if response is None:
+                    if self._config.resumable_on_failure and self._last_llm_failure_recoverable:
+                        # 账户配额/限流/网络等"需等外部恢复"的失败：不丢工作，转可唤回暂停。
+                        # 不可恢复错误（如 400/认证/校验）落入下方 ERROR，避免误导主代理等待。
+                        ctx.update_session_status("suspended")
+                        logger.info(
+                            "[Agent Loop] 子代理暂停可唤回（LLM 调用失败，账单或网络）: %s",
+                            session_id,
+                        )
+                        return AgentResult(
+                            result_type=ResultType.PAUSED,
+                            error="LLM 调用失败（账单或网络），可恢复后续跑",
+                        )
                     ctx.update_session_status("failed")
                     return AgentResult(result_type=ResultType.ERROR, error="LLM 调用失败")
 
@@ -862,6 +938,18 @@ class AgentLoop:
                 return signal
 
         # 超过最大迭代次数
+        if self._config.resumable_on_failure:
+            # 可唤回 Agent（临时子代理）：撞迭代上限不算失败，转可唤回暂停，保留工作历史。
+            ctx.update_session_status("suspended")
+            logger.info(
+                "[Agent Loop] 子代理暂停可唤回（已达迭代上限 %s 轮）: %s",
+                self._config.max_iterations,
+                session_id,
+            )
+            return AgentResult(
+                result_type=ResultType.PAUSED,
+                error=f"已达迭代上限（{self._config.max_iterations} 轮）",
+            )
         if self._config.text_as_user_input:
             # 持续对话类 Agent（assistant 等）：标记 suspended，用户下条消息可恢复
             ctx.update_session_status("suspended")
