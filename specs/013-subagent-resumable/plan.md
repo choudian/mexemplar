@@ -1,6 +1,6 @@
 # Implementation Plan: 子代理可唤回机制（Resumable / Re-dispatchable Subagent）
 
-**Branch**: `013-subagent-resumable` | **Date**: 2026-06-03 | **Spec**: [spec.md](./spec.md)
+**Branch**: `013-subagent-resumable` | **Date**: 2026-06-03 | **Status**: Completed | **Spec**: [spec.md](./spec.md)
 **Input**: Feature specification from `specs/013-subagent-resumable/spec.md`
 
 ## Summary

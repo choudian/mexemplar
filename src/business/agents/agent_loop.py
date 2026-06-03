@@ -42,7 +42,6 @@ _RECOVERABLE_LLM_ERROR_MARKERS = (
     "overloaded",
     "529",
     "timeout",
-    "timed out",
     "connection",
     "network",
     "temporarily unavailable",
@@ -71,10 +70,13 @@ def _is_recoverable_llm_failure(exc: BaseException) -> bool:
     遍历异常链（`__cause__` / `__context__`），按异常类型名与消息文本做标记匹配。
     无法确定时保守返回 False（按不可恢复处理），宁可如实失败也不误导主代理等待。
     """
+    _MAX_CHAIN_DEPTH = 20
     seen: set[int] = set()
     cur: Optional[BaseException] = exc
-    while cur is not None and id(cur) not in seen:
+    depth = 0
+    while cur is not None and id(cur) not in seen and depth < _MAX_CHAIN_DEPTH:
         seen.add(id(cur))
+        depth += 1
         type_name = type(cur).__name__.lower()
         if any(marker in type_name for marker in _RECOVERABLE_LLM_ERROR_TYPES):
             return True
@@ -151,9 +153,6 @@ class AgentLoop:
         self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
         self._msg_repo = MessageRepository()  # 复用 MessageRepository，避免每次重建
         self._session_repo = SessionRepository()
-        # 最近一次 LLM 调用最终失败是否可恢复（账单/网络类）。仅在 _call_llm_with_retry
-        # 返回 None 时由其设置、并被紧随其后的 None 分支立即读取，不跨迭代复用。
-        self._last_llm_failure_recoverable = False
 
         logger.debug(
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
@@ -214,7 +213,7 @@ class AgentLoop:
         iteration: int,
         session_id: str = "",
         workflow_id: str | None = None,
-    ) -> Optional[LLMResponse]:
+    ) -> tuple[Optional[LLMResponse], bool]:
         """
         调用 LLM（带重试机制）
 
@@ -227,7 +226,9 @@ class AgentLoop:
             iteration: 当前迭代次数
 
         Returns:
-            LLMResponse 对象，失败返回 None
+            (LLMResponse | None, recoverable: bool) 元组。
+            成功时 recoverable=False；最终失败时 recoverable 表示是否为
+            账户配额/限流/网络类可恢复失败。
         """
         retry_config: RetryConfig = self._retry
 
@@ -249,17 +250,17 @@ class AgentLoop:
                 )
                 if response.has_tool_calls:
                     logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
-                return response
+                return response, False
 
             except Exception as e:
                 if retry_count >= retry_config.max_retries:
-                    self._last_llm_failure_recoverable = _is_recoverable_llm_failure(e)
+                    recoverable = _is_recoverable_llm_failure(e)
                     logger.error(
                         "[Agent Loop] LLM 调用最终失败: error_type=%s recoverable=%s",
                         type(e).__name__,
-                        self._last_llm_failure_recoverable,
+                        recoverable,
                     )
-                    return None
+                    return None, recoverable
                 delay = retry_config.retry_delay * (retry_count + 1)
                 logger.warning(
                     "[Agent Loop] LLM 调用失败: error_type=%s, 等待 %ss 后重试 (%s/%s)",
@@ -270,7 +271,7 @@ class AgentLoop:
                 )
                 time.sleep(delay)
 
-        return None
+        return None, False
 
     def _get_workflow_id(self, session_id: str) -> str | None:
         session = self._session_repo.get_by_id(session_id)
@@ -904,7 +905,7 @@ class AgentLoop:
                 messages = ctx.assemble_context()
                 logger.debug(f"[Agent Loop] 迭代 {iteration}: 组装了 {len(messages)} 条消息")
 
-                response = self._call_llm_with_retry(
+                response, llm_failure_recoverable = self._call_llm_with_retry(
                     messages,
                     all_tool_schemas,
                     iteration,
@@ -912,7 +913,7 @@ class AgentLoop:
                     workflow_id,
                 )
                 if response is None:
-                    if self._config.resumable_on_failure and self._last_llm_failure_recoverable:
+                    if self._config.resumable_on_failure and llm_failure_recoverable:
                         # 账户配额/限流/网络等"需等外部恢复"的失败：不丢工作，转可唤回暂停。
                         # 不可恢复错误（如 400/认证/校验）落入下方 ERROR，避免误导主代理等待。
                         ctx.update_session_status("suspended")

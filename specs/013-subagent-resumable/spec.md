@@ -2,7 +2,7 @@
 
 **Feature Branch**: `013-subagent-resumable`
 **Created**: 2026-06-02
-**Status**: Draft
+**Status**: Completed
 **Input**: User description: "这次做上边的这个计划" —— 指代已敲定的设计计划：临时子代理在被迫中断（迭代超限 / LLM 调用最终失败）时不再丢弃已完成工作，而是转为可暂停、可唤回的状态；主代理可查看子代理工作概览并决定续跑还是新开。
 
 ## User Scenarios & Testing *(mandatory)*

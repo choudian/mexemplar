@@ -538,6 +538,10 @@ __all__ = [
     "create_delegate_to_specialist_handler",
     "CREATE_SPECIALIST_SCHEMA",
     "create_create_specialist_handler",
+    "CONTINUE_SUBAGENT_SCHEMA",
+    "create_continue_subagent_handler",
+    "INSPECT_SUBAGENT_SCHEMA",
+    "create_inspect_subagent_handler",
 ]
 
 

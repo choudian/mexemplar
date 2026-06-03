@@ -54,6 +54,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_EPHEMERAL_SUBAGENT_PROMPT = "你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。"
+
 
 class _EventBusAdapter(EventBusPort):
     def connect(self, event_name: str, handler):
@@ -535,12 +537,14 @@ class AgentOrchestrator:
             )
         except Exception as exc:
             logger.error("[Orchestrator] 委派执行失败: %s", exc, exc_info=True)
+            # 将孤立 session 标记为 failed，避免 _continue_subagent 因 status=="active" 拒绝唤回。
+            self._session_repo.update_status(session_id, "failed")
             failed_transition_id = self._session_store.record_transition(
                 workflow_id,
                 event_type="assistant_delegation_failed",
                 from_session_id=session_id,
                 to_session_id=parent_session_id,
-                payload=json.dumps({"error": str(exc)}, ensure_ascii=False),
+                payload=json.dumps({"error": "委派执行内部错误"}, ensure_ascii=False),
             )
             self._capture_delegation_debug_detail(
                 workflow_id=workflow_id,
@@ -553,7 +557,7 @@ class AgentOrchestrator:
             )
             return {
                 "success": False,
-                "message": str(exc),
+                "message": "委派执行内部错误，已记录详情",
                 "executor_session_id": session_id,
                 "workflow_id": workflow_id,
             }
@@ -668,7 +672,7 @@ class AgentOrchestrator:
         """唤回一个属于当前主代理的子代理续跑（从 DB 持久化历史恢复，跨进程重启亦可）。"""
         session = self._resolve_subagent_session(parent_session_id, subagent_id)
         if session is None:
-            return {"success": False, "error": f"未找到可唤回的子代理: {subagent_id}"}
+            return {"success": False, "error": "未找到可唤回的子代理，请确认 subagent_id 正确"}
         if getattr(session, "status", None) == "active":
             return {
                 "success": False,
@@ -678,13 +682,15 @@ class AgentOrchestrator:
 
         from src.business.agents.config import AgentConfig
 
+        _MAX_EXTRA_ITERATIONS = 100
         try:
             extra = int(extra_iterations)
         except (TypeError, ValueError):
             extra = 20
+        extra = min(max(1, extra), _MAX_EXTRA_ITERATIONS)
         config = AgentConfig(
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
-            system_prompt="你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。",
+            system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
             max_iterations=max(1, extra),
             resumable_on_failure=True,
         )
@@ -705,7 +711,7 @@ class AgentOrchestrator:
             result = loop.run(subagent_id, user_input, tools=tools)
         except Exception as exc:
             logger.error("[Orchestrator] 子代理续跑失败: %s", exc, exc_info=True)
-            return {"success": False, "error": str(exc), "subagent_id": subagent_id}
+            return {"success": False, "error": "续跑执行内部错误，已记录详情", "subagent_id": subagent_id}
 
         result_text = self._extract_latest_assistant_text(subagent_id)
         if result.result_type == ResultType.PAUSED:
@@ -733,6 +739,16 @@ class AgentOrchestrator:
         if result.result_type == ResultType.NEEDS_USER_INPUT:
             # 对已完成态子代理不带 instruction 唤回时，loop 立即回 NEEDS_USER_INPUT（无模型调用）。
             # 没有新指令就无从"接着跑"，给主代理明确可操作的提示而非含糊的失败。
+            self._session_store.record_transition(
+                workflow_id,
+                event_type="assistant_delegation_resumed",
+                from_session_id=subagent_id,
+                to_session_id=parent_session_id,
+                payload=json.dumps(
+                    {"subagent_id": subagent_id, "result_type": result.result_type.value},
+                    ensure_ascii=False,
+                ),
+            )
             return {
                 "success": False,
                 "subagent_id": subagent_id,
@@ -746,6 +762,16 @@ class AgentOrchestrator:
             }
 
         success = result.result_type == ResultType.COMPLETED and bool(result_text)
+        self._session_store.record_transition(
+            workflow_id,
+            event_type="assistant_delegation_completed" if success else "assistant_delegation_failed",
+            from_session_id=subagent_id,
+            to_session_id=parent_session_id,
+            payload=json.dumps(
+                {"subagent_id": subagent_id, "success": success, "result_type": result.result_type.value},
+                ensure_ascii=False,
+            ),
+        )
         response = {
             "success": success,
             "subagent_id": subagent_id,
@@ -762,7 +788,7 @@ class AgentOrchestrator:
         """返回子代理工作概览（机械统计，不触发任何模型调用）。"""
         session = self._resolve_subagent_session(parent_session_id, subagent_id)
         if session is None:
-            return {"success": False, "error": f"未找到可查看的子代理: {subagent_id}"}
+            return {"success": False, "error": "未找到可查看的子代理，请确认 subagent_id 正确"}
 
         messages = self._message_repo.get_context(subagent_id)
         assistant_turns = 0
@@ -779,7 +805,12 @@ class AgentOrchestrator:
                     name = tc.get("name") if isinstance(tc, dict) else None
                     if name:
                         tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
-            except (ValueError, TypeError):
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "[inspect_subagent] malformed tool_calls JSON: session=%s error=%s",
+                    subagent_id,
+                    exc,
+                )
                 continue
 
         return {
@@ -1643,7 +1674,7 @@ class AgentOrchestrator:
 
             ephemeral_config = AgentConfig(
                 agent_type=AgentType.EPHEMERAL_SUBAGENT,
-                system_prompt="你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。",
+                system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
                 max_iterations=50,
                 resumable_on_failure=True,
             )
