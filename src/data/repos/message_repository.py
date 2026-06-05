@@ -131,6 +131,46 @@ class MessageRepository(BaseRepository):
             return text[:max_length] + "\n...[truncated]"
         return text
 
+    def get_latest_assistant_texts(
+        self, session_ids: list[str], max_length: int = 6000
+    ) -> dict[str, str]:
+        """批量返回多个会话中最后一条非空 assistant 消息文本（与 get_latest_assistant_text 同口径，含截断）。"""
+        if not session_ids:
+            return {}
+        sub = (
+            self.session.query(
+                Message.session_id,
+                func.max(Message.sequence).label("max_seq"),
+            )
+            .filter(
+                Message.session_id.in_(session_ids),
+                Message.is_archived.is_(False),
+                Message.role == "assistant",
+                Message.content.isnot(None),
+                Message.content != "",
+            )
+            .group_by(Message.session_id)
+            .subquery()
+        )
+        rows = (
+            self.session.query(Message.session_id, Message.content)
+            .join(
+                sub,
+                and_(
+                    Message.session_id == sub.c.session_id,
+                    Message.sequence == sub.c.max_seq,
+                ),
+            )
+            .all()
+        )
+        result: dict[str, str] = {sid: "" for sid in session_ids}
+        for sid, content in rows:
+            text = str(content).strip()
+            if len(text) > max_length:
+                text = text[:max_length] + "\n...[truncated]"
+            result[sid] = text
+        return result
+
     def get_all(self, session_id: str) -> List[Message]:
         """获取会话的所有消息"""
         return (

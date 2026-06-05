@@ -70,11 +70,14 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     "assistant.progress": UiEventDefinition(
         "assistant.progress",
         "notification",
-        frozenset({"status", "headline", "message", "question"}),
+        frozenset({"status", "headline", "message", "question", "runId"}),
         frozenset({"sessionId", "workflowId"}),
-        {"status": "running", "headline": "Assistant is working"},
+        {"status": "running", "headline": "Assistant is working", "runId": "run-1"},
         required_payload_keys=frozenset({"status"}),
         required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(
+            ("status", frozenset({"running", "waiting_for_user", "succeeded", "failed", "cancelled"})),
+        ),
     ),
     "assistant.error": UiEventDefinition(
         "assistant.error",
@@ -115,6 +118,31 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("actionType", CONFIRMATION_VALID_ACTION_TYPES),
             ("status", frozenset({"active"})),
         ),
+    ),
+    "assistant.activity": UiEventDefinition(
+        "assistant.activity",
+        "notification",
+        frozenset({"subagentId", "kind", "toolName", "text", "seq"}),
+        frozenset({"sessionId"}),
+        {"kind": "tool_call", "toolName": "delegate_to_subagent", "text": "派发子任务", "seq": 1},
+        required_payload_keys=frozenset({"kind", "seq"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(("kind", frozenset({"reasoning", "tool_call", "tool_result"})),),
+    ),
+    "assistant.subagent": UiEventDefinition(
+        "assistant.subagent",
+        "notification",
+        frozenset({"subagentId", "label", "task", "status", "lastOutput", "reason"}),
+        frozenset({"sessionId"}),
+        {
+            "subagentId": "sess_child_1",
+            "label": "子助手 · 资料检索",
+            "task": "检索最新季度报表",
+            "status": "running",
+        },
+        required_payload_keys=frozenset({"subagentId", "status"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(("status", frozenset({"running", "done", "suspended", "failed"})),),
     ),
     "recording.progress": UiEventDefinition(
         "recording.progress",

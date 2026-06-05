@@ -16,6 +16,7 @@ from src.business.agents.config import (
     AgentType,
     ResultType,
     ToolDefinition,
+    subagent_label,
 )
 from src.business.brain.specialist_service import parse_tool_whitelist
 from src.business.agents.tools.pm_output_tools import report_code_issue, submit_requirements
@@ -24,7 +25,7 @@ from src.business.agents.tools.desktop_tools import create_desktop_specific_tool
 from src.business.agents.tools.programmer_tools import submit_code, syntax_check
 from src.business.agents.tools.recording_data_tools import create_recording_tools
 from src.business.agents.tools.trial_tools import create_desktop_trial_tools, create_trial_tools
-from src.business.ai.llm_client import LangChainLLMClient
+from src.business.ai.llm_client import LangChainLLMClient, ToolCallInfo
 from src.business.memory.compression_handler import CompressionHandler
 from src.business.services import SkillCompositionService
 from src.data.repos.skill_equipment_repository import ASSISTANT_ENTITY_ID
@@ -94,12 +95,14 @@ class _AgentExecutionAdapter(AgentExecutionPort):
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
+        assistant_continue_intent: dict | None = None,
     ) -> AgentResult | None:
         return self._run_agent(
             agent_type,
             user_input,
             workflow_id=workflow_id,
             session_id=session_id,
+            assistant_continue_intent=assistant_continue_intent,
         )
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
@@ -117,12 +120,14 @@ class _AssistantTaskAdapter(AssistantTaskPort):
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
+        assistant_continue_intent: dict | None = None,
     ) -> None:
         self._run_agent(
             agent_type,
             user_input,
             workflow_id=workflow_id,
             session_id=session_id,
+            assistant_continue_intent=assistant_continue_intent,
         )
 
     def start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
@@ -235,6 +240,7 @@ class AgentOrchestrator:
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
+        assistant_continue_intent: dict | None = None,
     ) -> AgentResult | None:
         if agent_type == AgentType.ASSISTANT:
             assert session_id, "assistant 类型必须传 session_id"
@@ -282,11 +288,17 @@ class AgentOrchestrator:
             return AgentResult(result_type=ResultType.ERROR, error=message)
 
         try:
+            initial_tool_calls = (
+                [self._build_continue_subagent_tool_call(assistant_continue_intent)]
+                if agent_type == AgentType.ASSISTANT and assistant_continue_intent
+                else None
+            )
             result = loop.run(
                 session_id,
                 user_input,
                 tools=tools,
                 system_prompt_override=formatted_prompt,
+                initial_tool_calls=initial_tool_calls,
             )
         except Exception as exc:
             message = f"{agent_type} Agent 执行失败"
@@ -317,6 +329,11 @@ class AgentOrchestrator:
             )
             return result
 
+        if result.result_type == ResultType.CANCELLED:
+            # 用户主动停止（014）：可恢复暂停，不是错误。已产内容已落库，直接正常返回，不发 agent_error。
+            logger.info("[Orchestrator] %s Agent 被用户停止: session=%s", agent_type, session_id)
+            return result
+
         if result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
             self._emit_agent_error(
                 workflow_id or "",
@@ -326,6 +343,23 @@ class AgentOrchestrator:
                 result.result_type.value,
             )
         return result
+
+    def _build_continue_subagent_tool_call(self, intent: dict) -> ToolCallInfo:
+        subagent_id = str(intent.get("subagent_id") or "").strip()
+        if not subagent_id:
+            raise ValueError("continueSubagent.subagentId must not be empty")
+        instruction = str(intent.get("instruction") or "").strip()
+        args: dict[str, object] = {
+            "subagent_id": subagent_id,
+            "extra_iterations": int(intent.get("extra_iterations") or 20),
+        }
+        if instruction:
+            args["instruction"] = instruction
+        return ToolCallInfo(
+            id=f"continue_subagent_{uuid.uuid4().hex[:12]}",
+            name="continue_subagent",
+            args=args,
+        )
 
     def _seal_assistant_segment_at_memory_limit(self, session_id: str) -> Optional[str]:
         """Seal accumulated assistant messages when configured memory limits are reached."""
@@ -522,6 +556,13 @@ class AgentOrchestrator:
                 "methodologyEquipmentPromptSnapshot": methodology_equipment_snapshot,
             },
         )
+        # 子任务卡片壳 + running 状态（014 US4）：归属父会话
+        self._emit_subagent_started(
+            parent_session_id=parent_session_id,
+            subagent_id=session_id,
+            agent_type=str(agent_type),
+            task=user_input,
+        )
 
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
@@ -557,6 +598,11 @@ class AgentOrchestrator:
                 },
                 output_detail={"success": False, "error": str(exc)},
             )
+            self._emit_subagent_finished(
+                parent_session_id=parent_session_id,
+                subagent_id=session_id,
+                status="failed",
+            )
             return {
                 "success": False,
                 "message": "委派执行内部错误，已记录详情",
@@ -564,15 +610,19 @@ class AgentOrchestrator:
                 "workflow_id": workflow_id,
             }
 
-        if result.result_type == ResultType.PAUSED:
-            # 子代理被迫中断（迭代超限 / LLM 调用失败）但工作已保活：返回可唤回句柄。
+        if result.result_type in (ResultType.PAUSED, ResultType.CANCELLED):
+            # 子代理被迫中断（迭代超限 / LLM 失败 = PAUSED）或被用户停止（CANCELLED）但工作已保活：
+            # 记暂停流转并返回可唤回句柄。该 dict 作为委派工具结果落库（含"可 continue_subagent 续跑"
+            # 线索），父 loop 在下一取消检查点退出前已持久化，为"继续任务"留线索。
+            cancelled = result.result_type == ResultType.CANCELLED
+            reason = "用户已停止" if cancelled else result.error
             paused_transition_id = self._session_store.record_transition(
                 workflow_id,
                 event_type="assistant_delegation_paused",
                 from_session_id=session_id,
                 to_session_id=parent_session_id,
                 payload=json.dumps(
-                    {"subagent_id": session_id, "reason": result.error},
+                    {"subagent_id": session_id, "reason": reason},
                     ensure_ascii=False,
                 ),
             )
@@ -586,19 +636,31 @@ class AgentOrchestrator:
                 output_detail={
                     "success": False,
                     "paused": True,
+                    "cancelled": cancelled,
                     "resultType": result.result_type.value,
-                    "reason": result.error,
+                    "reason": reason,
                 },
+            )
+            self._emit_subagent_paused(
+                parent_session_id=parent_session_id,
+                subagent_id=session_id,
+                reason=reason,
+            )
+            message = (
+                f"子代理已被停止（{reason}），可用 continue_subagent 唤回续跑"
+                if cancelled
+                else f"子代理已暂停（{reason}），可用 continue_subagent 唤回续跑"
             )
             return {
                 "success": False,
                 "paused": True,
+                "cancelled": cancelled,
                 "subagent_id": session_id,
-                "message": f"子代理已暂停（{result.error}），可用 continue_subagent 唤回续跑",
+                "message": message,
                 "executor_session_id": session_id,
                 "workflow_id": workflow_id,
                 "result_type": result.result_type.value,
-                "reason": result.error,
+                "reason": reason,
             }
 
         result_text = self._extract_latest_assistant_text(session_id)
@@ -628,6 +690,12 @@ class AgentOrchestrator:
                 "resultText": result_text,
                 "error": result.error,
             },
+        )
+        self._emit_subagent_finished(
+            parent_session_id=parent_session_id,
+            subagent_id=session_id,
+            status="done" if success else "failed",
+            last_output=result_text,
         )
 
         response = {
@@ -771,11 +839,22 @@ class AgentOrchestrator:
         )
         user_input = instruction.strip() if (instruction or "").strip() else None
         workflow_id = getattr(session, "workflow_id", "") or ""
+        self._emit_subagent_started(
+            parent_session_id=parent_session_id,
+            subagent_id=subagent_id,
+            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            task=self._message_repo.get_first_user_message(subagent_id) or "继续任务",
+        )
         try:
             # user_input=None 时复用 _initialize_session 的 suspended/completed → active 恢复
             result = loop.run(subagent_id, user_input, tools=tools)
         except Exception as exc:
             logger.error("[Orchestrator] 子代理续跑失败: %s", exc, exc_info=True)
+            self._emit_subagent_finished(
+                parent_session_id=parent_session_id,
+                subagent_id=subagent_id,
+                status="failed",
+            )
             return {
                 "success": False,
                 "error": "续跑执行内部错误，已记录详情",
@@ -783,26 +862,38 @@ class AgentOrchestrator:
             }
 
         result_text = self._extract_latest_assistant_text(subagent_id)
-        if result.result_type == ResultType.PAUSED:
-            # 再次中断 → 仍可重复唤回
+        if result.result_type in (ResultType.PAUSED, ResultType.CANCELLED):
+            # 再次中断 / 用户停止 → 仍可重复唤回；CANCELLED 是可恢复暂停，不是失败。
+            cancelled = result.result_type == ResultType.CANCELLED
+            reason = "用户已停止" if cancelled else result.error
             self._session_store.record_transition(
                 workflow_id,
                 event_type="assistant_delegation_paused",
                 from_session_id=subagent_id,
                 to_session_id=parent_session_id,
                 payload=json.dumps(
-                    {"subagent_id": subagent_id, "reason": result.error},
+                    {"subagent_id": subagent_id, "reason": reason},
                     ensure_ascii=False,
                 ),
+            )
+            self._emit_subagent_paused(
+                parent_session_id=parent_session_id,
+                subagent_id=subagent_id,
+                reason=reason,
             )
             return {
                 "success": False,
                 "paused": True,
+                "cancelled": cancelled,
                 "subagent_id": subagent_id,
-                "message": f"子代理再次暂停（{result.error}），可继续 continue_subagent",
+                "message": (
+                    f"子代理已被停止（{reason}），可继续 continue_subagent"
+                    if cancelled
+                    else f"子代理再次暂停（{reason}），可继续 continue_subagent"
+                ),
                 "executor_session_id": subagent_id,
                 "result_type": result.result_type.value,
-                "reason": result.error,
+                "reason": reason,
             }
 
         if result.result_type == ResultType.NEEDS_USER_INPUT:
@@ -817,6 +908,11 @@ class AgentOrchestrator:
                     {"subagent_id": subagent_id, "result_type": result.result_type.value},
                     ensure_ascii=False,
                 ),
+            )
+            self._emit_subagent_paused(
+                parent_session_id=parent_session_id,
+                subagent_id=subagent_id,
+                reason="等待追加指令",
             )
             return {
                 "success": False,
@@ -857,6 +953,12 @@ class AgentOrchestrator:
         }
         if result.error:
             response["error"] = result.error
+        self._emit_subagent_finished(
+            parent_session_id=parent_session_id,
+            subagent_id=subagent_id,
+            status="done" if success else "failed",
+            last_output=result_text,
+        )
         return response
 
     def _inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict:
@@ -1199,6 +1301,63 @@ class AgentOrchestrator:
             user_feedback=user_feedback,
         )
         self._start_triage(tool_id, user_feedback, workflow_id)
+
+    def _emit_subagent_started(
+        self,
+        *,
+        parent_session_id: str,
+        subagent_id: str,
+        agent_type: str,
+        task: str,
+    ) -> None:
+        """发出子任务开始生命周期事件（014，best-effort）：卡片壳 + running 状态。"""
+        emit(
+            "assistant_subagent_started",
+            sender=self,
+            session_id=parent_session_id,
+            subagent_id=subagent_id,
+            label=subagent_label(agent_type),
+            task=task,
+            status="running",
+        )
+
+    def _emit_subagent_finished(
+        self,
+        *,
+        parent_session_id: str,
+        subagent_id: str,
+        status: str,
+        last_output: str | None = None,
+    ) -> None:
+        """发出子任务结束生命周期事件（014，best-effort）：status∈{done,failed}。"""
+        emit(
+            "assistant_subagent_finished",
+            sender=self,
+            session_id=parent_session_id,
+            subagent_id=subagent_id,
+            status=status,
+            last_output=last_output,
+        )
+
+    def _emit_subagent_paused(
+        self,
+        *,
+        parent_session_id: str,
+        subagent_id: str,
+        reason: str | None = None,
+    ) -> None:
+        """发出子任务暂停生命周期事件（014，best-effort）。
+
+        session_id 取父助理会话（卡片归属父对话）；经 ui_event_projector 投影为 assistant.subagent。
+        """
+        emit(
+            "assistant_subagent_paused",
+            sender=self,
+            session_id=parent_session_id,
+            subagent_id=subagent_id,
+            status="suspended",
+            reason=reason,
+        )
 
     def _emit_agent_error(
         self,

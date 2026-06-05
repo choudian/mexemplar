@@ -1,0 +1,972 @@
+# Main Specification Memory
+
+**Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
+**Last Updated**: 2026-06-05
+**Revision**: 2026-06-05 — Merged `specs/014-assistant-chat-transparency`
+
+---
+
+## User Scenarios
+
+### US-001: Agent 在 query_data 中识别大字段 (Priority: P1)
+
+Agent 在分析录制数据时，通过 query_data 查询到包含超大文本字段的记录。系统返回结构化占位对象，明确告知 Agent 字段大小、预览片段和继续读取方式，取代旧的 12KB 无差别截断。 [Source: specs/001-recording-field-layering]
+
+### US-002: Agent 分段读取大字段内容 (Priority: P1)
+
+Agent 使用 `read_field_chunk` 工具，按 locator + field + offset + 可选 length 读取单段原文。每次返回不超过 `max_chunk_chars`（默认 1000 字符）。 [Source: specs/001-recording-field-layering]
+
+### US-003: Agent 逐段查看完整字段 (Priority: P2)
+
+Agent 通过多次分段读取逐步拿到完整原始值。支持任意 offset 跳转、EOF 明确标识、Unicode 码点正确切片。 [Source: specs/001-recording-field-layering]
+
+### US-004: 与现有数据发现和查询工具透明集成 (Priority: P2)
+
+Agent 沿用 describe_data → query_data → read_field_chunk 工作流。describe_data 标注大字段提示；query_data 对大字段做占位替换；read_field_chunk 按需分段读取。文档和 prompt 统一为 5 工具模型。 [Source: specs/001-recording-field-layering]
+
+### US-005: 多工具调用完整配对 (Priority: P1)
+
+模型在同一轮响应中返回多个普通工具调用时，AgentLoop 按返回顺序逐个执行并记录结果，确保下一轮模型请求前所有工具调用均有配对结果。 [Source: specs/003-fix-agentloop-tool-calls]
+
+### US-006: 中断型工具行为可预期 (Priority: P1)
+
+中断型工具单独出现时保留既有暂停/完成语义；与任何其他工具同轮出现时判定为模型输出错误，不执行任何 handler 并写入配对错误结果。 [Source: specs/003-fix-agentloop-tool-calls]
+
+### US-007: 会话恢复不重复或遗漏工具 (Priority: P2)
+
+Agent 中断或重启后，系统恢复时识别同轮模型响应中哪些工具调用已有结果、哪些仍缺结果，只补齐缺失结果且不重复已完成调用。 [Source: specs/003-fix-agentloop-tool-calls]
+
+### US-008: 工具执行管线支持统一 Pre/Post Hook (Priority: P1)
+
+Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefinition` 工具前后挂载同步 pre/post hook；没有声明 hook 的工具保持透明兼容。 [Source: specs/002-tool-hook-system]
+
+### US-009: 门卫式安全校验迁移到 pre_hook (Priority: P2)
+
+`builtin_general_tools`、`recording_data_tools`、`trial_tools` 中可复用的拒绝、确认、安全策略和限流 gate 统一迁移到 pre_hook；handler 保留执行准备与结果转换。 [Source: specs/002-tool-hook-system]
+
+### US-010: AgentConfig 级全局 Hook (Priority: P3)
+
+当前 `AgentConfig` 可以挂载 `global_pre_hooks` / `global_post_hooks`，对该配置实例下所有参与 hook 管线的 `ToolDefinition` 工具生效。 [Source: specs/002-tool-hook-system]
+
+### US-011: 长会话压缩后 Agent 不再崩溃 (Priority: P1)
+
+用户与 assistant 进行长时间对话涉及大量工具调用，当会话消息数达到压缩阈值时，系统自动触发上下文压缩。压缩完成后 Agent 能继续正常工作，不再出现 400 错误导致会话不可恢复。 [Source: specs/005-fix-compression-tool-pairing]
+
+### US-012: 多次压缩不累积残留 (Priority: P2)
+
+会话经历多次上下文压缩时，前一次压缩时被保留的边界 tool 组在第二次压缩时若已完全落在压缩区内部，会被正常压缩掉，不会无限累积。 [Source: specs/005-fix-compression-tool-pairing]
+
+### US-013: 压缩后"继续"能正常恢复 (Priority: P3)
+
+当因边缘 case 导致孤立 tool result 残留时，用户点击"继续"恢复会话，系统能自动检测并清理孤立消息，会话能正常运行。 [Source: specs/005-fix-compression-tool-pairing]
+### US-011: 单次确认改为非阻塞浮层 (Priority: P1)
+
+Assistant Agent 触发高危工具时，主窗口右下角出现非阻塞浮层，显示工具名与关键参数摘要，提供"全部允许 / 同意 / 拒绝"三按钮。用户可正常浏览聊天记录、滚动页面、打开侧边栏。 [Source: specs/004-auth-toast]
+
+### US-012: 会话级"全部允许"快捷通道 (Priority: P2)
+
+浮层"全部允许"按钮一键开启会话级豁免：本次会话内后续所有 Assistant 高危工具请求自动放行。新建对话时自动复位。 [Source: specs/004-auth-toast]
+
+### US-013: 顶栏 Toggle 与浮层状态双向同步 (Priority: P3)
+
+对话窗口顶栏提供"免确认" Toggle，与浮层"全部允许"共享同一会话级状态，任一入口变化后另一处可视状态立刻同步。新对话时一并复位。 [Source: specs/004-auth-toast]
+
+### US-014: AI 回复消息以富文本展示 Markdown (Priority: P1)
+
+AI 回复包含标题、列表、代码块、加粗、链接、图片、表格等 Markdown 元素时，聊天气泡将 AI 回复渲染为富文本结构。用户消息保持纯文本。Markdown 链接/图片不触发外部导航。 [Source: specs/006-chat-ui-polish]
+
+### US-015: 压缩后的旧聊天记录仍可回看 (Priority: P2)
+
+长会话触发上下文压缩后，被归档的早期用户消息与助手回复仍按原时间顺序出现在同一聊天时间线中。不显示归档/压缩分区标签。工具调用/结果/压缩摘要不作为普通聊天记录展示。初始展示最近 10 条，滚动向上分页加载。 [Source: specs/006-chat-ui-polish]
+
+### US-016: 新对话/欢迎界面不展示"免确认"Toggle (Priority: P3)
+
+"免确认" Toggle 仅在当前对话已启动过 Agent 会话后可见。欢迎界面、新对话起始态、清空后的会话不展示。 [Source: specs/006-chat-ui-polish]
+
+### US-017: 录制桌面操作并产出可分析数据 (Priority: P1)
+
+用户在录制页选择桌面模式后，应用最小化主窗并在 minimize 完成后启动全局键鼠 hook、UIA 查询、剪贴板订阅和帧缓冲。停止录制后主窗恢复，sanity check 对话框展示健康统计，用户可继续进入 intent 分析。 [Source: specs/007-desktop-recording]
+
+### US-018: Agent 使用桌面录制数据生成方案 (Priority: P1)
+
+PM / Programmer / Trial 在桌面 mode 下使用 5 个通用录制数据工具的 mode dispatch 和 3 个桌面专属工具分析 `desktop_recordings` / `desktop_actions`，同时浏览器路径工具和 prompt 保持不退化。 [Source: specs/007-desktop-recording]
+
+### US-019: 桌面 Programmer 代码进入隔离 Trial 子进程 (Priority: P2)
+
+Programmer 输出的 `async def execute() -> dict` 先经过 `ast.parse` syntax gate 和最多 2 次自动反馈重试，再由 execution 层子进程在 `data/trials/<trial_id>/` 隔离 cwd、env 白名单和 120s 超时兜底下试用执行。 [Source: specs/007-desktop-recording]
+
+### US-020: 桌面录制健康反馈与早期止损 (Priority: P3)
+
+录制停止后，用户通过 sanity check 颜色、动作总数、UIA 命中率、clip 成功率和三按钮状态机决定继续分析、放弃录制或重新录制；`vision_model` 缺失时以设置区说明和一次性 toast 透明提示降级。 [Source: specs/007-desktop-recording]
+
+### US-021: 使用重新设计的桌面应用壳 (Priority: P1)
+
+用户启动打包后的桌面应用后，进入 Tauri + React 应用壳，使用同一个窗口内的持久导航栏访问 AI Assistant、技能教学、技能列表、技能组合和设置；红/黄/绿自定义窗口控件执行真实关闭、最小化、最大化/还原动作。 [Source: specs/008-ui-stack-redesign]
+
+### US-022: 在重新设计的 AI Assistant 中工作 (Priority: P1)
+
+用户可以创建、选择、搜索、重命名和删除对话，发送消息，查看连续聊天时间线、安全 Markdown 回复、紧凑执行摘要和非模态高危确认；旧消息仍以普通聊天历史呈现，不暴露归档/压缩术语。 [Source: specs/008-ui-stack-redesign]
+
+### US-023: 在重新设计流程中教学技能 (Priority: P1)
+
+用户在技能教学页选择 Browser Recording、Extension Recording 或 Desktop Recording，经过准备检查、录制、意图确认、学习和试用验证等可见阶段；桌面录制保留 minimize 后启动 hook、健康检查和三按钮决策语义。 [Source: specs/008-ui-stack-redesign]
+
+### US-024: 管理技能和技能组合 (Priority: P1)
+
+用户可以查看待验证、已发布和失败技能分类并执行对应操作；也可以创建范围型或顺序型技能组合，选择已发布成员、调整顺序、填写适用场景、试用并发布，成员变化时已发布组合会进入需复核状态。 [Source: specs/008-ui-stack-redesign]
+
+### US-025: 在重新设计设置中配置应用 (Priority: P1)
+
+用户可以在设置页查看和更新 AI、录制、数据和产品信息；非密钥配置通过统一配置入口保存，密钥只以遮罩状态展示并通过 keyring 写入，设计中可见的操作按钮必须执行真实支持流程或返回真实业务错误。 [Source: specs/008-ui-stack-redesign]
+
+---
+
+## Functional Requirements
+
+### 录制数据大字段按需读取 [Source: specs/001-recording-field-layering]
+
+- **FR-001**: describe_data 基于当前源表 schema 与内置 `StableLocatorRule`，自动标注哪些文本字段在值达到阈值时会进入"大字段占位 + 分段读取"工作流；v1 至少覆盖 `network_requests.response_body`、`actions.dom_tree_snapshot`、`sibling_snapshots.siblings`
+- **FR-002**: query_data 对任意文本字段值达到阈值的结果列，返回结构化占位信息；取代原 `_MAX_QUERY_CELL_CHARS = 12_000` 的无差别截断；一旦达到阈值不因"原文 JSON 恰好更短"而豁免
+- **FR-003**: 占位信息包含 `__large_field__`、`field`、`size_chars`、`preview`（≤ `preview_chars`）、`locator`、`read_hint`（固定 `read_field_chunk`）
+- **FR-003a**: 无法继续读取时占位信息包含 `read_blocked_reason`（稳定枚举：`missing_locator_field` / `computed_or_aggregated_column` / `ambiguous_locator_source` / `unsupported_source_table`）及可选 `read_blocked_message`
+- **FR-004**: `read_field_chunk` 接收 locator + field + offset + 可选 length；offset/length 按 Python `str` Unicode 码点计数；缺省 length 取 `max_chunk_chars`
+- **FR-005**: `read_field_chunk` 返回固定结构：`content`、`field`、`locator`、`offset`、`returned_length`、`total_length`、`has_more`、`next_offset`、`error`；成功时 `error=null`，失败时 `error={code, message}`
+- **FR-006**: 大字段"完整访问"通过多次分段读取实现，不要求一次性返回全文
+- **FR-007**: 单次 content 长度限制在 `max_chunk_chars` 内，通过 `returned_length` / `next_offset` / `has_more` 如实告知实际返回范围
+- **FR-008**: offset 到达或超过字段结尾时返回空成功响应：`content=""`, `returned_length=0`, `has_more=false`, `next_offset=null`
+- **FR-009**: 非法参数、定位失败、字段不存在等错误按固定结构返回 `error.code` 枚举（9 种：`invalid_offset` / `invalid_length` / `unknown_table` / `field_not_found` / `non_text_field` / `unknown_id_field` / `record_unavailable` / `unsupported_continuation` / `internal_error`）
+- **FR-010**: 未超过阈值的小字段保持原有行为，直接返回完整内容
+- **FR-011**: 阈值、预览长度、单次分段上限通过统一配置管理（`recording.large_field.*`），支持运行时调整；配置变更仅影响后续阈值/预览/chunk 大小，不使既有 locator 失效
+- **FR-011a**: `preview_chars` / `max_chunk_chars` 为硬上限，默认均 1000 字符；元数据为固定小结构；不设独立 JSON 预算验收线
+- **FR-012**: describe_data 用机器可读字段表达大字段提示：`large_field=true`、`read_via="read_field_chunk"`、`locator_fields=[...]`
+- **FR-013**: query_data 占位替换不破坏行列结构，其余正常字段保持原样
+- **FR-014**: 缺少稳定定位字段时占位提示 Agent 先补查（`read_blocked_reason="missing_locator_field"`）
+- **FR-015**: 续读支持判定：直接源字段选择 + 源表由 StableLocatorRule 覆盖 + 同行保留稳定定位字段；聚合/计算/歧义来源仍触发占位但 `locator=null`
+- **FR-016**: 所有活文档、prompt、配置注释更新为 5 工具模型；最小清单：`docs/ARCHITECTURE.md`、`docs/design/pm_agent_design.md`、`docs/design/programmer_agent_design.md`、`docs/design/recording_tools_redesign_todo.md`、`config.example.comments.md`、`src/business/agents/prompts/pm_prompt.py`、`src/business/agents/prompts/programmer_prompt.py`
+
+### AgentLoop 多工具调用结果配对 [Source: specs/003-fix-agentloop-tool-calls]
+
+- **FR-017**: 系统必须支持单条模型响应包含多个工具调用，并将这些调用作为同一轮有序工具序列处理
+- **FR-018**: 系统必须按模型返回的工具调用列表顺序执行普通工具调用
+- **FR-019**: 系统必须为每一个已记录的工具调用保存一个对应的工具结果，确保后续模型请求中的会话历史不存在未配对工具调用
+- **FR-020**: 当普通工具执行返回成功结果时，系统必须保存该工具调用对应的结果，并继续处理同轮后续普通工具调用
+- **FR-021**: 当普通工具执行失败时（仅包括未知工具、handler 抛出异常、工具返回顶层 JSON 对象且含 `error` 字段或 `success: false` 的标准化错误结构），系统必须保存该失败工具对应的错误结果，停止真实执行同轮后续工具，并为每个后续未执行工具保存"未执行/需模型重新规划"的工具结果；系统不得通过普通文本是否包含"错误"或"error"等关键词推断失败
+- **FR-022**: 当模型在同一响应中返回多于一个工具调用且其中包含至少一个中断型工具时，系统必须保存该模型响应，将该响应判定为模型输出错误，不真实执行任何工具调用，并为响应中的每个 tool call 保存配对错误结果。合法的中断响应必须有且仅有一个工具调用且为中断型
+- **FR-023**: 中断型工具单独出现且 handler 成功执行时，系统保留既有暂停或完成语义。中断型工具与任何其他工具同轮出现时的处理由 FR-022 定义。handler 抛异常时按 FR-021 失败语义处理；暂停/完成语义不在失败路径触发
+- **FR-024**: 会话恢复时，系统必须识别同一条模型响应中哪些工具调用已有结果、哪些仍缺结果，并只补齐缺失结果
+- **FR-025**: 会话恢复不得只取第一条待执行工具调用；多工具响应中的待执行项必须按原始顺序恢复
+- **FR-026**: 会话恢复时，如果待补齐工具调用当前没有可用 handler，系统必须按工具失败语义处理：为该工具保存配对错误结果，停止真实执行同轮后续工具，并为后续未执行工具保存"未执行/需模型重新规划"的工具结果
+- **FR-027**: 系统必须保留单工具调用场景的现有行为，不能让已有 PM、程序员、试用和 assistant 工作流出现可见回归
+- **FR-028**: 系统必须在日志中保留多工具调用数量、执行顺序和恢复缺失结果的关键信息（结构化日志 schema 见 contracts）
+- **FR-029**: 系统必须补充覆盖多工具调用完整配对、中断型工具混合报错、工具异常、未知工具、恢复时工具不可用和恢复路径的行为测试
+- **FR-030**: 系统必须通过 `ToolDefinition` 上的声明式分类字段 `is_interrupting: bool` 在执行任何 handler 之前识别中断型工具；不得通过 handler 返回值类型或硬编码工具名白名单作为识别依据
+- **FR-031**: `not_executed` 与 `invalid_model_output` 配对结果的 content 必须采用标准化错误结构：顶层 JSON 对象，含稳定 `error` 字段与 `message`，可附加 `upstream_tool_call_id`、`code` 等诊断字段
+- **FR-032**: 系统必须强制 `ToolDefinition.is_interrupting` 与 handler 实际返回类型一致：`is_interrupting=True` 必须 `ToolSignal`，`is_interrupting=False` 必须 `str`。不一致按 FR-021 失败语义处理（`handler_contract_violation`）
+
+### Agent 工具执行 Hook 系统 [Source: specs/002-tool-hook-system]
+
+- **FR-033**: `ToolDefinition` 必须支持可选 `pre_hook` / `post_hook` 字段；`AgentConfig` 必须支持实例级 `global_pre_hooks` / `global_post_hooks`，默认均为空。
+- **FR-034**: pre_hook 可通过 `PreHookResult(error=...)` 拒绝本次工具调用；被拒绝时 handler 与全部 post_hook 不执行，LLM 收到标准化 `pre_hook_rejected` 工具错误，普通批次后续工具触发 `not_executed` 级联。
+- **FR-035**: pre_hook 不得修改 handler 入参；`ToolCallContext.args` 是 LLM 原始入参的递归只读隔离视图，顶层或嵌套写入必须抛异常且不得影响 handler 实际参数。
+- **FR-036**: post_hook 只可改写普通字符串工具结果；所有 post_hook 都接收 handler 原始字符串结果或 handler 异常转换后的 error 字符串，链不流水线，最后一个非空 `PostHookResult.result` 生效。
+- **FR-037**: hook 执行顺序为工具级 pre_hook -> 当前 `AgentConfig` global pre_hooks -> handler -> 工具级 post_hook -> 当前 `AgentConfig` global post_hooks；任意 pre_hook 返回 error 即短路后续步骤。
+- **FR-038**: hook 未捕获异常必须记录 WARNING 级或更高日志且不污染工具结果；pre_hook 异常停止剩余 pre_hook、执行 handler 并跳过全部 post_hook；post_hook 异常停止剩余 post_hook 并返回 handler 原始结果。
+- **FR-039**: 普通 handler 未捕获异常必须转换为标准化 error 字符串；若没有发生 pre_hook 异常短路，该 error 字符串仍进入 post_hook 链，批处理失败级联依据原始失败状态而非 post_hook 改写文本。
+- **FR-040**: 合法 `ToolSignal` 不进入 post_hook 并原样上抛 AgentLoop；普通工具返回 `ToolSignal` 或中断型工具返回 `str` 均视为 handler 契约违规并按标准化错误处理。
+- **FR-041**: callable 动态工具路径必须每轮刷新 handler、hook 与 `is_interrupting` 元数据；AgentLoop 注入的 `talk_to_user` / `load_reference` 不进入工具级或 global hook 管线。
+- **FR-042**: `read_file`、`write_file`、`edit_file`、`list_dir`、`exec` 的路径存在性/类型、系统目录拒绝、命令安全判断和用户确认 gate 必须位于对应 pre_hook；确认请求失败必须 fail-closed 返回拒绝。`edit_file` 的 `old_text` 查找与唯一性校验保留在 handler。
+- **FR-043**: `query_data` SQL 安全策略与 `analyze_image` 单次最多 5 个 `action_index` gate 必须位于 pre_hook；`query_data` pre_hook 复用既有 `rewrite(sql)` / 过滤策略，不新增 raw-text 注释或字符串分号禁用规则。
+- **FR-044**: `trial_tools.run_command` 的 5 次调用上限必须由单次 `AgentLoop.run()` 范围内的闭包计数器 pre_hook 实现，不跨 run、session 或进程持久化。
+- **FR-045**: `programmer_tools.syntax_check`、`recording_data_tools.execute_code` 沙箱、`tool_executor` venv 隔离/命令白名单、`dynamic_tool_manager` 发布状态与允许列表不得迁移到 hook。
+- **FR-046**: hook 系统必须保留 AgentLoop 003 多工具批处理语义：执行前分类、混合中断批次不执行 hook/handler、普通批次失败级联 `not_executed`、合法单中断成功 `ToolSignal` 直接返回既有 AgentResult。
+
+### 上下文压缩 tool_call/tool_result 配对修复 [Source: specs/005-fix-compression-tool-pairing]
+
+- **FR-047**: 压缩切分时，必须识别跨越压缩/保留边界的 tool 组（assistant 消息含 tool_calls 在压缩区，但其部分或全部 tool result 在保留区）
+- **FR-048**: 跨越边界的 tool 组必须整体移入保留区——包括 assistant(tool_calls) 消息及其所有 tool result 消息，保证配对完整
+- **FR-049**: 完全在压缩区内部的 tool 组正常压缩，不做特殊处理——它们内部配对完整，压缩后通过摘要中的 tool_call_id 后处理保留信息
+- **FR-050**: 保留区调整后若压缩区为空，必须跳过 LLM 压缩调用，直接构建 `system | [保留区消息]` 的消息列表
+- **FR-051**: `assemble_context` 返回前必须校验消息列表中不存在孤立的 tool result（有 tool_call_id 但无对应 tool_call 的 tool 消息），发现时剔除该孤立消息并记录 warning 日志
+### 高危操作确认 Toast 化 [Source: specs/004-auth-toast]
+
+- **FR-052**: 当 Assistant Agent 调用受确认管控的高危工具（`write_file` / `edit_file` / `exec`）时，系统 MUST 在主窗口右下角显示非阻塞浮层并要求用户决策
+- **FR-053**: 浮层 MUST 是非模态的——出现期间用户对主窗口其它控件的输入 MUST 不被阻塞
+- **FR-054**: 浮层 MUST 显示足够上下文信息（至少工具名 + 关键参数摘要），摘要 MUST 包含目标路径或命令首行等关键字段，长参数 MUST 截断，且 MUST NOT 展示完整文件内容
+- **FR-055**: 浮层 MUST 提供三个按钮："全部允许" / "同意" / "拒绝"，每个按钮的语义与本规范定义一致
+- **FR-056**: 用户点击"同意" MUST 仅对当前一次确认请求放行，不影响后续请求
+- **FR-057**: 用户点击"拒绝" MUST 仅对当前一次确认请求拒绝，不影响后续请求
+- **FR-058**: 用户点击"全部允许" MUST 既放行当前请求，又使本次会话内 Assistant 的后续全部高危确认请求被自动放行（不再弹浮层）
+- **FR-059**: 当"全部允许"或顶栏 Toggle 开启时，系统 MUST 将确认队列中尚未展示的 Assistant 高危请求立即按自动放行处理
+- **FR-060**: 系统 MUST 在用户开启新对话时自动复位"全部允许"状态为关闭
+- **FR-061**: 对话窗口顶栏 MUST 提供"免确认"开关，与"全部允许"内部状态双向同步
+- **FR-062**: 浮层 MUST 设置超时机制；超时时间不晚于 Worker 阻塞确认超时阈值，超时按"拒绝"语义关闭
+- **FR-063**: 多个并发确认请求 MUST 被全部处理（按到达顺序排队展示），任何请求都不能因同时出现而丢失
+- **FR-064**: 确认浮层与普通 Toast（成功/错误提示）MUST 独立管理生命周期，互不覆盖
+- **FR-065**: 当"全部允许"或顶栏 Toggle 处于开启状态时，UI MUST 给出可见提示
+- **FR-066**: 现有的 `IntentConfirmationUI`（PM/Trial Agent）和 `ToolExecutionDialog` MUST 不受本变更影响
+- **FR-067**: 系统 MUST 为每次确认决策写入脱敏结构化日志（request_id、工具名、决策结果、决策来源、等待耗时与摘要），MUST NOT 记录完整工具参数或完整文件内容
+- **FR-068**: 确认浮层 MUST NOT 提供普通关闭按钮，也 MUST NOT 因点击浮层外区域而关闭；只能通过三按钮或超时结束
+- **FR-069**: 当用户在旧会话仍有未决确认请求时开启新对话，系统 MUST 将这些请求按拒绝/超时语义收敛并清空，MUST NOT 泄漏到新对话
+
+### 聊天界面体验完善 [Source: specs/006-chat-ui-polish]
+
+#### Story 1 — AI 回复 Markdown 渲染
+
+- **FR-070**: AI 回复在聊天气泡中展示时，系统 MUST 将其按 Markdown 语法解析并渲染为对应的富文本结构（至少包含标题、有序/无序列表、加粗、斜体、行内代码、代码块、引用、链接样式文本、远程图片、GitHub 风格 pipe table、分隔线）
+- **FR-071**: 用户消息（非 AI 回复）MUST 不进行 Markdown 解析，保持纯文本展示
+- **FR-072**: 渲染层 MUST 安全处理 AI 回复中的潜在脚本与裸 HTML：MUST NOT 执行任何脚本，MUST NOT 直接渲染未声明的 HTML 标签；未支持或不安全的内容 MUST 降级为纯文本
+- **FR-073**: AI 回复在流式输出过程中，未闭合的 Markdown 记号 MUST 不导致明显的样式抖动或大段重排；最终消息收敛后渲染结果 MUST 与一次性传入的渲染结果在视觉上一致
+- **FR-074**: 不含任何 Markdown 记号的纯文本 AI 回复 MUST 在视觉上与变更前一致
+- **FR-075**: Markdown 链接 MUST 只渲染为带链接视觉样式的文本，MUST NOT 提供点击打开或浏览器跳转能力；Markdown 图片 MAY 渲染远程 http(s) 图片资源，但 MUST NOT 可点击或触发导航
+
+#### Story 2 — 压缩后的旧聊天记录可回看
+
+- **FR-076**: 当前会话存在已被内部归档的用户消息或助手回复时，聊天框 MUST 将这些旧消息与当前未压缩消息按原 sequence 合并为同一条连续聊天时间线展示
+- **FR-077**: UI MUST NOT 把内部归档状态做成用户可见概念；MUST NOT 显示独立归档区、"已归档"、"已压缩"、分隔条或特殊底色
+- **FR-078**: 完整聊天时间线 MUST 按时间顺序、按发送方（用户/助手）渲染，遵循现有聊天气泡一致的发送方区分规则
+- **FR-079**: 工具调用、工具结果和压缩摘要等内部消息 MUST NOT 作为普通聊天记录展示
+- **FR-080**: 当会话从未发生过压缩时，聊天框 MUST 与今天的历史记录展示一致
+- **FR-081**: 压缩前旧消息中的用户消息与助手回复 MUST 默认完整展示原文，不因内部归档状态做每条消息折叠
+- **FR-082**: 用户开启新对话或清空当前会话时，旧消息 MUST 立即清空
+- **FR-083**: 聊天框打开存在大量历史的会话时，系统 MUST 初始展示最近 10 条展示消息，并在用户向上滚动时分页加载更早历史
+
+#### Story 3 — 新对话/欢迎界面隐藏免确认 Toggle
+
+- **FR-084**: 应用停留在欢迎界面时，对话窗口顶栏 MUST NOT 展示"免确认" Toggle
+- **FR-085**: 用户进入新对话起始态时，对话窗口顶栏 MUST NOT 展示"免确认" Toggle
+- **FR-086**: 一旦当前对话已启动过 Agent 会话，对话窗口顶栏 MUST 持续展示"免确认" Toggle，行为完全沿用 004-auth-toast 中定义的同步语义
+- **FR-087**: Toggle 显示/隐藏切换 MUST 不破坏顶栏其余控件的位置与样式
+
+### 桌面录制 Phase 1 [Source: specs/007-desktop-recording]
+
+#### 录制层
+
+- **FR-088**: 系统 MUST 支持桌面录制模式，从 `RecordingMixin._on_recording_started` 经 `DesktopRecordingService` / business bridge 路由到 `DesktopRecorder`；UI 层不得直接实例化或启动 Recorder。
+- **FR-089**: 桌面录制 MUST 通过 pynput 全局 hook 捕获鼠标左/右/中键、滚轮、拖拽、特殊键、组合键和 typing 序列；hook 注册失败 MUST 阻塞录制启动并弹错。
+- **FR-090**: 桌面录制 MUST 在 hook 触发时同步查询 UIA `ElementFromPoint`，50ms 超时后排异步队列回填；UIA COM 初始化失败降级启动并通过 toast 提示。
+- **FR-091**: 桌面录制 MUST 订阅剪贴板变更并在 Ctrl+V 时立即读取最新剪贴板内容；文本超阈值走 large-field 占位，图片落 `clipboard/<recording_id>_<event_seq>.png`。
+- **FR-092**: 桌面录制 MUST 维护 15fps、30 帧 FIFO ring buffer；每个动作落多帧 PNG，mp4 clip 受 `recording.desktop.enable_clip` 控制，clip 失败不得影响 PNG。
+- **FR-093**: 进程启动期 MUST 在 QApplication 前应用 Per-Monitor V2 DPI awareness；坐标、UIA 和截屏统一使用 physical pixel，`desktop_actions.monitor_index` 记录动作时刻屏幕。
+
+#### 数据层
+
+- **FR-094**: 系统 MUST 新增 `desktop_recordings` / `desktop_actions` DuckDB 表；帧、clip、剪贴板图落 `data/recordings/<recording_id>/` 目录，`desktop_recordings.health_stats` 在停止时一次性写入。
+- **FR-095**: `desktop_actions` MUST 包含动作类型、坐标、`monitor_index`、`window_title`、`uia_summary`、剪贴板字段、typing 文本、时间戳、duration、frame_count 和 has_clip 等桌面动作字段；drag 以 mouse_up 终点作为坐标和时间语义。
+- **FR-096**: `RecordingRepository.save_recording_session()` 的 `recording_mode` 默认值 MUST 修正为 browser 或必填，避免浏览器录制误写为 desktop。
+- **FR-097**: 配置模型和 UI fallback 的默认录制模式 MUST 统一为 browser，不得把桌面模式作为默认启动模式。
+
+#### Agent 工具层
+
+- **FR-098**: 5 个通用录制数据工具 MUST 通过 `RecordingRepository.get_recording_mode(recording_id)` 查询 mode 一次，并按 browser / desktop mode 内部切表。
+- **FR-099**: `describe_data` / `query_data` MUST 按 mode 严格隔离 allowlist；跨 mode 表访问由 sqlglot security gate 拒绝并返回 `table_not_in_mode` 标准错误。
+- **FR-100**: 桌面 mode MUST 提供 `list_desktop_actions`、`analyze_desktop_action`、`read_action_clip` 三个桌面专属工具，分别支持动作分页、最多 2 个动作的多模态分析和 clip 元数据读取。
+- **FR-101**: `analyze_desktop_action` MUST 始终返回字符串；失败 action 段写入 `[error: <reason_code>]`，reason_code 至少覆盖 `vision_timeout`、`vision_unauthorized`、`vision_failed`，且每次调用写 INFO 成本审计日志。
+- **FR-102**: 桌面 mode 下 PM / Programmer / Trial 工具集 MUST 用 3 个桌面专属工具替换浏览器 `analyze_image`；browser mode MUST 保留 `analyze_image` 且不注入桌面专属工具。
+
+#### Agent 编排层
+
+- **FR-103**: 系统 MUST 提供 `build_pm_prompt(mode)` / `build_programmer_prompt(mode)`；browser mode 返回 legacy prompt，desktop mode 返回桌面专用三段 prompt。
+- **FR-104**: Orchestrator 启动 PM / Programmer 前 MUST 用 `dataclasses.replace(..., system_prompt=...)` 构造临时 AgentConfig；不得改造 `agent_loop.format_system_prompt()`。
+- **FR-105**: Orchestrator MUST 在 Programmer 输出交给 Trial 前执行 `ast.parse` syntax gate；语法错误时最多自动反馈重试 2 次，连续失败后以用户可见 Toast 和进程日志收敛。
+- **FR-106**: `execution_strategy` MUST 支持 `desktop` 取值，并同步 Programmer 工具 schema、trial model 注释和 Trial 分发语义。
+- **FR-107**: 桌面 PM prompt MUST 引导 Agent 先看首尾摘要、按 `window_title` 聚焦、跳过冗余动作并按需调用 `analyze_desktop_action`；桌面 Programmer prompt MUST 强约束 `async def execute() -> dict`。
+
+#### 试用层
+
+- **FR-108**: 桌面试用 MUST 走"事前提示对话框 -> 用户开始 -> 跑期间无遮挡 -> 跑完普通 Toast"流程，事前提示展示代码预览和共享高危 API 检测标签。
+- **FR-109**: 桌面试用代码 MUST 由 `src/execution/desktop_trial_runner.py` 通过 `subprocess.Popen` 独立子进程执行，使用 `data/trials/<trial_id>/` cwd、env 白名单、stdout/stderr 落盘、120s 超时和 Windows `taskkill /F /T` 兜底。
+- **FR-110**: Trial wrapper MUST 捕获任意异常并把 `{"ok": false, "summary": ..., "details": {"traceback": ...}}` 写 stdout 末行；stdout 无有效 JSON 时 runner MUST 用 stderr 末 5 行生成失败 Toast 摘要。
+
+#### UI 与配置
+
+- **FR-111**: 录制页 MUST 提供右下角可拖录制浮窗；点"开始"后主窗最小化，hook/ring buffer/UIA/剪贴板订阅 MUST 在 minimize 完成回调后启动，停止后恢复主窗并弹 sanity check modal child。
+- **FR-112**: Ctrl+Alt+S MUST 注册为全局停止快捷键；注册失败不阻塞录制启动，但 UI MUST 一次性提示用户改用浮窗按钮。
+- **FR-113**: sanity check 对话框 MUST 通过 `DesktopRecordingService.get_health_stats(recording_id)` 间接读取 `desktop_recordings.health_stats`，显示健康指标并提供"继续分析 / 放弃录制 / 重新录制"三按钮状态机。
+- **FR-114**: 浏览器、桌面、扩展触发三种录制模式 MUST 两两互斥，互斥判定基于 in-memory active recorder state，UI 禁用和业务拒绝双保险。
+- **FR-115**: 系统 MUST 新增 `recording.desktop.enable_clip`（默认 true）和 `recording.desktop.vision_model`（无默认）配置，均通过 `get_unified_config()` 入口读写。
+- **FR-116**: `recording.desktop.vision_model` 未配置时 MUST 不注入 `analyze_desktop_action`，并在设置页说明和桌面 intent 页一次性 toast 中提示降级；provider 和 API key 沿用 `analyze_image` 现有 provider/keyring entry。
+- **FR-117**: Phase 1 MUST 不引入录制数据 retention、cleanup、compress 或 disk quota；放弃录制为软删除状态，Trial 调试目录 7 天 startup cleanup 与录制数据保留边界分开。
+
+### UI Stack Redesign [Source: specs/008-ui-stack-redesign]
+
+- **FR-118**: 系统 MUST 以 Tauri 2 + React 18 + TypeScript + Vite 作为维护中的主桌面 UI 栈，并把现有 Python 业务/数据/执行/录制能力作为打包 sidecar 暴露给前端。
+- **FR-119**: 系统 MUST 启动到同一个重新设计的桌面应用壳，覆盖 AI Assistant、技能教学、技能列表、技能组合和设置五个主屏；正常用户流程不得再依赖单独的 legacy PyQt 窗口。
+- **FR-120**: 前端 MUST 只通过 typed API/Tauri command/Bridge 访问能力，不得直接 import Repository、SQLite、DuckDB、配置文件、keyring 或 Python 数据层实现。
+- **FR-121**: Python sidecar API MUST 绑定 `127.0.0.1` 的随机端口，并要求每次启动生成的 runtime token；token 不得持久化、不得写入普通日志，Tauri 权限必须按 HTTP/shell/window 能力收敛。
+- **FR-122**: `src/desktop_api` MUST 作为 FastAPI adapter 调用业务服务、orchestrator 和事件适配器，不得成为新的数据访问层；跨模块通知继续以 `src/utils/events.py` blinker 为后端来源。
+- **FR-123**: 应用壳 MUST 展示 backend `starting | ready | degraded | failed | shutting_down` 等连接状态，并在启动、健康检查、失败和关闭路径提供可恢复用户状态。
+- **FR-124**: 自定义红/黄/绿窗口控件 MUST 在 Windows 上执行真实 close、minimize、maximize/restore，并支持键盘操作、可访问名称/状态和可见焦点。
+- **FR-125**: 所有来自设计原型的静态样例数据、假计数和无效点击控件 MUST 在验收前移除、禁用并给出真实不可用状态，或接入真实业务/API/Tauri command/验证错误；控制项追踪以 `control-inventory.md` 为准。
+- **FR-126**: AI Assistant MUST 支持会话创建、选择、搜索、重命名、删除、消息发送、连续时间线展示、Markdown 安全渲染、执行摘要和高危确认决策 endpoint/event 流。
+- **FR-127**: AI Assistant MUST 保留旧聊天历史的连续时间线语义，不得把内部归档/压缩状态展示为用户可见分区、标签、底色或特殊列表。
+- **FR-128**: Assistant 高危确认 MUST 保留既有非模态队列和会话级免确认语义，前端一次只展示一个 active confirmation，普通 toast 生命周期独立。
+- **FR-129**: 技能教学 MUST 通过业务服务/API 暴露 browser、extension、desktop 三种录制模式准备状态、启动/停止、桌面健康决策、意图回复/确认、学习和试用启动。
+- **FR-130**: 技能教学 MUST 保留桌面录制 minimize 完成后启动、健康统计三按钮、syntax gate retry、trial success threshold 和失败记录/重试语义。
+- **FR-131**: 技能列表 MUST 展示 pending、published、failed 三类技能及真实计数，并通过现有业务工作流支持 trial、元数据更新、删除验证、失败重试和忽略/关闭。
+- **FR-132**: 技能组合 MUST 支持列表、创建、更新、适用场景生成、推荐顺序、试用和发布；range 模式表示可选工具箱，ordered 模式表示显式顺序执行契约。
+- **FR-133**: 已发布技能组合在成员技能变化或下线时 MUST 标记 `needs_review`，对 Assistant 隐藏直到复核完成，并在 UI/API 中以独立展示状态呈现。
+- **FR-134**: 设置页 MUST 通过 `UnifiedConfigManager` 和 keyring-backed secret 方法读取/更新 AI、录制、数据和产品设置；密钥值只允许遮罩展示和写入/删除动作，不得明文返回。
+- **FR-135**: 设置页的连接测试、备份、导出、清除记忆、更新检查、文档、changelog 和证书安装等设计可见 action MUST 调用真实支持流程或返回真实业务验证/不可用错误。
+- **FR-136**: 系统 MUST 新增并维护 `frontend/`、`src-tauri/`、`src/desktop_api/`、相关业务 service/facade 和前端 Zustand/API/state/screen 结构，且这些结构必须与分层边界一致。
+- **FR-137**: 旧 PyQt 正常启动入口和主 UI 模块 MUST 在新 shell 通过验收后移除或降级为 legacy 失败提示；guard test 必须阻止正常路径重新打开维护中的 PyQt UI。
+- **FR-138**: 打包路径 MUST 能构建 Tauri shell 和 PyInstaller Python sidecar，并通过 build 脚本/安装文档说明外部二进制 handoff。
+- **FR-139**: 系统 MUST 对每个主屏至少保留一个主工作流回归覆盖，并覆盖 backend bridge 失败状态、可见控制 wiring、无样例数据、键盘/可访问性、sidecar token 安全和 legacy local data 不静默变更。
+- **FR-140**: 设计原型是 2026-05-09 Mexemplar prototype；布局、导航、密度、组件层级和页面流的 blocker/major 偏离必须在验收前修正或经新的基线批准。
+- **FR-141**: Windows 是首要验收平台；新 shell 依赖系统 WebView2/Tauri，fresh-install profile 是主验收档案，旧本地用户数据迁移不在本 feature 范围内。
+- **FR-142**: 系统 MUST 避免启动时静默损坏、删除或修改未迁移的 legacy local data，并通过专门安全检查验证。
+- **FR-143**: 前端交互控件 MUST 键盘可操作、提供可访问名称/状态、可见焦点、可读对比，并尊重 reduced-motion 偏好。
+- **FR-144**: 前端 server state 以 Python 服务/API 为权威；Zustand 仅维护 route、draft、选中 ID、局部面板、乐观 UI 标志和 sidecar 连接等本地 UI 状态。
+- **FR-145**: `DesktopAgentRuntime` / sidecar orchestrator 接线后续应收敛为业务拥有的 factory/service，避免 FastAPI adapter 长期直接组装 config、LLM client 和 `AgentOrchestrator`；当前作为 cleanup 技术债追踪。
+
+---
+
+## Key Entities
+
+### LargeFieldConfig
+运行时配置，namespace `recording.large_field.*`。字段：`threshold_chars`（默认 1000）、`preview_chars`（默认 1000）、`max_chunk_chars`（默认 1000）。验证：均为正整数。 [Source: specs/001-recording-field-layering]
+
+### StableLocatorRule
+每张源表的稳定定位字段映射。v1 覆盖：`network_requests`→`request_id`、`actions`→`action_id`、`sibling_snapshots`→`snapshot_id`。字段：`table`、`recommended_id_field`、`describe_locator_fields`。 [Source: specs/001-recording-field-layering]
+
+### ProjectionBinding
+SQL AST 分析结果：`output_name`、`source_table`、`source_field`、`is_direct_column`。由 `query_projection_analyzer.py` 基于 sqlglot 生成。 [Source: specs/001-recording-field-layering]
+
+### LargeFieldLocator
+续读定位指针：`table`（StableLocatorRule 覆盖）、`id_field`（稳定定位列）、`id_value`（int | str）。 [Source: specs/001-recording-field-layering]
+
+### LargeFieldPlaceholder
+query_data 返回的占位对象：`__large_field__`、`field`、`size_chars`、`preview`、`locator`、`read_hint`、`read_blocked_reason`、`read_blocked_message`。 [Source: specs/001-recording-field-layering]
+
+### ChunkReadRequest
+read_field_chunk 请求：`locator`、`field`、`offset`（≥0）、`length`（可选，默认 max_chunk_chars）。 [Source: specs/001-recording-field-layering]
+
+### ChunkReadResponse
+read_field_chunk 响应（成功/失败共用）：`content`、`field`、`locator`、`offset`、`returned_length`、`total_length`、`has_more`、`next_offset`、`error`。`error=null` 表示成功。 [Source: specs/001-recording-field-layering]
+
+### ChunkReadError codes
+9 种枚举：`invalid_offset`、`invalid_length`、`unknown_table`、`field_not_found`、`non_text_field`、`unknown_id_field`、`record_unavailable`、`unsupported_continuation`、`internal_error`。 [Source: specs/001-recording-field-layering]
+
+### ToolCallBatch [Source: specs/003-fix-agentloop-tool-calls]
+一条 assistant 消息中包含的一个或多个工具调用。状态：`complete`（全部配对）、`incomplete`（部分缺结果）、`invalid_output`（含混合中断型，无 handler 执行）。
+
+### StandardizedErrorStructure [Source: specs/003-fix-agentloop-tool-calls]
+AgentLoop 发出的配对错误结果通用格式：顶层 JSON 含 `error`（枚举）、`message`、可选 `tool_name`、`upstream_tool_call_id`、`code`。枚举：`unknown_tool`、`handler_exception`、`handler_contract_violation`、`not_executed`、`invalid_model_output`。
+
+### ToolDefinition.is_interrupting [Source: specs/003-fix-agentloop-tool-calls]
+`bool` 字段，标记工具是否为中断型。`True` → handler 必须返回 `ToolSignal`；`False` → handler 必须返回 `str`。运行时校验不一致则触发 `handler_contract_violation`。
+
+### ToolCallContext [Source: specs/002-tool-hook-system]
+单次工具调用只读上下文。字段：`tool_name`、`args`、`session_id`、`agent_type`、`iteration`。不包含 `result` 字段、不包含用户确认回调；`args` 是递归只读隔离视图。
+
+### PreHookResult [Source: specs/002-tool-hook-system]
+pre_hook 返回值。字段：`error: str | None = None`。`error` 有值时拒绝本次工具调用；不包含 `args` 字段，不支持参数 merge、替换或删除。
+
+### PostHookResult [Source: specs/002-tool-hook-system]
+post_hook 返回值。字段：`result: str | None = None`。只用于替换普通字符串工具结果；`ToolSignal` 不进入 post_hook。
+
+### ToolDefinition hook fields [Source: specs/002-tool-hook-system]
+`ToolDefinition` 在 `name`、`schema`、`handler`、`is_interrupting` 基础上新增 `pre_hook` / `post_hook`，默认 None。没有 hook 的工具行为保持透明。
+
+### AgentConfig global hooks [Source: specs/002-tool-hook-system]
+`AgentConfig.global_pre_hooks` / `global_post_hooks` 是当前配置实例范围内的列表，不跨 AgentConfig 共享，也不作用于 `talk_to_user` / `load_reference`。
+
+### Tool Group [Source: specs/005-fix-compression-tool-pairing]
+由一条 assistant 消息（含 tool_calls 字段）和紧跟其后的所有 tool result 消息组成的原子单元。识别规则：assistant 消息的 tool_calls 中每个 id 必须在后续连续的 tool 消息中找到对应 tool_call_id。
+
+### Boundary Tool Group [Source: specs/005-fix-compression-tool-pairing]
+tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 tool result 消息位于保留区的 tool 组。
+### PendingConfirmation [Source: specs/004-auth-toast]
+高危工具确认请求的运行时记录。字段：`request_id`（UUID）、`tool_name`（write_file/edit_file/exec）、`summary`（脱敏摘要）、`created_at`（monotonic 时间戳）、`event`（threading.Event）、`result`（bool）、`decision`（枚举：accepted/rejected/timeout/auto_approved/confirm_error）、`source`（枚举：toast_accept/toast_reject/toast_timeout/toast_allow_all/top_toggle/auto_scope/new_chat_reset/system_error）。每个请求恰好到达一个终态决策。
+
+### AutoApproveScope [Source: specs/004-auth-toast]
+会话级自动放行状态。字段：`enabled`（bool，默认 False）、`source`（最近变更来源）。生命周期等于一次对话；新对话复位。不持久化到 config/DB/keyring。
+
+### AuthToastSurface [Source: specs/004-auth-toast]
+UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summary`、`timeout_timer`（QTimer singleShot）。三按钮："全部允许"/"同意"/"拒绝"。无普通关闭按钮；不响应外部点击关闭。与普通 Toast 独立生命周期。
+
+### DisplayChatMessage [Source: specs/006-chat-ui-polish]
+业务层返回给 UI 的展示 DTO，不持久化。字段：`sequence`（int）、`role`（user/assistant）、`content`（str，已过滤空内容）、`created_at`（datetime or None）。映射自一条 SQLite Message，不包含 `is_archived`/`message_type`/`tool_calls` 等内部状态。
+
+### ChatHistoryPage [Source: specs/006-chat-ui-polish]
+业务层返回给 UI 的分页结果，不持久化。字段：`messages`（list[DisplayChatMessage]，按 sequence 升序）、`has_more_before`（bool）、`next_before_sequence`（int or None）。
+
+### MarkdownMessageView [Source: specs/006-chat-ui-polish]
+聊天气泡内部渲染 widget。使用 Qt `QTextDocument.setMarkdown(MarkdownDialectGitHub)` 渲染。属性：`navigation_enabled` 固定 false；`allowed_image_schemes` 限 http/https；渲染前对 raw HTML/script 做安全降级。
+
+### AutoApproveToggleVisibility [Source: specs/006-chat-ui-polish]
+ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏、`new_chat_empty`→隐藏、`conversation_started`→显示、`conversation_cleared`→隐藏。
+
+### DesktopRecordingSession [Source: specs/007-desktop-recording]
+一次桌面录制 session，对应 `desktop_recordings` 表。字段：`recording_id`、`recording_mode='desktop'`、`start_time`、`end_time`、`monitor_index`、`status`（`recording` / `stopped` / `abandoned`）、`health_stats`。桌面录制不要求镜像写入 `recording_sessions`。
+
+### DesktopAction [Source: specs/007-desktop-recording]
+桌面录制中的单个动作，对应 `desktop_actions` 表。字段：`action_id`、`recording_id`、`type`（mouse_left / mouse_right / mouse_middle / wheel / drag / typing / hotkey）、`coord_x`、`coord_y`、`monitor_index`、`window_title`、`uia_summary`、`clipboard_text`、`clipboard_image_path`、`text_content`、`timestamp`、`duration_ms`、`frame_count`、`has_clip`。typing 一段一行；drag 使用 mouse_up 终点语义。
+
+### DesktopHealthStats [Source: specs/007-desktop-recording]
+停止时写入 `desktop_recordings.health_stats` 的 JSON 汇总。字段：`uia_hit`、`uia_total`、`clip_success`、`clip_total`、`clipboard_event_count`、`action_type_counts`、`frame_total`、`duration_ms`。颜色规则：动作总数为 0 红；UIA 命中率低或 clip 失败率高黄；否则绿。
+
+### DesktopTrialResult [Source: specs/007-desktop-recording]
+桌面 Trial 子进程结果 DTO。字段至少包含 `ok`、`summary`、`details`、`exit_code`、`timed_out`、`stdout_path`、`stderr_path`、`trial_id`。SC-003 的"试用通过"要求 exit code 0、stdout 末行 JSON 解析成功且 `ok=True`。
+
+### DesktopRecordingConfig [Source: specs/007-desktop-recording]
+运行时配置 namespace `recording.desktop.*`。字段：`enable_clip`（bool，默认 true）、`vision_model`（str | None，无默认）。provider 和 API key 沿用 `analyze_image` 当前 provider/keyring entry。
+
+### HighRiskApiDetection [Source: specs/007-desktop-recording]
+桌面 Trial 事前提示与"走捷径"判定共用的静态检测结果。命中规则覆盖 `subprocess`、`os.startfile`、`webbrowser`、Win32 协议 URL（排除 Windows 盘符路径）、pywin32 高级 API、pywinauto 控件级 API；纯 pyautogui 坐标点击不算捷径。
+
+### DesignBaseline [Source: specs/008-ui-stack-redesign]
+2026-05-09 Mexemplar prototype 与 `control-inventory.md` 的组合验收基线。字段：`baseline_id`、`prototype_root`、`screens`、`feature_document`、`approved_controls`。所有已接受屏幕必须可追踪到该基线，样例数据、假计数和 no-op 控件不得进入正常状态。
+
+### DesignControl [Source: specs/008-ui-stack-redesign]
+单个可见原型控件到产品行为的追踪记录。字段：`control_id`、`source_file`、`screen`、`visible_label_or_affordance`、`required_disposition`（wire/validate/disable/remove）、`requirement_refs`、`implementation_refs`。
+
+### AppShell [Source: specs/008-ui-stack-redesign]
+Tauri/React 顶层桌面体验。字段：`route`、`window_state`、`backend_state`、`navigation_counts`、`user_display`、`theme_state`。默认 route 为 assistant；导航和窗口控件必须真实可用且可访问。
+
+### BackendConnectionState [Source: specs/008-ui-stack-redesign]
+Python sidecar 的用户可见状态。字段：`status`（starting/ready/degraded/failed/shutting_down）、`port`、`auth_token_state`、`health_checks`、`message`、`last_checked_at`。runtime token 不暴露给 UI 展示层。
+
+### AssistantExecutionSummary [Source: specs/008-ui-stack-redesign]
+工具/推理进度的紧凑可展开表示。字段：`summary_id`、`session_id`、`status`、`headline`、`steps`、`started_at`、`finished_at`。默认紧凑展示，不显示 prompt、archive 或 compression 内部术语。
+
+### SkillTeachingRun [Source: specs/008-ui-stack-redesign]
+从录制模式选择到 trial 验证的教学工作流 DTO。字段：`workflow_id`、`mode`、`stage`、`readiness`、`recording_summary`、`intent_questions`、`learning_progress`、`trial_progress`、`failure`。
+
+### Skill [Source: specs/008-ui-stack-redesign]
+技能列表与组合成员选择中的学习能力视图。字段：`tool_id`、`tool_name`、`description`、`parameters`、`source`、`workflow_id`、`status`、`trial_success_count`、`usage_metadata`、时间戳。
+
+### TeachingFailure [Source: specs/008-ui-stack-redesign]
+技能列表失败分类中的诊断记录。字段：`record_id`、`workflow_id`、`tool_name`、`failed_stage`、`error_summary`、`error_type`、`status`、`retry_count`、时间戳。
+
+### SkillCompositionView [Source: specs/008-ui-stack-redesign]
+技能组合 UI/API 视图。字段：`composition_id`、`composition_name`、`description`、`applicability`、`mode`、`status`、`displayStatus`、`assistant_enabled`、`recommend_order`、`needs_review`、`members`、时间戳。
+
+### SkillCompositionMemberView [Source: specs/008-ui-stack-redesign]
+组合和已发布技能的成员关系视图。字段：`member_id`、`composition_id`、`tool_id`、`selected_order`、`execution_order`、`created_at`。ordered 模式要求连续执行顺序。
+
+### AppSetting [Source: specs/008-ui-stack-redesign]
+设置页展示的配置/动作项。字段：`key`、`label`、`section`、`value_kind`、`value`、`masked_display_value`、`validation_rules`、`effective_change`、`status`。secret 类型只能遮罩展示并通过 keyring 写入/删除。
+
+### SidecarApiSession [Source: specs/008-ui-stack-redesign]
+Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`、`auth_token`、`tauri_origin`、`started_at`、`expires_at`；不持久化。
+
+---
+
+## Constraints & Compatibility
+
+- **CC-001**: 不修改原始录制数据；占位和续读为查询时派生
+- **CC-002**: 与 reference_handler 正交；两者不互相依赖
+- **CC-003**: 不破坏 query_data SQL 语义；变化仅在结果交付环节
+- **CC-003a**: network_requests 占位与续读必须复用 filter/sanitize 边界
+- **CC-004**: 占位生成和续读元信息确定性，不依赖 LLM
+- **CC-005**: 与 noise-filter 正交
+- **CC-006**: 不引入敏感信息自动识别或脱敏
+- **CC-007**: 不做结构骨架提取或语义摘要
+- **CC-008**: blocked/unsupported/error 路径必须产出可检索的结构化日志
+
+### AgentLoop 多工具调用约束 [Source: specs/003-fix-agentloop-tool-calls]
+
+- **CC-009**: 修复必须保持 AgentLoop 不直接感知 UI；上层仍通过现有结果状态接收暂停、完成或错误
+- **CC-010**: 修复必须兼容模型仍只返回单个工具调用的主路径
+- **CC-011**: 修复不得依赖模型或供应商一定遵守串行工具设置；系统自身必须保证历史消息配对完整
+- **CC-012**: 修复不得改变工具 handler 的业务返回协议；普通字符串结果和中断型结果仍按既有语义处理
+- **CC-013**: 修复不得让已完成工具在恢复时重复执行
+
+[Sources: specs/001-recording-field-layering, specs/003-fix-agentloop-tool-calls]
+
+### Agent 工具执行 Hook 约束 [Source: specs/002-tool-hook-system]
+
+- **CC-014**: 本系统不引入第三方依赖、持久化表、运行时配置、密钥或 UI。
+- **CC-015**: hook 协议保持同步契约，不把现有同步 handler 改造成异步。
+- **CC-016**: pre_hook 不做参数流水线，post_hook 不做结果流水线；不得重新引入 `PreHookResult.args`、`ToolCallContext.result` 或确认回调字段。
+- **CC-017**: 被迁移的 gate 判断必须从 handler 中删除，不保留作为备用路径；执行必需的解析、规范化、查询准备和结果转换可保留。
+
+### 上下文压缩配对修复约束 [Source: specs/005-fix-compression-tool-pairing]
+
+- **CC-018**: 修改后 `compress` 方法的返回值（List[Message]）结构必须保持兼容——调用方 `context_manager.assemble_context` 不需要修改其对压缩结果的处理方式
+- **CC-019**: 当边界调整后压缩区仍非空时，持久化行为保持不变；若压缩区为空，则跳过 compressed 消息创建和归档
+- **CC-020**: `_post_process_summary` 的 tool_call_id 替换逻辑保持不变——完全在压缩区内部的 tool 组仍需要此逻辑来保留 tool 信息
+- **CC-021**: reference_handler 对大内容 tool result 的替换不受影响——移入保留区的是 DB 中的原始 Message 对象，引用替换在 `assemble_context` 中统一执行
+- **CC-022**: 不影响 `get_pending_tool_calls` 的现有行为——它检测的是 assistant 消息中有 tool_calls 但无对应 tool result 的场景，与本次修复方向互补
+### 高危操作确认 Toast 化约束 [Source: specs/004-auth-toast]
+
+- **CC-018**: 现有 Worker → UI 的跨线程信号机制（pyqtSignal + Event 等待）MUST 保持不变；仅替换 UI 端展示形态
+- **CC-019**: 高危工具判定清单不变，不扩展也不收缩
+- **CC-020**: 浮层超时 MUST 不晚于 Worker 阻塞超时（120s），二者同步收敛
+- **CC-021**: 普通 Toast 行为不变；确认浮层与普通 Toast 通过独立生命周期管理共存
+- **CC-022**: "新对话"边界 MUST 同时复位会话级自动放行状态并清空旧会话未决确认
+
+### 聊天界面体验完善约束 [Source: specs/006-chat-ui-polish]
+
+- **CC-023**: 现有压缩边界处理与孤立 tool result 兜底的行为 MUST 不被本 feature 改动；完整历史回看只读取现有数据，不改变压缩输入/输出契约
+- **CC-024**: 004-auth-toast 中 Toggle 与浮层的双向同步、新对话复位等语义 MUST 保持完全一致；本 feature 仅控制控件的可见性，不变更其行为
+- **CC-025**: Markdown 渲染 MUST NOT 改变现有用户消息渲染路径，MUST NOT 影响普通 Toast、确认浮层、IntentConfirmationUI、ToolExecutionDialog
+- **CC-026**: 渲染层 MUST 不执行 AI 回复中的脚本或裸 HTML，避免 XSS/注入风险
+- **CC-027**: 现有跨线程信号、Worker 阻塞确认机制 MUST 不被本 feature 改动
+- **CC-028**: 若现有 UI 可访问接口不能直接提供完整历史消息，允许在业务层增加最小只读接口；UI MUST NOT 直接调用 Repository，且该接口 MUST NOT 改变存储 schema 或压缩契约
+
+### 桌面录制 Phase 1 约束 [Source: specs/007-desktop-recording]
+
+- **CC-029**: Phase 1 仅支持 Windows 10/11；macOS / Linux 桌面录制不在本期范围。
+- **CC-030**: 5 个通用录制数据工具的 mode dispatch MUST 保持浏览器路径 byte-equal，不得破坏 `network_requests.filtered = FALSE` 视图和 `recording_data_tools.py` 不直接 import sqlglot 的 guard。
+- **CC-031**: PM / Programmer 浏览器 prompt MUST 字节级保留；桌面 prompt 使用双轨构建，不把浏览器 prompt 改成动态分支。
+- **CC-032**: Phase 1 不做运行期隐私机制或上传确认；原始录制数据仅本地落盘，vision 分析按工具调用上传本次涉及的最多 2 个动作帧和关联剪贴板图。
+- **CC-033**: 桌面录制 MUST 与浏览器录制、扩展触发录制互斥，不支持中途切换或并发录制。
+- **CC-034**: 性能目标为软退出标准：CPU 单核 < 15%、鼠标延迟 < 50ms、内存 < 500MB、磁盘 IO 突发 < 50MB/s；Phase 1 通过 manual e2e 主观判断和日志审计，不设自动化硬门。
+- **CC-035**: 单次桌面录制不设时长、动作数或磁盘占用硬上限；崩溃孤儿和超量录制数据由开发/内测用户手动处理，硬限制推迟到 Phase 2。
+
+### UI Stack Redesign [Source: specs/008-ui-stack-redesign]
+
+- **CC-036**: 008 是完整主 UI 替换，不是单页实验；五个主屏必须在同一接受版本内完成。
+- **CC-037**: 前端和 desktop API adapter 不得绕过业务服务直接触达 Repository、SQLite、DuckDB、配置文件或 keyring。
+- **CC-038**: 设计词汇必须面向用户：使用"技能教学"、"技能列表"、"技能组合"、"范围型"、"顺序型"等概念，不把归档/压缩或内部方法名暴露为 UI 概念。
+- **CC-039**: 2026-05-09 prototype 约束可见设置和动作；无样例数据、假计数、假按钮可进入验收状态。
+- **CC-040**: 新 UI 接受后，legacy PyQt 不再是正常用户或开发者可依赖的维护 fallback；恢复 PyQt 正常入口必须先变更规格和活文档。
+- **CC-041**: Sidecar API 只绑定 loopback，使用 per-launch token；日志、DTO 和前端状态不得泄漏 token 或明文 secret。
+- **CC-042**: 新增 settings/action 能力必须遵守统一配置、keyring、业务验证和事件边界，不得为了完成设计按钮而引入文件直写或直接 SQL。
+- **CC-043**: Fresh-install profile 是主要验收路径；不迁移旧本地数据可以接受，但不得静默破坏或修改旧数据。
+
+---
+
+## Success Criteria
+
+- **SC-001**: 单个大字段占位对象 preview ≤ `preview_chars`（默认 1000），元数据固定小结构
+- **SC-002**: 多次分段读取可查看 1MB+ 字段任意区段，单次 content ≤ `max_chunk_chars`
+- **SC-003**: 占位替换额外延迟 ≤ 200ms（in-process，单条 1.2MB 行，仅计占位构造增量）
+- **SC-004**: 小字段（< 阈值）行为零回归
+- **SC-005**: FR-016 所列最小文档清单不含陈旧 4 tools 描述
+- **SC-006**: blocked/unsupported/error 路径在日志中可结构化检索
+
+### AgentLoop 多工具调用验收标准 [Source: specs/003-fix-agentloop-tool-calls]
+
+- **SC-007**: 两工具响应：100% 工具调用在下一轮模型请求前有配对结果
+- **SC-008**: 三工具响应：执行顺序与模型返回顺序完全一致
+- **SC-009**: 三工具中第二个返回标准化错误：前两个得到结果，第三个 not_executed，下一轮模型请求被接受
+- **SC-010**: 工具返回含"error"纯文本但非标准化错误结构时，后续工具仍正常执行
+- **SC-011**: 混合中断型+普通工具响应：原响应被持久化，所有 tool call 得到 invalid_model_output 配对结果，无 handler 执行
+- **SC-012**: 部分结果恢复：只补齐缺失调用，不重复已完成调用
+- **SC-013**: 恢复时 handler 缺失：该调用得到 error 结果，后续得到 not_executed 结果
+- **SC-014**: 现有单工具工作流无可见回归
+
+[Sources: specs/001-recording-field-layering, specs/003-fix-agentloop-tool-calls]
+
+### Agent 工具执行 Hook 验收标准 [Source: specs/002-tool-hook-system]
+
+- **SC-015**: 现有 Agent 与工具相关单元/集成测试零修改通过。
+- **SC-016**: 空操作 hook 全链路（工具 pre + 1 个 global pre + 工具 post + 1 个 global post）相对无 hook 单次调用额外开销不超过 5 ms。
+- **SC-017**: 迁移 gate 覆盖 `write_file` 系统目录、`exec` 元字符/非白名单、`query_data` 多语句/非查询/隐藏或系统表、`run_command` 第 6 次、`analyze_image` 6 个 action_index，同时保留 query_data harmless 注释和字符串内分号允许路径。
+- **SC-018**: handler 函数体不再出现已迁移的拒绝/确认/限流/安全策略判断；静态 guard 固定非迁移边界。
+- **SC-019**: 新增全局 pre_hook 的挂载成本不超过 30 行，且不需要修改任何工具 handler 或 AgentLoop 引擎本体。
+- **SC-020**: callable 动态工具同名替换 hook 或 `is_interrupting` 后，下一轮工具调用使用最新定义。
+- **SC-021**: 协议测试覆盖 `ToolCallContext.args` 顶层和嵌套只读隔离，误写不会影响 handler 入参且本次 post_hook 被跳过。
+- **SC-022**: 多工具批处理语义保持 003 行为：hook 拒绝/handler 失败级联 `not_executed`，混合中断批次不执行 hook/handler，合法单中断 `ToolSignal` 直接返回既有 AgentResult。
+
+### 上下文压缩配对修复验收标准 [Source: specs/005-fix-compression-tool-pairing]
+
+- **SC-023**: 任何会话经历上下文压缩后，消息列表中不存在孤立的 tool result（100% 无 400 错误）
+- **SC-024**: 多次压缩后上下文大小可控——每次压缩只额外保留边界处跨越的 tool 组，不随压缩次数累积
+- **SC-025**: 会话恢复（failed → active）后，assemble_context 的兜底校验能检测并清理孤立 tool result，不阻塞恢复流程
+### 高危操作确认 Toast 化验收标准 [Source: specs/004-auth-toast]
+
+- **SC-023**: 浮层弹出期间，用户在主窗口其它区域的点击响应延迟 ≤ 100ms
+- **SC-024**: 同一会话连续 10 次高危操作，开启"全部允许"后无需再做任何点击决策
+- **SC-025**: 新对话开启后，前一会话的"全部允许"100% 失效
+- **SC-026**: 顶栏 Toggle 与浮层"全部允许"双向同步成功率 100%（同帧或下一帧内同步）
+- **SC-027**: 5 个 Worker 同时发起确认请求，所有请求都被排队展示并得到一次决策或超时，无请求丢失
+- **SC-028**: 浮层超时关闭时间与 Worker 阻塞超时阈值的差值 ≤ 1 秒
+- **SC-029**: 同意、拒绝、超时、自动放行四类决策路径均产生 1 条脱敏结构化日志
+
+### 聊天界面体验完善验收标准 [Source: specs/006-chat-ui-polish]
+
+- **SC-030**: 包含标题、列表、代码块、加粗、链接、图片、表格的 AI 回复 100% 以富文本展示，原始 Markdown 记号不可见，链接/图片点击 0 次触发外部导航
+- **SC-031**: 不含 Markdown 记号的纯文本 AI 回复，渲染前后视觉无可识别差异
+- **SC-032**: 压缩后聊天框 100% 展示旧用户消息与助手回复，与当前消息按原时间顺序组成连续记录；0 条工具调用/结果/压缩摘要作为普通聊天消息可见
+- **SC-033**: 发生过压缩和从未压缩的会话都不显示任何内部状态提示
+- **SC-034**: "免确认" Toggle 在四类状态下可见性正确率 100%
+- **SC-035**: Toggle 显隐切换帧内完成，不出现视觉闪烁或布局抖动
+- **SC-036**: ≥1000 条旧消息时首屏加载 ≤2s，滚动/输入 UI 阻塞 ≤100ms
+- **SC-037**: AI 回复含脚本/裸 HTML 时 0 次脚本被执行，0 次裸 HTML 渲染为活动元素
+
+### 桌面录制 Phase 1 验收标准 [Source: specs/007-desktop-recording]
+
+- **SC-038**: 5 个标准场景全部录制成功；客观判定为 `health_stats.action_type_counts` 之和 > 0，US4 完成后 sanity check UI 颜色非红。
+- **SC-039**: 5 个标准场景 Agent 均能进入 intent 页并给出可执行方案；PM 到达 talk_to_user 终态，Programmer 输出代码通过 `ast.parse`。
+- **SC-040**: 5 个标准场景中至少 3/5 试用通过；客观判定为子进程 exit code 0、stdout 末行 JSON 解析成功且 `ok=True`。
+- **SC-041**: 5 个标准场景中至少 3/5 生成代码命中"走捷径"规则；先用共享 high-risk detector 机械判定，再由人工 spot check 复核误伤。
+- **SC-042**: 浏览器路径门卫不变量 1-7 在 mode dispatch 改造前后 100% 通过，5 个通用工具 canonical JSON baseline byte-equal。
+- **SC-043**: 浏览器 PM / Programmer prompt 行为级守卫测试 100% 通过，关键短语断言不退化。
+- **SC-044**: 5 场景 manual e2e 期间用户主观判断"不卡"，鼠标响应和整体流畅度无感知卡顿。
+- **SC-045**: installer 公开发版前完成产品/安全侧对"全局录制 + 无隐私机制 + vision 按需上传"的隐私风险签字。
+
+### UI Stack Redesign 验收标准 [Source: specs/008-ui-stack-redesign]
+
+- **SC-046**: 五个主屏在打包或 dev Tauri shell 中全部可达，产品评审无 blocker 或 major 视觉/流程偏离 2026-05-09 设计基线。
+- **SC-047**: AI Assistant happy path 在 2 分钟内完成：启动、创建或选择对话、发送消息、收到回复并看到可展开执行摘要。
+- **SC-048**: 技能教学 happy path 在受控 fixture 下 5 分钟内从录制模式选择推进到 trial-ready 状态。
+- **SC-049**: 用户可以查看 pending/published/failed 技能分类并对每类触发正确下一步动作，无 legacy UI fallback。
+- **SC-050**: 用户可以创建 range 和 ordered 两类技能组合，包含适用场景、成员验证、trial 和发布路径，且无直接数据存储编辑。
+- **SC-051**: 设置页支持查看和更新非密钥设置，secret 在 100% 正常 UI 状态下保持遮罩。
+- **SC-052**: backend startup、ready、degraded、failed、shutdown 状态在 UI 中可见；目标开发机上正常启动 95% 在 10 秒内达到 interactive ready 或可恢复 degraded。
+- **SC-053**: 自动化或脚本回归至少覆盖每个主屏一个主工作流，以及至少一个 backend bridge 失败状态。
+- **SC-054**: 五个屏幕的正常、空、加载、降级和错误状态不包含可发货的样例记录、假计数或 pretend action。
+- **SC-055**: Windows 红/黄/绿窗口控件通过手动和自动 smoke：close、minimize、maximize/restore 均调用真实窗口行为。
+- **SC-056**: `control-inventory.md` 中每个可见控制 100% 执行真实支持流程，或返回真实业务验证/不可用错误。
+- **SC-057**: Fresh-install 验收不依赖预置本地用户数据，legacy local data 安全检查确认启动不静默修改旧数据。
+- **SC-058**: 键盘和可访问性 smoke 覆盖导航、窗口控件、assistant compose/send、教学模式选择、技能/组合 tab 与动作、组合表单、设置表单、非模态确认和 toast/action feedback。
+
+---
+
+## Edge Cases
+
+- 阈值边界：`>=` 阈值即触发；`<` 阈值保持原样
+- 同一结果多个大字段：各自独立占位
+- 缺少定位字段：`locator=null` + `read_blocked_reason`
+- 长度超限：返回 cap 范围内容并告知实际范围
+- 非法参数（offset<0, length≤0）：返回明确错误
+- 运行时配置变更：不影响既有 locator 有效性
+- 刚达阈值即使原文更短也必须占位
+- 记录删除后续读：返回 `record_unavailable`
+- offset 超过结尾：空成功响应
+- join 歧义：保守判定为不支持续读
+- 聚合/计算列：触发占位但 `locator=null`
+
+[Source: specs/001-recording-field-layering]
+
+---
+
+### AgentLoop 多工具调用 [Source: specs/003-fix-agentloop-tool-calls]
+
+- 模型在串行工具设置下仍返回多个工具调用
+- 同轮多个工具调用中包含未知工具名
+- 同轮多个工具调用中某个工具执行抛出异常
+- 同轮多个普通工具调用中，前序工具返回标准化错误结构，后续工具不得继续真实执行
+- 普通工具返回文本中包含"错误"或"error"等词但不是标准化错误结构时，不得仅凭关键词判定为失败
+- 同轮工具调用中混有普通工具、中断型工具，作为模型输出错误处理
+- 同轮响应包含多个中断型工具也作为模型输出错误处理
+- Solo 中断型工具 handler 抛异常时不触发暂停/完成语义；按 FR-021 失败语义处理
+- 会话恢复仅检查最近一条 assistant 消息中的未配对调用（crash 只发生在执行中途）
+- 动态工具列表恢复前变化导致待恢复工具不存在时，按工具失败语义补齐
+
+### Agent 工具执行 Hook [Source: specs/002-tool-hook-system]
+
+- pre_hook 返回 error：handler 与全部 post_hook 均不执行，结果为标准化 `pre_hook_rejected`
+- pre_hook 写入 `ToolCallContext.args` 顶层或嵌套容器：抛出 hook 异常，handler 使用原始入参，本次 post_hook 跳过
+- pre_hook 抛异常：停止剩余 pre_hook，执行 handler，跳过全部 post_hook
+- post_hook 抛异常：停止剩余 post_hook，返回 handler 原始结果，丢弃前序 post_hook 的部分改写
+- 确认类 pre_hook 的确认请求失败：fail-closed，返回拒绝而不是让 AgentLoop 通用 pre_hook 异常策略放行 handler
+- handler 抛异常：转换为标准化 error 字符串并进入 post_hook，批处理失败级联仍按原始异常状态判定
+- 合法 `ToolSignal`：跳过 post_hook；普通工具返回 `ToolSignal` 或中断工具返回字符串均为 handler 契约违规
+- `talk_to_user` / `load_reference`：作为 AgentLoop 注入工具参与既有批处理控制，但不进入 hook 管线
+
+### 上下文压缩配对修复 [Source: specs/005-fix-compression-tool-pairing]
+
+- 压缩区末尾可以连续存在多个 tool 组，但真正跨越压缩/保留边界的只会是最后一个；仅将该边界 tool 组（含其所有 tool results）移入保留区
+- 压缩区调整边界后压缩区为空（只有边界 tool 组和保留区）——跳过 LLM 压缩调用
+- 保留区首条消息是 tool result，其对应的 assistant(tool_calls) 在压缩区中——核心修复场景
+- tool 组中 tool_result 内容已被 reference_handler 替换为指针，移入保留区后指针仍然有效
+- 会话恢复（`get_pending_tool_calls`）检测到的未配对 tool_call 与孤立 tool_result 同时存在的场景
+### 高危操作确认 Toast 化 [Source: specs/004-auth-toast]
+
+- 多 Worker 并发确认请求：按到达顺序排队展示，前一个关闭后下一个再显示
+- 排队中开启"全部允许"：当前请求放行，队列中尚未展示的请求立即自动放行
+- 普通 Toast 与确认浮层共存：独立管理，互不覆盖
+- 浮层超时与 Worker 阻塞对齐：浮层超时不晚于 Worker 超时
+- 会话切换时存在未决确认：所有未决请求按超时/拒绝语义收敛，不得泄漏到新对话
+- "全部允许"安全可见性：开启状态下 Toggle 文案变化
+- 手动关闭限制：浮层只能通过三按钮或超时结束
+- 非 Assistant Agent 的工具确认：PM/Trial 走 IntentConfirmationUI，不受影响
+
+### 聊天界面体验完善 [Source: specs/006-chat-ui-polish]
+
+- Markdown 含 raw HTML/script 片段：渲染层降级为纯文本，不执行脚本
+- Markdown 链接/图片目标安全：只渲染带样式文本和远程 http(s) 图片，不打开浏览器
+- 压缩边界与完整聊天记录冲突：工具调用/结果不作为普通聊天记录展示，压缩摘要不可见
+- "清空对话"清除旧消息，不在新会话中残留
+- Toggle 在会话生命周期边界的瞬态：显隐必须与目标视图严格对齐
+- 大规模旧消息性能：初始展示最近 10 条，向上滚动分页加载
+- IntentConfirmationUI / ToolExecutionDialog / 普通 Toast 不在本 feature 改动范围
+- 顶栏其它控件不受 Toggle 隐藏影响
+
+### 桌面录制 Phase 1 [Source: specs/007-desktop-recording]
+
+- pynput hook 注册失败：阻塞录制启动并弹错；UIA、剪贴板、Ctrl+Alt+S 失败：降级启动并 toast 提示。
+- 点"开始"按钮污染首动作：hook / ring buffer / UIA / 剪贴板订阅必须延迟到主窗 minimize 完成回调之后启动。
+- 录制启动后马上产生首动作：前置帧取 ring buffer 里所有可用帧，不补帧、不等齐 1 秒。
+- 多显示器和拖拽跨屏：每条 action 记录动作时刻 `monitor_index`；drag 使用 mouse_up 终点屏幕、坐标和时间。
+- `vision_model` 缺失：`analyze_desktop_action` 不注入工具集，设置页说明和 intent 页一次性 toast 提示降级。
+- vision timeout / unauthorized / failed：`analyze_desktop_action` 在对应 action 段返回 `[error: <reason_code>]`，与成功段拼接为同一字符串。
+- Trial 子进程超时：120s 后 terminate 并用 `taskkill /F /T` 兜底，Toast 标题为"试用超时"。
+- Trial stdout 无有效末行 JSON：runner 用 stderr 末 5 行生成失败摘要，完整 stdout/stderr 保留在 `data/trials/<trial_id>/`。
+- 三模式并发尝试：UI 禁用和业务拒绝双保险；互斥判定不依赖崩溃残留 DB 行。
+- 录制中崩溃：Phase 1 不自动恢复或清理 `desktop_recordings` 与录制目录，用户手动清理；Trial 调试目录 7 天 startup cleanup 是独立边界。
+
+### UI Stack Redesign [Source: specs/008-ui-stack-redesign]
+
+- Sidecar 启动失败：Tauri shell 保持可恢复失败状态，不静默退出或显示空白应用。
+- runtime token 缺失、过期或错误：API/event stream 必须拒绝请求，前端只展示可恢复连接错误，不泄漏 token。
+- 设计控件没有真实后端能力：必须禁用/移除并给出真实不可用状态，或接入真实业务验证错误，不允许 no-op。
+- backend 事件流断开：前端应保留当前屏幕状态并显示 degraded/retry 状态，后端仍以 `src/utils/events.py` 为事件来源。
+- 大量聊天历史：初始显示最近页，向上分页；不得把工具调用、压缩摘要或归档状态当作普通聊天消息。
+- 密钥设置更新失败：UI 不能回显明文 secret；失败只返回脱敏状态与业务错误。
+- legacy PyQt 正常入口被调用：应显示 legacy 失败/迁移提示或被 guard 阻断，不得启动维护中的旧 UI。
+- 旧本地数据存在但不迁移：新 shell 可按 fresh-install 验收，但启动不得静默删除、改写或腐化这些数据。
+
+---
+
+## Frontend Event Layer [Source: specs/009-frontend-event-layer]
+
+完整 User Stories、FR、Key Entities、CC、SC 和 Edge Cases 见 `specs/009-frontend-event-layer/spec.md`。这里只摘录最稳定的契约。
+
+### User Stories
+
+- **US-026 (P1)**: 前端只消费明确的界面事件——所有 frontend store 展示行为基于注册过的 UI event type，不再依赖内部 blinker 事件名或 `sourceEvent`。
+- **US-027 (P2)**: 事件流断开后界面能恢复权威状态——重连按 `sessionId + last-seen sequence` 回放；缺口、会话不匹配或 buffer 丢失 → `backend.resync_required` → 拉权威快照。
+- **US-028 (P3)**: 需要用户确认的试用预览安全闭环——广播 + first-decision-wins，每条带 `expires_at`；超时、断连、关闭 fail-closed 当拒绝。
+- **US-029 (P4)**: 开发者能验证事件契约没有漂移——契约一致性测试 + guard 测试覆盖未注册事件、旧来源字段、敏感字段泄露。
+
+### Key Contracts
+
+- **UI Event Registry**：后端 `src/desktop_api/ui_events.py` 是公开事件 type、payload 形状、enum 的权威来源；前端类型由它生成或校验。
+- **UI Event Envelope**：`eventId / sequence / sessionId / causationId / type / scope / payload / createdAt`。
+- **Subscriber**：每个订阅者独立队列；订阅者积压超阈值单独被踢，不阻塞其他订阅者和发布者。
+- **Interactive Request**：带后端生成的 `expires_at` + 单次消费决策语义；后续重复或冲突决策返回已解决/冲突，不能改变结果。
+
+### Constraints & Compatibility
+
+- **CC-044**: 后端 blinker 仍是跨模块通知来源；business/execution/recording/data 不依赖前端 UI 或 event-stream 投递。
+- **CC-045**: 前端不得读 Repository、local DB、config、keyring 来补偿缺失的事件数据。
+- **CC-046**: sidecar event stream 必须带 runtime session header；token 不进 URL、cookie、持久化、日志、event payload 或错误响应。
+- **CC-047**: 单次最终契约切换；不维护新旧事件契约并行。
+- **CC-048**: UI 事件是会话内通知，不是持久业务事实，不是长期 replay log。
+
+### Success Criteria
+
+- **SC-059**: 100% frontend display 决策（teaching/recording/trial/skills/compositions/settings/assistant/backend resync）基于注册过的 UI event type。
+- **SC-060**: 0 未知内部事件默认转发到前端事件流。
+- **SC-061**: 两订阅者至少 20 trial 收到同一事件，无 event stealing。
+- **SC-062**: 慢订阅者单独 resync 不影响 healthy 订阅者继续接收。
+- **SC-063**: 重连恢复至少 10 个 disconnect-resync 周期，无状态回退。
+- **SC-064**: 100% UI event payload example 通过 token/secret/code/command/stack/db path/raw recording 安全校验。
+- **SC-065**: trial preview 6 种结果（approve/deny/timeout/disconnect/overflow/shutdown）确定性发生，非 approve 一律按拒绝处理。
+- **SC-066**: 契约一致性测试发现任何只存在于后端或只存在于前端的 UI event type。
+
+---
+
+## Assistant Brain Redesign [Source: specs/010-assistant-brain-redesign]
+
+完整 User Stories、FR、Key Entities、CC、SC 和 Edge Cases 见 `specs/010-assistant-brain-redesign/spec.md`。这里只摘录最稳定的契约。
+
+### User Stories
+
+- **US-030 (P1)**: 跨对话延续的工作记忆——Segment 沉淀写入 hot/persistent zone；冷启动走 icebreaker；防抖期内回到同一对话继续不提前封存。
+- **US-031 (P2)**: 永久身份 + 可回溯历史档案——assistant 画像迁入 persistent zone；archive zone 按时间/主题轴聚合，显式 `retrieve_archive` 下钻。
+- **US-032 (P3)**: 100% 调度 + 可复用 specialist——任务派给临时 subagent 或固定专员；主助理不直接执行；PM/Programmer/Trial 不在 assistant 调度池。
+- **US-033 (P4)**: 避坑（failure zone）+ 人格感知（subconscious zone）+ 自我校准（prediction zone 后台 worker 自动验证 hit/miss/partial/expired）。
+- **US-034 (P5)**: 自动招募 specialist + 大脑管理模块（`/brain`、`/brain/specialists`）覆盖 6 zone 编辑 + skill pool。
+
+### Key Entities
+
+- **Cognitive Zone**：6 个：hot（当前生活语境）、persistent（永久事实 + 稳定长期经验）、archive（按时间/主题分层的历史索引）、subconscious（隐性人格特征 + 反感、参考性而非规则）、failure（带 scope 的硬伤教训）、prediction（可验证的自校准预测）。
+- **Memory Entry**：含 content、`status`（`active` / `fading` / `invalidated` / `soft-deleted`）、`entry_type`（`event` / `insight`，决定衰减路由）、`origin`、`reason`、`applicable_scope`、`loaded_count`、`referenced_count`、`superseded_by`、时间戳；prediction 额外含 `verification_checkpoint` / `verification_status` / `verification_rationale`。
+- **Segment**：一段 open-to-close 对话；状态 `pending` / `distilling` / `completed` / `failed`；`open` 态不持久化；CAS 状态转换；崩溃时 `distilling` 回 `pending`，重试计数器不变。
+- **Distillation**：单次结构化 LLM 调用，phase-aware schema；entries INSERT + 状态转换在单事务内；all-empty 触发一次重试，仍空标 `failed`。
+- **Specialist**：persistent named executor，含 role、tool whitelist、origin、reason、version history；白名单必须是 skill pool 子集；软删除 `is_active=0`，版本历史保留。
+- **Ephemeral Subagent**：单次、无名、不持久化的执行体。
+- **Reason**：每个自动产物必须附 traceable 解释，默认展开不折叠。
+- **Recruitment Signal**：后台检测到的派发模式信号，驱动自动招募 specialist。
+
+### Constraints & Compatibility
+
+- **CC-049**: 复用现有 AgentLoop 作为 assistant、subagent、specialist 的执行引擎；不替换。
+- **CC-050**: 不改变 PM / Programmer / Trial 录制流水线 Agent 或其编排链。
+- **CC-051**: 不引入新中间件（MQ、cache、message bus、vector DB）；复用现有 DB 队列 + background worker 模式。
+- **CC-052**: 既有 assistant 画像迁入 persistent zone，过渡保持后向兼容。
+- **CC-053**: distilled data 永不物理删除——invalidation 是降权，user delete 是 soft-delete，user edit 是新条目 + `superseded_by` 链。
+- **CC-054**: brain `decay/top-N/debounce/idle/retry/limit/periodic` 数值是占位符，待实测调整；稳定契约是 zone set、entry 属性、触发条件和行为保证。
+- **CC-055**: 分阶段交付（5 个 user story 独立可发布）。
+- **CC-056**: 高危确认语义对 executor 执行的任务保持不变。
+- **CC-057**: brain zone 数据不额外加密；与现有消息历史共享 OS 文件系统 + SQLite 安全边界。
+
+### Success Criteria
+
+- **SC-067**: 用户关闭对话后回来，10 次试验至少 9 次 assistant 引用上一段脉络无需复述。
+- **SC-068**: 任务样本（≥10 个）中至少 9/10 触发派发，0 个 accepted run 让 assistant 直接执行；纯对话不计入。
+- **SC-069**: Segment 封存后沉淀产物在下一轮对话对 assistant 可用，用户无需手动步骤。
+- **SC-070**: 100% 自动产物展示具体可追溯的 reason。
+- **SC-071**: 新用户回答最多 2 个问题就能进入正常使用，无表单或 onboarding wizard。
+- **SC-072**: 用户可在大脑管理模块定位并编辑/删除 6 zone 任一 entry。
+- **SC-073**: 持续派发同类任务后，一个招募扫描周期内自动创建 specialist 并附 reason。
+- **SC-074**: 每个 prediction entry 可验证——含具体声明，到验证点后得到 hit/miss/partial/expired 状态。
+- **SC-075**: 系统永不物理删除 distilled data；找不到 active 结果时仍返回 invalidated entry + invalidation factor。
+- **SC-076**: 大脑管理模块对任何自动产物 0 弹"是否要…"确认。
+- **SC-077**: 既有 assistant 画像数据在 brain 启用后出现在 persistent zone，display name/style/notes 无丢失。
+- **SC-078**: PM / Programmer / Trial 录制流程在重构后无可见回归。
+
+### Edge Cases
+
+- 冷启动 6 zone 全空：走 icebreaker，1-2 个核心问题，绝不展开问卷；无 onboarding 引导。
+- Segment 强制切：消息量/token 触达上限立即封存（不走防抖期）。
+- 沉淀失败（schema 不符）：超过重试上限 Segment 置 `failed`（不产生 Memory Entry），管理界面"沉淀失败可手动重试"。
+- 崩溃后 `distilling` 残留：启动扫描重置回 `pending`，重试计数不变；崩溃属基础设施失败不计入内容质量配额。
+- 进行中（`open` 态）Segment 崩溃：不持久化为 DB 行，由消息表推导；下次会话边界正常封存。
+- 复活推翻型：旧记忆不物理撤销，产生失效信号、被标记为已被覆盖。
+- 检索无 active 结果：仍返回失效条目并标失效系数。
+- 临时 subagent 对话：不进入归档与沉淀分析。
+- 历史会话迁移：brain 启用前的既有会话不自动批量沉淀，仅最底层档案可检索。
+- 用户沉默：既不计入正向也不计入反向信号。
+- specialist 白名单越权：必须是 skill pool 子集。
+- 潜意识误判：用户在管理界面删除条目，作为"判断偏了"反向信号写入 `feedback_signals`。
+
+---
+
+## 子代理可唤回机制 [Source: specs/013-subagent-resumable]
+
+### User Stories
+
+- **US-035 (P1)**: 迭代超限后唤回续跑——临时子代理撞迭代上限不丢工作，转可唤回暂停；主代理凭 `subagent_id` 唤回从断点续跑直至完成，可重复唤回。
+- **US-036 (P1)**: 调用失败后保活、待恢复再续——账单/网络类 LLM 调用最终失败时子代理原地冻结保活、暂停原因可区分；外部恢复后（含进程重启）凭 `subagent_id` 唤回续跑。
+- **US-037 (P2)**: 诊断"任务复杂"还是"走弯路"——主代理在不消耗额外模型调用的前提下查看子代理工作概览（轮数/工具调用次数/最后产出/状态），据此决定续跑还是新开。
+- **US-038 (P3)**: 对已完成但未达标的结果返工——对已正常完成的子代理带追加指令唤回，在原有上下文基础上补齐返工，不从零重派。
+
+### Functional Requirements
+
+- **FR-146**: 临时子代理达到迭代上限而未完成时，系统 MUST 将其转为"暂停（可唤回）"状态并完整保留其工作历史，而非作为失败丢弃。
+- **FR-147**: 临时子代理的模型调用经既有重试后仍最终失败（账户配额/账单超限、网络持续中断等）时，系统 MUST 将其转为"暂停（可唤回）"状态并保留工作历史，而非作为错误丢弃。
+- **FR-148**: 暂停结果 MUST 携带可区分的**暂停原因**，至少区分"迭代超限"与"调用失败（账单/网络）"两类，使主代理能采取不同策略。
+- **FR-149**: 委派与暂停结果 MUST 返回一个**子代理标识符**，供后续查看与唤回使用。
+- **FR-150**: 主代理 MUST 能获取指定子代理的**工作概览**：迭代轮数、调用过的工具及次数、最后一次产出、当前状态；该操作 MUST NOT 触发额外的模型调用。
+- **FR-151**: 主代理 MUST 能**唤回**任意属于自己的子代理继续执行，包括因中断而暂停的、以及已正常完成的；唤回时 MUST 允许附加可选的追加指令。
+- **FR-152**: 唤回 MUST 基于**持久化的工作历史**恢复，不依赖应用进程内存；即使期间进程重启，凭子代理标识符仍可唤回。
+- **FR-153**: 唤回与查看 MUST 校验子代理**归属**，拒绝针对"非当前主代理派出的会话"的访问，且不得泄露其内容。
+- **FR-154**: 被唤回的子代理若再次中断（超限或调用失败）MUST 仍可被再次唤回（支持重复唤回）。
+- **FR-155**: 系统 MUST 在主代理的决策层提供明确**引导**，使主代理知道：暂停后先查看概览诊断、任务复杂则续跑、走弯路则新开、账单/网络类失败需等恢复、已完成但未达标可带指令返工。
+- **FR-156**: 对**非临时子代理**的其它 agent，迭代超限与调用失败的既有处理行为 MUST 保持不变（无回归）。
+
+### Key Entities
+
+- **Subagent Work Session (可唤回语义)**：一次委派对应的、持久化的子代理对话历史。关键属性：子代理标识符（= executor session id）、归属主代理（`workflow_id` 格式 `dlg_{parent[:12]}_{16hex}`）、当前状态（`active` / `suspended` / `completed` / `failed`）、可用工具范围。暂停时 `active → suspended`，唤回时 `suspended/completed/failed → active`。承载于既有 `sessions` / `messages` 行，无新表。 [Source: specs/013-subagent-resumable]
+
+- **Pause Reason**：描述子代理为何暂停的字符串，至少两类：`"已达迭代上限（{N} 轮）"` 和 `"LLM 调用失败（账单或网络），可恢复后续跑"`。主代理据 reason 走不同策略。承载于 `AgentResult.error` → 工具返回 `reason`。 [Source: specs/013-subagent-resumable]
+
+- **Work Overview**：对子代理工作会话的机械式只读摘要——迭代轮数（`assistant_turns`）、各工具调用次数（`tool_call_counts`）、最后产出（`last_output`）、状态（`status`）。由 `_inspect_subagent` 从 `MessageRepository` 聚合返回，不含模型再加工，零模型调用。 [Source: specs/013-subagent-resumable]
+
+- **ResultType.PAUSED**：`config.py` 枚举新值 `paused`，表示会话已置 `suspended`、工作历史保留、可唤回。 [Source: specs/013-subagent-resumable]
+
+- **AgentConfig.resumable_on_failure: bool = False**：为真时 AgentLoop 把"迭代上限/LLM 调用最终失败"转 `PAUSED`；默认假保证非临时 Agent 零回归。 [Source: specs/013-subagent-resumable]
+
+### Constraints & Compatibility
+
+- **CC-058**: 子代理工作历史 MUST 依赖持久化会话存储而非进程内存，以保证跨进程重启的可唤回性（支撑账单超限等长时间等待场景）。
+- **CC-059**: "100% 调度"约束不变——主代理本体不直接执行任务，唤回的仍是子代理；本特性不引入主代理直接执行的路径。
+- **CC-060**: 已沉淀/会话数据"不物理删除"的原则不受影响——唤回是基于既有历史的恢复，不删除、不改写历史条目。
+- **CC-061**: 默认 agent 的中断处理不得回归（见 FR-156）。
+
+### Success Criteria
+
+- **SC-079**: 子代理被迫中断后，其已完成工作 100% 保留并可唤回继续——零工作丢失。
+- **SC-080**: 主代理唤回一个暂停子代理时，无需重述原始任务即可让其从断点继续（恢复不要求重新铺垫上下文）。
+- **SC-081**: 因账单/网络失败而暂停的子代理，在外部条件恢复后（含应用进程已重启的情况）仍可被成功唤回。
+- **SC-082**: 主代理可在**不消耗任何额外模型调用**的前提下获取子代理工作概览。
+- **SC-083**: 同一子代理支持被多次重复唤回（续跑→再暂停→再续跑）直至完成。
+- **SC-084**: 对非临时子代理的其它 agent，迭代超限与调用失败的处理行为零变化（既有相关测试全部通过）。
+- **SC-085**: 针对非本主代理派出的会话标识符的查看/唤回请求，100% 被拒绝且不泄露其内容。
+
+### Edge Cases
+
+- **重复唤回**：续跑后再次中断（超限或失败）→ 仍可被再次唤回，次数不设硬上限（由主代理判断停止）。
+- **唤回不存在/非己出的子代理**：标识符无效，或指向并非"当前主代理派出"的会话 → 系统拒绝唤回/查看，返回明确错误，绝不泄露他人会话内容。
+- **续跑时上下文过长**：子代理历史很长导致单次上下文偏大 → 由既有的上下文管理（按需压缩）处理；注意账单类失败属于配额问题，压缩不能解决，需等外部恢复。
+- **唤回一个仍在运行的子代理**：标识符指向尚未停止的会话 → 拒绝并发唤回，提示当前不可恢复。
+- **空产出的暂停**：子代理几乎没产出就暂停（如第 1 轮即调用失败）→ 概览如实反映（轮数极少、无有效产出），主代理据此多半选择重新委派。
+- **不可恢复的 LLM 错误**：400 bad request、凭据配置错、序列化 bug 等异常不可恢复 → 仍走 `ERROR` 置会话 `failed`，不转 PAUSED，主代理不被误导"等恢复后再续"。
+- **已完成子代理不带 instruction 唤回**：`_continue_subagent` 回明确提示"需带 instruction 说明要补齐/修正什么"，不执行模型调用。
+
+---
+
+## 主助理对话透明与可控 [Source: specs/014-assistant-chat-transparency]
+
+把 AI Assistant 主屏从"黑盒运行"扩展为看得见、停得下、接得上的透明对话体验。范围包括运行时输入门控、协作式深度取消、单条原地排队、默认折叠的活动时间线、子任务卡片与详情，以及暂停子任务的继续任务入口。
+
+### User Stories
+
+- **US-039 (P1)**: 运行时不被误唤醒，并且随时能停——助理正在处理时不能再次被新消息误唤醒；用户点击停止后，当前回合和同步派出的子任务都在安全节点进入可恢复暂停，已产内容保留。
+- **US-040 (P2)**: 它忙的时候，我可以先把下一句想好——每个会话只保留一条可原地编辑的排队消息；回合成功或等待用户回答时自动发出，失败或停止时退回普通草稿。
+- **US-041 (P2)**: 看得见主助理自己的思考过程——每个回合实时显示可展示的模型过程、工具动作和工具结果；过程区域默认折叠、限高内滚，历史回看可重建。
+- **US-042 (P2)**: 看得见它派出去的子任务在干什么——当前对话显示子任务卡片、状态和完整过程详情；断连或重开后通过权威端点恢复列表与状态。
+- **US-043 (P3)**: 被打断/暂停的子任务能接着干——暂停子任务提供继续任务操作，可带补充消息，并经主助理调度既有 `continue_subagent` 完成续跑。
+
+### Functional Requirements
+
+- **FR-157**: 当助理处于 `running` 状态时，系统 MUST 阻止用户发出会再次唤醒助理执行的新消息。
+- **FR-158**: 当助理处于 `waiting_for_user` 状态时，系统 MUST 允许用户正常输入并回答，不施加运行态门控。
+- **FR-159**: 输入控件可用性 MUST 由助理真实运行状态驱动，而非一次发送请求的瞬时状态驱动。
+- **FR-160**: 助理正在处理时，用户 MUST 能触发停止来中断当前回合。
+- **FR-161**: 停止 MUST 同时作用于该回合派出的正在运行子任务，使父子执行链一并停下。
+- **FR-162**: 停止 MUST 为协作式取消，在下一个安全节点生效，不采用强制杀线程或杀进程。
+- **FR-163**: 用户点击停止后，系统 MUST 立即进入可见的"停止中"反馈；重复点击 MUST 幂等。
+- **FR-164**: 若停止发生时存在 pending 高危确认，系统 MUST fail-closed 当拒绝并唤醒回合到取消检查点，同时保留 first-decision-wins / `expires_at` 同步确认协议。
+- **FR-165**: 用户主动停止 MUST 视为可恢复暂停而非错误；被停止的会话与子任务保留已产生的工作并可后续继续。
+- **FR-166**: 停止后对话 MUST 回到可继续/就绪态，且已产生内容保留在对话历史中。
+- **FR-167**: 助理忙时提交的下一条消息 MUST 进入排队待发；回合成功或等待用户回答时自动发出，回合失败或被停止时退回草稿。
+- **FR-168**: 系统 MUST 对每个会话仅保留一条生效待发的排队消息，后续输入修改同一条。
+- **FR-169**: 排队消息 MUST 归属所在会话，并在切换会话后再切回时保留。
+- **FR-170**: 排队消息 MUST 可原地编辑；输入框进入排队态，双击和键盘可达入口都能进入编辑态。
+- **FR-171**: 排队消息处于编辑态时 MUST NOT 被发出，即使此刻助理已空闲。
+- **FR-172**: 用户按回车或使输入框失焦 MUST 被视为编辑完成，消息恢复排队待发。
+- **FR-173**: 自动发出 MUST 仅针对已提交排队消息，编辑态消息不参与自动发出。
+- **FR-174**: 对每个助理回合，系统 MUST 实时呈现可取得的完整过程，包括模型过程文本、采取的动作和动作结果；工具结果经既有敏感字段过滤后尽量完整展示。
+- **FR-175**: 过程区域 MUST 默认折叠、不自动展开，用户可手动展开/收起。
+- **FR-176**: 助理最终回复 MUST 正常显示，且 MUST NOT 在过程区域中重复出现。
+- **FR-177**: 过程区域 MUST 限定高度，超出时内部滚动，不撑长整页。
+- **FR-178**: 历史会话 MUST 可展开回看回合过程；详细步骤仍在时展示全过程，已压缩/概要化时展示规整概要，不隐藏、不报错且不新增持久化要求。
+- **FR-179**: 助理把任务派给子助手时，系统 MUST 在当前对话中以卡片呈现子任务，显示任务描述和状态。
+- **FR-180**: 子任务卡片 MUST 实时反映状态变化，运行中 SHOULD 有可感知动效。
+- **FR-181**: 用户双击或通过键盘可达入口打开子任务卡片详情时，系统 MUST 展示该子助手自己的完整过程，包括工具调用与过滤后的完整结果。
+- **FR-182**: 子任务信息 MUST 归属并显示在发起它的当前对话中。
+- **FR-183**: 重连或重新打开会话时，系统 MUST 能取到该会话子任务的权威列表与状态。
+- **FR-184**: 处于暂停状态的子任务卡片 MUST 提供继续任务操作。
+- **FR-185**: 继续任务 MUST 通过唤醒主助理并由主助理续跑目标子任务实现，不能让用户直连操纵子任务。
+- **FR-186**: 用户 MAY 在继续任务时附加补充消息；若提供，该消息 MUST 被一并带入续跑。
+- **FR-187**: 子任务正在运行时，继续任务 MUST 不可用；系统 MUST 校验子任务归属，拒绝非当前对话子任务访问或操纵。
+- **FR-188**: 继续任务触发后，系统 SHOULD 校验目标子任务确实转为运行；若主助理未续跑目标子任务，MUST 给用户明确兜底提示而非静默无反应。
+
+### Key Entities
+
+- **Turn**：一次"用户消息 → 助理过程 → 最终回复"的展示单元，承载过程步骤、子任务和回合状态。
+- **Activity Step**：助理或子助手的一步活动，类型为 `reasoning` / `tool_call` / `tool_result`，可归属于主助理或某个子任务。
+- **Subagent Task**：助理委派出的执行单元，含任务描述、状态、过程和产出；状态包括 `running` / `done` / `suspended` / `failed`。
+- **Queued Message**：每会话唯一的下一条待发消息，状态为 `editing` 或 `queued`，属于前端临时意图，不持久化到后端。
+- **Run Context / Cancellation Registry**：业务层 ContextVar 运行上下文与进程内 session→Event 注册表，支持协作式深度取消和代际 token 防陈旧取消。
+- **ResultType.CANCELLED**：用户主动停止产生的显式结果类型，语义为可恢复暂停，不能与不可恢复错误混同。
+
+### Constraints & Compatibility
+
+- **CC-062**: MUST 保留既有高危确认同步确认协议与会话级免确认语义，不得回归 first-decision-wins、`expires_at` 或 fail-closed 行为。
+- **CC-063**: MUST 保持办公助理 100% 调度约束；主助理不直接执行任务，继续任务也经由主助理调度子任务完成。
+- **CC-064**: 取消 MUST 为协作式且类型安全，不得把用户主动停止与不可恢复错误混为一谈，也不得硬杀线程。
+- **CC-065**: 面向前端的新事件 MUST 经 UI Event Registry 注册后以受控 typed envelope 发出；前端不得依据内部事件名或未注册载荷做展示决策。
+- **CC-066**: 非助理执行链路（技能教学、学习、试用、PM、Programmer、Trial）MUST 零行为变化。
+- **CC-067**: 大脑沉淀数据永不物理删除等既有数据约束 MUST 不被破坏；本特性只读重建历史过程和子任务列表，不新增物理删除路径。
+- **CC-068**: 本特性不为外部脚本/API 消费者新增 deprecation、双发或额外兼容范围；当前边界是单用户本地桌面应用。
+
+### Success Criteria
+
+- **SC-086**: 助理 running 期间误唤醒发生率为 0；waiting_for_user 状态下输入 100% 可用。
+- **SC-087**: 点击停止后 UI 约 200ms 内进入停止中反馈；当前回合在当前步骤后的下一个安全节点停止并回到就绪态，且父子链无"主停子未停"残留。
+- **SC-088**: 排队消息在助理空闲或等待用户回答后自动发出；编辑态排队消息提前外发为 0。
+- **SC-089**: 用户可查看每个助理回合与被委派子任务的过程；运行时展示完整过程，历史回看展示全过程或规整概要。
+- **SC-090**: 被停止的子任务可被继续任务续跑并完成，续跑结果以主助理正常回复呈现。
+- **SC-091**: 停止/中断后，对话历史 100% 保留已产生内容。
+- **SC-092**: 非助理流程上线前后行为一致，相关回归用例 100% 通过。
+- **SC-093**: 除过程区域原样展示的内容外，普通界面文案中不出现 archive、compression、segment、event sequence 等内部机制术语。
+
+### Edge Cases
+
+- `waiting_for_user` 不算忙，用户必须能回答反问。
+- 停止是协作式取消，当前慢步骤返回前不会硬中断；生效前重复点击保持幂等。
+- 停止不等于失败，进度状态使用 `cancelled` 并保留可恢复线索。
+- 排队消息在失败或停止后退回普通草稿；编辑态不自动外发。
+- 历史回合已压缩时，展开过程显示规整概要，不新增持久化。
+- 单回合过程项很多时，过程区域内部滚动；活动事件有上限/合并策略并走 payload safety allowlist。
+- 事件流缺口或会话不匹配时，前端按 `backend.resync_required` 拉权威快照，不凭内部事件猜测状态。
+- 停止遇上 pending 高危确认时，确认 fail-closed 当拒绝并唤醒回合到取消检查点。

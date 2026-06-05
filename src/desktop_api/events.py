@@ -310,6 +310,10 @@ _PERSISTENT_TRIAL_HANDLER_ATTR = "_desktop_api_trial_preview_handler"
 _INTERNAL_EVENT_NAMES = [
     "agent_error",
     "agent_needs_user_input",
+    "assistant_agent_step",
+    "assistant_subagent_started",
+    "assistant_subagent_finished",
+    "assistant_subagent_paused",
     "requirement_confirmed",
     "code_completed",
     "review_passed",

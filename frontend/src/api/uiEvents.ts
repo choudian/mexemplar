@@ -3,6 +3,8 @@ export const UI_EVENT_TYPES = [
   "assistant.progress",
   "assistant.error",
   "assistant.confirmation",
+  "assistant.activity",
+  "assistant.subagent",
   "recording.progress",
   "teaching.stage_changed",
   "teaching.progress",
@@ -25,13 +27,20 @@ export type UiEventType = (typeof UI_EVENT_TYPES)[number];
 
 export const UI_EVENT_EXAMPLES = {
   "assistant.message": { "sequence": 1, "role": "assistant", "content": "Ready.", "rendering": "safe_markdown" },
-  "assistant.progress": { "status": "running", "headline": "Assistant is working" },
+  "assistant.progress": { "status": "running", "headline": "Assistant is working", "runId": "run-1" },
   "assistant.error": { "message": "Assistant failed to complete the request.", "type": "RuntimeError" },
   "assistant.confirmation": {
     "requestId": "req_1",
     "actionType": "exec",
     "sanitizedSummary": "命令首行: npm test",
     "status": "active",
+  },
+  "assistant.activity": { "kind": "tool_call", "toolName": "delegate_to_subagent", "text": "派发子任务", "seq": 1 },
+  "assistant.subagent": {
+    "subagentId": "sess_child_1",
+    "label": "子助手 · 资料检索",
+    "task": "检索最新季度报表",
+    "status": "running",
   },
   "recording.progress": { "status": "recording", "message": "Recording started.", "recordingMode": "desktop" },
   "teaching.stage_changed": { "stage": "learning", "message": "Tool learning started." },
@@ -95,6 +104,15 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
       "write_file",
     ],
     "status": ["active"],
+  },
+  "assistant.progress": {
+    "status": ["cancelled", "failed", "running", "succeeded", "waiting_for_user"],
+  },
+  "assistant.activity": {
+    "kind": ["reasoning", "tool_call", "tool_result"],
+  },
+  "assistant.subagent": {
+    "status": ["done", "failed", "running", "suspended"],
   },
   "teaching.stage_changed": {
     "stage": [
@@ -163,6 +181,8 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "assistant.progress": "assistant",
   "assistant.error": "assistant",
   "assistant.confirmation": "assistant",
+  "assistant.activity": "assistant",
+  "assistant.subagent": "assistant",
   "recording.progress": "teaching",
   "teaching.stage_changed": "teaching",
   "teaching.progress": "teaching",

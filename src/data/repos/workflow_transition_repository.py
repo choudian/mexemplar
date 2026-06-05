@@ -46,6 +46,20 @@ class WorkflowTransitionRepository(BaseRepository):
             .all()
         )
 
+    def list_by_session(self, session_id: str) -> List[WorkflowTransition]:
+        """获取与指定会话相关（作为 from 或 to）的所有交接记录，按时间排序。"""
+        return (
+            self.session.query(WorkflowTransition)
+            .filter(
+                or_(
+                    WorkflowTransition.from_session_id == session_id,
+                    WorkflowTransition.to_session_id == session_id,
+                )
+            )
+            .order_by(WorkflowTransition.created_at)
+            .all()
+        )
+
     def get_latest_by_workflow_and_event(
         self,
         workflow_id: str,

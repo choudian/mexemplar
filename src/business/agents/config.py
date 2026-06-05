@@ -42,6 +42,16 @@ _AGENT_TYPE_DISPLAY_NAMES = {
 }
 
 
+def subagent_label(agent_type: str | AgentType | None) -> str:
+    """根据 agent_type 返回 UI 展示用的子任务标签。"""
+    if agent_type is None:
+        return "子助手"
+    raw = agent_type.value if isinstance(agent_type, AgentType) else str(agent_type)
+    if raw == AgentType.SPECIALIST.value:
+        return "固定专员"
+    return "子助手"
+
+
 class ResultType(str, Enum):
     """Agent 运行结果类型"""
 
@@ -52,6 +62,10 @@ class ResultType(str, Enum):
     # resumable_on_failure=True 的 Agent（如临时子代理）撞迭代上限或 LLM 调用最终失败时
     # 返回该状态：会话置为 suspended、工作历史完整保留，主代理可唤回续跑。
     PAUSED = "paused"
+    # 用户主动"停止"触发的协作式取消（014-assistant-chat-transparency）：
+    # AgentLoop 在安全节点命中 cancel_event 时置会话 suspended 并返回该状态。
+    # 必须与不可恢复 ERROR 严格区分——停止是可恢复暂停，不是错误。
+    CANCELLED = "cancelled"
 
 
 @dataclass

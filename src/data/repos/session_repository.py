@@ -36,6 +36,12 @@ class SessionRepository(BaseRepository):
         """根据 ID 获取会话"""
         return self.session.query(Session).filter(Session.session_id == session_id).first()
 
+    def get_by_ids(self, session_ids: List[str]) -> List[Session]:
+        """批量按 ID 获取会话（无序，调用方按需索引），避免逐条 N 次查询。"""
+        if not session_ids:
+            return []
+        return self.session.query(Session).filter(Session.session_id.in_(session_ids)).all()
+
     def list_ids_by_prefix(
         self,
         prefix: str,

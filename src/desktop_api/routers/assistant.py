@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from src.business.services.chat_service import ChatService, DisplayChatMessage
 from src.desktop_api.assistant_runtime import AssistantRuntime
@@ -21,6 +21,10 @@ from src.desktop_api.schemas import (
     AssistantSendMessageResponse,
     AssistantSessionListResponse,
     AssistantSessionSummary,
+    AssistantStopRequest,
+    AssistantStopResponse,
+    AssistantSubagentListResponse,
+    AssistantTranscriptResponse,
     SegmentBoundaryRequest,
 )
 
@@ -143,10 +147,67 @@ def send_message(
     runtime: AssistantRuntime = Depends(get_assistant_runtime),
 ) -> AssistantSendMessageResponse:
     try:
-        accepted = runtime.dispatch_message(session_id, request.content)
+        accepted = runtime.dispatch_message(
+            session_id,
+            request.content,
+            continue_subagent=(
+                request.continueSubagent.model_dump() if request.continueSubagent else None
+            ),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return AssistantSendMessageResponse(accepted=accepted, sessionId=session_id)
+
+
+@router.post("/sessions/{session_id}/stop", response_model=AssistantStopResponse)
+def stop_session(
+    session_id: str,
+    request: AssistantStopRequest | None = Body(default=None),
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> AssistantStopResponse:
+    """停止会话当前回合（协作式，在下一安全节点生效；深度穿透其同步派出的子任务）。"""
+    accepted = runtime.cancel_session(session_id, run_id=request.runId if request else None)
+    return AssistantStopResponse(accepted=accepted)
+
+
+@router.get("/sessions/{session_id}/transcript", response_model=AssistantTranscriptResponse)
+def get_transcript(
+    session_id: str,
+    subagentId: str | None = Query(default=None),
+    afterSequence: int | None = Query(default=None),
+    beforeSequence: int | None = Query(default=None),
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> AssistantTranscriptResponse:
+    """取主助理或指定子任务的过程时间线（含工具，经 009 脱敏；已压缩回合带 compressed 标志）。"""
+    try:
+        return AssistantTranscriptResponse(
+            **runtime.get_transcript(
+                session_id,
+                subagentId,
+                after_sequence=afterSequence,
+                before_sequence=beforeSequence,
+            )
+        )
+    except (LookupError, PermissionError) as exc:
+        # 归属拒绝（非己出会话的子任务）与缺失一并返回 404「not found」——不确认其存在、
+        # 不暴露这是归属问题，符合 FR-030 不泄露他人会话子任务。
+        raise HTTPException(status_code=404, detail="subagent transcript not found") from exc
+    except Exception as exc:
+        logger.error("Assistant transcript failed for session %s: %s", session_id, exc)
+        raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
+
+
+@router.get("/sessions/{session_id}/subagents", response_model=AssistantSubagentListResponse)
+def list_subagents(
+    session_id: str,
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> AssistantSubagentListResponse:
+    """取会话子任务权威列表与状态（重连/重开会话兜底）。"""
+    try:
+        return AssistantSubagentListResponse(**runtime.list_subagents(session_id))
+    except Exception as exc:
+        logger.error("Assistant subagent list failed for session %s: %s", session_id, exc)
+        raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
 
 
 @router.post(

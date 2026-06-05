@@ -134,6 +134,8 @@ class PendingConfirmation:
     result: bool = False
     decision: str | None = None
     source: str | None = None
+    # 归属会话（= 运行上下文 root_session_id）；"停止"据此 fail-closed 该会话 pending 确认（014）。
+    session_id: str | None = None
 
 
 def register_confirm_mechanism(signal):
@@ -183,6 +185,29 @@ def settle_pending_confirmations(
             and (created_before is None or pending.created_at <= created_before)
         ]
 
+    for request_id in request_ids:
+        set_confirm_result(request_id, result, source)
+    return request_ids
+
+
+def settle_pending_confirmations_for_session(
+    session_id: str,
+    result: bool,
+    source: str,
+) -> list[str]:
+    """结算属于指定会话、仍在等待 UI 决策的确认请求（"停止"时 fail-closed 拒绝用）。
+
+    复用 set_confirm_result 的 first-decision-wins（event 已 set 则跳过），不破坏 CC-001 同步确认协议。
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return []
+    with _confirm_lock:
+        request_ids = [
+            request_id
+            for request_id, pending in _pending_confirms.items()
+            if not pending.event.is_set() and (pending.session_id or "") == sid
+        ]
     for request_id in request_ids:
         set_confirm_result(request_id, result, source)
     return request_ids
@@ -255,6 +280,15 @@ def _ask_user_confirm(
 
     request_id = str(uuid.uuid4())
     event = threading.Event()
+    # 捕获当前运行的归属会话（root_session_id），供"停止"按会话 fail-closed 唤醒（FR-006b）。
+    # 子代理高危确认的归属仍是父会话（ContextVar 持 root），停止父即可唤醒整链。
+    try:
+        from src.business.agents import run_context
+
+        _run_ctx = run_context.get_current()
+        _session_id = _run_ctx.root_session_id if _run_ctx is not None else None
+    except Exception:
+        _session_id = None
     pending = PendingConfirmation(
         request_id=request_id,
         tool_name=tool_name,
@@ -262,6 +296,7 @@ def _ask_user_confirm(
         created_at=time.monotonic(),
         event=event,
         extra_payload=extra_payload,
+        session_id=_session_id,
     )
     with _confirm_lock:
         _pending_confirms[request_id] = pending
@@ -1062,4 +1097,5 @@ __all__ = [
     "set_auto_approve_enabled",
     "set_confirm_result",
     "settle_pending_confirmations",
+    "settle_pending_confirmations_for_session",
 ]

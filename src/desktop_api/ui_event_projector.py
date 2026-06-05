@@ -2,12 +2,88 @@ from __future__ import annotations
 
 from typing import Any
 
+from src.business.agents.config import AgentType
+from src.business.services.ui_event_safety_service import (
+    DEFAULT_PUBLIC_TEXT_MAX_CHARS,
+    DEFAULT_PUBLIC_TEXT_MAX_LEN,
+    redact_public_ui_event_text,
+)
 from src.desktop_api.ui_event_types import UiEventDraft
+
+# assistant.activity / assistant.subagent 仅对可观测的助理执行链路投影；其余 agent_type 零 UI 噪声。
+# 从 AgentType 枚举派生，新增可观测类型时只需改枚举一处。
+_OBSERVABLE_AGENT_TYPES = frozenset({
+    AgentType.ASSISTANT.value,
+    AgentType.EPHEMERAL_SUBAGENT.value,
+    AgentType.SPECIALIST.value,
+})
+
+
+def _is_observable_agent_type(agent_type: Any) -> bool:
+    """该 agent_type 是否属于助理可观测链路（主助理 / 临时子代理 / 专员）。"""
+    return str(agent_type or "").lower() in _OBSERVABLE_AGENT_TYPES
+
+
+def _redact_text(value: Any) -> str:
+    return redact_public_ui_event_text(
+        "text",
+        value,
+        max_preview_chars=DEFAULT_PUBLIC_TEXT_MAX_CHARS,
+        max_len=DEFAULT_PUBLIC_TEXT_MAX_LEN,
+    )
 
 
 def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiEventDraft]:
     scope = _scope_from_payload(payload)
     causation_id = _causation_id(scope, payload)
+
+    if event_name == "assistant_agent_step":
+        if not _is_observable_agent_type(payload.get("agent_type")):
+            return []  # 非助理流程（PM/Programmer/Trial）零 assistant.activity（E4/CC-005）
+        return [
+            UiEventDraft(
+                "assistant.activity",
+                {
+                    "subagentId": _string_or_none(payload.get("subagent_id")),
+                    "kind": _string_or_none(payload.get("kind")),
+                    "toolName": _string_or_none(payload.get("tool_name")),
+                    "text": _redact_text(payload.get("text")),
+                    "seq": _int_or_none(payload.get("seq")),
+                },
+                scope,
+                causation_id,
+            )
+        ]
+    if event_name in {
+        "assistant_subagent_started",
+        "assistant_subagent_finished",
+        "assistant_subagent_paused",
+    }:
+        # 无需 agent_type 门控：这些生命周期事件只由 orchestrator 的助理委派点（_emit_subagent_*）
+        # 发出，按构造即属可观测助理链路，并以父助理 session 为 scope。
+        return [
+            UiEventDraft(
+                "assistant.subagent",
+                {
+                    "subagentId": _string_or_none(payload.get("subagent_id")),
+                    "label": _redact_text(payload.get("label")) or None,
+                    "task": _redact_text(payload.get("task")) or None,
+                    "status": _string_or_none(payload.get("status")),
+                    "lastOutput": (
+                        _redact_text(payload.get("last_output"))
+                        if payload.get("last_output") is not None
+                        else None
+                    ),
+                    "reason": (
+                        _redact_text(payload.get("reason"))
+                        if payload.get("reason") is not None
+                        else None
+                    ),
+                },
+                scope,
+                causation_id,
+            )
+        ]
 
     if event_name == "recording_started":
         return [
