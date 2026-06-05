@@ -1,0 +1,312 @@
+# Merged Features Log
+
+## 录制数据大字段按需读取 — 2026-04-25
+
+**Branch:** `001-recording-field-layering`
+**Spec:** `specs/001-recording-field-layering`
+
+**What was added:**
+- US-001 (P1): query_data 对任意达到阈值的文本字段返回结构化占位对象，取代旧 12KB 截断
+- US-002 (P1): 新增 `read_field_chunk` 工具，Agent 按 locator + field + offset 分段读取原文
+- US-003 (P2): 多次续读闭环、EOF 空成功、Unicode 码点切片、9 种错误码全覆盖
+- US-004 (P2): describe_data 增补机器可读大字段提示；prompt/文档更新为 5 工具工作流
+
+**New Components:**
+- `src/recording/filtering/query_projection_analyzer.py` — SQL 列血缘分析 (sqlglot)
+- `tests/recording/test_recording_data_large_fields.py` — 占位+续读+错误+性能+配置测试
+- `tests/recording/filtering/test_query_projection_analyzer.py` — 分析器单元测试
+- `tests/recording/filtering/test_recording_tools_no_sqlglot.py` — import guard test
+
+**Modified Components:**
+- `src/business/agents/tools/recording_data_tools.py` — 占位 builder + read_field_chunk + 5 工具注册
+- `src/data/config_models.py` — LargeFieldConfig dataclass
+- `src/data/unified_config.py` — get_recording_large_field_config()
+- `config.example.json` / `config.example.comments.md` — recording.large_field.* 配置
+- `src/business/agents/prompts/pm_prompt.py` / `programmer_prompt.py` — 5 工具工作流
+- `docs/ARCHITECTURE.md` / `docs/design/*.md` — 文档同步
+
+**Tasks Completed:** 44/44 tasks
+
+## AgentLoop 多工具调用结果配对修复 — 2026-04-26
+
+**Branch:** `003-fix-agentloop-tool-calls`
+**Spec:** `specs/003-fix-agentloop-tool-calls`
+
+**What was added:**
+- US-005 (P1): 多工具调用完整配对 — 同轮多个普通工具按顺序执行并逐一保存结果
+- US-006 (P1): 中断型工具行为可预期 — 混合批次拒绝、solo 中断保留既有语义、handler 契约校验
+- US-007 (P2): 会话恢复按原始顺序补齐缺失结果，不重复已完成调用
+
+**New Components:**
+- `ToolDefinition.is_interrupting` — 声明式中断型分类字段
+- `classify_tool_calls()` — 批次分类 helper
+- `make_error_result()` / `ERROR_CODES` — 标准化错误结构生成
+- `tests/integration/test_agent_loop_multi_tool_calls.py` — 14 场景集成测试
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` — 多工具批次处理、失败级联、中断校验、契约校验、恢复
+- `src/business/agents/config.py` — ToolDefinition 新增 `is_interrupting` 字段
+- `src/business/agents/tools/*.py` — 中断型工具注册添加 `is_interrupting=True`
+- `src/business/memory/context_manager.py` — `get_pending_tool_calls()` 多工具恢复
+
+**Tasks Completed:** 34/34 tasks
+
+## 工具执行 Pre/Post Hook 系统 — 2026-04-27
+
+**Branch:** `002-tool-hook-system`
+**Spec:** `specs/002-tool-hook-system`
+
+**What was added:**
+- US-008 (P1): `ToolDefinition` 支持工具级 pre/post hook，未声明 hook 的工具保持透明行为
+- US-009 (P2): `builtin_general_tools`、`recording_data_tools`、`trial_tools` 的门卫式 gate 迁移到 pre_hook
+- US-010 (P3): `AgentConfig` 支持实例级 global pre/post hooks，按固定顺序作用于 `ToolDefinition` 工具
+
+**New Components:**
+- `src/business/agents/hook_models.py` — hook 协议 dataclass/type alias 与递归 args freezing helper
+- `tests/test_hook_protocol.py` — hook 协议、迁移 gate、global hook、动态工具和性能烟测覆盖
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` — hook-aware per-call execution、hook 异常处理、post_hook rewrite、可靠失败状态
+- `src/business/agents/config.py` — `ToolDefinition.pre_hook/post_hook` 与 `AgentConfig.global_pre_hooks/global_post_hooks`
+- `src/business/agents/tools/builtin_general_tools.py` — read/write/edit/list/exec pre_hooks；确认请求失败 fail-closed
+- `src/business/agents/tools/recording_data_tools.py` — query_data/analyze_image gate pre_hooks
+- `src/business/agents/tools/trial_tools.py` — run_command per-run pre_hook 限流
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` — hook 运行结构与边界文档
+
+**Tasks Completed:** 34/37 tasks
+
+## 上下文压缩 tool_call/tool_result 配对修复 — 2026-04-27
+
+**Branch:** `005-fix-compression-tool-pairing`
+**Spec:** `specs/005-fix-compression-tool-pairing`
+
+**What was added:**
+- US-011 (P1): 压缩切分时检测跨越边界的 tool 组并整体移入保留区，修复 400 错误
+- US-012 (P2): 多次压缩后边界 tool 组不累积——已完全在压缩区内部的被正常压缩
+- US-013 (P3): assemble_context 兜底校验检测并剔除孤立 tool result，恢复路径自愈
+
+**New Components:**
+- `src/business/memory/compression_handler._adjust_boundary_for_tool_pairs` — 边界 tool 组检测与移入
+- `src/business/memory/context_manager._cleanup_orphan_tool_results` — 孤立 tool result 兜底校验
+- `tests/business/memory/test_compression_tool_pairing.py` — 边界调整 7 场景
+- `tests/business/memory/test_context_orphan_cleanup.py` — 孤立校验与兼容性 6 场景
+- `tests/business/memory/conftest.py` — mock Message 工厂与 mock MessageRepository
+
+**Modified Components:**
+- `src/business/memory/compression_handler.py` — `_split_messages` 接入边界调整；`compress` 处理空压缩区
+- `src/business/memory/context_manager.py` — `assemble_context` 接入孤立校验
+- `docs/ARCHITECTURE.md` — 压缩流程边界调整描述
+- `CLAUDE.md` — 当前代码现实补充
+
+**Tasks Completed:** 15/15 tasks
+## 高危操作确认 Toast 化 — 2026-04-27
+
+**Branch:** `004-auth-toast`
+**Spec:** `specs/004-auth-toast`
+
+**What was added:**
+- US-011 (P1): Assistant 高危工具确认从 QMessageBox 模态弹窗改为非阻塞右下角浮层
+- US-012 (P2): 浮层"全部允许"按钮开启会话级自动放行，新对话自动复位
+- US-013 (P3): 顶栏"免确认"Toggle 与浮层双向同步
+
+**New Components:**
+- `src/ui/widgets/auth_toast.py` — AuthToastSurface 非模态确认浮层
+- `tests/test_auth_toast_confirmation.py` — 确认状态/脱敏/自动放行业务测试
+- `tests/ui/test_auth_toast_surface.py` — 浮层 UI 测试
+- `tests/ui/test_chat_widget_auth_toggle.py` — Toggle 状态同步测试
+
+**Modified Components:**
+- `src/business/agents/tools/builtin_general_tools.py` — PendingConfirmation、自动放行状态、脱敏摘要/日志、确认 helper 重构
+- `src/ui/mixins/agent_handler_mixin.py` — 非阻塞确认队列替代 QMessageBox
+- `src/ui/main_window.py` — auth toast 状态/队列/resize 重定位
+- `src/ui/widgets/chat_widget.py` — 顶栏 Toggle + new_chat_started 信号
+- `src/ui/resources/styles.qss` — auth toast + Toggle 样式
+
+**Tasks Completed:** 37/38 tasks (T038 black/flake8 待完成)
+
+## 聊天界面体验完善 — 2026-04-29
+
+**Branch:** `006-chat-ui-polish`
+**Spec:** `specs/006-chat-ui-polish`
+
+**What was added:**
+- US-014 (P1): AI 回复 Markdown 渲染为富文本（标题、列表、代码块、表格、远程图片等），用户消息保持纯文本
+- US-015 (P2): 压缩后旧聊天记录按原时间线分页回看，初始 10 条，向上滚动加载更早历史
+- US-016 (P3): "免确认" Toggle 仅在已启动 Agent 的对话中可见，欢迎页/新对话起始态隐藏
+
+**New Components:**
+- `src/ui/widgets/markdown_message_view.py` — Markdown 安全渲染 widget（Qt 内建）
+- `src/business/services/chat_service.py` — DisplayChatMessage/ChatHistoryPage DTO + get_display_messages()
+- `tests/ui/test_chat_widget_markdown.py` — Markdown 渲染/安全降级测试
+- `tests/ui/test_chat_widget_history.py` — 历史分页/性能/归档透明性测试
+- `tests/ui/test_chat_widget_layering.py` — UI 分层门卫测试
+- `tests/business/test_chat_service_history.py` — Service 契约测试
+- `tests/data/chat_history_test_helpers.py` + `tests/ui/chat_widget_test_helpers.py` — 测试辅助
+
+**Modified Components:**
+- `src/ui/widgets/chat_widget.py` — Markdown 集成 + 历史分页 + Toggle 可见性状态机
+- `src/data/repos/message_repository.py` — get_display_page() 展示历史分页查询
+- `src/ui/resources/styles.qss` — Markdown 内容样式
+- `docs/ARCHITECTURE.md` — 展示历史分页路径文档
+
+**Tasks Completed:** 36/36 tasks
+
+## 桌面录制 Phase 1 — 2026-05-07
+
+**Branch:** `007-desktop-recording`
+**Spec:** `specs/007-desktop-recording`
+
+**What was added:**
+- US-017 (P1): 桌面录制从"暂不支持"变为 Windows-only 录制闭环，包含 minimize 后启动 hook、浮窗停止、health_stats sanity check。
+- US-018 (P1): 5 个通用录制数据工具按 browser/desktop mode dispatch，新增 3 个桌面专属工具并保持浏览器路径不退化。
+- US-019 (P2): 桌面 Programmer 代码先过 `ast.parse` syntax gate，再由 execution 层 Trial 子进程用隔离 cwd/env 和 120s `taskkill` 兜底试用。
+- US-020 (P3): sanity check 三按钮状态机、`vision_model` 缺失提示、桌面录制设置区和 early-loss feedback。
+
+**New Components:**
+- `src/recording/desktop_recorder.py` + `src/recording/desktop/` — pynput hook、UIA、剪贴板、ring buffer、PNG/clip sink、热键和 DPI awareness。
+- `src/business/agents/tools/desktop_tools.py` — `list_desktop_actions` / `analyze_desktop_action` / `read_action_clip`。
+- `src/business/agents/prompts/desktop_prompts.py` — PM / Programmer 双轨 prompt 构建。
+- `src/business/orchestration/agent/desktop_syntax_gate.py` — Programmer 代码语法 gate 与自动反馈模板。
+- `src/execution/desktop_trial_runner.py` / `desktop_trial_models.py` — Trial 子进程执行协议。
+- `src/ui/widgets/recording_floating_widget.py` / `desktop_sanity_check_dialog.py` / `desktop_trial_dialogs.py` / `settings/desktop_recording_settings.py`。
+
+**Modified Components:**
+- `src/business/agents/tools/recording_data_tools.py` — 5 通用工具 mode dispatch + desktop stable locator 支持。
+- `src/data/recording_repository.py` — `desktop_recordings` / `desktop_actions` 表、mode 查询入口、Trial 调试目录 startup cleanup。
+- `src/data/config_models.py` / `src/data/unified_config.py` — `recording.desktop.enable_clip` / `vision_model` 配置。
+- `src/recording/filtering/decision.py` / `sql_rewriter.py` — desktop/browser mode allowlist 和 `table_not_in_mode`。
+- `src/ui/widgets/recording_widget.py` / `src/ui/mixins/recording_mixin.py` — desktop 启停、minimize/restore、互斥与 sanity flow。
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` / `AGENTS.md` / `CLAUDE.md` — 桌面录制运行结构与边界同步。
+
+**Tasks Completed:** 86/104 tasks
+
+## UI Stack Redesign — 2026-05-13
+
+**Branch:** `008-ui-stack-redesign`
+**Spec:** `specs/008-ui-stack-redesign`
+
+**What was added:**
+- US-021 (P1): Tauri + React 应用壳，五个主屏同窗导航，自定义红/黄/绿窗口控件执行真实窗口动作。
+- US-022 (P1): Redesigned AI Assistant，支持会话管理、连续时间线、安全 Markdown、执行摘要和非模态高危确认。
+- US-023 (P1): Redesigned Skill Teaching，覆盖三种录制模式、准备状态、录制、意图、学习和 trial 阶段。
+- US-024 (P1): Redesigned Skill List 和 Skill Composition，支持分类动作、range/ordered 组合创建、试用、发布和需复核状态。
+- US-025 (P1): Redesigned Settings，非密钥配置走统一配置入口，secret 走 keyring，设计可见 actions 接入真实业务路径或真实错误。
+
+**New Components:**
+- `frontend/` — React 18 + TypeScript + Vite/Tailwind/Zustand 主 UI、unit tests 和 Playwright e2e。
+- `src-tauri/` — Tauri 2 shell、custom window commands、sidecar lifecycle、capabilities 和打包配置。
+- `src/desktop_api/` — FastAPI sidecar adapter、Pydantic DTOs、token auth、event-stream adapter 和 routers。
+- `src/business/services/desktop_bootstrap_service.py` / `desktop_health_service.py` / `teaching_service.py` / `settings_service.py` / `settings_actions_service.py` / `recording_readiness_service.py` — UI bridge-facing business services。
+- `tests/desktop_api/` / `tests/guardrails/` / `frontend/tests/` — API contract、sidecar/security、legacy PyQt removal、frontend unit/e2e 和 visible-control coverage。
+
+**Modified Components:**
+- `src/main.py` / `mexamplar_gui.py` / `start.bat` — legacy PyQt normal entrypoints retired to transition/failure guidance.
+- `src/ui/` and legacy `tests/ui` / `tests/e2e` PyQt paths — primary PyQt UI removed or replaced by frontend/API/guard coverage.
+- `pyproject.toml`, `frontend/package.json`, `build_tauri.bat`, `build_executable.py`, `installer.iss`, `BUILD_README.txt`, `README.md`, `INSTALL.md` — dependency, packaging, build and install docs updated for Tauri/Python sidecar.
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` / `AGENTS.md` / `CLAUDE.md` — active docs updated for the new UI stack and sidecar boundaries.
+
+**Tasks Completed:** 119/120 tasks (TD001 cleanup follow-up remains open)
+
+## Frontend Event Layer — 2026-05-16
+
+**Branch:** `009-frontend-event-layer`
+**Spec:** `specs/009-frontend-event-layer`
+
+**What was added:**
+- US-001 (P1): 公开 UI 事件契约由后端 UI Event Registry 拥有；前端只消费注册过的 typed event type，不再用内部 blinker 事件名或 `sourceEvent` 决定展示。
+- US-002 (P2): per-subscriber event stream；同会话内带 last-seen sequence 的重连按 buffer 回放，缺口/会话不匹配走 `backend.resync_required` 拉权威快照。
+- US-003 (P3): 试用预览交互式确认走广播 + first-decision-wins，每条请求带后端生成的 `expires_at`，超时/断连/关闭 fail-closed 当拒绝。
+- US-004 (P4): 契约一致性 + guard 测试覆盖未注册事件、旧事件来源字段、裸事件发布和敏感字段泄露。
+
+**New Components:**
+- `src/desktop_api/ui_events.py` — UI Event Registry、typed envelope、per-subscriber queue、payload safety validation。
+- `frontend/src/api/events.ts` + `frontend/src/state/eventStore.ts` — typed event stream consumption、sessionId/sequence 跟踪、resync 触发。
+- Trial preview confirmation 浮层组件（独立于普通 Toast 和高危确认）。
+
+**Modified Components:**
+- `src/utils/events.py` — 新增 UI 投影所需的标准化字段；保留 blinker 作为后端跨模块通知。
+- `src/desktop_api/events.py` — adapter 改走 UI Event Registry + envelope；去掉默认转发未知事件。
+- frontend stores（assistant、teaching、skills、compositions、settings）— 改成只消费 typed event type。
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` — 同步事件层契约。
+
+**Tasks Completed:** 全量完成（详见 `specs/009-frontend-event-layer/tasks.md`）
+
+## Assistant Brain Redesign — 2026-05-24
+
+**Branch:** `010-assistant-brain-redesign`
+**Spec:** `specs/010-assistant-brain-redesign`
+
+**What was added:**
+- US-001 (P1): 跨对话延续的工作记忆——Segment 沉淀写入 hot/persistent zone，新对话自动注入前段脉络；冷启动走 icebreaker（1-2 个核心问题，不展开成问卷）。
+- US-002 (P2): 永久身份 + 可回溯历史档案——assistant 画像迁入 persistent zone、archive zone 按时间/主题轴聚合，显式 `retrieve_archive` 工具下钻。
+- US-003 (P3): 100% 调度 + 可复用 specialist——任务派给临时 subagent 或固定专员，主助理不直接执行；PM/Programmer/Trial 不在 assistant 调度池。
+- US-004 (P4): 避坑（failure zone）+ 人格感知（subconscious zone）+ 自我校准（prediction zone 后台 worker 自动验证 hit/miss/partial/expired）。
+- US-005 (P5): 自动招募 specialist + 大脑管理模块（`/brain`、`/brain/specialists`）覆盖 6 zone 增删改 + skill pool 管理。
+
+**New Components:**
+- `src/business/brain/` — 11 个子模块：`models`、`segment_service`、`distillation_service`、`context_builder`、`decay_router`、`archive_service`、`retrieval_service`、`specialist_service`、`prediction_service`、`management_service`、`background_worker`。
+- `src/data/repos/brain_repository.py` + `src/data/repos/specialist_repository.py` — Memory Entry/Segment CRUD、compare-and-swap 状态转换、事务原子写入、invalidation/soft-delete、feedback signal 持久化；专员 CRUD + 版本历史。
+- v11 SQLite migration — 一次性建全 `brain_segments`、`brain_memory_entries`、`brain_specialists`、`brain_specialist_versions`、`brain_recruitment_signals`、`feedback_signals`（6 zone 共表，按 `zone` 字段区分）。
+- assistant 新工具：`delegate_to_subagent`、`delegate_to_specialist`、`create_specialist`、`retrieve_archive`、`retrieve_failure_zone`、`invalidate_memory_entry`。
+- `frontend/src/screens/BrainScreen/` + `frontend/src/screens/SpecialistScreen/` 两个新主屏。
+- `frontend/src/state/brainStore.ts` + `frontend/src/state/specialistStore.ts`。
+- 自动招募 specialist 的非模态 toast 组件（含 specialist 名 + reason 链接）。
+
+**Modified Components:**
+- `src/business/agents/` — assistant prompt 重构为多 zone 注入（hot/persistent/subconscious 被动注入 + specialist 列表 + capability 列表）+ "100% dispatch" 工作风格段；assistant 不再直接执行任务。
+- `src/desktop_api/` — 新增 brain/specialist router；assistant worker 在每轮跑前用 `BrainContextBuilder` 重建 prompt。
+- `src/utils/events.py` — 新增 `brain_zone_changed`、`brain_specialist_changed`、`segment_boundary_triggered`、`segment_idle_trigger`、`brain_specialist_recruited`、`brain_context_ready` 事件。
+- `src/data/migrations/` — v11 一次性建表迁移。
+- `docs/ARCHITECTURE.md` 第十节 Brain Service 架构 + `docs/PROJECT_CONSTRAINTS.md` Brain Architecture Constraints。
+
+**Tasks Completed:** 全量完成（详见 `specs/010-assistant-brain-redesign/tasks.md`）
+
+## 子代理可唤回机制 — 2026-06-03
+
+**Branch:** `013-subagent-resumable`
+**Spec:** `specs/013-subagent-resumable`
+
+**What was added:**
+- US-035 (P1): 临时子代理撞迭代上限不丢工作，转可唤回暂停；主代理凭 `subagent_id` 唤回从断点续跑直至完成，可重复唤回。
+- US-036 (P1): 账单/网络类 LLM 调用最终失败时子代理原地冻结保活、暂停原因可区分（可恢复 vs 不可恢复失败）；外部恢复后（含进程重启）凭 `subagent_id` 唤回续跑。
+- US-037 (P2): 主代理在不消耗额外模型调用的前提下查看子代理工作概览（轮数/工具调用次数/最后产出/状态），据此决定续跑还是新开。
+- US-038 (P3): 对已正常完成的子代理带追加指令唤回，在原有上下文基础上补齐返工，不从零重派。
+
+**New Components:**
+- `src/business/agents/config.py` — `ResultType.PAUSED` + `AgentConfig.resumable_on_failure`
+- `src/business/agents/agent_loop.py` — 两路 PAUSED 终止语义 + `_is_recoverable_llm_failure` 失败分类
+- `src/business/agents/tools/assistant_tools.py` — `continue_subagent` / `inspect_subagent` schema & handler 工厂
+- `src/business/orchestration/agent/orchestrator.py` — 委派回传 `subagent_id`、PAUSED 句柄、归属校验、续跑/概览编排
+- `src/business/agents/prompts/assistant_prompt.py` — "子代理暂停（可唤回）时的处理"引导段
+- `tests/business/agents/test_subagent_resumable.py` — 15 例行为契约测试
+
+**Tasks Completed:** 31/31 tasks
+
+## 主助理对话透明与可控 — 2026-06-05
+
+**Branch:** `014-assistant-chat-transparency`
+**Spec:** `specs/014-assistant-chat-transparency`
+
+**What was added:**
+- US-039 (P1): AI Assistant 运行时输入门控与停止，停止以协作式深度取消穿透同步派出的子任务，并保留已产内容。
+- US-040 (P2): 每会话单条可原地编辑的排队消息，成功或等待用户回答时自动派发，失败或停止时退回草稿。
+- US-041 (P2): 主助理活动时间线实时展示，默认折叠、限高内滚，历史回看可重建或显示规整概要。
+- US-042 (P2): 子任务卡片、状态动效和详情抽屉，重连或重开会话后通过权威端点恢复。
+- US-043 (P3): 暂停子任务的继续任务入口，经主助理调度既有 `continue_subagent` 续跑，可带补充消息。
+
+**New Components:**
+- `src/business/agents/run_context.py` — ContextVar 运行上下文、session→Event 注册表、代际 token、待停止集合。
+- `src/business/agents/observability.py` — 只读重建子任务权威列表和活动 transcript。
+- `frontend/src/screens/assistant/ActivityTimeline.tsx`、`ActivityStepRow.tsx`、`StepIcon.tsx` — 助理过程时间线。
+- `frontend/src/screens/assistant/SubagentCard.tsx`、`SubagentDetailDrawer.tsx` — 子任务卡片与详情。
+- `frontend/src/state/assistantTypes.ts`、`assistantHelpers.ts` — assistant 透明交互类型与辅助逻辑。
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` / `config.py` — 协作式取消检查、`ResultType.CANCELLED`、活动步骤事件。
+- `src/business/orchestration/agent/orchestrator.py` — `CANCELLED` 非错误处理、子任务生命周期事件、继续任务兜底。
+- `src/desktop_api/assistant_runtime.py` / `routers/assistant.py` / `confirmations.py` — stop、cancelled progress、pending 高危确认 fail-closed。
+- `src/desktop_api/ui_events.py` / `ui_event_projector.py` / `src/utils/events.py` — `assistant.activity`、`assistant.subagent` 和子任务生命周期投影。
+- `frontend/src/screens/assistant/AssistantScreen.tsx` / `MessageComposer.tsx` / `frontend/src/state/assistantStore.ts` / `frontend/src/api/assistant.ts` — 输入门控、停止、排队、活动和子任务接线。
+- `docs/ARCHITECTURE.md`、`frontend/AGENTS.md`、`src/AGENTS.md` — 活文档与模块入口同步。
+
+**Tasks Completed:** 71/71 tasks

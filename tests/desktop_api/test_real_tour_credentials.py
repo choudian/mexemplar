@@ -21,6 +21,9 @@ class FakeConfig:
     def get_ai_thinking_level(self) -> str:
         return "off"
 
+    def get_ai_max_tokens(self) -> int:
+        return 32000
+
     def get_ai_request_timeout(self) -> float:
         return 30.0
 

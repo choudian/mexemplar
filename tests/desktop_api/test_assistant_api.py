@@ -12,10 +12,15 @@ from src.desktop_api.routers import assistant as assistant_router
 
 class FakeAssistantRuntime:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[tuple[str, str, dict | None]] = []
 
-    def dispatch_message(self, session_id: str, content: str) -> bool:
-        self.calls.append((session_id, content))
+    def dispatch_message(
+        self,
+        session_id: str,
+        content: str,
+        continue_subagent: dict | None = None,
+    ) -> bool:
+        self.calls.append((session_id, content, continue_subagent))
         return True
 
 
@@ -140,7 +145,29 @@ def test_assistant_messages_are_display_filtered_and_send_dispatches(desktop_api
 
     assert sent.status_code == 200
     assert sent.json() == {"accepted": True, "sessionId": session_id}
-    assert fake_runtime.calls == [(session_id, "continue")]
+    assert fake_runtime.calls == [(session_id, "continue", None)]
+
+
+def test_assistant_send_message_passes_structured_continue_subagent(desktop_api_client):
+    fake_runtime = FakeAssistantRuntime()
+    desktop_api_client.app.dependency_overrides[assistant_router.get_assistant_runtime] = (
+        lambda: fake_runtime
+    )
+    try:
+        sent = desktop_api_client.post(
+            "/api/assistant/sessions/ast_1/messages",
+            json={
+                "content": "继续任务",
+                "continueSubagent": {"subagentId": "sub_1", "supplemental": "补充"},
+            },
+        )
+    finally:
+        desktop_api_client.app.dependency_overrides.clear()
+
+    assert sent.status_code == 200
+    assert fake_runtime.calls == [
+        ("ast_1", "继续任务", {"subagentId": "sub_1", "supplemental": "补充"})
+    ]
 
 
 def test_confirmation_decision_unknown_request_is_stable(desktop_api_client):

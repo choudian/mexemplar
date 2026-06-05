@@ -144,6 +144,14 @@ export function AppShell(): JSX.Element {
       if (!domains || domains.includes("skill")) refreshes.push(refreshSkillMethodologies());
       if (!domains || domains.includes("compositions")) refreshes.push(refreshCompositions());
       if (!domains || domains.includes("settings")) refreshes.push(refreshSettings());
+      if (!domains || domains.includes("assistant")) {
+        const assistantState = useAssistantStore.getState();
+        const sessionId = assistantState.activeSessionId;
+        if (sessionId) {
+          refreshes.push(assistantState.refreshSubagents(sessionId));
+          refreshes.push(assistantState.refreshActivityTranscript(sessionId));
+        }
+      }
       if (!domains || domains.includes("brain")) {
         const activeBrainZone = useBrainStore.getState().activeZone ?? "hot";
         refreshes.push(refreshBrainZones());

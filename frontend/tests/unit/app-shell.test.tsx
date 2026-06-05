@@ -94,16 +94,23 @@ describe("AppShell", () => {
       messages: [],
       query: "",
       draft: "",
+      draftBySession: {},
       loadingSessions: false,
       loadingMessages: false,
       sending: false,
+      stopping: false,
       hasMoreBefore: false,
       nextBeforeSequence: null,
       progress: { status: "idle", headline: "" },
+      progressBySession: {},
+      stoppingBySession: {},
       confirmations: [],
       lastError: null,
       idleThresholdMs: null,
       pendingOptimisticMessages: [],
+      turnActivityBySession: {},
+      activeTurnIdBySession: {},
+      queuedMessageBySession: {},
     });
     useTeachingStore.setState({
       hydrated: false,
@@ -430,6 +437,60 @@ describe("AppShell", () => {
     resolveRun();
 
     await waitFor(() => expect(useTeachingStore.getState().stage).toBe("published"));
+  });
+
+  test("refreshes assistant subagents and transcript on assistant resync", async () => {
+    useAssistantStore.setState({
+      activeSessionId: "ast_1",
+      messages: [{ sequence: 1, role: "user", content: "做事", createdAt: null, rendering: "plain_text" }],
+      turnActivityBySession: {
+        ast_1: { seq_1: { turnId: "seq_1", fromSequence: 1, steps: [], subagents: [] } },
+      },
+      activeTurnIdBySession: { ast_1: "seq_1" },
+    });
+    const streamFrames = [
+      eventFrame({
+        eventId: "evt_assistant_resync",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: null,
+        type: "backend.resync_required",
+        scope: {},
+        payload: { reason: "replay_gap", domains: ["assistant"], eventSessionId: "ui_sess_test" },
+        createdAt: "2026-05-10T00:00:00Z",
+      }),
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/events")) return eventStreamResponse(streamFrames, { close: true });
+      if (url.endsWith("/api/assistant/sessions/ast_1/subagents")) {
+        return jsonResponse({
+          items: [{ subagentId: "sub_1", label: "子助手", task: "查资料", status: "running", turnStartSequence: 1 }],
+        });
+      }
+      if (url.includes("/api/assistant/sessions/ast_1/transcript")) {
+        return jsonResponse({
+          steps: [{ kind: "tool_call", toolName: "snapshot", text: "权威步骤", seq: 1 }],
+          compressed: false,
+        });
+      }
+      if (url.includes("/api/assistant/sessions?")) return jsonResponse({ items: [] });
+      return jsonResponse(bootstrapPayload);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AppShell />);
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/assistant/sessions/ast_1/subagents"))).toBe(true),
+    );
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([input]) => String(input).includes("/api/assistant/sessions/ast_1/transcript"))).toBe(true),
+    );
+    await waitFor(() =>
+      expect(useAssistantStore.getState().turnActivityBySession.ast_1.seq_1.subagents).toHaveLength(1),
+    );
+    expect(useAssistantStore.getState().turnActivityBySession.ast_1.seq_1.steps[0].toolName).toBe("snapshot");
   });
 
   test("does not apply incremental events after a failed authoritative resync", async () => {

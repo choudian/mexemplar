@@ -137,6 +137,21 @@ brain_skill_supersede_completed = _signals.signal("brain_skill_supersede_complet
 brain_skill_bootstrap_fallback_used = _signals.signal("brain_skill_bootstrap_fallback_used")
 """内置方法论 seed 读取失败并启用 fallback"""
 
+# 助理对话透明化事件（014-assistant-chat-transparency）
+# 仅由可观测的助理 / 子代理 / 专员运行链路 emit（AgentLoop 仅在 run_context 存在时发出），
+# 经 ui_event_projector 投影为 assistant.activity / assistant.subagent typed UI 事件。
+assistant_agent_step = _signals.signal("assistant_agent_step")
+"""助理/子代理逐步活动事件：reasoning / tool_call / tool_result（best-effort，仅可观测运行时）"""
+
+assistant_subagent_started = _signals.signal("assistant_subagent_started")
+"""子任务委派开始事件（卡片壳 + running 状态，session_id=父助理会话）"""
+
+assistant_subagent_finished = _signals.signal("assistant_subagent_finished")
+"""子任务委派结束事件（status∈{done,failed}，session_id=父助理会话）"""
+
+assistant_subagent_paused = _signals.signal("assistant_subagent_paused")
+"""子任务委派暂停事件（用户停止/取消，status=suspended，session_id=父助理会话）"""
+
 # =============================================================================
 # 事件数据类
 # =============================================================================
@@ -288,6 +303,10 @@ _signal_names = [
     "brain_skill_equipment_changed",
     "brain_skill_supersede_completed",
     "brain_skill_bootstrap_fallback_used",
+    "assistant_agent_step",
+    "assistant_subagent_started",
+    "assistant_subagent_finished",
+    "assistant_subagent_paused",
 ]
 
 
@@ -344,6 +363,10 @@ __all__ = [
     "brain_skill_equipment_changed",
     "brain_skill_supersede_completed",
     "brain_skill_bootstrap_fallback_used",
+    "assistant_agent_step",
+    "assistant_subagent_started",
+    "assistant_subagent_finished",
+    "assistant_subagent_paused",
     # 数据类
     "RecordingEventData",
     # 函数

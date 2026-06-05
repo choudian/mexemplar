@@ -117,13 +117,52 @@ class AssistantMessagesResponse(BaseModel):
     nextBeforeSequence: int | None = None
 
 
+class AssistantContinueSubagentDirective(BaseModel):
+    subagentId: str
+    supplemental: str | None = None
+
+
 class AssistantSendMessageRequest(BaseModel):
     content: str
+    continueSubagent: AssistantContinueSubagentDirective | None = None
 
 
 class AssistantSendMessageResponse(BaseModel):
     accepted: bool
     sessionId: str
+
+
+class AssistantStopRequest(BaseModel):
+    runId: str | None = None
+
+
+class AssistantStopResponse(BaseModel):
+    accepted: bool
+
+
+class AssistantActivityStep(BaseModel):
+    kind: Literal["reasoning", "tool_call", "tool_result"]
+    toolName: str | None = None
+    text: str
+    seq: int
+
+
+class AssistantTranscriptResponse(BaseModel):
+    steps: list[AssistantActivityStep]
+    compressed: bool = False
+
+
+class AssistantSubagentSummary(BaseModel):
+    subagentId: str
+    label: str
+    task: str
+    status: Literal["running", "done", "suspended", "failed"]
+    lastOutput: str | None = None
+    turnStartSequence: int | None = None
+
+
+class AssistantSubagentListResponse(BaseModel):
+    items: list[AssistantSubagentSummary]
 
 
 class AssistantConfirmationDecisionRequest(BaseModel):
@@ -333,9 +372,7 @@ class SkillEquipmentAuditRow(BaseModel):
                 )
         elif self.status == "active":
             if self.unequipped_at is not None or self.unequipped_reason is not None:
-                raise ValueError(
-                    "active rows must not have unequipped_at or unequipped_reason"
-                )
+                raise ValueError("active rows must not have unequipped_at or unequipped_reason")
         return self
 
 

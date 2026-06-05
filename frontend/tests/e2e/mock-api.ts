@@ -339,6 +339,31 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (!equipmentByEntity.spec_1.includes("sk_created")) equipmentByEntity.spec_1.push("sk_created");
       return json(route, { accepted: true, sessionId: "ast_1" });
     }
+    if (path === "/api/assistant/sessions/ast_1/stop" && method === "POST") {
+      return json(route, { accepted: true });
+    }
+    if (path === "/api/assistant/sessions/ast_1/subagents" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            subagentId: "sub_1",
+            label: "子助手",
+            task: "检索季度报表",
+            status: "suspended",
+            lastOutput: "已检索到部分数据",
+          },
+        ],
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/transcript" && method === "GET") {
+      return json(route, {
+        steps: [
+          { kind: "tool_call", toolName: "search", text: "查询报表", seq: 1 },
+          { kind: "tool_result", toolName: "search", text: "命中 3 条", seq: 2 },
+        ],
+        compressed: false,
+      });
+    }
     if (path === "/api/assistant/segment-boundary" && method === "POST") {
       return json(route, { segment_id: "seg_new", status: "pending" });
     }

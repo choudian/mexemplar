@@ -9,7 +9,14 @@ function jsonResponse(payload: unknown): Response {
 }
 
 function errorResponse(status: number, payload: unknown): Response {
-  return { ok: false, status, json: async () => payload } as Response;
+  // requestJson 的错误分支用 response.text() 解析错误体——真实 Response 同时有 text()/json()，
+  // mock 必须一并提供 text()，否则错误路径抛 TypeError 而非 DesktopApiError。
+  return {
+    ok: false,
+    status,
+    json: async () => payload,
+    text: async () => JSON.stringify(payload),
+  } as Response;
 }
 
 const entry = {

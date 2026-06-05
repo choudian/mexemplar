@@ -470,6 +470,20 @@ select:focus-visible,
   transition: background 120ms ease, color 120ms ease;
 }
 
+.me-link-button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  padding: 0;
+}
+
+.me-link-button:hover {
+  text-decoration: underline;
+}
+
 .me-toggle {
   display: inline-flex;
   height: 28px;
@@ -1156,6 +1170,9 @@ select:focus-visible,
 .assistant-composer-tools,
 .assistant-composer .me-button {
   pointer-events: auto;
+  /* 组合 bar 以负 margin 覆盖在输入框上方；显式抬升按钮，避免输入框拦截点击（停止/发送可点） */
+  position: relative;
+  z-index: 2;
 }
 
 .assistant-composer-tools {
@@ -1169,6 +1186,56 @@ select:focus-visible,
   max-width: 720px;
   margin: 0 auto;
   padding-bottom: 48px;
+}
+
+/* 014: 运行时输入门控 + 停止三态 */
+.assistant-composer[data-running="true"] textarea {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-2));
+  background: color-mix(in srgb, var(--surface-1) 92%, var(--accent) 8%);
+}
+
+.assistant-composer[data-running="true"] .me-button-secondary {
+  color: var(--danger, #d23b3b);
+  border-color: color-mix(in srgb, var(--danger, #d23b3b) 45%, transparent);
+}
+
+.assistant-composer[data-running="true"] .me-button-secondary:hover {
+  background: color-mix(in srgb, var(--danger, #d23b3b) 10%, transparent);
+}
+
+/* 014 US2: 排队下一条（整框三态） */
+.assistant-queued-box {
+  display: block;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  min-height: 74px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border-2));
+  border-radius: var(--radius-lg);
+  padding: 10px 14px 48px;
+  background: color-mix(in srgb, var(--surface-1) 88%, var(--accent) 12%);
+  color: var(--text);
+  text-align: left;
+  cursor: text;
+}
+
+.assistant-queued-box:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.assistant-queued-hint {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--text-2, #888);
+  margin-bottom: 4px;
+}
+
+.assistant-queued-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.55;
 }
 
 .teaching-screen,
@@ -5594,4 +5661,376 @@ select:focus-visible,
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/* =========================================================================
+   Assistant 透明/可控（活动时间线 / 子任务卡片 / 详情抽屉）
+   ========================================================================= */
+
+/* 活动时间线（折叠） */
+.assistant-activity {
+  align-self: stretch;
+  margin-left: 38px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+
+.assistant-activity > summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--text-2);
+  font-weight: 550;
+  list-style: none;
+}
+
+.assistant-activity > summary::-webkit-details-marker {
+  display: none;
+}
+
+.assistant-activity > summary::after {
+  content: "\25B6";
+  margin-left: auto;
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.assistant-activity[open] > summary::after {
+  transform: rotate(90deg);
+}
+
+.assistant-activity-count {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.assistant-activity[open] > summary .assistant-activity-count {
+  margin-left: 0;
+}
+
+.assistant-activity-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 12px 12px;
+  border-top: 1px solid var(--border-2);
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.assistant-step {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text-2);
+  line-height: 1.5;
+  animation: me-fade-in 220ms ease both;
+}
+
+.assistant-step-icon {
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--text-muted);
+}
+
+.assistant-step[data-kind="tool"] .assistant-step-icon {
+  color: var(--accent);
+}
+
+.assistant-step[data-kind="result"] .assistant-step-icon {
+  color: var(--ok);
+}
+
+.assistant-step-text code {
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 11.5px;
+}
+
+/* 子助手卡片 */
+.assistant-subcard {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease, transform 120ms ease;
+  animation: me-fade-in 240ms ease both;
+}
+
+.assistant-subcard:hover,
+.assistant-subcard:focus-visible {
+  border-color: color-mix(in oklch, var(--accent) 40%, var(--border-1));
+  box-shadow: 0 4px 14px rgb(20 20 20 / 8%);
+}
+
+.assistant-subcard[data-status="running"] {
+  border-color: color-mix(in oklch, var(--accent) 45%, var(--border-1));
+  background: color-mix(in oklch, var(--accent) 5%, var(--surface-1));
+}
+
+.assistant-subcard[data-status="suspended"] {
+  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--warn) 7%, var(--surface-1));
+}
+
+.assistant-subcard-icon {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.assistant-subcard[data-status="suspended"] .assistant-subcard-icon {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.assistant-subcard[data-status="done"] .assistant-subcard-icon {
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.assistant-subcard-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.assistant-subcard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.assistant-subcard-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.assistant-subcard-status-running {
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.assistant-subcard-status-done {
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.assistant-subcard-status-suspended {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.assistant-subcard-task {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.assistant-subcard-output {
+  margin: 6px 0 0;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.assistant-subcard-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.assistant-link {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.assistant-link:hover {
+  color: var(--accent);
+}
+
+.assistant-continue-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 4px 11px;
+  border: 1px solid color-mix(in oklch, var(--warn) 42%, var(--border-1));
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--warn) 12%, var(--surface-1));
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assistant-continue-btn:hover {
+  background: color-mix(in oklch, var(--warn) 20%, var(--surface-1));
+}
+
+/* 014 US3: 历史压缩概要提示 */
+.assistant-activity-compressed {
+  margin: 0 0 4px;
+  font-size: 12px;
+  color: var(--text-muted, #888);
+  font-style: italic;
+}
+
+/* 014 US5: 继续任务补充输入 */
+.assistant-continue-form {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.assistant-continue-input {
+  min-width: 160px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 12px;
+}
+
+/* 详情抽屉 */
+.assistant-drawer-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: flex-end;
+  background: rgb(15 15 15 / 28%);
+  animation: me-fade-in 150ms ease both;
+}
+
+.assistant-drawer {
+  display: flex;
+  width: min(420px, 86%);
+  flex-direction: column;
+  border-left: 1px solid var(--border-1);
+  background: var(--surface-1);
+  box-shadow: -18px 0 40px rgb(20 20 20 / 16%);
+}
+
+.assistant-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-1);
+}
+
+.assistant-drawer-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--accent);
+}
+
+.assistant-drawer-title > div {
+  display: flex;
+  flex-direction: column;
+}
+
+.assistant-drawer-title strong {
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.assistant-drawer-title small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.assistant-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.assistant-drawer-hint {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.assistant-drawer-empty {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.assistant-drawer-empty[role="alert"] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.assistant-steplist {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.assistant-steplist .assistant-step {
+  font-size: 12.5px;
+}
+
+.assistant-drawer-output {
+  margin-top: 16px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--ok) 30%, var(--border-1));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--ok) 6%, var(--surface-2));
+}
+
+.assistant-drawer-output > span {
+  color: var(--ok);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.assistant-drawer-output > p {
+  margin: 4px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
 }

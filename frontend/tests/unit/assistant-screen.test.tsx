@@ -168,7 +168,7 @@ describe("AssistantScreen", () => {
     expect(useAssistantStore.getState().messages).toEqual([]);
     expect(useAssistantStore.getState().draft).toBe("Second message");
     expect(useAssistantStore.getState().pendingOptimisticMessages).toEqual([]);
-    expect(useAssistantStore.getState().progress.status).toBe("waiting_for_user");
+    expect(useAssistantStore.getState().progress.status).toBe("running");
   });
 
   test("keeps authoritative assistant reply when a later optimistic send is rejected", async () => {
@@ -248,7 +248,7 @@ describe("AssistantScreen", () => {
     ]);
     expect(useAssistantStore.getState().draft).toBe("Second question");
     expect(useAssistantStore.getState().pendingOptimisticMessages).toEqual([]);
-    expect(useAssistantStore.getState().progress.status).toBe("waiting_for_user");
+    expect(useAssistantStore.getState().progress.status).toBe("running");
   });
 
   test("sends the exact draft without trimming leading or trailing whitespace", async () => {

@@ -1,21 +1,57 @@
 import { PanelLeft, Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
 import { useAssistantStore } from "../../state/assistantStore";
-import type { PendingAssistantMessage } from "../../state/assistantStore";
+import type { AssistantTurnActivity, PendingAssistantMessage } from "../../state/assistantStore";
+import { emptyTurn, turnIdFromMessage } from "../../state/assistantStore";
 import { useShellStore } from "../../state/shellStore";
+import ActivityTimeline from "./ActivityTimeline";
 import ConfirmationToast from "./ConfirmationToast";
 import ExecutionSummary from "./ExecutionSummary";
 import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
+import SubagentCard from "./SubagentCard";
+import SubagentDetailDrawer from "./SubagentDetailDrawer";
 
 type AssistantDisplayMessage = AssistantMessage | PendingAssistantMessage;
 
+type ThreadBlock =
+  | { kind: "message"; message: AssistantDisplayMessage }
+  | { kind: "transparency"; turnId: string; turn: AssistantTurnActivity; running: boolean };
+
 function messageKey(message: AssistantDisplayMessage): string | number {
   return "optimisticId" in message ? message.optimisticId : message.sequence;
+}
+
+function buildThreadBlocks(
+  messages: AssistantDisplayMessage[],
+  turns: Record<string, AssistantTurnActivity>,
+  activeTurnId: string | undefined,
+  running: boolean,
+): ThreadBlock[] {
+  const blocks: ThreadBlock[] = [];
+  let currentTurnId: string | null = null;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    const newTurnId = turnIdFromMessage(message);
+    if (newTurnId) currentTurnId = newTurnId;
+    blocks.push({ kind: "message", message });
+
+    if (!currentTurnId) continue;
+    const next = messages[index + 1];
+    const nextStartsTurn = next ? turnIdFromMessage(next) !== null : true;
+    if (!nextStartsTurn) continue;
+
+    const turn = turns[currentTurnId] ?? emptyTurn(currentTurnId);
+    const isRunning = running && activeTurnId === currentTurnId;
+    if (isRunning || turn.steps.length > 0 || turn.subagents.length > 0 || turn.fromSequence !== undefined) {
+      blocks.push({ kind: "transparency", turnId: currentTurnId, turn, running: isRunning });
+    }
+  }
+  return blocks;
 }
 
 export function AssistantScreen(): JSX.Element {
@@ -28,6 +64,7 @@ export function AssistantScreen(): JSX.Element {
   const loadingSessions = useAssistantStore((state) => state.loadingSessions);
   const loadingMessages = useAssistantStore((state) => state.loadingMessages);
   const sending = useAssistantStore((state) => state.sending);
+  const stopping = useAssistantStore((state) => state.stopping);
   const hasMoreBefore = useAssistantStore((state) => state.hasMoreBefore);
   const progress = useAssistantStore((state) => state.progress);
   const confirmations = useAssistantStore((state) => state.confirmations);
@@ -43,11 +80,28 @@ export function AssistantScreen(): JSX.Element {
   const setQuery = useAssistantStore((state) => state.setQuery);
   const setDraft = useAssistantStore((state) => state.setDraft);
   const sendDraft = useAssistantStore((state) => state.sendDraft);
+  const stopRun = useAssistantStore((state) => state.stopRun);
+  const queuedMessageBySession = useAssistantStore((state) => state.queuedMessageBySession);
+  const setQueuedText = useAssistantStore((state) => state.setQueuedText);
+  const commitQueued = useAssistantStore((state) => state.commitQueued);
+  const editQueued = useAssistantStore((state) => state.editQueued);
+  const turnActivityBySession = useAssistantStore((state) => state.turnActivityBySession);
+  const activeTurnIdBySession = useAssistantStore((state) => state.activeTurnIdBySession);
+  const continueSubagent = useAssistantStore((state) => state.continueSubagent);
   const decideConfirmation = useAssistantStore((state) => state.decideConfirmation);
   const autoApprove = useAssistantStore((state) => state.autoApprove);
   const setAutoApprove = useAssistantStore((state) => state.setAutoApprove);
   const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
   const [historyOpen, setHistoryOpen] = useState(true);
+  const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
+
+  const activeTurns = activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {};
+  const activeTurnId = activeSessionId ? activeTurnIdBySession[activeSessionId] : undefined;
+  const activeSubagents = useMemo(
+    () => Object.values(activeTurns).flatMap((turn) => turn.subagents),
+    [activeTurns],
+  );
+  const openSubagent = activeSubagents.find((item) => item.subagentId === openSubagentId);
 
   useEffect(() => {
     void loadSessions();
@@ -67,6 +121,11 @@ export function AssistantScreen(): JSX.Element {
           ]
         : messages,
     [activeSessionId, messages, pendingOptimisticMessages],
+  );
+  const isRunning = progress.status === "running";
+  const threadBlocks = useMemo(
+    () => buildThreadBlocks(visibleMessages, activeTurns, activeTurnId, isRunning),
+    [activeTurnId, activeTurns, isRunning, visibleMessages],
   );
   const conversationTitle = activeSession?.title ?? (visibleMessages.length > 0 ? "当前对话" : "新对话");
 
@@ -153,8 +212,31 @@ export function AssistantScreen(): JSX.Element {
             </div>
           ) : null}
           <div className="assistant-thread">
-            {visibleMessages.map((message) =>
-              message.role === "summary" ? (
+            {threadBlocks.map((block) => {
+              if (block.kind === "transparency") {
+                return activeSessionId ? (
+                  <Fragment key={`turn_${activeSessionId}_${block.turnId}`}>
+                    <ActivityTimeline
+                      sessionId={activeSessionId}
+                      turnId={block.turnId}
+                      liveSteps={block.turn.steps}
+                      running={block.running}
+                      afterSequence={block.turn.fromSequence}
+                      beforeSequence={block.turn.beforeSequence}
+                    />
+                    {block.turn.subagents.map((subagent) => (
+                      <SubagentCard
+                        key={`${block.turnId}_${subagent.subagentId}`}
+                        subagent={subagent}
+                        onOpen={() => setOpenSubagentId(subagent.subagentId)}
+                        onContinue={(note) => void continueSubagent(activeSessionId, subagent.subagentId, note)}
+                      />
+                    ))}
+                  </Fragment>
+                ) : null;
+              }
+              const { message } = block;
+              return message.role === "summary" ? (
                 <details className="assistant-summary" key={messageKey(message)}>
                   <summary>之前的对话内容</summary>
                   <div className="assistant-summary-body">
@@ -173,12 +255,19 @@ export function AssistantScreen(): JSX.Element {
                     )}
                   </div>
                 </article>
-              ),
-            )}
+              );
+            })}
             <ExecutionSummary status={progress.status} headline={progress.headline} />
             {lastError ? <div className="assistant-error">{lastError}</div> : null}
           </div>
         </div>
+        {openSubagent && activeSessionId ? (
+          <SubagentDetailDrawer
+            sessionId={activeSessionId}
+            subagent={openSubagent}
+            onClose={() => setOpenSubagentId(null)}
+          />
+        ) : null}
         <div className="assistant-confirmation-stack">
           {confirmations.map((confirmation) => (
             <ConfirmationToast
@@ -196,8 +285,15 @@ export function AssistantScreen(): JSX.Element {
           autoApprove={autoApprove}
           draft={draft}
           sending={sending}
+          isRunning={isRunning}
+          stopping={stopping}
+          queued={activeSessionId ? queuedMessageBySession[activeSessionId] : undefined}
           onDraftChange={setDraft}
           onSend={sendDraft}
+          onStop={() => void stopRun()}
+          onQueuedTextChange={setQueuedText}
+          onCommitQueued={commitQueued}
+          onEditQueued={editQueued}
           onToggleAutoApprove={(newVal) => void setAutoApprove(newVal)}
         />
       </div>

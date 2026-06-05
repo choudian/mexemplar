@@ -13,6 +13,7 @@ from src.business.agents.tools.builtin_general_tools import (
     get_pending_confirmation,
     register_confirm_mechanism,
     set_confirm_result,
+    settle_pending_confirmations_for_session,
 )
 from src.desktop_api.events import event_queue
 from src.desktop_api.ui_events import CONFIRMATION_VALID_ACTION_TYPES
@@ -101,6 +102,14 @@ def confirmation_event_payload(request_id: str) -> dict[str, object]:
             if key in _CONFIRMATION_EXTRA_KEYS:
                 payload[key] = value
     return payload
+
+
+def fail_closed_confirmations_for_session(session_id: str) -> list[str]:
+    """停止时把该会话仍 pending 的高危确认 fail-closed 当"拒绝"并唤醒回合（FR-006b / C2-X1）。
+
+    返回实际被拒绝的 request_id。复用同步确认协议 first-decision-wins，不破坏 CC-001（expires_at 不变）。
+    """
+    return settle_pending_confirmations_for_session(session_id, False, CONFIRM_SOURCE_TOAST_REJECT)
 
 
 def record_confirmation_decision(

@@ -16,6 +16,7 @@ class AgentExecutionPort(Protocol):
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
+        assistant_continue_intent: dict | None = None,
     ) -> AgentResult | None: ...
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None: ...
@@ -28,6 +29,7 @@ class AssistantTaskPort(Protocol):
         user_input: Optional[Union[str, dict]],
         workflow_id: str = None,
         session_id: str = None,
+        assistant_continue_intent: dict | None = None,
     ) -> None: ...
 
     def start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None: ...

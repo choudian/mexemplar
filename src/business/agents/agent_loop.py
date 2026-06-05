@@ -7,15 +7,17 @@ Agent Loop 核心
 import json
 import logging
 import time
-from typing import Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from src.business.ai.llm_client import LangChainLLMClient, LLMResponse, ToolCallInfo
 from src.business.debug.context import TraceContext
 from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
 from src.data.repositories import MessageRepository, SessionRepository
+from src.utils.events import emit
 from src.utils.helpers import safe_format_template
 
+from . import run_context
 from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
 from .hook_models import ToolCallContext, ToolExecutionOutcome, freeze_tool_args
@@ -24,6 +26,18 @@ from .tool_helpers import is_standardized_error, make_error_result
 logger = logging.getLogger(__name__)
 
 _INJECTED_TOOL_NAMES = frozenset({"load_reference", "talk_to_user"})
+
+# 活动事件文本截断上限（projector 还会再走 009 payload allowlist 脱敏）。
+_ACTIVITY_TEXT_LIMIT = 2000
+
+
+def _activity_payload_text(value: Any) -> Any:
+    """Preserve structured values so the UI-event safety layer can inspect keys."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value[:_ACTIVITY_TEXT_LIMIT]
+    return value
 
 # LLM 调用最终失败的"可恢复性"分类标记。
 # 仅账户配额/限流/网络这类"需等外部恢复"的失败才允许转可唤回暂停（见 spec Assumptions）；
@@ -106,6 +120,14 @@ def classify_tool_calls(
             kind = "ordinary"
         result.append((tc, kind, td))
     return result
+
+
+def _serialize_tool_calls(tool_calls: List[ToolCallInfo]) -> str:
+    """序列化 assistant tool_calls 为持久化 JSON（id/name/args，与 005/003 配对口径一致）。"""
+    return json.dumps(
+        [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in tool_calls],
+        ensure_ascii=False,
+    )
 
 
 class AgentLoop:
@@ -274,6 +296,52 @@ class AgentLoop:
     def _get_workflow_id(self, session_id: str) -> str | None:
         session = self._session_repo.get_by_id(session_id)
         return getattr(session, "workflow_id", None) if session else None
+
+    def _cancellation_result(self, ctx: ContextManager) -> Optional[AgentResult]:
+        """协作式取消检查（014）。
+
+        命中当前运行上下文的 cancel_event → 置会话 suspended 并返回 CANCELLED。
+        非助理流程从不 begin 运行上下文 → get_current() 为 None → 恒不取消（零行为变化）。
+        同线程同步派出的子 loop 读到的是父的 cancel_event，故父被停时子 loop 也在安全节点退出。
+        """
+        run_ctx = run_context.get_current()
+        if run_ctx is not None and run_ctx.cancel_event.is_set():
+            ctx.update_session_status("suspended")
+            logger.info("[Agent Loop] 协作式取消命中，会话置 suspended: %s", ctx.session_id)
+            return AgentResult(result_type=ResultType.CANCELLED)
+        return None
+
+    def _emit_activity(
+        self,
+        ctx: ContextManager,
+        kind: str,
+        *,
+        tool_name: Optional[str] = None,
+        text: Any = "",
+    ) -> None:
+        """逐步活动事件 emit（014，best-effort）。
+
+        仅在可观测运行（run_context 存在，即助理/子代理/专员链路）时发出——非助理流程
+        （PM/Programmer/Trial）ContextVar 空 → 零 emit、零行为变化（E4/CC-005）。
+        session_id 取 root（子代理活动也归到父会话），subagent_id 为自身 session（≠root 时）。
+        """
+        run_ctx = run_context.get_current()
+        if run_ctx is None:
+            return
+        seq = run_context.next_activity_seq()
+        if seq is None or seq > run_context.MAX_ACTIVITY_EVENTS_PER_RUN:
+            return  # 单回合上限，防极端长回合刷爆前端 store
+        subagent_id = ctx.session_id if ctx.session_id != run_ctx.root_session_id else None
+        emit(
+            "assistant_agent_step",
+            session_id=run_ctx.root_session_id,
+            subagent_id=subagent_id,
+            agent_type=self._config.agent_type.value,
+            kind=kind,
+            tool_name=tool_name,
+            text=_activity_payload_text(text),
+            seq=seq,
+        )
 
     def _execute_tool_call(
         self,
@@ -603,6 +671,8 @@ class AgentLoop:
 
             # Persist result (standardized error or success)
             ctx.save_tool_result(tool_call_id=tc.id, tool_name=tc.name, content=result)
+            # 逐步活动事件（014）：工具结果进时间线（projector 再走 009 脱敏）
+            self._emit_activity(ctx, "tool_result", tool_name=tc.name, text=result)
             if outcome.failed:
                 # Only cascade failure for tools with side effects
                 if tool_def.has_side_effects:
@@ -677,13 +747,24 @@ class AgentLoop:
         ctx.save_assistant_message(
             content=response.content or "",
             tool_calls=(
-                json.dumps(
-                    [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in response.tool_calls]
-                )
+                _serialize_tool_calls(response.tool_calls)
                 if response.has_tool_calls
                 else None
             ),
         )
+
+        # 逐步活动事件（014）：仅随【带工具调用的中间消息】一同产生 reasoning，
+        # 与历史重建口径一致（C2-E4）；最终无工具调用的回复走既有 display-message，不进时间线。
+        if response.has_tool_calls:
+            if response.content:
+                self._emit_activity(ctx, "reasoning", text=response.content)
+            for tc in response.tool_calls:
+                self._emit_activity(
+                    ctx,
+                    "tool_call",
+                    tool_name=tc.name,
+                    text=tc.args,
+                )
 
         if not response.has_tool_calls:
             if self._config.text_as_user_input and response.content:
@@ -795,6 +876,7 @@ class AgentLoop:
         user_input: Optional[Union[str, dict]] = None,
         tools: Optional[Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]] = None,
         system_prompt_override: Optional[str] = None,
+        initial_tool_calls: Optional[List[ToolCallInfo]] = None,
     ) -> AgentResult:
         """
         执行 Agent 循环
@@ -811,6 +893,8 @@ class AgentLoop:
                 为 None 时只有内置工具可用。
             system_prompt_override: 系统提示覆盖（用于注入模板变量如 {recording_id}）。
                 仅在会话首次初始化时生效，已有 system prompt 时忽略。
+            initial_tool_calls: 由业务层确定性注入的首批工具调用。会按普通工具调用
+                语义保存 assistant(tool_calls) 与 tool result，再进入下一轮 LLM。
 
         Returns:
             AgentResult 对象
@@ -867,6 +951,8 @@ class AgentLoop:
 
         # 检查是否有待重试的工具调用（多工具恢复）
         _pending_tcs = ctx.get_pending_tool_calls()
+        _initial_tool_calls = list(initial_tool_calls or [])
+        _initial_tool_calls_executed = False
         if _pending_tcs:
             logger.info(
                 f"[Agent Loop] 恢复待执行工具: {len(_pending_tcs)} 个未配对调用 "
@@ -877,6 +963,11 @@ class AgentLoop:
         iteration = 0
         while iteration < self._config.max_iterations:
             iteration += 1
+
+            # 取消检查点①：每轮迭代开头。覆盖续跑/恢复路径与父子深度取消链。
+            cancelled = self._cancellation_result(ctx)
+            if cancelled is not None:
+                return cancelled
 
             if _tools_callable:
                 new_tools = tools()
@@ -894,6 +985,28 @@ class AgentLoop:
                 ]
                 _pending_tcs = None
                 signal = self._execute_tool_batch(tool_call_list, ctx, session_id, iteration)
+                if signal is not None:
+                    return signal
+                continue
+            elif _initial_tool_calls and not _initial_tool_calls_executed:
+                _initial_tool_calls_executed = True
+                ctx.save_assistant_message(
+                    content="",
+                    tool_calls=_serialize_tool_calls(_initial_tool_calls),
+                )
+                for tc in _initial_tool_calls:
+                    self._emit_activity(
+                        ctx,
+                        "tool_call",
+                        tool_name=tc.name,
+                        text=tc.args,
+                    )
+                signal = self._execute_tool_batch(
+                    _initial_tool_calls,
+                    ctx,
+                    session_id,
+                    iteration,
+                )
                 if signal is not None:
                     return signal
                 continue
@@ -929,6 +1042,11 @@ class AgentLoop:
                 if isinstance(llm_outcome, AgentResult):
                     return llm_outcome
                 tool_call_list = llm_outcome
+
+            # 取消检查点②：LLM 返回后、执行工具批次前。停止在此即时生效，避免再触发副作用工具。
+            cancelled = self._cancellation_result(ctx)
+            if cancelled is not None:
+                return cancelled
 
             # 多工具调用：执行列表中的所有工具调用
             signal = self._execute_tool_batch(tool_call_list, ctx, session_id, iteration)

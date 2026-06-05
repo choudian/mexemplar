@@ -85,14 +85,84 @@ export function listAssistantMessages(
 export function sendAssistantMessage(
   sessionId: string,
   content: string,
+  options: {
+    continueSubagent?: {
+      subagentId: string;
+      supplemental?: string;
+    };
+  } = {},
 ): Promise<{ accepted: boolean; sessionId: string }> {
   return requestJson<{ accepted: boolean; sessionId: string }>(
     `/api/assistant/sessions/${encodeURIComponent(sessionId)}/messages`,
     {
       method: "POST",
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({
+        content,
+        ...(options.continueSubagent ? { continueSubagent: options.continueSubagent } : {}),
+      }),
     },
   );
+}
+
+export function stopAssistantRun(sessionId: string, runId?: string): Promise<{ accepted: boolean }> {
+  return requestJson<{ accepted: boolean }>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/stop`,
+    {
+      method: "POST",
+      ...(runId ? { body: JSON.stringify({ runId }) } : {}),
+    },
+  );
+}
+
+export interface AssistantActivityStep {
+  kind: "reasoning" | "tool_call" | "tool_result";
+  toolName?: string | null;
+  text: string;
+  seq: number;
+}
+
+export interface AssistantTranscript {
+  steps: AssistantActivityStep[];
+  compressed: boolean;
+}
+
+export function getSubagentTranscript(
+  sessionId: string,
+  subagentId?: string,
+  options: { afterSequence?: number; beforeSequence?: number } = {},
+): Promise<AssistantTranscript> {
+  const params = new URLSearchParams();
+  if (subagentId) {
+    params.set("subagentId", subagentId);
+  }
+  if (options.afterSequence !== undefined) {
+    params.set("afterSequence", String(options.afterSequence));
+  }
+  if (options.beforeSequence !== undefined) {
+    params.set("beforeSequence", String(options.beforeSequence));
+  }
+  const query = params.toString();
+  return requestJson<AssistantTranscript>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/transcript${query ? `?${query}` : ""}`,
+  );
+}
+
+export type SubagentStatus = "running" | "done" | "suspended" | "failed";
+
+export interface AssistantSubagentSummary {
+  subagentId: string;
+  label: string;
+  task: string;
+  status: SubagentStatus;
+  lastOutput?: string | null;
+  turnStartSequence?: number | null;
+}
+
+export async function listSubagents(sessionId: string): Promise<AssistantSubagentSummary[]> {
+  const response = await requestJson<{ items: AssistantSubagentSummary[] }>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/subagents`,
+  );
+  return response.items ?? [];
 }
 
 export function decideAssistantConfirmation(
