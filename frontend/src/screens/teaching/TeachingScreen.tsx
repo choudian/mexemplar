@@ -62,7 +62,6 @@ export function TeachingScreen(): JSX.Element {
   const stage = useTeachingStore((state) => state.stage);
   const progressLog = useTeachingStore((state) => state.progressLog);
   const busy = useTeachingStore((state) => state.busy);
-  const lastError = useTeachingStore((state) => state.lastError);
   const loadReadiness = useTeachingStore((state) => state.loadReadiness);
   const setSelectedMode = useTeachingStore((state) => state.setSelectedMode);
   const createRun = useTeachingStore((state) => state.createRun);
@@ -147,7 +146,6 @@ export function TeachingScreen(): JSX.Element {
           ) : null}
         </div>
       )}
-      {lastError ? <div className="teaching-error">{lastError}</div> : null}
     </section>
   );
 }

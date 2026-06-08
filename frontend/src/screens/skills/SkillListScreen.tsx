@@ -21,7 +21,6 @@ export function SkillListScreen(): JSX.Element {
   const counts = useSkillsStore((state) => state.counts);
   const query = useSkillsStore((state) => state.query);
   const busy = useSkillsStore((state) => state.busy);
-  const lastError = useSkillsStore((state) => state.lastError);
   const setCategory = useSkillsStore((state) => state.setCategory);
   const setQuery = useSkillsStore((state) => state.setQuery);
   const loadAllCategories = useSkillsStore((state) => state.loadAllCategories);
@@ -107,7 +106,6 @@ export function SkillListScreen(): JSX.Element {
           void dismissFailure(workflowId);
         }}
       />
-      {lastError ? <div className="skills-error">{lastError}</div> : null}
       <SkillTrialDialog />
     </section>
   );

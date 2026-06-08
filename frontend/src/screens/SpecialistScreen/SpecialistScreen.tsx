@@ -24,7 +24,6 @@ export function SpecialistScreen(): JSX.Element {
   const loading = useSpecialistStore((state) => state.loading);
   const loadingSkillPool = useBrainStore((state) => state.loadingSkillPool);
   const saving = useSpecialistStore((state) => state.saving);
-  const lastError = useSpecialistStore((state) => state.lastError);
   const load = useSpecialistStore((state) => state.load);
   const select = useSpecialistStore((state) => state.select);
   const setDraftField = useSpecialistStore((state) => state.setDraftField);
@@ -201,7 +200,6 @@ export function SpecialistScreen(): JSX.Element {
           </section>
         </main>
       </div>
-      {lastError ? <div className="brain-error">{lastError}</div> : null}
     </section>
   );
 }

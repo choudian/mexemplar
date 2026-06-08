@@ -39,7 +39,6 @@ export function CompositionListScreen(): JSX.Element {
   const selectedId = useCompositionsStore((state) => state.selectedId);
   const draft = useCompositionsStore((state) => state.draft);
   const busy = useCompositionsStore((state) => state.busy);
-  const lastError = useCompositionsStore((state) => state.lastError);
   const load = useCompositionsStore((state) => state.load);
   const select = useCompositionsStore((state) => state.select);
   const setDraftField = useCompositionsStore((state) => state.setDraftField);
@@ -141,7 +140,6 @@ export function CompositionListScreen(): JSX.Element {
       </div>
       <div className="composition-status">
         {selected ? <span>当前：{selected.name}</span> : <span>新建草稿</span>}
-        {lastError ? <strong>{lastError}</strong> : null}
       </div>
     </section>
   );

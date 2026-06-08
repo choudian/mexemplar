@@ -61,7 +61,6 @@ export function AssistantScreen(): JSX.Element {
   const hasMoreBefore = useAssistantStore((state) => state.hasMoreBefore);
   const progress = useAssistantStore((state) => state.progress);
   const confirmations = useAssistantStore((state) => state.confirmations);
-  const lastError = useAssistantStore((state) => state.lastError);
   const publishedSkillCount = useShellStore((state) => state.navigation.publishedSkillCount);
   const setRoute = useShellStore((state) => state.setRoute);
   const loadSessions = useAssistantStore((state) => state.loadSessions);
@@ -250,7 +249,6 @@ export function AssistantScreen(): JSX.Element {
                 已停止。被打断的子任务会标为「已暂停」，可以在卡片上点「继续任务」让它接着做。
               </div>
             ) : null}
-            {lastError ? <div className="assistant-error">{lastError}</div> : null}
           </div>
         </div>
         {openSubagent && activeSessionId ? (

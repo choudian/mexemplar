@@ -44,7 +44,6 @@ export function BrainScreen(): JSX.Element {
   const loadingEntries = useBrainStore((state) => state.loadingEntries);
   const loadingSegments = useBrainStore((state) => state.loadingSegments);
   const loadingEvolution = useBrainStore((state) => state.loadingEvolution);
-  const lastError = useBrainStore((state) => state.lastError);
   const loadZones = useBrainStore((state) => state.loadZones);
   const loadEntries = useBrainStore((state) => state.loadEntries);
   const loadSegments = useBrainStore((state) => state.loadSegments);
@@ -261,7 +260,6 @@ export function BrainScreen(): JSX.Element {
           }} />
         </aside>
       </div>
-      {lastError ? <div className="brain-error">{lastError}</div> : null}
     </section>
   );
 }

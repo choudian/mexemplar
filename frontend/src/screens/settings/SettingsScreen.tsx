@@ -17,7 +17,6 @@ export function SettingsScreen(): JSX.Element {
   const validationErrors = useSettingsStore((state) => state.validationErrors);
   const actionResults = useSettingsStore((state) => state.actionResults);
   const busy = useSettingsStore((state) => state.busy);
-  const lastError = useSettingsStore((state) => state.lastError);
   const load = useSettingsStore((state) => state.load);
   const setValue = useSettingsStore((state) => state.setValue);
   const saveValues = useSettingsStore((state) => state.saveValues);
@@ -93,7 +92,6 @@ export function SettingsScreen(): JSX.Element {
         ) : (
           <div className="settings-empty">正在加载设置</div>
         )}
-        {lastError ? <div className="settings-error">{lastError}</div> : null}
       </div>
     </section>
   );

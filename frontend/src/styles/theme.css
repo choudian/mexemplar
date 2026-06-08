@@ -239,6 +239,149 @@ select:focus-visible,
   white-space: nowrap;
 }
 
+/* ── Backend connection gate ───────────────────────────────────────────── */
+
+.backend-gate-blocker {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 48px 24px;
+  background: var(--surface-1);
+}
+
+.backend-gate-card {
+  display: flex;
+  max-width: 430px;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+  opacity: 0;
+  animation: backend-gate-in 0.32s ease forwards;
+}
+
+/* 连接中的卡片延迟出现：握手很快时直接被替换掉，不闪一下 */
+.backend-gate-card-starting {
+  animation-delay: 0.45s;
+}
+
+.backend-gate-icon {
+  display: grid;
+  width: 60px;
+  height: 60px;
+  place-items: center;
+  border-radius: 18px;
+}
+
+.backend-gate-icon[data-variant="failed"] {
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 9%, var(--surface-2));
+  border: 1px solid color-mix(in oklch, var(--danger) 22%, var(--border-1));
+}
+
+.backend-gate-icon[data-variant="starting"] {
+  color: var(--accent);
+  background: color-mix(in oklch, var(--accent) 9%, var(--surface-2));
+  border: 1px solid color-mix(in oklch, var(--accent) 20%, var(--border-1));
+}
+
+.backend-gate-text {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.backend-gate-title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.backend-gate-body {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--text-2);
+}
+
+.backend-gate-hint {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.backend-gate-card .me-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.backend-gate-spin {
+  animation: backend-gate-spin 0.9s linear infinite;
+}
+
+.backend-gate-linkbtn {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.backend-gate-linkbtn:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* 部分可用：不挡内容，顶部一条细横幅 */
+.backend-gate-banner {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-bottom: 1px solid color-mix(in oklch, var(--warn) 28%, var(--border-1));
+  background: color-mix(in oklch, var(--warn) 9%, var(--surface-2));
+  color: var(--text);
+  font-size: 13px;
+}
+
+.backend-gate-banner svg {
+  flex-shrink: 0;
+  color: var(--warn);
+}
+
+.backend-gate-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.backend-gate-banner .backend-gate-linkbtn {
+  flex-shrink: 0;
+}
+
+@keyframes backend-gate-in {
+  from {
+    opacity: 0;
+    transform: translateY(7px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes backend-gate-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .me-nav-rail {
   display: flex;
   width: 220px;
@@ -2813,6 +2956,76 @@ select:focus-visible,
 @keyframes teaching-toast-in {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Error toast（顶部居中，独立于右下角的成功/信息 toast）─────────────── */
+
+.error-toast-stack {
+  position: fixed;
+  top: 50px;
+  left: 50%;
+  z-index: 9990;
+  display: flex;
+  width: min(440px, calc(100% - 48px));
+  flex-direction: column;
+  gap: 10px;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.error-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px 11px 14px;
+  border: 1px solid color-mix(in oklch, var(--danger) 30%, var(--border-1));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--danger) 7%, var(--surface-2));
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.5;
+  pointer-events: auto;
+  animation: error-toast-in 0.26s ease;
+}
+
+.error-toast-icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--danger);
+}
+
+.error-toast-message {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+}
+
+.error-toast-close {
+  display: inline-flex;
+  flex-shrink: 0;
+  padding: 2px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.error-toast-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+
+@keyframes error-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 /* ── Skill Trial Dialog ────────────────────────────────────────────────── */

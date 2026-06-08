@@ -23,7 +23,6 @@ export function SkillMethodologyScreen(): JSX.Element {
   const loading = useSkillMethodologyStore((state) => state.loading);
   const loadingDetail = useSkillMethodologyStore((state) => state.loadingDetail);
   const saving = useSkillMethodologyStore((state) => state.saving);
-  const lastError = useSkillMethodologyStore((state) => state.lastError);
   const bootstrapWarning = useSkillMethodologyStore((state) => state.bootstrapWarning);
   const load = useSkillMethodologyStore((state) => state.load);
   const loadBootstrapStatus = useSkillMethodologyStore((state) => state.loadBootstrapStatus);
@@ -154,7 +153,6 @@ export function SkillMethodologyScreen(): JSX.Element {
           <span>暂无 active 方法论。让 Assistant 将完成过的流程做成方法论后会出现在这里。</span>
         </div>
       ) : null}
-      {lastError ? <div className="brain-error">{lastError}</div> : null}
       {skillConfirmation ? (
         <SkillDangerConfirm
           affectedNames={skillConfirmation.actionType === "skill.soft_delete" ? affectedNames : []}

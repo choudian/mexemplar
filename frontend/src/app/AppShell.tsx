@@ -22,7 +22,9 @@ import { useSkillMethodologyStore } from "../state/skillMethodologyStore";
 import { useSkillsStore } from "../state/skillsStore";
 import { useSpecialistStore } from "../state/specialistStore";
 import { useTeachingStore } from "../state/teachingStore";
+import { BackendGate } from "./BackendGate";
 import { BackendStatus } from "./BackendStatus";
+import { ErrorToastHost } from "./ErrorToastHost";
 import { CustomTitlebar } from "./CustomTitlebar";
 import { NavRail } from "./NavRail";
 import { getHiddenRoute, getRoute, redirectPathFor, routeIdFromPath, routePaths } from "./routes";
@@ -92,6 +94,7 @@ export function AppShell(): JSX.Element {
   const applySpecialistEvent = useSpecialistStore((state) => state.applyEvent);
   const refreshSpecialists = useSpecialistStore((state) => state.load);
   const [debugTraceActive, setDebugTraceActive] = useState(false);
+  const [retryNonce, setRetryNonce] = useState(0);
   const [pathname, setPathname] = useState(() => window.location.pathname);
   const [toolRenameToastOpen, setToolRenameToastOpen] = useState(
     () => !isToolRenameToastDismissed(),
@@ -319,7 +322,18 @@ export function AppShell(): JSX.Element {
     setBackend,
     setAssistantIdleThresholdSeconds,
     loadSkillBootstrapStatus,
+    retryNonce,
   ]);
+
+  const reconnectBackend = useCallback(() => {
+    setBackend({
+      status: "starting",
+      message: "正在重新连接本地后端...",
+      checks: [{ name: "sidecar", status: "degraded", message: "Reconnecting to sidecar." }],
+      serverTime: new Date().toISOString(),
+    });
+    setRetryNonce((nonce) => nonce + 1);
+  }, [setBackend]);
 
   const teachingToast = useTeachingStore((state) => state.toast);
   const dismissTeachingToast = useTeachingStore((state) => state.dismissToast);
@@ -463,7 +477,9 @@ export function AppShell(): JSX.Element {
             </div>
           ) : null}
           <div className="me-screen-host">
-            <Screen />
+            <BackendGate backend={backend} onRetry={reconnectBackend}>
+              <Screen />
+            </BackendGate>
           </div>
         </main>
       </div>
@@ -504,6 +520,7 @@ export function AppShell(): JSX.Element {
         }}
         toast={recruitmentToast}
       />
+      <ErrorToastHost />
     </>
   );
 }
