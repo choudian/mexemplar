@@ -30,6 +30,9 @@ export type Subagent = {
   task: string;
   status: SubagentStatus;
   lastOutput?: string;
+  // 排序锚点：子任务首次出现时主时间线已到的步骤 seq（≈委派那一刻）。
+  // 让子卡片紧跟其 delegate 步骤、排在最终回复之前；权威恢复无法定位时为 undefined（落到末尾）。
+  anchorSeq?: number;
 };
 
 /** 单个"用户消息 -> 助理过程 -> 最终回复"回合承载自己的过程与子任务。 */

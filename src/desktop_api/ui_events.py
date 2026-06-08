@@ -43,6 +43,8 @@ class UiEventDefinition:
     required_payload_keys: frozenset[str] = frozenset()
     required_scope_keys: frozenset[str] = frozenset()
     payload_enum_values: tuple[tuple[str, frozenset[str]], ...] = ()
+    # 这些字段有意保留原文（UI 默认隐藏 + 双击查看），跳过 forbidden value 脱敏校验。
+    unredacted_payload_keys: frozenset[str] = frozenset()
 
 
 class UiEventValidationError(ValueError):
@@ -122,12 +124,13 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     "assistant.activity": UiEventDefinition(
         "assistant.activity",
         "notification",
-        frozenset({"subagentId", "kind", "toolName", "text", "seq"}),
+        frozenset({"subagentId", "kind", "toolName", "text", "seq", "redacted"}),
         frozenset({"sessionId"}),
         {"kind": "tool_call", "toolName": "delegate_to_subagent", "text": "派发子任务", "seq": 1},
         required_payload_keys=frozenset({"kind", "seq"}),
         required_scope_keys=frozenset({"sessionId"}),
         payload_enum_values=(("kind", frozenset({"reasoning", "tool_call", "tool_result"})),),
+        unredacted_payload_keys=frozenset({"text"}),
     ),
     "assistant.subagent": UiEventDefinition(
         "assistant.subagent",
@@ -487,6 +490,8 @@ def validate_ui_event_payload(event_type: str, payload: dict[str, Any]) -> None:
                 f"UI event {event_type} contains invalid enum value for {key}: {payload[key]}"
             )
     for key, value in payload.items():
+        if key in definition.unredacted_payload_keys:
+            continue  # 有意保留原文（UI 默认隐藏 + 双击查看），不做 forbidden value 脱敏校验
         _validate_payload_value(key, value)
 
 

@@ -1,5 +1,5 @@
 import { PanelLeft, Plus, Search } from "lucide-react";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
@@ -9,11 +9,9 @@ import { emptyTurn, turnIdFromMessage } from "../../state/assistantStore";
 import { useShellStore } from "../../state/shellStore";
 import ActivityTimeline from "./ActivityTimeline";
 import ConfirmationToast from "./ConfirmationToast";
-import ExecutionSummary from "./ExecutionSummary";
 import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
-import SubagentCard from "./SubagentCard";
 import SubagentDetailDrawer from "./SubagentDetailDrawer";
 
 type AssistantDisplayMessage = AssistantMessage | PendingAssistantMessage;
@@ -33,22 +31,17 @@ function buildThreadBlocks(
   running: boolean,
 ): ThreadBlock[] {
   const blocks: ThreadBlock[] = [];
-  let currentTurnId: string | null = null;
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
-    const newTurnId = turnIdFromMessage(message);
-    if (newTurnId) currentTurnId = newTurnId;
     blocks.push({ kind: "message", message });
 
-    if (!currentTurnId) continue;
-    const next = messages[index + 1];
-    const nextStartsTurn = next ? turnIdFromMessage(next) !== null : true;
-    if (!nextStartsTurn) continue;
-
-    const turn = turns[currentTurnId] ?? emptyTurn(currentTurnId);
-    const isRunning = running && activeTurnId === currentTurnId;
+    // 过程时间线插在每个回合的用户消息之后、助理回复之前（先过程、后回复，对齐原型）。
+    const turnId = turnIdFromMessage(message);
+    if (!turnId) continue;
+    const turn = turns[turnId] ?? emptyTurn(turnId);
+    const isRunning = running && activeTurnId === turnId;
     if (isRunning || turn.steps.length > 0 || turn.subagents.length > 0 || turn.fromSequence !== undefined) {
-      blocks.push({ kind: "transparency", turnId: currentTurnId, turn, running: isRunning });
+      blocks.push({ kind: "transparency", turnId, turn, running: isRunning });
     }
   }
   return blocks;
@@ -72,7 +65,7 @@ export function AssistantScreen(): JSX.Element {
   const publishedSkillCount = useShellStore((state) => state.navigation.publishedSkillCount);
   const setRoute = useShellStore((state) => state.setRoute);
   const loadSessions = useAssistantStore((state) => state.loadSessions);
-  const createSession = useAssistantStore((state) => state.createSession);
+  const startNewConversation = useAssistantStore((state) => state.startNewConversation);
   const selectSession = useAssistantStore((state) => state.selectSession);
   const loadMoreBefore = useAssistantStore((state) => state.loadMoreBefore);
   const renameSession = useAssistantStore((state) => state.renameSession);
@@ -85,6 +78,7 @@ export function AssistantScreen(): JSX.Element {
   const setQueuedText = useAssistantStore((state) => state.setQueuedText);
   const commitQueued = useAssistantStore((state) => state.commitQueued);
   const editQueued = useAssistantStore((state) => state.editQueued);
+  const cancelQueued = useAssistantStore((state) => state.cancelQueued);
   const turnActivityBySession = useAssistantStore((state) => state.turnActivityBySession);
   const activeTurnIdBySession = useAssistantStore((state) => state.activeTurnIdBySession);
   const continueSubagent = useAssistantStore((state) => state.continueSubagent);
@@ -140,7 +134,7 @@ export function AssistantScreen(): JSX.Element {
         sessions={sessions}
         onClose={() => setHistoryOpen(false)}
         onNew={() => {
-          void createSession();
+          void startNewConversation();
           setHistoryOpen(false);
         }}
         onQueryChange={setQuery}
@@ -166,7 +160,7 @@ export function AssistantScreen(): JSX.Element {
           <IconButton
             label="新对话"
             onClick={() => {
-              void createSession();
+              void startNewConversation();
               setHistoryOpen(true);
             }}
           >
@@ -215,24 +209,18 @@ export function AssistantScreen(): JSX.Element {
             {threadBlocks.map((block) => {
               if (block.kind === "transparency") {
                 return activeSessionId ? (
-                  <Fragment key={`turn_${activeSessionId}_${block.turnId}`}>
-                    <ActivityTimeline
-                      sessionId={activeSessionId}
-                      turnId={block.turnId}
-                      liveSteps={block.turn.steps}
-                      running={block.running}
-                      afterSequence={block.turn.fromSequence}
-                      beforeSequence={block.turn.beforeSequence}
-                    />
-                    {block.turn.subagents.map((subagent) => (
-                      <SubagentCard
-                        key={`${block.turnId}_${subagent.subagentId}`}
-                        subagent={subagent}
-                        onOpen={() => setOpenSubagentId(subagent.subagentId)}
-                        onContinue={(note) => void continueSubagent(activeSessionId, subagent.subagentId, note)}
-                      />
-                    ))}
-                  </Fragment>
+                  <ActivityTimeline
+                    key={`turn_${activeSessionId}_${block.turnId}`}
+                    sessionId={activeSessionId}
+                    turnId={block.turnId}
+                    liveSteps={block.turn.steps}
+                    running={block.running}
+                    afterSequence={block.turn.fromSequence}
+                    beforeSequence={block.turn.beforeSequence}
+                    subagents={block.turn.subagents}
+                    onOpenSubagent={(id) => setOpenSubagentId(id)}
+                    onContinueSubagent={(id, note) => void continueSubagent(activeSessionId, id, note)}
+                  />
                 ) : null;
               }
               const { message } = block;
@@ -257,7 +245,11 @@ export function AssistantScreen(): JSX.Element {
                 </article>
               );
             })}
-            <ExecutionSummary status={progress.status} headline={progress.headline} />
+            {progress.status === "cancelled" ? (
+              <div className="assistant-stopped-note">
+                已停止。被打断的子任务会标为「已暂停」，可以在卡片上点「继续任务」让它接着做。
+              </div>
+            ) : null}
             {lastError ? <div className="assistant-error">{lastError}</div> : null}
           </div>
         </div>
@@ -294,6 +286,7 @@ export function AssistantScreen(): JSX.Element {
           onQueuedTextChange={setQueuedText}
           onCommitQueued={commitQueued}
           onEditQueued={editQueued}
+          onCancelQueued={cancelQueued}
           onToggleAutoApprove={(newVal) => void setAutoApprove(newVal)}
         />
       </div>

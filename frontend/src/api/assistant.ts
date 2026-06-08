@@ -119,6 +119,8 @@ export interface AssistantActivityStep {
   toolName?: string | null;
   text: string;
   seq: number;
+  // 命中敏感规则的步骤：默认隐藏，双击查看原文（原文已保留下发）。
+  redacted?: boolean;
 }
 
 export interface AssistantTranscript {

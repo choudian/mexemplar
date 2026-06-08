@@ -47,7 +47,7 @@ def test_build_transcript_reconstructs_steps_excluding_final_reply(mock_config, 
     assert all("完成回复" not in s.text for s in result.steps)
 
 
-def test_build_transcript_redacts_sensitive_json_tool_payloads(mock_config, in_memory_db):
+def test_build_transcript_flags_sensitive_json_tool_payloads(mock_config, in_memory_db):
     sid = _new_session(AgentType.ASSISTANT)
     ctx = ContextManager(sid, mock_config)
     ctx.save_message(role="system", content="sys")
@@ -73,10 +73,11 @@ def test_build_transcript_redacts_sensitive_json_tool_payloads(mock_config, in_m
     result = AssistantObservability().build_transcript(sid)
 
     by_kind = {step.kind: step for step in result.steps}
-    assert by_kind["tool_call"].text == "[内容已隐藏]"
-    assert by_kind["tool_result"].text == "[内容已隐藏]"
-    assert "sk-secret" not in by_kind["tool_call"].text
-    assert "pw-secret" not in by_kind["tool_result"].text
+    # 方案 B：保留原文 + 标记 redacted（UI 默认隐藏、双击查看）
+    assert by_kind["tool_call"].redacted is True
+    assert by_kind["tool_result"].redacted is True
+    assert "sk-secret" in by_kind["tool_call"].text
+    assert "pw-secret" in by_kind["tool_result"].text
 
 
 def test_build_transcript_flags_compressed_history(mock_config, in_memory_db):

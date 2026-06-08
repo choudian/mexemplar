@@ -145,6 +145,7 @@ class AssistantActivityStep(BaseModel):
     toolName: str | None = None
     text: str
     seq: int
+    redacted: bool = False
 
 
 class AssistantTranscriptResponse(BaseModel):

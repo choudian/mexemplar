@@ -46,7 +46,7 @@
 - `src/desktop_api/` 是 UI adapter，只能调用 business services、orchestrator、configuration facade 和事件 adapter；不得成为新的 Repository 层或绕过业务服务写数据。
 - 前端事件流只能消费 `src/desktop_api/ui_events.py` 注册的公共 UI event type；React store 不得依赖内部 blinker 事件名、`payload.sourceEvent` 或未知事件默认转发来决定展示状态。
 - `src/desktop_api/events.py` 的事件发布必须经过 UI Event Registry、envelope creation 和 payload safety validation；不得新增绕过 `event_queue.publish_nowait()` / projection layer 的直接 SSE 输出路径。
-- UI event payload 必须是 allowlist 字段；runtime token、secret、完整代码、完整命令体、未脱敏 stack trace、本地数据库路径、raw query result 和未过滤录制数据不得进入公共 UI event。
+- UI event payload 必须是 allowlist 字段；runtime token、secret、完整代码、完整命令体、未脱敏 stack trace、本地数据库路径、raw query result 和未过滤录制数据不得进入公共 UI event。**例外**：`assistant.activity` 的 `text` 是过程时间线原文（单用户本地、原文本就明文存于 messages 表），命中敏感规则时保留原文并置 `redacted=true`，UI 默认隐藏、用户双击查看；该字段经 `UiEventDefinition.unredacted_payload_keys` 豁免 payload safety value 校验，事件内其余字段及其它事件仍走脱敏。
 - event stream 是当前桌面进程会话内通知通道，不是持久业务事实或长期 replay log；重连缺口必须通过 `backend.resync_required` 触发权威快照刷新。
 - sidecar API 只允许 localhost/loopback 使用，每次启动必须要求运行期 session token；token 不得写入配置、OpenAPI、日志、前端持久化存储或错误响应。
 - 设置页非 secret 值必须经 `get_unified_config()` 读写；secret 只能经 keyring-backed 方法写入/清除/API 测试，返回给前端的状态只能是存在性和 masked display。

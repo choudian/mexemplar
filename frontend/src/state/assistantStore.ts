@@ -99,6 +99,8 @@ export type AssistantState = {
   setIdleThresholdSeconds: (seconds: number) => void;
   loadSessions: () => Promise<void>;
   createSession: () => Promise<string | null>;
+  // 点"新对话"：仅切到空白草稿态，不写后端；首次发送时由 sendDraft 惰性创建会话。
+  startNewConversation: () => Promise<void>;
   selectSession: (sessionId: string) => Promise<void>;
   loadMoreBefore: () => Promise<void>;
   renameSession: (sessionId: string, title: string) => Promise<void>;
@@ -109,6 +111,8 @@ export type AssistantState = {
   setQueuedText: (text: string) => void;
   commitQueued: () => void;
   editQueued: () => void;
+  // 取消排队：清除当前会话的排队/编辑中消息（不外发、不留痕）
+  cancelQueued: () => void;
   // 子任务权威列表兜底（US4）：重连/打开会话时拉权威态
   refreshSubagents: (sessionId: string) => Promise<void>;
   // 过程权威 transcript 兜底（FR-032）：事件缺口时刷新当前回合步骤
@@ -204,6 +208,24 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
       return null;
     }
+  },
+  startNewConversation: async () => {
+    const prevSessionId = get().activeSessionId;
+    get().clearIdleTimer();
+    // 与切换/新建一致：先封存上一会话的 Segment（reason=new_session），再切到空白草稿态。
+    await sealPreviousSegment(prevSessionId);
+    set({
+      activeSessionId: null,
+      messages: [],
+      draft: "",
+      progress: idleProgress,
+      stopping: false,
+      confirmations: [],
+      autoApprove: false,
+      lastError: null,
+      hasMoreBefore: false,
+      nextBeforeSequence: null,
+    });
   },
   selectSession: async (sessionId) => {
     const prevSessionId = get().activeSessionId;
@@ -450,6 +472,14 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       },
     });
   },
+  cancelQueued: () => {
+    const sessionId = get().activeSessionId;
+    if (!sessionId) return;
+    if (!get().queuedMessageBySession[sessionId]) return;
+    const map = { ...get().queuedMessageBySession };
+    delete map[sessionId];
+    set({ queuedMessageBySession: map });
+  },
   continueSubagent: async (sessionId, subagentId, supplemental) => {
     // 只允许继续本会话子任务：调用方传入当前会话的卡片标识
     const note = (supplemental ?? "").trim();
@@ -491,6 +521,11 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       const items = await listSubagents(sessionId);
       const authoritativeIds = new Set(items.map((item) => item.subagentId));
       const existingTurns = get().turnActivityBySession[sessionId] ?? {};
+      // 保留实时事件已记录的排序锚点，权威恢复不应把子卡片打回末尾。
+      const priorAnchors = new Map<string, number | undefined>();
+      for (const turn of Object.values(existingTurns)) {
+        for (const item of turn.subagents) priorAnchors.set(item.subagentId, item.anchorSeq);
+      }
       const nextTurns: Record<string, AssistantTurnActivity> = {};
       for (const [turnId, turn] of Object.entries(existingTurns)) {
         nextTurns[turnId] = {
@@ -509,6 +544,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
           task: item.task,
           status: item.status,
           lastOutput: item.lastOutput ?? undefined,
+          anchorSeq: priorAnchors.get(item.subagentId),
         };
         nextTurns[targetTurnId] = {
           ...prev,
@@ -539,6 +575,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         toolName: step.toolName ?? undefined,
         text: step.text,
         subagentId: null,
+        redacted: step.redacted ?? false,
       }));
       set({
         ...updateTurn(get(), sessionId, turnId, () => ({
@@ -689,6 +726,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         toolName: typeof payload["toolName"] === "string" ? payload["toolName"] : undefined,
         text: typeof payload["text"] === "string" ? payload["text"] : "",
         subagentId: typeof payload["subagentId"] === "string" ? payload["subagentId"] : null,
+        redacted: payload["redacted"] === true,
       };
       // 去重（按 seq）+ 升序 + 前端上限（常态顺序追加免排序）
       set(
@@ -709,12 +747,16 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       set(
         commitLiveTurn(get(), sessionId, turnId, (turn) => {
           const prev = turn.subagents.find((item) => item.subagentId === subagentId);
+          // 首次出现时锚定到主时间线末尾步骤的 seq（委派位置）；后续更新保留首次锚点，避免被往后推。
+          const lastStep = turn.steps[turn.steps.length - 1];
+          const anchorSeq = prev?.anchorSeq ?? lastStep?.seq;
           const updated: Subagent = {
             subagentId,
             label: typeof payload["label"] === "string" ? payload["label"] : prev?.label ?? "子助手",
             task: typeof payload["task"] === "string" ? payload["task"] : prev?.task ?? "",
             status: (typeof payload["status"] === "string" ? payload["status"] : prev?.status ?? "running") as Subagent["status"],
             lastOutput: typeof payload["lastOutput"] === "string" ? payload["lastOutput"] : prev?.lastOutput,
+            anchorSeq,
           };
           return { ...turn, subagents: upsertSubagent(turn.subagents, updated) };
         }),

@@ -281,4 +281,83 @@ describe("AssistantScreen", () => {
       }),
     );
   });
+
+  test("过程时间线渲染在用户消息之后、助理回复之前", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ items: [] })));
+    useAssistantStore.setState({
+      activeSessionId: "ast_1",
+      messages: [
+        { sequence: 1, role: "user", content: "做事", createdAt: null, rendering: "plain_text" },
+        { sequence: 2, role: "assistant", content: "好的", createdAt: null, rendering: "safe_markdown" },
+      ],
+      turnActivityBySession: {
+        ast_1: {
+          seq_1: {
+            turnId: "seq_1",
+            fromSequence: 1,
+            steps: [{ seq: 1, kind: "tool_call", toolName: "noop", text: "x", subagentId: null }],
+            subagents: [],
+          },
+        },
+      },
+      activeTurnIdBySession: { ast_1: "seq_1" },
+      progress: { status: "idle", headline: "" },
+      pendingOptimisticMessages: [],
+    });
+
+    const { container } = render(<AssistantScreen />);
+    await waitFor(() => {
+      const thread = container.querySelector(".assistant-thread") as HTMLElement;
+      const order = Array.from(thread.children);
+      const userIdx = order.findIndex((el) => el.matches(".assistant-message[data-role='user']"));
+      const activityIdx = order.findIndex((el) => el.matches(".assistant-activity"));
+      const assistantIdx = order.findIndex((el) => el.matches(".assistant-message[data-role='assistant']"));
+      expect(userIdx).toBeGreaterThanOrEqual(0);
+      expect(activityIdx).toBeGreaterThan(userIdx);
+      expect(assistantIdx).toBeGreaterThan(activityIdx);
+    });
+  });
+
+  test("点新对话不创建会话，输入并发送才惰性创建", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/assistant/sessions?limit=200")) {
+        return jsonResponse(sessionsPayload);
+      }
+      if (url.endsWith("/api/assistant/sessions") && init?.method === "POST") {
+        return jsonResponse({ sessionId: "ast_new" });
+      }
+      if (url.endsWith("/api/assistant/sessions/ast_new/messages") && init?.method === "POST") {
+        return jsonResponse({ accepted: true, sessionId: "ast_new" });
+      }
+      return jsonResponse({ items: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const sessionPosts = () =>
+      fetchMock.mock.calls.filter(
+        ([u, i]) =>
+          String(u).endsWith("/api/assistant/sessions") &&
+          (i as RequestInit | undefined)?.method === "POST",
+      ).length;
+
+    render(<AssistantScreen />);
+    await waitFor(() => expect(screen.getByText("Budget review")).toBeInTheDocument());
+
+    // 点"新对话"：仅切到空白态，不创建后端会话
+    fireEvent.click(screen.getByRole("button", { name: "新对话" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: /今天想完成什么/ })).toBeInTheDocument());
+    expect(sessionPosts()).toBe(0);
+
+    // 输入并发送 → 惰性创建会话，再把消息发到新会话
+    fireEvent.change(screen.getByLabelText("输入消息"), { target: { value: "hello" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    await waitFor(() => expect(sessionPosts()).toBe(1));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/assistant/sessions/ast_new/messages",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+  });
 });

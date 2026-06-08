@@ -32,7 +32,6 @@ test("T107 visible controls across primary screens invoke real bridge paths or e
   await page.getByLabel("会话标题").fill("Renamed audit conversation");
   await page.getByRole("button", { name: "保存标题" }).click();
   await page.getByRole("button", { name: "删除对话" }).click();
-  expectRequest(api, "POST", "/api/assistant/sessions");
   expectRequest(api, "POST", "/api/assistant/sessions/ast_1/messages");
   expectRequest(api, "PATCH", "/api/assistant/sessions/ast_1");
   expectRequest(api, "DELETE", "/api/assistant/sessions/ast_1");

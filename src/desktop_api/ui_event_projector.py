@@ -6,6 +6,7 @@ from src.business.agents.config import AgentType
 from src.business.services.ui_event_safety_service import (
     DEFAULT_PUBLIC_TEXT_MAX_CHARS,
     DEFAULT_PUBLIC_TEXT_MAX_LEN,
+    public_ui_event_text_with_flag,
     redact_public_ui_event_text,
 )
 from src.desktop_api.ui_event_types import UiEventDraft
@@ -33,6 +34,16 @@ def _redact_text(value: Any) -> str:
     )
 
 
+def _text_with_flag(value: Any) -> tuple[str, bool]:
+    """activity step：保留原文（仅截断）+ 敏感标记，供 UI 默认隐藏 + 双击查看。"""
+    return public_ui_event_text_with_flag(
+        "text",
+        value,
+        max_preview_chars=DEFAULT_PUBLIC_TEXT_MAX_CHARS,
+        max_len=DEFAULT_PUBLIC_TEXT_MAX_LEN,
+    )
+
+
 def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiEventDraft]:
     scope = _scope_from_payload(payload)
     causation_id = _causation_id(scope, payload)
@@ -40,6 +51,7 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
     if event_name == "assistant_agent_step":
         if not _is_observable_agent_type(payload.get("agent_type")):
             return []  # 非助理流程（PM/Programmer/Trial）零 assistant.activity（E4/CC-005）
+        activity_text, activity_redacted = _text_with_flag(payload.get("text"))
         return [
             UiEventDraft(
                 "assistant.activity",
@@ -47,7 +59,8 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
                     "subagentId": _string_or_none(payload.get("subagent_id")),
                     "kind": _string_or_none(payload.get("kind")),
                     "toolName": _string_or_none(payload.get("tool_name")),
-                    "text": _redact_text(payload.get("text")),
+                    "text": activity_text,
+                    "redacted": activity_redacted,
                     "seq": _int_or_none(payload.get("seq")),
                 },
                 scope,

@@ -145,6 +145,28 @@ def redact_public_ui_event_text(
     return truncated
 
 
+def public_ui_event_text_with_flag(
+    key: str,
+    value: Any,
+    *,
+    max_preview_chars: int,
+    max_len: int | None = None,
+) -> tuple[str, bool]:
+    """保留原文（仅按 max_len 截断）+ 返回是否命中敏感规则的标记。
+
+    用于 assistant 过程时间线（activity step）：单用户本地场景下原文本就明文存于
+    messages 表，UI 默认按返回的 flag 隐藏、用户双击查看，不再用占位符抹掉原文。
+    与 redact_public_ui_event_text 共享敏感判定口径，确保实时事件与历史 transcript 一致。
+    """
+    text = _public_text(value)
+    truncated = text if max_len is None else text[:max_len]
+    validation_value: Any = value if isinstance(value, (dict, list)) else truncated
+    reason = unsafe_public_ui_event_value_reason(
+        key, validation_value, max_preview_chars=max_preview_chars
+    )
+    return truncated, reason is not None
+
+
 def _normalize_key(key: str) -> str:
     value = _CAMEL_CASE_PATTERN.sub(r"\1_\2", key).lower()
     return value.replace("-", "_")

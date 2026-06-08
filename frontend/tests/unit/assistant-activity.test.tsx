@@ -95,6 +95,88 @@ describe("ActivityTimeline (US3)", () => {
     fireEvent.click(screen.getByRole("button", { name: "重试" }));
     expect(await screen.findByText("retry")).toBeInTheDocument();
   });
+
+  test("步骤与子卡片按 anchorSeq 交错：子卡片紧跟委派步骤、排在最终回复之前", () => {
+    const sub: Subagent = {
+      subagentId: "c1",
+      label: "子助手",
+      task: "子任务",
+      status: "suspended", // 含暂停 → 默认展开，便于断言可见顺序
+      anchorSeq: 2,
+    };
+    const { container } = render(
+      <ActivityTimeline
+        sessionId="s1"
+        liveSteps={[
+          step({ seq: 1, kind: "tool_call", toolName: "delegate_to_subagent", text: "委派" }),
+          step({ seq: 2, kind: "tool_result", toolName: "delegate_to_subagent", text: "委派结果" }),
+          step({ seq: 3, kind: "tool_call", toolName: "reply_to_user", text: "最终回复" }),
+        ]}
+        running={false}
+        subagents={[sub]}
+      />,
+    );
+    const body = container.querySelector(".assistant-activity-body") as HTMLElement;
+    const order = Array.from(body.children).map((el) =>
+      el.classList.contains("assistant-subcard") ? "card" : el.textContent ?? "",
+    );
+    const resultIdx = order.findIndex((t) => t.includes("委派结果"));
+    const cardIdx = order.indexOf("card");
+    const replyIdx = order.findIndex((t) => t.includes("最终回复"));
+    expect(resultIdx).toBeGreaterThanOrEqual(0);
+    expect(cardIdx).toBeGreaterThan(resultIdx);
+    expect(replyIdx).toBeGreaterThan(cardIdx);
+  });
+
+  test("工具步骤的 JSON 参数被缩进美化为代码块", () => {
+    const { container } = render(
+      <ActivityTimeline
+        sessionId="s1"
+        liveSteps={[
+          step({ seq: 1, kind: "tool_call", toolName: "delegate_to_subagent", text: '{"task":"搜索","tools":["web_search"]}' }),
+        ]}
+        running={false}
+      />,
+    );
+    const pre = container.querySelector(".assistant-step-pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.textContent).toContain('"task": "搜索"'); // 缩进后键值带空格
+  });
+
+  test("非 JSON 原文里的字面换行符被还原为真排版", () => {
+    const { container } = render(
+      <ActivityTimeline
+        sessionId="s1"
+        liveSteps={[step({ seq: 1, kind: "tool_result", toolName: null, text: "第一行\\n第二行" })]}
+        running={false}
+      />,
+    );
+    const pre = container.querySelector(".assistant-step-pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.textContent?.split("\n")).toEqual(["第一行", "第二行"]);
+    expect(pre?.textContent).not.toContain("\\n");
+  });
+
+  test("redacted 步骤默认显示隐藏占位，双击后展示原文", () => {
+    const { container } = render(
+      <ActivityTimeline
+        sessionId="s1"
+        liveSteps={[
+          step({ seq: 1, kind: "tool_call", toolName: "exec", text: '{"command":"rm -rf /tmp"}', redacted: true }),
+        ]}
+        running={false}
+      />,
+    );
+    // 默认隐藏：占位可见，原文代码块不渲染
+    const placeholder = screen.getByText(/内容已隐藏/);
+    expect(placeholder).toBeInTheDocument();
+    expect(container.querySelector(".assistant-step-pre")).toBeNull();
+    // 双击占位 → 渲染原文
+    fireEvent.doubleClick(placeholder);
+    const pre = container.querySelector(".assistant-step-pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.textContent).toContain("rm -rf /tmp");
+  });
 });
 
 describe("SubagentCard (US4/US5)", () => {
@@ -207,6 +289,22 @@ describe("assistantStore 活动/子任务消费 (US3/US4)", () => {
     expect(cards).toHaveLength(1);
     expect(cards[0].status).toBe("done");
     expect(cards[0].label).toBe("子助手"); // 保留先前字段
+  });
+
+  test("assistant.subagent 记录排序锚点=委派时主时间线末尾 seq，晚到的更新不把它推到末尾", () => {
+    const store = useAssistantStore.getState();
+    // 委派前主时间线已有 delegate 调用与结果（末尾 seq=2）
+    store.applyEvent(activityEvent("s1", { seq: 1, kind: "tool_call", toolName: "delegate_to_subagent", text: "委派", subagentId: null }));
+    store.applyEvent(activityEvent("s1", { seq: 2, kind: "tool_result", toolName: "delegate_to_subagent", text: "结果", subagentId: null }));
+    // 子任务首次出现 → 锚定到 seq 2
+    store.applyEvent(subagentEvent("s1", { subagentId: "c1", label: "子助手", task: "查", status: "running" }));
+    // 之后主助理产出最终回复（seq 3），子任务完成事件更晚到
+    store.applyEvent(activityEvent("s1", { seq: 3, kind: "tool_call", toolName: "reply_to_user", text: "回复", subagentId: null }));
+    store.applyEvent(subagentEvent("s1", { subagentId: "c1", status: "done" }));
+
+    const card = useAssistantStore.getState().turnActivityBySession.s1.seq_1.subagents[0];
+    expect(card.anchorSeq).toBe(2);
+    expect(card.status).toBe("done");
   });
 
   test("continueSubagent 经 sendAssistantMessage 发带 subagentId + 补充的续跑指令 (US5)", async () => {

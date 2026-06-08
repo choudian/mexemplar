@@ -178,7 +178,13 @@ class AssistantRuntime:
         )
         return {
             "steps": [
-                {"kind": step.kind, "toolName": step.tool_name, "text": step.text, "seq": step.seq}
+                {
+                    "kind": step.kind,
+                    "toolName": step.tool_name,
+                    "text": step.text,
+                    "seq": step.seq,
+                    "redacted": step.redacted,
+                }
                 for step in result.steps
             ],
             "compressed": result.compressed,

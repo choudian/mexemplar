@@ -1,7 +1,8 @@
 """助理过程可观测只读读模型（014-assistant-chat-transparency）。
 
 由既有 Repository **只读**重建历史过程时间线与子任务权威列表——**无新表、无迁移、无物理删除**。
-文本字段显式走 009 payload safety allowlist 脱敏（不仅截断），与实时事件口径一致（C2-E2）。
+activity step 文本保留原文（仅截断）+ `redacted` 标记（UI 默认隐藏、双击查看，原文本就明文存于 messages 表）；
+subagent task/lastOutput 仍走 009 脱敏。与实时事件口径一致。
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from typing import Optional
 from src.business.services.ui_event_safety_service import (
     DEFAULT_PUBLIC_TEXT_MAX_CHARS,
     DEFAULT_PUBLIC_TEXT_MAX_LEN,
+    public_ui_event_text_with_flag,
     redact_public_ui_event_text,
 )
 from src.business.agents.config import subagent_label
@@ -32,6 +34,8 @@ class ActivityStep:
     seq: int
     text: str
     tool_name: Optional[str] = None
+    # 命中敏感规则（命令/代码/密钥等）→ UI 默认隐藏、双击查看原文（方案 B）。
+    redacted: bool = False
 
 
 @dataclass
@@ -59,6 +63,16 @@ def _redact(value: object) -> str:
     匹配 `api_key=` 正则、也无法被 `json.loads` 解析，会绕过脱敏使密钥明文外泄进 transcript（C2-E2/E5）。
     """
     return redact_public_ui_event_text(
+        "text",
+        "" if value is None else value,
+        max_preview_chars=DEFAULT_PUBLIC_TEXT_MAX_CHARS,
+        max_len=DEFAULT_PUBLIC_TEXT_MAX_LEN,
+    )
+
+
+def _redact_with_flag(value: object) -> tuple[str, bool]:
+    """activity 过程时间线专用：保留原文（仅截断）+ 返回敏感标记，供 UI 默认隐藏 + 双击查看。"""
+    return public_ui_event_text_with_flag(
         "text",
         "" if value is None else value,
         max_preview_chars=DEFAULT_PUBLIC_TEXT_MAX_CHARS,
@@ -131,7 +145,12 @@ class AssistantObservability:
                 content = getattr(msg, "content", None)
                 if content:
                     seq += 1
-                    steps.append(ActivityStep(kind="reasoning", seq=seq, text=_redact(content)))
+                    reason_text, reason_redacted = _redact_with_flag(content)
+                    steps.append(
+                        ActivityStep(
+                            kind="reasoning", seq=seq, text=reason_text, redacted=reason_redacted
+                        )
+                    )
                 try:
                     parsed = json.loads(raw_tc)
                 except (ValueError, TypeError):
@@ -140,22 +159,26 @@ class AssistantObservability:
                     if not isinstance(tc, dict):
                         continue
                     seq += 1
+                    call_text, call_redacted = _redact_with_flag(tc.get("args", {}))
                     steps.append(
                         ActivityStep(
                             kind="tool_call",
                             seq=seq,
                             tool_name=tc.get("name"),
-                            text=_redact(tc.get("args", {})),
+                            text=call_text,
+                            redacted=call_redacted,
                         )
                     )
             elif role == "tool":
                 seq += 1
+                result_text, result_redacted = _redact_with_flag(getattr(msg, "content", ""))
                 steps.append(
                     ActivityStep(
                         kind="tool_result",
                         seq=seq,
                         tool_name=getattr(msg, "tool_name", None),
-                        text=_redact(getattr(msg, "content", "")),
+                        text=result_text,
+                        redacted=result_redacted,
                     )
                 )
         return TranscriptResult(steps=steps, compressed=compressed)

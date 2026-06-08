@@ -515,6 +515,64 @@ select:focus-visible,
   opacity: 0.9;
 }
 
+/* "全部允许"是高危操作免确认开关：选中＝安全护栏已解除。
+   选中态用暖色（warn）+ 盾牌点亮 + 持续呼吸光晕 + 左侧激活条，强烈且持续地提示这一有后果的状态。 */
+.me-toggle[data-guard="auto-approve"] {
+  position: relative;
+  overflow: hidden;
+}
+
+.me-toggle[data-guard="auto-approve"].me-toggle-active {
+  border-color: color-mix(in oklch, var(--warn) 62%, transparent);
+  background: color-mix(in oklch, var(--warn) 16%, var(--surface-1));
+  color: color-mix(in oklch, var(--warn) 45%, var(--text));
+  font-weight: 650;
+  box-shadow:
+    0 0 0 1px color-mix(in oklch, var(--warn) 30%, transparent),
+    0 2px 12px color-mix(in oklch, var(--warn) 22%, transparent);
+  animation: guard-breathe 2.4s ease-in-out infinite;
+}
+
+.me-toggle[data-guard="auto-approve"].me-toggle-active:hover {
+  opacity: 1;
+  background: color-mix(in oklch, var(--warn) 24%, var(--surface-1));
+}
+
+.me-toggle[data-guard="auto-approve"].me-toggle-active svg {
+  color: var(--warn);
+  filter: drop-shadow(0 0 5px color-mix(in oklch, var(--warn) 60%, transparent));
+}
+
+/* 左侧激活指示条：像一盏"护栏已解除"的状态灯 */
+.me-toggle[data-guard="auto-approve"].me-toggle-active::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--warn);
+}
+
+@keyframes guard-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--warn) 26%, transparent),
+      0 2px 8px color-mix(in oklch, var(--warn) 14%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in oklch, var(--warn) 50%, transparent),
+      0 4px 18px color-mix(in oklch, var(--warn) 34%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .me-toggle[data-guard="auto-approve"].me-toggle-active {
+    animation: none;
+  }
+}
+
 .me-badge {
   display: inline-flex;
   min-height: 20px;
@@ -1016,40 +1074,6 @@ select:focus-visible,
   vertical-align: middle;
 }
 
-.assistant-execution-summary {
-  align-self: flex-start;
-  max-width: 100%;
-  overflow: hidden;
-  border: 1px solid var(--border-1);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
-}
-
-.assistant-execution-summary > button {
-  display: flex;
-  width: 100%;
-  min-height: 38px;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 10px;
-  border: 0;
-  background: transparent;
-  color: var(--text-2);
-  cursor: pointer;
-  font-size: 12.5px;
-  text-align: left;
-}
-
-.assistant-execution-details {
-  display: flex;
-  justify-content: space-between;
-  gap: 24px;
-  padding: 8px 10px 10px;
-  border-top: 1px solid var(--border-1);
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
 .assistant-summary {
   margin: 8px 0;
   border: 1px solid var(--border-2);
@@ -1141,12 +1165,14 @@ select:focus-visible,
 
 .assistant-composer textarea {
   width: 100%;
-  min-height: 74px;
-  max-height: 180px;
+  /* 随内容自动增高，到 max-height 后框内滚动；工具栏在框下方流式排列（非浮起），任意行数都不压字 */
+  field-sizing: content;
+  min-height: 80px;
+  max-height: 200px;
   resize: vertical;
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
-  padding: 12px 14px 6px;
+  padding: 12px 14px 12px;
   background: var(--surface-1);
   color: var(--text);
   line-height: 1.55;
@@ -1162,17 +1188,8 @@ select:focus-visible,
   max-width: 720px;
   justify-content: space-between;
   gap: 10px;
-  margin: -46px auto 0;
-  padding: 4px 6px 4px 8px;
-  pointer-events: none;
-}
-
-.assistant-composer-tools,
-.assistant-composer .me-button {
-  pointer-events: auto;
-  /* 组合 bar 以负 margin 覆盖在输入框上方；显式抬升按钮，避免输入框拦截点击（停止/发送可点） */
-  position: relative;
-  z-index: 2;
+  margin: 8px auto 0;
+  padding: 0 2px;
 }
 
 .assistant-composer-tools {
@@ -1185,13 +1202,65 @@ select:focus-visible,
   display: block;
   max-width: 720px;
   margin: 0 auto;
-  padding-bottom: 48px;
 }
 
-/* 014: 运行时输入门控 + 停止三态 */
-.assistant-composer[data-running="true"] textarea {
-  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-2));
-  background: color-mix(in srgb, var(--surface-1) 92%, var(--accent) 8%);
+/* 输入框 shell：把 textarea/排队框 + 工具栏包成一个一体化输入区（工具栏在容器内底部独立一行） */
+.assistant-composer-shell {
+  max-width: 720px;
+  margin: 0 auto;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  background: var(--surface-1);
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.assistant-composer-shell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
+/* shell 内输入元素去掉自身边框/底色，由 shell 统一呈现 */
+.assistant-composer-shell textarea,
+.assistant-composer-shell .assistant-queued-box {
+  display: block;
+  width: 100%;
+  max-width: none;
+  min-height: 60px;
+  margin: 0;
+  padding: 12px 14px 2px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  animation: none;
+}
+
+.assistant-composer-shell textarea {
+  max-height: 160px;
+  resize: none;
+}
+
+.assistant-composer-shell textarea:focus {
+  outline: 0;
+}
+
+/* 工具栏：shell 内底部独立一行（非浮起、非框外） */
+.assistant-composer-shell .assistant-composer-bar {
+  max-width: none;
+  margin: 0;
+  padding: 4px 10px 8px;
+}
+
+/* 014: 运行门控（editing）/排队（queued）整框态高亮；停止三态见 .me-button-secondary */
+.assistant-composer-shell[data-state="editing"] {
+  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-2));
+  background: color-mix(in oklch, var(--warn) 5%, var(--surface-1));
+}
+
+.assistant-composer-shell[data-state="queued"] {
+  border-color: color-mix(in oklch, var(--accent) 55%, var(--border-2));
+  background: color-mix(in oklch, var(--accent) 7%, var(--surface-1));
+  animation: assistant-queue-glow 2.6s ease-in-out infinite;
 }
 
 .assistant-composer[data-running="true"] .me-button-secondary {
@@ -1209,19 +1278,40 @@ select:focus-visible,
   width: 100%;
   max-width: 720px;
   margin: 0 auto;
-  min-height: 74px;
-  border: 1px dashed color-mix(in srgb, var(--accent) 55%, var(--border-2));
+  min-height: 80px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border-2));
   border-radius: var(--radius-lg);
-  padding: 10px 14px 48px;
-  background: color-mix(in srgb, var(--surface-1) 88%, var(--accent) 12%);
+  padding: 10px 14px 12px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-1));
   color: var(--text);
   text-align: left;
-  cursor: text;
+  cursor: pointer;
+  animation: assistant-queue-glow 2.6s ease-in-out infinite;
+}
+
+.assistant-queued-box:hover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--surface-1));
 }
 
 .assistant-queued-box:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+@keyframes assistant-queue-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 24%, transparent),
+      0 6px 18px color-mix(in srgb, var(--accent) 9%, transparent);
+  }
+
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--accent) 42%, transparent),
+      0 10px 30px color-mix(in srgb, var(--accent) 20%, transparent);
+  }
 }
 
 .assistant-queued-hint {
@@ -1236,6 +1326,91 @@ select:focus-visible,
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.55;
+}
+
+/* 014 US2: 排队提示条（三态）+ 取消排队 */
+.assistant-queue-ribbon {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto 8px;
+  padding: 4px 6px 4px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 550;
+  animation: me-fade-in 200ms ease both;
+}
+
+.assistant-queue-ribbon > span {
+  flex: 1;
+}
+
+.assistant-queue-ribbon[data-mode="queued"] {
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border-2));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-1));
+  color: var(--accent);
+}
+
+.assistant-queue-ribbon[data-mode="editing"] {
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, var(--border-2));
+  background: color-mix(in srgb, var(--warn) 8%, var(--surface-1));
+  color: var(--warn);
+}
+
+.assistant-queue-ribbon[data-mode="empty"] {
+  border: 1px dashed var(--border-2);
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.assistant-queue-clock {
+  animation: me-pulse 1.8s ease-in-out infinite;
+}
+
+.assistant-queue-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--border-2));
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.assistant-queue-edit:hover {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-1));
+}
+
+.assistant-queue-cancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.assistant-queue-cancel:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* 014: 停止后引导（被取消回合的可操作提示） */
+.assistant-stopped-note {
+  align-self: flex-start;
+  margin: 4px 0 0 38px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .teaching-screen,
@@ -5757,6 +5932,54 @@ select:focus-visible,
   background: color-mix(in oklch, var(--accent) 12%, transparent);
   color: var(--accent);
   font-size: 11.5px;
+}
+
+.assistant-step-text {
+  min-width: 0;
+  flex: 1;
+}
+
+/* 步骤原文（JSON/长结果）整齐展示：等宽 + 缩进 + 限高内滚，不撑爆时间线 */
+.assistant-step-pre {
+  margin: 4px 0 0;
+  max-height: 200px;
+  overflow: auto;
+  padding: 8px 10px;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.assistant-step-inline {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 命中敏感规则的步骤：默认显示可点占位，双击/回车展开原文 */
+.assistant-step-redacted {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px dashed var(--border-2);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--text-muted) 8%, transparent);
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.assistant-step-redacted:hover,
+.assistant-step-redacted:focus-visible {
+  color: var(--accent);
+  border-color: var(--accent);
+  outline: none;
 }
 
 /* 子助手卡片 */

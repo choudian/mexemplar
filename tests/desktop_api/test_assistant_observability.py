@@ -37,9 +37,10 @@ def test_activity_projection_for_assistant_main():
     assert draft.scope.get("sessionId") == "s1"
     assert draft.payload["kind"] == "tool_call"
     assert draft.payload["seq"] == 2
+    assert draft.payload["redacted"] is False  # 非敏感文本正常显示
 
 
-def test_activity_projection_redacts_unsafe_text():
+def test_activity_projection_flags_unsafe_text_keeps_original():
     drafts = project_internal_event(
         "assistant_agent_step",
         {
@@ -51,12 +52,13 @@ def test_activity_projection_redacts_unsafe_text():
             "seq": 3,
         },
     )
-    # 走 009 脱敏（不仅截断）
-    assert drafts[0].payload["text"] == "[内容已隐藏]"
+    # 方案 B：保留原文 + 标记 redacted，UI 默认隐藏、双击查看
+    assert drafts[0].payload["text"] == "api_key=sk-secret-12345"
+    assert drafts[0].payload["redacted"] is True
     assert drafts[0].payload["subagentId"] == "c1"
 
 
-def test_activity_projection_redacts_sensitive_json_text():
+def test_activity_projection_flags_sensitive_json_keeps_original():
     drafts = project_internal_event(
         "assistant_agent_step",
         {
@@ -69,11 +71,11 @@ def test_activity_projection_redacts_sensitive_json_text():
         },
     )
 
-    assert drafts[0].payload["text"] == "[内容已隐藏]"
-    assert "sk-secret" not in drafts[0].payload["text"]
+    assert drafts[0].payload["text"] == '{"api_key":"sk-secret-12345","query":"hello"}'
+    assert drafts[0].payload["redacted"] is True
 
 
-def test_activity_projection_redacts_sensitive_python_repr_text():
+def test_activity_projection_flags_sensitive_python_repr_keeps_original():
     drafts = project_internal_event(
         "assistant_agent_step",
         {
@@ -85,8 +87,8 @@ def test_activity_projection_redacts_sensitive_python_repr_text():
         },
     )
 
-    assert drafts[0].payload["text"] == "[内容已隐藏]"
-    assert "sk-secret" not in drafts[0].payload["text"]
+    assert drafts[0].payload["text"] == "{'api_key': 'sk-secret-12345', 'query': 'hello'}"
+    assert drafts[0].payload["redacted"] is True
 
 
 def test_subagent_lifecycle_projection():
