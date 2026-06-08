@@ -268,6 +268,44 @@ class TestInspectSubagent:
         assert res["last_output"] == "进展中"
         orch._llm.chat_with_tools.assert_not_called()
 
+    def test_inspect_flags_repeated_calls_when_spinning(self, orch):
+        """同一工具用几乎相同的参数反复调用 → repeated_calls 标出该工具及重复次数。"""
+        parent = "parent-spin"
+        child = _make_child_subagent(orch, parent)
+        ctx = ContextManager(child, orch._config)
+        ctx.save_user_message("task")
+        for _ in range(3):
+            ctx.save_assistant_message(
+                content=None,
+                tool_calls=json.dumps(
+                    [{"id": "c", "name": "web_fetch", "args": {"url": "https://x.com"}}]
+                ),
+            )
+
+        res = orch._inspect_subagent(parent_session_id=parent, subagent_id=child)
+        assert res["success"] is True
+        repeated = {item["tool"]: item["count"] for item in res["repeated_calls"]}
+        assert repeated.get("web_fetch") == 3
+
+    def test_inspect_no_repeated_calls_when_args_differ(self, orch):
+        """同一工具但每次参数不同（抓不同 URL）→ 视为正常推进，repeated_calls 不含该工具。"""
+        parent = "parent-progress"
+        child = _make_child_subagent(orch, parent)
+        ctx = ContextManager(child, orch._config)
+        ctx.save_user_message("task")
+        for i in range(3):
+            ctx.save_assistant_message(
+                content=None,
+                tool_calls=json.dumps(
+                    [{"id": "c", "name": "web_fetch", "args": {"url": f"https://x.com/{i}"}}]
+                ),
+            )
+
+        res = orch._inspect_subagent(parent_session_id=parent, subagent_id=child)
+        assert res["success"] is True
+        tools_flagged = {item["tool"] for item in res["repeated_calls"]}
+        assert "web_fetch" not in tools_flagged
+
     def test_inspect_rejects_foreign_session(self, orch):
         foreign = _make_child_subagent(orch, "other-parent-XYZ")
         res = orch._inspect_subagent(parent_session_id="parent-A", subagent_id=foreign)

@@ -60,9 +60,10 @@ ASSISTANT_SYSTEM_PROMPT = """\
 delegate_to_subagent 返回 paused=true 时，说明子代理被迫中断、但工作已完整保留，可唤回接着干。看返回里的 reason 决定怎么办：
 
 - **账单/网络类失败**（套餐超限、余额不足、网络持续中断）：当下立即续跑也会再失败，必须等外部恢复。先告知用户原因，待恢复后再调 continue_subagent(subagent_id) 接着跑，不要反复重试。
-- **迭代超限**（干了很久没干完）：先调 inspect_subagent(subagent_id) 看工作概览，判断根因：
-  - 任务确实复杂、在正常推进 → continue_subagent(subagent_id) 给它续跑配额
-  - 在少数工具间原地打转、走错方向 → 不要硬续，重新 delegate_to_subagent 新开，并在 execution_context 里说明要避开的弯路
+- **迭代超限**（干了很久没干完）：先调 inspect_subagent(subagent_id) 看工作概览，再决定。默认优先 continue_subagent(subagent_id) 续跑——撞迭代上限通常只是任务繁重、配额不够，不代表走错方向。只有出现明确的"无进展"信号时，才改为重新 delegate_to_subagent 新开（并在 execution_context 里说明要避开的弯路）：
+  - last_output 在反复重复相同的话、相同报错，或明确表示卡住、没有思路；
+  - inspect 返回的 repeated_calls 显示同一工具被几乎相同的参数反复调用（如反复抓同一个 URL），而不是在处理不同目标。
+  注意：工具调用次数多本身不等于打转——抓 20 个目标自然会有几十次 web_fetch，这是繁重任务的正常特征。拿不准时优先 continue_subagent(subagent_id)。
 
 子代理已正常完成、但你审查后判断没达标时，也可以用 continue_subagent(subagent_id, instruction="...") 让它补齐返工，不必从零重派。
 

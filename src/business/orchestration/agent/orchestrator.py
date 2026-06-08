@@ -970,6 +970,7 @@ class AgentOrchestrator:
         messages = self._message_repo.get_context(subagent_id)
         assistant_turns = 0
         tool_call_counts: dict[str, int] = {}
+        call_fingerprints: dict[tuple[str, str], int] = {}
         for msg in messages:
             if getattr(msg, "role", None) != "assistant":
                 continue
@@ -980,8 +981,11 @@ class AgentOrchestrator:
             try:
                 for tc in json.loads(raw):
                     name = tc.get("name") if isinstance(tc, dict) else None
-                    if name:
-                        tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+                    if not name:
+                        continue
+                    tool_call_counts[name] = tool_call_counts.get(name, 0) + 1
+                    key = (name, self._fingerprint_call_args(tc.get("args")))
+                    call_fingerprints[key] = call_fingerprints.get(key, 0) + 1
             except (ValueError, TypeError) as exc:
                 logger.warning(
                     "[inspect_subagent] malformed tool_calls JSON: session=%s error=%s",
@@ -990,14 +994,38 @@ class AgentOrchestrator:
                 )
                 continue
 
+        # 同一工具被几乎相同的参数反复调用 = 原地打转的信号，用于和"调用次数多但
+        # 在处理不同目标"（正常推进）区分。只回计数、不回参数明文，避免把可能含
+        # 敏感内容的参数注入 assistant 上下文。
+        repeated_calls = [
+            {"tool": name, "count": count}
+            for (name, _fp), count in sorted(
+                call_fingerprints.items(), key=lambda kv: kv[1], reverse=True
+            )
+            if count >= 2
+        ]
+
         return {
             "success": True,
             "subagent_id": subagent_id,
             "status": getattr(session, "status", None),
             "assistant_turns": assistant_turns,
             "tool_call_counts": tool_call_counts,
+            "repeated_calls": repeated_calls,
             "last_output": self._extract_latest_assistant_text(subagent_id),
         }
+
+    @staticmethod
+    def _fingerprint_call_args(args) -> str:
+        """对工具调用参数做稳定指纹，用于识别"几乎相同的参数反复调用"。
+
+        相同参数（如反复抓同一个 URL）产生相同指纹；不同参数（抓不同目标）
+        产生不同指纹。仅用于 _inspect_subagent 的重复度统计，不外泄参数明文。
+        """
+        try:
+            return json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return repr(args)
 
     def _capture_delegation_debug_detail(
         self,
