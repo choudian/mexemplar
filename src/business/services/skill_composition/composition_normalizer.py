@@ -24,8 +24,8 @@ def normalize_members(mode: str, members: List[dict], tool_repo) -> List[dict]:
     mode = (mode or "").strip()
     if mode not in VALID_MODES:
         raise SkillCompositionError("技能组合模式无效")
-    if not members:
-        raise SkillCompositionError("技能组合至少要包含一个技能")
+    if len(members) < 2:
+        raise SkillCompositionError("技能组合至少要包含两个技能")
 
     normalized = []
     seen_tool_ids = set()

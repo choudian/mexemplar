@@ -468,7 +468,7 @@ class CompositionUpsertRequest(BaseModel):
     description: str = ""
     mode: Literal["range", "ordered"] = "range"
     applicability: str = ""
-    members: list[CompositionMemberRequest] = Field(default_factory=list, min_length=1)
+    members: list[CompositionMemberRequest] = Field(default_factory=list, min_length=2)
     assistantEnabled: bool = True
     recommendOrder: bool = False
 

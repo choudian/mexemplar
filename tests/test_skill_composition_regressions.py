@@ -269,6 +269,7 @@ def test_generate_applicability_uses_selected_skills_and_cleans_prefix(monkeypat
 
 def test_get_tool_detail_accepts_display_labels_shown_to_assistant():
     _seed_published_tool("tool_display_label", "展示技能", "用于验证展示名激活")
+    _seed_published_tool("tool_display_label_2", "展示技能2", "第二个成员")
     service = SkillCompositionService()
     composition = service.create_composition(
         composition_name="展示组合",
@@ -277,7 +278,10 @@ def test_get_tool_detail_accepts_display_labels_shown_to_assistant():
         mode="ordered",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "tool_display_label", "selected_order": 1, "execution_order": 1}],
+        members=[
+            {"tool_id": "tool_display_label", "selected_order": 1, "execution_order": 1},
+            {"tool_id": "tool_display_label_2", "selected_order": 2, "execution_order": 2},
+        ],
     )
     service.publish_composition(composition.composition_id)
 
@@ -292,6 +296,7 @@ def test_get_tool_detail_accepts_display_labels_shown_to_assistant():
 
 def test_activated_composition_is_removed_after_it_needs_review():
     _seed_published_tool("tool_stale_member", "待失效成员", "用于验证重校验")
+    _seed_published_tool("tool_stale_member_2", "待失效成员2", "第二个成员")
     service = SkillCompositionService()
     composition = service.create_composition(
         composition_name="待失效组合",
@@ -300,7 +305,10 @@ def test_activated_composition_is_removed_after_it_needs_review():
         mode="range",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "tool_stale_member", "selected_order": 1}],
+        members=[
+            {"tool_id": "tool_stale_member", "selected_order": 1},
+            {"tool_id": "tool_stale_member_2", "selected_order": 2},
+        ],
     )
     service.publish_composition(composition.composition_id)
 
@@ -331,6 +339,7 @@ def test_save_tool_marks_referencing_compositions_stale_when_status_changes_to_p
             )
         )
 
+    _seed_published_tool("tool_status_flip_member_2", "状态回退成员2", "第二个成员")
     service = SkillCompositionService()
     composition = service.create_composition(
         composition_name="状态回退组合",
@@ -339,7 +348,10 @@ def test_save_tool_marks_referencing_compositions_stale_when_status_changes_to_p
         mode="range",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "tool_status_flip_member", "selected_order": 1}],
+        members=[
+            {"tool_id": "tool_status_flip_member", "selected_order": 1},
+            {"tool_id": "tool_status_flip_member_2", "selected_order": 2},
+        ],
     )
     service.publish_composition(composition.composition_id)
 
@@ -387,9 +399,10 @@ def test_service_create_composition_defaults_assistant_enabled_and_recommend_ord
 
 def test_start_trial_session_creates_session():
     _seed_published_tool("tool_range_dialog_member", "范围成员", "范围成员描述")
+    _seed_published_tool("tool_range_dialog_member_2", "范围成员2", "第二个成员")
     composition = _create_composition(
         "范围试用组合",
-        ["tool_range_dialog_member"],
+        ["tool_range_dialog_member", "tool_range_dialog_member_2"],
         mode="range",
     )
 
@@ -483,7 +496,8 @@ def test_trial_prompt_does_not_reference_unavailable_helper_tools():
 
 def test_trial_initially_exposes_only_composition_tool(monkeypatch):
     _seed_published_tool("tool_trial_member", "试用成员")
-    composition = _create_composition("试用组合", ["tool_trial_member"])
+    _seed_published_tool("tool_trial_member_2", "试用成员2")
+    composition = _create_composition("试用组合", ["tool_trial_member", "tool_trial_member_2"])
     _patch_trial_environment(monkeypatch)
 
     captured = {}
@@ -608,6 +622,7 @@ def test_continue_trial_uses_saved_session_snapshot_when_live_composition_change
     _seed_published_tool("snapold1_member", "旧成员1", "旧成员1描述")
     _seed_published_tool("snapold2_member", "旧成员2")
     _seed_published_tool("snapnewx_member", "新成员")
+    _seed_published_tool("snapnewy_member", "新成员2")
 
     service = SkillCompositionService()
     composition = service.create_composition(
@@ -633,7 +648,10 @@ def test_continue_trial_uses_saved_session_snapshot_when_live_composition_change
         mode="range",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "snapnewx_member", "selected_order": 1}],
+        members=[
+            {"tool_id": "snapnewx_member", "selected_order": 1},
+            {"tool_id": "snapnewy_member", "selected_order": 2},
+        ],
     )
     with ToolRepository() as tool_repo:
         old_member = tool_repo.get_by_id("snapold1_member")
@@ -721,7 +739,10 @@ def test_continue_trial_uses_saved_session_snapshot_when_live_composition_change
 
 def test_continue_trial_keeps_members_hidden_until_composition_has_started(monkeypatch):
     _seed_published_tool("tool_continue_hidden", "续跑隐藏成员")
-    composition = _create_composition("续跑未启动组合", ["tool_continue_hidden"])
+    _seed_published_tool("tool_continue_hidden_2", "续跑隐藏成员2")
+    composition = _create_composition(
+        "续跑未启动组合", ["tool_continue_hidden", "tool_continue_hidden_2"]
+    )
     _patch_trial_environment(monkeypatch)
 
     session_id = "comptrial_not_started"
@@ -768,8 +789,9 @@ def test_continue_trial_keeps_members_hidden_until_composition_has_started(monke
 
 def test_continue_trial_rejects_session_from_other_composition():
     _seed_published_tool("tool_session_guard", "会话守卫成员")
-    first = _create_composition("会话组合A", ["tool_session_guard"])
-    second = _create_composition("会话组合B", ["tool_session_guard"])
+    _seed_published_tool("tool_session_guard_2", "会话守卫成员2")
+    first = _create_composition("会话组合A", ["tool_session_guard", "tool_session_guard_2"])
+    second = _create_composition("会话组合B", ["tool_session_guard", "tool_session_guard_2"])
 
     with SessionRepository() as session_repo:
         session_repo.create(
@@ -791,6 +813,11 @@ def test_continue_trial_rejects_session_from_other_composition():
 
 def test_duplicate_composition_name_is_rejected_on_create():
     _seed_published_tool("tool_duplicate_create", "重名成员")
+    _seed_published_tool("tool_duplicate_create_2", "重名成员2")
+    members = [
+        {"tool_id": "tool_duplicate_create", "selected_order": 1},
+        {"tool_id": "tool_duplicate_create_2", "selected_order": 2},
+    ]
     service = SkillCompositionService()
     service.create_composition(
         composition_name="重名组合",
@@ -799,7 +826,7 @@ def test_duplicate_composition_name_is_rejected_on_create():
         mode="range",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "tool_duplicate_create", "selected_order": 1}],
+        members=members,
     )
 
     with pytest.raises(SkillCompositionError, match="技能组合名称已存在"):
@@ -810,12 +837,17 @@ def test_duplicate_composition_name_is_rejected_on_create():
             mode="range",
             assistant_enabled=True,
             recommend_order=False,
-            members=[{"tool_id": "tool_duplicate_create", "selected_order": 1}],
+            members=members,
         )
 
 
 def test_duplicate_composition_name_is_rejected_on_update():
     _seed_published_tool("tool_duplicate_update", "更新重名成员")
+    _seed_published_tool("tool_duplicate_update_2", "更新重名成员2")
+    members = [
+        {"tool_id": "tool_duplicate_update", "selected_order": 1},
+        {"tool_id": "tool_duplicate_update_2", "selected_order": 2},
+    ]
     service = SkillCompositionService()
     service.create_composition(
         composition_name="组合甲",
@@ -824,7 +856,7 @@ def test_duplicate_composition_name_is_rejected_on_update():
         mode="range",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "tool_duplicate_update", "selected_order": 1}],
+        members=members,
     )
     second = service.create_composition(
         composition_name="组合乙",
@@ -833,7 +865,7 @@ def test_duplicate_composition_name_is_rejected_on_update():
         mode="range",
         assistant_enabled=True,
         recommend_order=False,
-        members=[{"tool_id": "tool_duplicate_update", "selected_order": 1}],
+        members=members,
     )
 
     with pytest.raises(SkillCompositionError, match="技能组合名称已存在"):
@@ -845,7 +877,7 @@ def test_duplicate_composition_name_is_rejected_on_update():
             mode="range",
             assistant_enabled=True,
             recommend_order=False,
-            members=[{"tool_id": "tool_duplicate_update", "selected_order": 1}],
+            members=members,
         )
 
     reloaded = service.get_composition(second.composition_id)

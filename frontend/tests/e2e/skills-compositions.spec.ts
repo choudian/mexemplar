@@ -20,6 +20,7 @@ test("T076 inspects skill states and creates range plus ordered compositions", a
   await page.getByLabel("描述").fill("Range composition");
   await page.getByLabel("适用场景").fill("When any reusable skill can solve the task");
   await page.getByRole("button", { name: /Published Skill/ }).click();
+  await page.getByRole("button", { name: /Second Skill/ }).click();
   await page.getByRole("button", { name: "保存草稿" }).click();
   await expect(page.getByText("当前：Range fixture")).toBeVisible();
 

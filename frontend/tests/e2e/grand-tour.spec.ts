@@ -55,6 +55,7 @@ test("TC-GT-003 用户创建工具组合", async ({ page }) => {
   await page.getByLabel("描述").fill("自动处理客户邮件并生成摘要报告");
   await page.getByLabel("适用场景").fill("当客户邮件需要摘要报告时");
   await page.getByRole("button", { name: /Published Skill/ }).click();
+  await page.getByRole("button", { name: /Second Skill/ }).click();
   await page.getByRole("button", { name: /保存草稿/ }).click();
   await expect(page.getByText("当前：邮件处理工作流")).toBeVisible();
   await page.getByRole("button", { name: /发布/ }).click();

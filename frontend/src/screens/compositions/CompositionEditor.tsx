@@ -170,9 +170,16 @@ function CompositionEditor({
           </section>
 
           <div className="composition-editor-actions">
-            <Button disabled={busy || !draft.name.trim() || !draft.applicability.trim()} onClick={onSave}>
+            <Button
+              disabled={busy || !draft.name.trim() || !draft.applicability.trim() || draft.members.length < 2}
+              title={draft.members.length < 2 ? "技能组合至少要添加 2 个技能" : undefined}
+              onClick={onSave}
+            >
               保存草稿
             </Button>
+            {draft.members.length < 2 ? (
+              <small className="composition-editor-hint">技能组合至少要添加 2 个技能</small>
+            ) : null}
             <Button disabled={busy || !canPublish} kind="secondary" onClick={onTrial}>
               <Play size={14} />
               试用

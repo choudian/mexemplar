@@ -61,7 +61,7 @@ export function CompositionListScreen(): JSX.Element {
   }, [load, loadSkills]);
 
   const selected = items.find((item) => item.compositionId === selectedId);
-  const canPublish = Boolean(selectedId && draft.applicability.trim() && draft.members.length > 0);
+  const canPublish = Boolean(selectedId && draft.applicability.trim() && draft.members.length >= 2);
   const openCreate = () => {
     select(null);
     setView("create");

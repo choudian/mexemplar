@@ -73,6 +73,16 @@ def test_composition_create_rejects_empty_members_at_api_boundary(desktop_api_cl
     assert response.status_code == 422
 
 
+def test_composition_create_rejects_single_member_at_api_boundary(desktop_api_client):
+    seed_published_tool("tool_a", "Collect invoices")
+    payload = composition_payload()
+    payload["members"] = [{"toolId": "tool_a", "selectedOrder": 1, "executionOrder": 1}]
+
+    response = desktop_api_client.post("/api/compositions", json=payload)
+
+    assert response.status_code == 422
+
+
 class FakeCompositionAdapter:
     def generate_applicability(self, payload):
         assert payload["name"] == "Draft"

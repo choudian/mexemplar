@@ -3822,6 +3822,11 @@ select:focus-visible,
   gap: 8px;
 }
 
+.composition-editor-hint {
+  color: var(--me-text-muted, #8a8f98);
+  font-size: 12px;
+}
+
 .composition-status {
   justify-content: space-between;
   gap: 10px;

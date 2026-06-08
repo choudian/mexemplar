@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { configureDesktopApi } from "../../src/api/client";
+import CompositionEditor from "../../src/screens/compositions/CompositionEditor";
 import { CompositionListScreen } from "../../src/screens/compositions/CompositionListScreen";
 import { SkillListScreen } from "../../src/screens/skills/SkillListScreen";
 import { useCompositionsStore } from "../../src/state/compositionsStore";
@@ -157,6 +158,59 @@ describe("skills and compositions screens", () => {
     expect(useSkillsStore.getState().categories.failed).toEqual([]);
   });
 
+  test("blocks saving a single-member composition and shows a min-two hint", () => {
+    const editorProps = {
+      skills: [],
+      busy: false,
+      canPublish: false,
+      onField: () => {},
+      onMode: () => {},
+      onAddMember: () => {},
+      onMoveMember: () => {},
+      onRemoveMember: () => {},
+      onGenerateApplicability: () => {},
+      onRecommendOrder: () => {},
+      onSave: () => {},
+      onPublish: () => {},
+      onTrial: () => {},
+    };
+
+    const { rerender } = render(
+      <CompositionEditor
+        {...editorProps}
+        draft={{
+          name: "Solo",
+          description: "",
+          mode: "range",
+          applicability: "When only one skill is picked",
+          members: [{ toolId: "tool_a", name: "Only Skill", description: "", selectedOrder: 1 }],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "保存草稿" })).toBeDisabled();
+    expect(screen.getByText("技能组合至少要添加 2 个技能")).toBeInTheDocument();
+
+    rerender(
+      <CompositionEditor
+        {...editorProps}
+        draft={{
+          name: "Pair",
+          description: "",
+          mode: "range",
+          applicability: "When two skills cooperate",
+          members: [
+            { toolId: "tool_a", name: "First Skill", description: "", selectedOrder: 1 },
+            { toolId: "tool_b", name: "Second Skill", description: "", selectedOrder: 2 },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "保存草稿" })).toBeEnabled();
+    expect(screen.queryByText("技能组合至少要添加 2 个技能")).not.toBeInTheDocument();
+  });
+
   test("creates an ordered composition, reorders members, tries it, and publishes it", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -179,6 +233,14 @@ describe("skills and compositions screens", () => {
                 description: "Ready to reuse",
                 selectedOrder: 1,
                 executionOrder: 1,
+              },
+              {
+                memberId: "m_2",
+                toolId: "tool_b",
+                name: "Second Skill",
+                description: "Runs after the first skill",
+                selectedOrder: 2,
+                executionOrder: 2,
               },
             ],
           });
@@ -235,6 +297,14 @@ describe("skills and compositions screens", () => {
               description: "Ready to reuse",
               selectedOrder: 1,
               executionOrder: 1,
+            },
+            {
+              memberId: "m_2",
+              toolId: "tool_b",
+              name: "Second Skill",
+              description: "Runs after the first skill",
+              selectedOrder: 2,
+              executionOrder: 2,
             },
           ],
         });

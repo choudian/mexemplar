@@ -43,12 +43,31 @@ def test_normalize_members_sorts_selected_order_for_ordered_mode():
 
 
 def test_normalize_members_rejects_unpublished_tools():
-    repo = _FakeToolRepo([Tool(tool_id="tool_hidden", tool_name="隐藏技能", status="draft")])
+    repo = _FakeToolRepo(
+        [
+            Tool(tool_id="tool_hidden", tool_name="隐藏技能", status="draft"),
+            Tool(tool_id="tool_ok", tool_name="已掌握技能", status="published"),
+        ]
+    )
 
     with pytest.raises(SkillCompositionError, match="只能将已掌握技能加入技能组合"):
         normalize_members(
             "range",
-            [{"tool_id": "tool_hidden", "selected_order": 1}],
+            [
+                {"tool_id": "tool_hidden", "selected_order": 1},
+                {"tool_id": "tool_ok", "selected_order": 2},
+            ],
+            repo,
+        )
+
+
+def test_normalize_members_rejects_single_member():
+    repo = _FakeToolRepo([Tool(tool_id="tool_a", tool_name="技能A", status="published")])
+
+    with pytest.raises(SkillCompositionError, match="技能组合至少要包含两个技能"):
+        normalize_members(
+            "range",
+            [{"tool_id": "tool_a", "selected_order": 1}],
             repo,
         )
 
