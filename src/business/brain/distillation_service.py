@@ -489,9 +489,26 @@ class DistillationService:
         return "\n".join(lines)
 
     def run_subconscious_distillation(self, llm_client=None) -> int:
-        """Run periodic cross-segment distillation into the subconscious zone."""
+        """Run periodic cross-segment distillation into the subconscious zone.
+
+        段身份去重：以"最近完成且仍有 active hot/persistent 条目的 Segment"为输入标记，与上
+        一次潜意识输出记录的段标记比较；相同即说明没有新的可消费蒸馏材料，跳过本轮沉淀，避免
+        后台 worker 每个 tick 对同一段记忆重复抽取潜意识条目、浪费 LLM 调用。
+        """
         if llm_client is None:
             return 0
+        repo = self._get_repo()
+        latest_segment = repo.get_latest_distilled_segment_id()
+        if latest_segment is not None:
+            last_marker = repo.get_latest_output_segment_marker(
+                "subconscious", "subconscious_distillation"
+            )
+            if last_marker == latest_segment:
+                logger.info(
+                    "Subconscious distillation skipped: segment %s already processed",
+                    latest_segment,
+                )
+                return 0
         context = self._build_subconscious_context()
         if not context:
             return 0
@@ -511,7 +528,6 @@ class DistillationService:
         items = self._subconscious_items_from_response(response)
         if not items:
             return 0
-        repo = self._get_repo()
         created = 0
         created_entry_ids: list[str] = []
         try:
@@ -526,6 +542,7 @@ class DistillationService:
                     origin="subconscious_distillation",
                     reason=reason,
                     scope=item.get("scope"),
+                    source_segment_id=latest_segment,
                     commit=False,
                 )
                 created_entry_ids.append(str(entry_id))

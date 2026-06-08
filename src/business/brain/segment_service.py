@@ -78,14 +78,68 @@ class SegmentService:
     def handle_idle_trigger(self, session_id: str) -> Optional[str]:
         """处理前端空闲计时器触发。
 
+        主助理把任务委派给临时子代理或专员后会进入"等待"状态，UI 看上去空闲，但任务链
+        并未结束。若此时直接封存段，蒸馏输入会缺少子代理的执行过程和最终结果，甚至把
+        "进行中"误记为失败（见 BUG-2）。因此当会话仍有活跃子代理/专员在跑时，跳过本次
+        idle 封存，等任务链结束后的下一次边界（再次 idle、window_close 等）再封存。
+
         Args:
             session_id: 所属会话 ID
 
         Returns:
-            segment_id，如果成功封存
+            segment_id，如果成功封存；会话仍在等待子代理时返回 None。
         """
+        if self._has_active_subagent(session_id):
+            logger.info(
+                "Segment idle seal deferred: session %s is waiting on an active subagent",
+                session_id,
+            )
+            return None
         emit("segment_idle_trigger", session_id=session_id)
         return self.seal_segment(session_id, boundary_reason="idle")
+
+    def _has_active_subagent(self, session_id: str) -> bool:
+        """会话是否仍有活跃（运行中）的子代理/专员。
+
+        主助理通过 `assistant_delegation_started` 交接（from=主会话, to=子会话）派活；
+        子会话运行期间 status='active'，完成/暂停/失败后转其它状态。只要存在任一仍为
+        active 的子会话，就说明主助理在等待结果，会话并非真正空闲。
+        """
+        try:
+            from src.data.repos.session_repository import SessionRepository
+            from src.data.repos.workflow_transition_repository import (
+                WorkflowTransitionRepository,
+            )
+        except ImportError:
+            return False
+
+        transition_repo = WorkflowTransitionRepository()
+        try:
+            transitions = transition_repo.list_by_session(session_id)
+        except Exception as exc:
+            logger.warning("Failed to inspect delegations for session %s: %s", session_id, exc)
+            return False
+        finally:
+            transition_repo.close()
+
+        subagent_ids = [
+            getattr(transition, "to_session_id", None)
+            for transition in transitions
+            if getattr(transition, "event_type", "") == "assistant_delegation_started"
+            and getattr(transition, "from_session_id", None) == session_id
+        ]
+        subagent_ids = [sid for sid in subagent_ids if sid]
+        if not subagent_ids:
+            return False
+
+        session_repo = SessionRepository()
+        try:
+            return any(session_repo.get_status(sid) == "active" for sid in subagent_ids)
+        except Exception as exc:
+            logger.warning("Failed to inspect subagent status for session %s: %s", session_id, exc)
+            return False
+        finally:
+            session_repo.close()
 
     def _infer_message_range(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
         """Infer the contiguous user-visible message range not covered by sealed segments."""

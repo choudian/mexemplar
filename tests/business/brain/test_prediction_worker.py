@@ -69,6 +69,109 @@ def test_generate_predictions_writes_prediction_entries():
     assert entry.verification_checkpoint == "下次对话时"
 
 
+def _prediction_response(content: str) -> "LLMResponse":
+    return LLMResponse(
+        content=None,
+        tool_calls=[
+            ToolCallInfo(
+                id="pred",
+                name="prediction_generation_output",
+                args={
+                    "prediction_zone": [
+                        {
+                            "content": content,
+                            "verification_checkpoint": "下次对话时",
+                            "reason": "预算审核最近反复出现",
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+
+
+def _completed_segment_with_hot(repo, segment_id: str, content: str) -> str:
+    """创建一个 completed Segment 并写入一条 active hot 条目（带 source_segment_id），
+    模拟一次真实蒸馏的产出，用于驱动按段身份去重的 prediction/subconscious 任务。"""
+    seg = repo.create_segment(
+        session_id="sess-dedup",
+        boundary_reason="idle",
+        message_id_start="m1",
+        message_id_end="m2",
+        segment_id=segment_id,
+    )
+    sid = str(seg)
+    repo.transition_segment(sid, from_status="pending", to_status="distilling")
+    repo.complete_segment_with_entries(
+        sid,
+        [
+            {
+                "zone": Zone.HOT.value,
+                "content": content,
+                "reason": "近期重复话题",
+                "origin": "distillation",
+                "entry_type": "event",
+                "source_segment_id": sid,
+            }
+        ],
+    )
+    return sid
+
+
+def test_generate_predictions_skips_when_segment_already_processed():
+    from src.business.brain.prediction_service import PredictionService
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    _completed_segment_with_hot(repo, "seg-1", "用户最近多次提到预算审核")
+    service = PredictionService(repo=repo)
+
+    first = service.generate_predictions(_MockLLM([_prediction_response("第一次猜测")]))
+    assert len(first) == 1
+    assert repo.get_entry(first[0]).source_segment_id == "seg-1"
+
+    guard_llm = MagicMock()
+    assert service.generate_predictions(guard_llm) == []
+    guard_llm.chat_with_tools.assert_not_called()
+
+
+def test_generate_predictions_runs_again_after_new_segment():
+    from src.business.brain.prediction_service import PredictionService
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    _completed_segment_with_hot(repo, "seg-1", "用户最近多次提到预算审核")
+    service = PredictionService(repo=repo)
+
+    first = service.generate_predictions(_MockLLM([_prediction_response("第一次猜测")]))
+    assert len(first) == 1
+
+    # 新完成的 Segment 带来新的 hot 材料 → 段标记前移，应再次生成。
+    _completed_segment_with_hot(repo, "seg-2", "用户开始关注季度报表")
+
+    second = service.generate_predictions(_MockLLM([_prediction_response("第二次猜测")]))
+    assert len(second) == 1
+    assert repo.get_entry(second[0]).source_segment_id == "seg-2"
+
+
+def test_generate_predictions_runs_without_segment_info():
+    """没有任何带 source_segment_id 的蒸馏条目时（如裸 hot 条目）保守运行，绝不漏蒸馏。"""
+    from src.business.brain.prediction_service import PredictionService
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    repo.create_entry(
+        zone=Zone.HOT.value,
+        content="用户最近多次提到预算审核",
+        origin="distillation",
+        reason="近期重复话题",
+    )
+    service = PredictionService(repo=repo)
+
+    created = service.generate_predictions(_MockLLM([_prediction_response("猜测")]))
+    assert len(created) == 1
+
+
 def test_verify_predictions_updates_status_and_rationale():
     from src.business.brain.prediction_service import PredictionService
     from src.data.repos.brain_repository import BrainRepository
@@ -246,6 +349,59 @@ def test_subconscious_distillation_writes_entries():
 
     assert count == 1
     assert entries[0].content == "用户偏好先结论后细节。"
+
+
+def _subconscious_response(content: str) -> "LLMResponse":
+    return LLMResponse(
+        content=None,
+        tool_calls=[
+            ToolCallInfo(
+                id="sub",
+                name="subconscious_distillation_output",
+                args={
+                    "subconscious_zone": [
+                        {
+                            "content": content,
+                            "reason": "多次要求先给结论",
+                            "scope": "沟通风格",
+                        }
+                    ]
+                },
+            )
+        ],
+    )
+
+
+def test_subconscious_distillation_skips_when_segment_already_processed():
+    from src.business.brain.distillation_service import DistillationService
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    _completed_segment_with_hot(repo, "seg-1", "用户多次要求先给结论再展开。")
+    service = DistillationService(repo=repo)
+
+    assert service.run_subconscious_distillation(_MockLLM([_subconscious_response("先结论后细节")])) == 1
+    produced = repo.get_entries_by_zone(Zone.SUBCONSCIOUS.value, status="active")
+    assert produced[0].source_segment_id == "seg-1"
+
+    guard_llm = MagicMock()
+    assert service.run_subconscious_distillation(guard_llm) == 0
+    guard_llm.chat_with_tools.assert_not_called()
+
+
+def test_subconscious_distillation_runs_again_after_new_segment():
+    from src.business.brain.distillation_service import DistillationService
+    from src.data.repos.brain_repository import BrainRepository
+
+    repo = BrainRepository()
+    _completed_segment_with_hot(repo, "seg-1", "用户多次要求先给结论再展开。")
+    service = DistillationService(repo=repo)
+
+    assert service.run_subconscious_distillation(_MockLLM([_subconscious_response("先结论后细节")])) == 1
+
+    _completed_segment_with_hot(repo, "seg-2", "用户开始强调可执行步骤。")
+
+    assert service.run_subconscious_distillation(_MockLLM([_subconscious_response("强调步骤")])) == 1
 
 
 def test_subconscious_distillation_rolls_back_partial_batch(monkeypatch):

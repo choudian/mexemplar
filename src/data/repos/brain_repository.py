@@ -423,6 +423,53 @@ class BrainRepository(BaseRepository):
             query = query.filter(BrainMemoryEntry.status != "soft-deleted")
         return query.count()
 
+    def get_latest_distilled_segment_id(self) -> Optional[str]:
+        """返回最近完成、且仍有 active hot/persistent 条目的 Segment ID。
+
+        跨 Segment 的 prediction / subconscious 任务用它做"段身份"去重：只要这一段与上次
+        任务输出标记的 Segment 相同，就说明没有新的可消费蒸馏材料，可跳过本轮 LLM 调用。
+        按 Segment 完成顺序（completed_at）排序，而非条目时间戳，因此不受用户编辑旧条目
+        （沿用旧段 ID 但刷新 created_at）或系统时钟回拨影响。无可用段时返回 None，调用方据此
+        保守运行，绝不漏蒸馏。
+        """
+        has_live_entry = (
+            self.session.query(BrainMemoryEntry.entry_id)
+            .filter(
+                BrainMemoryEntry.source_segment_id == BrainSegment.segment_id,
+                BrainMemoryEntry.zone.in_(("hot", "persistent")),
+                BrainMemoryEntry.status == "active",
+            )
+            .exists()
+        )
+        row = (
+            self.session.query(BrainSegment.segment_id)
+            .filter(BrainSegment.status == "completed", has_live_entry)
+            .order_by(BrainSegment.completed_at.desc(), BrainSegment.segment_id.desc())
+            .first()
+        )
+        return row[0] if row else None
+
+    def get_latest_output_segment_marker(self, zone: str, origin: str) -> Optional[str]:
+        """返回指定 zone+origin 最近一条输出条目记录的 source_segment_id 段标记。
+
+        prediction / subconscious 任务每次运行时会把产出的条目标记为当时处理的最新
+        Segment ID；下一轮用它与 get_latest_distilled_segment_id() 比较来判断是否已处理过
+        该段。无输出或未标记时返回 None。
+        """
+        row = (
+            self.session.query(BrainMemoryEntry.source_segment_id)
+            .filter(
+                BrainMemoryEntry.zone == zone,
+                BrainMemoryEntry.origin == origin,
+            )
+            .order_by(
+                BrainMemoryEntry.created_at.desc(),
+                BrainMemoryEntry.entry_id.desc(),
+            )
+            .first()
+        )
+        return row[0] if row else None
+
     def search_archive_entries(
         self,
         query: str,

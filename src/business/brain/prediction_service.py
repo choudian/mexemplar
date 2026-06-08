@@ -55,9 +55,27 @@ class PredictionService:
         return self._config
 
     def generate_predictions(self, llm_client=None) -> list[str]:
-        """基于跨 Segment 上下文生成猜测区条目。无 LLM 时静默 no-op。"""
+        """基于跨 Segment 上下文生成猜测区条目。无 LLM 时静默 no-op。
+
+        段身份去重：以"最近完成且仍有 active hot/persistent 条目的 Segment"为输入标记，与上
+        一次猜测输出记录的段标记比较；相同即说明没有新的可消费蒸馏材料，跳过本轮生成，避免后台
+        worker 每个 tick 对同一段记忆重复生成猜测、浪费 LLM 调用。
+        """
         if llm_client is None:
             return []
+
+        repo = self._get_repo()
+        latest_segment = repo.get_latest_distilled_segment_id()
+        if latest_segment is not None:
+            last_marker = repo.get_latest_output_segment_marker(
+                "prediction", "prediction_generation"
+            )
+            if last_marker == latest_segment:
+                logger.info(
+                    "Prediction generation skipped: segment %s already processed",
+                    latest_segment,
+                )
+                return []
 
         context = self._collect_prediction_context()
         if not context:
@@ -77,7 +95,6 @@ class PredictionService:
 
         prediction_items = self._prediction_items_from_response(response)
         created_ids: list[str] = []
-        repo = self._get_repo()
         for item in prediction_items:
             content = (item.get("content") or "").strip()
             reason = (item.get("reason") or "").strip()
@@ -88,6 +105,7 @@ class PredictionService:
                 content=content,
                 reason=reason,
                 verification_checkpoint=checkpoint,
+                source_segment_id=latest_segment,
             )
             created_ids.append(entry_id)
             emit(
