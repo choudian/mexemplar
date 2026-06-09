@@ -32,6 +32,8 @@ _SYSTEM_ROOTS = [
     Path("/sbin"),
 ]
 
+_RESOLVED_SYSTEM_ROOTS: list[Path] = [r.resolve(strict=False) for r in _SYSTEM_ROOTS]
+
 SAFE_EXEC_COMMANDS = frozenset(
     {
         "python --version",
@@ -141,9 +143,9 @@ def _is_hidden(path: Path, workspace_root: Path) -> bool:
 
 
 def _is_system_path(path: Path) -> bool:
-    for root in _SYSTEM_ROOTS:
+    for root in _RESOLVED_SYSTEM_ROOTS:
         try:
-            if path.is_relative_to(root.resolve(strict=False)):
+            if path.is_relative_to(root):
                 return True
         except OSError:
             continue
@@ -378,7 +380,8 @@ def build_edit_summary(
 
 
 def build_exec_summary(command: str) -> str:
-    first_line = str(command).splitlines()[0] if str(command).splitlines() else ""
+    lines = str(command).splitlines()
+    first_line = lines[0] if lines else ""
     return _truncate_summary(
         f"Run elevated command in workspace: {redact_fragment(first_line, 120)}"
     )

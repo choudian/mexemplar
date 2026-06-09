@@ -146,10 +146,6 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def compact_dict(value: dict[str, Any]) -> dict[str, Any]:
-    return {k: v for k, v in value.items() if v is not None}
-
-
 def compact_nested(value: Any) -> Any:
     if isinstance(value, dict):
         return {k: compact_nested(v) for k, v in value.items() if v is not None}
@@ -173,7 +169,7 @@ class ToolError:
         else:
             code = self.code
             message = self.message
-        return compact_dict(
+        return compact_nested(
             {
                 "code": code,
                 "message": message,
@@ -193,7 +189,7 @@ class PermissionDecision:
     reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return compact_dict(
+        return compact_nested(
             {
                 "scope": self.scope,
                 "risk": self.risk,
@@ -214,7 +210,7 @@ class ToolOutputReference:
     expires_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return compact_dict(
+        return compact_nested(
             {
                 "referenceId": self.reference_id,
                 "kind": self.kind,
@@ -234,7 +230,7 @@ class VerificationResult:
     message: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return compact_dict(
+        return compact_nested(
             {
                 "status": self.status,
                 "oldBaseline": self.old_baseline,
@@ -328,7 +324,7 @@ def envelope_dict(
         verification_value = verification.to_dict()
     else:
         verification_value = verification
-    obj = compact_dict(
+    obj = compact_nested(
         {
             "schemaVersion": SCHEMA_VERSION,
             "tool": tool,

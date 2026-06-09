@@ -186,7 +186,6 @@ class AgentLoop:
         self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
         self._msg_repo = MessageRepository()  # 复用 MessageRepository，避免每次重建
         self._session_repo = SessionRepository()
-        self._last_llm_failure_recoverable = False
 
         logger.debug(
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
@@ -247,7 +246,7 @@ class AgentLoop:
         iteration: int,
         session_id: str = "",
         workflow_id: str | None = None,
-    ) -> Optional[LLMResponse]:
+    ) -> tuple[Optional[LLMResponse], bool]:
         """
         调用 LLM（带重试机制）
 
@@ -260,11 +259,10 @@ class AgentLoop:
             iteration: 当前迭代次数
 
         Returns:
-            LLMResponse 或 None。最终失败是否为账户配额/限流/网络类可恢复失败
-            记录在 `_last_llm_failure_recoverable`，供 run() 决定是否暂停可唤回。
+            (LLMResponse 或 None, 最终失败是否为可恢复失败)。
+            可恢复失败指账户配额/限流/网络类"需等外部恢复"的失败。
         """
         retry_config: RetryConfig = self._retry
-        self._last_llm_failure_recoverable = False
 
         for retry_count in range(retry_config.max_retries + 1):
             try:
@@ -284,18 +282,17 @@ class AgentLoop:
                 )
                 if response.has_tool_calls:
                     logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
-                return response
+                return response, False
 
             except Exception as e:
                 if retry_count >= retry_config.max_retries:
                     recoverable = _is_recoverable_llm_failure(e)
-                    self._last_llm_failure_recoverable = recoverable
                     logger.error(
                         "[Agent Loop] LLM 调用最终失败: error_type=%s recoverable=%s",
                         type(e).__name__,
                         recoverable,
                     )
-                    return None
+                    return None, recoverable
                 delay = retry_config.retry_delay * (retry_count + 1)
                 logger.warning(
                     "[Agent Loop] LLM 调用失败: error_type=%s, 等待 %ss 后重试 (%s/%s)",
@@ -306,7 +303,7 @@ class AgentLoop:
                 )
                 time.sleep(delay)
 
-        return None
+        return None, False
 
     def _get_workflow_id(self, session_id: str) -> str | None:
         session = self._session_repo.get_by_id(session_id)
@@ -1062,14 +1059,13 @@ class AgentLoop:
                 messages = ctx.assemble_context()
                 logger.debug(f"[Agent Loop] 迭代 {iteration}: 组装了 {len(messages)} 条消息")
 
-                response = self._call_llm_with_retry(
+                response, llm_failure_recoverable = self._call_llm_with_retry(
                     messages,
                     all_tool_schemas,
                     iteration,
                     session_id,
                     workflow_id,
                 )
-                llm_failure_recoverable = self._last_llm_failure_recoverable
                 if response is None:
                     if self._config.resumable_on_failure and llm_failure_recoverable:
                         # 账户配额/限流/网络等"需等外部恢复"的失败：不丢工作，转可唤回暂停。

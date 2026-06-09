@@ -46,10 +46,16 @@ class ProcessRecord:
     stdout_chunks: deque[str] = field(default_factory=lambda: deque(maxlen=512))
     stderr_chunks: deque[str] = field(default_factory=lambda: deque(maxlen=512))
     closed: bool = False
+    _duplicate_key: tuple[str, str, str] | None = field(default=None, repr=False)
 
     @property
     def duplicate_key(self) -> tuple[str, str, str]:
-        return (self.session_id, str(self.cwd.resolve()), " ".join(self.command.split()))
+        if self._duplicate_key is None:
+            object.__setattr__(
+                self, "_duplicate_key",
+                (self.session_id, str(self.cwd.resolve()), " ".join(self.command.split())),
+            )
+        return self._duplicate_key
 
 
 class ProcessManager:

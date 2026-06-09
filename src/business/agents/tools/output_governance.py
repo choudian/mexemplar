@@ -33,34 +33,31 @@ from src.utils.agent_tool_health import (
 logger = logging.getLogger(__name__)
 
 
-def governance_failure_fallback(*, tool_name: str, content: str) -> str:
+def _governance_fallback(*, tool_name: str, raw_chars: int | None = None) -> str:
     increment_agent_tool_health(compaction_fallbacks=1)
+    payload: dict[str, Any] = {
+        "compacted": True,
+        "preview": "[tool output withheld after governance failure]",
+    }
+    if raw_chars is not None:
+        payload["rawChars"] = raw_chars
     return error_json(
         tool_name,
         "compaction_failed_fallback",
         "Tool output governance failed; raw output was withheld.",
-        payload={
-            "compacted": True,
-            "rawChars": len(content) if isinstance(content, str) else 0,
-            "preview": "[tool output withheld after governance failure]",
-        },
+        payload=payload,
         warnings=["compaction_failed_fallback"],
     )
+
+
+def governance_failure_fallback(*, tool_name: str, content: str) -> str:
+    raw_chars = len(content) if isinstance(content, str) else 0
+    return _governance_fallback(tool_name=tool_name, raw_chars=raw_chars)
 
 
 def governance_double_failure_fallback(*, tool_name: str) -> str:
     """Last-resort envelope when both governance and governance_failure_fallback throw."""
-    increment_agent_tool_health(compaction_fallbacks=1)
-    return error_json(
-        tool_name,
-        "compaction_failed_fallback",
-        "Tool output governance failed; raw output was withheld.",
-        payload={
-            "compacted": True,
-            "preview": "[tool output withheld after governance failure]",
-        },
-        warnings=["compaction_failed_fallback"],
-    )
+    return _governance_fallback(tool_name=tool_name)
 
 
 def _redact_value(value: Any) -> Any:
