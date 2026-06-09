@@ -138,5 +138,30 @@
       },
       "seed_file_path": "src/business/brain/seed/how_to_create_skill_methodology.md"
     }
+  },
+  "agent_tools": {
+    "file": {
+      "default_max_lines": 200,
+      "max_window_chars": 50000,
+      "max_decode_bytes": 1048576
+    },
+    "output": {
+      "visible_char_cap": 12000,
+      "raw_reference_threshold_chars": 20000,
+      "max_artifact_bytes": 10485760,
+      "retention_days": 14
+    },
+    "search": {
+      "default_page_size": 100,
+      "max_files_scanned": 50000,
+      "max_bytes_per_file": 1048576,
+      "max_elapsed_ms": 30000
+    },
+    "process": {
+      "default_timeout_ms": 30000,
+      "max_timeout_ms": 600000,
+      "log_tail_chars": 4000,
+      "max_background_processes": 16
+    }
   }
 }

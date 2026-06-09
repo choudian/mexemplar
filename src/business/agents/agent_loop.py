@@ -7,6 +7,8 @@ Agent Loop 核心
 import json
 import logging
 import time
+from contextlib import nullcontext
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from src.business.ai.llm_client import LangChainLLMClient, LLMResponse, ToolCallInfo
@@ -22,6 +24,16 @@ from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefin
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
 from .hook_models import ToolCallContext, ToolExecutionOutcome, freeze_tool_args
 from .tool_helpers import is_standardized_error, make_error_result
+from .tools.builtin_contracts import (
+    UPGRADED_BUILTIN_TOOL_NAMES,
+    is_tool_failure_result,
+    use_tool_runtime,
+)
+from .tools.output_governance import (
+    govern_tool_result,
+    governance_double_failure_fallback,
+    governance_failure_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +50,7 @@ def _activity_payload_text(value: Any) -> Any:
     if isinstance(value, str):
         return value[:_ACTIVITY_TEXT_LIMIT]
     return value
+
 
 # LLM 调用最终失败的"可恢复性"分类标记。
 # 仅账户配额/限流/网络这类"需等外部恢复"的失败才允许转可唤回暂停（见 spec Assumptions）；
@@ -173,6 +186,7 @@ class AgentLoop:
         self._system_prompt_checked: Dict[str, bool] = {}  # 缓存 system prompt 检查结果
         self._msg_repo = MessageRepository()  # 复用 MessageRepository，避免每次重建
         self._session_repo = SessionRepository()
+        self._last_llm_failure_recoverable = False
 
         logger.debug(
             f"[Agent Loop] 初始化: {config.agent_type.value}, "
@@ -233,7 +247,7 @@ class AgentLoop:
         iteration: int,
         session_id: str = "",
         workflow_id: str | None = None,
-    ) -> tuple[Optional[LLMResponse], bool]:
+    ) -> Optional[LLMResponse]:
         """
         调用 LLM（带重试机制）
 
@@ -246,11 +260,11 @@ class AgentLoop:
             iteration: 当前迭代次数
 
         Returns:
-            (LLMResponse | None, recoverable: bool) 元组。
-            成功时 recoverable=False；最终失败时 recoverable 表示是否为
-            账户配额/限流/网络类可恢复失败。
+            LLMResponse 或 None。最终失败是否为账户配额/限流/网络类可恢复失败
+            记录在 `_last_llm_failure_recoverable`，供 run() 决定是否暂停可唤回。
         """
         retry_config: RetryConfig = self._retry
+        self._last_llm_failure_recoverable = False
 
         for retry_count in range(retry_config.max_retries + 1):
             try:
@@ -270,17 +284,18 @@ class AgentLoop:
                 )
                 if response.has_tool_calls:
                     logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
-                return response, False
+                return response
 
             except Exception as e:
                 if retry_count >= retry_config.max_retries:
                     recoverable = _is_recoverable_llm_failure(e)
+                    self._last_llm_failure_recoverable = recoverable
                     logger.error(
                         "[Agent Loop] LLM 调用最终失败: error_type=%s recoverable=%s",
                         type(e).__name__,
                         recoverable,
                     )
-                    return None, recoverable
+                    return None
                 delay = retry_config.retry_delay * (retry_count + 1)
                 logger.warning(
                     "[Agent Loop] LLM 调用失败: error_type=%s, 等待 %ss 后重试 (%s/%s)",
@@ -291,7 +306,7 @@ class AgentLoop:
                 )
                 time.sleep(delay)
 
-        return None, False
+        return None
 
     def _get_workflow_id(self, session_id: str) -> str | None:
         session = self._session_repo.get_by_id(session_id)
@@ -372,7 +387,18 @@ class AgentLoop:
         failure_code: str | None = None
 
         try:
-            handler_result = tool_def.handler(**tool_call.args)
+            runtime_context = (
+                use_tool_runtime(
+                    session_id=session_id,
+                    tool_call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    workspace_root=Path.cwd(),
+                )
+                if tool_call.name in UPGRADED_BUILTIN_TOOL_NAMES
+                else nullcontext()
+            )
+            with runtime_context:
+                handler_result = tool_def.handler(**tool_call.args)
         except Exception as exc:
             failure_code = "handler_exception"
             failed = True
@@ -423,7 +449,7 @@ class AgentLoop:
                 failure_code="handler_contract_violation",
             )
 
-        if is_standardized_error(handler_result):
+        if is_standardized_error(handler_result) or is_tool_failure_result(handler_result):
             failed = True
             failure_code = failure_code or "standardized_error"
 
@@ -490,11 +516,12 @@ class AgentLoop:
                     False,
                 )
             if result is not None and result.error is not None:
+                error_code = result.error_code or "pre_hook_rejected"
                 return (
                     ToolExecutionOutcome(
-                        make_error_result("pre_hook_rejected", result.error),
+                        make_error_result(error_code, result.error),
                         failed=True,
-                        failure_code="pre_hook_rejected",
+                        failure_code=error_code,
                     ),
                     False,
                 )
@@ -552,11 +579,7 @@ class AgentLoop:
             content = (
                 result.display_text if result.save_result else "[工具执行失败，已提交分诊处理]"
             )
-            ctx.save_tool_result(
-                tool_call_id=tool_call.id,
-                tool_name=tool_call.name,
-                content=content,
-            )
+            self._persist_tool_result(tool_call, ctx, content)
             # 携带 ToolSignal 的 display_text 到 ToolCallInfo
             signal_call_info = ToolCallInfo(
                 id=tool_call.id,
@@ -588,17 +611,53 @@ class AgentLoop:
                 )
 
         # 普通工具结果，保存并继续迭代
-        ctx.save_tool_result(
-            tool_call_id=tool_call.id,
-            tool_name=tool_call.name,
-            content=result,
-        )
+        self._persist_tool_result(tool_call, ctx, result)
         logger.debug(
             "[Agent Loop] 工具结果: tool=%s result_chars=%s",
             tool_call.name,
             len(str(result)),
         )
         return None
+
+    def _persist_tool_result(
+        self,
+        tool_call: ToolCallInfo,
+        ctx: ContextManager,
+        content: str,
+    ) -> str:
+        """Govern and persist exactly one tool result for a tool call."""
+        final_content = content
+        if isinstance(content, str):
+            try:
+                final_content = govern_tool_result(
+                    tool_name=tool_call.name,
+                    tool_call_id=tool_call.id,
+                    session_id=ctx.session_id,
+                    content=content,
+                    workspace_root=Path.cwd(),
+                )
+            except Exception:
+                logger.warning(
+                    "[Agent Loop] tool result governance failed: tool=%s",
+                    tool_call.name,
+                    exc_info=True,
+                )
+                try:
+                    final_content = governance_failure_fallback(
+                        tool_name=tool_call.name,
+                        content=content,
+                    )
+                except Exception:
+                    final_content = governance_double_failure_fallback(
+                        tool_name=tool_call.name,
+                    )
+        ctx.save_tool_result(
+            tool_call_id=tool_call.id,
+            tool_name=tool_call.name,
+            content=final_content,
+        )
+        self._emit_activity(ctx, "tool_result", tool_name=tool_call.name, text=final_content)
+        return final_content
 
     def _execute_tool_batch(
         self,
@@ -669,10 +728,8 @@ class AgentLoop:
             outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
             result = outcome.result
 
-            # Persist result (standardized error or success)
-            ctx.save_tool_result(tool_call_id=tc.id, tool_name=tc.name, content=result)
-            # 逐步活动事件（014）：工具结果进时间线（projector 再走 009 脱敏）
-            self._emit_activity(ctx, "tool_result", tool_name=tc.name, text=result)
+            # Persist governed result (standardized error or success)
+            self._persist_tool_result(tc, ctx, result)
             if outcome.failed:
                 # Only cascade failure for tools with side effects
                 if tool_def.has_side_effects:
@@ -697,11 +754,7 @@ class AgentLoop:
         self, tc: ToolCallInfo, ctx: ContextManager, error_code: str, message: str, **extra
     ):
         """Save a standardized error result for a tool call."""
-        ctx.save_tool_result(
-            tool_call_id=tc.id,
-            tool_name=tc.name,
-            content=make_error_result(error_code, message, **extra),
-        )
+        self._persist_tool_result(tc, ctx, make_error_result(error_code, message, **extra))
 
     def _execute_solo_interrupt(
         self,
@@ -714,11 +767,7 @@ class AgentLoop:
         """Execute a solo interrupting tool with contract validation."""
         outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
         if not isinstance(outcome.result, ToolSignal):
-            ctx.save_tool_result(
-                tool_call_id=tc.id,
-                tool_name=tc.name,
-                content=outcome.result,
-            )
+            self._persist_tool_result(tc, ctx, outcome.result)
             return None
 
         # Valid interrupt: use existing _handle_tool_result path
@@ -747,9 +796,7 @@ class AgentLoop:
         ctx.save_assistant_message(
             content=response.content or "",
             tool_calls=(
-                _serialize_tool_calls(response.tool_calls)
-                if response.has_tool_calls
-                else None
+                _serialize_tool_calls(response.tool_calls) if response.has_tool_calls else None
             ),
         )
 
@@ -1015,13 +1062,14 @@ class AgentLoop:
                 messages = ctx.assemble_context()
                 logger.debug(f"[Agent Loop] 迭代 {iteration}: 组装了 {len(messages)} 条消息")
 
-                response, llm_failure_recoverable = self._call_llm_with_retry(
+                response = self._call_llm_with_retry(
                     messages,
                     all_tool_schemas,
                     iteration,
                     session_id,
                     workflow_id,
                 )
+                llm_failure_recoverable = self._last_llm_failure_recoverable
                 if response is None:
                     if self._config.resumable_on_failure and llm_failure_recoverable:
                         # 账户配额/限流/网络等"需等外部恢复"的失败：不丢工作，转可唤回暂停。

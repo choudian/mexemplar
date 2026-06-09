@@ -13,13 +13,25 @@
 
 ## Migrated Gate Ownership
 
-- `builtin_general_tools.read_file`、`write_file`、`edit_file`、`list_dir`、`exec` 的路径存在性、系统目录拒绝、命令安全分类和用户确认属于 pre_hook。
+- `builtin_general_tools.read_file`、`write_file`、`edit_file`、`list_dir`、`exec`、`apply_patch`、`search_files`、`search_content` 和 process lifecycle 工具的路径存在性、系统目录拒绝、命令安全分类和用户确认属于 pre_hook / 共享权限 helper。
 - `edit_file` 的 `old_text` 查找与唯一性校验属于编辑执行准备，留在 handler。
 - assistant 高危确认必须只展示和记录脱敏摘要：`write_file` 只含目标路径，`edit_file` 只含截断片段，`exec` 只含命令首行；不得记录完整文件内容、完整替换文本或多行命令体。
 - assistant “全部允许/免确认”只允许是当前进程会话级内存状态，不得写入配置、keyring、SQLite 或 DuckDB；新对话入口必须复位该状态并收敛旧 pending 请求。
 - `recording_data_tools.query_data` 的 SQL 拒绝策略属于 pre_hook，但 handler 仍可再次调用 `rewrite(sql)` 生成实际执行 SQL。
 - `recording_data_tools.analyze_image` 的单次最多 5 个 action_index 限制属于 pre_hook。
 - `trial_tools.run_command` 的单次 `AgentLoop.run()` 调用上限属于 `create_trial_tools()` 内创建的 pre_hook 闭包。
+
+## Agent Built-in Tool Boundaries
+
+- 已升级的通用内置工具必须返回统一 JSON envelope（必含 `schemaVersion`、`tool`、`outcome`、`payload`、`createdAt`，按需含 `error`、`permission`、`limits`、`references`、`warnings`、`verification`）；AgentLoop 保存工具结果时必须经 output governance，畸形结果必须收敛为不含原文的 `handler_contract_violation`，并确保接受、拒绝、未知工具、handler 异常、跳过和 fallback 路径都只有一条配对 tool result。
+- 文件读取只能返回有界文本窗口、行号/续读元数据、脱敏内容和 raw-byte baseline；二进制、媒体和解码失败不得把 raw bytes 写入 tool result、普通日志或 UI event。
+- 已存在文件的 `write_file`、`edit_file`、`apply_patch` update/delete 必须提供当前 baseline；baseline 缺失或过期必须在落盘前拒绝。新文件创建可以没有 baseline，但仍受 workspace 写权限和确认约束。
+- workspace 外读取只能作为高风险检查路径，经确认后短期放行；workspace 外写入、删除、patch 和命令执行一律 fail-closed，不得用相对路径、symlink 或 cwd 切换绕过。
+- `search_files` / `search_content` 必须使用结构化遍历、默认忽略依赖/构建/缓存目录、稳定排序、有界分页和脱敏摘要；不要恢复通过 shell `find`/`grep` 解析结果的默认路径。
+- `exec` 和 process lifecycle 工具只允许 workspace 内 cwd，并以解析后的 argv 直接启动子进程，不通过 shell；换行、管道、重定向、命令连接符、shell host、内联解释器代码、显式 workspace 外 executable 和 workspace 外路径参数必须在执行前拒绝。当前 Python runtime 的绝对 executable 是测试/运行脚本所需的受控例外。同步命令输出必须截断并脱敏，后台进程数、日志窗口和等待时间必须受统一配置上限约束；进程记录只在当前 sidecar 进程会话内有效，重启后的未知 `proc_*` 必须返回 unavailable 而不是尝试复用系统进程。
+- 大输出原文只能由 `ToolOutputRepository` 管理的私有 blob + SQLite metadata 持久化；业务层不得直接写 tool-output SQL 或暴露 blob 路径。`load_tool_output` 必须按 owner session + workspace 授权、有界窗口读取、脱敏并处理 expired / missing blob；`tool_call_id` 只记录来源，不是授权因子。过期或软删除 blob 删除失败时必须保留可重试清理路径。
+- raw output blob 当前不做应用层加密；本地桌面部署依赖应用数据目录访问控制，并在 POSIX 上 best-effort 设置私有文件权限。任何跨用户、远程或同步场景都必须先补充加密和密钥管理设计。
+- 新增非 UI tuning knob 走 `get_unified_config().get_agent_tools_*`，Settings UI 暂不暴露 `agent_tools.*`；如需前端可调，必须先更新本文件和 `frontend/AGENTS.md`。
 
 ## Non-Migrated Boundaries
 
@@ -98,6 +110,9 @@ Reviewer 必须拒绝下列改动：
 - 在 pre_hook 中加入参数改写或参数流水线语义。
 - 在 `ToolCallContext` 中加入确认回调、结果字段或可写参数引用。
 - 在 handler 中保留已经迁移到 pre_hook 的拒绝、确认、限流或安全策略分支。
+- 让已升级内置工具返回旧的纯文本成功/失败形态，或绕过 AgentLoop output governance 直接保存工具结果。
+- 在业务层、desktop API、前端或 Tauri 层直接管理内置工具执行状态、后台进程 registry、tool-output SQL 或私有 blob 路径。
+- 让既有文件写入/编辑/patch 在缺少当前 baseline 时落盘，或允许 workspace 外写入、删除、patch、执行命令。
 - 将 assistant 高危确认改回模态阻塞确认，或让普通 Toast 与高危确认浮层复用同一个生命周期引用。
 - 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。
 - 让 AgentLoop 内建注入的 `load_reference` 或 `talk_to_user` 进入 tool/global hook 链。

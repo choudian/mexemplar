@@ -58,6 +58,7 @@
 
 ## Recent Changes
 
+- 015-agent-builtin-tools-upgrade: Agent 内置基础工具升级为统一 envelope + workspace 权限契约，文件读取/写入/编辑/patch/search/exec/process/output recovery 均走 baseline、分页/截断、fail-closed 确认和 output governance；大输出通过 `ToolOutputRepository` 私有 artifact + `load_tool_output` 授权恢复。
 - 014-assistant-chat-transparency: AI Assistant 主屏新增运行态输入门控、协作式深度取消停止、单条原地排队、实时折叠活动时间线、子任务卡片/详情，以及暂停子任务经主助理续跑；过程/子任务事件走 UI Event Registry，历史过程由既有 Repository 只读重建。
 - 013-subagent-resumable: 临时子代理可唤回机制——撞迭代上限或 LLM 调用最终失败时转 `suspended` 保活，主代理可 `inspect_subagent`（零模型调用概览）和 `continue_subagent`（断点续跑/返工），归属校验拒绝非己出会话，`_is_recoverable_llm_failure` 区分可恢复（配额/网络）与不可恢复失败，跨进程重启仍可唤回。
 - 010-assistant-brain-redesign: 办公助理重构为"大脑 + 100% 调度"架构，新增 `src/business/brain/` 6 分区认知层（hot/persistent/archive/subconscious/failure/prediction）、Segment 沉淀、自动招募专员、显式 archive/failure 检索工具、`brain_*` SQLite 表（v11 migration）、`BrainScreen` 和 `SpecialistScreen` 两个新主屏。
@@ -109,7 +110,16 @@
 **Root Cause:** `_call_llm_with_retry` 对任何异常重试耗尽后返回 `None`，本身无法区分可恢复与不可恢复失败；需要 `_is_recoverable_llm_failure` 按异常类型/消息做二次分类。
 **Prevention Rule:** `_is_recoverable_llm_failure` 必须按异常链严格匹配——仅 429/配额/billing/网络/超时/5xx 转可唤回 PAUSED，其余仍走 `ERROR` 置会话 `failed`；不可恢复错误的测试 (`test_llm_failure_nonrecoverable_still_error_when_resumable`) 必须持续通过。
 
+### Agent 内置工具不能绕过统一安全契约
+
+**Issue:** 新增或修改 `read_file` / `write_file` / `edit_file` / `apply_patch` / `search_*` / `exec` / process / `load_tool_output` 时，如果直接返回旧纯文本、绕过 baseline、workspace policy 或 output governance，会破坏 function-calling 配对、安全确认和 raw artifact 隔离。
+**Root Cause:** 通用内置工具现在由 `builtin_general_tools.py` facade 分发到 focused 模块，安全语义分散在 shared envelope、permission helper、AgentLoop 保存边界和 Repository blob 管理中，临时就地补逻辑容易漏掉其中一层。
+**Prevention Rule:** 已升级内置工具必须返回统一 envelope；既有文件 mutation 必须带当前 raw-byte baseline；workspace 外写/删/patch/exec fail-closed；大输出只能经 `ToolOutputRepository` 私有 artifact + `load_tool_output` 授权读取；配置只走 `get_unified_config().get_agent_tools_*`。
+
 <!-- SPECKIT START -->
+The `015-agent-builtin-tools-upgrade` feature has been archived to `.specify/memory/`.
+For historical context, see `specs/015-agent-builtin-tools-upgrade/`.
+
 The `014-assistant-chat-transparency` feature has been archived to `.specify/memory/`.
 For historical context, see `specs/014-assistant-chat-transparency/`.
 

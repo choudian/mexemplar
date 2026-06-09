@@ -20,6 +20,10 @@ import dataclasses
 from src.utils.helpers import normalize_thinking_level
 from src.data.config_models import (
     AppConfig,
+    AgentToolsFileConfig,
+    AgentToolsOutputConfig,
+    AgentToolsProcessConfig,
+    AgentToolsSearchConfig,
     ConfigFileLoader,
     LargeFieldConfig,
     RecordingDesktopConfig,
@@ -366,6 +370,110 @@ class UnifiedConfigManager:
     def get_memory_compression_trigger_strategy(self) -> str:
         """压缩触发策略："token" | "count" | "combined" """
         return self.get("memory.compression_trigger_strategy", default="token")
+
+    # ===== 便捷方法：Agent 内建工具配置 =====
+
+    def _get_bounded_positive_int(
+        self,
+        key: str,
+        default: int,
+        *,
+        maximum: int | None = None,
+        minimum: int = 1,
+    ) -> int:
+        raw = self.get(key, default=default)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            logger.warning("[配置] %s 非法值 %r，回退到 %d", key, raw, default)
+            return default
+        if value < minimum:
+            logger.warning("[配置] %s 必须 >= %d，回退到 %d", key, minimum, default)
+            return default
+        if maximum is not None and value > maximum:
+            logger.warning("[配置] %s 超过最大值 %d，截断", key, maximum)
+            return maximum
+        return value
+
+    def get_agent_tools_file_config(self) -> AgentToolsFileConfig:
+        return self._load_dataclass_config("agent_tools.file", AgentToolsFileConfig)
+
+    def get_agent_tools_output_config(self) -> AgentToolsOutputConfig:
+        return self._load_dataclass_config("agent_tools.output", AgentToolsOutputConfig)
+
+    def get_agent_tools_search_config(self) -> AgentToolsSearchConfig:
+        return self._load_dataclass_config("agent_tools.search", AgentToolsSearchConfig)
+
+    def get_agent_tools_process_config(self) -> AgentToolsProcessConfig:
+        return self._load_dataclass_config("agent_tools.process", AgentToolsProcessConfig)
+
+    def get_agent_tools_file_default_max_lines(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.file.default_max_lines", 200, maximum=1000
+        )
+
+    def get_agent_tools_file_max_window_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.file.max_window_chars", 50000, maximum=250000
+        )
+
+    def get_agent_tools_file_max_decode_bytes(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.file.max_decode_bytes", 1048576, maximum=10485760
+        )
+
+    def get_agent_tools_output_visible_char_cap(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.visible_char_cap", 12000, maximum=50000
+        )
+
+    def get_agent_tools_output_raw_reference_threshold_chars(self) -> int:
+        visible = self.get_agent_tools_output_visible_char_cap()
+        return self._get_bounded_positive_int(
+            "agent_tools.output.raw_reference_threshold_chars",
+            20000,
+            minimum=visible,
+        )
+
+    def get_agent_tools_output_max_artifact_bytes(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.max_artifact_bytes", 10485760, maximum=104857600
+        )
+
+    def get_agent_tools_output_retention_days(self) -> int:
+        return self._get_bounded_positive_int("agent_tools.output.retention_days", 14, maximum=90)
+
+    def get_agent_tools_search_default_page_size(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.search.default_page_size", 100, maximum=500
+        )
+
+    def get_agent_tools_search_max_files_scanned(self) -> int:
+        return self._get_bounded_positive_int("agent_tools.search.max_files_scanned", 50000)
+
+    def get_agent_tools_search_max_bytes_per_file(self) -> int:
+        return self._get_bounded_positive_int("agent_tools.search.max_bytes_per_file", 1048576)
+
+    def get_agent_tools_search_max_elapsed_ms(self) -> int:
+        return self._get_bounded_positive_int("agent_tools.search.max_elapsed_ms", 30000)
+
+    def get_agent_tools_process_default_timeout_ms(self) -> int:
+        return self._get_bounded_positive_int("agent_tools.process.default_timeout_ms", 30000)
+
+    def get_agent_tools_process_max_timeout_ms(self) -> int:
+        default = self.get_agent_tools_process_default_timeout_ms()
+        return self._get_bounded_positive_int(
+            "agent_tools.process.max_timeout_ms", 600000, minimum=default
+        )
+
+    def get_agent_tools_process_log_tail_chars(self) -> int:
+        visible = self.get_agent_tools_output_visible_char_cap()
+        return self._get_bounded_positive_int(
+            "agent_tools.process.log_tail_chars", 4000, maximum=visible
+        )
+
+    def get_agent_tools_process_max_background_processes(self) -> int:
+        return self._get_bounded_positive_int("agent_tools.process.max_background_processes", 16)
 
     # ===== 便捷方法：录制配置 =====
 

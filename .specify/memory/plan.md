@@ -739,3 +739,127 @@ frontend/tests/
 - 事件与 API：UI Event Registry 注册、projector 映射、payload safety、stop/subagents/transcript/continue 端点。
 - 前端：composer 门控与停止、排队三态、自动派发边界、ActivityTimeline 折叠/限高、SubagentCard/DetailDrawer、缺口 resync。
 - Guardrails：非助理 Agent 零 emit/零行为变化；同线程同步委派承重不变量。
+
+## Agent Built-in Tools Upgrade [Source: specs/015-agent-builtin-tools-upgrade]
+
+**Revision note (2026-06-09)**: Archived merged feature 015 into main implementation memory; documents the implemented built-in tool subsystem, configuration contract, storage boundary, and verification strategy.
+
+### Technical Context
+
+- **Runtime**: Python 3.11+ source with Python 3.12 sidecar runtime; no frontend or Rust change is required for the core tool subsystem.
+- **Dependencies**: existing `AgentLoop` / `ToolDefinition` hook protocol, `pathlib`, `subprocess`, `threading`, SQLAlchemy SQLite repositories, `get_unified_config()` / `UnifiedConfigManager`, and pytest.
+- **Storage**: persistent raw-output reference metadata lives in SQLite via Repository; raw blobs live under the application data directory in a private `tool_outputs/` subtree. Background process records are in-memory and valid only for the current sidecar process session.
+- **Boundaries**: business-facing schemas and summaries live in `src/business/agents/tools/`; live command/process execution belongs to `src/execution/`; durable metadata belongs to `src/data/repos/`.
+
+### Configuration
+
+The following runtime knobs are owned by unified configuration and must not be read from `config.json` directly:
+
+```text
+agent_tools.file.default_max_lines
+agent_tools.file.max_window_chars
+agent_tools.file.max_decode_bytes
+agent_tools.output.visible_char_cap
+agent_tools.output.raw_reference_threshold_chars
+agent_tools.output.max_artifact_bytes
+agent_tools.output.retention_days
+agent_tools.search.default_page_size
+agent_tools.search.max_files_scanned
+agent_tools.search.max_bytes_per_file
+agent_tools.search.max_elapsed_ms
+agent_tools.process.default_timeout_ms
+agent_tools.process.max_timeout_ms
+agent_tools.process.log_tail_chars
+agent_tools.process.max_background_processes
+```
+
+Fixed policy constants:
+
+- Authorized workspace is resolved from Agent runtime context, not from a user-editable config key.
+- Outside-workspace reads are always exceptional high-risk inspection.
+- Outside-workspace mutation, deletion, patching, and execution are always denied.
+
+### Source Code Structure
+
+```text
+src/
+├── business/
+│   └── agents/
+│       ├── agent_loop.py                 # exactly-one-result persistence/governance boundary
+│       └── tools/
+│           ├── builtin_general_tools.py  # stable public registry facade
+│           ├── builtin_contracts.py      # envelope, errors, limits, reference DTOs
+│           ├── builtin_permissions.py    # workspace/risk classification and summaries
+│           ├── file_tools.py             # read/write/edit/patch handlers
+│           ├── search_tools.py           # filename/content search
+│           ├── command_tools.py          # exec + process lifecycle tool handlers
+│           └── output_governance.py      # redaction, compaction, raw-reference creation
+├── execution/
+│   ├── command_runner.py                 # synchronous command execution boundary
+│   └── process_manager.py                # session-scoped background process registry
+└── data/
+    ├── models_sqlite.py                  # tool output reference metadata model
+    ├── migrations.py                     # SQLite schema migration
+    ├── unified_config.py                 # typed agent_tools getters
+    └── repos/
+        └── tool_output_repository.py     # metadata Repository for raw-output references
+
+tests/
+├── business/agents/test_builtin_*        # file/search/command/output/facade contracts
+├── data/test_tool_output_repository.py
+├── guardrails/test_agent_builtin_tool_boundaries.py
+└── integration/test_agent_builtin_*      # tool contract + process lifecycle
+```
+
+### Tool Result Envelope
+
+All upgraded foundational built-ins return a shared JSON envelope with `schemaVersion`, `tool`, `outcome`, bounded `payload`, optional `error`, `permission`, `limits`, `references`, `warnings`, `verification`, and `createdAt`. Stable outcomes include `success`, `error`, `rejected`, `unsupported`, `timeout`, `background_started`, `not_executed`, and `confirmation_required`.
+
+Stable error codes include path errors, permission/confirmation failures, `unsupported_binary`, decode failures, `baseline_required`, `baseline_stale`, edit/patch/search failures, command/process errors, output-reference errors, `compaction_failed_fallback`, and `internal_error`.
+
+### Workspace And File Mutation Policy
+
+- All file, search, patch, delete, and command requests resolve canonical paths before side effects.
+- Workspace writes, deletes, patch updates/deletes, and command execution are allowed only after policy classification and any required confirmation.
+- Outside-workspace reads require high-risk confirmation with a safe summary; outside-workspace writes/deletes/patches/execution are rejected.
+- Existing-file mutation uses raw-byte `FileBaseline`; missing/stale baselines reject before disk changes.
+- Edits preserve detectable text style where possible and report concise changed regions plus verification metadata.
+
+### Search And Patch
+
+`search_files` and `search_content` use structured traversal with deterministic sorting, default generated/dependency ignores, page-size caps, elapsed/file caps, line-numbered content matches, and opaque continuation tokens. An optimized `rg --json` adapter may sit behind the same contract if large-repo fixtures exceed native traversal limits.
+
+`apply_patch` validates every operation before mutation. Add/update/delete summaries expose affected files, operation type, verification, and stable rejection codes, but never full replacement payloads in confirmation or ordinary visible summaries.
+
+### Command And Process Lifecycle
+
+- Sync command execution is isolated in `src/execution/command_runner.py` and returns status, exit code, timeout classification, bounded output, and raw-reference availability.
+- Background process management is in `src/execution/process_manager.py`; records are sidecar-session scoped and not restored as live handles after restart.
+- Process logs are bounded ring buffers using `agent_tools.process.log_tail_chars`; duplicate starts use normalized command/cwd/session keys and point to the existing `processId`.
+- Stop first attempts graceful termination, then force-stops the process tree on Windows or child process group on POSIX where supported.
+
+### Raw Output Artifact Security
+
+- Ordinary envelopes expose only opaque `referenceId`, kind, size, content type, digest, and expiry metadata.
+- Blob paths and `storageKey` stay internal to data-layer helpers and Repository metadata; they must not enter Agent-visible text, public UI events, ordinary logs, confirmation summaries, or error responses.
+- Reference creation writes a temp blob, computes sha256, atomically finalizes the blob, then commits active metadata. Failures remove temp/final blobs best effort and return a compact safe fallback with `compaction_failed_fallback`.
+- Retention uses `expiresAt = createdAt + agent_tools.output.retention_days`; cleanup marks metadata expired/deleted and removes orphaned blobs/metadata with log-safe diagnostics.
+- `load_tool_output` authorizes by owner session/workspace context before reading a blob.
+
+### AgentLoop Result Governance
+
+Result governance is a single save-time boundary, not a post-hook pipeline. All built-in tool save paths route through the governance wrapper before persistence so redaction, compaction, raw-reference creation, fallback warnings, and exactly-one-result pairing happen together. Governance failure returns one safe fallback envelope and must never create a second tool result for the same `tool_call_id`.
+
+### Runtime Health Metadata
+
+Implementation emits log-safe diagnostics/counters for compacted outputs, fallback count, raw-reference create/load failures, stale or missing baseline rejections, outside-workspace read confirmations and fail-closed outcomes, background process starts/reuse/timeouts/stops/shutdown cleanup, and retention cleanup of expired metadata, missing blobs, and orphaned blobs.
+
+Diagnostics must omit raw command bodies, local blob paths, file contents, credentials, runtime tokens, raw stack traces, and secret-like values.
+
+### Testing Strategy
+
+- Unit tests cover path resolution, workspace escapes, symlinks, binary detection, redaction, pagination, baseline hashing, style preservation, patch validation, search caps, and output compaction.
+- Integration tests cover AgentLoop multi-tool batches and prove accepted, rejected, compacted, failed, skipped, and fallback built-ins each create exactly one tool result.
+- Data tests cover tool-output metadata persistence, retention cleanup, expired/deleted lookup, and post-restart reference behavior.
+- Process tests cover background start, poll, logs, wait, stop, input, close, duplicate prevention, timeout, and unavailable-after-restart.
+- Guardrails keep UI/desktop API out of built-in execution state, prevent direct SQL in business code, preserve fail-closed confirmation semantics, and assert no legacy contract dependency remains.

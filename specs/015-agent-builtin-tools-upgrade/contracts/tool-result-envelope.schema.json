@@ -1,0 +1,217 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mexemplar.local/contracts/tool-result-envelope.schema.json",
+  "title": "Agent Built-in Tool Result Envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "tool", "outcome", "payload", "createdAt"],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "success",
+        "error",
+        "rejected",
+        "unsupported",
+        "timeout",
+        "background_started",
+        "not_executed",
+        "confirmation_required"
+      ]
+    },
+    "payload": {
+      "type": "object"
+    },
+    "error": {
+      "$ref": "#/$defs/toolError"
+    },
+    "permission": {
+      "$ref": "#/$defs/permissionDecision"
+    },
+    "limits": {
+      "$ref": "#/$defs/limits"
+    },
+    "references": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/outputReference"
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "verification": {
+      "$ref": "#/$defs/verification"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "toolError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "retryable"],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "nextAction": {
+          "type": "string"
+        },
+        "details": {
+          "type": "object"
+        }
+      }
+    },
+    "permissionDecision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "risk", "decision"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["workspace", "external", "system", "hidden", "linked_external"]
+        },
+        "risk": {
+          "type": "string",
+          "enum": ["read_only", "workspace_mutation", "elevated", "denied"]
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["allowed", "confirmation_required", "confirmed", "rejected", "denied"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "truncated": {
+          "type": "boolean"
+        },
+        "visibleChars": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rawBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pageSize": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "hasMore": {
+          "type": "boolean"
+        },
+        "nextPageToken": {
+          "type": ["string", "null"]
+        },
+        "lineStart": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "lineEnd": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "capName": {
+          "type": "string"
+        }
+      }
+    },
+    "outputReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["referenceId", "kind", "sizeBytes"],
+      "properties": {
+        "referenceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["stdout", "stderr", "combined_output", "file_snapshot", "media", "tool_payload"]
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contentType": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "expiresAt": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["verified", "failed", "skipped"]
+        },
+        "oldBaseline": {
+          "type": ["string", "null"]
+        },
+        "newBaseline": {
+          "type": ["string", "null"]
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "outcome": {
+            "enum": ["error", "rejected", "unsupported", "timeout", "not_executed"]
+          }
+        },
+        "required": ["outcome"]
+      },
+      "then": {
+        "required": ["error"]
+      }
+    }
+  ]
+}

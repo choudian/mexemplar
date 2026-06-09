@@ -508,6 +508,46 @@ class BrainSkillSourceSegment(Base):
         )
 
 
+class ToolOutputReference(Base):
+    """Persistent metadata for recoverable raw built-in tool output."""
+
+    __tablename__ = "tool_output_references"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'expired', 'deleted')",
+            name="ck_tool_output_references_status",
+        ),
+        Index("idx_tool_output_reference_id", "reference_id"),
+        Index("idx_tool_output_session", "session_id"),
+        Index("idx_tool_output_tool_call", "tool_call_id"),
+        Index("idx_tool_output_status", "status"),
+        Index("idx_tool_output_expires", "expires_at"),
+    )
+
+    reference_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    tool_call_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    storage_root_kind: Mapped[str] = mapped_column(
+        String(30), nullable=False, default="app_data_tool_outputs"
+    )
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False, default="text/plain")
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    redaction_profile: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    owner_workspace_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<ToolOutputReference(reference_id={self.reference_id!r}, " f"status={self.status!r})>"
+        )
+
+
 class BrainSkillEquipment(Base):
     """装备者与方法论之间的状态化关系。"""
 

@@ -68,6 +68,14 @@ def _tool_results(loop: AgentLoop, session_id: str):
     return [m for m in ctx._msg_repo.get_context(session_id) if m.role == "tool"]
 
 
+def _tool_error_code(content: str) -> str:
+    payload = json.loads(content)
+    error = payload.get("error")
+    if isinstance(error, dict):
+        return error["code"]
+    return error
+
+
 def _ctx(tool_name: str, args: dict | None = None) -> ToolCallContext:
     return ToolCallContext(
         tool_name=tool_name,
@@ -460,6 +468,7 @@ def test_tool_level_noop_hook_overhead_smoke(mock_config, in_memory_db):
 def test_builtin_general_pre_hooks_reject_before_handler(
     monkeypatch, tmp_path, mock_config, in_memory_db
 ):
+    monkeypatch.chdir(tmp_path)
     called = {"handler": 0}
 
     def handler(**kwargs):
@@ -481,10 +490,13 @@ def test_builtin_general_pre_hooks_reject_before_handler(
             mock_config,
             f"hook-{name}-reject",
         )
-        payload = json.loads(_tool_results(loop, f"hook-{name}-reject")[0].content)
-        assert payload["error"] == "pre_hook_rejected"
+        assert _tool_error_code(_tool_results(loop, f"hook-{name}-reject")[0].content) == (
+            "path_not_found"
+        )
 
     monkeypatch.setattr(general_tools, "_ask_user_confirm", lambda message, **_kw: False)
+    script = tmp_path / "confirm.py"
+    script.write_text("print('should not run')\n", encoding="utf-8")
     exec_tool = ToolDefinition(
         name="exec",
         schema=_schema("exec"),
@@ -493,13 +505,13 @@ def test_builtin_general_pre_hooks_reject_before_handler(
     )
     loop, _ = _run_batch(
         [exec_tool],
-        [ToolCallInfo(id="exec-call", name="exec", args={"command": "python -c 1"})],
+        [ToolCallInfo(id="exec-call", name="exec", args={"command": "python confirm.py"})],
         mock_config,
         "hook-exec-confirm-reject",
     )
     assert (
-        json.loads(_tool_results(loop, "hook-exec-confirm-reject")[0].content)["error"]
-        == "pre_hook_rejected"
+        _tool_error_code(_tool_results(loop, "hook-exec-confirm-reject")[0].content)
+        == "permission_denied"
     )
     assert called["handler"] == 0
 
@@ -507,6 +519,7 @@ def test_builtin_general_pre_hooks_reject_before_handler(
 def test_builtin_general_confirm_pre_hook_denial_and_approval(
     monkeypatch, tmp_path, mock_config, in_memory_db
 ):
+    monkeypatch.chdir(tmp_path)
     target = tmp_path / "out.txt"
     write_tool = _tool_by_name("write_file")
 
@@ -528,8 +541,8 @@ def test_builtin_general_confirm_pre_hook_denial_and_approval(
     )
     assert not target.exists()
     assert (
-        json.loads(_tool_results(loop, "hook-confirm-denied")[0].content)["error"]
-        == "pre_hook_rejected"
+        _tool_error_code(_tool_results(loop, "hook-confirm-denied")[0].content)
+        == "permission_denied"
     )
 
     confirmations = []
@@ -556,13 +569,17 @@ def test_builtin_general_confirm_pre_hook_denial_and_approval(
     )
 
     assert target.read_text(encoding="utf-8") == "yes"
-    assert json.loads(_tool_results(loop, "hook-confirm-approved")[0].content)["success"] is True
+    assert (
+        json.loads(_tool_results(loop, "hook-confirm-approved")[0].content)["outcome"] == "success"
+    )
     assert len(confirmations) == 1
 
 
 def test_builtin_general_confirm_pre_hooks_fail_closed_on_confirm_error(
     monkeypatch, tmp_path, mock_config, in_memory_db
 ):
+    monkeypatch.chdir(tmp_path)
+
     class FailingSignal:
         def emit(self, request_id, message):
             raise RuntimeError("signal is gone")
@@ -587,8 +604,8 @@ def test_builtin_general_confirm_pre_hooks_fail_closed_on_confirm_error(
     )
     assert not write_target.exists()
     assert (
-        json.loads(_tool_results(loop, "hook-confirm-error-write")[0].content)["error"]
-        == "pre_hook_rejected"
+        _tool_error_code(_tool_results(loop, "hook-confirm-error-write")[0].content)
+        == "confirmation_failed_closed"
     )
 
     edit_target = tmp_path / "edit.txt"
@@ -612,8 +629,8 @@ def test_builtin_general_confirm_pre_hooks_fail_closed_on_confirm_error(
     )
     assert edit_target.read_text(encoding="utf-8") == "before"
     assert (
-        json.loads(_tool_results(loop, "hook-confirm-error-edit")[0].content)["error"]
-        == "pre_hook_rejected"
+        _tool_error_code(_tool_results(loop, "hook-confirm-error-edit")[0].content)
+        == "confirmation_failed_closed"
     )
 
     called = {"handler": 0}
@@ -628,16 +645,24 @@ def test_builtin_general_confirm_pre_hooks_fail_closed_on_confirm_error(
         handler=exec_handler,
         pre_hook=general_tools.exec_pre_hook,
     )
+    exec_script = tmp_path / "confirm-error.py"
+    exec_script.write_text("print('should not run')\n", encoding="utf-8")
     loop, _ = _run_batch(
         [exec_tool],
-        [ToolCallInfo(id="exec-call", name="exec", args={"command": "python -c 1"})],
+        [
+            ToolCallInfo(
+                id="exec-call",
+                name="exec",
+                args={"command": "python confirm-error.py"},
+            )
+        ],
         mock_config,
         "hook-confirm-error-exec",
     )
     assert called["handler"] == 0
     assert (
-        json.loads(_tool_results(loop, "hook-confirm-error-exec")[0].content)["error"]
-        == "pre_hook_rejected"
+        _tool_error_code(_tool_results(loop, "hook-confirm-error-exec")[0].content)
+        == "confirmation_failed_closed"
     )
     with general_tools._confirm_lock:
         assert general_tools._pending_confirms == {}

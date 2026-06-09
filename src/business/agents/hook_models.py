@@ -26,6 +26,7 @@ class PreHookResult:
     """Pre-hook decision. A non-None error rejects the tool call."""
 
     error: str | None = None
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)

@@ -970,3 +970,92 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - 单回合过程项很多时，过程区域内部滚动；活动事件有上限/合并策略并走 payload safety allowlist。
 - 事件流缺口或会话不匹配时，前端按 `backend.resync_required` 拉权威快照，不凭内部事件猜测状态。
 - 停止遇上 pending 高危确认时，确认 fail-closed 当拒绝并唤醒回合到取消检查点。
+
+## Agent Built-in Tools Upgrade [Source: specs/015-agent-builtin-tools-upgrade]
+
+**Revision note (2026-06-09)**: Archived merged feature 015 into main memory; continued requirement, compatibility, and success-criteria numbering from the existing project memory.
+
+### User Stories
+
+- **US-044 (P1)**: Agent 可以安全检查文件内容，以有界窗口、行范围、继续读取元数据和敏感值脱敏来理解上下文，不把大文件、二进制或媒体原文塞进会话。
+- **US-045 (P1)**: Agent 修改文件前必须证明它观察过当前内容；既有文件写入、编辑、删除和 patch update/delete 使用 raw-byte baseline 防止 stale mutation。
+- **US-046 (P2)**: Agent 可以通过结构化 `search_files` / `search_content` / `apply_patch` 完成仓库搜索和多文件变更，结果有分页、忽略目录、验证状态和稳定错误码。
+- **US-047 (P2)**: Agent 可以区分同步命令和长运行进程，启动、轮询、读取日志、等待、停止、发送输入和关闭当前 sidecar 进程会话内的 background process。
+- **US-048 (P3)**: 大工具输出在进入 Agent 会话前压缩为安全摘要，完整原文通过持久 `ToolOutputReference` 按授权恢复，跨 sidecar 重启仍受 retention 与 cleanup 约束。
+
+### Functional Requirements
+
+- **FR-189**: 系统 MUST 为升级后的内置基础工具提供稳定结构化成功/失败 envelope，包含工具身份、outcome、可行动 payload、permission scope、truncation/limits、verification、reference 和稳定错误码。
+- **FR-190**: 受影响的内置工具调用方 MUST 在对应交付 slice 内迁移到新 contract；本 feature 不保留 legacy 参数或结果格式兼容作为验收要求。
+- **FR-191**: 文件、搜索、patch、删除和命令执行 MUST 在任何副作用前解析到 authorized workspace 边界并分类；workspace 外读取只可走高危确认，workspace 外写入、删除、patch 和执行一律拒绝。
+- **FR-192**: `read_file` MUST 支持有界文本窗口、行号/范围、总量/剩余信息、继续读取元数据和大文件明确行为。
+- **FR-193**: 二进制或不支持媒体读取 MUST 返回元数据或 unsupported outcome，不得把 raw bytes/base64 放入 Agent 可见文本。
+- **FR-194**: 文件读取、命令输出和可见工具结果 MUST 脱敏常见凭据样式，同时保留继续处理所需上下文。
+- **FR-195**: 同一运行中重复读取相同有界窗口 MUST 返回 loop-prevention metadata，但不得阻断有意的后续读取。
+- **FR-196**: 文件创建和替换 MUST 做写后验证和变更摘要；新文件可无 baseline，替换既有文件必须要求当前 baseline，除非未来另有显式 force mode、确认和测试。
+- **FR-197**: 既有文件 replace/edit/delete/patch update/delete 在缺 baseline 或 baseline stale 时 MUST 在落盘前拒绝，并提示重新读取当前内容。
+- **FR-198**: `edit_file` MUST 支持单个或多个不重叠 replacement，以及显式 replace-all 模式。
+- **FR-199**: 文件编辑 SHOULD 保留可检测的原始文本风格，包括 newline、BOM/final newline 和 leading marker。
+- **FR-200**: 编辑失败 MUST 返回附近候选位置或可行动诊断，并建议读取合适窗口后重试。
+- **FR-201**: `apply_patch` MUST 支持 workspace 内 add/update/delete 的多文件 patch，在 mutation 前做 dry-run-equivalent validation，update/delete 要求 baseline，并在 mutation 后验证。
+- **FR-202**: `search_files` MUST 返回有界、确定性排序的文件名结果，默认排除常见 generated/dependency 目录，并提供 continuation metadata。
+- **FR-203**: `search_content` MUST 返回按文件分组的匹配、行号、可选上下文、多种输出模式、有界结果和 continuation metadata。
+- **FR-204**: 内置工具和命令请求 MUST 有统一 risk classification，使 read-only、workspace mutation、elevated-risk 动作可被一致允许、确认或拒绝。
+- **FR-205**: 高危确认 MUST 保留既有 fail-closed 语义；确认不可用、中断、超时或断连时拒绝动作。
+- **FR-206**: `exec` MUST 返回 status、exit outcome、timeout classification、有界 stdout/stderr、truncation 信息和可用 raw-output reference metadata。
+- **FR-207**: 后台 process lifecycle 工具 MUST 支持当前 sidecar 进程会话内的 list/poll/logs/wait/stop/send-input/close。
+- **FR-208**: 系统 MUST 在 Agent 尝试继续或查看既有长运行进程时防止重复启动相同 background process。
+- **FR-209**: 大工具结果进入 Agent 会话前 MUST compact，并在需要时保存可持久恢复的 raw-output reference，同时保留关键成功/失败事实。
+- **FR-210**: 每个执行、拒绝、中断、压缩、fallback 或失败的 tool call MUST 仍只产生一条配对 tool result。
+- **FR-211**: full raw output、media payload 和敏感本地细节 MUST 不进入普通 Agent 可见文本；只能经授权 reference-loading path 显式读取，且受 retention/cleanup policy 管控。
+- **FR-212**: 工具 envelope MUST 暴露足够调试和测试的 metadata，包括 permission、truncation、compression mode、verification、error code 和 artifact reference。
+- **FR-213**: 自动化覆盖 MUST 包含文件读取、文件 mutation、搜索、patch、命令执行、process lifecycle、权限边界、confirmation fail-closed 和 tool-result compaction。
+- **FR-214**: tool caps、retention、workspace policy、process limits 和 output governance 的运行时 tunables MUST 通过统一配置边界定义，或显式标记为有理由的 fixed constants。
+- **FR-215**: 系统 MUST 提供 log-safe runtime health metadata，覆盖 compacted output、raw-reference create/load failure、stale mutation rejection、process cleanup、confirmation fail-closed 和 retention cleanup failure。
+
+### Key Entities
+
+- **Built-in Foundational Tool**: Agent 共享的文件访问、搜索、patch、命令执行、process lifecycle 或 output recovery 能力。
+- **Tool Result Envelope**: 升级后内置工具的统一可见结果，包含 outcome、payload、error、permission、limits、references、warnings 和 verification。
+- **Authorized Workspace**: 常规文件读写、搜索、patch 和命令执行允许所在的会话工作区边界。
+- **Permission Decision**: 工具请求的 scope、risk、decision、safe summary 和 stable reason。
+- **File Baseline**: Agent 先前读取内容对应的 raw-byte hash/metadata，用于既有文件 stale mutation detection。
+- **Process Record**: 当前 sidecar 进程会话内可管理的后台命令记录；重启后旧记录不可当作 live process 管理。
+- **Tool Output Reference**: 持久 raw output/media metadata 指针，普通可见结果只暴露 opaque reference、大小、类型、digest 和过期信息。
+- **ToolOutputRepository**: 管理 raw-output reference SQLite metadata 的 Repository 边界；blob 路径不进入业务可见文本、普通日志或 UI event。
+
+### Constraints & Compatibility
+
+- **CC-069**: 范围仅限 Agent 内置 foundational tools；用户创建的业务工具、录制 workflow tools 和 specialist methodology assets 不由本特性重定义。
+- **CC-070**: AgentLoop 既有 tool-call/tool-result pairing 语义 MUST 保持，单工具和多工具轮次都不得出现孤立 tool result 或重复配对。
+- **CC-071**: 高危确认必须继续是 session-scoped、fail-closed，且"全部允许/免确认"不得持久化到配置、keyring、SQLite 或 DuckDB。
+- **CC-072**: permission 和 confirmation summary 不得包含完整文件内容、完整替换文本、完整多行命令、凭据或 raw large output。
+- **CC-073**: UI 和 desktop API 不得直接管理内置工具执行状态；未来可见状态必须走既有 bridge 和 UI Event Registry 公开契约。
+- **CC-074**: 新增 retention、threshold、workspace/output cap 配置必须走 `get_unified_config()` / `UnifiedConfigManager` 和安全数据边界。
+- **CC-075**: 搜索、mutation、patch 和 terminal 能力必须拒绝 workspace 外 mutation/execution；只读外部路径检查是唯一可高危确认的外部路径操作。
+- **CC-076**: 每个已交付 tool family 必须完整迁移到新 contract，不能维护 legacy/new 双兼容窗口。
+- **CC-077**: workspace 外读取是 exceptional high-risk inspection；工具描述和确认摘要不得鼓励广泛探索本机文件系统。
+
+### Success Criteria
+
+- **SC-094**: 小文本、大文本、二进制、媒体和 secret-like fixture 的读取 100% 返回有界结构化 outcome，continuation、refusal 或 redaction 行为正确。
+- **SC-095**: mutation safety 测试中，既有文件 replace/edit/delete/update 缺 baseline 或 baseline stale 的尝试 100% 在内容变更前拒绝。
+- **SC-096**: patch boundary 测试中，workspace 外目标的 patch operation 100% 在 mutation 前拒绝。
+- **SC-097**: search fixture 默认排除 generated/dependency 目录，每页结果不超过配置 page size，并正确报告 `hasMore` / continuation。
+- **SC-098**: 100,000+ 字符命令输出的可见 tool result 保持在配置 conversation cap 以下，并为每个 oversized result 保留可恢复 raw reference。
+- **SC-099**: 代表性失败输出压缩后 100% 保留失败项名称、主错误信息和最终摘要。
+- **SC-100**: AgentLoop 多工具测试中，执行、拒绝、中断、压缩、失败、跳过和 fallback 的内置工具调用 100% 只有一条配对结果。
+- **SC-101**: 高危动作测试中，确认失败、超时或断连 100% 拒绝动作。
+- **SC-102**: 每个已交付 tool family 的内部调用方和测试 100% 使用新 built-in tool contract，无 legacy 参数或结果格式依赖。
+- **SC-103**: Agent continuation 脚本 100% 能利用 `nextPageToken`、line-window metadata、baseline guidance 和 `load_tool_output` reference 继续完成任务。
+- **SC-104**: runtime health 测试证明 compacted output、raw-reference failure、stale rejection、process cleanup、confirmation fail-closed 和 retention cleanup diagnostics 不泄漏 raw secrets 或本地 artifact 路径。
+
+### Edge Cases
+
+- 重复读取同一窗口只给 loop-prevention metadata，不阻断有意 reread。
+- 相对路径穿越、绝对路径、隐藏/system/link target 和 symlink escape 必须先解析和分类；外部只读路径需高危确认，外部 mutation/execution fail-closed。
+- 多个工具调用并发修改同一文件时必须串行化或拒绝，不能静默覆盖。
+- tool result hook、compaction 或 artifact 写入失败时，原始 tool call 仍必须得到 exactly-one safe fallback result。
+- background process 超出发起回合但仍在同一 sidecar 会话内时，后续 inspection 能看到 active/completed/timed_out/terminated 状态。
+- sidecar 重启后，旧 process id 返回 unavailable-after-restart，不当作可管理 live process。
+- raw binary/media output 不进入普通对话文本；只保留受授权和 retention 管控的 reference。

@@ -1,0 +1,355 @@
+"""Visible-result governance and raw-output recovery for built-in tools."""
+
+from __future__ import annotations
+
+import json
+import logging
+import copy
+from pathlib import Path
+from typing import Any
+
+from src.business.agents.tools.builtin_config import get_config_int
+from src.business.agents.tools.builtin_contracts import (
+    OUTCOME_REJECTED,
+    UPGRADED_BUILTIN_TOOL_NAMES,
+    ToolOutputReference,
+    current_tool_runtime,
+    error_json,
+    parse_envelope,
+    runtime_session_id,
+    runtime_workspace_root,
+    standardized_error_to_envelope,
+    success_json,
+    truncate_with_marker,
+)
+from src.business.agents.tools.file_tools import _looks_binary, _redact_text
+from src.data.repos.tool_output_repository import ToolOutputRepository
+from src.utils.agent_tool_health import (
+    get_agent_tool_health_counters,
+    increment_agent_tool_health,
+    record_retention_cleanup,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def governance_failure_fallback(*, tool_name: str, content: str) -> str:
+    increment_agent_tool_health(compaction_fallbacks=1)
+    return error_json(
+        tool_name,
+        "compaction_failed_fallback",
+        "Tool output governance failed; raw output was withheld.",
+        payload={
+            "compacted": True,
+            "rawChars": len(content) if isinstance(content, str) else 0,
+            "preview": "[tool output withheld after governance failure]",
+        },
+        warnings=["compaction_failed_fallback"],
+    )
+
+
+def governance_double_failure_fallback(*, tool_name: str) -> str:
+    """Last-resort envelope when both governance and governance_failure_fallback throw."""
+    increment_agent_tool_health(compaction_fallbacks=1)
+    return error_json(
+        tool_name,
+        "compaction_failed_fallback",
+        "Tool output governance failed; raw output was withheld.",
+        payload={
+            "compacted": True,
+            "preview": "[tool output withheld after governance failure]",
+        },
+        warnings=["compaction_failed_fallback"],
+    )
+
+
+def _redact_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _redact_text(value)[0]
+    if isinstance(value, list):
+        return [_redact_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_value(val) for key, val in value.items() if _safe_key(key)}
+    return value
+
+
+def _safe_key(key: str) -> bool:
+    lowered = str(key).lower()
+    return lowered not in {"storage_key", "storagepath", "storage_path", "blob_path", "raw_path"}
+
+
+def _preview(text: str, cap: int) -> str:
+    redacted = _redact_text(text)[0]
+    result, _ = truncate_with_marker(redacted, cap)
+    return result
+
+
+def _json_dumps(obj: dict[str, Any]) -> str:
+    return json.dumps(obj, ensure_ascii=False, default=str)
+
+
+def _fit_compacted_envelope(
+    obj: dict[str, Any],
+    *,
+    preview_source: str,
+    visible_cap: int,
+) -> str:
+    """Fit the final compact envelope inside the configured visible cap when possible."""
+    payload = obj.get("payload")
+    if not isinstance(payload, dict):
+        return _json_dumps(obj)
+
+    preview_budget = max(0, min(visible_cap // 2, visible_cap - 1024))
+    if preview_budget <= 0:
+        preview_budget = max(0, visible_cap // 4)
+    for _ in range(12):
+        payload["preview"] = _preview(preview_source, preview_budget) if preview_budget else ""
+        encoded = _json_dumps(obj)
+        if len(encoded) <= visible_cap:
+            return encoded
+        overflow = len(encoded) - visible_cap
+        if preview_budget <= 0:
+            break
+        preview_budget = max(0, preview_budget - overflow - 32)
+
+    payload["preview"] = ""
+    encoded = _json_dumps(obj)
+    if len(encoded) <= visible_cap:
+        return encoded
+
+    payload["originalPayloadKeys"] = payload.get("originalPayloadKeys", [])[:8]
+    warnings = obj.get("warnings")
+    if isinstance(warnings, list):
+        obj["warnings"] = warnings[:4]
+    return _json_dumps(obj)
+
+
+def govern_tool_result(
+    *,
+    tool_name: str,
+    tool_call_id: str,
+    session_id: str,
+    content: str,
+    workspace_root: str | Path | None = None,
+) -> str:
+    """Apply redaction/compaction before one tool result is persisted."""
+    is_upgraded = tool_name in UPGRADED_BUILTIN_TOOL_NAMES
+    obj = parse_envelope(content)
+    if not is_upgraded and obj is None:
+        return content
+
+    if obj is not None and obj.get("tool") != tool_name:
+        obj = None
+    if obj is None:
+        converted = standardized_error_to_envelope(tool_name, content)
+        if converted is None:
+            if not is_upgraded:
+                return content
+        else:
+            obj = parse_envelope(converted)
+            content = converted
+    if obj is None:
+        return error_json(
+            tool_name,
+            "handler_contract_violation",
+            "Built-in tool returned an invalid result envelope; raw output was withheld.",
+            payload={"compacted": True, "rawChars": len(content)},
+            warnings=["invalid_tool_result_withheld"],
+        )
+
+    raw_reference_text = content
+    visible_obj = copy.deepcopy(obj)
+    visible_obj["payload"] = _redact_value(visible_obj.get("payload") or {})
+    if "error" in visible_obj:
+        visible_obj["error"] = _redact_value(visible_obj["error"])
+    raw_text = _json_dumps(visible_obj)
+    visible_cap = get_config_int("get_agent_tools_output_visible_char_cap", 12000, maximum=50000)
+    threshold = get_config_int(
+        "get_agent_tools_output_raw_reference_threshold_chars",
+        20000,
+        minimum=visible_cap,
+    )
+    max_artifact = get_config_int(
+        "get_agent_tools_output_max_artifact_bytes", 10_485_760, maximum=104_857_600
+    )
+    if len(raw_text) <= visible_cap and len(raw_text) < threshold:
+        return raw_text
+
+    warnings = list(visible_obj.get("warnings") or [])
+    references = list(visible_obj.get("references") or [])
+    payload_keys = sorted(str(key) for key in (visible_obj.get("payload") or {}).keys())
+    compact_payload = {
+        "compacted": True,
+        "originalOutcome": visible_obj.get("outcome"),
+        "originalPayloadKeys": payload_keys,
+        "rawChars": len(raw_reference_text),
+        "preview": "",
+    }
+    raw_bytes = raw_reference_text.encode("utf-8")
+    if len(raw_bytes) <= max_artifact:
+        try:
+            repo = ToolOutputRepository()
+            model = repo.create_reference(
+                session_id=session_id,
+                tool_name=tool_name,
+                tool_call_id=tool_call_id,
+                kind="tool_payload",
+                data=raw_reference_text,
+                workspace_root=workspace_root or runtime_workspace_root(),
+                retention_days=get_config_int(
+                    "get_agent_tools_output_retention_days", 14, maximum=90
+                ),
+                content_type="application/json",
+                redaction_profile="visible_preview_redacted",
+            )
+            references.append(
+                ToolOutputReference(
+                    reference_id=model.reference_id,
+                    kind=model.kind,
+                    size_bytes=model.size_bytes,
+                    content_type=model.content_type,
+                    sha256=model.sha256,
+                    expires_at=model.expires_at.isoformat() if model.expires_at else None,
+                ).to_dict()
+            )
+            warnings.append("tool_output_compacted")
+            increment_agent_tool_health(compacted_outputs=1)
+        except Exception:
+            logger.warning("[agent_tools] raw reference creation failed", exc_info=True)
+            warnings.append("compaction_failed_fallback")
+            increment_agent_tool_health(raw_reference_create_failures=1, compaction_fallbacks=1)
+    else:
+        warnings.append("max_artifact_bytes_exceeded")
+        increment_agent_tool_health(compaction_fallbacks=1)
+
+    visible_obj["payload"] = compact_payload
+    visible_obj["references"] = references
+    visible_obj["warnings"] = warnings
+    return _fit_compacted_envelope(
+        visible_obj,
+        preview_source=raw_text,
+        visible_cap=visible_cap,
+    )
+
+
+def load_tool_output_handler(
+    referenceId: str,
+    offset: int = 0,
+    maxBytes: int = 64000,
+    renderAs: str = "text",
+    sessionId: str | None = None,
+    workspaceRoot: str | None = None,
+) -> str:
+    tool = "load_tool_output"
+    runtime = current_tool_runtime()
+    session_id = runtime.session_id if runtime is not None else sessionId or runtime_session_id()
+    workspace = (
+        runtime.workspace_root if runtime is not None else runtime_workspace_root(workspaceRoot)
+    )
+    repo = ToolOutputRepository()
+    model = repo.get_by_reference_id(referenceId)
+    if model is None:
+        increment_agent_tool_health(raw_reference_load_failures=1)
+        return error_json(
+            tool,
+            "output_reference_not_found",
+            "Output reference was not found.",
+            outcome=OUTCOME_REJECTED,
+            payload={"referenceId": referenceId},
+        )
+    if model.session_id != session_id:
+        return error_json(
+            tool,
+            "permission_denied",
+            "Output reference belongs to a different session.",
+            outcome=OUTCOME_REJECTED,
+            payload={"referenceId": referenceId},
+        )
+    if repo.is_expired(model):
+        repo.mark_expired(referenceId)
+        model.status = "expired"
+    if model.status == "expired":
+        return error_json(
+            tool,
+            "output_reference_expired",
+            "Output reference has expired.",
+            outcome=OUTCOME_REJECTED,
+            payload={"referenceId": referenceId},
+        )
+    if model.status != "active":
+        return error_json(
+            tool,
+            "output_reference_not_found",
+            "Output reference is no longer active.",
+            outcome=OUTCOME_REJECTED,
+            payload={"referenceId": referenceId},
+        )
+    loaded = repo.load_authorized_bytes(
+        referenceId,
+        session_id=session_id,
+        workspace_root=workspace,
+    )
+    if loaded is None:
+        increment_agent_tool_health(raw_reference_load_failures=1)
+        return error_json(
+            tool,
+            "output_reference_not_found",
+            "Output reference blob is missing or unauthorized.",
+            outcome=OUTCOME_REJECTED,
+            payload={"referenceId": referenceId},
+        )
+    data = loaded.data
+    start = max(0, int(offset or 0))
+    limit = max(1, min(int(maxBytes or 64000), 1_000_000))
+    window = data[start : start + limit]
+    if renderAs != "text" or _looks_binary(Path(referenceId), window[:4096]):
+        return error_json(
+            tool,
+            "unsupported_binary",
+            "Binary/media raw output is not rendered as text.",
+            outcome=OUTCOME_REJECTED,
+            payload={
+                "referenceId": referenceId,
+                "kind": model.kind,
+                "sizeBytes": model.size_bytes,
+                "contentType": model.content_type,
+            },
+        )
+    text = window.decode("utf-8", errors="replace")
+    redacted, redactions = _redact_text(text)
+    has_more = start + len(window) < len(data)
+    return success_json(
+        tool,
+        {
+            "referenceId": referenceId,
+            "kind": model.kind,
+            "offset": start,
+            "bytesReturned": len(window),
+            "hasMore": has_more,
+            "content": redacted,
+            "redactions": redactions,
+        },
+        limits={
+            "truncated": has_more,
+            "rawBytes": len(data),
+            "visibleChars": len(redacted),
+            "hasMore": has_more,
+            "nextPageToken": str(start + len(window)) if has_more else None,
+        },
+    )
+
+
+def cleanup_tool_outputs() -> dict[str, int]:
+    try:
+        result = ToolOutputRepository().cleanup_expired()
+        record_retention_cleanup(result)
+        return result
+    except Exception:
+        logger.warning("[agent_tools] tool output cleanup failed", exc_info=True)
+        increment_agent_tool_health(cleanup_failures=1, retention_cleanup_failures=1)
+        counters = get_agent_tool_health_counters()
+        return {"cleanupFailures": counters["cleanup_failures"]}
+
+
+def get_tool_output_health_counters() -> dict[str, int]:
+    return get_agent_tool_health_counters()

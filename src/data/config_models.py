@@ -290,6 +290,55 @@ class BrainConfig:
 
 
 @dataclass
+class AgentToolsFileConfig:
+    """Agent built-in file tool limits."""
+
+    default_max_lines: int = 200
+    max_window_chars: int = 50000
+    max_decode_bytes: int = 1048576
+
+
+@dataclass
+class AgentToolsOutputConfig:
+    """Agent built-in output governance limits."""
+
+    visible_char_cap: int = 12000
+    raw_reference_threshold_chars: int = 20000
+    max_artifact_bytes: int = 10485760
+    retention_days: int = 14
+
+
+@dataclass
+class AgentToolsSearchConfig:
+    """Agent built-in search limits."""
+
+    default_page_size: int = 100
+    max_files_scanned: int = 50000
+    max_bytes_per_file: int = 1048576
+    max_elapsed_ms: int = 30000
+
+
+@dataclass
+class AgentToolsProcessConfig:
+    """Agent built-in command/process limits."""
+
+    default_timeout_ms: int = 30000
+    max_timeout_ms: int = 600000
+    log_tail_chars: int = 4000
+    max_background_processes: int = 16
+
+
+@dataclass
+class AgentToolsConfig:
+    """Agent built-in foundational tool configuration."""
+
+    file: AgentToolsFileConfig = field(default_factory=AgentToolsFileConfig)
+    output: AgentToolsOutputConfig = field(default_factory=AgentToolsOutputConfig)
+    search: AgentToolsSearchConfig = field(default_factory=AgentToolsSearchConfig)
+    process: AgentToolsProcessConfig = field(default_factory=AgentToolsProcessConfig)
+
+
+@dataclass
 class AppConfig:
     """应用配置"""
 
@@ -300,6 +349,7 @@ class AppConfig:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
+    agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典（不包含敏感信息）"""
@@ -356,6 +406,19 @@ class AppConfig:
                     **_filter_dataclass_fields(skill_data, BrainSkillConfig)
                 )
             config.brain = BrainConfig(**brain_data)
+
+        if "agent_tools" in data:
+            agent_tools_data = _filter_dataclass_fields(data["agent_tools"], AgentToolsConfig)
+            for key, sub_cls in (
+                ("file", AgentToolsFileConfig),
+                ("output", AgentToolsOutputConfig),
+                ("search", AgentToolsSearchConfig),
+                ("process", AgentToolsProcessConfig),
+            ):
+                val = agent_tools_data.get(key)
+                if isinstance(val, dict):
+                    agent_tools_data[key] = sub_cls(**_filter_dataclass_fields(val, sub_cls))
+            config.agent_tools = AgentToolsConfig(**agent_tools_data)
 
         if "app_name" in data:
             config.app_name = data["app_name"]

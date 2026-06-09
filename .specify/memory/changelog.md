@@ -310,3 +310,29 @@
 - `docs/ARCHITECTURE.md`、`frontend/AGENTS.md`、`src/AGENTS.md` — 活文档与模块入口同步。
 
 **Tasks Completed:** 71/71 tasks
+
+## Agent Built-in Tools Upgrade — 2026-06-09
+
+**Branch:** `015-agent-builtin-tools-upgrade`
+**Spec:** `specs/015-agent-builtin-tools-upgrade`
+
+**What was added:**
+- US-044 (P1): Agent 内置文件读取升级为有界窗口、continuation metadata、binary/media refusal 和 secret-like redaction。
+- US-045 (P1): 既有文件写入、编辑、删除和 patch update/delete 必须使用 raw-byte baseline，stale mutation 在落盘前拒绝。
+- US-046 (P2): 新增结构化 `search_files` / `search_content` / `apply_patch` contract，统一 workspace policy、分页、验证和稳定错误码。
+- US-047 (P2): 新增 `exec` 与当前 sidecar 会话内的 background process lifecycle 工具，支持 poll/logs/wait/stop/send-input/close 和重复启动防护。
+- US-048 (P3): 大输出进入 Agent 会话前压缩，完整 raw output/media 通过持久 `ToolOutputReference` + `load_tool_output` 授权恢复，并受 retention cleanup 管控。
+
+**New Components:**
+- `src/business/agents/tools/builtin_contracts.py`、`builtin_permissions.py`、`file_tools.py`、`search_tools.py`、`command_tools.py`、`output_governance.py` — 内置工具 envelope、权限、文件、搜索、命令/process 和输出治理实现。
+- `src/execution/command_runner.py` / `src/execution/process_manager.py` — 同步命令执行边界和当前 sidecar 会话内 background process registry。
+- `src/data/repos/tool_output_repository.py` + SQLite metadata model/migration — raw-output reference Repository 边界。
+- `src/utils/agent_tool_health.py` — log-safe runtime health diagnostics。
+- `tests/business/agents/test_builtin_*`、`tests/data/test_tool_output_repository.py`、`tests/guardrails/test_agent_builtin_tool_boundaries.py`、`tests/integration/test_agent_builtin_*` — 工具 contract、Repository、guardrail 和 process lifecycle 覆盖。
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` / `hook_models.py` / `tools/builtin_general_tools.py` — 保持 facade，升级 built-in contract、权限和 exactly-one-result 保存治理。
+- `src/data/config_models.py` / `unified_config.py` / `migrations.py` / `models_sqlite.py` / `repositories.py` — 新增 agent tool caps、retention、process limits 和 output reference metadata。
+- `config.example.json`、`docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、`AGENTS.md`、`src/AGENTS.md` — 活文档、配置示例和 AI 入口同步。
+
+**Tasks Completed:** 86/86 tasks

@@ -264,6 +264,26 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 `load_reference` 和 `talk_to_user` 是 AgentLoop 内建注入工具，继续用于上下文引用和用户交互，但不进入 tool/global hook 管线。
 
+### 内置通用工具运行结构
+
+办公助理的通用内置工具仍由 `src/business/agents/tools/builtin_general_tools.py` 作为公开 facade 注册，但文件、搜索、命令、后台进程和大输出治理分别下沉到 focused 模块：
+
+| 模块 | 职责 |
+|------|------|
+| `builtin_contracts.py` | 统一 result envelope、稳定 outcome/error code、运行期 tool context |
+| `builtin_permissions.py` | workspace 解析、外部/隐藏/系统/symlink 分类、确认决策和脱敏摘要 |
+| `file_tools.py` | 有界读取、raw-byte baseline、baseline-safe 写入/编辑、结构化 patch |
+| `search_tools.py` | 结构化文件/内容搜索、默认 ignore、分页和脱敏 |
+| `command_tools.py` | 同步 `exec` 和 process lifecycle handler |
+| `output_governance.py` | 可见结果压缩、raw output reference、`load_tool_output` 和健康计数 |
+| `src/execution/command_runner.py` | 同步子进程执行边界、cwd/timeout/stdout/stderr 归一化 |
+| `src/execution/process_manager.py` | 当前 sidecar 会话内后台进程 registry、日志窗口、等待/停止/关闭 |
+| `src/data/repos/tool_output_repository.py` | 私有 blob + SQLite metadata 的 raw output reference Repository |
+
+AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session、tool_call、tool_name、workspace root），handler 返回统一 JSON envelope。保存 tool result 前统一经过 output governance：小结果直接脱敏进入 messages，大结果写入 `ToolOutputRepository` 管理的私有 artifact 并在可见结果中只保留摘要和 reference id；畸形 envelope 或治理异常只保存不含原始内容的安全 fallback。这样未知工具、pre-hook 拒绝、handler 异常、标准化错误、跳过和 fallback 路径仍保持 function-calling 所需的“一次 tool call 对一条 tool result”配对。
+
+文件修改采用先读后写模型：`read_file` 返回基于原始字节的 baseline；已存在文件的 `write_file`、`edit_file` 和 `apply_patch` update/delete 必须带当前 baseline，过期或缺失在落盘前拒绝。`list_dir` 和搜索返回有界、相对路径的结构化结果，搜索默认使用原生遍历而非 shell 解析。命令解析为 argv 后以 `shell=False` 启动，只允许 workspace 内 cwd 和路径参数；shell 控制语法、shell host 与内联解释器代码在执行前拒绝。后台进程受会话级数量、日志和等待上限约束，只在当前 sidecar 进程会话内可管理，重启后旧 `proc_*` id 返回 unavailable。
+
 ### 内置工具依赖预装
 
 需要第三方包的内置工具（如 `web_search` 依赖 `duckduckgo-search`）不在主进程直接 import，而是通过 `tool_executor.run_tool_code()` 在 `data/tool_venv/` 子进程执行。`tool_executor` 暴露 `BUILTIN_TOOL_DEPS` 列表和 `ensure_builtin_deps()` 函数，FastAPI lifespan 启动时调用预装。后续新增内置工具依赖只需往该列表追加包名。

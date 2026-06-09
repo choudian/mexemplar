@@ -989,6 +989,47 @@ def migrate_to_v12(engine):
             raise
 
 
+def migrate_to_v13(engine):
+    """迁移到版本 13：Agent 内建工具 raw output 引用元数据表。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tool_output_references (
+                    reference_id TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    tool_name TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    tool_call_id TEXT,
+                    storage_key TEXT NOT NULL,
+                    storage_root_kind TEXT NOT NULL DEFAULT 'app_data_tool_outputs',
+                    size_bytes INTEGER NOT NULL,
+                    content_type TEXT NOT NULL DEFAULT 'text/plain',
+                    sha256 TEXT NOT NULL,
+                    redaction_profile TEXT,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'expired', 'deleted')),
+                    owner_workspace_hash TEXT NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    expires_at DATETIME
+                )
+            """))
+            for index_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_tool_output_reference_id ON tool_output_references(reference_id)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_output_session ON tool_output_references(session_id)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_output_tool_call ON tool_output_references(tool_call_id)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_output_status ON tool_output_references(status)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_output_expires ON tool_output_references(expires_at)",
+            ]:
+                conn.execute(text(index_sql))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 13})
+            conn.commit()
+            logger.info("数据库迁移到版本 13 完成：tool output reference 元数据表")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 13 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1001,6 +1042,7 @@ _MIGRATIONS = [
     (10, migrate_to_v10),
     (11, migrate_to_v11),
     (12, migrate_to_v12),
+    (13, migrate_to_v13),
 ]
 
 

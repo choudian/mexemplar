@@ -130,3 +130,28 @@ def test_redirect_response_body_is_drained_when_length_is_known() -> None:
     general_tools._drain_redirect_response_body(response)
 
     assert response.read_sizes == [10_000]
+
+
+def test_list_dir_returns_bounded_envelope_without_absolute_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "b.txt").write_text("b", encoding="utf-8")
+    (tmp_path / "a.txt").write_text("a", encoding="utf-8")
+    (tmp_path / ".hidden").write_text("hidden", encoding="utf-8")
+
+    result = json.loads(general_tools.list_dir_handler("."))
+
+    assert result["schemaVersion"] == 1
+    assert result["tool"] == "list_dir"
+    assert result["outcome"] == "success"
+    assert result["payload"]["path"] == "."
+    assert [item["name"] for item in result["payload"]["items"]] == ["a.txt", "b.txt"]
+    assert str(tmp_path) not in json.dumps(result, ensure_ascii=False)
+
+
+def test_list_dir_rejects_outside_workspace_without_confirmation(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    result = json.loads(general_tools.list_dir_handler(str(tmp_path.parent)))
+
+    assert result["outcome"] == "rejected"
+    assert result["error"]["code"] == "path_outside_workspace"
