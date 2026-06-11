@@ -69,3 +69,33 @@ def test_settings_secret_delete_clears_keyring_without_exposing_secret(tmp_path,
     assert response == {"secretKey": "ai.api_key", "present": False, "masked": ""}
     assert backend.get_password(service_name, "anthropic_api_key") is None
     assert "sk-delete-me" not in str(response)
+
+
+def test_brave_secret_write_masks_response_and_avoids_plaintext_db(tmp_path, memory_keyring):
+    backend, service_name = memory_keyring
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    service = SettingsService(config)
+
+    response = service.write_secret("web.brave_api_key", "brave-secret-value")
+
+    assert response == {"secretKey": "web.brave_api_key", "present": True, "masked": "••••••••"}
+    assert "brave-secret-value" not in str(response)
+    assert backend.get_password(service_name, "brave_search_api_key") == "brave-secret-value"
+    assert get_sqlalchemy_manager().get_setting("web.brave_api_key", default="") == ""
+
+    values = service.get_values()
+    assert values["secrets"]["web.brave_api_key"]["present"] is True
+    assert "brave-secret-value" not in str(values)
+
+
+def test_brave_secret_delete_clears_keyring_without_exposing_secret(tmp_path, memory_keyring):
+    backend, service_name = memory_keyring
+    backend.set_password(service_name, "brave_search_api_key", "brave-delete-me")
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    service = SettingsService(config)
+
+    response = service.delete_secret("web.brave_api_key")
+
+    assert response == {"secretKey": "web.brave_api_key", "present": False, "masked": ""}
+    assert backend.get_password(service_name, "brave_search_api_key") is None
+    assert "brave-delete-me" not in str(response)

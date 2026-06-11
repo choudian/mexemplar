@@ -34,6 +34,7 @@ const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000,
 
 const TOAST_AUTO_DISMISS_MS = 8000;
 const SEEN_EVENT_ID_LIMIT = 500;
+const TEACHING_STAGE_REDIRECT_MS = 3000;
 
 const FAILED_BACKEND: BackendConnectionState = {
   status: "failed",
@@ -59,6 +60,13 @@ function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
     }
     signal.addEventListener("abort", abort, { once: true });
   });
+}
+
+function isSavedTeachingToolEvent(event: UiEvent): boolean {
+  return event.type === "tools.changed" &&
+    event.payload.status === "saved" &&
+    typeof event.scope.workflowId === "string" &&
+    event.scope.workflowId.length > 0;
 }
 
 export function AppShell(): JSX.Element {
@@ -100,6 +108,31 @@ export function AppShell(): JSX.Element {
     () => !isToolRenameToastDismissed(),
   );
   const debugStatusVersion = useRef(0);
+  const pendingSkillRedirectTimer = useRef<number | undefined>(undefined);
+
+  const navigateVisibleRoute = useCallback((nextRoute: Parameters<typeof setRoute>[0]) => {
+    const nextPath = routePaths[nextRoute];
+    if (nextPath && window.location.pathname !== nextPath) {
+      window.history.pushState({}, "", nextPath);
+      setPathname(nextPath);
+    }
+    setRoute(nextRoute);
+  }, [setRoute]);
+
+  const schedulePendingSkillRedirect = useCallback((workflowId: string) => {
+    if (pendingSkillRedirectTimer.current !== undefined) {
+      window.clearTimeout(pendingSkillRedirectTimer.current);
+    }
+    pendingSkillRedirectTimer.current = window.setTimeout(() => {
+      const teachingState = useTeachingStore.getState();
+      if (teachingState.skillTrialToolId || teachingState.run?.workflowId !== workflowId) {
+        return;
+      }
+      useSkillsStore.getState().setCategory("pending");
+      void useSkillsStore.getState().loadAllCategories();
+      navigateVisibleRoute("skills");
+    }, TEACHING_STAGE_REDIRECT_MS);
+  }, [navigateVisibleRoute]);
 
   const refreshDebugTraceStatus = useCallback(async () => {
     const requestVersion = ++debugStatusVersion.current;
@@ -218,6 +251,9 @@ export function AppShell(): JSX.Element {
           }
           if (resyncBlocked) return;
           dispatchUiEvent(event);
+          if (isSavedTeachingToolEvent(event)) {
+            schedulePendingSkillRedirect(event.scope.workflowId);
+          }
         })
         .catch(() => {
           resyncBlocked = true;
@@ -322,6 +358,7 @@ export function AppShell(): JSX.Element {
     setBackend,
     setAssistantIdleThresholdSeconds,
     loadSkillBootstrapStatus,
+    schedulePendingSkillRedirect,
     retryNonce,
   ]);
 
@@ -336,6 +373,8 @@ export function AppShell(): JSX.Element {
   }, [setBackend]);
 
   const teachingToast = useTeachingStore((state) => state.toast);
+  const teachingStage = useTeachingStore((state) => state.stage);
+  const teachingWorkflowId = useTeachingStore((state) => state.run?.workflowId ?? null);
   const dismissTeachingToast = useTeachingStore((state) => state.dismissToast);
   const recruitmentToast = useSpecialistStore((state) => state.recruitmentToast);
   const dismissRecruitmentToast = useSpecialistStore((state) => state.dismissRecruitmentToast);
@@ -401,6 +440,23 @@ export function AppShell(): JSX.Element {
     }
     setRoute(nextRoute);
   }, [hiddenRoute, setRoute]);
+
+  useEffect(() => {
+    if (!teachingWorkflowId || skillTrialToolId || teachingStage !== "learning") return;
+    const timer = window.setTimeout(() => {
+      navigateVisibleRoute("assistant");
+    }, TEACHING_STAGE_REDIRECT_MS);
+    return () => window.clearTimeout(timer);
+  }, [navigateVisibleRoute, skillTrialToolId, teachingStage, teachingWorkflowId]);
+
+  useEffect(() => {
+    return () => {
+      if (pendingSkillRedirectTimer.current !== undefined) {
+        window.clearTimeout(pendingSkillRedirectTimer.current);
+        pendingSkillRedirectTimer.current = undefined;
+      }
+    };
+  }, []);
 
   useEffect(() => {
     void refreshDebugTraceStatus();

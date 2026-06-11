@@ -91,7 +91,7 @@ class AIConfig:
 
     # 记忆机制配置
     memory_reference_steps_threshold: int = 3  # tool result 被引用替换前需要的 assistant 消息数
-    memory_reference_size_threshold: int = 2000  # 触发引用替换的最小字符数
+    memory_reference_size_threshold: int = 10000  # 触发引用替换的最小字符数
     memory_compression_token_threshold: int = 80000  # token 估算触发压缩的阈值
     memory_compression_count_threshold: Optional[int] = None  # 消息条数触发压缩的阈值（可选）
     memory_compression_keep_recent: int = 20  # 压缩时保留的最近消息数
@@ -223,6 +223,13 @@ class UIConfig:
 
 
 @dataclass
+class WebConfig:
+    """Web tool configuration."""
+
+    search_backend: str = "auto"
+
+
+@dataclass
 class BrainSegmentConfig:
     """大脑 Segment 配置"""
 
@@ -348,6 +355,7 @@ class AppConfig:
     ai: AIConfig = field(default_factory=AIConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
+    web: WebConfig = field(default_factory=WebConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
     agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
 
@@ -382,6 +390,9 @@ class AppConfig:
 
         if "ui" in data:
             config.ui = UIConfig(**_filter_dataclass_fields(data["ui"], UIConfig))
+
+        if "web" in data:
+            config.web = WebConfig(**_filter_dataclass_fields(data["web"], WebConfig))
 
         if "brain" in data:
             brain_data = _filter_dataclass_fields(data["brain"], BrainConfig)

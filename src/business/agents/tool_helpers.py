@@ -61,6 +61,7 @@ def is_standardized_error(result: str) -> bool:
 
     两种格式：
     - error_json 生成的 ``{"success": false, ...}``
+    - web_search 等工具返回的 ``{"success": false, "error": ...}``
     - make_error_result 生成的 ``{"error": "code", "message": ...}``
     """
     if not isinstance(result, str):
@@ -72,6 +73,8 @@ def is_standardized_error(result: str) -> bool:
         obj = json.loads(result)
         if isinstance(obj, dict):
             if obj.get("success") is False and "message" in obj:
+                return True
+            if obj.get("success") is False and isinstance(obj.get("error"), str) and obj["error"]:
                 return True
             if "error" in obj and isinstance(obj["error"], str) and obj["error"]:
                 return True
@@ -111,7 +114,9 @@ def get_vision_llm_client(model: str | None = None) -> Any:
     resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
     provider = config.get_ai_vision_provider()
     resolved_model = model or config.get_ai_vision_model()
-    api_key = resolver.get_ai_vision_api_key() if resolver is not None else config.get_ai_vision_api_key()
+    api_key = (
+        resolver.get_ai_vision_api_key() if resolver is not None else config.get_ai_vision_api_key()
+    )
     base_url = config.get_ai_vision_base_url()
     key = (provider, resolved_model, api_key, base_url)
 

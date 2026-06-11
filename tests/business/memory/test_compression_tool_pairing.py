@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.business.memory.compression_handler import CompressionHandler
+from src.data.repositories import MessageRepository
+from tests.data.chat_history_test_helpers import create_assistant_session, seed_message
 
 
 @pytest.fixture
@@ -227,3 +229,62 @@ class TestReCompressAbsorbsBoundaryGroup:
         # tool 组完全在压缩区，不调整
         assert len(result_c) == len(compress_msgs)
         assert len(result_k) == len(keep_msgs)
+
+
+class _FakeCompressionLLM:
+    def chat(self, _prompt: str) -> str:
+        return "### 当前进展\n- 已完成 call_1 的工具读取。"
+
+
+class TestCompressPersistence:
+    """压缩持久化回归测试。"""
+
+    def test_compress_does_not_archive_new_summary_message(self):
+        """摘要复用起始 sequence 时，归档原始范围不能把新摘要一起归档。"""
+        session_id = create_assistant_session("ast_compress_self_archive")
+        seed_message(session_id, sequence=1, role="system", content="sys")
+        seed_message(session_id, sequence=2, role="user", content="请读取资料")
+        seed_message(
+            session_id,
+            sequence=3,
+            role="assistant",
+            content=None,
+            tool_calls='[{"id":"call_1","name":"web_fetch","args":{"url":"https://example.test"}}]',
+        )
+        seed_message(
+            session_id,
+            sequence=4,
+            role="tool",
+            content="x" * 2000,
+            tool_call_id="call_1",
+        )
+        seed_message(session_id, sequence=5, role="assistant", content="读取完成")
+        seed_message(session_id, sequence=6, role="user", content="继续")
+
+        config = MagicMock()
+        config.get_memory_compression_keep_recent.return_value = 1
+        config.get_memory_compression_trigger_strategy.return_value = "count"
+        config.get_memory_compression_count_threshold.return_value = 2
+        handler = CompressionHandler(config)
+        handler._llm_client = _FakeCompressionLLM()
+        repo = MessageRepository()
+
+        handler.compress(session_id, repo.get_context(session_id), repo)
+
+        context = repo.get_context(session_id)
+        summaries = [
+            msg
+            for msg in context
+            if msg.role == "summary" and msg.message_type == "compressed"
+        ]
+        assert len(summaries) == 1
+        assert summaries[0].sequence == 2
+        assert summaries[0].is_archived is False
+        assert [msg.sequence for msg in context] == [1, 2, 6]
+
+        original_archived = {
+            msg.sequence
+            for msg in repo.get_all(session_id)
+            if msg.message_type == "normal" and 2 <= msg.sequence <= 5 and msg.is_archived
+        }
+        assert original_archived == {2, 3, 4, 5}

@@ -14,28 +14,39 @@
 import json
 import logging
 import heapq
-import http.client
+import html as html_lib
 import ipaddress
-import socket
-import ssl
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 import uuid
+from collections import OrderedDict
 from contextvars import ContextVar
 from dataclasses import dataclass
-from html.parser import HTMLParser
+from http import HTTPStatus
 from pathlib import Path
 from typing import List
+
+from markdownify import markdownify as html_to_markdown
 
 from src.business.agents.config import ToolDefinition
 from src.business.agents.hook_models import PreHookResult, ToolCallContext
 from src.business.agents.tool_helpers import make_tool_schema, error_json
-from src.business.agents.tools import command_tools, file_tools, output_governance, search_tools
+from src.business.agents.tools import (
+    command_tools,
+    file_tools,
+    output_governance,
+    search_tools,
+    web_search_providers,
+)
 from src.business.agents.tools.builtin_contracts import (
     OUTCOME_REJECTED,
     current_tool_runtime,
     error_json as builtin_error_json,
+    runtime_session_id,
+    runtime_workspace_root,
     success_json,
 )
 from src.business.agents.tools.builtin_permissions import (
@@ -80,19 +91,63 @@ CONFIRM_SOURCE_NEW_CHAT_RESET = "new_chat_reset"
 _SUMMARY_SNIPPET_MAX = 80
 _SUMMARY_TOTAL_MAX = 240
 
-# web_fetch 返回内容最大字符数
-_WEB_FETCH_MAX_LENGTH = 5000
+# web_fetch behavior follows Claude Code WebFetch limits.
+_WEB_FETCH_MAX_LENGTH = 100_000
 _WEB_FETCH_ALLOWED_SCHEMES = {"http", "https"}
-_WEB_FETCH_LOCALHOST_NAMES = {"localhost", "localhost.localdomain"}
-_WEB_FETCH_MAX_REDIRECTS = 5
-_WEB_FETCH_MAX_BYTES = 1_000_000
-_WEB_FETCH_REDIRECT_DRAIN_BYTES = 64 * 1024
-_WEB_FETCH_SSL_CONTEXT = ssl.create_default_context()
+_WEB_FETCH_MAX_URL_LENGTH = 2000
+_WEB_FETCH_MAX_BYTES = 10 * 1024 * 1024
+_WEB_FETCH_TIMEOUT = 60
+_WEB_FETCH_DOMAIN_CHECK_TIMEOUT = 10
+_WEB_FETCH_MAX_REDIRECTS = 10
+_WEB_FETCH_CACHE_TTL_SECONDS = 15 * 60
+_WEB_FETCH_CACHE_MAX_BYTES = 50 * 1024 * 1024
+_WEB_FETCH_DOMAIN_CHECK_CACHE_TTL_SECONDS = 5 * 60
+_WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES = 128
+_WEB_FETCH_PROMPT_PREVIEW_CHARS = 900
+_WEB_FETCH_TITLE_FALLBACK_CHARS = 600
+_WEB_FETCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+_WEB_FETCH_REDIRECT_STATUSES = {301, 302, 307, 308}
+_WEB_FETCH_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
+_WEB_FETCH_DOMAIN_INFO_URL = "https://api.anthropic.com/api/web/domain_info"
 _LIST_DIR_MAX_ITEMS = 1000
-# Short TTL prevents SSRF via DNS rebinding while reducing blocking DNS calls per agent turn.
-_DNS_CACHE: dict[str, tuple[float, list]] = {}
-_DNS_CACHE_LOCK = threading.Lock()
-_DNS_CACHE_TTL = 30.0
+
+
+@dataclass(frozen=True)
+class _FetchedWebContent:
+    final_url: str
+    content: str
+    bytes: int
+    code: int | None
+    code_text: str
+    content_type: str
+    title: str | None = None
+    persisted_reference_id: str | None = None
+    persisted_size: int | None = None
+
+
+@dataclass(frozen=True)
+class _WebFetchRedirect:
+    original_url: str
+    redirect_url: str
+    status_code: int
+
+
+@dataclass(frozen=True)
+class _WebFetchCacheEntry:
+    content: _FetchedWebContent
+    size_bytes: int
+    expires_at: float
+
+
+_web_fetch_cache: OrderedDict[str, _WebFetchCacheEntry] = OrderedDict()
+_web_fetch_cache_size_bytes = 0
+_web_fetch_cache_lock = threading.RLock()
+_web_fetch_domain_check_cache: OrderedDict[str, float] = OrderedDict()
+_web_fetch_domain_check_lock = threading.RLock()
 
 # =========================================================================
 # 用户确认机制（高危工具，线程安全）
@@ -364,46 +419,21 @@ WEB_SEARCH_SCHEMA = make_tool_schema(
 )
 
 
-_WEB_SEARCH_CODE = """\
-import json
-
-async def execute(**kwargs):
-    from duckduckgo_search import DDGS
-
-    query = kwargs["query"]
-    num_results = kwargs.get("num_results", 5)
-
-    results = []
-    with DDGS() as ddgs:
-        for r in ddgs.text(query, max_results=num_results):
-            results.append({
-                "title": r.get("title", ""),
-                "url": r.get("href", ""),
-                "snippet": r.get("body", ""),
-            })
-    return {"success": True, "message": json.dumps({"success": True, "results": results, "count": len(results)}, ensure_ascii=False)}
-"""
-
-
 def web_search_handler(query: str, num_results: int = 5) -> str:
-    """使用 DuckDuckGo 进行网页搜索（通过 tool_venv 子进程执行）"""
+    """Search the web using the configured provider backend."""
     try:
-        from src.execution.tool_executor import run_tool_code
-
-        result = run_tool_code(
-            code=_WEB_SEARCH_CODE,
-            parameters={"query": query, "num_results": num_results},
-            dependencies=["duckduckgo-search"],
-        )
-        if result.get("success"):
-            return result.get("message", json.dumps({"success": False, "error": "空结果"}))
-        error_msg = result.get("message", "搜索执行失败")
-        if "依赖安装失败" in error_msg:
-            error_msg += "。可尝试手动安装: pip install duckduckgo-search"
-        return error_json(error_msg)
+        result = web_search_providers.search_web(query, num_results)
+        return json.dumps(result, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[web_search] 失败: {e}")
-        return error_json(f"搜索执行失败: {e}。如持续失败，可尝试: pip install duckduckgo-search")
+        return json.dumps(
+            {
+                "success": False,
+                "error": f"搜索执行失败: {e}。建议直接使用 web_fetch 抓取目标网页内容",
+                "data": {"web": []},
+            },
+            ensure_ascii=False,
+        )
 
 
 # =========================================================================
@@ -412,83 +442,76 @@ def web_search_handler(query: str, num_results: int = 5) -> str:
 
 WEB_FETCH_SCHEMA = make_tool_schema(
     name="web_fetch",
-    description="抓取指定网页的文本内容（自动去除 HTML 标签）。",
+    description=(
+        "抓取指定 URL 的内容；HTTP 自动升级 HTTPS，HTML 转 Markdown，"
+        "同域重定向自动跟随，并带 15 分钟 LRU 缓存。"
+    ),
     properties={
         "url": {"type": "string", "description": "要抓取的网页 URL"},
         "max_length": {
             "type": "integer",
             "description": f"返回内容最大字符数，默认 {_WEB_FETCH_MAX_LENGTH}",
         },
+        "prompt": {
+            "type": "string",
+            "description": "可选：基于网页内容生成一个轻量结果，例如标题或摘要。",
+        },
     },
     required=["url"],
 )
 
 
-def web_fetch_handler(url: str, max_length: int = _WEB_FETCH_MAX_LENGTH) -> str:
-    """抓取网页文本内容"""
+def web_fetch_handler(
+    url: str,
+    max_length: int = _WEB_FETCH_MAX_LENGTH,
+    prompt: str | None = None,
+) -> str:
+    """Fetch URL content and return Markdown/text in the legacy JSON shape."""
     try:
-        safe_url = _validate_web_fetch_url(url)
+        original_url = str(url or "").strip()
+        safe_url = _validate_web_fetch_url(original_url)
         max_length = _normalize_web_fetch_max_length(max_length)
-        final_url, html = _fetch_validated_web_url(safe_url)
+        started = time.monotonic()
+        fetched = _get_url_markdown_content(original_url, safe_url)
 
-        text = _extract_text_from_html(html)[:max_length]
+        if isinstance(fetched, _WebFetchRedirect):
+            return _web_fetch_redirect_json(fetched, prompt, started)
 
-        return json.dumps(
-            {
-                "success": True,
-                "url": final_url,
-                "content": text,
-                "truncated": len(text) == max_length,
-            },
-            ensure_ascii=False,
+        full_text = fetched.content
+        text = full_text[:max_length]
+
+        response = {
+            "success": True,
+            "url": fetched.final_url,
+            "content": text,
+            "truncated": len(full_text) > max_length,
+            "status": fetched.code,
+            "status_text": fetched.code_text,
+            "bytes": fetched.bytes,
+            "duration_ms": int((time.monotonic() - started) * 1000),
+            "content_type": fetched.content_type,
+        }
+        if fetched.persisted_reference_id:
+            response["binary"] = {
+                "reference_id": fetched.persisted_reference_id,
+                "size_bytes": fetched.persisted_size or fetched.bytes,
+                "content_type": fetched.content_type,
+            }
+        prompt_result = _summarize_web_fetch_for_prompt(
+            fetched.final_url,
+            prompt,
+            full_text,
+            fetched.title,
+            fetched.persisted_reference_id,
+            fetched.content_type,
+            fetched.persisted_size or fetched.bytes,
         )
+        if prompt_result is not None:
+            response["result"] = prompt_result
+        return json.dumps(response, ensure_ascii=False)
     except Exception as e:
         logger.error(f"[web_fetch] 失败: {e}")
         return error_json(e)
-
-
-class _ResolvedHTTPConnection(http.client.HTTPConnection):
-    """HTTP connection that connects to a pre-validated address, not a fresh DNS result."""
-
-    def __init__(
-        self, host: str, port: int, resolved_address: ipaddress._BaseAddress, timeout: float
-    ):
-        super().__init__(host, port=port, timeout=timeout)
-        self._resolved_address = str(resolved_address)
-
-    def connect(self) -> None:
-        self.sock = _create_resolved_web_fetch_socket(
-            (self._resolved_address, self.port),
-            self.timeout,
-            self.source_address,
-        )
-
-
-class _ResolvedHTTPSConnection(http.client.HTTPSConnection):
-    """HTTPS connection that preserves SNI while dialing a pre-validated address."""
-
-    def __init__(
-        self, host: str, port: int, resolved_address: ipaddress._BaseAddress, timeout: float
-    ):
-        super().__init__(host, port=port, timeout=timeout, context=_WEB_FETCH_SSL_CONTEXT)
-        self._resolved_address = str(resolved_address)
-
-    def connect(self) -> None:
-        sock = _create_resolved_web_fetch_socket(
-            (self._resolved_address, self.port),
-            self.timeout,
-            self.source_address,
-        )
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
-
-
-def _create_resolved_web_fetch_socket(address, timeout, source_address):
-    sock = socket.create_connection(address, timeout, source_address)
-    try:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    except (AttributeError, OSError):
-        pass
-    return sock
 
 
 def _normalize_web_fetch_max_length(max_length: int) -> int:
@@ -499,57 +522,433 @@ def _normalize_web_fetch_max_length(max_length: int) -> int:
     return max(1, min(parsed, _WEB_FETCH_MAX_LENGTH))
 
 
+class _DomainBlockedError(RuntimeError):
+    def __init__(self, domain: str) -> None:
+        super().__init__(f"Claude Code is unable to fetch from {domain}")
+
+
+class _DomainCheckFailedError(RuntimeError):
+    def __init__(self, domain: str) -> None:
+        super().__init__(
+            "Unable to verify if domain "
+            f"{domain} is safe to fetch. This may be due to network restrictions "
+            "or enterprise security policies blocking claude.ai."
+        )
+
+
+class _EgressBlockedError(RuntimeError):
+    def __init__(self, domain: str) -> None:
+        super().__init__(
+            json.dumps(
+                {
+                    "error_type": "EGRESS_BLOCKED",
+                    "domain": domain,
+                    "message": f"Access to {domain} is blocked by the network egress proxy.",
+                },
+                ensure_ascii=False,
+            )
+        )
+
+
 def _validate_web_fetch_url(url: str) -> str:
     candidate = str(url or "").strip()
-    parsed = urllib.parse.urlparse(candidate)
+    if len(candidate) > _WEB_FETCH_MAX_URL_LENGTH:
+        raise ValueError("web_fetch URL 超过 2000 字符限制")
+    parsed = urllib.parse.urlsplit(candidate)
     if parsed.scheme.lower() not in _WEB_FETCH_ALLOWED_SCHEMES:
         raise ValueError("web_fetch 只允许 http/https URL")
     if not parsed.hostname:
         raise ValueError("web_fetch URL 缺少主机名")
+    if parsed.username or parsed.password:
+        raise ValueError("web_fetch URL 不允许包含 username/password")
     _web_fetch_port(parsed)
-    return urllib.parse.urlunparse(parsed._replace(scheme=parsed.scheme.lower()))
+    _reject_private_web_fetch_host(parsed.hostname)
+    return _normalize_web_fetch_url(parsed)
 
 
-def _fetch_validated_web_url(
-    url: str, *, redirects_remaining: int = _WEB_FETCH_MAX_REDIRECTS
-) -> tuple[str, str]:
-    parsed = urllib.parse.urlparse(_validate_web_fetch_url(url))
-    addresses = _validated_web_fetch_addresses(parsed.hostname or "")
-    address = addresses[0]
-    port = _web_fetch_port(parsed)
-    conn_cls = _ResolvedHTTPSConnection if parsed.scheme == "https" else _ResolvedHTTPConnection
-    conn = conn_cls(parsed.hostname or "", port, address, timeout=15)
-    path = urllib.parse.urlunparse(("", "", parsed.path or "/", parsed.params, parsed.query, ""))
-    headers = {
-        "User-Agent": "Mozilla/5.0",
-        "Host": _web_fetch_host_header(parsed),
-        "Connection": "close",
-    }
+def _normalize_web_fetch_url(parsed) -> str:
+    scheme = parsed.scheme.lower()
+    host = _encode_web_fetch_host(parsed.hostname or "")
+    if scheme == "http":
+        scheme = "https"
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+
+    port = parsed.port
+    default_port = 443 if scheme == "https" else 80
+    port_part = "" if port is None or port == default_port else f":{port}"
+    netloc = f"{host}{port_part}"
+    path = urllib.parse.quote(parsed.path or "/", safe="/:%@!$&'()*+,;=")
+    query = urllib.parse.quote(parsed.query, safe="=&?/:;+,%@!$'()*")
+    return urllib.parse.urlunsplit((scheme, netloc, path, query, ""))
+
+
+def _encode_web_fetch_host(host: str) -> str:
+    host = host.strip("[]").rstrip(".")
+    if ":" in host:
+        return host
     try:
-        conn.request("GET", path, headers=headers)
-        resp = conn.getresponse()
-        if resp.status in {301, 302, 303, 307, 308}:
-            if redirects_remaining <= 0:
-                raise ValueError("web_fetch 重定向次数过多")
-            location = resp.getheader("Location")
+        return host.encode("idna").decode("ascii")
+    except UnicodeError as exc:
+        raise ValueError(f"web_fetch URL 主机名非法: {host}") from exc
+
+
+def _reject_private_web_fetch_host(host: str) -> None:
+    normalized = host.strip("[]").rstrip(".").lower()
+    if normalized in _WEB_FETCH_LOCAL_HOSTNAMES or normalized.endswith(".localhost"):
+        raise ValueError("web_fetch 拒绝 localhost 或内网地址")
+    try:
+        ip = ipaddress.ip_address(normalized)
+    except ValueError:
+        if len([part for part in normalized.split(".") if part]) < 2:
+            raise ValueError("web_fetch URL 主机名必须是公开域名")
+        return
+    mapped = getattr(ip, "ipv4_mapped", None)
+    if not ip.is_global or (mapped is not None and not mapped.is_global):
+        raise ValueError("web_fetch 拒绝 localhost 或内网地址")
+
+
+def _get_url_markdown_content(
+    original_url: str,
+    safe_url: str,
+) -> _FetchedWebContent | _WebFetchRedirect:
+    cached = _get_web_fetch_cache(original_url)
+    if cached is not None:
+        return cached
+
+    parsed = urllib.parse.urlsplit(safe_url)
+    hostname = parsed.hostname or ""
+    _check_web_fetch_domain_blocklist(hostname)
+
+    response = _get_with_permitted_redirects(safe_url)
+    if isinstance(response, _WebFetchRedirect):
+        return response
+
+    final_url, raw, status, status_text, content_type = response
+    decoded = _decode_web_fetch_bytes(raw, content_type)
+    title = _extract_web_fetch_title(decoded) if "text/html" in content_type.lower() else None
+    if "text/html" in content_type.lower():
+        content = _extract_text_from_html(decoded)
+    else:
+        content = decoded
+
+    persisted_reference_id = None
+    persisted_size = None
+    if _is_binary_web_fetch_content_type(content_type):
+        persisted_reference_id = _persist_web_fetch_binary(raw, content_type)
+        persisted_size = len(raw) if persisted_reference_id else None
+
+    fetched = _FetchedWebContent(
+        final_url=final_url,
+        content=content,
+        bytes=len(raw),
+        code=status,
+        code_text=status_text,
+        content_type=content_type,
+        title=title,
+        persisted_reference_id=persisted_reference_id,
+        persisted_size=persisted_size,
+    )
+    _set_web_fetch_cache(original_url, fetched)
+    return fetched
+
+
+def _get_with_permitted_redirects(
+    url: str,
+    depth: int = 0,
+) -> tuple[str, bytes, int | None, str, str] | _WebFetchRedirect:
+    if depth > _WEB_FETCH_MAX_REDIRECTS:
+        raise ValueError(f"Too many redirects (exceeded {_WEB_FETCH_MAX_REDIRECTS})")
+
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _WEB_FETCH_USER_AGENT,
+            "Accept": "text/markdown, text/html, */*",
+            "Accept-Encoding": "identity",
+        },
+        method="GET",
+    )
+    try:
+        with _open_web_fetch_url(request, timeout=_WEB_FETCH_TIMEOUT) as resp:
+            raw = _read_web_fetch_response_bytes(resp)
+            status = getattr(resp, "status", None)
+            return (
+                resp.geturl(),
+                raw,
+                status,
+                str(getattr(resp, "reason", "") or _http_status_text(status)),
+                str(resp.headers.get("Content-Type", "") or ""),
+            )
+    except urllib.error.HTTPError as exc:
+        if exc.code in _WEB_FETCH_REDIRECT_STATUSES:
+            location = exc.headers.get("Location")
             if not location:
-                raise ValueError("web_fetch 重定向响应缺少 Location")
-            next_url = urllib.parse.urljoin(urllib.parse.urlunparse(parsed), location)
-            _drain_redirect_response_body(resp)
-            conn.close()
-            return _fetch_validated_web_url(next_url, redirects_remaining=redirects_remaining - 1)
-        if resp.status >= 400:
-            raise ValueError(f"web_fetch HTTP 请求失败: {resp.status}")
-        raw = resp.read(_WEB_FETCH_MAX_BYTES + 1)
-        if len(raw) > _WEB_FETCH_MAX_BYTES:
-            raw = raw[:_WEB_FETCH_MAX_BYTES]
-        charset = resp.headers.get_content_charset() or "utf-8"
-        return urllib.parse.urlunparse(parsed), raw.decode(charset, errors="replace")
-    finally:
-        conn.close()
+                raise ValueError("Redirect missing Location header") from exc
+            redirect_url = urllib.parse.urljoin(url, location)
+            if _is_permitted_web_fetch_redirect(url, redirect_url):
+                return _get_with_permitted_redirects(redirect_url, depth + 1)
+            return _WebFetchRedirect(
+                original_url=url,
+                redirect_url=redirect_url,
+                status_code=exc.code,
+            )
+        if exc.code == 403 and exc.headers.get("X-Proxy-Error") == "blocked-by-allowlist":
+            domain = urllib.parse.urlsplit(url).hostname or ""
+            raise _EgressBlockedError(domain) from exc
+        raise
 
 
-def _web_fetch_port(parsed: urllib.parse.ParseResult) -> int:
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_WEB_FETCH_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+
+def _open_web_fetch_url(request: urllib.request.Request, timeout: int):
+    return _WEB_FETCH_OPENER.open(request, timeout=timeout)
+
+
+def _read_web_fetch_response_bytes(resp) -> bytes:
+    content_length = resp.headers.get("Content-Length")
+    if content_length:
+        try:
+            if int(content_length) > _WEB_FETCH_MAX_BYTES:
+                raise ValueError("web_fetch 响应超过 10MB 下载限制")
+        except ValueError as exc:
+            if "10MB" in str(exc):
+                raise
+    raw = resp.read(_WEB_FETCH_MAX_BYTES + 1)
+    if len(raw) > _WEB_FETCH_MAX_BYTES:
+        raise ValueError("web_fetch 响应超过 10MB 下载限制")
+    return raw
+
+
+def _decode_web_fetch_bytes(raw: bytes, content_type: str) -> str:
+    charset = _charset_from_web_fetch_content_type(content_type) or _sniff_web_fetch_charset(raw)
+    charset = charset or "utf-8"
+    return raw.decode(charset, errors="replace")
+
+
+def _charset_from_web_fetch_content_type(content_type: str) -> str | None:
+    lowered = str(content_type or "").lower()
+    marker = "charset="
+    idx = lowered.find(marker)
+    if idx < 0:
+        return None
+    value = str(content_type)[idx + len(marker) : idx + len(marker) + 80]
+    value = value.strip(" \t\r\n'\";/>")
+    chars = []
+    for ch in value:
+        if ch.isalnum() or ch in {"-", "_", "."}:
+            chars.append(ch)
+        else:
+            break
+    return "".join(chars) or None
+
+
+def _check_web_fetch_domain_blocklist(domain: str) -> None:
+    if _web_fetch_domain_check_cache_has(domain):
+        return
+
+    url = f"{_WEB_FETCH_DOMAIN_INFO_URL}?domain=" f"{urllib.parse.quote(domain, safe='')}"
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _WEB_FETCH_USER_AGENT,
+            "Accept": "application/json",
+            "Accept-Encoding": "identity",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=_WEB_FETCH_DOMAIN_CHECK_TIMEOUT) as resp:
+            status = getattr(resp, "status", None)
+            body = resp.read(1_000_000)
+    except Exception:
+        logger.debug(
+            "[web_fetch] domain blocklist check failed for %s, defaulting to allow",
+            domain,
+            exc_info=True,
+        )
+        _set_web_fetch_domain_check_cache(domain)
+        return
+
+    if status == 200:
+        try:
+            data = json.loads(body.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            logger.debug(
+                "[web_fetch] domain_info response parse error for %s, defaulting to allow", domain
+            )
+            _set_web_fetch_domain_check_cache(domain)
+            return
+        if data.get("can_fetch") is True:
+            _set_web_fetch_domain_check_cache(domain)
+            return
+        raise _DomainBlockedError(domain)
+    # 非 200 响应也默认放行（可能是代理/拦截返回的非标准状态码）
+    logger.debug(
+        "[web_fetch] domain_info returned status %s for %s, defaulting to allow", status, domain
+    )
+    _set_web_fetch_domain_check_cache(domain)
+
+
+def _is_permitted_web_fetch_redirect(original_url: str, redirect_url: str) -> bool:
+    try:
+        original = urllib.parse.urlsplit(original_url)
+        redirect = urllib.parse.urlsplit(redirect_url)
+        if redirect.scheme != original.scheme:
+            return False
+        if _web_fetch_port(redirect) != _web_fetch_port(original):
+            return False
+        if redirect.username or redirect.password:
+            return False
+        original_host = (original.hostname or "").lower().removeprefix("www.")
+        redirect_host = (redirect.hostname or "").lower().removeprefix("www.")
+        return original_host == redirect_host
+    except Exception:
+        return False
+
+
+def _http_status_text(status: int | None) -> str:
+    if status is None:
+        return ""
+    try:
+        return HTTPStatus(int(status)).phrase
+    except ValueError:
+        return ""
+
+
+def _web_fetch_redirect_json(
+    redirect: _WebFetchRedirect,
+    prompt: str | None,
+    started: float,
+) -> str:
+    status_text = _http_status_text(redirect.status_code)
+    prompt_text = str(prompt or "")
+    message = (
+        "REDIRECT DETECTED: The URL redirects to a different host.\n\n"
+        f"Original URL: {redirect.original_url}\n"
+        f"Redirect URL: {redirect.redirect_url}\n"
+        f"Status: {redirect.status_code} {status_text}\n\n"
+        "To complete your request, fetch content from the redirected URL with:\n"
+        f'- url: "{redirect.redirect_url}"\n'
+        f'- prompt: "{prompt_text}"'
+    )
+    return json.dumps(
+        {
+            "success": True,
+            "url": redirect.original_url,
+            "content": message,
+            "result": message,
+            "redirect": True,
+            "redirect_url": redirect.redirect_url,
+            "status": redirect.status_code,
+            "status_text": status_text,
+            "bytes": len(message.encode("utf-8")),
+            "duration_ms": int((time.monotonic() - started) * 1000),
+        },
+        ensure_ascii=False,
+    )
+
+
+def _get_web_fetch_cache(key: str) -> _FetchedWebContent | None:
+    now = time.monotonic()
+    with _web_fetch_cache_lock:
+        entry = _web_fetch_cache.get(key)
+        if entry is None:
+            return None
+        if entry.expires_at <= now:
+            _delete_web_fetch_cache_entry(key)
+            return None
+        _web_fetch_cache.move_to_end(key)
+        return entry.content
+
+
+def _set_web_fetch_cache(key: str, content: _FetchedWebContent) -> None:
+    size_bytes = max(1, len(content.content.encode("utf-8", errors="replace")))
+    if size_bytes > _WEB_FETCH_CACHE_MAX_BYTES:
+        return
+    with _web_fetch_cache_lock:
+        _delete_web_fetch_cache_entry(key)
+        _web_fetch_cache[key] = _WebFetchCacheEntry(
+            content=content,
+            size_bytes=size_bytes,
+            expires_at=time.monotonic() + _WEB_FETCH_CACHE_TTL_SECONDS,
+        )
+        _add_web_fetch_cache_size(size_bytes)
+        while _web_fetch_cache_size_bytes > _WEB_FETCH_CACHE_MAX_BYTES and _web_fetch_cache:
+            oldest_key = next(iter(_web_fetch_cache))
+            _delete_web_fetch_cache_entry(oldest_key)
+
+
+def _delete_web_fetch_cache_entry(key: str) -> None:
+    entry = _web_fetch_cache.pop(key, None)
+    if entry is not None:
+        _add_web_fetch_cache_size(-entry.size_bytes)
+
+
+def _add_web_fetch_cache_size(delta: int) -> None:
+    global _web_fetch_cache_size_bytes
+    _web_fetch_cache_size_bytes = max(0, _web_fetch_cache_size_bytes + delta)
+
+
+def _web_fetch_domain_check_cache_has(domain: str) -> bool:
+    now = time.monotonic()
+    with _web_fetch_domain_check_lock:
+        expires_at = _web_fetch_domain_check_cache.get(domain)
+        if expires_at is None:
+            return False
+        if expires_at <= now:
+            _web_fetch_domain_check_cache.pop(domain, None)
+            return False
+        _web_fetch_domain_check_cache.move_to_end(domain)
+        return True
+
+
+def _set_web_fetch_domain_check_cache(domain: str) -> None:
+    with _web_fetch_domain_check_lock:
+        _web_fetch_domain_check_cache[domain] = (
+            time.monotonic() + _WEB_FETCH_DOMAIN_CHECK_CACHE_TTL_SECONDS
+        )
+        _web_fetch_domain_check_cache.move_to_end(domain)
+        while len(_web_fetch_domain_check_cache) > _WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES:
+            _web_fetch_domain_check_cache.popitem(last=False)
+
+
+def clear_web_fetch_cache() -> None:
+    global _web_fetch_cache_size_bytes
+    with _web_fetch_cache_lock:
+        _web_fetch_cache.clear()
+        _web_fetch_cache_size_bytes = 0
+    with _web_fetch_domain_check_lock:
+        _web_fetch_domain_check_cache.clear()
+
+
+def _sniff_web_fetch_charset(raw: bytes) -> str | None:
+    head = raw[:4096].decode("ascii", errors="ignore")
+    meta_match = urllib.parse.unquote(head).lower()
+    for marker in ("charset=", "encoding="):
+        idx = meta_match.find(marker)
+        if idx < 0:
+            continue
+        value = meta_match[idx + len(marker) : idx + len(marker) + 40]
+        value = value.strip(" \t\r\n'\";/>")
+        charset = []
+        for ch in value:
+            if ch.isalnum() or ch in {"-", "_", "."}:
+                charset.append(ch)
+            else:
+                break
+        if charset:
+            return "".join(charset)
+    return None
+
+
+def _web_fetch_port(parsed) -> int:
     try:
         port = parsed.port
     except ValueError as exc:
@@ -559,100 +958,138 @@ def _web_fetch_port(parsed: urllib.parse.ParseResult) -> int:
     return 443 if parsed.scheme.lower() == "https" else 80
 
 
-def _web_fetch_host_header(parsed: urllib.parse.ParseResult) -> str:
-    host = (parsed.hostname or "").strip("[]")
-    if ":" in host:
-        host = f"[{host}]"
-    port = _web_fetch_port(parsed)
-    default_port = 443 if parsed.scheme.lower() == "https" else 80
-    return host if port == default_port else f"{host}:{port}"
+def _is_binary_web_fetch_content_type(content_type: str) -> bool:
+    if not content_type:
+        return False
+    media_type = (content_type.split(";", 1)[0] or "").strip().lower()
+    if media_type.startswith("text/"):
+        return False
+    if media_type.endswith("+json") or media_type == "application/json":
+        return False
+    if media_type.endswith("+xml") or media_type == "application/xml":
+        return False
+    if media_type.startswith("application/javascript"):
+        return False
+    if media_type == "application/x-www-form-urlencoded":
+        return False
+    return True
 
 
-def _drain_redirect_response_body(resp: http.client.HTTPResponse) -> None:
+def _persist_web_fetch_binary(raw: bytes, content_type: str) -> str | None:
     try:
-        if getattr(resp, "chunked", False):
-            resp.read()
-            return
-        remaining = getattr(resp, "length", None)
-        if isinstance(remaining, int) and remaining > 0:
-            resp.read(min(remaining, _WEB_FETCH_REDIRECT_DRAIN_BYTES))
-    except Exception as exc:
-        logger.debug("Failed to drain redirect response body: %s", exc)
+        from src.data.repos.tool_output_repository import ToolOutputRepository
+
+        runtime = current_tool_runtime()
+        model = ToolOutputRepository().create_reference(
+            session_id=runtime_session_id(),
+            tool_name="web_fetch",
+            tool_call_id=runtime.tool_call_id if runtime is not None else None,
+            kind="web_fetch_binary",
+            data=raw,
+            workspace_root=runtime_workspace_root(),
+            content_type=content_type or "application/octet-stream",
+            retention_days=14,
+        )
+        return model.reference_id
+    except Exception:
+        logger.warning("[web_fetch] binary content persistence failed", exc_info=True)
+        return None
 
 
-def _cached_dns_lookup(host: str) -> list:
-    now = time.monotonic()
-    with _DNS_CACHE_LOCK:
-        entry = _DNS_CACHE.get(host)
-        if entry is not None and now < entry[0]:
-            return entry[1]
-    try:
-        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
-    except socket.gaierror as exc:
-        raise ValueError(f"web_fetch 无法解析主机名: {host}") from exc
-    addresses = []
-    for info in infos:
-        sockaddr = info[4]
-        if not sockaddr:
-            continue
-        try:
-            addresses.append(ipaddress.ip_address(sockaddr[0]))
-        except ValueError:
-            continue
-    with _DNS_CACHE_LOCK:
-        _DNS_CACHE[host] = (now + _DNS_CACHE_TTL, addresses)
-    return addresses
-
-
-def _validated_web_fetch_addresses(hostname: str) -> list[ipaddress._BaseAddress]:
-    host = hostname.strip("[]").rstrip(".").lower()
-    if host in _WEB_FETCH_LOCALHOST_NAMES or host.endswith(".localhost"):
-        raise ValueError("web_fetch 不允许访问本机地址")
-
-    try:
-        addresses = [ipaddress.ip_address(host)]
-    except ValueError:
-        addresses = _cached_dns_lookup(host)
-
-    if not addresses:
-        raise ValueError(f"web_fetch 无法解析主机名: {hostname}")
-    validated = []
-    for address in addresses:
-        if hasattr(address, "ipv4_mapped") and address.ipv4_mapped is not None:
-            address = address.ipv4_mapped
-        if not address.is_global:
-            raise ValueError("web_fetch 不允许访问内网、本机或保留地址")
-        validated.append(address)
-    return validated
-
-
-class _HtmlTextExtractor(HTMLParser):
-    """从 HTML 中提取纯文本（去除 script/style/head 标签内容）"""
-
-    def __init__(self):
-        super().__init__()
-        self.parts: list[str] = []
-        self._skip = False
-
-    def handle_starttag(self, tag, _attrs):
-        if tag in ("script", "style", "head"):
-            self._skip = True
-
-    def handle_endtag(self, tag):
-        if tag in ("script", "style", "head"):
-            self._skip = False
-
-    def handle_data(self, data):
-        if not self._skip:
-            stripped = data.strip()
-            if stripped:
-                self.parts.append(stripped)
+def _format_web_fetch_size(size_in_bytes: int) -> str:
+    kb = size_in_bytes / 1024
+    if kb < 1:
+        return f"{size_in_bytes} bytes"
+    if kb < 1024:
+        return f"{kb:.1f}".rstrip("0").rstrip(".") + "KB"
+    mb = kb / 1024
+    if mb < 1024:
+        return f"{mb:.1f}".rstrip("0").rstrip(".") + "MB"
+    gb = mb / 1024
+    return f"{gb:.1f}".rstrip("0").rstrip(".") + "GB"
 
 
 def _extract_text_from_html(html: str) -> str:
-    parser = _HtmlTextExtractor()
-    parser.feed(html)
-    return "\n".join(parser.parts)
+    return html_to_markdown(
+        html,
+        heading_style="ATX",
+        bullets="*+-",
+    ).strip()
+
+
+def _summarize_web_fetch_for_prompt(
+    final_url: str,
+    prompt: str | None,
+    content: str,
+    title: str | None,
+    persisted_reference_id: str | None,
+    content_type: str,
+    persisted_size: int,
+) -> str | None:
+    prompt_text = str(prompt or "").strip()
+    if not prompt_text:
+        return None
+
+    lower_prompt = prompt_text.lower()
+    compact = _collapse_web_fetch_whitespace(content)
+    if "title" in lower_prompt or "标题" in prompt_text:
+        title = title or _first_nonempty_web_fetch_line(content)
+        detail = (
+            f"Title: {title}"
+            if title
+            else _preview_web_fetch_text(compact, _WEB_FETCH_TITLE_FALLBACK_CHARS)
+        )
+    elif any(
+        keyword in lower_prompt
+        for keyword in ("summary", "summarize", "摘要", "总结", "概括", "简介")
+    ):
+        detail = _preview_web_fetch_text(compact, _WEB_FETCH_PROMPT_PREVIEW_CHARS)
+    else:
+        preview = _preview_web_fetch_text(compact, _WEB_FETCH_PROMPT_PREVIEW_CHARS)
+        detail = f"Prompt: {prompt_text}\nContent preview:\n{preview}"
+
+    result = f"Fetched {final_url}\n{detail}"
+    if persisted_reference_id:
+        result += (
+            f"\n\n[Binary content ({content_type or 'unknown type'}, "
+            f"{_format_web_fetch_size(persisted_size)}) also saved as "
+            f"tool output reference {persisted_reference_id}]"
+        )
+    return result
+
+
+def _extract_web_fetch_title(raw_html: str) -> str | None:
+    lowered = raw_html.lower()
+    start = lowered.find("<title")
+    if start < 0:
+        return None
+    start = lowered.find(">", start)
+    if start < 0:
+        return None
+    end = lowered.find("</title>", start)
+    if end < 0:
+        return None
+    title = html_lib.unescape(raw_html[start + 1 : end])
+    title = _collapse_web_fetch_whitespace(title)
+    return title or None
+
+
+def _first_nonempty_web_fetch_line(content: str) -> str:
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _collapse_web_fetch_whitespace(value: str) -> str:
+    return " ".join(value.split())
+
+
+def _preview_web_fetch_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars].rstrip() + "..."
 
 
 def _resolve_path_arg(ctx: ToolCallContext, key: str = "path", default: str | None = None) -> Path:

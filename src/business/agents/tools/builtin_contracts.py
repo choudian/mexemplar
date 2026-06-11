@@ -485,8 +485,11 @@ def standardized_error_to_envelope(tool: str, value: str) -> str | None:
             outcome=OUTCOME_NOT_EXECUTED if code == "not_executed" else OUTCOME_REJECTED,
             details=details or None,
         )
-    if obj.get("success") is False and "message" in obj:
-        return error_json(tool, "internal_error", str(obj["message"]))
+    if obj.get("success") is False:
+        if "message" in obj:
+            return error_json(tool, "internal_error", str(obj["message"]))
+        if isinstance(obj.get("error"), str) and obj["error"]:
+            return error_json(tool, "internal_error", str(obj["error"]))
     return None
 
 

@@ -1,6 +1,6 @@
 # 记忆机制设计
 
-本文档为架构 v2 的记忆机制细化设计，定义引用替换、会话压缩、上下文组装的运行时行为及接口。
+本文档为架构 v2 的记忆机制细化设计，定义显式 REF 加载、会话压缩、上下文组装的运行时行为及接口。
 
 依赖：[数据层设计](data_layer_design.md)
 
@@ -8,7 +8,7 @@
 
 ## 一、整体定位
 
-记忆机制是数据层之上的**运行时层**，位于 `src/business/memory/`。数据层始终存储原始完整消息，记忆层在加载上下文时进行引用替换和压缩处理。
+记忆机制是数据层之上的**运行时层**，位于 `src/business/memory/`。数据层始终存储原始完整消息，记忆层在加载上下文时进行压缩处理并转换为 LLM 消息格式。
 
 ```
 Agent Loop
@@ -26,26 +26,28 @@ SQLite（messages / sessions 表）
 
 ## 二、引用替换（短期记忆）
 
+> 当前状态：会话内 tool result 的运行时引用替换已停用。`ReferenceHandler` 现在只负责将持久化 `Message` 转成 LLM API 消息格式，工具结果原文直接进入上下文。`load_reference` 仍保留给跨会话摘要等显式 REF 下钻场景。
+
 ### 2.1 机制概述
 
-Agent 的回复文字天然是摘要，工具返回的大块原始数据在 N 步之后替换为指针。不需要额外 LLM 调用。
+旧设计中，Agent 的回复文字天然是摘要，工具返回的大块原始数据在 N 步之后替换为指针，不需要额外 LLM 调用。该会话内替换机制已停用，避免 search/fetch 等工具结果在恢复后再次被归档并形成 `load_reference` 循环。
 
-### 2.2 替换条件
+### 2.2 旧替换条件（已停用）
 
-同时满足两个条件时替换：
+旧机制同时满足两个条件时替换：
 
 1. **步数条件**：该 tool result 之后已有 ≥ N 条 `role=assistant` 消息（默认 N=3）
-2. **大小条件**：该 tool result 的 `content` 长度 ≥ 阈值（默认 2000 字符）
+2. **大小条件**：该 tool result 的 `content` 长度 ≥ 阈值（默认 10000 字符）
 
 步数按 assistant 消息计数，因为每条 assistant 回复代表一个"思考步骤"。user 消息和 tool result 不计入步数。
 
 小的 tool result（错误信息、状态确认等）始终保留原文，不值得做引用替换。
 
-### 2.3 替换时机
+### 2.3 旧替换时机（已停用）
 
-`assemble_context()` 加载消息后、发给 LLM 之前，运行时替换。**不修改数据库中的原始消息**。
+旧机制在 `assemble_context()` 加载消息后、发给 LLM 之前运行时替换。当前 `assemble_context()` 只做压缩、孤立 tool result 清理和格式转换。**数据库中的原始消息始终不被修改**。
 
-### 2.4 指针格式
+### 2.4 旧指针格式（已停用）
 
 ```
 [REF::{message_id}] 此工具结果已归档（原始大小: {size}字符）。如需查看原始数据，请调用 load_reference("{message_id}")
@@ -80,7 +82,7 @@ Agent 的回复文字天然是摘要，工具返回的大块原始数据在 N �
 - 调用 `MessageRepository.get_by_id(message_id)` 读取原始 `content`
 - 返回原始内容作为**新的 tool result 消息**（标准 tool call/result 流程）
 - 不修改历史中的指针消息
-- 加载回来的数据本身也受引用替换规则约束 — N 步后同样会被替换
+- 加载回来的数据当前不会被会话内引用替换再次归档
 
 这是最简单的设计：不需要"粘滞"引用的状态追踪，一切都是标准的工具调用流程。
 
@@ -277,12 +279,12 @@ class CombinedTrigger(CompressionTrigger):
 ```python
 def assemble_context(self) -> List[Dict]:
     """
-    加载会话消息，按需压缩，应用引用替换，返回 LLM API 格式的消息列表。
+    加载会话消息，按需压缩，返回 LLM API 格式的消息列表。
 
     流程：
     1. 从 DB 加载非 archived 消息（按 sequence 排序）
     2. 检查是否需要压缩 → 如需要，执行压缩，重新加载
-    3. 对 tool result 消息应用引用替换
+    3. 清理孤立 tool result
     4. 转换为 LLM API 格式
     """
 ```
@@ -337,7 +339,7 @@ System prompt 存入 messages 表作为 `sequence=1, role='system'` 的消息。
 
 ### 5.2 会话恢复
 
-恢复会话 = 调用 `assemble_context()`。没有特殊的"恢复"流程——加载消息、应用压缩和引用替换、返回上下文，跟正常的上下文组装完全相同。
+恢复会话 = 调用 `assemble_context()`。没有特殊的"恢复"流程——加载消息、应用压缩并转换格式、返回上下文，跟正常的上下文组装完全相同。
 
 ### 5.3 Fork
 
@@ -347,7 +349,7 @@ System prompt 存入 messages 表作为 `sequence=1, role='system'` 的消息。
 2. `MessageRepository.bulk_copy()` 复制消息到新 session
 3. 所有 message_id 换新
 
-引用指针中的 message_id 指向原始会话的消息。由于 `load_reference` 通过 `get_by_id()` 全局查找，不限于当前 session，原始消息未被删除，引用仍然有效。
+显式 REF 中的 ID 指向原始会话的消息或摘要。由于 `load_reference` 通过 ID 全局查找，不限于当前 session，原始消息未被删除，引用仍然有效。
 
 ---
 
@@ -359,7 +361,7 @@ System prompt 存入 messages 表作为 `sequence=1, role='system'` 的消息。
 src/business/memory/
     __init__.py
     context_manager.py      # ContextManager — Agent Loop 的唯一接口
-    reference_handler.py    # ReferenceHandler — 引用替换逻辑
+    reference_handler.py    # ReferenceHandler — LLM 消息格式转换
     compression_handler.py  # CompressionHandler — 压缩逻辑 + 触发策略
 ```
 
@@ -379,7 +381,7 @@ class ContextManager:
     # --- 上下文组装 ---
 
     def assemble_context(self) -> List[Dict]:
-        """加载消息 → 压缩检查 → 引用替换 → 返回 LLM 格式"""
+        """加载消息 → 压缩检查 → 孤立 tool 清理 → 返回 LLM 格式"""
 
     # --- 消息持久化 ---
 
@@ -402,8 +404,8 @@ class ContextManager:
 
     # --- 引用加载 ---
 
-    def load_reference(self, message_id: str) -> str:
-        """加载被引用替换的原始消息内容。供 load_reference 工具调用。"""
+    def load_reference(self, reference_id: str) -> str:
+        """加载显式 REF 指向的原始内容。供 load_reference 工具调用。"""
 
     # --- 会话管理 ---
 
@@ -421,7 +423,7 @@ class ContextManager:
 
 ```python
 class ReferenceHandler:
-    """引用替换逻辑：将旧的大体积 tool result 替换为指针。"""
+    """引用处理逻辑：当前保留完整 tool result，不做运行时指针替换。"""
 
     def __init__(self, config: UnifiedConfigManager):
         self.steps_threshold = config.get_memory_reference_steps_threshold()
@@ -429,22 +431,9 @@ class ReferenceHandler:
 
     def apply_replacements(self, messages: List[Message]) -> List[Dict]:
         """
-        输入有序消息列表，输出 LLM 格式的消息列表，其中符合条件的
-        tool result 被替换为指针。
-
-        算法：
-        1. 遍历消息，对每条 role=tool 的消息
-        2. 计算其后有多少条 role=assistant 消息
-        3. 如果 >= steps_threshold 且 len(content) >= size_threshold
-        4. 将 content 替换为指针文本
+        输入有序消息列表，输出 LLM 格式的消息列表。
+        旧 size/steps 引用替换逻辑已停用。
         """
-
-    def _make_pointer(self, message_id: str, original_size: int) -> str:
-        """生成指针文本"""
-
-    def _count_assistant_steps_after(self, messages: List[Message],
-                                       tool_index: int) -> int:
-        """计算指定位置之后的 assistant 消息数量"""
 ```
 
 ### 6.4 CompressionHandler — 内部
@@ -572,7 +561,7 @@ ctx.save_user_message(new_user_input)
 | 配置键 | 默认值 | 说明 |
 |--------|--------|------|
 | `memory.reference_steps_threshold` | 3 | tool result 被替换前需要的 assistant 消息数 |
-| `memory.reference_size_threshold` | 2000 | 触发替换的最小字符数 |
+| `memory.reference_size_threshold` | 10000 | 触发替换的最小字符数（当前保留配置，运行时替换停用） |
 | `memory.compression_token_threshold` | 80000 | token 估算触发压缩的阈值 |
 | `memory.compression_count_threshold` | — | 消息条数触发压缩的阈值（可选） |
 | `memory.compression_keep_recent` | 20 | 压缩时保留的最近消息数 |
@@ -595,11 +584,11 @@ def get_memory_compression_trigger_strategy(self) -> str
 
 ### 9.1 空/None Content
 
-assistant 消息可能 `content=None`（仅包含 tool_calls）。格式转换时设为空字符串。引用替换跳过非 tool 消息。
+assistant 消息可能 `content=None`（仅包含 tool_calls）。格式转换时设为空字符串。
 
 ### 9.2 单条 assistant 消息包含多个 tool_calls
 
-每个 tool result 是独立消息，有各自的 `tool_call_id`。引用替换独立评估每条 tool result。
+每个 tool result 是独立消息，有各自的 `tool_call_id`。当前格式转换保留每条 tool result 的原始 content、`tool_call_id` 和 `name`。
 
 ### 9.3 并发会话
 
@@ -608,8 +597,8 @@ ContextManager 实例绑定单个 session，不共享可变状态。数据库层
 ### 9.4 超大 tool result
 
 单条 tool result 超过 LLM 上下文窗口的情况：
-- 应在工具设计层面避免（分页、过滤）
-- `load_reference` 返回完整原始数据，不做截断
+- 应在工具设计层面避免（分页、过滤、内置工具输出治理）
+- `ReferenceHandler` 不再用会话内指针隐藏超大结果
 - 如确实发生，LLM 会报错，Agent 可自行调整查询
 
 ### 9.5 压缩区为空
@@ -626,21 +615,21 @@ ContextManager 实例绑定单个 session，不共享可变状态。数据库层
 
 本设计基于架构 v2 第六节，与数据层设计保持一致的决策：
 
-- **引用替换是运行时行为** — 数据层始终存原始消息，无引用表
+- **会话内引用替换已停用** — 数据层始终存原始消息，无引用表
 - **消息类型只有 normal/compressed** — 无 reference 类型
-- **load_reference 通过 MessageRepository.get_by_id()** — 无额外存储
+- **load_reference 通过 ID 查找消息或摘要** — 无额外存储
 
 本设计**新增/细化**的决策：
 
 | 决策 | 架构 v2 原文 | 本设计细化 |
 |------|-------------|-----------|
-| 步数计算 | "固定步数（默认 3 步）" | 按 assistant 消息计数 |
-| 大小阈值 | 未明确 | 默认 2000 字符 |
-| 指针格式 | 未明确 | `[REF::{message_id}]` + 大小 + 指令 |
+| 步数计算 | "固定步数（默认 3 步）" | 旧机制规则，当前停用 |
+| 大小阈值 | 未明确 | 默认 10000 字符，当前仅保留配置 |
+| 指针格式 | 未明确 | 旧机制为 `[REF::{message_id}]` + 大小 + 指令，当前会话内不生成 |
 | 压缩触发 | "消息类型可扩展" | token 估算为默认，可组合策略 |
 | 压缩 tool 处理 | 未明确 | 摘要中内嵌 tool_call 数据 + tool_result 引用（后处理替换） |
 | System prompt | 架构 v2 未明确 | 存入 messages 表，不参与压缩 |
-| 压缩消息角色 | 未明确 | 专用 `role='summary'`，发 LLM 时映射为 system |
+| 压缩消息角色 | 未明确 | 专用 `role='summary'`，发 LLM 时映射为 user |
 
 ---
 

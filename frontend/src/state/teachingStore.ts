@@ -9,7 +9,6 @@ import {
   getTeachingRun,
   replyTeachingIntent,
   startTeachingRecording,
-  startTeachingTrial,
   stopTeachingRecording,
 } from "../api/teaching";
 import type { RecordingModeReadiness, TeachingMode, TeachingRun, TeachingStage, TrialPreviewRequest } from "../api/teaching";
@@ -138,7 +137,7 @@ function dedupeMessageDetail(headline: string, detail: string | undefined): stri
 
 const TRIAL_VALIDATION_TOAST: TeachingToast = {
   title: "工具学习完成",
-  body: "可以开始试用验证，确认它能按预期执行。",
+  body: "新工具已进入工具列表，可在待考核工具中发起试用。",
 };
 
 function toastForStage(stage: TeachingStage): TeachingToast | null {
@@ -262,9 +261,9 @@ export const useTeachingStore = create<TeachingState>((set, get) => ({
           set({ run: makeTrialRun(result.workflowId) });
           await replySkillTrial(trialToolId, text);
         }
-      } else if (run) {
-        const updated = await startTeachingTrial(run.workflowId);
-        set({ run: updated, stage: updated.stage });
+      } else {
+        set({ lastError: "请到工具列表中发起试用。" });
+        return false;
       }
       return true;
     } catch (error) {

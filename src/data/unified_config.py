@@ -28,6 +28,7 @@ from src.data.config_models import (
     LargeFieldConfig,
     RecordingDesktopConfig,
     RecordingNoiseFilterConfig,
+    WebConfig,
 )
 from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manager
 
@@ -318,6 +319,58 @@ class UnifiedConfigManager:
         except Exception:
             return None
 
+    # ===== 便捷方法：Web 工具配置 =====
+
+    def get_web_search_backend(self) -> str:
+        """获取 web_search provider backend。"""
+        raw = self.get("web.search_backend", default=WebConfig().search_backend)
+        value = str(raw or "auto").strip().lower()
+        return value or "auto"
+
+    def get_web_brave_api_key(self) -> Optional[str]:
+        """获取 Brave Search API Key（只读 keyring，不回退明文配置）。"""
+        try:
+            import keyring
+
+            api_key = keyring.get_password(_get_keyring_service_name(), "brave_search_api_key")
+        except ImportError:
+            logger.warning("[配置] keyring 模块未安装，无法读取 Brave API Key")
+            return None
+        except Exception as e:
+            logger.warning(f"[配置] 从 keyring 读取 Brave API Key 失败: {e}")
+            return None
+        if api_key and isinstance(api_key, str) and api_key.strip():
+            return api_key
+        return None
+
+    def set_web_brave_api_key(self, api_key: str) -> None:
+        """安全写入 Brave Search API Key 到 keyring，并清除数据库明文副本。"""
+        try:
+            import keyring
+
+            keyring.set_password(_get_keyring_service_name(), "brave_search_api_key", api_key)
+            logger.info("[配置] Brave API Key 已安全写入 keyring")
+        except Exception as e:
+            logger.warning(
+                "[配置] keyring 写入失败，无法安全存储 Brave API Key。"
+                "API Key 不会被存储到数据库中以避免明文泄露。"
+            )
+            raise RuntimeError(f"无法安全存储 Brave API Key: {e}。") from e
+        try:
+            self.set("web.brave_api_key", "")
+        except Exception as e:
+            logger.warning(f"[配置] 清除数据库 Brave API Key 明文失败: {e}")
+
+    def clear_web_brave_api_key(self) -> None:
+        """清除 Brave Search API Key（keyring + 数据库明文残留）。"""
+        try:
+            import keyring
+
+            keyring.delete_password(_get_keyring_service_name(), "brave_search_api_key")
+        except Exception:
+            pass
+        self.set("web.brave_api_key", "")
+
     # ===== 便捷方法：会话压缩调用配置 =====
 
     def get_compression_model_provider(self) -> str:
@@ -353,7 +406,7 @@ class UnifiedConfigManager:
 
     def get_memory_reference_size_threshold(self) -> int:
         """触发引用替换的最小字符数"""
-        return self.get("memory.reference_size_threshold", default=2000)
+        return self.get("memory.reference_size_threshold", default=10000)
 
     def get_memory_compression_token_threshold(self) -> int:
         """token 估算触发压缩的阈值"""

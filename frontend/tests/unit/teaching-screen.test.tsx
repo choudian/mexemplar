@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { configureDesktopApi } from "../../src/api/client";
 import { TeachingScreen } from "../../src/screens/teaching/TeachingScreen";
 import { TrialStage } from "../../src/screens/teaching/TrialStage";
+import { useShellStore } from "../../src/state/shellStore";
+import { useSkillsStore } from "../../src/state/skillsStore";
 import { useTeachingStore } from "../../src/state/teachingStore";
 
 function jsonResponse(payload: unknown) {
@@ -17,6 +19,9 @@ function jsonResponse(payload: unknown) {
 describe("TeachingScreen", () => {
   beforeEach(() => {
     configureDesktopApi({ baseUrl: "http://desktop.test", sessionToken: "token" });
+    window.history.replaceState({}, "", "/tools/teaching");
+    useShellStore.setState({ activeRoute: "teaching" });
+    useSkillsStore.setState({ activeCategory: "published" });
     useTeachingStore.setState({
       hydrated: false,
       readiness: [],
@@ -35,6 +40,7 @@ describe("TeachingScreen", () => {
   });
 
   afterEach(() => {
+    window.history.replaceState({}, "", "/");
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
@@ -70,9 +76,6 @@ describe("TeachingScreen", () => {
       }
       if (url.endsWith("/api/teaching/runs/rec_1/intent/confirm")) {
         return jsonResponse({ workflowId: "rec_1", mode: "browser", stage: "learning", summary: {} });
-      }
-      if (url.endsWith("/api/teaching/runs/rec_1/trial/start")) {
-        return jsonResponse({ workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} });
       }
       if (url.endsWith("/api/teaching/trial-preview/preview_1/decision")) {
         return jsonResponse({ requestId: "preview_1", decision: "approve", accepted: true, status: "approved" });
@@ -138,47 +141,18 @@ describe("TeachingScreen", () => {
         createdAt: "2026-05-10T00:00:01Z",
       });
     });
-    await waitFor(() => expect(screen.getByRole("heading", { name: "试用验证" })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("heading", { name: "工具学习完成" })).toBeInTheDocument());
+    expect(screen.queryByRole("heading", { name: "试用验证" })).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("给我一个真实任务...")).not.toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/teaching/runs/rec_1/trial/start")),
+    ).toBe(false);
 
-    const trialInput = screen.getByPlaceholderText("给我一个真实任务...");
-    fireEvent.change(trialInput, { target: { value: "整理上周的客户反馈邮件" } });
-    fireEvent.keyDown(trialInput, { key: "Enter", code: "Enter" });
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "http://desktop.test/api/teaching/runs/rec_1/trial/start",
-        expect.objectContaining({ method: "POST" }),
-      ),
-    );
+    fireEvent.click(screen.getByRole("button", { name: "去工具列表试用" }));
 
-    act(() => {
-      useTeachingStore.getState().applyEvent({
-        eventId: "evt_preview",
-        sequence: 3,
-        sessionId: "ui_sess_test",
-        causationId: "rec_1",
-        type: "trial.preview_requested",
-        scope: { workflowId: "rec_1" },
-        payload: {
-          requestId: "preview_1",
-          workflowId: "rec_1",
-          trialId: "trial_1",
-          summary: "桌面试用需要确认。",
-          codePreview: "print('safe preview')",
-          riskSummary: "将控制本机桌面。",
-          expires_at: "2099-05-10T00:00:00Z",
-          status: "pending",
-        },
-        createdAt: "2026-05-10T00:00:01Z",
-      });
-    });
-    await waitFor(() => expect(screen.getByText("桌面试用确认")).toBeInTheDocument());
-    fireEvent.click(screen.getByText("批准"));
-    await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith(
-        "http://desktop.test/api/teaching/trial-preview/preview_1/decision",
-        expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "approve" }) }),
-      ),
-    );
+    expect(useShellStore.getState().activeRoute).toBe("skills");
+    expect(useSkillsStore.getState().activeCategory).toBe("pending");
+    expect(window.location.pathname).toBe("/tools/list");
   });
 
   test("minimizes the Tauri window before starting desktop recording", async () => {

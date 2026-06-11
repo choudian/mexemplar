@@ -27,7 +27,11 @@ function ConfirmationToast({
           允许
         </Button>
         {onAllowAll && (
-          <Button kind="ghost" onClick={onAllowAll}>
+          <Button
+            kind="ghost"
+            data-guard="auto-approve"
+            onClick={onAllowAll}
+          >
             <ShieldCheck size={14} />
             <span>全部允许</span>
           </Button>

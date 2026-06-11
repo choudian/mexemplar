@@ -27,6 +27,11 @@
   --radius-md: 10px;
   --radius-lg: 14px;
   --shell-radius: 16px;
+  --toast-radius: var(--radius-lg);
+  --toast-max-w: 400px;
+  --toast-padding: 14px 16px;
+  --toast-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+  --toast-z: 9990;
   --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   font-family: var(--font-ui);
 }
@@ -142,6 +147,30 @@ select:focus-visible,
   from {
     opacity: 0;
     transform: translateY(2px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes me-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes me-toast-in-down {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
   }
 
   to {
@@ -716,6 +745,38 @@ select:focus-visible,
   }
 }
 
+/* 确认浮层"全部允许"按钮：呼应输入栏 guard toggle 的暖色视觉语言。
+   不是 toggle（一次性动作），所以不用呼吸光晕，但共享 warn 色调 + 左侧指示条 + 盾牌点亮。 */
+.assistant-confirmation-actions .me-button[data-guard="auto-approve"] {
+  position: relative;
+  overflow: hidden;
+  border-color: color-mix(in oklch, var(--warn) 42%, transparent);
+  background: color-mix(in oklch, var(--warn) 10%, var(--surface-1));
+  color: color-mix(in oklch, var(--warn) 50%, var(--text));
+  font-weight: 550;
+}
+
+.assistant-confirmation-actions .me-button[data-guard="auto-approve"]:hover {
+  background: color-mix(in oklch, var(--warn) 18%, var(--surface-1));
+  color: color-mix(in oklch, var(--warn) 60%, var(--text));
+  border-color: color-mix(in oklch, var(--warn) 56%, transparent);
+}
+
+.assistant-confirmation-actions .me-button[data-guard="auto-approve"] svg {
+  color: var(--warn);
+  filter: drop-shadow(0 0 3px color-mix(in oklch, var(--warn) 50%, transparent));
+}
+
+/* 左侧指示条：与输入栏 guard toggle 的激活条同源 */
+.assistant-confirmation-actions .me-button[data-guard="auto-approve"]::before {
+  content: "";
+  position: absolute;
+  inset: 4px auto 4px 0;
+  width: 3px;
+  border-radius: 1px;
+  background: var(--warn);
+}
+
 .me-badge {
   display: inline-flex;
   min-height: 20px;
@@ -1265,16 +1326,17 @@ select:focus-visible,
   right: 24px;
   bottom: 132px;
   display: grid;
-  width: min(360px, calc(100% - 48px));
+  width: min(var(--toast-max-w), calc(100% - 48px));
   gap: 10px;
 }
 
 .assistant-confirmation {
-  padding: 14px;
-  border: 1px solid color-mix(in oklch, var(--danger) 32%, var(--border-1));
-  border-radius: var(--radius-md);
+  padding: var(--toast-padding);
+  border: 1px solid color-mix(in oklch, var(--danger) 30%, var(--border-1));
+  border-radius: var(--toast-radius);
   background: var(--surface-1);
-  box-shadow: 0 14px 36px rgb(20 20 20 / 14%);
+  box-shadow: var(--toast-shadow);
+  animation: me-toast-in 240ms ease both;
 }
 
 .assistant-confirmation-title,
@@ -1293,7 +1355,8 @@ select:focus-visible,
 .assistant-confirmation p {
   margin: 8px 0 12px;
   color: var(--text-2);
-  line-height: 1.45;
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 
 .assistant-confirmation-actions {
@@ -2896,17 +2959,17 @@ select:focus-visible,
   position: fixed;
   bottom: 24px;
   right: 24px;
-  z-index: 9999;
+  z-index: calc(var(--toast-z) + 9);
   display: flex;
   align-items: flex-start;
   gap: 14px;
-  max-width: 380px;
-  padding: 16px 18px;
+  max-width: var(--toast-max-w);
+  padding: var(--toast-padding);
   border: 1px solid color-mix(in oklch, var(--ok) 30%, var(--border-1));
-  border-radius: var(--radius-lg);
-  background: color-mix(in oklch, var(--ok) 6%, var(--surface-2));
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.18);
-  animation: teaching-toast-in .3s ease;
+  border-radius: var(--toast-radius);
+  background: color-mix(in oklch, var(--ok) 7%, var(--surface-2));
+  box-shadow: var(--toast-shadow);
+  animation: me-toast-in 240ms ease both;
 }
 
 .tool-rename-toast {
@@ -2930,6 +2993,7 @@ select:focus-visible,
 
 .teaching-toast-body strong {
   font-size: 14px;
+  font-weight: 600;
 }
 
 .teaching-toast-body span {
@@ -2953,22 +3017,17 @@ select:focus-visible,
   color: var(--text);
 }
 
-@keyframes teaching-toast-in {
-  from { opacity: 0; transform: translateY(12px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
 /* ── Error toast（顶部居中，独立于右下角的成功/信息 toast）─────────────── */
 
 .error-toast-stack {
   position: fixed;
   top: 50px;
   left: 50%;
-  z-index: 9990;
+  z-index: var(--toast-z);
   display: flex;
-  width: min(440px, calc(100% - 48px));
+  width: min(var(--toast-max-w), calc(100% - 48px));
   flex-direction: column;
-  gap: 10px;
+  gap: var(--toast-gap, 10px);
   transform: translateX(-50%);
   pointer-events: none;
 }
@@ -2977,16 +3036,16 @@ select:focus-visible,
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 11px 12px 11px 14px;
+  padding: var(--toast-padding);
   border: 1px solid color-mix(in oklch, var(--danger) 30%, var(--border-1));
-  border-radius: var(--radius-md);
+  border-radius: var(--toast-radius);
   background: color-mix(in oklch, var(--danger) 7%, var(--surface-2));
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.16);
+  box-shadow: var(--toast-shadow);
   color: var(--text);
   font-size: 13.5px;
   line-height: 1.5;
   pointer-events: auto;
-  animation: error-toast-in 0.26s ease;
+  animation: me-toast-in-down 240ms ease both;
 }
 
 .error-toast-icon {
@@ -3015,17 +3074,6 @@ select:focus-visible,
 .error-toast-close:hover {
   background: var(--surface-3);
   color: var(--text);
-}
-
-@keyframes error-toast-in {
-  from {
-    opacity: 0;
-    transform: translateY(-8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 /* ── Skill Trial Dialog ────────────────────────────────────────────────── */
@@ -4745,17 +4793,17 @@ select:focus-visible,
   position: fixed;
   right: 24px;
   bottom: 24px;
-  z-index: 9998;
+  z-index: calc(var(--toast-z) + 8);
   display: flex;
-  max-width: 430px;
+  max-width: var(--toast-max-w);
   align-items: flex-start;
   gap: 14px;
-  padding: 14px;
-  border: 1px solid color-mix(in oklch, var(--accent) 34%, var(--border-1));
-  border-radius: 8px;
-  background: color-mix(in oklch, var(--accent) 7%, var(--surface-1));
-  box-shadow: 0 10px 32px rgb(0 0 0 / 16%);
-  animation: me-fade-in 180ms ease both;
+  padding: var(--toast-padding);
+  border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--border-1));
+  border-radius: var(--toast-radius);
+  background: color-mix(in oklch, var(--accent) 7%, var(--surface-2));
+  box-shadow: var(--toast-shadow);
+  animation: me-toast-in 240ms ease both;
 }
 
 .brain-toast-body {
@@ -4766,13 +4814,13 @@ select:focus-visible,
 }
 
 .brain-toast-body strong {
-  font-size: 13.5px;
+  font-size: 14px;
 }
 
 .brain-toast-body span {
   color: var(--text-2);
-  font-size: 12.5px;
-  line-height: 1.45;
+  font-size: 13.5px;
+  line-height: 1.5;
 }
 
 .brain-toast-actions {
@@ -5874,23 +5922,26 @@ select:focus-visible,
   display: grid;
   place-items: center;
   background: color-mix(in oklch, var(--text) 26%, transparent);
+  animation: me-fade-in 180ms ease both;
 }
 
 .methodology-danger-dialog {
   display: flex;
-  width: min(460px, calc(100vw - 32px));
+  width: min(var(--toast-max-w), calc(100vw - 32px));
   flex-direction: column;
   gap: 12px;
-  border: 1px solid var(--border-2);
-  border-radius: 8px;
+  border: 1px solid color-mix(in oklch, var(--danger) 24%, var(--border-1));
+  border-radius: var(--toast-radius);
   background: var(--surface-1);
-  box-shadow: 0 18px 60px color-mix(in oklch, var(--text) 18%, transparent);
-  padding: 16px;
+  box-shadow: var(--toast-shadow);
+  padding: var(--toast-padding);
+  animation: me-toast-in 240ms ease both;
 }
 
 .methodology-danger-dialog p {
   margin: 0;
   color: var(--text-2);
+  font-size: 13.5px;
   line-height: 1.5;
 }
 

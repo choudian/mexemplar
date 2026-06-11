@@ -185,6 +185,45 @@ def test_ordinary_failure_cascade(loop_config, mock_config, in_memory_db):
     assert t3_result["error"] == "not_executed"
 
 
+def test_success_false_error_result_counts_as_tool_failure(loop_config, mock_config, in_memory_db):
+    """web_search style {"success": false, "error": "..."} is a standard tool failure."""
+    call_count = {"t1": 0, "t2": 0}
+
+    def _t1(**kwargs):
+        call_count["t1"] += 1
+        return json.dumps({"success": False, "error": "search failed", "data": {"web": []}})
+
+    def _t2(**kwargs):
+        call_count["t2"] += 1
+        return "should not run"
+
+    tools = [
+        ToolDefinition(name="t1", schema={"type": "object", "properties": {}}, handler=_t1),
+        ToolDefinition(name="t2", schema={"type": "object", "properties": {}}, handler=_t2),
+    ]
+
+    responses = [
+        LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallInfo(id="c1", name="t1", args={}),
+                ToolCallInfo(id="c2", name="t2", args={}),
+            ],
+        ),
+        LLMResponse(content="replanned", tool_calls=[]),
+    ]
+    llm = MockLLMClient(responses)
+    loop = AgentLoop(loop_config, llm, mock_config)
+    loop.run(session_id="test-success-false-error", user_input="test", tools=tools)
+
+    assert call_count == {"t1": 1, "t2": 0}
+    ctx = loop._get_context_manager("test-success-false-error")
+    tool_results = [
+        m for m in ctx._msg_repo.get_context("test-success-false-error") if m.role == "tool"
+    ]
+    assert json.loads(tool_results[1].content)["error"] == "not_executed"
+
+
 def test_plain_text_error_not_failure(loop_config, mock_config, in_memory_db):
     """SC-003a: Plain text containing 'error' does not stop later tools."""
     call_count = {"t1": 0, "t2": 0}

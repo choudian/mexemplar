@@ -33,6 +33,7 @@ def test_read_only_resolver_reads_existing_keyring_without_mutation() -> None:
             ("MexemplarTest", "anthropic_api_key"): "sk-main",
             ("MexemplarTest", "anthropic_vision_api_key"): "sk-vision",
             ("MexemplarTest", "openai_api_key"): "sk-embedding",
+            ("MexemplarTest", "brave_search_api_key"): "brave-key",
         }
     )
     audit = CredentialMutationAudit()
@@ -46,6 +47,8 @@ def test_read_only_resolver_reads_existing_keyring_without_mutation() -> None:
     assert resolver.get_ai_vision_api_key() == "sk-vision"
     assert resolver.get_embedding_api_key() == "sk-embedding"
     assert resolver.get_compression_model_api_key() == "sk-main"
+    assert resolver.get_web_brave_api_key() == "brave-key"
+    assert resolver.get_secret("web.brave_api_key") == "brave-key"
     assert keyring.set_calls == []
     assert keyring.delete_calls == []
     audit.assert_clean()

@@ -8,11 +8,18 @@ from src.data.credential_resolver import (
     get_real_tour_credential_resolver,
     is_real_tour_runtime,
 )
-from src.data.config_models import AIConfig, LargeFieldConfig, RecordingConfig, RecordingDesktopConfig, UIConfig
+from src.data.config_models import (
+    AIConfig,
+    LargeFieldConfig,
+    RecordingConfig,
+    RecordingDesktopConfig,
+    UIConfig,
+    WebConfig,
+)
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils import events
 
-SettingSectionId = Literal["ai", "recording", "data", "about"]
+SettingSectionId = Literal["ai", "web", "recording", "data", "about"]
 SettingKind = Literal["string", "integer", "number", "boolean", "enum", "path", "secret", "action"]
 
 
@@ -32,6 +39,7 @@ class SettingSpec:
 
 SECTION_LABELS: dict[SettingSectionId, str] = {
     "ai": "AI",
+    "web": "Web",
     "recording": "录制",
     "data": "数据",
     "about": "关于",
@@ -42,6 +50,7 @@ _RECORDING_DEFAULTS = RecordingConfig()
 _DESKTOP_DEFAULTS = RecordingDesktopConfig()
 _LARGE_FIELD_DEFAULTS = LargeFieldConfig()
 _UI_DEFAULTS = UIConfig()
+_WEB_DEFAULTS = WebConfig()
 
 SETTING_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec(
@@ -104,6 +113,23 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         status="unavailable",
     ),
     SettingSpec("ai.api_key", "API Key", "ai", "secret", secret=True),
+    SettingSpec(
+        "web.search_backend",
+        "搜索后端",
+        "web",
+        "enum",
+        description="web_search 使用的搜索后端。auto 会按 Brave、DuckDuckGo HTML、ddgs 顺序尝试。",
+        options=["auto", "brave-free", "ddg-html", "ddgs"],
+        default=_WEB_DEFAULTS.search_backend,
+    ),
+    SettingSpec(
+        "web.brave_api_key",
+        "Brave Search API Key",
+        "web",
+        "secret",
+        description="仅用于 Brave Search API，密钥只保存到系统 keyring。",
+        secret=True,
+    ),
     SettingSpec(
         "recording.screenshot_quality",
         "截图质量",
@@ -269,6 +295,8 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     ),
 )
 
+SECRET_SETTING_KEYS = tuple(spec.key for spec in SETTING_SPECS if spec.secret)
+
 ACTION_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("test_ai_connection", "测试 AI 连接", "ai", "action"),
     SettingSpec("install_extension_certificate", "安装扩展证书", "recording", "action"),
@@ -333,7 +361,7 @@ class SettingsService:
             values[spec.key] = "" if value is None else value
         return {
             "values": values,
-            "secrets": {"ai.api_key": self._secret_state("ai.api_key")},
+            "secrets": {key: self._secret_state(key) for key in SECRET_SETTING_KEYS},
             "status": self._status_map(),
         }
 
@@ -352,21 +380,21 @@ class SettingsService:
     def write_secret(self, secret_key: str, value: str) -> dict[str, Any]:
         if is_real_tour_runtime():
             raise SettingsValidationError(secret_key, "真实验收期间密钥只读。")
-        if secret_key != "ai.api_key":
+        if secret_key not in SECRET_SETTING_KEYS:
             raise SettingsValidationError(secret_key, "不支持的密钥项。")
         secret = value.strip()
         if not secret:
             raise SettingsValidationError(secret_key, "密钥不能为空。")
-        self._config.set_ai_api_key(secret)
+        self._write_secret_value(secret_key, secret)
         events.emit("settings_changed", sender=self, keys=[secret_key])
         return self._secret_state(secret_key)
 
     def delete_secret(self, secret_key: str) -> dict[str, Any]:
         if is_real_tour_runtime():
             raise SettingsValidationError(secret_key, "真实验收期间密钥只读。")
-        if secret_key != "ai.api_key":
+        if secret_key not in SECRET_SETTING_KEYS:
             raise SettingsValidationError(secret_key, "不支持的密钥项。")
-        self._config.clear_ai_api_key()
+        self._delete_secret_value(secret_key)
         events.emit("settings_changed", sender=self, keys=[secret_key])
         return self._secret_state(secret_key)
 
@@ -383,7 +411,7 @@ class SettingsService:
         }
 
     def _secret_state(self, secret_key: str) -> dict[str, Any]:
-        present = bool(self._get_ai_api_key()) if secret_key == "ai.api_key" else False
+        present = bool(self._read_secret_value(secret_key))
         return {
             "secretKey": secret_key,
             "present": present,
@@ -400,6 +428,9 @@ class SettingsService:
             vision_status = "available"
         return {
             "ai.api_key": "available" if self._get_ai_api_key() else "missing_secret",
+            "web.brave_api_key": (
+                "available" if self._get_web_brave_api_key() else "missing_secret"
+            ),
             "recording.desktop.vision_model": vision_status,
         }
 
@@ -412,6 +443,44 @@ class SettingsService:
         if self._credential_resolver is not None:
             return self._credential_resolver.get_ai_vision_api_key()
         return self._config.get_ai_vision_api_key()
+
+    def _get_web_brave_api_key(self) -> str | None:
+        return self._read_secret_value("web.brave_api_key")
+
+    def _read_secret_value(self, secret_key: str) -> str | None:
+        if self._credential_resolver is not None:
+            getter = getattr(self._credential_resolver, "get_secret", None)
+            if callable(getter):
+                return getter(secret_key)
+            if secret_key == "ai.api_key":
+                return self._credential_resolver.get_ai_api_key()
+            if secret_key == "web.brave_api_key":
+                brave_getter = getattr(self._credential_resolver, "get_web_brave_api_key", None)
+                return brave_getter() if callable(brave_getter) else None
+        if secret_key == "ai.api_key":
+            return self._config.get_ai_api_key()
+        if secret_key == "web.brave_api_key":
+            getter = getattr(self._config, "get_web_brave_api_key", None)
+            return getter() if callable(getter) else None
+        return None
+
+    def _write_secret_value(self, secret_key: str, secret: str) -> None:
+        if secret_key == "ai.api_key":
+            self._config.set_ai_api_key(secret)
+            return
+        if secret_key == "web.brave_api_key":
+            self._config.set_web_brave_api_key(secret)
+            return
+        raise SettingsValidationError(secret_key, "不支持的密钥项。")
+
+    def _delete_secret_value(self, secret_key: str) -> None:
+        if secret_key == "ai.api_key":
+            self._config.clear_ai_api_key()
+            return
+        if secret_key == "web.brave_api_key":
+            self._config.clear_web_brave_api_key()
+            return
+        raise SettingsValidationError(secret_key, "不支持的密钥项。")
 
     def _normalize_value(self, spec: SettingSpec, value: Any) -> Any:
         if spec.value_kind in {"integer", "number"}:

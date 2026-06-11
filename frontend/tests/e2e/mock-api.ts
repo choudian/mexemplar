@@ -42,7 +42,9 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   const requests: MockRequestRecord[] = [];
   let assistantMessagePosted = false;
   let secretPresent = false;
+  let braveSecretPresent = false;
   let settingsModel = "claude-sonnet-4-20250514";
+  let searchBackend = "auto";
   let compositionCounter = 0;
   let debugTraceEnabled = false;
   let methodologyCreated = false;
@@ -781,6 +783,33 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
             actions: [{ key: "test_ai_connection", label: "测试 AI 连接", section: "ai", valueKind: "action", status: "available" }],
           },
           {
+            id: "web",
+            label: "Web",
+            items: [
+              {
+                key: "web.search_backend",
+                label: "搜索后端",
+                section: "web",
+                valueKind: "enum",
+                description: "",
+                options: ["auto", "brave-free", "ddg-html", "ddgs"],
+                validationRules: {},
+                status: "available",
+              },
+              {
+                key: "web.brave_api_key",
+                label: "Brave Search API Key",
+                section: "web",
+                valueKind: "secret",
+                description: "",
+                options: [],
+                validationRules: {},
+                status: "available",
+              },
+            ],
+            actions: [],
+          },
+          {
             id: "about",
             label: "关于",
             items: [],
@@ -792,10 +821,11 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     if (path === "/api/settings/values" && method === "PATCH") {
       const body = request.postDataJSON() as { values?: Record<string, string> };
       settingsModel = body.values?.["ai.model"] ?? settingsModel;
-      return json(route, settingsValues(settingsModel, secretPresent));
+      searchBackend = body.values?.["web.search_backend"] ?? searchBackend;
+      return json(route, settingsValues(settingsModel, secretPresent, searchBackend, braveSecretPresent));
     }
     if (path === "/api/settings/values" || path === "/api/settings") {
-      return json(route, settingsValues(settingsModel, secretPresent));
+      return json(route, settingsValues(settingsModel, secretPresent, searchBackend, braveSecretPresent));
     }
     if (path === "/api/settings/secrets/ai.api_key" && method === "POST") {
       secretPresent = true;
@@ -804,6 +834,14 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     if (path === "/api/settings/secrets/ai.api_key" && method === "DELETE") {
       secretPresent = false;
       return json(route, { secretKey: "ai.api_key", present: false, masked: "" });
+    }
+    if (path === "/api/settings/secrets/web.brave_api_key" && method === "POST") {
+      braveSecretPresent = true;
+      return json(route, { secretKey: "web.brave_api_key", present: true, masked: "••••••••" });
+    }
+    if (path === "/api/settings/secrets/web.brave_api_key" && method === "DELETE") {
+      braveSecretPresent = false;
+      return json(route, { secretKey: "web.brave_api_key", present: false, masked: "" });
     }
     if (path === "/api/settings/actions/check_updates") {
       return json(route, { actionName: "check_updates", status: "unavailable", message: "当前构建未配置更新通道。", details: {} });
@@ -818,10 +856,16 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   return { requests };
 }
 
-function settingsValues(model: string, secretPresent: boolean) {
+function settingsValues(model: string, secretPresent: boolean, searchBackend: string, braveSecretPresent: boolean) {
   return {
-    values: { "ai.model": model, "ai.timeout": 120 },
-    secrets: { "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" } },
-    status: { "ai.api_key": secretPresent ? "available" : "missing_secret" },
+    values: { "ai.model": model, "ai.timeout": 120, "web.search_backend": searchBackend },
+    secrets: {
+      "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
+      "web.brave_api_key": { present: braveSecretPresent, masked: braveSecretPresent ? "••••••••" : "" },
+    },
+    status: {
+      "ai.api_key": secretPresent ? "available" : "missing_secret",
+      "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
+    },
   };
 }

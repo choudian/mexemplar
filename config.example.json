@@ -24,7 +24,7 @@
     "compression_model_temperature": 0.5,
     "compression_model_max_tokens": 1024,
     "memory_reference_steps_threshold": 3,
-    "memory_reference_size_threshold": 2000,
+    "memory_reference_size_threshold": 10000,
     "memory_compression_token_threshold": 80000,
     "memory_compression_count_threshold": null,
     "memory_compression_keep_recent": 20,
@@ -111,6 +111,9 @@
     "language": "zh_CN",
     "window_width": 1200,
     "window_height": 800
+  },
+  "web": {
+    "search_backend": "auto"
   },
   "brain": {
     "segment": {

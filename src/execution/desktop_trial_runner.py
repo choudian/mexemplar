@@ -102,13 +102,26 @@ def _trial_root() -> Path:
     return get_default_data_dir() / "trials"
 
 
+def _build_trial_env(trial_dir: Path, data_dir: Path) -> dict[str, str]:
+    env = build_whitelisted_env()
+    env.update(
+        {
+            "MEXEMPLAR_DATA_DIR": str(data_dir),
+            "MEXEMPLAR_TOOL_RUN_DIR": str(trial_dir),
+            "MEXEMPLAR_OUTPUT_DIR": str(trial_dir),
+        }
+    )
+    return env
+
+
 def _write_bytes(path: Path, content: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(content)
 
 
 def run_desktop_trial(code: str, trial_id: str) -> TrialResult:
-    trial_dir = _trial_root() / trial_id
+    trial_root = _trial_root()
+    trial_dir = trial_root / trial_id
     trial_dir.mkdir(parents=True, exist_ok=True)
     stdout_path = trial_dir / "stdout.log"
     stderr_path = trial_dir / "stderr.log"
@@ -121,7 +134,7 @@ def run_desktop_trial(code: str, trial_id: str) -> TrialResult:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=str(trial_dir),
-        env=build_whitelisted_env(),
+        env=_build_trial_env(trial_dir, trial_root.parent),
         creationflags=creationflags,
     )
 

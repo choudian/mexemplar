@@ -192,15 +192,25 @@ class MessageRepository(BaseRepository):
         )
         return (max_seq or 0) + 1
 
-    def mark_archived(self, session_id: str, from_seq: int, to_seq: int):
+    def mark_archived(
+        self,
+        session_id: str,
+        from_seq: int,
+        to_seq: int,
+        *,
+        exclude_message_id: Optional[str] = None,
+    ):
         """归档指定范围的消息"""
-        self.session.query(Message).filter(
+        query = self.session.query(Message).filter(
             and_(
                 Message.session_id == session_id,
                 Message.sequence >= from_seq,
                 Message.sequence <= to_seq,
             )
-        ).update({"is_archived": True}, synchronize_session=False)
+        )
+        if exclude_message_id:
+            query = query.filter(Message.message_id != exclude_message_id)
+        query.update({"is_archived": True}, synchronize_session=False)
         self.session.commit()
         logger.debug(f"会话 {session_id} 消息 {from_seq}-{to_seq} 已归档")
 

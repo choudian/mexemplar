@@ -266,7 +266,7 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 ### 内置通用工具运行结构
 
-办公助理的通用内置工具仍由 `src/business/agents/tools/builtin_general_tools.py` 作为公开 facade 注册，但文件、搜索、命令、后台进程和大输出治理分别下沉到 focused 模块：
+办公助理的通用内置工具仍由 `src/business/agents/tools/builtin_general_tools.py` 作为公开 facade 注册，但文件、搜索、Web 搜索、命令、后台进程和大输出治理分别下沉到 focused 模块：
 
 | 模块 | 职责 |
 |------|------|
@@ -274,6 +274,7 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 | `builtin_permissions.py` | workspace 解析、外部/隐藏/系统/symlink 分类、确认决策和脱敏摘要 |
 | `file_tools.py` | 有界读取、raw-byte baseline、baseline-safe 写入/编辑、结构化 patch |
 | `search_tools.py` | 结构化文件/内容搜索、默认 ignore、分页和脱敏 |
+| `web_search_providers.py` | `web_search` provider registry、`web.search_backend` 路由、Brave / DuckDuckGo HTML / ddgs 后端 |
 | `command_tools.py` | 同步 `exec` 和 process lifecycle handler |
 | `output_governance.py` | 可见结果压缩、raw output reference、`load_tool_output` 和健康计数 |
 | `src/execution/command_runner.py` | 同步子进程执行边界、cwd/timeout/stdout/stderr 归一化 |
@@ -286,7 +287,9 @@ AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session
 
 ### 内置工具依赖预装
 
-需要第三方包的内置工具（如 `web_search` 依赖 `duckduckgo-search`）不在主进程直接 import，而是通过 `tool_executor.run_tool_code()` 在 `data/tool_venv/` 子进程执行。`tool_executor` 暴露 `BUILTIN_TOOL_DEPS` 列表和 `ensure_builtin_deps()` 函数，FastAPI lifespan 启动时调用预装。后续新增内置工具依赖只需往该列表追加包名。
+`web_search` 通过 `web.search_backend` 选择 provider：`auto` 会按 `brave-free → ddg-html → ddgs` 尝试；显式配置 `brave-free`、`ddg-html` 或 `ddgs` 时只使用指定 provider。Brave API Key 只能经 Settings secret API 写入 keyring；`ddg-html` 使用标准库请求 DuckDuckGo HTML 页面；`ddgs` 保留 `duckduckgo-search` 作为最后降级，并继续通过 `tool_executor.run_tool_code()` 在 `data/tool_venv/` 子进程执行。
+
+仍需要第三方包的内置工具不在主进程直接 import，而是通过 `tool_executor.run_tool_code()` 在工具 venv 子进程执行。`tool_executor` 暴露 `BUILTIN_TOOL_DEPS` 列表和 `ensure_builtin_deps()` 函数，FastAPI lifespan 启动时调用预装。后续新增内置工具依赖只需往该列表追加包名。
 
 ### 用户交互
 
@@ -382,23 +385,18 @@ PM/程序员/助理三个 Agent 有预定义的固定 Config（`PM_CONFIG`、`PR
 
 ### 短期记忆：引用机制
 
-Agent 的回复文字保留（天然就是摘要），工具返回的大块原始数据在 N 步之后替换成指针。
+会话内 tool result 的运行时引用替换当前已停用。工具返回的大块原始数据直接保留在上下文中，避免旧机制把 search/fetch 结果替换成纯指针后诱发 `load_reference` 反复恢复同一数据。
 
 ```
-替换前：
+旧机制示例（已停用）：
   Agent: 我来查一下这个页面的网络请求
   Tool result: {完整的 200KB 响应数据...}
   Agent: 发现这个 API 返回了 JSON，data 字段包含列表数据
-
-替换后：
-  Agent: 我来查一下这个页面的网络请求
-  Tool result: [REF::{message_id}] 此工具结果已归档（原始大小: 200000字符）。如需查看原始数据，请调用 load_reference("{message_id}")
-  Agent: 发现这个 API 返回了 JSON，data 字段包含列表数据
 ```
 
-- **触发时机**：固定步数（默认 3 步），可配置
-- Agent 需要回看细节时，调用 `load_reference` 工具加载原始数据
-- 不需要额外 LLM 调用生成摘要
+- `memory.reference_size_threshold` 的默认值保留为 10000 字符，用于后续重新设计时的兼容配置。
+- `load_reference` 仍保留给跨会话摘要等显式 REF 下钻场景，但会话内 tool result 不再由 `ReferenceHandler` 自动生成 `REF::` 指针。
+- 大输出治理优先走已升级内置工具的可见摘要 + `load_tool_output` 授权读取机制。
 
 ### 会话级记忆：消息类型系统
 
@@ -414,13 +412,13 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 3. 调用压缩 LLM 对压缩区生成结构化摘要
 4. 若边界调整后压缩区为空，跳过 LLM 调用和持久化，直接返回 `system + keep_msgs`
 
-`assemble_context` 在压缩后、引用替换前执行 `_cleanup_orphan_tool_results`，检测并剔除孤立 tool result（tool_call_id 不在任意 assistant(tool_calls) 中出现的 tool 消息），作为边界调整的兜底校验。
+`assemble_context` 在压缩后、格式转换前执行 `_cleanup_orphan_tool_results`，检测并剔除孤立 tool result（tool_call_id 不在任意 assistant(tool_calls) 中出现的 tool 消息），作为边界调整的兜底校验。
 
-引用替换不体现为消息类型，而是运行时行为（见记忆机制设计）。
+会话内引用替换当前不体现为消息类型，也不作为运行时自动行为（见记忆机制设计）。
 
 ### 跨会话记忆（办公助理专用）
 
-办公助理需要跨会话记忆来理解用户的使用模式和历史任务。采用**层级摘要 + ID 引用**机制（全局摘要 → 分组摘要 → 会话摘要 → 原始消息），与会话内的引用替换同构，通过 `load_reference` 逐层下钻。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 第七节。
+办公助理需要跨会话记忆来理解用户的使用模式和历史任务。采用**层级摘要 + ID 引用**机制（全局摘要 → 分组摘要 → 会话摘要 → 原始消息），通过 `load_reference` 逐层下钻。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 第七节。
 
 ### 全局记忆（PM/程序员/试用）
 
@@ -474,7 +472,7 @@ Agent 的回复文字保留（天然就是摘要），工具返回的大块原�
 
 体现在：
 - 查录制数据按需查字段，不 `SELECT *`
-- 短期记忆的引用机制 — 大块数据用指针，按需加载
+- 短期记忆的上下文治理 — 大块工具结果先保留原文，后续由压缩和内置工具输出治理兜底
 - PM 分类分批提问
 - 程序员不需要全局记忆
 - PM 给程序员的交接信息只给需要的，不给分析过程

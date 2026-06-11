@@ -502,7 +502,7 @@ class CompositionTrialRequest(BaseModel):
 class SettingDescriptor(BaseModel):
     key: str
     label: str
-    section: Literal["ai", "recording", "data", "about"]
+    section: Literal["ai", "web", "recording", "data", "about"]
     valueKind: Literal["string", "integer", "number", "boolean", "enum", "path", "secret", "action"]
     description: str = ""
     options: list[str] = Field(default_factory=list)
@@ -511,7 +511,7 @@ class SettingDescriptor(BaseModel):
 
 
 class SettingSection(BaseModel):
-    id: Literal["ai", "recording", "data", "about"]
+    id: Literal["ai", "web", "recording", "data", "about"]
     label: str
     items: list[SettingDescriptor] = Field(default_factory=list)
     actions: list[SettingDescriptor] = Field(default_factory=list)

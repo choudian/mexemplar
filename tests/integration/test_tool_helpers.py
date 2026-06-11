@@ -6,6 +6,7 @@ make_error_result / is_standardized_error 单元测试
 - 纯文本含 "error" 关键词
 - {"success": false} 无 message（不应触发）
 - {"success": false, "message": "..."}（应触发）
+- {"success": false, "error": "..."}（应触发）
 - {"error": "code", "message": "..."}（应触发）
 - error 值为非字符串（不应触发）
 - error 值为空字符串（不应触发）
@@ -50,6 +51,10 @@ class TestIsStandardizedError:
 
     def test_error_json_raw(self):
         s = json.dumps({"success": False, "message": "bad", "data": None})
+        assert is_standardized_error(s) is True
+
+    def test_success_false_error_field(self):
+        s = json.dumps({"success": False, "error": "bad", "data": {"web": []}})
         assert is_standardized_error(s) is True
 
     # 正例：make_error_result 格式

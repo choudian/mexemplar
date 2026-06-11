@@ -63,6 +63,33 @@ const schemaPayload = {
       ],
     },
     {
+      id: "web",
+      label: "Web",
+      items: [
+        {
+          key: "web.search_backend",
+          label: "搜索后端",
+          section: "web",
+          valueKind: "enum",
+          description: "",
+          options: ["auto", "brave-free", "ddg-html", "ddgs"],
+          validationRules: {},
+          status: "available",
+        },
+        {
+          key: "web.brave_api_key",
+          label: "Brave Search API Key",
+          section: "web",
+          valueKind: "secret",
+          description: "",
+          options: [],
+          validationRules: {},
+          status: "available",
+        },
+      ],
+      actions: [],
+    },
+    {
       id: "about",
       label: "关于",
       items: [],
@@ -106,24 +133,39 @@ describe("SettingsScreen", () => {
 
   test("loads settings, validates values, saves non-secrets, masks secrets, and runs actions", async () => {
     let model = "claude-sonnet-4-20250514";
+    let searchBackend = "auto";
     let secretPresent = false;
+    let braveSecretPresent = false;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/settings/schema")) return jsonResponse(schemaPayload);
       if (url.endsWith("/api/settings/values") && init?.method === "PATCH") {
         const body = JSON.parse(String(init.body)) as { values: Record<string, string> };
         model = body.values["ai.model"] ?? model;
+        searchBackend = body.values["web.search_backend"] ?? searchBackend;
         return jsonResponse({
-          values: { "ai.model": model, "ai.timeout": 120 },
-          secrets: { "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" } },
-          status: { "ai.api_key": secretPresent ? "available" : "missing_secret" },
+          values: { "ai.model": model, "ai.timeout": 120, "web.search_backend": searchBackend },
+          secrets: {
+            "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
+            "web.brave_api_key": { present: braveSecretPresent, masked: braveSecretPresent ? "••••••••" : "" },
+          },
+          status: {
+            "ai.api_key": secretPresent ? "available" : "missing_secret",
+            "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
+          },
         });
       }
       if (url.endsWith("/api/settings/values")) {
         return jsonResponse({
-          values: { "ai.model": model, "ai.timeout": 120 },
-          secrets: { "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" } },
-          status: { "ai.api_key": secretPresent ? "available" : "missing_secret" },
+          values: { "ai.model": model, "ai.timeout": 120, "web.search_backend": searchBackend },
+          secrets: {
+            "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
+            "web.brave_api_key": { present: braveSecretPresent, masked: braveSecretPresent ? "••••••••" : "" },
+          },
+          status: {
+            "ai.api_key": secretPresent ? "available" : "missing_secret",
+            "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
+          },
         });
       }
       if (url.endsWith("/api/settings/secrets/ai.api_key") && init?.method === "POST") {
@@ -133,6 +175,14 @@ describe("SettingsScreen", () => {
       if (url.endsWith("/api/settings/secrets/ai.api_key") && init?.method === "DELETE") {
         secretPresent = false;
         return jsonResponse({ secretKey: "ai.api_key", present: false, masked: "" });
+      }
+      if (url.endsWith("/api/settings/secrets/web.brave_api_key") && init?.method === "POST") {
+        braveSecretPresent = true;
+        return jsonResponse({ secretKey: "web.brave_api_key", present: true, masked: "••••••••" });
+      }
+      if (url.endsWith("/api/settings/secrets/web.brave_api_key") && init?.method === "DELETE") {
+        braveSecretPresent = false;
+        return jsonResponse({ secretKey: "web.brave_api_key", present: false, masked: "" });
       }
       if (url.endsWith("/api/settings/actions/check_updates")) {
         return jsonResponse({
@@ -185,6 +235,37 @@ describe("SettingsScreen", () => {
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/ai.api_key",
+        expect.objectContaining({ method: "DELETE" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Web" }));
+    fireEvent.change(screen.getByLabelText("搜索后端"), { target: { value: "brave-free" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存设置/ }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/settings/values",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ values: { "web.search_backend": "brave-free" } }),
+        }),
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("Brave Search API Key"), { target: { value: "brave-secret-value" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存密钥/ }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/settings/secrets/web.brave_api_key",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(document.body.textContent).not.toContain("brave-secret-value");
+
+    fireEvent.click(screen.getByRole("button", { name: "删除密钥" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/settings/secrets/web.brave_api_key",
         expect.objectContaining({ method: "DELETE" }),
       ),
     );

@@ -55,6 +55,7 @@ class ReadOnlyCredentialResolver:
     MAIN_USERNAME = "anthropic_api_key"
     VISION_USERNAME = "anthropic_vision_api_key"
     EMBEDDING_USERNAME = "openai_api_key"
+    BRAVE_SEARCH_USERNAME = "brave_search_api_key"
 
     def __init__(
         self,
@@ -83,6 +84,9 @@ class ReadOnlyCredentialResolver:
     def get_compression_model_api_key(self) -> str | None:
         return self.get_ai_api_key()
 
+    def get_web_brave_api_key(self) -> str | None:
+        return self._read_keyring(self.BRAVE_SEARCH_USERNAME)
+
     def fingerprint(self, key_name: str = "ai.api_key") -> CredentialFingerprint:
         secret = self.get_secret(key_name)
         if not secret:
@@ -99,6 +103,8 @@ class ReadOnlyCredentialResolver:
             return self.get_embedding_api_key()
         if key_name == "ai.compression_model_api_key":
             return self.get_compression_model_api_key()
+        if key_name == "web.brave_api_key":
+            return self.get_web_brave_api_key()
         return None
 
     def set_password(self, *_args: Any, **_kwargs: Any) -> None:

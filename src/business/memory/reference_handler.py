@@ -1,27 +1,26 @@
 """
-引用替换处理器
+引用处理器
 
-将旧的大体积 tool result 替换为指针，短期记忆机制。
+会话内大体积 tool result 的运行时引用替换已停用。当前处理器只负责
+将 Message 转换为 LLM API 消息格式，避免旧引用机制把工具结果替换成
+纯指针后诱发 load_reference 循环。
 """
 
 import json
-import logging
 from typing import List
 
 from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
 
-logger = logging.getLogger(__name__)
-
 _USER_ROLES = frozenset({"summary", "program", "agent"})
 
 
 class ReferenceHandler:
-    """引用替换逻辑：将旧的大体积 tool result 替换为指针。"""
+    """引用处理逻辑：当前保留完整 tool result，不做运行时指针替换。"""
 
     def __init__(self, config: UnifiedConfigManager):
         """
-        初始化引用替换处理器
+        初始化引用处理器
 
         Args:
             config: 统一配置管理器
@@ -31,14 +30,12 @@ class ReferenceHandler:
 
     def apply_replacements(self, messages: List[Message]) -> List[dict]:
         """
-        输入有序消息列表，输出 LLM 格式的消息列表，其中符合条件的
-        tool result 被替换为指针。
+        输入有序消息列表，输出 LLM 格式的消息列表。
 
-        算法：
-        1. 遍历消息，对每条 role=tool 的消息
-        2. 计算其后有多少条 role=assistant 消息
-        3. 如果 >= steps_threshold 且 len(content) >= size_threshold
-           将 content 替换为指针文本
+        旧实现会在每次上下文组装时按 size/steps 阈值把历史 tool result
+        重新替换为 ``REF::`` 纯指针。该机制会让 search/fetch 等工具结果
+        在 load_reference 后再次被归档，造成模型反复恢复同一引用。
+        Phase 1 先停用会话内替换，让工具结果直接留在上下文中。
 
         Args:
             messages: 按序列号排序的消息列表
@@ -46,50 +43,7 @@ class ReferenceHandler:
         Returns:
             LLM API 格式的消息列表
         """
-        result = []
-
-        for i, msg in enumerate(messages):
-            # 先转换为 LLM 格式
-            llm_msg = self._to_llm_format(msg)
-
-            # 只对 tool 角色应用引用替换
-            if msg.role == "tool":
-                content = msg.content or ""
-                if len(content) >= self.size_threshold:
-                    # 计算后续 assistant 消息数量
-                    assistant_count = self._count_assistant_steps_after(messages, i)
-
-                    # 如果超过阈值，替换为指针
-                    if assistant_count >= self.steps_threshold:
-                        llm_msg["content"] = self._make_pointer(msg.message_id, len(content))
-                        logger.debug(
-                            f"[引用替换] {msg.message_id}: "
-                            f"{len(content)}字符 → 指针 (后续{assistant_count}条assistant消息)"
-                        )
-
-            result.append(llm_msg)
-
-        return result
-
-    def _make_pointer(self, message_id: str, original_size: int) -> str:
-        """生成指针文本"""
-        return (
-            f"[REF::{message_id}] 此工具结果已归档（原始大小: {original_size}字符）。"
-            f'如需查看原始数据，请调用 load_reference("{message_id}")'
-        )
-
-    def _count_assistant_steps_after(self, messages: List[Message], tool_index: int) -> int:
-        """
-        计算指定位置之后的 assistant 消息数量
-
-        Args:
-            messages: 消息列表
-            tool_index: tool 消息的索引
-
-        Returns:
-            后续的 assistant 消息数量
-        """
-        return sum(1 for msg in messages[tool_index + 1 :] if msg.role == "assistant")
+        return [self._to_llm_format(msg) for msg in messages]
 
     def _to_llm_format(self, msg: Message) -> dict:
         """

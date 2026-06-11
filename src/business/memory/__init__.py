@@ -2,9 +2,9 @@
 记忆机制模块
 
 Agent Loop 的记忆管理系统，负责：
-- 引用替换：将旧的大体积 tool result 替换为指针
+- 显式 REF 加载：通过 load_reference 下钻摘要或历史引用
 - 会话压缩：使用 LLM 对旧消息生成摘要
-- 上下文组装：加载消息、应用压缩和引用替换
+- 上下文组装：加载消息、按需压缩并转换为 LLM 消息格式
 
 三个 Agent 共用同一套记忆机制，行为通过配置参数调节。
 
@@ -27,6 +27,6 @@ Agent Loop 的记忆管理系统，负责：
     ctx.save_user_message("用户输入")
     ctx.save_assistant_message("AI回复")
 
-    # 加载引用
+    # 加载显式 REF
     ctx.load_reference(message_id)
 """

@@ -76,3 +76,48 @@ def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_p
     assert noise_filter.first_party_whitelist == ["static.example.com"]
     assert noise_filter.static_extensions == [".png", ".css"]
     assert noise_filter.static_content_type_prefixes == ["image/", "text/css"]
+
+
+def test_web_search_backend_defaults_to_auto(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setitem(
+        sys.modules,
+        "keyring",
+        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
+    )
+
+    config = UnifiedConfigManager(config_path=str(config_path))
+
+    assert config.get_web_search_backend() == "auto"
+
+
+def test_web_search_backend_reads_file_override_normalized(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"web": {"search_backend": "DDG-HTML"}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "keyring",
+        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
+    )
+
+    config = UnifiedConfigManager(config_path=str(config_path))
+
+    assert config.get_web_search_backend() == "ddg-html"
+
+
+def test_memory_reference_size_threshold_default_is_raised(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setitem(
+        sys.modules,
+        "keyring",
+        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
+    )
+
+    config = UnifiedConfigManager(config_path=str(config_path))
+
+    assert config.get_memory_reference_size_threshold() == 10000

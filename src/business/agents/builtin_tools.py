@@ -20,7 +20,7 @@ TALK_TO_USER_SCHEMA = make_tool_schema(
 # load_reference 由 AgentLoop 内部处理，不在注册表中
 LOAD_REFERENCE_SCHEMA = make_tool_schema(
     name="load_reference",
-    description="加载被引用替换的原始消息内容。当工具结果被引用替换时，使用此工具获取完整内容。",
+    description="加载显式 REF 指向的原始内容，适用于跨会话摘要或历史引用下钻。",
     properties={
         "reference_id": {"type": "string", "description": "要加载的引用 ID（消息 ID 或摘要 ID）"}
     },

@@ -6,3 +6,7 @@ from src.business.agents.prompts.programmer_prompt import PROGRAMMER_SYSTEM_PROM
 def test_browser_prompts_guard_returns_legacy_constants():
     assert build_pm_prompt("browser") == PM_SYSTEM_PROMPT
     assert build_programmer_prompt("browser") == PROGRAMMER_SYSTEM_PROMPT
+
+
+def test_browser_programmer_prompt_includes_output_dir_contract():
+    assert "MEXEMPLAR_OUTPUT_DIR" in PROGRAMMER_SYSTEM_PROMPT

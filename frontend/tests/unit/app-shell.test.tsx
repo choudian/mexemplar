@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { invoke } from "@tauri-apps/api/core";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -74,6 +74,7 @@ function eventStreamResponse(frames: string[] = [], options?: { close?: boolean 
 
 describe("AppShell", () => {
   beforeEach(() => {
+    window.history.replaceState({}, "", "/");
     useShellStore.setState({
       activeRoute: "assistant",
       backend: null,
@@ -207,6 +208,8 @@ describe("AppShell", () => {
   });
 
   afterEach(() => {
+    window.history.replaceState({}, "", "/");
+    vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
@@ -333,8 +336,121 @@ describe("AppShell", () => {
 
     await waitFor(() => expect(useTeachingStore.getState().stage).toBe("trial_validation"));
     await waitFor(() => expect(screen.getByText("工具学习完成")).toBeInTheDocument());
-    expect(screen.getByText("可以开始试用验证，确认它能按预期执行。")).toBeInTheDocument();
+    expect(screen.getByText("新工具已进入工具列表，可在待考核工具中发起试用。")).toBeInTheDocument();
     await waitFor(() => expect(useTeachingStore.getState().trialPreview?.requestId).toBe("preview_1"));
+  });
+
+  test("returns to the assistant shortly after programmer learning starts", async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, "", "/tools/teaching");
+    const quietBootstrap = {
+      ...bootstrapPayload,
+      connection: { ...bootstrapPayload.connection, status: "failed", message: "Screen render disabled." },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/events")) return eventStreamResponse();
+        return jsonResponse(quietBootstrap);
+      }),
+    );
+    useShellStore.setState({ activeRoute: "teaching" });
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "learning", summary: {} },
+      stage: "learning",
+      skillTrialToolId: null,
+    });
+
+    render(<AppShell />);
+
+    await act(async () => {});
+    expect(useShellStore.getState().activeRoute).toBe("teaching");
+    expect(window.location.pathname).toBe("/tools/teaching");
+
+    act(() => {
+      vi.advanceTimersByTime(3000);
+    });
+
+    expect(useShellStore.getState().activeRoute).toBe("assistant");
+    expect(window.location.pathname).toBe("/");
+  });
+
+  test("opens pending skills after the learned tool is saved", async () => {
+    vi.useFakeTimers();
+    const quietBootstrap = {
+      ...bootstrapPayload,
+      connection: { ...bootstrapPayload.connection, status: "failed", message: "Screen render disabled." },
+    };
+    const savedToolEvent = eventFrame({
+      eventId: "evt_tool_saved",
+      sequence: 1,
+      sessionId: "ui_sess_test",
+      causationId: "rec_1",
+      type: "tools.changed",
+      scope: { workflowId: "rec_1", toolId: "tool_rec_1" },
+      payload: { reason: "catalog_invalidated", status: "saved", toolId: "tool_rec_1" },
+      createdAt: "2026-05-10T00:00:01Z",
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/events")) return eventStreamResponse([savedToolEvent]);
+      if (url.endsWith("/api/skills?category=pending")) {
+        return jsonResponse({
+          category: "pending",
+          count: 1,
+          items: [
+            {
+              toolId: "tool_rec_1",
+              name: "新学会的工具",
+              description: "工具保存事件到达后可见。",
+              status: "pending",
+              source: "teaching",
+              trialSuccessCount: 0,
+              workflowId: "rec_1",
+            },
+          ],
+        });
+      }
+      if (url.endsWith("/api/skills?category=published")) {
+        return jsonResponse({ category: "published", count: 0, items: [] });
+      }
+      if (url.endsWith("/api/skills?category=failed")) {
+        return jsonResponse({ category: "failed", count: 0, items: [] });
+      }
+      return jsonResponse(quietBootstrap);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    useSkillsStore.setState({ activeCategory: "published" });
+    useTeachingStore.setState({
+      run: { workflowId: "rec_1", mode: "browser", stage: "trial_validation", summary: {} },
+      stage: "trial_validation",
+      skillTrialToolId: null,
+    });
+
+    render(<AppShell />);
+
+    await act(async () => {});
+    expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/api/events"))).toBe(true);
+    expect(useShellStore.getState().activeRoute).toBe("assistant");
+    expect(useSkillsStore.getState().activeCategory).toBe("published");
+
+    act(() => {
+      vi.advanceTimersByTime(2999);
+    });
+
+    expect(useShellStore.getState().activeRoute).toBe("assistant");
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+      await Promise.resolve();
+    });
+
+    expect(useShellStore.getState().activeRoute).toBe("skills");
+    expect(useSkillsStore.getState().activeCategory).toBe("pending");
+    expect(window.location.pathname).toBe("/tools/list");
+    await act(async () => {});
+    expect(useSkillsStore.getState().categories.pending[0]?.workflowId).toBe("rec_1");
   });
 
   test("ignores duplicate event ids before they create duplicate display entries", async () => {

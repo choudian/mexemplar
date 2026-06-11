@@ -105,6 +105,7 @@ PROGRAMMER_SYSTEM_PROMPT = """\
 - 从需求 JSON 的 parameters 中获取所有变量参数
 - 可以补充技术参数（如超时时间、翻页数量），在提交时一并声明
 - execute_code 是临时沙箱，代码跑完即丢，不要依赖它存储状态
+- 工具运行时会提供输出目录环境变量：`MEXEMPLAR_OUTPUT_DIR`。下载文件、报表、截图、缓存结果等持久输出必须写入 `Path(os.environ["MEXEMPLAR_OUTPUT_DIR"])` 或它的子目录
 - 写完后用 syntax_check 工具检查，确认无误后用 submit_code 工具提交
 
 ## 代码规范
@@ -169,6 +170,7 @@ if __name__ == "__main__":
 - 使用浏览器时用 playwright.async_api（异步），不使用 sync_api
 - 纯 API 方案可以只用 requests/urllib，不需要引入 Playwright
 - 所有用户可变参数从 kwargs 获取，不硬编码
+- 不要把输出文件写到项目根目录、源码目录或系统临时目录；如果需要写文件，优先使用 `Path(os.environ["MEXEMPLAR_OUTPUT_DIR"]) / "文件名"`
 - 必须有异常处理，出错时返回 success=False
 - 使用浏览器时必须在 finally 中关闭浏览器
 - 支持 `if __name__ == "__main__"` 命令行调用

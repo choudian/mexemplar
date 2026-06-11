@@ -109,6 +109,7 @@ cp config.example.json config.json
 - `provider`
 - `model`
 - `base_url`
+- `web.search_backend`
 
 API Key 等密钥由 Settings 写入系统 keyring，不建议写入 `config.json`。非密钥示例：
 
@@ -119,6 +120,9 @@ API Key 等密钥由 Settings 写入系统 keyring，不建议写入 `config.jso
     "model": "gpt-4o-mini",
     "api_key": "",
     "base_url": "https://api.openai.com/v1"
+  },
+  "web": {
+    "search_backend": "auto"
   }
 }
 ```

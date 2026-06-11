@@ -20,6 +20,7 @@ def test_desktop_prompt_builders_include_contract_phrases():
     assert "analyze_desktop_action" in pm_prompt
     assert "read_action_clip" in pm_prompt
     assert "async def execute() -> dict" in programmer_prompt
+    assert "MEXEMPLAR_OUTPUT_DIR" in programmer_prompt
 
 
 def test_desktop_pm_prompt_does_not_call_missing_vision_tool():

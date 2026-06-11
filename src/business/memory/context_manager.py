@@ -39,7 +39,7 @@ class ContextManager:
         self._msg_repo = MessageRepository()
         self._session_repo = SessionRepository()
 
-        # 初始化引用替换处理器
+        # 初始化引用处理器（当前只做 LLM 消息格式转换）
         self._reference_handler = ReferenceHandler(config)
 
         # 初始化压缩处理器
@@ -49,14 +49,13 @@ class ContextManager:
 
     def assemble_context(self) -> List[Dict]:
         """
-        加载会话消息，按需压缩，应用引用替换，返回 LLM API 格式的消息列表。
+        加载会话消息，按需压缩并转换为 LLM API 格式的消息列表。
 
         流程：
         1. 从 DB 加载非 archived 消息（按 sequence 排序）
         2. 检查是否需要压缩 → 如需要，执行压缩，重新加载
-        3. 清理孤立 tool result（压缩后、引用替换前）
-        4. 对 tool result 消息应用引用替换
-        5. 转换为 LLM API 格式
+        3. 清理孤立 tool result（压缩后、格式转换前）
+        4. 转换为 LLM API 格式
 
         Returns:
             LLM API 格式的消息列表
@@ -75,7 +74,7 @@ class ContextManager:
         # 3. 清理孤立 tool result
         messages = self._cleanup_orphan_tool_results(messages)
 
-        # 4. 应用引用替换
+        # 4. 转换为 LLM API 格式
         llm_messages = self._reference_handler.apply_replacements(messages)
 
         logger.debug(f"[上下文] 已组装 {len(llm_messages)} 条消息")
@@ -243,7 +242,7 @@ class ContextManager:
 
     def load_reference(self, reference_id: str) -> str:
         """
-        加载被引用替换的原始内容。供 load_reference 工具调用。
+        加载显式 REF 指向的原始内容。供 load_reference 工具调用。
 
         根据 ID 前缀路由到不同的存储：
         - ss_* / gs_* / global_* → assistant_summaries 表（跨会话记忆摘要）

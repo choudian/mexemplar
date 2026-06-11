@@ -27,6 +27,8 @@ _PROGRAMMER_DESKTOP_GUIDANCE = (
     "优先寻找系统 API、命令行、pywinauto、Win32 协议等捷径；"
     "例如能直接打开文件或发送协议 URL 时，不要模拟多次鼠标点击。"
     "生成代码必须定义 async def execute() -> dict，并返回包含 ok、summary、details 的 dict。\n"
+    "下载文件、报表、截图、缓存结果等持久输出必须写入 "
+    "Path(os.environ[\"MEXEMPLAR_OUTPUT_DIR\"]) 或它的子目录。\n"
 )
 _PROGRAMMER_COMMON_FOOTER = "只返回完整可执行代码，不返回解释性 Markdown。\n"
 

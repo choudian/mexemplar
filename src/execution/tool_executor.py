@@ -7,21 +7,25 @@
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
+
+from src.utils.helpers import get_default_data_dir
 
 logger = logging.getLogger(__name__)
 
 _TOOL_TIMEOUT = 120  # 秒，浏览器操作预留充足时间
 
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_DATA_DIR = _PROJECT_ROOT / "data"
-_VENV_DIR = _DATA_DIR / "tool_venv"
-_RUNNER_PATH = _DATA_DIR / "tool_runner.py"
+_TOOL_TMP_DIR_NAME = "tool_tmp"
+_TOOL_RUNS_DIR_NAME = "tool_runs"
+_TOOL_VENV_DIR_NAME = "tool_venv"
+_TOOL_RUNNER_FILENAME = "tool_runner.py"
 
 # pip 包名 → import 名（二者不同时才需要列出）
 _PIP_TO_IMPORT = {
@@ -102,10 +106,11 @@ def _find_system_python() -> str | None:
 
 def _get_venv_python() -> str:
     """获取 venv 的 python 路径，不存在则创建。"""
+    venv_dir = get_default_data_dir() / _TOOL_VENV_DIR_NAME
     if sys.platform == "win32":
-        venv_python = _VENV_DIR / "Scripts" / "python.exe"
+        venv_python = venv_dir / "Scripts" / "python.exe"
     else:
-        venv_python = _VENV_DIR / "bin" / "python"
+        venv_python = venv_dir / "bin" / "python"
 
     if venv_python.exists():
         return str(venv_python)
@@ -114,10 +119,10 @@ def _get_venv_python() -> str:
     if not system_python:
         raise RuntimeError("未找到系统 Python。请安装 Python 3.11+ 并确保 python 命令在 PATH 中。")
 
-    logger.info(f"[ToolExecutor] 使用 {system_python} 创建虚拟环境: {_VENV_DIR}")
-    _VENV_DIR.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(f"[ToolExecutor] 使用 {system_python} 创建虚拟环境: {venv_dir}")
+    venv_dir.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        [system_python, "-m", "venv", str(_VENV_DIR)],
+        [system_python, "-m", "venv", str(venv_dir)],
         check=True,
         capture_output=True,
         text=True,
@@ -127,10 +132,11 @@ def _get_venv_python() -> str:
 
 def _ensure_runner() -> str:
     """确保 runner 脚本存在并是最新的，返回路径。"""
-    _RUNNER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    if not _RUNNER_PATH.exists() or _RUNNER_PATH.read_text(encoding="utf-8") != _RUNNER_CODE:
-        _RUNNER_PATH.write_text(_RUNNER_CODE, encoding="utf-8")
-    return str(_RUNNER_PATH)
+    runner_path = get_default_data_dir() / _TOOL_RUNNER_FILENAME
+    runner_path.parent.mkdir(parents=True, exist_ok=True)
+    if not runner_path.exists() or runner_path.read_text(encoding="utf-8") != _RUNNER_CODE:
+        runner_path.write_text(_RUNNER_CODE, encoding="utf-8")
+    return str(runner_path)
 
 
 _IMPORT_TO_PIP = {v: k for k, v in _PIP_TO_IMPORT.items()}
@@ -262,6 +268,50 @@ def _ensure_dependencies(venv_python: str, dependencies: list[str]) -> tuple[boo
         return False, f"依赖安装出错: {e}"
 
 
+def _create_tool_run_dir(data_dir: Path) -> Path:
+    """创建持久工具输出目录。工具代码的 cwd 会指向这里。"""
+    runs_dir = data_dir / _TOOL_RUNS_DIR_NAME
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_dir / uuid.uuid4().hex
+    run_dir.mkdir()
+    return run_dir
+
+
+def _build_tool_run_env(run_dir: Path, data_dir: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.update(
+        {
+            "MEXEMPLAR_DATA_DIR": str(data_dir),
+            "MEXEMPLAR_TOOL_RUN_DIR": str(run_dir),
+            "MEXEMPLAR_OUTPUT_DIR": str(run_dir),
+        }
+    )
+    return env
+
+
+def _collect_output_files(run_dir: Path, *, limit: int = 50) -> list[str]:
+    """收集工具输出目录中的相对文件路径，用于把实际落点回传给 Agent。"""
+    files: list[str] = []
+    try:
+        for path in run_dir.rglob("*"):
+            if not path.is_file():
+                continue
+            files.append(path.relative_to(run_dir).as_posix())
+            if len(files) >= limit:
+                break
+    except OSError:
+        return files
+    return files
+
+
+def _attach_output_metadata(result: dict, run_dir: Path) -> dict:
+    output_files = _collect_output_files(run_dir)
+    if output_files:
+        result.setdefault("output_dir", str(run_dir))
+        result.setdefault("output_files", output_files)
+    return result
+
+
 def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = None) -> dict:
     """
     在 venv 子进程中执行工具代码，返回标准结果字典。
@@ -294,13 +344,15 @@ def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = 
     runner_path = _ensure_runner()
 
     # 4. 写临时文件（每次执行独立目录，支持并发）
-    tmp_dir = _DATA_DIR / "tool_tmp"
+    data_dir = get_default_data_dir()
+    tmp_dir = data_dir / _TOOL_TMP_DIR_NAME
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    run_dir = Path(tempfile.mkdtemp(dir=tmp_dir))
+    tmp_run_dir = Path(tempfile.mkdtemp(dir=tmp_dir))
+    output_dir = _create_tool_run_dir(data_dir)
 
-    tool_file = run_dir / "tool.py"
-    params_file = run_dir / "params.json"
-    result_file = run_dir / "result.json"
+    tool_file = tmp_run_dir / "tool.py"
+    params_file = tmp_run_dir / "params.json"
+    result_file = tmp_run_dir / "result.json"
 
     try:
         tool_file.write_text(code, encoding="utf-8")
@@ -313,6 +365,8 @@ def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = 
                 capture_output=True,
                 text=True,
                 timeout=_TOOL_TIMEOUT,
+                cwd=str(output_dir),
+                env=_build_tool_run_env(output_dir, data_dir),
             )
         except subprocess.TimeoutExpired:
             return {
@@ -329,7 +383,7 @@ def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = 
 
         result = json.loads(result_file.read_text(encoding="utf-8"))
         if isinstance(result, dict):
-            return result
+            return _attach_output_metadata(result, output_dir)
         return {"success": True, "message": "执行完成", "data": result}
 
     except Exception as e:
@@ -337,4 +391,4 @@ def run_tool_code(code: str, parameters: dict, dependencies: list[str] | None = 
         return {"success": False, "message": f"执行出错: {type(e).__name__}: {e}", "data": None}
 
     finally:
-        shutil.rmtree(run_dir, ignore_errors=True)
+        shutil.rmtree(tmp_run_dir, ignore_errors=True)

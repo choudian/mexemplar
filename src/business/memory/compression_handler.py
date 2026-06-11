@@ -278,7 +278,12 @@ class CompressionHandler:
 
             # 保存 compressed 消息并归档原始消息
             msg_repo.create(compressed_msg)
-            msg_repo.mark_archived(session_id, start_seq, end_seq)
+            msg_repo.mark_archived(
+                session_id,
+                start_seq,
+                end_seq,
+                exclude_message_id=compressed_msg.message_id,
+            )
 
             logger.info(
                 f"[压缩] 已压缩消息 {start_seq}-{end_seq} " f"(摘要长度: {len(summary)}字符)"
