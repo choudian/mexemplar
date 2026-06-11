@@ -10,6 +10,7 @@ from src.data.credential_resolver import (
 )
 from src.data.config_models import (
     AIConfig,
+    AgentToolsOutputSemanticSummaryConfig,
     LargeFieldConfig,
     RecordingConfig,
     RecordingDesktopConfig,
@@ -19,7 +20,7 @@ from src.data.config_models import (
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils import events
 
-SettingSectionId = Literal["ai", "web", "recording", "data", "about"]
+SettingSectionId = Literal["ai", "web", "tool_output", "recording", "data", "about"]
 SettingKind = Literal["string", "integer", "number", "boolean", "enum", "path", "secret", "action"]
 
 
@@ -34,12 +35,14 @@ class SettingSpec:
     validation_rules: dict[str, Any] = field(default_factory=dict)
     default: Any = None
     secret: bool = False
+    advanced: bool = False
     status: Literal["available", "missing_secret", "invalid", "unavailable"] = "available"
 
 
 SECTION_LABELS: dict[SettingSectionId, str] = {
     "ai": "AI",
     "web": "Web",
+    "tool_output": "工具输出",
     "recording": "录制",
     "data": "数据",
     "about": "关于",
@@ -51,6 +54,7 @@ _DESKTOP_DEFAULTS = RecordingDesktopConfig()
 _LARGE_FIELD_DEFAULTS = LargeFieldConfig()
 _UI_DEFAULTS = UIConfig()
 _WEB_DEFAULTS = WebConfig()
+_SUMMARY_DEFAULTS = AgentToolsOutputSemanticSummaryConfig()
 
 SETTING_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec(
@@ -129,6 +133,143 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         "secret",
         description="仅用于 Brave Search API，密钥只保存到系统 keyring。",
         secret=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.enabled",
+        "语义摘要",
+        "tool_output",
+        "boolean",
+        description="大输出先保留确定性事实，再用独立模型生成辅助摘要。",
+        default=_SUMMARY_DEFAULTS.enabled,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.provider",
+        "提供商",
+        "tool_output",
+        "enum",
+        options=[
+            "anthropic",
+            "openai",
+            "deepseek",
+            "qwen",
+            "zhipu",
+            "moonshot",
+            "openai-compatible",
+        ],
+        default=_SUMMARY_DEFAULTS.provider,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.model",
+        "摘要模型",
+        "tool_output",
+        "string",
+        description="留空时不调用模型，自动使用确定性摘要。",
+        default=_SUMMARY_DEFAULTS.model,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.base_url",
+        "API 地址",
+        "tool_output",
+        "string",
+        description="OpenAI-compatible 提供商必须填写。",
+        default=_SUMMARY_DEFAULTS.base_url,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.temperature",
+        "温度",
+        "tool_output",
+        "number",
+        validation_rules={"min": 0, "max": 2},
+        default=_SUMMARY_DEFAULTS.temperature,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.api_key",
+        "摘要 API Key",
+        "tool_output",
+        "secret",
+        description="独立存入系统密钥库，不复用主模型密钥。",
+        secret=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.trigger_chars",
+        "触发字符数",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 1000, "max": 1000000},
+        default=_SUMMARY_DEFAULTS.trigger_chars,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.max_input_chars",
+        "最大摘要输入",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 1000, "max": 1000000},
+        default=_SUMMARY_DEFAULTS.max_input_chars,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.chunk_chars",
+        "分块字符数",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 1000, "max": 120000},
+        default=_SUMMARY_DEFAULTS.chunk_chars,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.max_map_chunks",
+        "最大 Map 分块",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 1, "max": 20},
+        default=_SUMMARY_DEFAULTS.max_map_chunks,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.map_concurrency",
+        "Map 并发",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 1, "max": 10},
+        default=_SUMMARY_DEFAULTS.map_concurrency,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.total_timeout_seconds",
+        "总超时秒数",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 1, "max": 120},
+        default=_SUMMARY_DEFAULTS.total_timeout_seconds,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.map_max_tokens",
+        "Map 最大 Token",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 64, "max": 4000},
+        default=_SUMMARY_DEFAULTS.map_max_tokens,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.reduce_max_tokens",
+        "Reduce 最大 Token",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 64, "max": 8000},
+        default=_SUMMARY_DEFAULTS.reduce_max_tokens,
+        advanced=True,
+    ),
+    SettingSpec(
+        "agent_tools.output.semantic_summary.summary_max_chars",
+        "摘要字符上限",
+        "tool_output",
+        "integer",
+        validation_rules={"min": 500, "max": 20000},
+        default=_SUMMARY_DEFAULTS.summary_max_chars,
+        advanced=True,
     ),
     SettingSpec(
         "recording.screenshot_quality",
@@ -299,6 +440,12 @@ SECRET_SETTING_KEYS = tuple(spec.key for spec in SETTING_SPECS if spec.secret)
 
 ACTION_SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("test_ai_connection", "测试 AI 连接", "ai", "action"),
+    SettingSpec(
+        "test_tool_output_summary_connection",
+        "测试摘要模型连接",
+        "tool_output",
+        "action",
+    ),
     SettingSpec("install_extension_certificate", "安装扩展证书", "recording", "action"),
     SettingSpec("browse_data_directory", "打开数据目录", "data", "action"),
     SettingSpec("backup_data", "备份数据", "data", "action"),
@@ -408,6 +555,7 @@ class SettingsService:
             "options": spec.options,
             "validationRules": spec.validation_rules,
             "status": spec.status,
+            "advanced": spec.advanced,
         }
 
     def _secret_state(self, secret_key: str) -> dict[str, Any]:
@@ -426,12 +574,67 @@ class SettingsService:
             vision_status = "missing_secret"
         else:
             vision_status = "available"
+        summary_enabled_value = self._config.get(
+            "agent_tools.output.semantic_summary.enabled",
+            default=True,
+        )
+        summary_enabled = (
+            summary_enabled_value.strip().lower() in {"1", "true", "yes", "on"}
+            if isinstance(summary_enabled_value, str)
+            else bool(summary_enabled_value)
+        )
+        summary_provider = (
+            str(
+                self._config.get(
+                    "agent_tools.output.semantic_summary.provider",
+                    default="anthropic",
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+        summary_model = str(
+            self._config.get(
+                "agent_tools.output.semantic_summary.model",
+                default="",
+            )
+            or ""
+        ).strip()
+        summary_base_url = str(
+            self._config.get(
+                "agent_tools.output.semantic_summary.base_url",
+                default="",
+            )
+            or ""
+        ).strip()
+        if not summary_enabled or not summary_model:
+            summary_status = "unavailable"
+        elif summary_provider == "openai-compatible":
+            from src.business.agents.tools.semantic_summary import (
+                is_valid_compatible_base_url,
+            )
+
+            if not is_valid_compatible_base_url(summary_base_url):
+                summary_status = "invalid"
+            elif not self._get_tool_output_summary_api_key():
+                summary_status = "missing_secret"
+            else:
+                summary_status = "available"
+        elif not self._get_tool_output_summary_api_key():
+            summary_status = "missing_secret"
+        else:
+            summary_status = "available"
         return {
             "ai.api_key": "available" if self._get_ai_api_key() else "missing_secret",
             "web.brave_api_key": (
                 "available" if self._get_web_brave_api_key() else "missing_secret"
             ),
             "recording.desktop.vision_model": vision_status,
+            "agent_tools.output.semantic_summary.api_key": (
+                "available" if self._get_tool_output_summary_api_key() else "missing_secret"
+            ),
+            "agent_tools.output.semantic_summary.model": summary_status,
         }
 
     def _get_ai_api_key(self) -> str | None:
@@ -447,6 +650,9 @@ class SettingsService:
     def _get_web_brave_api_key(self) -> str | None:
         return self._read_secret_value("web.brave_api_key")
 
+    def _get_tool_output_summary_api_key(self) -> str | None:
+        return self._read_secret_value("agent_tools.output.semantic_summary.api_key")
+
     def _read_secret_value(self, secret_key: str) -> str | None:
         if self._credential_resolver is not None:
             getter = getattr(self._credential_resolver, "get_secret", None)
@@ -457,10 +663,20 @@ class SettingsService:
             if secret_key == "web.brave_api_key":
                 brave_getter = getattr(self._credential_resolver, "get_web_brave_api_key", None)
                 return brave_getter() if callable(brave_getter) else None
+            if secret_key == "agent_tools.output.semantic_summary.api_key":
+                summary_getter = getattr(
+                    self._credential_resolver,
+                    "get_tool_output_summary_api_key",
+                    None,
+                )
+                return summary_getter() if callable(summary_getter) else None
         if secret_key == "ai.api_key":
             return self._config.get_ai_api_key()
         if secret_key == "web.brave_api_key":
             getter = getattr(self._config, "get_web_brave_api_key", None)
+            return getter() if callable(getter) else None
+        if secret_key == "agent_tools.output.semantic_summary.api_key":
+            getter = getattr(self._config, "get_tool_output_summary_api_key", None)
             return getter() if callable(getter) else None
         return None
 
@@ -471,6 +687,9 @@ class SettingsService:
         if secret_key == "web.brave_api_key":
             self._config.set_web_brave_api_key(secret)
             return
+        if secret_key == "agent_tools.output.semantic_summary.api_key":
+            self._config.set_tool_output_summary_api_key(secret)
+            return
         raise SettingsValidationError(secret_key, "不支持的密钥项。")
 
     def _delete_secret_value(self, secret_key: str) -> None:
@@ -479,6 +698,9 @@ class SettingsService:
             return
         if secret_key == "web.brave_api_key":
             self._config.clear_web_brave_api_key()
+            return
+        if secret_key == "agent_tools.output.semantic_summary.api_key":
+            self._config.clear_tool_output_summary_api_key()
             return
         raise SettingsValidationError(secret_key, "不支持的密钥项。")
 

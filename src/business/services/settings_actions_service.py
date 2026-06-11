@@ -30,6 +30,7 @@ class SettingsActionsService:
     def run_action(self, action_name: str, *, confirmed: bool = False) -> dict[str, Any]:
         handlers = {
             "test_ai_connection": self._test_ai_connection,
+            "test_tool_output_summary_connection": self._test_tool_output_summary_connection,
             "browse_data_directory": self._browse_data_directory,
             "backup_data": self._backup_data,
             "export_all_data": self._export_all_data,
@@ -92,6 +93,60 @@ class SettingsActionsService:
             "completed",
             "数据目录已定位。",
             {"path": str(self._data_dir)},
+        )
+
+    def _test_tool_output_summary_connection(self) -> dict[str, Any]:
+        from src.business.agents.tools.semantic_summary import (
+            test_semantic_summary_connection,
+        )
+
+        provider = self._config.get_agent_tools_output_semantic_summary_provider()
+        model = self._config.get_agent_tools_output_semantic_summary_model()
+        resolver = self._credential_resolver or (
+            get_real_tour_credential_resolver() if is_real_tour_runtime() else None
+        )
+        api_key = (
+            resolver.get_tool_output_summary_api_key()
+            if resolver is not None
+            else self._config.get_tool_output_summary_api_key()
+        )
+        details = {"provider": provider, "model": model}
+        if not model:
+            return self._response(
+                "test_tool_output_summary_connection",
+                "failed",
+                "摘要模型不能为空。",
+                {**details, "code": "missing_model"},
+            )
+        if not api_key:
+            return self._response(
+                "test_tool_output_summary_connection",
+                "failed",
+                "缺少摘要 API Key。",
+                {**details, "code": "missing_secret"},
+            )
+        ok, reason = test_semantic_summary_connection(
+            config=self._config,
+            api_key=api_key,
+        )
+        if not ok:
+            messages = {
+                "missing_base_url": "OpenAI-compatible 提供商需要 API 地址。",
+                "invalid_base_url": "摘要模型 API 地址格式无效。",
+                "invalid_provider": "摘要模型提供商配置无效。",
+                "timeout": "摘要模型连接超时。",
+            }
+            return self._response(
+                "test_tool_output_summary_connection",
+                "failed",
+                messages.get(reason, "摘要模型连接失败。"),
+                {**details, "code": reason},
+            )
+        return self._response(
+            "test_tool_output_summary_connection",
+            "completed",
+            "摘要模型连接成功。",
+            details,
         )
 
     def _backup_data(self) -> dict[str, Any]:

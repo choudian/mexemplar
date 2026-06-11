@@ -285,7 +285,10 @@ def process_poll_handler(processId: str) -> str:
 
 
 def process_logs_handler(
-    processId: str, stream: str = "combined", tailChars: int | None = None
+    processId: str,
+    stream: str = "combined",
+    tailChars: int | None = None,
+    extractionGoal: str | None = None,
 ) -> str:
     _, rejected = _process_for_current_session("process_logs", processId)
     if rejected is not None:
@@ -309,7 +312,11 @@ def process_logs_handler(
     )
 
 
-def process_wait_handler(processId: str, timeoutMs: int | None = None) -> str:
+def process_wait_handler(
+    processId: str,
+    timeoutMs: int | None = None,
+    extractionGoal: str | None = None,
+) -> str:
     _, rejected = _process_for_current_session("process_wait", processId)
     if rejected is not None:
         return rejected

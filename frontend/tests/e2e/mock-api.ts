@@ -45,6 +45,8 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   let braveSecretPresent = false;
   let settingsModel = "claude-sonnet-4-20250514";
   let searchBackend = "auto";
+  let summarySecretPresent = false;
+  let summaryModel = "";
   let compositionCounter = 0;
   let debugTraceEnabled = false;
   let methodologyCreated = false;
@@ -795,6 +797,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
                 options: ["auto", "brave-free", "ddg-html", "ddgs"],
                 validationRules: {},
                 status: "available",
+                advanced: false,
               },
               {
                 key: "web.brave_api_key",
@@ -805,9 +808,70 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
                 options: [],
                 validationRules: {},
                 status: "available",
+                advanced: false,
               },
             ],
             actions: [],
+          },
+          {
+            id: "tool_output",
+            label: "工具输出",
+            items: [
+              {
+                key: "agent_tools.output.semantic_summary.enabled",
+                label: "语义摘要",
+                section: "tool_output",
+                valueKind: "boolean",
+                description: "",
+                options: [],
+                validationRules: {},
+                status: "available",
+                advanced: false,
+              },
+              {
+                key: "agent_tools.output.semantic_summary.model",
+                label: "摘要模型",
+                section: "tool_output",
+                valueKind: "string",
+                description: "",
+                options: [],
+                validationRules: {},
+                status: "available",
+                advanced: false,
+              },
+              {
+                key: "agent_tools.output.semantic_summary.api_key",
+                label: "摘要 API Key",
+                section: "tool_output",
+                valueKind: "secret",
+                description: "",
+                options: [],
+                validationRules: {},
+                status: "available",
+                advanced: false,
+              },
+              {
+                key: "agent_tools.output.semantic_summary.trigger_chars",
+                label: "触发字符数",
+                section: "tool_output",
+                valueKind: "integer",
+                description: "",
+                options: [],
+                validationRules: { min: 1000, max: 1000000 },
+                status: "available",
+                advanced: true,
+              },
+            ],
+            actions: [
+              {
+                key: "test_tool_output_summary_connection",
+                label: "测试摘要模型连接",
+                section: "tool_output",
+                valueKind: "action",
+                status: "available",
+                advanced: false,
+              },
+            ],
           },
           {
             id: "about",
@@ -822,10 +886,31 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       const body = request.postDataJSON() as { values?: Record<string, string> };
       settingsModel = body.values?.["ai.model"] ?? settingsModel;
       searchBackend = body.values?.["web.search_backend"] ?? searchBackend;
-      return json(route, settingsValues(settingsModel, secretPresent, searchBackend, braveSecretPresent));
+      summaryModel = body.values?.["agent_tools.output.semantic_summary.model"] ?? summaryModel;
+      return json(
+        route,
+        settingsValues(
+          settingsModel,
+          secretPresent,
+          searchBackend,
+          braveSecretPresent,
+          summaryModel,
+          summarySecretPresent,
+        ),
+      );
     }
     if (path === "/api/settings/values" || path === "/api/settings") {
-      return json(route, settingsValues(settingsModel, secretPresent, searchBackend, braveSecretPresent));
+      return json(
+        route,
+        settingsValues(
+          settingsModel,
+          secretPresent,
+          searchBackend,
+          braveSecretPresent,
+          summaryModel,
+          summarySecretPresent,
+        ),
+      );
     }
     if (path === "/api/settings/secrets/ai.api_key" && method === "POST") {
       secretPresent = true;
@@ -843,6 +928,38 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       braveSecretPresent = false;
       return json(route, { secretKey: "web.brave_api_key", present: false, masked: "" });
     }
+    if (path === "/api/settings/secrets/agent_tools.output.semantic_summary.api_key" && method === "POST") {
+      summarySecretPresent = true;
+      return json(route, {
+        secretKey: "agent_tools.output.semantic_summary.api_key",
+        present: true,
+        masked: "••••••••",
+      });
+    }
+    if (path === "/api/settings/secrets/agent_tools.output.semantic_summary.api_key" && method === "DELETE") {
+      summarySecretPresent = false;
+      return json(route, {
+        secretKey: "agent_tools.output.semantic_summary.api_key",
+        present: false,
+        masked: "",
+      });
+    }
+    if (path === "/api/settings/actions/test_tool_output_summary_connection") {
+      if (!summarySecretPresent) {
+        return json(route, {
+          actionName: "test_tool_output_summary_connection",
+          status: "failed",
+          message: "缺少摘要 API Key。",
+          details: { provider: "openai", model: summaryModel, code: "missing_secret" },
+        });
+      }
+      return json(route, {
+        actionName: "test_tool_output_summary_connection",
+        status: "completed",
+        message: "摘要模型连接成功。",
+        details: { provider: "openai", model: summaryModel },
+      });
+    }
     if (path === "/api/settings/actions/check_updates") {
       return json(route, { actionName: "check_updates", status: "unavailable", message: "当前构建未配置更新通道。", details: {} });
     }
@@ -856,16 +973,40 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
   return { requests };
 }
 
-function settingsValues(model: string, secretPresent: boolean, searchBackend: string, braveSecretPresent: boolean) {
+function settingsValues(
+  model: string,
+  secretPresent: boolean,
+  searchBackend: string,
+  braveSecretPresent: boolean,
+  summaryModel: string,
+  summarySecretPresent: boolean,
+) {
   return {
-    values: { "ai.model": model, "ai.timeout": 120, "web.search_backend": searchBackend },
+    values: {
+      "ai.model": model,
+      "ai.timeout": 120,
+      "web.search_backend": searchBackend,
+      "agent_tools.output.semantic_summary.enabled": true,
+      "agent_tools.output.semantic_summary.model": summaryModel,
+      "agent_tools.output.semantic_summary.trigger_chars": 20000,
+    },
     secrets: {
       "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
-      "web.brave_api_key": { present: braveSecretPresent, masked: braveSecretPresent ? "••••••••" : "" },
+      "web.brave_api_key": {
+        present: braveSecretPresent,
+        masked: braveSecretPresent ? "••••••••" : "",
+      },
+      "agent_tools.output.semantic_summary.api_key": {
+        present: summarySecretPresent,
+        masked: summarySecretPresent ? "••••••••" : "",
+      },
     },
     status: {
       "ai.api_key": secretPresent ? "available" : "missing_secret",
       "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
+      "agent_tools.output.semantic_summary.api_key": summarySecretPresent
+        ? "available"
+        : "missing_secret",
     },
   };
 }

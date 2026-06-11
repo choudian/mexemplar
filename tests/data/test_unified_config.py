@@ -43,6 +43,24 @@ def test_compression_model_follows_primary_chat_model(tmp_path, monkeypatch):
     assert config.get_compression_model_max_tokens() == 321
 
 
+def test_tool_output_semantic_summary_defaults_and_bounds(tmp_path, monkeypatch):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+
+    assert config.get_agent_tools_output_semantic_summary_enabled() is True
+    assert config.get_agent_tools_output_semantic_summary_provider() == "anthropic"
+    assert config.get_agent_tools_output_semantic_summary_model() == ""
+    assert config.get_agent_tools_output_semantic_summary_temperature() == 0.2
+    assert config.get_agent_tools_output_semantic_summary_trigger_chars() == 20000
+    assert config.get_agent_tools_output_semantic_summary_max_input_chars() == 120000
+    assert config.get_agent_tools_output_semantic_summary_chunk_chars() == 20000
+    assert config.get_agent_tools_output_semantic_summary_max_map_chunks() == 6
+    assert config.get_agent_tools_output_semantic_summary_map_concurrency() == 3
+    assert config.get_agent_tools_output_semantic_summary_total_timeout_seconds() == 12
+    assert config.get_agent_tools_output_semantic_summary_map_max_tokens() == 500
+    assert config.get_agent_tools_output_semantic_summary_reduce_max_tokens() == 900
+    assert config.get_agent_tools_output_semantic_summary_summary_max_chars() == 4000
+
+
 def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_path, monkeypatch):
     config_path = tmp_path / "config.json"
     config_path.write_text(

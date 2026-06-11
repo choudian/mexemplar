@@ -34,6 +34,7 @@ CALL_PATTERNS = {
     "get_ai_vision_api_key": re.compile(r"\.get_ai_vision_api_key\s*\("),
     "get_embedding_api_key": re.compile(r"\.get_embedding_api_key\s*\("),
     "get_compression_model_api_key": re.compile(r"\.get_compression_model_api_key\s*\("),
+    "get_tool_output_summary_api_key": re.compile(r"\.get_tool_output_summary_api_key\s*\("),
 }
 
 

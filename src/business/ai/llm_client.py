@@ -92,6 +92,8 @@ class LangChainLLMClient:
         max_tokens: int = 1024,
         thinking_level: str = "off",
         timeout: Optional[float] = None,
+        max_retries: Optional[int] = None,
+        audit_source: Optional[str] = None,
     ):
         """
         初始化 LLM 客户端
@@ -122,6 +124,8 @@ class LangChainLLMClient:
         self.max_tokens = max_tokens
         self.thinking_level = normalize_thinking_level(thinking_level)
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.audit_source = audit_source
 
         try:
             from src.business.debug.service import get_debug_service
@@ -202,6 +206,8 @@ class LangChainLLMClient:
             }
             if self.timeout is not None:
                 kwargs["timeout"] = self.timeout
+            if self.max_retries is not None:
+                kwargs["max_retries"] = max(0, int(self.max_retries))
 
             # 如果有自定义 endpoint（用于代理）
             if self.base_url:
@@ -237,6 +243,8 @@ class LangChainLLMClient:
             }
             if self.timeout is not None:
                 kwargs["timeout"] = self.timeout
+            if self.max_retries is not None:
+                kwargs["max_retries"] = max(0, int(self.max_retries))
 
             # 注入推理（仅对官方 OpenAI endpoint；自定义/兼容 endpoint 静默忽略）
             effort = self._OPENAI_REASONING_EFFORT.get(self.thinking_level)
@@ -295,11 +303,12 @@ class LangChainLLMClient:
         Returns:
             模型响应文本
         """
+
         def _invoke(raw_prompt: str) -> str:
             try:
                 from src.data.real_tour_audit import record_paid_call
 
-                record_paid_call("llm_chat")
+                record_paid_call(self.audit_source or "llm_chat")
             except ImportError:
                 pass
             from langchain_core.messages import HumanMessage
@@ -323,13 +332,13 @@ class LangChainLLMClient:
             return _invoke(prompt)
 
         return observe_chat(
-                buffer=buffer,
-                redactor=redactor,
-                epoch=epoch,
-                prompt=prompt,
-                invoke_fn=_invoke,
-                method="chat",
-            )
+            buffer=buffer,
+            redactor=redactor,
+            epoch=epoch,
+            prompt=prompt,
+            invoke_fn=_invoke,
+            method="chat",
+        )
 
     def chat_with_tools(
         self,
@@ -350,6 +359,7 @@ class LangChainLLMClient:
         Returns:
             LLMResponse 对象
         """
+
         def _invoke_provider(
             provider_messages: List[Dict[str, Any]],
             provider_tools: List[Dict[str, Any]] | None,
@@ -357,7 +367,7 @@ class LangChainLLMClient:
             try:
                 from src.data.real_tour_audit import record_paid_call
 
-                record_paid_call("llm_chat_with_tools")
+                record_paid_call(self.audit_source or "llm_chat_with_tools")
             except ImportError:
                 pass
             # 转换为 LangChain 消息对象
@@ -411,14 +421,14 @@ class LangChainLLMClient:
             return _invoke_provider(messages, tools)
 
         return observe_chat_with_tools(
-                buffer=buffer,
-                redactor=redactor,
-                epoch=epoch,
-                messages=messages,
-                tools=tools,
-                invoke_fn=_invoke_provider,
-                method="chat_with_tools",
-            )
+            buffer=buffer,
+            redactor=redactor,
+            epoch=epoch,
+            messages=messages,
+            tools=tools,
+            invoke_fn=_invoke_provider,
+            method="chat_with_tools",
+        )
 
     def _convert_to_langchain_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         """

@@ -27,6 +27,7 @@ const schemaPayload = {
           options: [],
           validationRules: { required: true },
           status: "available",
+          advanced: false,
         },
         {
           key: "ai.timeout",
@@ -37,6 +38,7 @@ const schemaPayload = {
           options: [],
           validationRules: { min: 1, max: 600 },
           status: "available",
+          advanced: false,
         },
         {
           key: "ai.api_key",
@@ -47,6 +49,7 @@ const schemaPayload = {
           options: [],
           validationRules: {},
           status: "available",
+          advanced: false,
         },
       ],
       actions: [
@@ -59,6 +62,70 @@ const schemaPayload = {
           options: [],
           validationRules: {},
           status: "available",
+          advanced: false,
+        },
+      ],
+    },
+    {
+      id: "tool_output",
+      label: "工具输出",
+      items: [
+        {
+          key: "agent_tools.output.semantic_summary.enabled",
+          label: "语义摘要",
+          section: "tool_output",
+          valueKind: "boolean",
+          description: "",
+          options: [],
+          validationRules: {},
+          status: "available",
+          advanced: false,
+        },
+        {
+          key: "agent_tools.output.semantic_summary.model",
+          label: "摘要模型",
+          section: "tool_output",
+          valueKind: "string",
+          description: "",
+          options: [],
+          validationRules: {},
+          status: "available",
+          advanced: false,
+        },
+        {
+          key: "agent_tools.output.semantic_summary.api_key",
+          label: "摘要 API Key",
+          section: "tool_output",
+          valueKind: "secret",
+          description: "",
+          options: [],
+          validationRules: {},
+          status: "available",
+          advanced: false,
+        },
+        {
+          key: "agent_tools.output.semantic_summary.trigger_chars",
+          label: "触发字符数",
+          section: "tool_output",
+          valueKind: "integer",
+          description: "",
+          options: [],
+          validationRules: { min: 1000, max: 1000000 },
+          status: "available",
+          advanced: true,
+        },
+      ],
+      actions: [
+        {
+          key: "test_tool_output_summary_connection",
+          label: "测试摘要模型连接",
+          section: "tool_output",
+          valueKind: "action",
+          description: "",
+          options: [],
+          validationRules: {},
+          status: "available",
+          advanced: false,
         },
       ],
     },
@@ -75,6 +142,7 @@ const schemaPayload = {
           options: ["auto", "brave-free", "ddg-html", "ddgs"],
           validationRules: {},
           status: "available",
+          advanced: false,
         },
         {
           key: "web.brave_api_key",
@@ -85,6 +153,7 @@ const schemaPayload = {
           options: [],
           validationRules: {},
           status: "available",
+          advanced: false,
         },
       ],
       actions: [],
@@ -103,6 +172,7 @@ const schemaPayload = {
           options: [],
           validationRules: {},
           status: "available",
+          advanced: false,
         },
       ],
     },
@@ -136,6 +206,36 @@ describe("SettingsScreen", () => {
     let searchBackend = "auto";
     let secretPresent = false;
     let braveSecretPresent = false;
+    let summaryModel = "";
+    let summarySecretPresent = false;
+    const settingsPayload = () => ({
+      values: {
+        "ai.model": model,
+        "ai.timeout": 120,
+        "web.search_backend": searchBackend,
+        "agent_tools.output.semantic_summary.enabled": true,
+        "agent_tools.output.semantic_summary.model": summaryModel,
+        "agent_tools.output.semantic_summary.trigger_chars": 20000,
+      },
+      secrets: {
+        "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
+        "web.brave_api_key": {
+          present: braveSecretPresent,
+          masked: braveSecretPresent ? "••••••••" : "",
+        },
+        "agent_tools.output.semantic_summary.api_key": {
+          present: summarySecretPresent,
+          masked: summarySecretPresent ? "••••••••" : "",
+        },
+      },
+      status: {
+        "ai.api_key": secretPresent ? "available" : "missing_secret",
+        "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
+        "agent_tools.output.semantic_summary.api_key": summarySecretPresent
+          ? "available"
+          : "missing_secret",
+      },
+    });
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/api/settings/schema")) return jsonResponse(schemaPayload);
@@ -143,30 +243,11 @@ describe("SettingsScreen", () => {
         const body = JSON.parse(String(init.body)) as { values: Record<string, string> };
         model = body.values["ai.model"] ?? model;
         searchBackend = body.values["web.search_backend"] ?? searchBackend;
-        return jsonResponse({
-          values: { "ai.model": model, "ai.timeout": 120, "web.search_backend": searchBackend },
-          secrets: {
-            "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
-            "web.brave_api_key": { present: braveSecretPresent, masked: braveSecretPresent ? "••••••••" : "" },
-          },
-          status: {
-            "ai.api_key": secretPresent ? "available" : "missing_secret",
-            "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
-          },
-        });
+        summaryModel = body.values["agent_tools.output.semantic_summary.model"] ?? summaryModel;
+        return jsonResponse(settingsPayload());
       }
       if (url.endsWith("/api/settings/values")) {
-        return jsonResponse({
-          values: { "ai.model": model, "ai.timeout": 120, "web.search_backend": searchBackend },
-          secrets: {
-            "ai.api_key": { present: secretPresent, masked: secretPresent ? "••••••••" : "" },
-            "web.brave_api_key": { present: braveSecretPresent, masked: braveSecretPresent ? "••••••••" : "" },
-          },
-          status: {
-            "ai.api_key": secretPresent ? "available" : "missing_secret",
-            "web.brave_api_key": braveSecretPresent ? "available" : "missing_secret",
-          },
-        });
+        return jsonResponse(settingsPayload());
       }
       if (url.endsWith("/api/settings/secrets/ai.api_key") && init?.method === "POST") {
         secretPresent = true;
@@ -183,6 +264,38 @@ describe("SettingsScreen", () => {
       if (url.endsWith("/api/settings/secrets/web.brave_api_key") && init?.method === "DELETE") {
         braveSecretPresent = false;
         return jsonResponse({ secretKey: "web.brave_api_key", present: false, masked: "" });
+      }
+      if (url.endsWith("/api/settings/secrets/agent_tools.output.semantic_summary.api_key") && init?.method === "POST") {
+        summarySecretPresent = true;
+        return jsonResponse({
+          secretKey: "agent_tools.output.semantic_summary.api_key",
+          present: true,
+          masked: "••••••••",
+        });
+      }
+      if (url.endsWith("/api/settings/secrets/agent_tools.output.semantic_summary.api_key") && init?.method === "DELETE") {
+        summarySecretPresent = false;
+        return jsonResponse({
+          secretKey: "agent_tools.output.semantic_summary.api_key",
+          present: false,
+          masked: "",
+        });
+      }
+      if (url.endsWith("/api/settings/actions/test_tool_output_summary_connection")) {
+        if (!summarySecretPresent) {
+          return jsonResponse({
+            actionName: "test_tool_output_summary_connection",
+            status: "failed",
+            message: "缺少摘要 API Key。",
+            details: { provider: "openai", model: "summary-model", code: "missing_secret" },
+          });
+        }
+        return jsonResponse({
+          actionName: "test_tool_output_summary_connection",
+          status: "completed",
+          message: "摘要模型连接成功。",
+          details: { provider: "openai", model: "summary-model" },
+        });
       }
       if (url.endsWith("/api/settings/actions/check_updates")) {
         return jsonResponse({
@@ -269,6 +382,43 @@ describe("SettingsScreen", () => {
         expect.objectContaining({ method: "DELETE" }),
       ),
     );
+
+    fireEvent.click(screen.getByRole("tab", { name: "工具输出" }));
+    expect(screen.getByLabelText("触发字符数")).not.toBeVisible();
+    fireEvent.click(screen.getByText("高级参数"));
+    expect(screen.getByLabelText("触发字符数")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("摘要模型"), { target: { value: "summary-model" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存设置/ }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/settings/values",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({
+            values: { "agent_tools.output.semantic_summary.model": "summary-model" },
+          }),
+        }),
+      ),
+    );
+    fireEvent.change(screen.getByLabelText("摘要 API Key"), { target: { value: "sk-summary" } });
+    fireEvent.click(screen.getByRole("button", { name: /保存密钥/ }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/settings/secrets/agent_tools.output.semantic_summary.api_key",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /执行/ }));
+    await waitFor(() => expect(screen.getByText("摘要模型连接成功。")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "删除密钥" }));
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/settings/secrets/agent_tools.output.semantic_summary.api_key",
+        expect.objectContaining({ method: "DELETE" }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /执行/ }));
+    await waitFor(() => expect(screen.getByText("缺少摘要 API Key。")).toBeInTheDocument());
 
     const aboutTab = screen.getByRole("tab", { name: "关于" });
     aboutTab.focus();

@@ -222,3 +222,110 @@ def test_settings_service_validates_web_search_backend() -> None:
 
     with pytest.raises(SettingsValidationError):
         service.update_values({"web.search_backend": "unknown"})
+
+
+def test_tool_output_settings_schema_exposes_advanced_fields():
+    schema = SettingsService().get_schema()
+    section = next(item for item in schema["sections"] if item["id"] == "tool_output")
+
+    assert section["label"] == "工具输出"
+    assert any(
+        item["key"] == "agent_tools.output.semantic_summary.model" for item in section["items"]
+    )
+    assert any(item["advanced"] is True for item in section["items"])
+    assert section["actions"][0]["key"] == "test_tool_output_summary_connection"
+
+
+def test_tool_output_settings_status_marks_invalid_compatible_endpoint():
+    config = FakeConfig()
+    config.writes.update(
+        {
+            "agent_tools.output.semantic_summary.enabled": True,
+            "agent_tools.output.semantic_summary.provider": "openai-compatible",
+            "agent_tools.output.semantic_summary.model": "summary-model",
+            "agent_tools.output.semantic_summary.base_url": "not-a-url",
+        }
+    )
+
+    status = SettingsService(config=config).get_values()["status"]
+
+    assert status["agent_tools.output.semantic_summary.model"] == "invalid"
+
+
+class SummaryActionConfig:
+    provider = "openai"
+    base_url = ""
+
+    def get_agent_tools_output_semantic_summary_provider(self):
+        return self.provider
+
+    def get_agent_tools_output_semantic_summary_model(self):
+        return "summary-model"
+
+    def get_agent_tools_output_semantic_summary_base_url(self):
+        return self.base_url
+
+    def get_agent_tools_output_semantic_summary_enabled(self):
+        return True
+
+    def get_agent_tools_output_semantic_summary_temperature(self):
+        return 0.2
+
+    def get_agent_tools_output_semantic_summary_max_input_chars(self):
+        return 120000
+
+    def get_agent_tools_output_semantic_summary_chunk_chars(self):
+        return 20000
+
+    def get_agent_tools_output_semantic_summary_max_map_chunks(self):
+        return 6
+
+    def get_agent_tools_output_semantic_summary_map_concurrency(self):
+        return 3
+
+    def get_agent_tools_output_semantic_summary_total_timeout_seconds(self):
+        return 12
+
+    def get_agent_tools_output_semantic_summary_map_max_tokens(self):
+        return 500
+
+    def get_agent_tools_output_semantic_summary_reduce_max_tokens(self):
+        return 900
+
+    def get_agent_tools_output_semantic_summary_summary_max_chars(self):
+        return 4000
+
+    def get_tool_output_summary_api_key(self):
+        return "sk-summary"
+
+
+def test_tool_output_connection_action_returns_only_status_provider_and_model(monkeypatch):
+    monkeypatch.setattr(
+        "src.business.agents.tools.semantic_summary.test_semantic_summary_connection",
+        lambda **_kwargs: (True, "success"),
+    )
+    result = SettingsActionsService(config=SummaryActionConfig()).run_action(
+        "test_tool_output_summary_connection"
+    )
+
+    assert result["status"] == "completed"
+    assert result["details"] == {"provider": "openai", "model": "summary-model"}
+    assert "response" not in result["details"]
+
+
+def test_tool_output_connection_rejects_invalid_compatible_endpoint_without_call(monkeypatch):
+    config = SummaryActionConfig()
+    config.provider = "openai-compatible"
+    config.base_url = "not-a-url"
+    calls = []
+    monkeypatch.setattr(
+        "src.business.agents.tools.semantic_summary._invoke_with_deadline",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    result = SettingsActionsService(config=config).run_action("test_tool_output_summary_connection")
+
+    assert result["status"] == "failed"
+    assert result["message"] == "摘要模型 API 地址格式无效。"
+    assert result["details"]["code"] == "invalid_base_url"
+    assert calls == []

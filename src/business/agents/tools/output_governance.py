@@ -6,7 +6,7 @@ import json
 import logging
 import copy
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from src.business.agents.tools.builtin_config import get_config_int
 from src.business.agents.tools.builtin_contracts import (
@@ -20,10 +20,17 @@ from src.business.agents.tools.builtin_contracts import (
     runtime_workspace_root,
     standardized_error_to_envelope,
     success_json,
-    truncate_with_marker,
 )
 from src.business.agents.tools.file_tools import _looks_binary, _redact_text
+from src.business.agents.tools.semantic_summary import (
+    build_deterministic_preview,
+    extract_deterministic_facts,
+    normalize_tool_output,
+    resolve_extraction_goal,
+    summarize_tool_output,
+)
 from src.data.repos.tool_output_repository import ToolOutputRepository
+from src.data.unified_config import get_unified_config
 from src.utils.agent_tool_health import (
     get_agent_tool_health_counters,
     increment_agent_tool_health,
@@ -75,12 +82,6 @@ def _safe_key(key: str) -> bool:
     return lowered not in {"storage_key", "storagepath", "storage_path", "blob_path", "raw_path"}
 
 
-def _preview(text: str, cap: int) -> str:
-    redacted = _redact_text(text)[0]
-    result, _ = truncate_with_marker(redacted, cap)
-    return result
-
-
 def _json_dumps(obj: dict[str, Any]) -> str:
     return json.dumps(obj, ensure_ascii=False, default=str)
 
@@ -90,6 +91,9 @@ def _fit_compacted_envelope(
     *,
     preview_source: str,
     visible_cap: int,
+    tool_name: str,
+    extraction_goal: str,
+    content_type: str,
 ) -> str:
     """Fit the final compact envelope inside the configured visible cap when possible."""
     payload = obj.get("payload")
@@ -100,7 +104,17 @@ def _fit_compacted_envelope(
     if preview_budget <= 0:
         preview_budget = max(0, visible_cap // 4)
     for _ in range(12):
-        payload["preview"] = _preview(preview_source, preview_budget) if preview_budget else ""
+        payload["preview"] = (
+            build_deterministic_preview(
+                preview_source,
+                preview_budget,
+                tool_name=tool_name,
+                extraction_goal=extraction_goal,
+                content_type=content_type,
+            )
+            if preview_budget
+            else ""
+        )
         encoded = _json_dumps(obj)
         if len(encoded) <= visible_cap:
             return encoded
@@ -118,7 +132,88 @@ def _fit_compacted_envelope(
     warnings = obj.get("warnings")
     if isinstance(warnings, list):
         obj["warnings"] = warnings[:4]
+    encoded = _json_dumps(obj)
+    if len(encoded) <= visible_cap:
+        return encoded
+
+    semantic = payload.get("semanticSummary")
+    if isinstance(semantic, dict):
+        for key in ("nextActions", "importantData", "keyFindings", "errors"):
+            value = semantic.get(key)
+            if isinstance(value, list):
+                semantic[key] = value[:2]
+        semantic["overview"] = str(semantic.get("overview") or "")[:600]
+        encoded = _json_dumps(obj)
+        if len(encoded) <= visible_cap:
+            return encoded
+        payload.pop("semanticSummary", None)
     return _json_dumps(obj)
+
+
+def _reports_truncation(obj: Mapping[str, Any] | None) -> bool:
+    if not isinstance(obj, Mapping):
+        return False
+    limits = obj.get("limits")
+    if isinstance(limits, Mapping):
+        if any(bool(limits.get(key)) for key in ("truncated", "clipped", "cropped", "hasMore")):
+            return True
+        status = str(limits.get("status") or "").lower()
+        if status in {"truncated", "clipped", "cropped"}:
+            return True
+    payload = obj.get("payload")
+    if isinstance(payload, Mapping):
+        if bool(payload.get("truncated")) or bool(payload.get("hasMore")):
+            return True
+        status = str(payload.get("status") or "").lower()
+        if status in {"truncated", "clipped", "cropped"}:
+            return True
+    warnings = obj.get("warnings")
+    if isinstance(warnings, list):
+        return any(
+            any(token in str(item).lower() for token in ("truncat", "clip", "crop"))
+            for item in warnings
+        )
+    return False
+
+
+def _authorized_existing_references(
+    *,
+    references: list[Any],
+    session_id: str,
+    workspace_root: str | Path | None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    authorized: list[dict[str, Any]] = []
+    source_text: str | None = None
+    seen: set[str] = set()
+    repo = ToolOutputRepository()
+    for item in references:
+        if not isinstance(item, dict):
+            continue
+        reference_id = str(item.get("referenceId") or "")
+        if not reference_id or reference_id in seen:
+            continue
+        seen.add(reference_id)
+        loaded = repo.load_authorized_bytes(
+            reference_id,
+            session_id=session_id,
+            workspace_root=workspace_root or runtime_workspace_root(),
+        )
+        if loaded is None:
+            continue
+        model = loaded.model
+        authorized.append(
+            ToolOutputReference(
+                reference_id=model.reference_id,
+                kind=model.kind,
+                size_bytes=model.size_bytes,
+                content_type=model.content_type,
+                sha256=model.sha256,
+                expires_at=model.expires_at.isoformat() if model.expires_at else None,
+            ).to_dict()
+        )
+        if source_text is None:
+            source_text = loaded.data.decode("utf-8", errors="replace")
+    return authorized, source_text
 
 
 def govern_tool_result(
@@ -127,12 +222,17 @@ def govern_tool_result(
     tool_call_id: str,
     session_id: str,
     content: str,
+    tool_args: Mapping[str, Any] | None = None,
     workspace_root: str | Path | None = None,
 ) -> str:
-    """Apply redaction/compaction before one tool result is persisted."""
+    """Apply deterministic and optional semantic governance before persistence."""
     is_upgraded = tool_name in UPGRADED_BUILTIN_TOOL_NAMES
     obj = parse_envelope(content)
-    if not is_upgraded and obj is None:
+    config = get_unified_config()
+    trigger_chars = config.get_agent_tools_output_semantic_summary_trigger_chars()
+    visible_cap = get_config_int("get_agent_tools_output_visible_char_cap", 12000, maximum=50000)
+    plain_custom = not is_upgraded and obj is None
+    if plain_custom and len(content) < trigger_chars and len(content) <= visible_cap:
         return content
 
     if obj is not None and obj.get("tool") != tool_name:
@@ -141,7 +241,7 @@ def govern_tool_result(
         converted = standardized_error_to_envelope(tool_name, content)
         if converted is None:
             if not is_upgraded:
-                return content
+                obj = json.loads(success_json(tool_name, {"content": content}))
         else:
             obj = parse_envelope(converted)
             content = converted
@@ -160,30 +260,49 @@ def govern_tool_result(
     if "error" in visible_obj:
         visible_obj["error"] = _redact_value(visible_obj["error"])
     raw_text = _json_dumps(visible_obj)
-    visible_cap = get_config_int("get_agent_tools_output_visible_char_cap", 12000, maximum=50000)
-    threshold = get_config_int(
-        "get_agent_tools_output_raw_reference_threshold_chars",
-        20000,
-        minimum=visible_cap,
-    )
     max_artifact = get_config_int(
         "get_agent_tools_output_max_artifact_bytes", 10_485_760, maximum=104_857_600
     )
-    if len(raw_text) <= visible_cap and len(raw_text) < threshold:
+    existing_references = list(visible_obj.get("references") or [])
+    must_compact = (
+        len(raw_reference_text) >= trigger_chars
+        or len(raw_text) > visible_cap
+        or bool(existing_references)
+        or _reports_truncation(visible_obj)
+    )
+    if not must_compact:
         return raw_text
 
     warnings = list(visible_obj.get("warnings") or [])
-    references = list(visible_obj.get("references") or [])
+    references, referenced_source = _authorized_existing_references(
+        references=existing_references,
+        session_id=session_id,
+        workspace_root=workspace_root,
+    )
     payload_keys = sorted(str(key) for key in (visible_obj.get("payload") or {}).keys())
+    source_for_normalization = (
+        raw_reference_text
+        if tool_name == "load_tool_output"
+        else referenced_source or raw_reference_text
+    )
+    normalized = normalize_tool_output(
+        tool_name,
+        source_for_normalization,
+        visible_obj,
+    )
+    facts = extract_deterministic_facts(visible_obj)
+    facts.update(normalized.facts)
+    extraction_goal = resolve_extraction_goal(tool_name, tool_args)
     compact_payload = {
         "compacted": True,
         "originalOutcome": visible_obj.get("outcome"),
         "originalPayloadKeys": payload_keys,
-        "rawChars": len(raw_reference_text),
+        "rawChars": len(source_for_normalization),
+        "facts": facts,
         "preview": "",
     }
     raw_bytes = raw_reference_text.encode("utf-8")
-    if len(raw_bytes) <= max_artifact:
+    if not references and len(raw_bytes) <= max_artifact:
         try:
             repo = ToolOutputRepository()
             model = repo.create_reference(
@@ -210,22 +329,46 @@ def govern_tool_result(
                 ).to_dict()
             )
             warnings.append("tool_output_compacted")
-            increment_agent_tool_health(compacted_outputs=1)
         except Exception:
             logger.warning("[agent_tools] raw reference creation failed", exc_info=True)
             warnings.append("compaction_failed_fallback")
             increment_agent_tool_health(raw_reference_create_failures=1, compaction_fallbacks=1)
     else:
-        warnings.append("max_artifact_bytes_exceeded")
-        increment_agent_tool_health(compaction_fallbacks=1)
+        if not references and len(raw_bytes) > max_artifact:
+            warnings.append("max_artifact_bytes_exceeded")
+            increment_agent_tool_health(compaction_fallbacks=1)
+
+    try:
+        semantic_summary = summarize_tool_output(
+            tool_name=tool_name,
+            tool_args=tool_args,
+            source_text=normalized.text,
+            source_obj=None,
+            config=config,
+        )
+    except Exception:
+        logger.warning(
+            "[agent_tools] semantic tool-output summary failed: tool=%s",
+            tool_name,
+            exc_info=True,
+        )
+        semantic_summary = None
+    if semantic_summary is not None:
+        compact_payload["semanticSummary"] = semantic_summary
+    if "tool_output_compacted" not in warnings:
+        warnings.append("tool_output_compacted")
+    increment_agent_tool_health(compacted_outputs=1)
 
     visible_obj["payload"] = compact_payload
     visible_obj["references"] = references
     visible_obj["warnings"] = warnings
     return _fit_compacted_envelope(
         visible_obj,
-        preview_source=raw_text,
+        preview_source=normalized.text,
         visible_cap=visible_cap,
+        tool_name=tool_name,
+        extraction_goal=extraction_goal,
+        content_type=normalized.content_type,
     )
 
 
@@ -234,6 +377,7 @@ def load_tool_output_handler(
     offset: int = 0,
     maxBytes: int = 64000,
     renderAs: str = "text",
+    extractionGoal: str | None = None,
     sessionId: str | None = None,
     workspaceRoot: str | None = None,
 ) -> str:
@@ -333,6 +477,16 @@ def load_tool_output_handler(
             "hasMore": has_more,
             "nextPageToken": str(start + len(window)) if has_more else None,
         },
+        references=[
+            ToolOutputReference(
+                reference_id=model.reference_id,
+                kind=model.kind,
+                size_bytes=model.size_bytes,
+                content_type=model.content_type,
+                sha256=model.sha256,
+                expires_at=model.expires_at.isoformat() if model.expires_at else None,
+            ).to_dict()
+        ],
     )
 
 

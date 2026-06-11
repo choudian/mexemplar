@@ -181,6 +181,46 @@
       "owner": "US3",
       "out_of_scope_skip_rationale": null,
       "verification_status": "covered"
+    },
+    {
+      "callsite": "src/business/agents/tools/semantic_summary.py::LangChainLLMClient",
+      "category": "tool_output_summary_llm_client_construction",
+      "trace_handling": "each provider call runs inside TraceContext source tool_output_summary and LangChainLLMClient observation boundary",
+      "real_tour_provider_handling": "read_only dedicated credential resolver plus existing paid-call and elapsed-time budget",
+      "redaction_handling": "selected tool output and extraction goal are redacted before client construction and provider invocation",
+      "owner": "US2",
+      "out_of_scope_skip_rationale": null,
+      "verification_status": "covered"
+    },
+    {
+      "callsite": "src/business/agents/tools/semantic_summary.py::get_tool_output_summary_api_key",
+      "category": "tool_output_summary_credential_read",
+      "trace_handling": "credential value is never emitted as a trace record",
+      "real_tour_provider_handling": "real-tour runtime uses ReadOnlyCredentialResolver dedicated keyring username",
+      "redaction_handling": "client construction registers the key with the debug secret inventory",
+      "owner": "US2",
+      "out_of_scope_skip_rationale": null,
+      "verification_status": "covered"
+    },
+    {
+      "callsite": "src/business/services/settings_service.py::get_tool_output_summary_api_key",
+      "category": "tool_output_summary_settings_secret_status",
+      "trace_handling": "not_applicable_no_model_call",
+      "real_tour_provider_handling": "read_only presence check through injected resolver",
+      "redaction_handling": "secret is reduced to masked presence and status",
+      "owner": "US2",
+      "out_of_scope_skip_rationale": null,
+      "verification_status": "covered"
+    },
+    {
+      "callsite": "src/business/services/settings_actions_service.py::get_tool_output_summary_api_key",
+      "category": "tool_output_summary_connection_credential",
+      "trace_handling": "connection provider call uses tool_output_summary TraceContext",
+      "real_tour_provider_handling": "read_only resolver and paid-call budget apply before live validation",
+      "redaction_handling": "action response contains only provider model status and safe error code",
+      "owner": "US3",
+      "out_of_scope_skip_rationale": null,
+      "verification_status": "covered"
     }
   ]
 }

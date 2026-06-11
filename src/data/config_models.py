@@ -306,6 +306,26 @@ class AgentToolsFileConfig:
 
 
 @dataclass
+class AgentToolsOutputSemanticSummaryConfig:
+    """Dedicated semantic summary model and bounded execution settings."""
+
+    enabled: bool = True
+    provider: str = "anthropic"
+    model: str = ""
+    base_url: str = ""
+    temperature: float = 0.2
+    trigger_chars: int = 20000
+    max_input_chars: int = 120000
+    chunk_chars: int = 20000
+    max_map_chunks: int = 6
+    map_concurrency: int = 3
+    total_timeout_seconds: int = 12
+    map_max_tokens: int = 500
+    reduce_max_tokens: int = 900
+    summary_max_chars: int = 4000
+
+
+@dataclass
 class AgentToolsOutputConfig:
     """Agent built-in output governance limits."""
 
@@ -313,6 +333,9 @@ class AgentToolsOutputConfig:
     raw_reference_threshold_chars: int = 20000
     max_artifact_bytes: int = 10485760
     retention_days: int = 14
+    semantic_summary: AgentToolsOutputSemanticSummaryConfig = field(
+        default_factory=AgentToolsOutputSemanticSummaryConfig
+    )
 
 
 @dataclass
@@ -422,13 +445,25 @@ class AppConfig:
             agent_tools_data = _filter_dataclass_fields(data["agent_tools"], AgentToolsConfig)
             for key, sub_cls in (
                 ("file", AgentToolsFileConfig),
-                ("output", AgentToolsOutputConfig),
                 ("search", AgentToolsSearchConfig),
                 ("process", AgentToolsProcessConfig),
             ):
                 val = agent_tools_data.get(key)
                 if isinstance(val, dict):
                     agent_tools_data[key] = sub_cls(**_filter_dataclass_fields(val, sub_cls))
+            output_data = agent_tools_data.get("output")
+            if isinstance(output_data, dict):
+                semantic_data = output_data.get("semantic_summary")
+                if isinstance(semantic_data, dict):
+                    output_data["semantic_summary"] = AgentToolsOutputSemanticSummaryConfig(
+                        **_filter_dataclass_fields(
+                            semantic_data,
+                            AgentToolsOutputSemanticSummaryConfig,
+                        )
+                    )
+                agent_tools_data["output"] = AgentToolsOutputConfig(
+                    **_filter_dataclass_fields(output_data, AgentToolsOutputConfig)
+                )
             config.agent_tools = AgentToolsConfig(**agent_tools_data)
 
         if "app_name" in data:

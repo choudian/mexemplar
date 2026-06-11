@@ -152,7 +152,23 @@
       "visible_char_cap": 12000,
       "raw_reference_threshold_chars": 20000,
       "max_artifact_bytes": 10485760,
-      "retention_days": 14
+      "retention_days": 14,
+      "semantic_summary": {
+        "enabled": true,
+        "provider": "anthropic",
+        "model": "",
+        "base_url": "",
+        "temperature": 0.2,
+        "trigger_chars": 20000,
+        "max_input_chars": 120000,
+        "chunk_chars": 20000,
+        "max_map_chunks": 6,
+        "map_concurrency": 3,
+        "total_timeout_seconds": 12,
+        "map_max_tokens": 500,
+        "reduce_max_tokens": 900,
+        "summary_max_chars": 4000
+      }
     },
     "search": {
       "default_page_size": 100,

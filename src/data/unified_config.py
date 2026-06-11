@@ -22,6 +22,7 @@ from src.data.config_models import (
     AppConfig,
     AgentToolsFileConfig,
     AgentToolsOutputConfig,
+    AgentToolsOutputSemanticSummaryConfig,
     AgentToolsProcessConfig,
     AgentToolsSearchConfig,
     ConfigFileLoader,
@@ -239,6 +240,48 @@ class UnifiedConfigManager:
             pass
         self.set("ai.api_key", "")
 
+    def get_tool_output_summary_api_key(self) -> Optional[str]:
+        """Read the dedicated tool-output summary key from keyring only."""
+        try:
+            import keyring
+
+            return keyring.get_password(
+                _get_keyring_service_name(),
+                "tool_output_summary_api_key",
+            )
+        except ImportError:
+            logger.warning("[配置] keyring 模块未安装，无法读取工具输出摘要密钥")
+        except Exception:
+            logger.warning("[配置] 读取工具输出摘要密钥失败", exc_info=True)
+        return None
+
+    def set_tool_output_summary_api_key(self, api_key: str) -> None:
+        """Store the dedicated summary key in keyring without plaintext fallback."""
+        try:
+            import keyring
+
+            keyring.set_password(
+                _get_keyring_service_name(),
+                "tool_output_summary_api_key",
+                api_key,
+            )
+        except Exception as exc:
+            raise RuntimeError("无法安全存储工具输出摘要密钥。") from exc
+        self.set("agent_tools.output.semantic_summary.api_key", "")
+
+    def clear_tool_output_summary_api_key(self) -> None:
+        """Delete the dedicated summary key and any stale plaintext setting."""
+        try:
+            import keyring
+
+            keyring.delete_password(
+                _get_keyring_service_name(),
+                "tool_output_summary_api_key",
+            )
+        except Exception:
+            pass
+        self.set("agent_tools.output.semantic_summary.api_key", "")
+
     def get_ai_base_url(self) -> Optional[str]:
         """获取主 LLM 自定义 endpoint（用于代理）"""
         return self.get("ai.base_url", default=None)
@@ -452,7 +495,17 @@ class UnifiedConfigManager:
         return self._load_dataclass_config("agent_tools.file", AgentToolsFileConfig)
 
     def get_agent_tools_output_config(self) -> AgentToolsOutputConfig:
-        return self._load_dataclass_config("agent_tools.output", AgentToolsOutputConfig)
+        output = self._load_dataclass_config("agent_tools.output", AgentToolsOutputConfig)
+        output.semantic_summary = self.get_agent_tools_output_semantic_summary_config()
+        return output
+
+    def get_agent_tools_output_semantic_summary_config(
+        self,
+    ) -> AgentToolsOutputSemanticSummaryConfig:
+        return self._load_dataclass_config(
+            "agent_tools.output.semantic_summary",
+            AgentToolsOutputSemanticSummaryConfig,
+        )
 
     def get_agent_tools_search_config(self) -> AgentToolsSearchConfig:
         return self._load_dataclass_config("agent_tools.search", AgentToolsSearchConfig)
@@ -495,6 +548,112 @@ class UnifiedConfigManager:
 
     def get_agent_tools_output_retention_days(self) -> int:
         return self._get_bounded_positive_int("agent_tools.output.retention_days", 14, maximum=90)
+
+    def get_agent_tools_output_semantic_summary_enabled(self) -> bool:
+        value = self.get("agent_tools.output.semantic_summary.enabled", default=True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def get_agent_tools_output_semantic_summary_provider(self) -> str:
+        return (
+            str(
+                self.get(
+                    "agent_tools.output.semantic_summary.provider",
+                    default="anthropic",
+                )
+                or ""
+            )
+            .strip()
+            .lower()
+        )
+
+    def get_agent_tools_output_semantic_summary_model(self) -> str:
+        return str(self.get("agent_tools.output.semantic_summary.model", default="") or "").strip()
+
+    def get_agent_tools_output_semantic_summary_base_url(self) -> str:
+        return str(
+            self.get("agent_tools.output.semantic_summary.base_url", default="") or ""
+        ).strip()
+
+    def get_agent_tools_output_semantic_summary_temperature(self) -> float:
+        value = self.get("agent_tools.output.semantic_summary.temperature", default=0.2)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return 0.2
+        return min(2.0, max(0.0, parsed))
+
+    def get_agent_tools_output_semantic_summary_trigger_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.trigger_chars",
+            20000,
+            minimum=1000,
+            maximum=1000000,
+        )
+
+    def get_agent_tools_output_semantic_summary_max_input_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.max_input_chars",
+            120000,
+            minimum=1000,
+            maximum=1000000,
+        )
+
+    def get_agent_tools_output_semantic_summary_chunk_chars(self) -> int:
+        maximum = self.get_agent_tools_output_semantic_summary_max_input_chars()
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.chunk_chars",
+            20000,
+            minimum=1000,
+            maximum=maximum,
+        )
+
+    def get_agent_tools_output_semantic_summary_max_map_chunks(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.max_map_chunks",
+            6,
+            maximum=20,
+        )
+
+    def get_agent_tools_output_semantic_summary_map_concurrency(self) -> int:
+        maximum = self.get_agent_tools_output_semantic_summary_max_map_chunks()
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.map_concurrency",
+            3,
+            maximum=min(10, maximum),
+        )
+
+    def get_agent_tools_output_semantic_summary_total_timeout_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.total_timeout_seconds",
+            12,
+            maximum=120,
+        )
+
+    def get_agent_tools_output_semantic_summary_map_max_tokens(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.map_max_tokens",
+            500,
+            minimum=64,
+            maximum=4000,
+        )
+
+    def get_agent_tools_output_semantic_summary_reduce_max_tokens(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.reduce_max_tokens",
+            900,
+            minimum=64,
+            maximum=8000,
+        )
+
+    def get_agent_tools_output_semantic_summary_summary_max_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.output.semantic_summary.summary_max_chars",
+            4000,
+            minimum=500,
+            maximum=20000,
+        )
 
     def get_agent_tools_search_default_page_size(self) -> int:
         return self._get_bounded_positive_int(

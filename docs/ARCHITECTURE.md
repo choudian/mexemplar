@@ -281,7 +281,9 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 | `src/execution/process_manager.py` | 当前 sidecar 会话内后台进程 registry、日志窗口、等待/停止/关闭 |
 | `src/data/repos/tool_output_repository.py` | 私有 blob + SQLite metadata 的 raw output reference Repository |
 
-AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session、tool_call、tool_name、workspace root），handler 返回统一 JSON envelope。保存 tool result 前统一经过 output governance：小结果直接脱敏进入 messages，大结果写入 `ToolOutputRepository` 管理的私有 artifact 并在可见结果中只保留摘要和 reference id；畸形 envelope 或治理异常只保存不含原始内容的安全 fallback。这样未知工具、pre-hook 拒绝、handler 异常、标准化错误、跳过和 fallback 路径仍保持 function-calling 所需的“一次 tool call 对一条 tool result”配对。
+AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session、tool_call、tool_name、workspace root），handler 返回统一 JSON envelope。保存任何文本 tool result 前统一经过 output governance：小型 legacy/custom 结果保持原格式；大结果、截断结果或已有 raw reference 的结果先复用/创建 `ToolOutputRepository` 私有 artifact，再生成有界 compact envelope。compact payload 的 `facts` 与 `preview` 来自确定性提取，独立低成本模型只追加 advisory `semanticSummary`，不能覆盖 exit code、错误码、状态等可验证事实。
+
+语义摘要配置位于 `agent_tools.output.semantic_summary.*`，使用独立 keyring 密钥 `tool_output_summary_api_key`。输入按工具类型优先提取 stdout/stderr、文件内容、搜索结果、网页正文或 reference 内容；超过输入预算时按 head/error context/uniform/tail 选择，再以最多 6 个 map、并发 3 和一次 reduce 在默认 12 秒总预算内同步生成。摘要调用失败、超时或 JSON 畸形时只移除 `semanticSummary`，原有 facts、preview 和 raw reference 保留，仍只持久化一条 tool result。Debug trace source 为 `tool_output_summary`，Real Grand Tour 继续受只读凭据和付费调用预算约束。
 
 文件修改采用先读后写模型：`read_file` 返回基于原始字节的 baseline；已存在文件的 `write_file`、`edit_file` 和 `apply_patch` update/delete 必须带当前 baseline，过期或缺失在落盘前拒绝。`list_dir` 和搜索返回有界、相对路径的结构化结果，搜索默认使用原生遍历而非 shell 解析。命令解析为 argv 后以 `shell=False` 启动，只允许 workspace 内 cwd 和路径参数；shell 控制语法、shell host 与内联解释器代码在执行前拒绝。后台进程受会话级数量、日志和等待上限约束，只在当前 sidecar 进程会话内可管理，重启后旧 `proc_*` id 返回 unavailable。
 

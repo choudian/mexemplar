@@ -631,6 +631,7 @@ class AgentLoop:
                     tool_call_id=tool_call.id,
                     session_id=ctx.session_id,
                     content=content,
+                    tool_args=tool_call.args,
                     workspace_root=Path.cwd(),
                 )
             except Exception:

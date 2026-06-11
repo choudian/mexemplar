@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-06-05
-**Revision**: 2026-06-05 — Merged `specs/014-assistant-chat-transparency`
+**Last Updated**: 2026-06-11
+**Revision**: 2026-06-11 — Merged `specs/016-tool-output-semantic-summary`
 
 ---
 
@@ -1026,7 +1026,7 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 
 ### Constraints & Compatibility
 
-- **CC-069**: 范围仅限 Agent 内置 foundational tools；用户创建的业务工具、录制 workflow tools 和 specialist methodology assets 不由本特性重定义。
+- **CC-069**: 015 对 handler 参数和结构化 envelope 的升级范围仅限 Agent 内置 foundational tools；用户创建的业务工具、录制 workflow tools 和 specialist methodology assets 不采用该 handler 契约。016 仅把共享的保存时文本结果治理扩展到 legacy/custom 工具结果，不改变其 handler 参数、权限或业务语义。 [Updated by Source: specs/016-tool-output-semantic-summary]
 - **CC-070**: AgentLoop 既有 tool-call/tool-result pairing 语义 MUST 保持，单工具和多工具轮次都不得出现孤立 tool result 或重复配对。
 - **CC-071**: 高危确认必须继续是 session-scoped、fail-closed，且"全部允许/免确认"不得持久化到配置、keyring、SQLite 或 DuckDB。
 - **CC-072**: permission 和 confirmation summary 不得包含完整文件内容、完整替换文本、完整多行命令、凭据或 raw large output。
@@ -1059,3 +1059,74 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - background process 超出发起回合但仍在同一 sidecar 会话内时，后续 inspection 能看到 active/completed/timed_out/terminated 状态。
 - sidecar 重启后，旧 process id 返回 unavailable-after-restart，不当作可管理 live process。
 - raw binary/media output 不进入普通对话文本；只保留受授权和 retention 管控的 reference。
+
+---
+
+## 工具输出语义摘要 [Source: specs/016-tool-output-semantic-summary]
+
+**Revision note (2026-06-11)**: Archived merged feature 016 into main memory; continued user-story, requirement, compatibility, and success-criteria numbering from the existing project memory.
+
+### User Stories
+
+- **US-049 (P1)**: Agent 面对大或截断的工具结果时，获得有界 compact envelope，其中确定性 `facts`、`preview`、原始字符数、payload keys 和可授权恢复的 raw reference 不依赖模型可用性。
+- **US-050 (P1)**: Agent 可获得固定结构的 advisory 语义摘要，用于快速理解概览、关键发现、错误、重要数据和下一步；无效 JSON、provider 失败、Map-Reduce 失败或超时会确定性省略摘要。
+- **US-051 (P2)**: Agent 可通过 `extractionGoal`、`web_fetch.prompt` 或保守推断的常见 goal/query/prompt/pattern 参数，让摘要聚焦当前工具调用目的，而不改变工具执行和权限语义。
+- **US-052 (P2)**: 用户可在 Settings“工具输出”分区配置独立低成本摘要模型、兼容端点、温度、预算和 keyring-only 密钥，并执行不返回模型原文的连接测试。
+
+### Functional Requirements
+
+- **FR-216**: Governance MUST 处理每个文本工具结果，同时保持未触发治理的小型 legacy/custom 结果原格式不变。
+- **FR-217**: 原始文本达到 `trigger_chars`、`limits.truncated` 为真、已有 raw reference，或 handler metadata 报告 clipping/truncation 时 MUST 触发 compact。
+- **FR-218**: Governance MUST 在 LLM 不可用时仍保留确定性 `preview`、`facts`、`rawChars`、`originalPayloadKeys` 和授权 reference。
+- **FR-219**: 不存在可复用 reference 且 artifact 限额允许时，系统 MUST 在语义摘要调用前持久化原始工具结果。
+- **FR-220**: 语义摘要失败 MUST 直接省略 `semanticSummary`，不得替换确定性事实或为同一 tool call 创建第二条结果。
+- **FR-221**: 语义模型的输入和输出 MUST 脱敏、有界，并始终作为不可信数据处理。
+- **FR-222**: 输入超过 `max_input_chars` 时 MUST 按 15% head、35% error context、35% uniform sample、15% tail 的预算选择内容。
+- **FR-223**: Map-Reduce MUST 遵守配置的 chunk size、map count、concurrency、token budget 和 total timeout，业务层不得额外重试。
+- **FR-224**: `semanticSummary` MUST 标记 `advisory=true`，且 MUST NOT 覆盖已验证的 facts、exit code、错误码或状态。
+- **FR-225**: Extraction goal MUST 只影响摘要 prompt，MUST NOT 改变工具执行、权限判断或 handler 语义。
+- **FR-226**: 摘要配置及全部高级限额 MUST 通过 `get_unified_config()` / `UnifiedConfigManager` 访问。
+- **FR-227**: 独立摘要 API key MUST 只使用 keyring username `tool_output_summary_api_key`，不得回退到 plaintext 配置。
+- **FR-228**: 支持的 provider MUST 包含 Anthropic、OpenAI、DeepSeek、Qwen、Zhipu、Moonshot 和 custom OpenAI-compatible endpoint。
+- **FR-229**: Runtime health counters MUST 覆盖 attempts、successes、timeouts、partial summaries、invalid summaries、map/reduce failures 和 input characters。
+- **FR-230**: 新 provider callsite MUST 注册到 Debug provider inventory 和 Real Grand Tour credential/budget coverage，并使用 trace source `tool_output_summary`。
+- **FR-231**: 本特性 MUST NOT 引入数据库迁移；摘要保存在既有 tool-result message 中，raw output 继续由 `ToolOutputRepository` 拥有。
+
+### Key Entities
+
+- **Governed Text Tool Result**: 任意 legacy、custom 或 upgraded 工具产生的文本结果。小结果可保持原格式；达到治理条件后统一进入保存时 compact 流程。
+- **Deterministic Compact Envelope**: 有界可见结果，至少包含 `facts`、`preview`、`rawChars`、`originalPayloadKeys` 和可用 reference；这些字段是执行真相，不依赖 LLM。
+- **Semantic Summary**: 可省略的 advisory JSON，固定字段为 `overview`、`keyFindings`、`errors`、`importantData`、`nextActions`、`extractionGoal`、`coverage`、`mode` 和 `advisory`。
+- **Extraction Goal**: 最长 1000 字符的摘要聚焦提示；来源可以是显式 `extractionGoal`、`web_fetch.prompt` 或 custom tool 常见参数，不传入 handler 执行分支。
+- **Semantic Summary Configuration**: `agent_tools.output.semantic_summary.*` 下的 provider/model/base URL/temperature、触发阈值、采样、Map-Reduce、deadline、token 和输出字符预算。
+- **Tool Output Summary Credential**: keyring 中 username 为 `tool_output_summary_api_key` 的独立 secret；配置、DTO、日志和 UI 只暴露 masked presence/status。
+- **Semantic Summary Health Metrics**: log-safe 进程内计数器，记录摘要尝试、成功、超时、部分成功、非法结果、Map/Reduce 失败和输入字符数。
+
+### Constraints & Compatibility
+
+- **CC-078**: 小型 legacy/custom 文本结果在未触发治理时必须保持原格式，避免扩大 016 的兼容性影响。
+- **CC-079**: `facts` / `preview` 是确定性权威信息；模型摘要只能辅助阅读，不能成为 exit code、错误码、状态或权限决策的来源。
+- **CC-080**: artifact、governance、provider、JSON validation 或 timeout 失败时必须 fail-open 到一个安全、有界、exactly-one 的 tool result。
+- **CC-081**: 已授权的现有 raw reference 必须复用；需要新 reference 时必须先完成持久化，再进行摘要调用，摘要失败不得丢失恢复入口。
+- **CC-082**: 原始工具输出属于不可信数据；prompt 必须阻止其覆盖摘要协议，输入/输出和最终 compact envelope 都必须执行敏感值脱敏与字符上限。
+- **CC-083**: `extractionGoal` 只用于摘要语义，不得进入 workspace policy、高危确认、工具参数改写或业务执行条件。
+- **CC-084**: 摘要配置必须走统一配置，secret 必须 keyring-only；disabled、空 model、缺 secret 或无效 compatible endpoint 时不得发起 provider 调用。
+- **CC-085**: 本特性不新增数据库 schema；既有 `ToolOutputRepository`、message persistence 和 exactly-one pairing 边界保持不变。
+
+### Success Criteria
+
+- **SC-105**: 100k、1MB 和超过 artifact limit 的 fixture 均生成不超过 `visible_char_cap` 的可见结果。
+- **SC-106**: 位于输出开头、中间或结尾的诊断信息均能被确定性 facts/preview fixture 保留。
+- **SC-107**: 摘要成功、provider 失败、非法 JSON、超时和 fallback 场景中，每个 tool call 均只持久化一条结果。
+- **SC-108**: 原始 secret 不出现在 semantic prompt、summary、普通日志、UI event 或可见 compact envelope 中。
+- **SC-109**: 现有 reference 被复用，且 Repository 重新实例化后仍可按授权加载。
+- **SC-110**: 后端设置、keyring、连接动作、前端保存/删除/测试和可行动错误展示测试全部通过。
+
+### Edge Cases
+
+- 大 legacy/custom/upgraded 结果都进入 compact；小 legacy/custom 结果保持原样。
+- 已有 raw reference 时复用而不重复创建；artifact 超限或存储失败时仍保留有界确定性结果。
+- 单块摘要返回非法 JSON、provider 异常或 deadline 耗尽时省略 `semanticSummary`。
+- Map-Reduce 允许部分 map 成功后 reduce；所有 map 失败、reduce 失败或总超时均省略摘要。
+- 工具输出中的 prompt injection 文本只能作为待总结数据，不能修改固定 JSON 协议或系统指令。
+- `load_tool_output` 读取出的第二阶段大结果会再次进入同一治理边界，同时保持授权和可见上限。

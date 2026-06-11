@@ -21,6 +21,14 @@ _DEFAULT_COUNTERS: dict[str, int] = {
     "process_cleanup_failures": 0,
     # Backward-compatible alias used by the original output governance counter.
     "cleanup_failures": 0,
+    "semantic_summary_attempts": 0,
+    "semantic_summary_successes": 0,
+    "semantic_summary_timeouts": 0,
+    "semantic_summary_partial": 0,
+    "semantic_summary_invalid": 0,
+    "semantic_summary_map_failures": 0,
+    "semantic_summary_reduce_failures": 0,
+    "semantic_summary_input_chars": 0,
 }
 
 _counters: dict[str, int] = dict(_DEFAULT_COUNTERS)

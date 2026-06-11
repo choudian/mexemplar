@@ -4136,6 +4136,26 @@ select:focus-visible,
   gap: 10px;
 }
 
+.settings-advanced {
+  margin-top: 4px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--surface-1) 72%, transparent);
+}
+
+.settings-advanced summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-advanced-grid {
+  display: grid;
+  padding: 0 14px 4px;
+}
+
 .settings-tabs .me-button {
   justify-content: flex-start;
 }

@@ -99,3 +99,28 @@ def test_brave_secret_delete_clears_keyring_without_exposing_secret(tmp_path, me
     assert response == {"secretKey": "web.brave_api_key", "present": False, "masked": ""}
     assert backend.get_password(service_name, "brave_search_api_key") is None
     assert "brave-delete-me" not in str(response)
+
+
+def test_tool_output_summary_secret_is_keyring_only(tmp_path, memory_keyring):
+    backend, service_name = memory_keyring
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    service = SettingsService(config)
+
+    response = service.write_secret(
+        "agent_tools.output.semantic_summary.api_key",
+        "sk-summary-only",
+    )
+
+    assert response["present"] is True
+    assert backend.get_password(service_name, "tool_output_summary_api_key") == "sk-summary-only"
+    assert (
+        get_sqlalchemy_manager().get_setting(
+            "agent_tools.output.semantic_summary.api_key",
+            default="",
+        )
+        == ""
+    )
+    assert "sk-summary-only" not in str(service.get_values())
+
+    service.delete_secret("agent_tools.output.semantic_summary.api_key")
+    assert backend.get_password(service_name, "tool_output_summary_api_key") is None

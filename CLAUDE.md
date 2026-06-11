@@ -58,6 +58,7 @@
 
 ## Recent Changes
 
+- 016-tool-output-semantic-summary: 所有文本工具结果统一进入大输出治理；compact envelope 保留确定性 facts/preview 和 raw reference，并可用独立低成本模型在 12 秒预算内生成 goal-aware 单块或 Map-Reduce advisory 摘要。摘要模型配置和独立 keyring 密钥在 Settings“工具输出”分区管理。
 - 015-agent-builtin-tools-upgrade: Agent 内置基础工具升级为统一 envelope + workspace 权限契约，文件读取/写入/编辑/patch/search/exec/process/output recovery 均走 baseline、分页/截断、fail-closed 确认和 output governance；大输出通过 `ToolOutputRepository` 私有 artifact + `load_tool_output` 授权恢复。
 - 014-assistant-chat-transparency: AI Assistant 主屏新增运行态输入门控、协作式深度取消停止、单条原地排队、实时折叠活动时间线、子任务卡片/详情，以及暂停子任务经主助理续跑；过程/子任务事件走 UI Event Registry，历史过程由既有 Repository 只读重建。
 - 013-subagent-resumable: 临时子代理可唤回机制——撞迭代上限或 LLM 调用最终失败时转 `suspended` 保活，主代理可 `inspect_subagent`（零模型调用概览）和 `continue_subagent`（断点续跑/返工），归属校验拒绝非己出会话，`_is_recoverable_llm_failure` 区分可恢复（配额/网络）与不可恢复失败，跨进程重启仍可唤回。
@@ -116,7 +117,16 @@
 **Root Cause:** 通用内置工具现在由 `builtin_general_tools.py` facade 分发到 focused 模块，安全语义分散在 shared envelope、permission helper、AgentLoop 保存边界和 Repository blob 管理中，临时就地补逻辑容易漏掉其中一层。
 **Prevention Rule:** 已升级内置工具必须返回统一 envelope；既有文件 mutation 必须带当前 raw-byte baseline；workspace 外写/删/patch/exec fail-closed；大输出只能经 `ToolOutputRepository` 私有 artifact + `load_tool_output` 授权读取；配置只走 `get_unified_config().get_agent_tools_*`。
 
+### 语义摘要不能替代确定性事实
+
+**Issue:** 让模型摘要覆盖 exit code、错误码或状态，或摘要失败后丢掉 raw reference，会把辅助信息误当成执行真相。
+**Root Cause:** 工具输出很大时，模型摘要更易读，但它仍可能遗漏、误判或超时。
+**Prevention Rule:** `facts` / `preview` 始终由确定性逻辑生成；`semanticSummary` 固定 `advisory=true`，失败时直接省略；摘要前后都脱敏，原文 reference 在摘要调用前完成复用或创建。
+
 <!-- SPECKIT START -->
+The `016-tool-output-semantic-summary` feature was archived to `.specify/memory/` on 2026-06-11.
+For historical context, see `specs/016-tool-output-semantic-summary/`.
+
 The `015-agent-builtin-tools-upgrade` feature has been archived to `.specify/memory/`.
 For historical context, see `specs/015-agent-builtin-tools-upgrade/`.
 

@@ -95,9 +95,7 @@ def test_builtin_read_file_agent_loop_persists_one_envelope_result(
     assert payload["outcome"] == "success"
 
 
-def test_builtin_read_file_missing_path_keeps_stable_error_code(
-    tmp_path, monkeypatch, mock_config
-):
+def test_builtin_read_file_missing_path_keeps_stable_error_code(tmp_path, monkeypatch, mock_config):
     monkeypatch.chdir(tmp_path)
     read_tool = next(td for td in general_tools.BUILTIN_GENERAL_TOOLS if td.name == "read_file")
 
@@ -209,3 +207,144 @@ def test_governance_failure_persists_one_safe_result_without_raw_output(
     assert len(tool_results) == 1
     assert payload["error"]["code"] == "compaction_failed_fallback"
     assert secret not in tool_results[0].content
+
+
+def test_agent_loop_passes_tool_args_to_governance_once(monkeypatch, mock_config):
+    captured = []
+
+    def capture_governance(**kwargs):
+        captured.append(kwargs)
+        return kwargs["content"]
+
+    monkeypatch.setattr(
+        "src.business.agents.agent_loop.govern_tool_result",
+        capture_governance,
+    )
+    tool = ToolDefinition(
+        name="custom_tool",
+        schema=make_tool_schema(
+            "custom_tool",
+            "custom",
+            {"query": {"type": "string"}},
+            ["query"],
+        ),
+        handler=lambda query: f"result:{query}",
+        has_side_effects=False,
+    )
+
+    loop, _ = _run(
+        [
+            ToolCallInfo(
+                id="call-1",
+                name="custom_tool",
+                args={"query": "find regression"},
+            )
+        ],
+        [tool],
+        mock_config,
+        "governance-tool-args",
+    )
+
+    assert len(captured) == 1
+    assert captured[0]["tool_args"] == {"query": "find regression"}
+    assert len(_tool_results(loop, "governance-tool-args")) == 1
+
+
+def test_multi_tool_summary_success_and_fallback_keep_one_result_per_call(
+    tmp_path, monkeypatch, mock_config
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path / "data",
+    )
+
+    def fake_summary(**kwargs):
+        if kwargs["tool_args"]["query"] != "summarize":
+            return None
+        return {
+            "overview": "summary",
+            "keyFindings": [],
+            "errors": [],
+            "importantData": [],
+            "nextActions": [],
+            "extractionGoal": "summarize",
+            "coverage": "complete",
+            "mode": "single",
+            "advisory": True,
+        }
+
+    monkeypatch.setattr(
+        "src.business.agents.tools.output_governance.summarize_tool_output",
+        fake_summary,
+    )
+    tool = ToolDefinition(
+        name="custom_tool",
+        schema=make_tool_schema(
+            "custom_tool",
+            "large custom output",
+            {"query": {"type": "string"}},
+            ["query"],
+        ),
+        handler=lambda query: f"{query}\n" + ("x" * 25_000),
+        has_side_effects=False,
+    )
+
+    loop, _ = _run(
+        [
+            ToolCallInfo(
+                id="call-summary",
+                name="custom_tool",
+                args={"query": "summarize"},
+            ),
+            ToolCallInfo(
+                id="call-fallback",
+                name="custom_tool",
+                args={"query": "fallback"},
+            ),
+        ],
+        [tool],
+        mock_config,
+        "multi-tool-summary-pairing",
+    )
+    tool_results = _tool_results(loop, "multi-tool-summary-pairing")
+    payloads = [json.loads(result.content)["payload"] for result in tool_results]
+
+    assert len(tool_results) == 2
+    assert payloads[0]["semanticSummary"]["overview"] == "summary"
+    assert "semanticSummary" not in payloads[1]
+
+
+def test_large_result_secret_stays_out_of_visible_result_activity_and_logs(
+    tmp_path, monkeypatch, mock_config, caplog
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path / "data",
+    )
+    activities = []
+    monkeypatch.setattr(
+        AgentLoop,
+        "_emit_activity",
+        lambda _self, _ctx, _kind, **kwargs: activities.append(kwargs),
+    )
+    secret = "raw-ui-log-secret"
+    tool = ToolDefinition(
+        name="custom_tool",
+        schema=make_tool_schema("custom_tool", "large custom output", {}, []),
+        handler=lambda: (f"token={secret}\n" * 2000),
+        has_side_effects=False,
+    )
+
+    loop, _ = _run(
+        [ToolCallInfo(id="call-secret", name="custom_tool", args={})],
+        [tool],
+        mock_config,
+        "large-result-secret-boundary",
+    )
+    visible_result = _tool_results(loop, "large-result-secret-boundary")[0].content
+
+    assert secret not in visible_result
+    assert all(secret not in str(activity.get("text", "")) for activity in activities)
+    assert secret not in caplog.text

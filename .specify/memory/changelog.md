@@ -1,5 +1,8 @@
 # Merged Features Log
 
+**Last Updated:** 2026-06-11
+**Revision:** 2026-06-11 — Archived `specs/016-tool-output-semantic-summary`
+
 ## 录制数据大字段按需读取 — 2026-04-25
 
 **Branch:** `001-recording-field-layering`
@@ -336,3 +339,31 @@
 - `config.example.json`、`docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、`AGENTS.md`、`src/AGENTS.md` — 活文档、配置示例和 AI 入口同步。
 
 **Tasks Completed:** 86/86 tasks
+
+## Tool Output Semantic Summary — 2026-06-11
+
+**Branch:** `016-tool-output-semantic-summary`
+**Spec:** `specs/016-tool-output-semantic-summary`
+**Revision note:** Archived the completed feature into project memory with deterministic facts remaining authoritative and semantic summaries explicitly advisory.
+
+**What was added:**
+- US-049 (P1): 所有大或截断文本工具结果进入统一 compact 治理，保留确定性 facts/preview、原始大小、payload keys 和可授权恢复的 raw reference。
+- US-050 (P1): 独立低成本模型可生成固定 JSON 结构的单块或 Map-Reduce advisory 摘要；非法输出、provider 失败和超时确定性省略摘要。
+- US-051 (P2): `extractionGoal`、`web_fetch.prompt` 和 custom tool 常见 goal/query/prompt/pattern 参数可引导摘要重点，但不改变执行或权限语义。
+- US-052 (P2): Settings 新增“工具输出”分区，支持 provider/model/endpoint/temperature、高级预算、独立 keyring 密钥和脱敏连接测试。
+
+**New Components:**
+- `src/business/agents/tools/semantic_summary.py` — 工具感知文本提取、15/35/35/15 选择预算、goal 推断、单块/Map-Reduce 调用、deadline、JSON validation 和脱敏。
+- `tests/business/agents/test_tool_output_semantic_summary.py` — 选择、摘要、失败、超时、注入、脱敏和 goal 覆盖。
+- Settings “Tool Output” section — 高级预算折叠、masked secret 和 connection action。
+
+**Modified Components:**
+- `src/business/agents/agent_loop.py` / `tools/output_governance.py` — 原始工具参数传入保存边界；所有文本结果统一治理、reference-first、确定性 facts/preview 和 exactly-one fallback。
+- `src/business/agents/tools/builtin_general_tools.py` / `command_tools.py` — `extractionGoal` schema 与 centralized raw-reference ownership。
+- `src/data/config_models.py` / `unified_config.py` / `credential_resolver.py` — `agent_tools.output.semantic_summary.*` 配置和 `tool_output_summary_api_key` keyring-only secret。
+- `src/business/services/settings_service.py` / `settings_actions_service.py` / `src/desktop_api/schemas.py` — 设置 descriptor、状态、secret 操作和只返回 provider/model metadata 的连接测试。
+- `frontend/src/api/settings.ts` / `frontend/src/screens/settings/SettingControls.tsx` — typed advanced descriptor 和工具输出设置 UI。
+- `src/utils/agent_tool_health.py` / Debug provider inventory / Real Grand Tour coverage — 摘要运行计数、trace、credential 和 budget 门卫。
+- `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` / `config.example.json` / AI entry mirrors — 当前架构、约束、配置和协作知识同步。
+
+**Tasks Completed:** 23/23 tasks

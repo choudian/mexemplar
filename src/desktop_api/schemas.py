@@ -502,16 +502,17 @@ class CompositionTrialRequest(BaseModel):
 class SettingDescriptor(BaseModel):
     key: str
     label: str
-    section: Literal["ai", "web", "recording", "data", "about"]
+    section: Literal["ai", "web", "tool_output", "recording", "data", "about"]
     valueKind: Literal["string", "integer", "number", "boolean", "enum", "path", "secret", "action"]
     description: str = ""
     options: list[str] = Field(default_factory=list)
     validationRules: dict[str, Any] = Field(default_factory=dict)
     status: Literal["available", "missing_secret", "invalid", "unavailable"] = "available"
+    advanced: bool = False
 
 
 class SettingSection(BaseModel):
-    id: Literal["ai", "web", "recording", "data", "about"]
+    id: Literal["ai", "web", "tool_output", "recording", "data", "about"]
     label: str
     items: list[SettingDescriptor] = Field(default_factory=list)
     actions: list[SettingDescriptor] = Field(default_factory=list)

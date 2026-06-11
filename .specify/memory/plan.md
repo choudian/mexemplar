@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-06-05
-**Revision**: 2026-06-05 — Merged `specs/014-assistant-chat-transparency`
+**Last Updated**: 2026-06-11
+**Revision**: 2026-06-11 — Merged `specs/016-tool-output-semantic-summary`
 
 ---
 
@@ -850,6 +850,8 @@ Stable error codes include path errors, permission/confirmation failures, `unsup
 
 Result governance is a single save-time boundary, not a post-hook pipeline. All built-in tool save paths route through the governance wrapper before persistence so redaction, compaction, raw-reference creation, fallback warnings, and exactly-one-result pairing happen together. Governance failure returns one safe fallback envelope and must never create a second tool result for the same `tool_call_id`.
 
+Feature 016 extends this same save-time boundary to every text tool result, including legacy and custom tools, while preserving the original format for small results. This extension does not change custom handler arguments, permission decisions, or business semantics. [Source: specs/016-tool-output-semantic-summary]
+
 ### Runtime Health Metadata
 
 Implementation emits log-safe diagnostics/counters for compacted outputs, fallback count, raw-reference create/load failures, stale or missing baseline rejections, outside-workspace read confirmations and fail-closed outcomes, background process starts/reuse/timeouts/stops/shutdown cleanup, and retention cleanup of expired metadata, missing blobs, and orphaned blobs.
@@ -863,3 +865,107 @@ Diagnostics must omit raw command bodies, local blob paths, file contents, crede
 - Data tests cover tool-output metadata persistence, retention cleanup, expired/deleted lookup, and post-restart reference behavior.
 - Process tests cover background start, poll, logs, wait, stop, input, close, duplicate prevention, timeout, and unavailable-after-restart.
 - Guardrails keep UI/desktop API out of built-in execution state, prevent direct SQL in business code, preserve fail-closed confirmation semantics, and assert no legacy contract dependency remains.
+
+---
+
+## Tool Output Semantic Summary [Source: specs/016-tool-output-semantic-summary]
+
+**Revision note (2026-06-11)**: Archived merged feature 016 into main implementation memory; records the implemented deterministic compaction, optional advisory summarization, dedicated settings/credential path, and verification coverage.
+
+### Technical Context
+
+- **Runtime**: Python 3.11+ source with Python 3.12 sidecar runtime; React 18 + TypeScript/Vite Settings UI.
+- **Dependencies**: no new external package. The implementation reuses `AgentLoop`, `ToolOutputRepository`, `LangChainLLMClient`, `TraceContext`, unified config, keyring, pytest, Vitest, and the existing typed settings API.
+- **Storage**: semantic summaries remain inside persisted tool-result message content. Raw output continues to use existing SQLite reference metadata and private blobs through `ToolOutputRepository`; no migration is introduced.
+- **Performance**: the default total summary deadline is 12 seconds, with at most 6 map calls and concurrency 3. Visible results remain bounded by `agent_tools.output.visible_char_cap`.
+- **Safety**: exactly-one result pairing, deterministic fail-open fallback, keyring-only secret storage, and no raw prompt/model output in ordinary logs, UI events, or connection-test responses.
+
+### Configuration
+
+All values are owned by `get_unified_config()` / `UnifiedConfigManager`:
+
+```text
+agent_tools.output.semantic_summary.enabled              # true
+agent_tools.output.semantic_summary.provider             # anthropic
+agent_tools.output.semantic_summary.model                # ""
+agent_tools.output.semantic_summary.base_url             # ""
+agent_tools.output.semantic_summary.temperature          # 0.2
+agent_tools.output.semantic_summary.trigger_chars        # 20000
+agent_tools.output.semantic_summary.max_input_chars      # 120000
+agent_tools.output.semantic_summary.chunk_chars          # 20000
+agent_tools.output.semantic_summary.max_map_chunks       # 6
+agent_tools.output.semantic_summary.map_concurrency      # 3
+agent_tools.output.semantic_summary.total_timeout_seconds # 12
+agent_tools.output.semantic_summary.map_max_tokens       # 500
+agent_tools.output.semantic_summary.reduce_max_tokens    # 900
+agent_tools.output.semantic_summary.summary_max_chars    # 4000
+```
+
+The dedicated secret uses keyring username `tool_output_summary_api_key`. Plaintext configuration fallback is forbidden.
+
+### Source Code Structure
+
+```text
+src/
+├── business/
+│   ├── agents/
+│   │   ├── agent_loop.py                    # passes original tool args into save-time governance
+│   │   └── tools/
+│   │       ├── output_governance.py         # all-text trigger, facts/preview, reference-first compact
+│   │       ├── semantic_summary.py           # selection, goals, single/Map-Reduce, validation/deadline
+│   │       ├── builtin_general_tools.py      # optional extractionGoal schemas
+│   │       └── command_tools.py              # centralized governance owns command raw references
+│   └── services/
+│       ├── settings_service.py               # Tool Output descriptors/status/secret operations
+│       └── settings_actions_service.py       # sanitized connection test
+├── data/
+│   ├── config_models.py                      # semantic-summary config dataclass
+│   ├── unified_config.py                     # validated getters + keyring-backed secret helpers
+│   └── credential_resolver.py                # read-only summary credential resolution
+├── desktop_api/
+│   └── schemas.py                            # settings descriptor `advanced` metadata
+└── utils/
+    └── agent_tool_health.py                  # log-safe semantic summary counters
+
+frontend/
+├── src/api/settings.ts                       # typed advanced descriptor contract
+└── src/screens/settings/SettingControls.tsx  # Tool Output section + advanced disclosure
+```
+
+### Governance Flow
+
+1. Parse upgraded envelopes when possible and inspect all text results at the single AgentLoop save boundary.
+2. Keep small legacy/custom results unchanged. Trigger compact for size, truncation/clipping metadata, or an existing raw reference.
+3. Redact the visible object and derive deterministic `facts`, `preview`, `rawChars`, and `originalPayloadKeys`.
+4. Reuse an authorized existing reference; otherwise persist the original handler result before summary work when artifact limits allow.
+5. Resolve an extraction goal from explicit `extractionGoal`, `web_fetch.prompt`, or conservative custom goal/query/prompt/pattern arguments.
+6. Attempt semantic summarization over redacted, bounded selected text.
+7. Validate, redact, and bound the semantic JSON. Any failure omits `semanticSummary` while preserving deterministic fields and reference.
+8. Fit the compact envelope to the existing visible cap and persist exactly one result.
+
+### Semantic Summarizer
+
+- Tool-aware extraction prefers stdout/stderr, file content, search matches, web body, and loaded reference content; unknown tools use bounded structured JSON text.
+- Inputs above `max_input_chars` use 15% head, 35% error/warning context, 35% uniform samples, and 15% tail.
+- One chunk uses `mode=single`; multiple chunks use a bounded thread pool for map calls and one reduce call.
+- Partial map success may reduce. Total map failure, invalid output, reduce failure, provider failure, or deadline exhaustion returns no semantic summary.
+- Every provider request receives only the remaining deadline, uses no business-layer retry, and runs under `TraceContext(source="tool_output_summary")`.
+- Prompt instructions treat tool output as untrusted data and require a fixed JSON-only advisory schema.
+
+### Settings And Provider Integration
+
+- The generic settings descriptor supports `advanced`; the Tool Output section keeps budget controls collapsed by default.
+- Provider options include Anthropic, OpenAI, DeepSeek, Qwen, Zhipu, Moonshot, and custom OpenAI-compatible endpoints.
+- The UI exposes only masked secret presence. Save/delete operations use the existing settings secret API.
+- Connection validation performs one minimal bounded provider call and returns status plus provider/model metadata, never the model response.
+- Empty model, missing secret, disabled summary, or invalid compatible endpoint degrades without a provider call.
+- Debug provider inventory and Real Grand Tour coverage register summary client construction, credential reads, trace source, and paid-call budget.
+
+### Testing Strategy
+
+- Unit tests cover deterministic selection budgets, diagnostics at different positions, redaction, prompt injection text, extraction goals, single call, Map-Reduce, partial maps, invalid JSON, provider failure, and timeout.
+- Governance tests cover legacy/custom/upgraded result shapes, all trigger rules, existing-reference reuse, artifact-limit fallback, visible caps, and second-stage `load_tool_output` governance.
+- Integration tests prove AgentLoop argument propagation and exactly-one result pairing across summary success/failure and multi-tool batches.
+- Settings/data/API tests cover defaults, validation, keyring-only storage, read-only credential resolution, connection action, provider metadata, and advanced descriptor shape.
+- Frontend tests cover Tool Output navigation, advanced disclosure, value save, secret write/delete, connection status, and actionable error display.
+- Guardrails cover provider inventory, Real Grand Tour credential/budget registration, secret/log/UI-event leakage, active documentation, and AI entry mirrors.

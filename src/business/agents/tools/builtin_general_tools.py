@@ -1279,6 +1279,11 @@ READ_FILE_SCHEMA = make_tool_schema(
             "type": "boolean",
             "description": "Whether to include structured line rows",
         },
+        "extractionGoal": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Optional goal used only to focus large-output summarization",
+        },
     },
     required=["path"],
 )
@@ -1291,6 +1296,7 @@ def read_file_handler(
     maxLines: int | None = None,
     includeLineNumbers: bool = True,
     max_bytes: int | None = None,
+    extractionGoal: str | None = None,
 ) -> str:
     return file_tools.read_file_handler(
         path=path,
@@ -1516,6 +1522,11 @@ EXEC_SCHEMA = make_tool_schema(
         "mode": {"type": "string", "enum": ["sync", "background"], "description": "Execution mode"},
         "stdin": {"type": "string", "description": "Optional bounded stdin for sync commands"},
         "allowStdin": {"type": "boolean", "description": "Enable stdin for background process"},
+        "extractionGoal": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "Optional goal used only to focus large-output summarization",
+        },
     },
     required=["command"],
 )
@@ -1529,6 +1540,7 @@ def exec_handler(
     mode: str = "sync",
     stdin: str | None = None,
     allowStdin: bool = False,
+    extractionGoal: str | None = None,
 ) -> str:
     return command_tools.exec_handler(
         command=command,
@@ -1580,6 +1592,7 @@ SEARCH_FILES_SCHEMA = make_tool_schema(
         "pageSize": {"type": "integer"},
         "pageToken": {"type": "string"},
         "includeHidden": {"type": "boolean"},
+        "extractionGoal": {"type": "string", "maxLength": 1000},
     },
     required=[],
 )
@@ -1597,6 +1610,7 @@ SEARCH_CONTENT_SCHEMA = make_tool_schema(
         "pageSize": {"type": "integer"},
         "pageToken": {"type": "string"},
         "includeHidden": {"type": "boolean"},
+        "extractionGoal": {"type": "string", "maxLength": 1000},
     },
     required=["pattern"],
 )
@@ -1626,6 +1640,7 @@ PROCESS_LOGS_SCHEMA = make_tool_schema(
         "processId": {"type": "string"},
         "stream": {"type": "string", "enum": ["stdout", "stderr", "combined"]},
         "tailChars": {"type": "integer"},
+        "extractionGoal": {"type": "string", "maxLength": 1000},
     },
     required=["processId"],
 )
@@ -1634,7 +1649,11 @@ PROCESS_LOGS_SCHEMA = make_tool_schema(
 PROCESS_WAIT_SCHEMA = make_tool_schema(
     name="process_wait",
     description="Wait up to timeoutMs for a current-session background process.",
-    properties={"processId": {"type": "string"}, "timeoutMs": {"type": "integer"}},
+    properties={
+        "processId": {"type": "string"},
+        "timeoutMs": {"type": "integer"},
+        "extractionGoal": {"type": "string", "maxLength": 1000},
+    },
     required=["processId"],
 )
 
@@ -1663,6 +1682,7 @@ LOAD_TOOL_OUTPUT_SCHEMA = make_tool_schema(
         "offset": {"type": "integer"},
         "maxBytes": {"type": "integer"},
         "renderAs": {"type": "string", "enum": ["text"]},
+        "extractionGoal": {"type": "string", "maxLength": 1000},
     },
     required=["referenceId"],
 )
@@ -1678,6 +1698,7 @@ def search_files_handler(
     pageSize: int | None = None,
     pageToken: str | None = None,
     includeHidden: bool = False,
+    extractionGoal: str | None = None,
 ) -> str:
     return search_tools.search_files_handler(
         root=root,
@@ -1697,6 +1718,7 @@ def search_content_handler(
     pageSize: int | None = None,
     pageToken: str | None = None,
     includeHidden: bool = False,
+    extractionGoal: str | None = None,
 ) -> str:
     return search_tools.search_content_handler(
         root=root,
@@ -1715,12 +1737,14 @@ def load_tool_output_handler(
     offset: int = 0,
     maxBytes: int = 64000,
     renderAs: str = "text",
+    extractionGoal: str | None = None,
 ) -> str:
     return output_governance.load_tool_output_handler(
         referenceId=referenceId,
         offset=offset,
         maxBytes=maxBytes,
         renderAs=renderAs,
+        extractionGoal=extractionGoal,
     )
 
 

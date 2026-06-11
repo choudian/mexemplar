@@ -30,8 +30,12 @@
 - `search_files` / `search_content` 必须使用结构化遍历、默认忽略依赖/构建/缓存目录、稳定排序、有界分页和脱敏摘要；不要恢复通过 shell `find`/`grep` 解析结果的默认路径。
 - `exec` 和 process lifecycle 工具只允许 workspace 内 cwd，并以解析后的 argv 直接启动子进程，不通过 shell；换行、管道、重定向、命令连接符、shell host、内联解释器代码、显式 workspace 外 executable 和 workspace 外路径参数必须在执行前拒绝。当前 Python runtime 的绝对 executable 是测试/运行脚本所需的受控例外。同步命令输出必须截断并脱敏，后台进程数、日志窗口和等待时间必须受统一配置上限约束；进程记录只在当前 sidecar 进程会话内有效，重启后的未知 `proc_*` 必须返回 unavailable 而不是尝试复用系统进程。
 - 大输出原文只能由 `ToolOutputRepository` 管理的私有 blob + SQLite metadata 持久化；业务层不得直接写 tool-output SQL 或暴露 blob 路径。`load_tool_output` 必须按 owner session + workspace 授权、有界窗口读取、脱敏并处理 expired / missing blob；`tool_call_id` 只记录来源，不是授权因子。过期或软删除 blob 删除失败时必须保留可重试清理路径。
+- 所有文本 tool result 都经过同一治理边界：小型 legacy/custom 结果保持原格式；原文达到阈值、handler 报告截断/裁剪、或已有 raw reference 时转 compact envelope。compact payload 的 `facts` 和 `preview` 是确定性权威信息；`semanticSummary` 永远是 `advisory=true` 的辅助信息，失败/超时/非法 JSON 时必须直接省略，不能覆盖 facts 或产生第二条 tool result。
+- 语义摘要输入必须在 provider 调用前脱敏，并把工具输出声明为不可信数据；模型输出在解析后再次脱敏并受固定 schema/字符上限约束。超过输入上限的选择预算固定保留 head、错误/异常/warning 上下文、均匀采样和 tail；模型调用受总超时、map 数量、并发和 token 上限控制，不做业务重试。
+- `extractionGoal` 只允许影响摘要 prompt，不得进入工具执行、权限分类或 handler 业务语义。支持该字段的 built-in schema 最大 1000 字；`web_fetch.prompt` 和 custom tool 常见 goal/query/prompt/pattern 参数只能做保守推导。
 - raw output blob 当前不做应用层加密；本地桌面部署依赖应用数据目录访问控制，并在 POSIX 上 best-effort 设置私有文件权限。任何跨用户、远程或同步场景都必须先补充加密和密钥管理设计。
-- 新增非 UI tuning knob 走 `get_unified_config().get_agent_tools_*`，Settings UI 暂不暴露 `agent_tools.*`；如需前端可调，必须先更新本文件和 `frontend/AGENTS.md`。
+- 新增 tuning knob 走 `get_unified_config().get_agent_tools_*`。Settings UI 只开放 `agent_tools.output.semantic_summary.*` 的独立“工具输出”分区；file/search/process、artifact retention 和 visible cap 等工程限额仍不开放。
+- 工具输出摘要密钥只允许写入 keyring username `tool_output_summary_api_key`，不得回退主模型密钥或 plaintext config。OpenAI-compatible provider 必须配置 base URL；模型名为空、密钥缺失、endpoint 无效或开关关闭时无损降级为确定性摘要。
 
 ## Non-Migrated Boundaries
 

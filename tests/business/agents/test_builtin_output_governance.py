@@ -290,3 +290,352 @@ def test_output_governance_withholds_invalid_upgraded_tool_result():
 
     assert forged["error"]["code"] == "handler_contract_violation"
     assert secret not in json.dumps(forged, ensure_ascii=False)
+
+
+def test_small_custom_result_keeps_original_format():
+    content = "custom tool result"
+
+    assert (
+        govern_tool_result(
+            tool_name="custom_tool",
+            tool_call_id="call-custom",
+            session_id="session-1",
+            content=content,
+            tool_args={"query": "demo"},
+            workspace_root=".",
+        )
+        == content
+    )
+
+
+def test_large_custom_result_compacts_and_reuses_existing_reference(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    repo = ToolOutputRepository()
+    model = repo.create_reference(
+        session_id="session-1",
+        tool_name="custom_tool",
+        tool_call_id="call-custom",
+        kind="tool_payload",
+        data="raw source",
+        workspace_root=tmp_path,
+    )
+    content = success_json(
+        "custom_tool",
+        {"content": "x" * 25000},
+        references=[
+            {
+                "referenceId": model.reference_id,
+                "kind": model.kind,
+                "sizeBytes": model.size_bytes,
+                "contentType": model.content_type,
+                "sha256": model.sha256,
+            }
+        ],
+    )
+
+    governed = _obj(
+        govern_tool_result(
+            tool_name="custom_tool",
+            tool_call_id="call-custom",
+            session_id="session-1",
+            content=content,
+            tool_args={"goal": "find issues"},
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert governed["payload"]["compacted"] is True
+    assert governed["payload"]["facts"]["outcome"] == "success"
+    assert governed["references"][0]["referenceId"] == model.reference_id
+    assert len(governed["references"]) == 1
+
+
+def test_semantic_summary_is_advisory_and_does_not_replace_facts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    monkeypatch.setattr(
+        "src.business.agents.tools.output_governance.summarize_tool_output",
+        lambda **_kwargs: {
+            "overview": "model says success",
+            "keyFindings": [],
+            "errors": [],
+            "importantData": [],
+            "nextActions": [],
+            "extractionGoal": "find failure",
+            "coverage": "complete",
+            "mode": "single",
+            "advisory": True,
+        },
+    )
+    content = success_json(
+        "exec",
+        {"status": "failed", "exitCode": 9, "stderr": "ERROR\n" + "x" * 25000},
+    )
+
+    governed = _obj(
+        govern_tool_result(
+            tool_name="exec",
+            tool_call_id="call-1",
+            session_id="session-1",
+            content=content,
+            tool_args={"extractionGoal": "find failure"},
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert governed["payload"]["facts"]["status"] == "failed"
+    assert governed["payload"]["facts"]["exitCode"] == 9
+    assert governed["payload"]["semanticSummary"]["advisory"] is True
+
+
+def test_over_artifact_limit_still_respects_visible_cap(monkeypatch):
+    original_get_config_int = __import__(
+        "src.business.agents.tools.output_governance",
+        fromlist=["get_config_int"],
+    ).get_config_int
+
+    def tiny_artifact_limit(getter, default, **kwargs):
+        if getter == "get_agent_tools_output_max_artifact_bytes":
+            return 1000
+        return original_get_config_int(getter, default, **kwargs)
+
+    monkeypatch.setattr(
+        "src.business.agents.tools.output_governance.get_config_int",
+        tiny_artifact_limit,
+    )
+    governed = govern_tool_result(
+        tool_name="custom_tool",
+        tool_call_id="call-1",
+        session_id="session-1",
+        content="x" * 1_000_000,
+        workspace_root=".",
+    )
+    parsed = _obj(governed)
+
+    assert len(governed) <= 12000
+    assert parsed.get("references", []) == []
+    assert "max_artifact_bytes_exceeded" in parsed["warnings"]
+
+
+def test_handler_clipping_metadata_triggers_compaction(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    content = success_json(
+        "custom_tool",
+        {"content": "short"},
+        warnings=["handler_output_clipped"],
+    )
+
+    governed = _obj(
+        govern_tool_result(
+            tool_name="custom_tool",
+            tool_call_id="call-1",
+            session_id="session-1",
+            content=content,
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert governed["payload"]["compacted"] is True
+    assert governed["references"]
+
+
+def test_load_tool_output_second_stage_reuses_source_reference(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    model = ToolOutputRepository().create_reference(
+        session_id="session-1",
+        tool_name="exec",
+        tool_call_id="call-1",
+        kind="combined_output",
+        data="ERROR source\n" + ("x" * 100000),
+        workspace_root=tmp_path,
+    )
+    loaded = load_tool_output_handler(
+        model.reference_id,
+        maxBytes=64000,
+        sessionId="session-1",
+        workspaceRoot=str(tmp_path),
+    )
+    governed = _obj(
+        govern_tool_result(
+            tool_name="load_tool_output",
+            tool_call_id="call-2",
+            session_id="session-1",
+            content=loaded,
+            tool_args={"extractionGoal": "find source error"},
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert governed["payload"]["compacted"] is True
+    assert governed["references"][0]["referenceId"] == model.reference_id
+    assert len(governed["references"]) == 1
+
+
+def test_web_fetch_compaction_uses_markdown_body_and_transport_facts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    markdown = (
+        "# Trending\n\n"
+        "## acme/project\n\n"
+        "Production repository with 12,345 stars.\n\n" + ("Detailed project notes.\n\n" * 1200)
+    )
+    content = json.dumps(
+        {
+            "success": True,
+            "url": "https://example.test/trending",
+            "content": markdown,
+            "truncated": True,
+            "status": 200,
+            "bytes": 54321,
+            "duration_ms": 42,
+            "content_type": "text/html; charset=utf-8",
+            "result": "legacy prompt result",
+        },
+        ensure_ascii=False,
+    )
+
+    governed = _obj(
+        govern_tool_result(
+            tool_name="web_fetch",
+            tool_call_id="call-web",
+            session_id="session-1",
+            content=content,
+            tool_args={"prompt": "repository stars"},
+            workspace_root=tmp_path,
+        )
+    )
+
+    preview = governed["payload"]["preview"]
+    facts = governed["payload"]["facts"]
+    assert "acme/project" in preview
+    assert "12,345 stars" in preview
+    assert '\\"content\\"' not in preview
+    assert '"success"' not in preview
+    assert facts["url"] == "https://example.test/trending"
+    assert facts["httpStatus"] == 200
+    assert facts["bytes"] == 54321
+    assert facts["truncated"] is True
+    assert facts["contentType"] == "text/html; charset=utf-8"
+
+
+def test_semantic_summary_failure_keeps_deterministic_web_preview_and_reference(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+
+    def fail_summary(**_kwargs):
+        raise RuntimeError("summary provider unavailable")
+
+    monkeypatch.setattr(
+        "src.business.agents.tools.output_governance.summarize_tool_output",
+        fail_summary,
+    )
+    content = json.dumps(
+        {
+            "success": True,
+            "url": "https://example.test/trending",
+            "content": "# Trending\n\n## acme/project\n\n12,345 stars\n\n" + ("notes\n" * 5000),
+            "truncated": False,
+            "status": 200,
+            "bytes": 40000,
+            "content_type": "text/html",
+        }
+    )
+
+    governed = _obj(
+        govern_tool_result(
+            tool_name="web_fetch",
+            tool_call_id="call-web",
+            session_id="session-1",
+            content=content,
+            tool_args={"prompt": "repository stars"},
+            workspace_root=tmp_path,
+        )
+    )
+
+    assert "semanticSummary" not in governed["payload"]
+    assert "acme/project" in governed["payload"]["preview"]
+    assert governed["payload"]["facts"]["httpStatus"] == 200
+    assert governed["references"][0]["referenceId"].startswith("out_")
+
+
+def test_load_tool_output_compaction_summarizes_each_window_not_full_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    repo = ToolOutputRepository()
+    page_size = 30000
+    model = repo.create_reference(
+        session_id="session-1",
+        tool_name="exec",
+        tool_call_id="call-1",
+        kind="combined_output",
+        data=("FIRST_PAGE_ALPHA\n" + ("a" * (page_size - 17)))
+        + ("SECOND_PAGE_BETA\n" + ("b" * (page_size - 17))),
+        workspace_root=tmp_path,
+    )
+
+    def load_and_govern(offset: int, call_id: str) -> dict:
+        loaded = load_tool_output_handler(
+            model.reference_id,
+            offset=offset,
+            maxBytes=page_size,
+            sessionId="session-1",
+            workspaceRoot=str(tmp_path),
+        )
+        return _obj(
+            govern_tool_result(
+                tool_name="load_tool_output",
+                tool_call_id=call_id,
+                session_id="session-1",
+                content=loaded,
+                tool_args={"extractionGoal": "inspect current page"},
+                workspace_root=tmp_path,
+            )
+        )
+
+    first = load_and_govern(0, "call-page-1")
+    second = load_and_govern(page_size, "call-page-2")
+
+    assert "FIRST_PAGE_ALPHA" in first["payload"]["preview"]
+    assert "SECOND_PAGE_BETA" not in first["payload"]["preview"]
+    assert "SECOND_PAGE_BETA" in second["payload"]["preview"]
+    assert "FIRST_PAGE_ALPHA" not in second["payload"]["preview"]
+    assert first["payload"]["facts"]["offset"] == 0
+    assert first["payload"]["facts"]["windowBytes"] == page_size
+    assert first["payload"]["facts"]["totalBytes"] == page_size * 2
+    assert first["payload"]["facts"]["hasMore"] is True
+    assert first["payload"]["facts"]["nextPageToken"] == str(page_size)
+    assert second["payload"]["facts"]["offset"] == page_size
+    assert second["payload"]["facts"]["hasMore"] is False
+    assert first["references"][0]["referenceId"] == model.reference_id
+    assert second["references"][0]["referenceId"] == model.reference_id
+    assert len(list((tmp_path / "tool_outputs").glob("**/*.blob"))) == 1
