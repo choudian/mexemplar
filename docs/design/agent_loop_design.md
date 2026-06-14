@@ -241,11 +241,11 @@ class AgentType(str, Enum):
 class RetryConfig:
     """LLM 调用重试配置
 
-    任何异常都会触发重试（基于线性退避）。不再按错误关键词区分可重试/不可重试——
+    任何异常都会触发重试（基于指数退避）。不再按错误关键词区分可重试/不可重试——
     早期的字符串白名单几乎匹配不到 LangChain/SDK 包装后的真实异常文本，等价于关闭。
     """
     max_retries: int = 3      # 最大重试次数
-    retry_delay: float = 1.0  # 退避基数；实际延迟 = retry_delay * (retry_count + 1)
+    retry_delay: float = 1.0  # 退避基数；实际延迟 = retry_delay * 2 ** (attempt - 1)
 
 
 @dataclass
@@ -615,8 +615,8 @@ def _call_llm_with_retry(
     """
     调用 LLM，带重试机制
 
-    所有异常都会触发重试（最多 max_retries 次），采用线性退避：
-    delay = retry_delay * (retry_count + 1)。
+    所有异常都会触发重试（最多 max_retries 次），采用指数退避：
+    delay = retry_delay * 2 ** (attempt - 1)。
 
     Returns:
         LLMResponse，失败时返回 None（调用者需检查）
@@ -629,7 +629,7 @@ def _call_llm_with_retry(
                 logger.error(f"[AgentLoop] LLM 调用最终失败: {e}")
                 ctx.update_session_status("failed")
                 return None
-            delay = self._config.retry.retry_delay * (retry_count + 1)
+            delay = self._config.retry.retry_delay * (2 ** retry_count)
             logger.warning(f"[AgentLoop] LLM 调用失败，{delay}秒后重试（{retry_count + 1}/{self._config.retry.max_retries}）: {e}")
             time.sleep(delay)
 

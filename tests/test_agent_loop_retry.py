@@ -4,7 +4,7 @@
 - 首次成功直接返回，不 sleep
 - 任何异常都触发重试（不再有 retryable_errors 白名单）
 - 重试用尽返回 None
-- 线性退避：delay = retry_delay * (retry_count + 1)
+- 指数退避：delay = retry_delay * 2 ** retry_count
 - 最终失败不再 sleep
 - retry 配置由 unified_config 提供（max_retries / retry_delay）
 """
@@ -41,9 +41,10 @@ def test_first_attempt_succeeds_no_sleep(make_loop):
     llm.chat_with_tools.return_value = expected
 
     with patch("src.business.agents.agent_loop.time.sleep") as sleep_mock:
-        response = loop._call_llm_with_retry([], [], iteration=1)
+        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is expected
+    assert recoverable is False
     assert llm.chat_with_tools.call_count == 1
     sleep_mock.assert_not_called()
 
@@ -58,9 +59,10 @@ def test_retries_business_exception(make_loop):
     ]
 
     with patch("src.business.agents.agent_loop.time.sleep"):
-        response = loop._call_llm_with_retry([], [], iteration=1)
+        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is expected
+    assert recoverable is False
     assert llm.chat_with_tools.call_count == 2
 
 
@@ -74,9 +76,10 @@ def test_retries_real_world_rate_limit_message(make_loop):
     ]
 
     with patch("src.business.agents.agent_loop.time.sleep"):
-        response = loop._call_llm_with_retry([], [], iteration=1)
+        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is expected
+    assert recoverable is False
     assert llm.chat_with_tools.call_count == 2
 
 
@@ -85,15 +88,16 @@ def test_returns_none_after_max_retries(make_loop):
     llm.chat_with_tools.side_effect = RuntimeError("boom")
 
     with patch("src.business.agents.agent_loop.time.sleep"):
-        response = loop._call_llm_with_retry([], [], iteration=1)
+        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is None
+    assert recoverable is False
     # max_retries=2 → 一次原始 + 两次重试 = 3 次总调用
     assert llm.chat_with_tools.call_count == 3
 
 
-def test_linear_backoff(make_loop):
-    """delay = retry_delay * (retry_count + 1)。"""
+def test_exponential_backoff(make_loop):
+    """delay = retry_delay * 2 ** (attempt - 1)。"""
     loop, llm = make_loop(max_retries=3, retry_delay=2.0)
     llm.chat_with_tools.side_effect = RuntimeError("boom")
 
@@ -101,7 +105,7 @@ def test_linear_backoff(make_loop):
         loop._call_llm_with_retry([], [], iteration=1)
 
     sleep_calls = [c.args[0] for c in sleep_mock.call_args_list]
-    assert sleep_calls == [2.0, 4.0, 6.0]
+    assert sleep_calls == [2.0, 4.0, 8.0]
 
 
 def test_no_sleep_after_final_failure(make_loop):
@@ -122,9 +126,10 @@ def test_max_retries_zero_no_retry(make_loop):
     llm.chat_with_tools.side_effect = RuntimeError("boom")
 
     with patch("src.business.agents.agent_loop.time.sleep") as sleep_mock:
-        response = loop._call_llm_with_retry([], [], iteration=1)
+        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is None
+    assert recoverable is False
     assert llm.chat_with_tools.call_count == 1
     sleep_mock.assert_not_called()
 

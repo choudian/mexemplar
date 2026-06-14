@@ -254,8 +254,8 @@ class AgentLoop:
         """
         调用 LLM（带重试机制）
 
-        任何异常都会触发重试，最多 max_retries 次。退避策略为线性：
-        delay = retry_delay * (retry_count + 1)。
+        任何异常都会触发重试，最多 max_retries 次。退避策略为指数：
+        delay = retry_delay * 2 ** retry_count。
 
         Args:
             messages: 消息列表
@@ -297,7 +297,7 @@ class AgentLoop:
                         recoverable,
                     )
                     return None, recoverable
-                delay = retry_config.retry_delay * (retry_count + 1)
+                delay = retry_config.retry_delay * (2**retry_count)
                 logger.warning(
                     "[Agent Loop] LLM 调用失败: error_type=%s, 等待 %ss 后重试 (%s/%s)",
                     type(e).__name__,
@@ -305,7 +305,14 @@ class AgentLoop:
                     retry_count + 1,
                     retry_config.max_retries,
                 )
-                time.sleep(delay)
+                # 走可中断 sleep：用户在退避窗口里点 Stop 时，cancel_event 立刻唤醒，
+                # 让外层 _cancellation_result 在下一轮迭代起点收敛到 suspended，
+                # 而不是先白等满指数退避（最多 4s+）再触发取消检查。
+                run_ctx = run_context.get_current()
+                if run_ctx is not None:
+                    run_ctx.cancel_event.wait(timeout=delay)
+                else:
+                    time.sleep(delay)
 
         return None, False
 

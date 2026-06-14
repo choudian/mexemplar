@@ -17,6 +17,7 @@ from src.data.repositories import (
 )
 from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
+from src.utils.timezone import to_local
 from .reference_handler import ReferenceHandler
 from .compression_handler import CompressionHandler
 
@@ -61,6 +62,7 @@ class ContextManager:
         2. 检查是否需要压缩 → 如需要，执行压缩，重新加载
         3. 清理孤立 tool result（压缩后、格式转换前）
         4. 转换为 LLM API 格式
+        5. 为首条及跨日后的首条用户消息注入本地日期
 
         Returns:
             LLM API 格式的消息列表
@@ -82,8 +84,40 @@ class ContextManager:
         # 4. 转换为 LLM API 格式
         llm_messages = self._reference_handler.apply_replacements(messages)
 
+        # 5. 仅修改本次 LLM 请求，不改 DB 中保存的用户原话
+        self._inject_user_message_dates(messages, llm_messages)
+
         logger.debug(f"[上下文] 已组装 {len(llm_messages)} 条消息")
         return llm_messages
+
+    @staticmethod
+    def _inject_user_message_dates(
+        messages: List[Message],
+        llm_messages: List[Dict],
+    ) -> None:
+        """为首条及跨日后的首条真实用户消息添加 ``[YYYY-MM-DD]`` 前缀。"""
+        # apply_replacements 当前一一对应、等长；显式比较 + log 而非 assert，
+        # 因为打包后的 sidecar 可能以 -O 启动，assert 会被剥掉、长度漂移会被
+        # zip 静默截断从而漏注入。长度异常时跳过注入，避免错位污染历史。
+        if len(messages) != len(llm_messages):
+            logger.warning(
+                "[上下文] messages 与 llm_messages 长度不一致 (%s vs %s)，跳过日期注入",
+                len(messages),
+                len(llm_messages),
+            )
+            return
+        previous_user_date = None
+
+        for message, llm_message in zip(messages, llm_messages):
+            if message.role != "user" or message.created_at is None:
+                continue
+
+            message_date = to_local(message.created_at).date()
+            if previous_user_date is None or message_date != previous_user_date:
+                llm_message["content"] = (
+                    f"[{message_date.isoformat()}] {llm_message.get('content', '')}"
+                )
+            previous_user_date = message_date
 
     def _cleanup_orphan_tool_results(self, messages: List[Message]) -> List[Message]:
         """检测并剔除孤立的 tool result 消息。

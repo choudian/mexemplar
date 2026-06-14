@@ -72,8 +72,8 @@ class ResultType(str, Enum):
 class RetryConfig:
     """重试配置
 
-    任何 LLM 调用异常都会触发重试，采用线性退避：
-    delay = retry_delay * (retry_count + 1)。
+    任何 LLM 调用异常都会触发重试，采用指数退避：
+    delay = retry_delay * 2 ** retry_count。
     """
 
     max_retries: int = 3
