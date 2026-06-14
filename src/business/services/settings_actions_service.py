@@ -7,11 +7,6 @@ from pathlib import Path
 from typing import Any
 
 from src.data.repos.assistant_summary_repository import AssistantSummaryRepository
-from src.data.credential_resolver import (
-    ReadOnlyCredentialResolver,
-    get_real_tour_credential_resolver,
-    is_real_tour_runtime,
-)
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils.helpers import get_default_data_dir
 
@@ -21,11 +16,9 @@ class SettingsActionsService:
         self,
         config: UnifiedConfigManager | None = None,
         data_dir: Path | None = None,
-        credential_resolver: ReadOnlyCredentialResolver | None = None,
     ):
         self._config = config or get_unified_config()
         self._data_dir = data_dir or get_default_data_dir()
-        self._credential_resolver = credential_resolver
 
     def run_action(self, action_name: str, *, confirmed: bool = False) -> dict[str, Any]:
         handlers = {
@@ -67,14 +60,7 @@ class SettingsActionsService:
             return self._response("test_ai_connection", "failed", "AI 提供商配置无效。")
         if not model:
             return self._response("test_ai_connection", "failed", "AI 模型不能为空。")
-        credential_resolver = self._credential_resolver or (
-            get_real_tour_credential_resolver() if is_real_tour_runtime() else None
-        )
-        api_key = (
-            credential_resolver.get_ai_api_key()
-            if credential_resolver is not None
-            else self._config.get_ai_api_key()
-        )
+        api_key = self._config.get_ai_api_key()
         if not api_key:
             return self._response(
                 "test_ai_connection", "failed", "缺少 API Key。", {"code": "missing_secret"}
@@ -102,14 +88,7 @@ class SettingsActionsService:
 
         provider = self._config.get_agent_tools_output_semantic_summary_provider()
         model = self._config.get_agent_tools_output_semantic_summary_model()
-        resolver = self._credential_resolver or (
-            get_real_tour_credential_resolver() if is_real_tour_runtime() else None
-        )
-        api_key = (
-            resolver.get_tool_output_summary_api_key()
-            if resolver is not None
-            else self._config.get_tool_output_summary_api_key()
-        )
+        api_key = self._config.get_tool_output_summary_api_key()
         details = {"provider": provider, "model": model}
         if not model:
             return self._response(

@@ -31,7 +31,7 @@ class SecretRedactor:
 
     Sentinel registration is intentionally decoupled from configuration
     migration getters — the caller supplies plain values that are already
-    in memory (e.g. from keyring or unified config).
+    in memory from unified config.
     """
 
     def __init__(self) -> None:

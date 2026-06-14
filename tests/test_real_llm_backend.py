@@ -5,7 +5,7 @@
   pytest tests/test_real_llm_backend.py -xvs
 
 标记:
-  pytest.mark.real_llm — 需要通过统一配置/keyring 配置有效 API Key
+  pytest.mark.real_llm — 需要通过统一配置配置有效 API Key
 """
 
 import json
@@ -24,7 +24,7 @@ def _read_llm_config() -> dict:
     config = get_unified_config()
     api_key = config.get_ai_api_key()
     if not api_key:
-        pytest.skip("统一配置/keyring 中没有 AI API Key")
+        pytest.skip("统一配置中没有 AI API Key")
     return {
         "provider": config.get_ai_provider(),
         "model": config.get_ai_model(),

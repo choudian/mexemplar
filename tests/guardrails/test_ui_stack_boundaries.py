@@ -19,7 +19,6 @@ def test_frontend_does_not_import_storage_or_python_internals() -> None:
     forbidden = [
         "sqlite",
         "duckdb",
-        "keyring",
         "src/data",
         "src.data",
         "Repository",
@@ -37,7 +36,6 @@ def test_desktop_api_does_not_import_repositories_or_storage_engines() -> None:
         "src.data.recording_repository",
         "sqlite3",
         "duckdb",
-        "keyring",
     ]
 
     for path, content in _read_tree(ROOT / "src" / "desktop_api", (".py",)):

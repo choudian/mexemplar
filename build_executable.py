@@ -42,7 +42,6 @@ def build_sidecar() -> Path:
         "--clean",
         "--collect-submodules=uvicorn",
         "--collect-submodules=fastapi",
-        "--hidden-import=keyring",
         "--hidden-import=sqlite_vec",
         str(entry),
     ]

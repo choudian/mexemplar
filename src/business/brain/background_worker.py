@@ -84,10 +84,7 @@ class BrainBackgroundWorker:
             return self._llm_client
         try:
             from src.business.ai.llm_client import LangChainLLMClient
-            from src.data.credential_resolver import (
-                get_real_tour_credential_resolver,
-                is_real_tour_runtime,
-            )
+            from src.data.real_tour_audit import is_real_tour_runtime
 
             config = self._get_config()
             if (
@@ -96,12 +93,10 @@ class BrainBackgroundWorker:
             ):
                 logger.info("Brain worker LLM disabled during real-tour runtime")
                 return None
-            resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
-            api_key = resolver.get_ai_api_key() if resolver is not None else config.get_ai_api_key()
             self._llm_client = LangChainLLMClient(
                 provider=config.get_ai_provider(),
                 model=config.get_ai_model(),
-                api_key=api_key,
+                api_key=config.get_ai_api_key(),
                 base_url=config.get_ai_base_url(),
                 temperature=0.7,
                 max_tokens=config.get_ai_max_tokens(),

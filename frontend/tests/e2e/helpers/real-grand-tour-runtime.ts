@@ -33,7 +33,6 @@ export interface RealGrandTourStartResult {
 
 export interface RealGrandTourAuditSnapshot {
   paidCallCount: number;
-  credentialMutationCount: number;
   budgetExceeded: boolean;
 }
 
@@ -160,17 +159,14 @@ export function readRealGrandTourAudit(dataDir: string): RealGrandTourAuditSnaps
     const raw = fs.readFileSync(auditFile, "utf-8");
     const parsed = JSON.parse(raw) as Partial<RealGrandTourAuditSnapshot>;
     const paidCallCount = Number(parsed.paidCallCount);
-    const credentialMutationCount = Number(parsed.credentialMutationCount);
     if (
       !Number.isInteger(paidCallCount) || paidCallCount < 0 ||
-      !Number.isInteger(credentialMutationCount) || credentialMutationCount < 0 ||
       typeof parsed.budgetExceeded !== "boolean"
     ) {
       throw new Error("invalid_audit_payload");
     }
     return {
       paidCallCount,
-      credentialMutationCount,
       budgetExceeded: parsed.budgetExceeded,
     };
   } catch {

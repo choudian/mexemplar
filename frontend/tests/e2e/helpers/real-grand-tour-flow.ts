@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { expect, type Browser, type Page } from "@playwright/test";
 
 import { EventWatcher, type PublicUiEvent } from "./event-watcher";
+import { GRAND_TOUR_FIXTURE_SKILL_NAME } from "./grand-tour-fixture-constants";
 import type { RealGrandTourRuntime } from "./real-grand-tour-runtime";
 import {
   RealGrandTourSafeJourneyPage,
@@ -501,7 +502,7 @@ export function createRealGrandTourFlow({ frontendBaseUrl, maxRunMs }: FlowOptio
     }
     await expect(pendingRow).toBeVisible({ timeout: shortEventTimeoutMs });
     await pendingRow.getByRole("button", { name: "试用" }).click();
-    await expect(page.getByRole("dialog", { name: "技能试用" })).toBeVisible({
+    await expect(page.getByRole("dialog", { name: "工具试用" })).toBeVisible({
       timeout: shortEventTimeoutMs,
     });
     const trialGreetingSequence = eventSequence(watcher);
@@ -550,6 +551,14 @@ export function createRealGrandTourFlow({ frontendBaseUrl, maxRunMs }: FlowOptio
     await page.getByLabel("适用场景").fill("Use for the Real Grand Tour safe local approval fixture only.");
     await page.locator(".composition-skill-picker").getByLabel("搜索技能").fill(skill.name);
     await page.locator(".composition-skill-option", { hasText: skill.name }).click();
+    // 产品契约要求组合 >=2 成员；加入 grand-tour 启动注入的夹具技能作为第二成员。
+    await page
+      .locator(".composition-skill-picker")
+      .getByLabel("搜索技能")
+      .fill(GRAND_TOUR_FIXTURE_SKILL_NAME);
+    await page
+      .locator(".composition-skill-option", { hasText: GRAND_TOUR_FIXTURE_SKILL_NAME })
+      .click();
     await page.getByRole("button", { name: "保存草稿" }).click();
     await expect(page.getByText(`当前：${compositionName}`)).toBeVisible({
       timeout: shortEventTimeoutMs,

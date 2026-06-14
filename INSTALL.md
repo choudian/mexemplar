@@ -64,8 +64,8 @@ iscc installer.iss
 
 ## 配置
 
-- 非密钥配置通过 `config.example.json` 初始化，并由 Settings 经 `get_unified_config()` 修改。
-- API Key 等密钥通过 Settings 写入系统 keyring，不应写入文档、日志或前端持久化存储。
+- 配置通过 `config.example.json` 初始化，并由 Settings 经 `get_unified_config()` / `UnifiedConfigManager` 修改。
+- API Key 等密钥保存在本地统一配置中；不应写入文档、普通日志或前端持久化存储，Settings/API 只返回遮罩状态。
 
 ## Legacy 入口
 

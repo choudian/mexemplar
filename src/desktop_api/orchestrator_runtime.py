@@ -7,29 +7,18 @@ from collections.abc import Callable
 from src.business.ai.llm_client import LangChainLLMClient
 from src.business.agents.config import AgentType
 from src.business.orchestration.agent import AgentOrchestrator
-from src.data.credential_resolver import (
-    ReadOnlyCredentialResolver,
-    get_real_tour_credential_resolver,
-    is_real_tour_runtime,
-)
 from src.data.unified_config import get_unified_config
 from src.desktop_api.events import event_queue
 
 logger = logging.getLogger(__name__)
 
 
-def build_default_orchestrator(
-    credential_resolver: ReadOnlyCredentialResolver | None = None,
-) -> AgentOrchestrator:
+def build_default_orchestrator() -> AgentOrchestrator:
     config = get_unified_config()
-    resolver = credential_resolver or (
-        get_real_tour_credential_resolver() if is_real_tour_runtime() else None
-    )
-    api_key = resolver.get_ai_api_key() if resolver is not None else config.get_ai_api_key()
     llm_client = LangChainLLMClient(
         provider=config.get_ai_provider(),
         model=config.get_ai_model(),
-        api_key=api_key,
+        api_key=config.get_ai_api_key(),
         base_url=config.get_ai_base_url(),
         temperature=0.7,
         max_tokens=config.get_ai_max_tokens(),

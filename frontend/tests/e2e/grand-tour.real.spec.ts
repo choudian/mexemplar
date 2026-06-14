@@ -4,6 +4,7 @@ import path from "node:path";
 
 import { expect, test } from "@playwright/test";
 
+import { GRAND_TOUR_FIXTURE_SKILL_ID } from "./helpers/grand-tour-fixture-constants";
 import { EventWatcher, streamPublicUiEvents, waitForPublicEvent } from "./helpers/event-watcher";
 import {
   createRealGrandTourFlow,
@@ -115,9 +116,6 @@ test.describe("Manual Real Grand Tour", () => {
     } catch {
       evidenceFailures.push("audit_unavailable");
     }
-    if (audit?.credentialMutationCount) {
-      evidenceFailures.push("credential_mutation_detected");
-    }
     if (audit?.budgetExceeded) {
       evidenceFailures.push("budget_exceeded");
     }
@@ -156,9 +154,6 @@ test.describe("Manual Real Grand Tour", () => {
     } catch {
       flow.addOnce(evidenceFailures, "audit_unavailable");
     }
-    if (audit?.credentialMutationCount) {
-      flow.addOnce(evidenceFailures, "credential_mutation_detected");
-    }
     if (audit?.budgetExceeded || flow.runElapsedMs(activeRun) > maxRunMs) {
       flow.addOnce(evidenceFailures, "budget_exceeded");
     }
@@ -177,7 +172,6 @@ test.describe("Manual Real Grand Tour", () => {
           elapsedMs: flow.runElapsedMs(activeRun),
           paidCallCount: audit?.paidCallCount ?? 0,
         },
-        credentialMutationCount: audit?.credentialMutationCount ?? 0,
         scenarios: activeRun.scenarios.map((item) => ({ ...item, cleanupStatus })),
       },
       path.resolve(process.cwd(), "test-results", "real-grand-tour"),
@@ -198,7 +192,7 @@ test.describe("Manual Real Grand Tour", () => {
     if (!activeRun || !activeScenario) throw new Error("real_tour_runtime_unavailable");
 
     await page.goto("/");
-    await expect(page.getByRole("status")).toContainText(/已就绪|ready/i, { timeout: 60_000 });
+    await expect(page.locator(".me-backend-status")).toContainText(/已就绪|ready/i, { timeout: 60_000 });
     await flow.selectTeachingMode(page, /浏览器录制/);
     await flow.startTeachingRecording(page, activeScenario.watcher);
     await flow.stopRecordingIfNeeded(page, activeScenario.watcher);
@@ -255,6 +249,8 @@ test.describe("Manual Real Grand Tour", () => {
 
     const composition = await flow.createAndPublishComposition(activeRun.sidecar, page, publishedSkill);
     expect(composition.members.some((member) => member.toolId === publishedSkill.toolId)).toBe(true);
+    expect(composition.members.length).toBeGreaterThanOrEqual(2);
+    expect(composition.members.some((member) => member.toolId === GRAND_TOUR_FIXTURE_SKILL_ID)).toBe(true);
 
     await flow.sendAssistantDispatchPrompt(
       page,

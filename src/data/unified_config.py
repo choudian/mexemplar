@@ -6,13 +6,12 @@
 2. 配置文件（默认值）
 3. 代码默认值（fallback）
 
-【架构约束】所有配置必须通过本模块管理，敏感信息（API Key等）使用 keyring 存储。
+【架构约束】所有配置和 API Key 必须通过本模块管理。
 不要硬编码配置，不要直接读取 config.json 文件。
 详见 CLAUDE.md 核心约束 #4、#5
 """
 
 import logging
-import os
 import threading
 from typing import Optional, Dict, Any, Callable, List
 import dataclasses
@@ -35,10 +34,20 @@ from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manage
 
 logger = logging.getLogger(__name__)
 
+SENSITIVE_CONFIG_KEYS = frozenset(
+    {
+        "ai.api_key",
+        "ai.vision_api_key",
+        "ai.embedding_api_key",
+        "ai.compression_model_api_key",
+        "web.brave_api_key",
+        "agent_tools.output.semantic_summary.api_key",
+    }
+)
 
-def _get_keyring_service_name() -> str:
-    """返回当前运行时使用的 keyring service name。"""
-    return os.environ.get("EXEMPLAR_KEYRING_SERVICE_NAME", "Mexemplar").strip() or "Mexemplar"
+
+def _log_value(key: str, value: Any) -> Any:
+    return "<redacted>" if key in SENSITIVE_CONFIG_KEYS and value else value
 
 
 @dataclasses.dataclass
@@ -97,7 +106,11 @@ class UnifiedConfigManager:
         # 1. 检查运行时缓存
         with self._cache_lock:
             if key in self._runtime_cache:
-                logger.debug(f"[配置] 从缓存读取: {key} = {self._runtime_cache[key]}")
+                logger.debug(
+                    "[配置] 从缓存读取: %s = %s",
+                    key,
+                    _log_value(key, self._runtime_cache[key]),
+                )
                 return self._runtime_cache[key]
 
         # 2. 检查数据库配置
@@ -105,7 +118,7 @@ class UnifiedConfigManager:
         if db_value is not None:
             with self._cache_lock:
                 self._runtime_cache[key] = db_value
-            logger.debug(f"[配置] 从数据库读取: {key} = {db_value}")
+            logger.debug("[配置] 从数据库读取: %s = %s", key, _log_value(key, db_value))
             return db_value
 
         # 3. 从配置文件读取（支持点分隔路径）
@@ -138,14 +151,14 @@ class UnifiedConfigManager:
             # 仅缓存
             with self._cache_lock:
                 self._runtime_cache[key] = value
-            logger.info(f"[配置] 已缓存: {key} = {value}")
+            logger.info("[配置] 已缓存: %s = %s", key, _log_value(key, value))
         elif persist == "database":
             # 保存到数据库
             self._sa.set_setting(key, value, value_type)
             # 同时更新缓存
             with self._cache_lock:
                 self._runtime_cache[key] = value
-            logger.info(f"[配置] 已保存到数据库: {key} = {value}")
+            logger.info("[配置] 已保存到数据库: %s = %s", key, _log_value(key, value))
         else:
             raise ValueError(f"未知的 persist 类型: {persist!r}，可选 'database' 或 'runtime'")
 
@@ -169,7 +182,7 @@ class UnifiedConfigManager:
 
     def get_ai_vision_api_key(self) -> Optional[str]:
         """获取视觉模型 API key（为空则跟随主模型）"""
-        return self.get("ai.vision_api_key", default=None) or self.get_ai_api_key()
+        return self._get_secret("ai.vision_api_key") or self.get_ai_api_key()
 
     def get_ai_vision_base_url(self) -> Optional[str]:
         """获取视觉模型 endpoint（为空则返回 None，由 LangChain 根据 provider 自动选择默认 endpoint）"""
@@ -180,107 +193,28 @@ class UnifiedConfigManager:
         return self.get("ai.provider", default="anthropic")
 
     def get_ai_api_key(self) -> Optional[str]:
-        """获取 AI API 密钥（keyring 优先，config.json 明文仅作迁移源）"""
-        # 正常路径：从 keyring 读取
-        try:
-            import keyring
-
-            api_key = keyring.get_password(_get_keyring_service_name(), "anthropic_api_key")
-            if api_key:
-                return api_key
-        except ImportError:
-            logger.warning("[配置] keyring 模块未安装，无法读取加密存储的 API 密钥")
-        except Exception as e:
-            logger.warning(f"[配置] 从 keyring 读取 API 密钥失败: {e}")
-
-        # 迁移路径：config.json 有残留明文 → 迁移到 keyring 后清除
-        config_key = self.get("ai.api_key", default=None)
-        if config_key and isinstance(config_key, str) and config_key.strip():
-            try:
-                import keyring
-
-                keyring.set_password(_get_keyring_service_name(), "anthropic_api_key", config_key)
-                self.set("ai.api_key", "")
-                logger.info("[配置] 已将 config.json 明文密钥迁移到 keyring 并清除明文")
-            except Exception:
-                logger.warning("[配置] 明文密钥迁移到 keyring 失败，明文密钥暂留", exc_info=True)
-            return config_key
-
-        return None
+        """从统一配置读取主模型 API 密钥。"""
+        return self._get_secret("ai.api_key")
 
     def set_ai_api_key(self, api_key: str) -> None:
-        """安全写入 API 密钥到 keyring，并清除数据库中的明文副本"""
-        try:
-            import keyring
-
-            keyring.set_password(_get_keyring_service_name(), "anthropic_api_key", api_key)
-            logger.info("[配置] API 密钥已安全写入 keyring")
-        except Exception as e:
-            logger.warning(
-                "[配置] keyring 写入失败，无法安全存储 API 密钥。"
-                "请检查 keyring 模块是否正确安装（pip install keyring）。"
-                "API 密钥不会被存储到数据库中以避免明文泄露。"
-            )
-            raise RuntimeError(
-                f"无法安全存储 API 密钥: {e}。" "请确保 keyring 模块已安装且可用。"
-            ) from e
-        # 成功写入 keyring 后，清除数据库中的明文密钥
-        try:
-            self.set("ai.api_key", "")
-        except Exception as e:
-            logger.warning(f"[配置] 清除数据库明文密钥失败: {e}")
+        """写入统一配置中的主模型 API 密钥。"""
+        self._set_secret("ai.api_key", api_key)
 
     def clear_ai_api_key(self) -> None:
-        """清除 API 密钥（keyring + 数据库）"""
-        try:
-            import keyring
-
-            keyring.delete_password(_get_keyring_service_name(), "anthropic_api_key")
-        except Exception:
-            pass
-        self.set("ai.api_key", "")
+        """清除统一配置中的主模型 API 密钥。"""
+        self._clear_secret("ai.api_key")
 
     def get_tool_output_summary_api_key(self) -> Optional[str]:
-        """Read the dedicated tool-output summary key from keyring only."""
-        try:
-            import keyring
-
-            return keyring.get_password(
-                _get_keyring_service_name(),
-                "tool_output_summary_api_key",
-            )
-        except ImportError:
-            logger.warning("[配置] keyring 模块未安装，无法读取工具输出摘要密钥")
-        except Exception:
-            logger.warning("[配置] 读取工具输出摘要密钥失败", exc_info=True)
-        return None
+        """从统一配置读取工具输出摘要 API 密钥。"""
+        return self._get_secret("agent_tools.output.semantic_summary.api_key")
 
     def set_tool_output_summary_api_key(self, api_key: str) -> None:
-        """Store the dedicated summary key in keyring without plaintext fallback."""
-        try:
-            import keyring
-
-            keyring.set_password(
-                _get_keyring_service_name(),
-                "tool_output_summary_api_key",
-                api_key,
-            )
-        except Exception as exc:
-            raise RuntimeError("无法安全存储工具输出摘要密钥。") from exc
-        self.set("agent_tools.output.semantic_summary.api_key", "")
+        """写入统一配置中的工具输出摘要 API 密钥。"""
+        self._set_secret("agent_tools.output.semantic_summary.api_key", api_key)
 
     def clear_tool_output_summary_api_key(self) -> None:
-        """Delete the dedicated summary key and any stale plaintext setting."""
-        try:
-            import keyring
-
-            keyring.delete_password(
-                _get_keyring_service_name(),
-                "tool_output_summary_api_key",
-            )
-        except Exception:
-            pass
-        self.set("agent_tools.output.semantic_summary.api_key", "")
+        """清除统一配置中的工具输出摘要 API 密钥。"""
+        self._clear_secret("agent_tools.output.semantic_summary.api_key")
 
     def get_ai_base_url(self) -> Optional[str]:
         """获取主 LLM 自定义 endpoint（用于代理）"""
@@ -349,18 +283,7 @@ class UnifiedConfigManager:
 
     def get_embedding_api_key(self) -> Optional[str]:
         """获取 embedding 服务 API 密钥（用于向量搜索）"""
-        # 优先从配置文件获取
-        api_key = self.get("ai.embedding_api_key", default=None)
-        if api_key:
-            return api_key
-
-        # 从 keyring 读取
-        try:
-            import keyring
-
-            return keyring.get_password(_get_keyring_service_name(), "openai_api_key")
-        except Exception:
-            return None
+        return self._get_secret("ai.embedding_api_key")
 
     # ===== 便捷方法：Web 工具配置 =====
 
@@ -371,48 +294,16 @@ class UnifiedConfigManager:
         return value or "auto"
 
     def get_web_brave_api_key(self) -> Optional[str]:
-        """获取 Brave Search API Key（只读 keyring，不回退明文配置）。"""
-        try:
-            import keyring
-
-            api_key = keyring.get_password(_get_keyring_service_name(), "brave_search_api_key")
-        except ImportError:
-            logger.warning("[配置] keyring 模块未安装，无法读取 Brave API Key")
-            return None
-        except Exception as e:
-            logger.warning(f"[配置] 从 keyring 读取 Brave API Key 失败: {e}")
-            return None
-        if api_key and isinstance(api_key, str) and api_key.strip():
-            return api_key
-        return None
+        """从统一配置读取 Brave Search API Key。"""
+        return self._get_secret("web.brave_api_key")
 
     def set_web_brave_api_key(self, api_key: str) -> None:
-        """安全写入 Brave Search API Key 到 keyring，并清除数据库明文副本。"""
-        try:
-            import keyring
-
-            keyring.set_password(_get_keyring_service_name(), "brave_search_api_key", api_key)
-            logger.info("[配置] Brave API Key 已安全写入 keyring")
-        except Exception as e:
-            logger.warning(
-                "[配置] keyring 写入失败，无法安全存储 Brave API Key。"
-                "API Key 不会被存储到数据库中以避免明文泄露。"
-            )
-            raise RuntimeError(f"无法安全存储 Brave API Key: {e}。") from e
-        try:
-            self.set("web.brave_api_key", "")
-        except Exception as e:
-            logger.warning(f"[配置] 清除数据库 Brave API Key 明文失败: {e}")
+        """写入统一配置中的 Brave Search API Key。"""
+        self._set_secret("web.brave_api_key", api_key)
 
     def clear_web_brave_api_key(self) -> None:
-        """清除 Brave Search API Key（keyring + 数据库明文残留）。"""
-        try:
-            import keyring
-
-            keyring.delete_password(_get_keyring_service_name(), "brave_search_api_key")
-        except Exception:
-            pass
-        self.set("web.brave_api_key", "")
+        """清除统一配置中的 Brave Search API Key。"""
+        self._clear_secret("web.brave_api_key")
 
     # ===== 便捷方法：会话压缩调用配置 =====
 
@@ -655,6 +546,21 @@ class UnifiedConfigManager:
             maximum=20000,
         )
 
+    def get_agent_tools_output_load_max_bytes(self) -> int:
+        """Per-call byte ceiling for load_tool_output raw retrieval.
+
+        Bounds how much original output one load_tool_output window can pull into
+        context. The result is exempt from governance summarization/compaction, so
+        this ceiling (plus offset/maxBytes pagination) is the only size guard.
+        """
+        return self._get_bounded_positive_int(
+            "agent_tools.output.load_max_bytes", 131072, maximum=1_048_576
+        )
+
+    def get_agent_tools_max_parallel_workers(self) -> int:
+        """Maximum concurrent worker threads for concurrency-safe tool calls."""
+        return self._get_bounded_positive_int("agent_tools.max_parallel_workers", 4, maximum=16)
+
     def get_agent_tools_search_default_page_size(self) -> int:
         return self._get_bounded_positive_int(
             "agent_tools.search.default_page_size", 100, maximum=500
@@ -866,6 +772,22 @@ class UnifiedConfigManager:
             return 1048576
 
     # ===== 内部方法 =====
+
+    def _get_secret(self, key: str) -> Optional[str]:
+        value = self.get(key, default=None)
+        if not isinstance(value, str):
+            return None
+        normalized = value.strip()
+        return normalized or None
+
+    def _set_secret(self, key: str, value: str) -> None:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("密钥不能为空。")
+        self.set(key, normalized)
+
+    def _clear_secret(self, key: str) -> None:
+        self.set(key, "")
 
     def _get_from_file_config(self, key: str) -> Any:
         """

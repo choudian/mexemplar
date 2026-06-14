@@ -33,7 +33,6 @@ hiddenimports = [
     'blinker',
     'cryptography',
     'duckdb',
-    'keyring',
     'langchain_core',
     'langchain_anthropic',
     'langchain_openai',

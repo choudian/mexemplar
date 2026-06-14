@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 
 import { EventWatcher, waitForPublicEvent } from "../e2e/helpers/event-watcher";
-import { CredentialMutationAudit, credentialFingerprint } from "../e2e/helpers/real-grand-tour-credentials";
 import { RealGrandTourBudget } from "../e2e/helpers/real-grand-tour-budget";
 import { assertSanitizedArtifact, writeSummaryReport } from "../e2e/helpers/real-grand-tour-report";
 import { withLiveRecordingCleanup } from "../e2e/helpers/real-grand-tour-recording";
@@ -46,15 +45,6 @@ describe("real Grand Tour controlled failures", () => {
     expect(config.optIn).toBe(true);
     expect(config.allowLiveCapture).toBe(true);
     expect(realGrandTourSkipReason(config)).toBeNull();
-  });
-
-  test("credential mutation attempts fail the audit while preserving zero secret output", () => {
-    const audit = new CredentialMutationAudit();
-    audit.recordMutationAttempt();
-
-    expect(audit.mutationCount).toBe(1);
-    expect(() => audit.assertClean()).toThrow("credential_mutation_attempted");
-    expect(credentialFingerprint("sk-real-secret").fingerprint).not.toContain("sk-real-secret");
   });
 
   test("event timeout fails with a bounded public-event error", async () => {
@@ -148,7 +138,6 @@ describe("real Grand Tour controlled failures", () => {
           startedAt: "2026-05-24T00:00:00Z",
           finishedAt: "2026-05-24T00:00:01Z",
           budgetUsage: budget.usage(),
-          credentialMutationCount: 0,
           scenarios: [{
             scenarioId: "budget-exhaustion",
             status: "failed",

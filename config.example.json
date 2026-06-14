@@ -17,6 +17,7 @@
     "vision_provider": null,
     "vision_api_key": null,
     "vision_base_url": null,
+    "embedding_api_key": null,
     "compression_model_provider": "anthropic",
     "compression_model_name": "claude-3-5-haiku-20241022",
     "compression_model_api_key": null,
@@ -113,7 +114,8 @@
     "window_height": 800
   },
   "web": {
-    "search_backend": "auto"
+    "search_backend": "auto",
+    "brave_api_key": null
   },
   "brain": {
     "segment": {
@@ -158,6 +160,7 @@
         "provider": "anthropic",
         "model": "",
         "base_url": "",
+        "api_key": "",
         "temperature": 0.2,
         "trigger_chars": 20000,
         "max_input_chars": 120000,

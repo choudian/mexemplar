@@ -64,13 +64,14 @@ class AIConfig:
     vision_provider: Optional[str] = None  # 视觉模型提供商（为空则跟随主模型 provider）
     vision_api_key: Optional[str] = None  # 视觉模型专用 API key（为空则跟随主模型）
     vision_base_url: Optional[str] = None  # 视觉模型专用 endpoint（为空则跟随主模型）
+    embedding_api_key: Optional[str] = None  # 向量检索专用 API key
     temperature: float = 0.7
     max_tokens: int = 32000
     timeout: int = 180
     base_url: Optional[str] = None  # 自定义 API endpoint（用于代理或兼容 API）
 
     # LLM 调用重试配置（agent_loop 层）
-    # 任意异常都会触发重试，线性退避：delay = retry_delay * (retry_count + 1)
+    # 任意异常都会触发重试，指数退避：delay = retry_delay * 2 ** retry_count
     retry_max_retries: int = 3  # 最大重试次数（最终调用次数 = max_retries + 1）
     retry_delay: float = 1.0  # 退避基数（秒）
 
@@ -227,6 +228,7 @@ class WebConfig:
     """Web tool configuration."""
 
     search_backend: str = "auto"
+    brave_api_key: Optional[str] = None
 
 
 @dataclass
@@ -313,6 +315,7 @@ class AgentToolsOutputSemanticSummaryConfig:
     provider: str = "anthropic"
     model: str = ""
     base_url: str = ""
+    api_key: Optional[str] = None
     temperature: float = 0.2
     trigger_chars: int = 20000
     max_input_chars: int = 120000
@@ -383,11 +386,21 @@ class AppConfig:
     agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典（不包含敏感信息）"""
+        """转换为可写配置字典（不含密钥等敏感信息）。"""
+        from src.data.unified_config import SENSITIVE_CONFIG_KEYS
+
         data = asdict(self)
-        # 不序列化API密钥
-        if "api_key" in data.get("ai", {}):
-            data["ai"]["api_key"] = None
+        # 不序列化任何密钥（api_key 等），避免明文写入 config.json。
+        for dotted in SENSITIVE_CONFIG_KEYS:
+            parts = dotted.split(".")
+            node: Any = data
+            for key in parts[:-1]:
+                if not isinstance(node, dict) or key not in node:
+                    node = None
+                    break
+                node = node[key]
+            if isinstance(node, dict) and parts[-1] in node:
+                node[parts[-1]] = None
         return data
 
     @classmethod

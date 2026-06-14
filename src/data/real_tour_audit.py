@@ -14,15 +14,11 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 
 class RealTourBudgetExceeded(RuntimeError):
     """Raised before a provider call that would exceed the real-tour budget."""
-
-
-class RealTourCredentialMutationError(RuntimeError):
-    """Raised when real-tour code attempts to mutate keyring credentials."""
 
 
 class RealTourAuditIntegrityError(RuntimeError):
@@ -31,7 +27,6 @@ class RealTourAuditIntegrityError(RuntimeError):
 
 _LOCK = threading.Lock()
 _STARTED_AT = time.monotonic()
-_KEYRING_GUARD_INSTALLED = False
 
 
 def is_real_tour_runtime() -> bool:
@@ -71,47 +66,6 @@ def record_paid_call(source: str) -> None:
         _write_state_unlocked(state)
 
 
-def record_credential_mutation(operation: str) -> None:
-    """Record a forbidden keyring mutation attempt."""
-    if not is_real_tour_runtime():
-        return
-    with _LOCK:
-        state = _read_state_unlocked()
-        state["credentialMutationCount"] = int(state.get("credentialMutationCount", 0)) + 1
-        state["lastCredentialMutation"] = operation
-        _write_state_unlocked(state)
-
-
-def install_keyring_mutation_guard() -> None:
-    """Patch keyring write/delete calls so real-tour mutations fail closed."""
-    global _KEYRING_GUARD_INSTALLED
-    if not is_real_tour_runtime() or _KEYRING_GUARD_INSTALLED:
-        return
-    try:
-        import keyring
-        if not hasattr(keyring, "set_password") or not hasattr(keyring, "delete_password"):
-            raise ImportError("keyring mutation functions unavailable")
-    except Exception as exc:
-        raise RealTourCredentialMutationError(
-            "credential_mutation_guard_unavailable"
-        ) from exc
-
-    def _forbid(operation: str) -> Callable[..., None]:
-        def wrapper(*_args: Any, **_kwargs: Any) -> None:
-            record_credential_mutation(operation)
-            raise RealTourCredentialMutationError("credential_mutation_forbidden")
-
-        return wrapper
-
-    keyring.set_password = _forbid("set_password")  # type: ignore[assignment]
-    keyring.delete_password = _forbid("delete_password")  # type: ignore[assignment]
-    _KEYRING_GUARD_INSTALLED = True
-    with _LOCK:
-        state = _read_state_unlocked()
-        state["keyringMutationGuard"] = "installed"
-        _write_state_unlocked(state)
-
-
 def _positive_int(value: str | None, fallback: int) -> int:
     try:
         parsed = int(str(value))
@@ -131,10 +85,22 @@ def _audit_file() -> Path:
 def _default_state() -> dict[str, Any]:
     return {
         "paidCallCount": 0,
-        "credentialMutationCount": 0,
         "budgetExceeded": False,
         "elapsedMs": 0,
     }
+
+
+def ensure_initialized() -> None:
+    """Create the audit file with default state if it does not exist yet.
+
+    Called at sidecar startup so the Playwright runner can read the file
+    before the first LLM call.
+    """
+    if not is_real_tour_runtime():
+        return
+    path = _audit_file()
+    if not path.exists():
+        _write_state_unlocked(_default_state())
 
 
 def _read_state_unlocked() -> dict[str, Any]:
@@ -154,10 +120,7 @@ def _write_state_unlocked(state: dict[str, Any]) -> None:
     validated = _validate_state(state)
     if path.exists():
         previous = _read_state_unlocked()
-        if any(
-            validated[key] < previous[key]
-            for key in ("paidCallCount", "credentialMutationCount")
-        ):
+        if validated["paidCallCount"] < previous["paidCallCount"]:
             raise RealTourAuditIntegrityError("real_tour_audit_counter_regression")
 
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
@@ -178,7 +141,7 @@ def _validate_state(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise RealTourAuditIntegrityError("real_tour_audit_invalid")
     state = {**_default_state(), **data}
-    for key in ("paidCallCount", "credentialMutationCount", "elapsedMs"):
+    for key in ("paidCallCount", "elapsedMs"):
         value = state.get(key)
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise RealTourAuditIntegrityError("real_tour_audit_invalid")

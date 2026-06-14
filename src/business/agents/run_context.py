@@ -1,6 +1,6 @@
 """Agent 运行上下文与协作式取消注册表（014-assistant-chat-transparency）。
 
-纯进程内、会话级内存原语，**不写配置/keyring/SQLite/DuckDB**（与"免确认/会话级状态"同纪律）。
+纯进程内、会话级内存原语，**不写配置/SQLite/DuckDB**（与"免确认/会话级状态"同纪律）。
 
 ⚠️ 承重不变量（E1）：助理走 100% 调度，子代理 / 专员在**同一 worker 线程内同步**跑子
 loop（调用栈 `父 loop → 工具 handler → 子 loop.run`）。ContextVar 沿同线程同步调用栈自动

@@ -40,10 +40,7 @@ class AssistantMemoryManager:
         self._embedding_checked = True
         try:
             from langchain_openai import OpenAIEmbeddings
-            from src.data.credential_resolver import (
-                get_real_tour_credential_resolver,
-                is_real_tour_runtime,
-            )
+            from src.data.real_tour_audit import is_real_tour_runtime
             from src.data.unified_config import get_unified_config
 
             if (
@@ -52,12 +49,7 @@ class AssistantMemoryManager:
             ):
                 logger.info("[AssistantMemory] embedding disabled during real-tour runtime")
                 return None
-            resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
-            openai_key = (
-                resolver.get_embedding_api_key()
-                if resolver is not None
-                else get_unified_config().get_embedding_api_key()
-            )
+            openai_key = get_unified_config().get_embedding_api_key()
             if openai_key:
                 try:
                     from src.business.debug.service import get_debug_service
@@ -270,7 +262,6 @@ class AssistantMemoryManager:
         except Exception as e:
             logger.error(f"[AssistantMemory] 获取全局摘要失败: {e}")
             return None
-
 
 
 # =========================================================================

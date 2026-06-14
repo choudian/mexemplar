@@ -35,7 +35,7 @@
 - `extractionGoal` 只允许影响摘要 prompt，不得进入工具执行、权限分类或 handler 业务语义。支持该字段的 built-in schema 最大 1000 字；`web_fetch.prompt` 和 custom tool 常见 goal/query/prompt/pattern 参数只能做保守推导。
 - raw output blob 当前不做应用层加密；本地桌面部署依赖应用数据目录访问控制，并在 POSIX 上 best-effort 设置私有文件权限。任何跨用户、远程或同步场景都必须先补充加密和密钥管理设计。
 - 新增 tuning knob 走 `get_unified_config().get_agent_tools_*`。Settings UI 只开放 `agent_tools.output.semantic_summary.*` 的独立“工具输出”分区；file/search/process、artifact retention 和 visible cap 等工程限额仍不开放。
-- 工具输出摘要密钥只允许写入 keyring username `tool_output_summary_api_key`，不得回退主模型密钥或 plaintext config。OpenAI-compatible provider 必须配置 base URL；模型名为空、密钥缺失、endpoint 无效或开关关闭时无损降级为确定性摘要。
+- 工具输出摘要使用独立的 `agent_tools.output.semantic_summary.api_key`，不得回退主模型密钥。该密钥与其他 secret 一样只能经 `UnifiedConfigManager` 读写：`config.json` 提供本地默认值，`app_settings` 可覆盖；Settings 保存/删除操作更新统一配置。OpenAI-compatible provider 必须配置 base URL；模型名为空、密钥缺失、endpoint 无效或开关关闭时无损降级为确定性摘要。
 
 ## Non-Migrated Boundaries
 
@@ -58,14 +58,14 @@
 
 ## Tauri / Frontend / Sidecar Boundaries
 
-- `frontend/` 只能通过 typed API client、Tauri window command 或前端本地状态访问产品能力；不得 import Python 业务代码、读取 SQLite/DuckDB/config/keyring，或持久化 secret。
+- `frontend/` 只能通过 typed API client、Tauri window command 或前端本地状态访问产品能力；不得 import Python 业务代码、读取 SQLite/DuckDB/config，或持久化 secret。
 - `src/desktop_api/` 是 UI adapter，只能调用 business services、orchestrator、configuration facade 和事件 adapter；不得成为新的 Repository 层或绕过业务服务写数据。
 - 前端事件流只能消费 `src/desktop_api/ui_events.py` 注册的公共 UI event type；React store 不得依赖内部 blinker 事件名、`payload.sourceEvent` 或未知事件默认转发来决定展示状态。
 - `src/desktop_api/events.py` 的事件发布必须经过 UI Event Registry、envelope creation 和 payload safety validation；不得新增绕过 `event_queue.publish_nowait()` / projection layer 的直接 SSE 输出路径。
 - UI event payload 必须是 allowlist 字段；runtime token、secret、完整代码、完整命令体、未脱敏 stack trace、本地数据库路径、raw query result 和未过滤录制数据不得进入公共 UI event。**例外**：`assistant.activity` 的 `text` 是过程时间线原文（单用户本地、原文本就明文存于 messages 表），命中敏感规则时保留原文并置 `redacted=true`，UI 默认隐藏、用户双击查看；该字段经 `UiEventDefinition.unredacted_payload_keys` 豁免 payload safety value 校验，事件内其余字段及其它事件仍走脱敏。
 - event stream 是当前桌面进程会话内通知通道，不是持久业务事实或长期 replay log；重连缺口必须通过 `backend.resync_required` 触发权威快照刷新。
 - sidecar API 只允许 localhost/loopback 使用，每次启动必须要求运行期 session token；token 不得写入配置、OpenAPI、日志、前端持久化存储或错误响应。
-- 设置页非 secret 值必须经 `get_unified_config()` 读写；secret 只能经 keyring-backed 方法写入/清除/API 测试，返回给前端的状态只能是存在性和 masked display。
+- 设置页所有值必须经 `get_unified_config()` / `UnifiedConfigManager` 读写；secret 的写入、清除和 API 测试也走同一入口，返回给前端的状态只能是存在性和 masked display。
 - React store 可以保存 draft、dirty state、当前 section、事件流状态和 masked secret 状态；不得保存 plaintext API key 或任何长期信任开关。
 - `src/main.py`、`mexemplar_gui.py`、`start.bat`、`mexemplar_gui.bat` 只能显式失败并提示 legacy PyQt launcher 已退休；不得恢复可启动 PyQt fallback。
 - `src/ui/`、`tests/ui/` 和旧 Python GUI `tests/e2e/` 不再是维护面；新增 UI 行为覆盖应放在 `frontend/tests/unit/` 或 `frontend/tests/e2e/`，后端桥接覆盖放在 `tests/desktop_api/`、`tests/integration/` 或 `tests/guardrails/`。
@@ -73,7 +73,7 @@
 ## Debug Inspector Boundaries
 
 - `/debug` 是隐藏诊断路由，不出现在普通导航；只能通过 typed debug API client 调 authenticated `/api/debug`。
-- `debug.trace.enabled` 只能由 DebugInspectorService 以 runtime 配置 arm，不能写入数据库、配置文件、keyring 或前端持久化存储。
+- `debug.trace.enabled` 只能由 DebugInspectorService 以 runtime 配置 arm，不能写入数据库、配置文件或前端持久化存储。
 - Raw LLM trace 与 Assistant delegated task/result ephemeral detail 只存在于当前 sidecar 进程内的 epoch buffer；disable、clear、restart 必须销毁它们，mid-flight stale completion 不得回填旧 epoch。
 - Flow 中的既有 `workflow_transitions` 是按业务生命周期保留的持久状态事实，不会因 debug clear/disable 删除；reference content 是鉴权后的按需、`no-store` 响应，不写入 debug buffer。离开 `/debug` 只清理前端内存中的 raw 响应状态。
 - Raw debug endpoints 必须返回 `Cache-Control: no-store`；URL、ordinary UI event payload、localStorage/sessionStorage/indexedDB、普通日志不得出现 diagnostic-only prompt、trace、handoff、media、correlation 或 credential 字段。
@@ -85,8 +85,8 @@
 
 - 默认 `npm run test:e2e` 必须保持 mock-backed、cost-free、无 live capture；真实验收只走独立 `npm run test:e2e:grand-tour`。
 - 独立 Real Grand Tour 命令内置启用 real-tour runtime 和 live capture；执行时只能按 `docs/local/real-grand-tour-safe-journey.md` 的固定无敏感 fixture/script 执行，不再要求 shell opt-in 环境变量。
-- Real-tour credential 只能通过 `src/data/credential_resolver.py` 的 keyring-only read-only resolver 读取；不得触发 plaintext config fallback、config-to-keyring migration、`set_password` 或 `delete_password`。
-- Real-tour provider inventory 必须覆盖 main、vision、background brain、settings validation、skill-composition、compression、embedding 和 diagnostic redactor；未覆盖路径必须在场景前显式 skip 或 fail as unmet prerequisite，不能回退 ordinary getter。
+- Real-tour credential 必须通过 `UnifiedConfigManager` 的普通只读 getter 获取；不得创建独立凭据解析、迁移或写入路径。
+- Real-tour provider inventory 必须覆盖 main、vision、background brain、settings validation、skill-composition、compression、embedding 和 diagnostic redactor；未覆盖路径必须在场景前显式 skip 或 fail as unmet prerequisite。
 - Real-tour runtime 使用随机 localhost port/token、临时 `EXEMPLAR_DATA_DIR`、paid-call/time budget、public event watcher 和 sanitized summary report。报告和 Playwright artifacts 不得包含 prompt/response、credential、runtime token、raw media、截图、录制正文或完整敏感本地路径；trace/video/screenshot 默认 off。
 
 ## Brain Architecture Constraints
@@ -124,5 +124,5 @@ Reviewer 必须拒绝下列改动：
 - 让桌面录制 UI 直接访问 Repository 或 Recorder，或绕过 `DesktopRecordingService`。
 - 在桌面 mode 中注入 `analyze_image`，或允许桌面工具读取浏览器录制表。
 - 让桌面 Trial 继承完整父进程环境、在任意 cwd 执行，或缺少超时清理。
-- 让前端、Tauri 命令或 desktop API 直接读取/写入 SQLite、DuckDB、config 文件或 keyring。
+- 让前端、Tauri 命令或 desktop API 直接读取/写入 SQLite、DuckDB 或 config 文件。
 - 重新引入 PyQt runtime 依赖、`src.ui` 生产代码、旧 Python GUI E2E，或任何正常用户可触达的 PyQt 启动路径。

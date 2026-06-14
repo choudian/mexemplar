@@ -799,20 +799,7 @@ def summarize_tool_output(
     client_factory: Callable[..., Any] | None = None,
 ) -> dict[str, Any] | None:
     manager = config or get_unified_config()
-    api_key: str | None = None
-    real_tour_runtime = False
-    try:
-        from src.data.credential_resolver import (
-            get_real_tour_credential_resolver,
-            is_real_tour_runtime,
-        )
-
-        real_tour_runtime = is_real_tour_runtime()
-        if real_tour_runtime:
-            api_key = get_real_tour_credential_resolver().get_tool_output_summary_api_key() or ""
-    except Exception:
-        api_key = "" if real_tour_runtime else None
-    settings = SemanticSummarySettings.from_config(manager, api_key=api_key)
+    settings = SemanticSummarySettings.from_config(manager)
     if not settings.available:
         return None
     increment_agent_tool_health(

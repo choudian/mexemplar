@@ -111,7 +111,7 @@ cp config.example.json config.json
 - `base_url`
 - `web.search_backend`
 
-API Key 等密钥由 Settings 写入系统 keyring，不建议写入 `config.json`。非密钥示例：
+API Key 等密钥也由 `UnifiedConfigManager` 管理：Settings 保存到本地 `app_settings`，`config.json` 可提供默认值。前端/API 只显示遮罩状态，普通日志不会记录明文。配置示例：
 
 ```json
 {

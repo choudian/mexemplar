@@ -18,7 +18,6 @@ export interface RealGrandTourSummaryReport {
   startedAt: string;
   finishedAt: string;
   budgetUsage: { elapsedMs: number; paidCallCount: number };
-  credentialMutationCount: number;
   scenarios: ScenarioReport[];
 }
 

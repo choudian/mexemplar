@@ -56,7 +56,20 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_EPHEMERAL_SUBAGENT_PROMPT = "你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。"
+_SUBAGENT_WORK_RULES = (
+    "工作规则（必须遵守）：\n"
+    "1. 严格限定在任务范围内，不要做任务描述以外的事情。\n"
+    "2. 每次工具返回结果后，先评估当前已有信息是否足以完成任务。"
+    "如果足够，直接输出最终结果，不要为了更全面而继续调用工具。\n"
+    "3. 工具调用之间不要输出中间文字，静默使用工具，最后一次性报告结果。\n"
+    "4. 不要闲聊、不要发表意见、不要建议下一步，只报告结构化的事实。\n"
+    "5. 最终回复控制在 500 字以内，除非任务本身需要更长的输出。"
+)
+
+_EPHEMERAL_SUBAGENT_PROMPT = (
+    "你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。\n"
+    "\n" + _SUBAGENT_WORK_RULES
+)
 _LEGACY_DELEGATION_PARENT_PREFIX_LENGTH = 12
 
 
@@ -1186,7 +1199,7 @@ class AgentOrchestrator:
             "你是一个临时子代理，只为当前一次委派任务服务。\n"
             "你可以使用被授予的工具完成任务，但不要再委派给其他 Agent。\n"
             f"用户技能白名单：{whitelist_text}\n"
-            "完成后直接输出最终结果，不要向用户闲聊。"
+            "\n" + _SUBAGENT_WORK_RULES
         )
 
     @staticmethod

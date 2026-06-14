@@ -25,7 +25,7 @@ React UI (frontend/)
 - sidecar 只绑定本机回环地址，并要求每次启动生成的 session token；token 不写入配置、OpenAPI 或日志。
 - Debug Inspector 只通过 authenticated `/api/debug` 暴露，trace arm 是运行时状态，不持久化。Trace buffer 以进程内 epoch 隔离，受 record/bytes 限制；disable、clear、restart 都会销毁 raw detail。Raw debug endpoints 使用 `Cache-Control: no-store`，前端 raw trace/flow/reference state 只保存在组件内存，离开 `/debug` 或 clear/stop 时清理。模型 text/tool/vision 调用统一走 fail-isolated observation boundary；vision 只保留媒体元数据，embedding 不进入 LLM trace record，但必须在 provider/redaction inventory 中登记。
 - Agent Flow 以持久 `workflow_transitions` 为权威，Debug Inspector 只在 armed epoch 中叠加临时 trace link 和 Assistant delegation task/result debug detail；UI 必须标出 linked/unlinked 与 provenance，不能把临时 detail 写回业务事实。
-- Manual Real Grand Tour 是独立 Playwright 套件，默认 E2E 仍为 mock/controlled/cost-free。真实套件只通过 `npm run test:e2e:grand-tour` 运行，并内置启用 real-tour runtime 和 live capture；运行时使用随机 localhost port/token、临时数据目录、只读 keyring credential resolver、paid-call/time budget、public event watcher 和 sanitized summary report；trace/video/screenshot 默认关闭，现场录制只能按固定安全旅程执行。
+- Manual Real Grand Tour 是独立 Playwright 套件，默认 E2E 仍为 mock/controlled/cost-free。真实套件只通过 `npm run test:e2e:grand-tour` 运行，并内置启用 real-tour runtime 和 live capture；运行时使用随机 localhost port/token、临时数据目录、`UnifiedConfigManager` 只读凭据 getter、paid-call/time budget、public event watcher 和 sanitized summary report；trace/video/screenshot 默认关闭，现场录制只能按固定安全旅程执行。
 - `src/main.py`、`mexemplar_gui.py`、`start.bat` 和 `mexemplar_gui.bat` 是显式失败的 legacy 兼容入口；`src/ui/` 的 PyQt 主 UI 代码已退休。
 
 ---
@@ -283,13 +283,13 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session、tool_call、tool_name、workspace root），handler 返回统一 JSON envelope。保存任何文本 tool result 前统一经过 output governance：小型 legacy/custom 结果保持原格式；大结果、截断结果或已有 raw reference 的结果先复用/创建 `ToolOutputRepository` 私有 artifact，再生成有界 compact envelope。compact payload 的 `facts` 与 `preview` 来自确定性提取，独立低成本模型只追加 advisory `semanticSummary`，不能覆盖 exit code、错误码、状态等可验证事实。
 
-语义摘要配置位于 `agent_tools.output.semantic_summary.*`，使用独立 keyring 密钥 `tool_output_summary_api_key`。输入按工具类型优先提取 stdout/stderr、文件内容、搜索结果、网页正文或 reference 内容；超过输入预算时按 head/error context/uniform/tail 选择，再以最多 6 个 map、并发 3 和一次 reduce 在默认 12 秒总预算内同步生成。摘要调用失败、超时或 JSON 畸形时只移除 `semanticSummary`，原有 facts、preview 和 raw reference 保留，仍只持久化一条 tool result。Debug trace source 为 `tool_output_summary`，Real Grand Tour 继续受只读凭据和付费调用预算约束。
+语义摘要配置位于 `agent_tools.output.semantic_summary.*`，运行时使用独立的 `agent_tools.output.semantic_summary.api_key`，不得回退主模型密钥。该密钥由 `UnifiedConfigManager` 管理：`config.json` 提供本地默认值，`app_settings` 可覆盖，Settings 保存/删除操作写入统一配置。输入按工具类型优先提取 stdout/stderr、文件内容、搜索结果、网页正文或 reference 内容；超过输入预算时按 head/error context/uniform/tail 选择，再以最多 6 个 map、并发 3 和一次 reduce 在默认 12 秒总预算内同步生成。摘要调用失败、超时或 JSON 畸形时只移除 `semanticSummary`，原有 facts、preview 和 raw reference 保留，仍只持久化一条 tool result。Debug trace source 为 `tool_output_summary`；Real Grand Tour 使用相同的只读配置 getter，并继续受付费调用预算约束。
 
 文件修改采用先读后写模型：`read_file` 返回基于原始字节的 baseline；已存在文件的 `write_file`、`edit_file` 和 `apply_patch` update/delete 必须带当前 baseline，过期或缺失在落盘前拒绝。`list_dir` 和搜索返回有界、相对路径的结构化结果，搜索默认使用原生遍历而非 shell 解析。命令解析为 argv 后以 `shell=False` 启动，只允许 workspace 内 cwd 和路径参数；shell 控制语法、shell host 与内联解释器代码在执行前拒绝。后台进程受会话级数量、日志和等待上限约束，只在当前 sidecar 进程会话内可管理，重启后旧 `proc_*` id 返回 unavailable。
 
 ### 内置工具依赖预装
 
-`web_search` 通过 `web.search_backend` 选择 provider：`auto` 会按 `brave-free → ddg-html → ddgs` 尝试；显式配置 `brave-free`、`ddg-html` 或 `ddgs` 时只使用指定 provider。Brave API Key 只能经 Settings secret API 写入 keyring；`ddg-html` 使用标准库请求 DuckDuckGo HTML 页面；`ddgs` 保留 `duckduckgo-search` 作为最后降级，并继续通过 `tool_executor.run_tool_code()` 在 `data/tool_venv/` 子进程执行。
+`web_search` 通过 `web.search_backend` 选择 provider：`auto` 会按 `brave-free → ddg-html → ddgs` 尝试；显式配置 `brave-free`、`ddg-html` 或 `ddgs` 时只使用指定 provider。Brave API Key 经 Settings secret API 写入统一配置；`ddg-html` 使用标准库请求 DuckDuckGo HTML 页面；`ddgs` 保留 `duckduckgo-search` 作为最后降级，并继续通过 `tool_executor.run_tool_code()` 在 `data/tool_venv/` 子进程执行。
 
 仍需要第三方包的内置工具不在主进程直接 import，而是通过 `tool_executor.run_tool_code()` 在工具 venv 子进程执行。`tool_executor` 暴露 `BUILTIN_TOOL_DEPS` 列表和 `ensure_builtin_deps()` 函数，FastAPI lifespan 启动时调用预装。后续新增内置工具依赖只需往该列表追加包名。
 

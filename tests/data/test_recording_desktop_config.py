@@ -1,12 +1,10 @@
 import json
-import sys
-import types
 
 from src.data.config_models import AppConfig
 from src.data.unified_config import UnifiedConfigManager
 
 
-def test_recording_desktop_config_defaults_and_round_trip(tmp_path, monkeypatch):
+def test_recording_desktop_config_defaults_and_round_trip(tmp_path):
     assert AppConfig().ai.timeout == 180
     assert AppConfig().recording.desktop.enable_clip is True
     assert AppConfig().recording.desktop.vision_model is None
@@ -20,12 +18,6 @@ def test_recording_desktop_config_defaults_and_round_trip(tmp_path, monkeypatch)
         ),
         encoding="utf-8",
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
     desktop = config.get_recording_desktop_config()
 
@@ -35,18 +27,12 @@ def test_recording_desktop_config_defaults_and_round_trip(tmp_path, monkeypatch)
     assert config.get_desktop_vision_model() == "vision-x"
 
 
-def test_desktop_vision_model_does_not_fallback_to_general_vision(tmp_path, monkeypatch):
+def test_desktop_vision_model_does_not_fallback_to_general_vision(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({"ai": {"vision_model": "general-vision"}, "recording": {"desktop": {}}}),
         encoding="utf-8",
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
 
     assert config.get_ai_vision_model() == "general-vision"

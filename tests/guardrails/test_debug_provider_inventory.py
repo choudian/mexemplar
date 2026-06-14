@@ -21,7 +21,6 @@ REQUIRED_FIELDS = {
 
 ALLOWED_STATUSES = {"covered", "out_of_scope"}
 EXCLUDED_SCAN_FILES = {
-    "src/data/credential_resolver.py",
     "src/data/unified_config.py",
 }
 

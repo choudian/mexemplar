@@ -104,19 +104,12 @@ _vision_client_lock = threading.Lock()
 
 def get_vision_llm_client(model: str | None = None) -> Any:
     from src.business.ai.llm_client import LangChainLLMClient
-    from src.data.credential_resolver import (
-        get_real_tour_credential_resolver,
-        is_real_tour_runtime,
-    )
     from src.data.unified_config import get_unified_config
 
     config = get_unified_config()
-    resolver = get_real_tour_credential_resolver() if is_real_tour_runtime() else None
     provider = config.get_ai_vision_provider()
     resolved_model = model or config.get_ai_vision_model()
-    api_key = (
-        resolver.get_ai_vision_api_key() if resolver is not None else config.get_ai_vision_api_key()
-    )
+    api_key = config.get_ai_vision_api_key()
     base_url = config.get_ai_vision_base_url()
     key = (provider, resolved_model, api_key, base_url)
 

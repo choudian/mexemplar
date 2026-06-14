@@ -14,9 +14,7 @@ mock 掉 SQLAlchemyManager 和 config 文件加载，直接测试 UnifiedConfigM
 """
 
 import json
-import sys
-import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -31,24 +29,14 @@ _EMPTY_CONFIG = json.dumps({}, ensure_ascii=False)
 
 
 def _make_config(tmp_path, config_json: str | None = None):
-    """创建一个完全隔离的 UnifiedConfigManager，不碰真实 DB / keyring。"""
+    """创建一个完全隔离的 UnifiedConfigManager，不碰真实 DB。"""
     config_path = tmp_path / "config.json"
     config_path.write_text(
         config_json or _EMPTY_CONFIG,
         encoding="utf-8",
     )
 
-    # mock keyring 以避免外部依赖
-    fake_keyring = types.SimpleNamespace(
-        get_password=lambda *a, **kw: None,
-        set_password=lambda *a, **kw: None,
-        delete_password=lambda *a, **kw: None,
-    )
-
-    with (
-        patch.dict(sys.modules, {"keyring": fake_keyring}),
-    ):
-        return UnifiedConfigManager(config_path=str(config_path))
+    return UnifiedConfigManager(config_path=str(config_path))
 
 
 # ---------------------------------------------------------------------------

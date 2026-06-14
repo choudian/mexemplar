@@ -1,1 +1,1 @@
-{"budgetExceeded": true, "credentialMutationCount": 0, "elapsedMs": 396625, "keyringMutationGuard": "installed", "lastBudgetReason": "paid_call_count", "lastCallSource": "llm_chat_with_tools", "paidCallCount": 30}
+{"budgetExceeded": true, "elapsedMs": 396625, "lastBudgetReason": "paid_call_count", "lastCallSource": "llm_chat_with_tools", "paidCallCount": 30}

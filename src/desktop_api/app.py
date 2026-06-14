@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 
-from src.business.services.real_tour_startup_service import RealTourStartupService
 from src.business.services.recording_startup_service import RecordingStartupService
 from src.desktop_api.confirmations import install_confirmation_signal
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
@@ -38,7 +37,6 @@ def create_app(session_token: str | None = None) -> FastAPI:
     token = session_token or os.environ.get("MEXEMPLAR_DESKTOP_TOKEN", "")
     install_blinker_event_adapter()
     install_confirmation_signal()
-    RealTourStartupService().install_runtime_guards()
     if token:
         try:
             from src.business.debug.service import get_debug_service
@@ -51,6 +49,17 @@ def create_app(session_token: str | None = None) -> FastAPI:
     async def lifespan(_app: FastAPI):
         RecordingStartupService().ensure_recovered()
         ensure_builtin_deps()
+        try:
+            from src.data.real_tour_audit import ensure_initialized
+            ensure_initialized()
+        except Exception:
+            logger.warning("Real tour audit initialization failed", exc_info=True)
+        try:
+            from src.business.services.grand_tour_fixture_service import ensure_fixture_skill
+
+            ensure_fixture_skill()
+        except Exception:
+            logger.warning("Grand tour fixture skill injection failed", exc_info=True)
         brain_worker = None
         try:
             from src.business.brain.background_worker import BrainBackgroundWorker

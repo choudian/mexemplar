@@ -3,11 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from src.data.credential_resolver import (
-    ReadOnlyCredentialResolver,
-    get_real_tour_credential_resolver,
-    is_real_tour_runtime,
-)
 from src.data.config_models import (
     AIConfig,
     AgentToolsOutputSemanticSummaryConfig,
@@ -17,6 +12,7 @@ from src.data.config_models import (
     UIConfig,
     WebConfig,
 )
+from src.data.real_tour_audit import is_real_tour_runtime
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils import events
 
@@ -131,7 +127,7 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         "Brave Search API Key",
         "web",
         "secret",
-        description="仅用于 Brave Search API，密钥只保存到系统 keyring。",
+        description="仅用于 Brave Search API，密钥保存到统一配置。",
         secret=True,
     ),
     SettingSpec(
@@ -187,7 +183,7 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         "摘要 API Key",
         "tool_output",
         "secret",
-        description="独立存入系统密钥库，不复用主模型密钥。",
+        description="独立保存到统一配置，不复用主模型密钥。",
         secret=True,
     ),
     SettingSpec(
@@ -466,15 +462,8 @@ class SettingsValidationError(ValueError):
 
 
 class SettingsService:
-    def __init__(
-        self,
-        config: UnifiedConfigManager | None = None,
-        credential_resolver: ReadOnlyCredentialResolver | None = None,
-    ):
+    def __init__(self, config: UnifiedConfigManager | None = None):
         self._config = config or get_unified_config()
-        self._credential_resolver = credential_resolver or (
-            get_real_tour_credential_resolver() if is_real_tour_runtime() else None
-        )
         self._specs = {spec.key: spec for spec in SETTING_SPECS}
         self._actions = {spec.key: spec for spec in ACTION_SPECS}
 
@@ -570,7 +559,7 @@ class SettingsService:
         direct_vision_model = self._config.get("recording.desktop.vision_model", default=None)
         if not direct_vision_model:
             vision_status = "unavailable"
-        elif not self._get_ai_vision_api_key():
+        elif not self._config.get_ai_vision_api_key():
             vision_status = "missing_secret"
         else:
             vision_status = "available"
@@ -617,92 +606,57 @@ class SettingsService:
 
             if not is_valid_compatible_base_url(summary_base_url):
                 summary_status = "invalid"
-            elif not self._get_tool_output_summary_api_key():
+            elif not self._read_secret_value("agent_tools.output.semantic_summary.api_key"):
                 summary_status = "missing_secret"
             else:
                 summary_status = "available"
-        elif not self._get_tool_output_summary_api_key():
+        elif not self._read_secret_value("agent_tools.output.semantic_summary.api_key"):
             summary_status = "missing_secret"
         else:
             summary_status = "available"
         return {
-            "ai.api_key": "available" if self._get_ai_api_key() else "missing_secret",
+            "ai.api_key": "available" if self._read_secret_value("ai.api_key") else "missing_secret",
             "web.brave_api_key": (
-                "available" if self._get_web_brave_api_key() else "missing_secret"
+                "available" if self._read_secret_value("web.brave_api_key") else "missing_secret"
             ),
             "recording.desktop.vision_model": vision_status,
             "agent_tools.output.semantic_summary.api_key": (
-                "available" if self._get_tool_output_summary_api_key() else "missing_secret"
+                "available" if self._read_secret_value("agent_tools.output.semantic_summary.api_key") else "missing_secret"
             ),
             "agent_tools.output.semantic_summary.model": summary_status,
         }
 
-    def _get_ai_api_key(self) -> str | None:
-        if self._credential_resolver is not None:
-            return self._credential_resolver.get_ai_api_key()
-        return self._config.get_ai_api_key()
-
-    def _get_ai_vision_api_key(self) -> str | None:
-        if self._credential_resolver is not None:
-            return self._credential_resolver.get_ai_vision_api_key()
-        return self._config.get_ai_vision_api_key()
-
-    def _get_web_brave_api_key(self) -> str | None:
-        return self._read_secret_value("web.brave_api_key")
-
-    def _get_tool_output_summary_api_key(self) -> str | None:
-        return self._read_secret_value("agent_tools.output.semantic_summary.api_key")
+    # 外部 secret_key → UnifiedConfigManager 的 (getter, setter, clearer) 方法名，
+    # 是密钥读/写/删三处分发的单一真值来源；新增密钥项只改这一处。
+    _SECRET_METHODS: dict[str, tuple[str, str, str]] = {
+        "ai.api_key": ("get_ai_api_key", "set_ai_api_key", "clear_ai_api_key"),
+        "web.brave_api_key": (
+            "get_web_brave_api_key",
+            "set_web_brave_api_key",
+            "clear_web_brave_api_key",
+        ),
+        "agent_tools.output.semantic_summary.api_key": (
+            "get_tool_output_summary_api_key",
+            "set_tool_output_summary_api_key",
+            "clear_tool_output_summary_api_key",
+        ),
+    }
 
     def _read_secret_value(self, secret_key: str) -> str | None:
-        if self._credential_resolver is not None:
-            getter = getattr(self._credential_resolver, "get_secret", None)
-            if callable(getter):
-                return getter(secret_key)
-            if secret_key == "ai.api_key":
-                return self._credential_resolver.get_ai_api_key()
-            if secret_key == "web.brave_api_key":
-                brave_getter = getattr(self._credential_resolver, "get_web_brave_api_key", None)
-                return brave_getter() if callable(brave_getter) else None
-            if secret_key == "agent_tools.output.semantic_summary.api_key":
-                summary_getter = getattr(
-                    self._credential_resolver,
-                    "get_tool_output_summary_api_key",
-                    None,
-                )
-                return summary_getter() if callable(summary_getter) else None
-        if secret_key == "ai.api_key":
-            return self._config.get_ai_api_key()
-        if secret_key == "web.brave_api_key":
-            getter = getattr(self._config, "get_web_brave_api_key", None)
-            return getter() if callable(getter) else None
-        if secret_key == "agent_tools.output.semantic_summary.api_key":
-            getter = getattr(self._config, "get_tool_output_summary_api_key", None)
-            return getter() if callable(getter) else None
-        return None
+        methods = self._SECRET_METHODS.get(secret_key)
+        return getattr(self._config, methods[0])() if methods else None
 
     def _write_secret_value(self, secret_key: str, secret: str) -> None:
-        if secret_key == "ai.api_key":
-            self._config.set_ai_api_key(secret)
-            return
-        if secret_key == "web.brave_api_key":
-            self._config.set_web_brave_api_key(secret)
-            return
-        if secret_key == "agent_tools.output.semantic_summary.api_key":
-            self._config.set_tool_output_summary_api_key(secret)
-            return
-        raise SettingsValidationError(secret_key, "不支持的密钥项。")
+        methods = self._SECRET_METHODS.get(secret_key)
+        if methods is None:
+            raise SettingsValidationError(secret_key, "不支持的密钥项。")
+        getattr(self._config, methods[1])(secret)
 
     def _delete_secret_value(self, secret_key: str) -> None:
-        if secret_key == "ai.api_key":
-            self._config.clear_ai_api_key()
-            return
-        if secret_key == "web.brave_api_key":
-            self._config.clear_web_brave_api_key()
-            return
-        if secret_key == "agent_tools.output.semantic_summary.api_key":
-            self._config.clear_tool_output_summary_api_key()
-            return
-        raise SettingsValidationError(secret_key, "不支持的密钥项。")
+        methods = self._SECRET_METHODS.get(secret_key)
+        if methods is None:
+            raise SettingsValidationError(secret_key, "不支持的密钥项。")
+        getattr(self._config, methods[2])()
 
     def _normalize_value(self, spec: SettingSpec, value: Any) -> Any:
         if spec.value_kind in {"integer", "number"}:

@@ -1,11 +1,20 @@
 import json
-import sys
-import types
 
 from src.data.unified_config import UnifiedConfigManager
 
 
-def test_compression_model_follows_primary_chat_model(tmp_path, monkeypatch):
+class _SettingsStore:
+    def __init__(self):
+        self.values = {}
+
+    def get_setting(self, key, default=None):
+        return self.values.get(key, default)
+
+    def set_setting(self, key, value, value_type="string"):
+        self.values[key] = value
+
+
+def test_compression_model_follows_primary_chat_model(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps(
@@ -27,13 +36,8 @@ def test_compression_model_follows_primary_chat_model(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
 
     assert config.get_compression_model_provider() == "openai"
     assert config.get_compression_model_name() == "gpt-4o-mini"
@@ -43,8 +47,9 @@ def test_compression_model_follows_primary_chat_model(tmp_path, monkeypatch):
     assert config.get_compression_model_max_tokens() == 321
 
 
-def test_tool_output_semantic_summary_defaults_and_bounds(tmp_path, monkeypatch):
+def test_tool_output_semantic_summary_defaults_and_bounds(tmp_path):
     config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    config._sa = _SettingsStore()
 
     assert config.get_agent_tools_output_semantic_summary_enabled() is True
     assert config.get_agent_tools_output_semantic_summary_provider() == "anthropic"
@@ -61,7 +66,74 @@ def test_tool_output_semantic_summary_defaults_and_bounds(tmp_path, monkeypatch)
     assert config.get_agent_tools_output_semantic_summary_summary_max_chars() == 4000
 
 
-def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_path, monkeypatch):
+def test_all_api_keys_are_read_from_unified_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "ai": {
+                    "api_key": "main-key",
+                    "vision_api_key": "vision-key",
+                    "embedding_api_key": "embedding-key",
+                },
+                "web": {"brave_api_key": "brave-key"},
+                "agent_tools": {
+                    "output": {
+                        "semantic_summary": {
+                            "api_key": "summary-key",
+                        }
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_ai_api_key() == "main-key"
+    assert config.get_ai_vision_api_key() == "vision-key"
+    assert config.get_embedding_api_key() == "embedding-key"
+    assert config.get_web_brave_api_key() == "brave-key"
+    assert config.get_tool_output_summary_api_key() == "summary-key"
+
+
+def test_secret_setters_persist_to_unified_config_and_clear(tmp_path):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    store = _SettingsStore()
+    config._sa = store
+
+    config.set_ai_api_key(" main-key ")
+    config.set_web_brave_api_key(" brave-key ")
+    config.set_tool_output_summary_api_key(" summary-key ")
+
+    assert store.values["ai.api_key"] == "main-key"
+    assert store.values["web.brave_api_key"] == "brave-key"
+    assert store.values["agent_tools.output.semantic_summary.api_key"] == "summary-key"
+    assert config.get_ai_api_key() == "main-key"
+    assert config.get_web_brave_api_key() == "brave-key"
+    assert config.get_tool_output_summary_api_key() == "summary-key"
+
+    config.clear_ai_api_key()
+    config.clear_web_brave_api_key()
+    config.clear_tool_output_summary_api_key()
+
+    assert config.get_ai_api_key() is None
+    assert config.get_web_brave_api_key() is None
+    assert config.get_tool_output_summary_api_key() is None
+
+
+def test_secret_values_are_redacted_from_config_logs(tmp_path, caplog):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    config._sa = _SettingsStore()
+
+    config.set_ai_api_key("sk-log-secret")
+    config.get_ai_api_key()
+
+    assert "sk-log-secret" not in caplog.text
+
+
+def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps(
@@ -80,13 +152,8 @@ def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_p
         ),
         encoding="utf-8",
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
     noise_filter = config.get_recording_noise_filter_config()
 
     assert noise_filter.enabled is False
@@ -96,46 +163,31 @@ def test_recording_noise_filter_config_reads_nested_defaults_and_overrides(tmp_p
     assert noise_filter.static_content_type_prefixes == ["image/", "text/css"]
 
 
-def test_web_search_backend_defaults_to_auto(tmp_path, monkeypatch):
+def test_web_search_backend_defaults_to_auto(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
 
     assert config.get_web_search_backend() == "auto"
 
 
-def test_web_search_backend_reads_file_override_normalized(tmp_path, monkeypatch):
+def test_web_search_backend_reads_file_override_normalized(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(
         json.dumps({"web": {"search_backend": "DDG-HTML"}}, ensure_ascii=False),
         encoding="utf-8",
     )
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
 
     assert config.get_web_search_backend() == "ddg-html"
 
 
-def test_memory_reference_size_threshold_default_is_raised(tmp_path, monkeypatch):
+def test_memory_reference_size_threshold_default_is_raised(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setitem(
-        sys.modules,
-        "keyring",
-        types.SimpleNamespace(get_password=lambda *args, **kwargs: None),
-    )
-
     config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
 
     assert config.get_memory_reference_size_threshold() == 10000

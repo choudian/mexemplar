@@ -2,7 +2,9 @@
 
 ## `ai`
 
-设置页展示的 AI 配置均通过 `get_unified_config()` 读写。`ai.api_key` 只用于迁移兼容，运行时写入密钥必须走 keyring，不应把明文密钥保存在配置文件或数据库。
+设置页展示的 AI 配置和 API Key 均通过 `get_unified_config()` / `UnifiedConfigManager` 读写。密钥保存在统一配置层，可由 `config.json` 提供默认值，也可由 Settings 写入 `app_settings` 覆盖；Settings 和 API 响应只返回遮罩状态，不返回密钥明文。普通日志必须对密钥字段脱敏。
+
+当前密钥字段包括 `ai.api_key`、`ai.vision_api_key`、`ai.embedding_api_key`、`web.brave_api_key` 和 `agent_tools.output.semantic_summary.api_key`。会话压缩继续复用 `ai.api_key`。
 
 ## `ui`
 
