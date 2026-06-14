@@ -12,6 +12,13 @@ from typing import Any, Iterator
 
 SCHEMA_VERSION = 1
 
+# Shared User-Agent for HTTP requests made by built-in tools.
+BUILTIN_WEB_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/122.0.0.0 Safari/537.36"
+)
+
 OUTCOME_SUCCESS = "success"
 OUTCOME_ERROR = "error"
 OUTCOME_REJECTED = "rejected"
@@ -99,6 +106,17 @@ UPGRADED_BUILTIN_TOOL_NAMES = frozenset(
         "process_stop",
         "process_send_input",
         "process_close",
+        "load_tool_output",
+    }
+)
+
+# Tools whose result is the explicit raw-output escape hatch. Their output must
+# NOT be re-summarized or re-compacted by output governance: doing so is both
+# wasteful (an extra summarizer LLM call on data the model deliberately asked to
+# see) and self-defeating (the model requested the original bytes, not a digest).
+# Size stays bounded by the tool handler's own offset/maxBytes pagination.
+COMPACTION_EXEMPT_TOOL_NAMES = frozenset(
+    {
         "load_tool_output",
     }
 )

@@ -7,7 +7,9 @@ Agent Loop 核心
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
+from contextvars import copy_context
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -29,6 +31,7 @@ from .tools.builtin_contracts import (
     is_tool_failure_result,
     use_tool_runtime,
 )
+from .tools.builtin_config import get_config_int
 from .tools.output_governance import (
     govern_tool_result,
     governance_double_failure_fallback,
@@ -38,6 +41,7 @@ from .tools.output_governance import (
 logger = logging.getLogger(__name__)
 
 _INJECTED_TOOL_NAMES = frozenset({"load_reference", "talk_to_user"})
+_DEFAULT_PARALLEL_WORKERS = 4
 
 # 活动事件文本截断上限（projector 还会再走 009 payload allowlist 脱敏）。
 _ACTIVITY_TEXT_LIMIT = 2000
@@ -623,6 +627,17 @@ class AgentLoop:
         content: str,
     ) -> str:
         """Govern and persist exactly one tool result for a tool call."""
+        final_content = self._govern_tool_result(tool_call, ctx, content)
+        self._save_governed_tool_result(tool_call, ctx, final_content)
+        return final_content
+
+    def _govern_tool_result(
+        self,
+        tool_call: ToolCallInfo,
+        ctx: ContextManager,
+        content: str,
+    ) -> str:
+        """Apply output governance without mutating conversation state."""
         final_content = content
         if isinstance(content, str):
             try:
@@ -649,13 +664,135 @@ class AgentLoop:
                     final_content = governance_double_failure_fallback(
                         tool_name=tool_call.name,
                     )
+        return final_content
+
+    def _save_governed_tool_result(
+        self,
+        tool_call: ToolCallInfo,
+        ctx: ContextManager,
+        content: str,
+    ) -> None:
+        """Persist one already-governed result and emit its ordered activity event."""
         ctx.save_tool_result(
             tool_call_id=tool_call.id,
             tool_name=tool_call.name,
-            content=final_content,
+            content=content,
         )
-        self._emit_activity(ctx, "tool_result", tool_name=tool_call.name, text=final_content)
-        return final_content
+        self._emit_activity(ctx, "tool_result", tool_name=tool_call.name, text=content)
+
+    def _execute_and_govern_tool_call(
+        self,
+        tool_call: ToolCallInfo,
+        tool_def: ToolDefinition,
+        ctx: ContextManager,
+        session_id: str,
+        iteration: int,
+    ) -> tuple[ToolExecutionOutcome, str]:
+        """Execute and govern a safe call in a worker without persisting it."""
+        outcome = self._execute_tool_call(tool_call, tool_def, session_id, iteration)
+        governed = self._govern_tool_result(tool_call, ctx, outcome.result)
+        return outcome, governed
+
+    @staticmethod
+    def _partition_tool_calls(
+        classified: List[tuple],
+    ) -> List[tuple[bool, List[tuple]]]:
+        """Group contiguous concurrency-safe read calls while keeping serial barriers.
+
+        Partition items share the classified-item shape ``(tool_call, kind, tool_def)``;
+        order is preserved by construction, so no positional index is carried.
+        """
+        partitions: List[tuple[bool, List[tuple]]] = []
+        current_parallel: List[tuple] = []
+
+        for item in classified:
+            _, kind, tool_def = item
+            concurrency_safe = (
+                kind == "ordinary"
+                and tool_def is not None
+                and tool_def.is_concurrency_safe
+                and not tool_def.has_side_effects
+            )
+            if concurrency_safe:
+                current_parallel.append(item)
+                continue
+
+            if current_parallel:
+                partitions.append((True, current_parallel))
+                current_parallel = []
+            partitions.append((False, [item]))
+
+        if current_parallel:
+            partitions.append((True, current_parallel))
+        return partitions
+
+    def _execute_parallel_partition(
+        self,
+        partition: List[tuple],
+        ctx: ContextManager,
+        session_id: str,
+        iteration: int,
+        executor: ThreadPoolExecutor,
+    ) -> List[tuple]:
+        """Execute and govern one safe partition on a shared executor.
+
+        ``executor`` is owned by the caller (one per batch, not one per
+        partition); results are returned in input order.
+        """
+        tool_names = [tool_call.name for tool_call, _, _ in partition]
+        started = time.monotonic()
+        logger.info("[Agent Loop] 并发工具分区开始: tools=%s", tool_names)
+        futures = []
+        for tool_call, _, tool_def in partition:
+            context = copy_context()
+            future = executor.submit(
+                context.run,
+                self._execute_and_govern_tool_call,
+                tool_call,
+                tool_def,
+                ctx,
+                session_id,
+                iteration,
+            )
+            futures.append((tool_call, future))
+
+        results = []
+        for tool_call, future in futures:
+            try:
+                outcome, governed = future.result()
+            except Exception as exc:
+                logger.warning(
+                    "[Agent Loop] 并发工具执行异常: tool=%s error_type=%s",
+                    tool_call.name,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                raw_result = make_error_result(
+                    "handler_exception",
+                    f"工具 '{tool_call.name}' 执行异常: {exc}",
+                )
+                outcome = ToolExecutionOutcome(
+                    raw_result,
+                    failed=True,
+                    failure_code="handler_exception",
+                )
+                governed = self._govern_tool_result(tool_call, ctx, raw_result)
+            results.append((tool_call, outcome, governed))
+
+        logger.info(
+            "[Agent Loop] 并发工具分区完成: tools=%s elapsed_ms=%s",
+            tool_names,
+            int((time.monotonic() - started) * 1000),
+        )
+        return results
+
+    def _log_tool_result(self, tc, outcome) -> None:
+        """统一的工具结果 debug 日志（并发与串行路径共用，避免格式漂移）。"""
+        logger.debug(
+            "[Agent Loop] 工具结果: tool=%s result_chars=%s",
+            tc.name,
+            len(str(outcome.result)),
+        )
 
     def _execute_tool_batch(
         self,
@@ -704,45 +841,80 @@ class AgentLoop:
             tc, _, tool_def = classified[0]
             return self._execute_solo_interrupt(tc, tool_def, ctx, session_id, iteration)
 
-        # Ordinary batch (all ordinary or unknown)
-        first_failure = None
-        for i, (tc, kind, tool_def) in enumerate(classified):
-            if first_failure is not None:
-                self._save_error(
-                    tc,
-                    ctx,
-                    "not_executed",
-                    "前序副作用工具失败，跳过执行。请基于已有结果重新规划。",
-                    upstream_tool_call_id=classified[i - 1][0].id if i > 0 else None,
-                )
-                continue
+        # Ordinary batch (all ordinary or unknown). Contiguous concurrency-safe
+        # reads overlap on one shared executor, but serial barriers and persistence
+        # retain model-provided order. A single side-effect/unknown failure cascades
+        # `not_executed` onto every later call (tracked by its tool_call_id).
+        failure_upstream_id: Optional[str] = None
+        partitions = self._partition_tool_calls(classified)
+        max_workers = get_config_int(
+            "get_agent_tools_max_parallel_workers",
+            _DEFAULT_PARALLEL_WORKERS,
+            maximum=16,
+        )
+        executor: Optional[ThreadPoolExecutor] = None
+        try:
+            for is_parallel, partition in partitions:
+                if failure_upstream_id is not None:
+                    for tc, _, _ in partition:
+                        self._save_error(
+                            tc,
+                            ctx,
+                            "not_executed",
+                            "前序副作用工具失败，跳过执行。请基于已有结果重新规划。",
+                            upstream_tool_call_id=failure_upstream_id,
+                        )
+                    continue
 
-            # Unknown tool — 模型幻觉，后续工具参数可能基于错误上下文，触发级联
-            if kind == "unknown":
-                self._save_error(tc, ctx, "unknown_tool", f"未知工具 '{tc.name}'，无法执行。")
-                first_failure = i + 1
-                continue
+                if is_parallel and len(partition) > 1:
+                    if executor is None:
+                        executor = ThreadPoolExecutor(
+                            max_workers=max_workers,
+                            thread_name_prefix="agent-tool",
+                        )
+                    for tc, outcome, governed in self._execute_parallel_partition(
+                        partition,
+                        ctx,
+                        session_id,
+                        iteration,
+                        executor,
+                    ):
+                        self._save_governed_tool_result(tc, ctx, governed)
+                        if outcome.failed:
+                            logger.info(
+                                "[Agent Loop] 并发分区中无副作用工具 %s 失败，不影响其他工具",
+                                tc.name,
+                            )
+                        else:
+                            self._log_tool_result(tc, outcome)
+                    continue
 
-            outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
-            result = outcome.result
+                tc, kind, tool_def = partition[0]
 
-            # Persist governed result (standardized error or success)
-            self._persist_tool_result(tc, ctx, result)
-            if outcome.failed:
-                # Only cascade failure for tools with side effects
-                if tool_def.has_side_effects:
-                    first_failure = i + 1
+                # Unknown tool — 模型幻觉，后续工具参数可能基于错误上下文，触发级联
+                if kind == "unknown":
+                    self._save_error(tc, ctx, "unknown_tool", f"未知工具 '{tc.name}'，无法执行。")
+                    failure_upstream_id = tc.id
+                    continue
+
+                outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
+                self._persist_tool_result(tc, ctx, outcome.result)
+                if outcome.failed:
+                    # Only cascade failure for tools with side effects
+                    if tool_def.has_side_effects:
+                        failure_upstream_id = tc.id
+                    else:
+                        logger.info(f"[Agent Loop] 无副作用工具 {tc.name} 失败，继续执行后续调用")
                 else:
-                    logger.info(f"[Agent Loop] 无副作用工具 {tc.name} 失败，继续执行后续调用")
-            else:
-                logger.debug(
-                    "[Agent Loop] 工具结果: tool=%s result_chars=%s",
-                    tc.name,
-                    len(str(result)),
-                )
+                    self._log_tool_result(tc, outcome)
+        finally:
+            if executor is not None:
+                executor.shutdown(wait=True)
 
-        if first_failure is not None:
-            logger.info(f"[Agent Loop] 批次执行中断: 在第 {first_failure} 个调用处失败")
+        if failure_upstream_id is not None:
+            logger.info(
+                f"[Agent Loop] 批次执行中断: 调用 {failure_upstream_id} 失败，级联跳过后续工具"
+            )
         else:
             logger.info(f"[Agent Loop] 批次执行完成: {batch_size} 个调用全部处理")
 
@@ -959,11 +1131,15 @@ class AgentLoop:
             ctx: ContextManager,
         ) -> Dict[str, ToolDefinition]:
             registry = {td.name: td for td in tool_defs}
+            # ContextManager.load_reference 内部对其共享 Repository session 加锁，
+            # 因此可被并发工具安全调用。
             registry["load_reference"] = ToolDefinition(
                 name="load_reference",
                 schema=LOAD_REFERENCE_SCHEMA,
-                handler=lambda reference_id: ctx.load_reference(reference_id),
+                handler=ctx.load_reference,
                 is_interrupting=False,
+                has_side_effects=False,
+                is_concurrency_safe=True,
             )
             # text_as_user_input=True 时，LLM 直接输出文本即可与用户对话，
             # 不需要 talk_to_user 工具（避免 LLM 在该调 submit 时误调 talk_to_user）

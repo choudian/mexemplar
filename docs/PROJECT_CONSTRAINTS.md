@@ -10,13 +10,15 @@
 - post_hook 不通过 `ToolCallContext` 获取结果；它只能通过第二个 `result` 参数读取 handler 原始字符串结果或普通 handler 异常转换出的标准化错误字符串。
 - post_hook 不形成结果流水线；每个 post_hook 看到同一个原始结果，最后一个返回非空 `PostHookResult.result` 的 hook 决定最终文本。
 - `ToolSignal` 是 AgentLoop 控制信号，合法中断型工具返回该信号时跳过 post_hook。
+- `ToolDefinition.is_concurrency_safe` 是保守的显式白名单，默认必须为 `False`。AgentLoop 只并发执行连续、普通、无副作用且已标记安全的调用；handler、hook 与 output governance 可在最多 4 个 worker 中重叠，但 `save_tool_result` 和活动事件必须由调用线程按原工具调用顺序执行。
+- 并发分区内失败不得级联到兄弟读取或后续串行分区；副作用工具失败仍按既有规则令后续调用写 `not_executed`。共享 SQLAlchemy Session、可变激活缓存、计数写入、进程状态、用户工具、组合工具、委派和文件/命令 mutation 在证明并加固线程安全前不得标记并发安全。
 
 ## Migrated Gate Ownership
 
 - `builtin_general_tools.read_file`、`write_file`、`edit_file`、`list_dir`、`exec`、`apply_patch`、`search_files`、`search_content` 和 process lifecycle 工具的路径存在性、系统目录拒绝、命令安全分类和用户确认属于 pre_hook / 共享权限 helper。
 - `edit_file` 的 `old_text` 查找与唯一性校验属于编辑执行准备，留在 handler。
 - assistant 高危确认必须只展示和记录脱敏摘要：`write_file` 只含目标路径，`edit_file` 只含截断片段，`exec` 只含命令首行；不得记录完整文件内容、完整替换文本或多行命令体。
-- assistant “全部允许/免确认”只允许是当前进程会话级内存状态，不得写入配置、keyring、SQLite 或 DuckDB；新对话入口必须复位该状态并收敛旧 pending 请求。
+- assistant “全部允许/免确认”只允许是当前进程会话级内存状态，不得写入配置、SQLite 或 DuckDB；新对话入口必须复位该状态并收敛旧 pending 请求。
 - `recording_data_tools.query_data` 的 SQL 拒绝策略属于 pre_hook，但 handler 仍可再次调用 `rewrite(sql)` 生成实际执行 SQL。
 - `recording_data_tools.analyze_image` 的单次最多 5 个 action_index 限制属于 pre_hook。
 - `trial_tools.run_command` 的单次 `AgentLoop.run()` 调用上限属于 `create_trial_tools()` 内创建的 pre_hook 闭包。

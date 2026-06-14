@@ -664,9 +664,11 @@ def _bounded_summary(
             if len(result["overview"]) <= 100:
                 break
     for key in ("extractionGoal", "overview"):
-        while len(json.dumps(result, ensure_ascii=False)) > maximum and result[key]:
-            overflow = len(json.dumps(result, ensure_ascii=False)) - maximum
-            result[key] = result[key][: max(0, len(result[key]) - overflow)]
+        while True:
+            size = len(json.dumps(result, ensure_ascii=False))
+            if size <= maximum or not result[key]:
+                break
+            result[key] = result[key][: max(0, len(result[key]) - (size - maximum))]
     if len(json.dumps(result, ensure_ascii=False)) > maximum:
         return None
     return result

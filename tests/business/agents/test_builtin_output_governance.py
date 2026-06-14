@@ -450,11 +450,19 @@ def test_handler_clipping_metadata_triggers_compaction(tmp_path, monkeypatch):
     assert governed["references"]
 
 
-def test_load_tool_output_second_stage_reuses_source_reference(tmp_path, monkeypatch):
+def test_load_tool_output_is_exempt_from_summary_and_compaction(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
         "src.data.repos.tool_output_repository.get_default_data_dir",
         lambda: tmp_path,
+    )
+
+    def fail_summary(**_kwargs):  # pragma: no cover - must never be called
+        raise AssertionError("load_tool_output must not be semantically summarized")
+
+    monkeypatch.setattr(
+        "src.business.agents.tools.output_governance.summarize_tool_output",
+        fail_summary,
     )
     model = ToolOutputRepository().create_reference(
         session_id="session-1",
@@ -481,9 +489,51 @@ def test_load_tool_output_second_stage_reuses_source_reference(tmp_path, monkeyp
         )
     )
 
-    assert governed["payload"]["compacted"] is True
+    # The raw escape hatch is returned verbatim: no summary, no compaction marker,
+    # the original page content is preserved, and the source reference is intact.
+    assert "semanticSummary" not in governed["payload"]
+    assert "compacted" not in governed["payload"]
+    assert "ERROR source" in governed["payload"]["content"]
     assert governed["references"][0]["referenceId"] == model.reference_id
     assert len(governed["references"]) == 1
+
+
+def test_load_tool_output_caps_window_and_keeps_redaction(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        "src.data.repos.tool_output_repository.get_default_data_dir",
+        lambda: tmp_path,
+    )
+    model = ToolOutputRepository().create_reference(
+        session_id="session-1",
+        tool_name="exec",
+        tool_call_id="call-1",
+        kind="combined_output",
+        data="token=secret-value\n" + ("x" * 200000),
+        workspace_root=tmp_path,
+    )
+
+    governed = _obj(
+        govern_tool_result(
+            tool_name="load_tool_output",
+            tool_call_id="call-2",
+            session_id="session-1",
+            content=load_tool_output_handler(
+                model.reference_id,
+                maxBytes=1_000_000,
+                sessionId="session-1",
+                workspaceRoot=str(tmp_path),
+            ),
+            workspace_root=tmp_path,
+        )
+    )
+
+    # maxBytes is clamped to the configured ceiling (default 131072), so a single
+    # raw window can never blow up context, and redaction still applies.
+    assert governed["payload"]["bytesReturned"] <= 131072
+    assert governed["payload"]["hasMore"] is True
+    assert "secret-value" not in governed["payload"]["content"]
+    assert "token=***" in governed["payload"]["content"]
 
 
 def test_web_fetch_compaction_uses_markdown_body_and_transport_facts(tmp_path, monkeypatch):
@@ -582,7 +632,7 @@ def test_semantic_summary_failure_keeps_deterministic_web_preview_and_reference(
     assert governed["references"][0]["referenceId"].startswith("out_")
 
 
-def test_load_tool_output_compaction_summarizes_each_window_not_full_artifact(
+def test_load_tool_output_returns_each_window_verbatim_not_full_artifact(
     tmp_path,
     monkeypatch,
 ):
@@ -625,17 +675,21 @@ def test_load_tool_output_compaction_summarizes_each_window_not_full_artifact(
     first = load_and_govern(0, "call-page-1")
     second = load_and_govern(page_size, "call-page-2")
 
-    assert "FIRST_PAGE_ALPHA" in first["payload"]["preview"]
-    assert "SECOND_PAGE_BETA" not in first["payload"]["preview"]
-    assert "SECOND_PAGE_BETA" in second["payload"]["preview"]
-    assert "FIRST_PAGE_ALPHA" not in second["payload"]["preview"]
-    assert first["payload"]["facts"]["offset"] == 0
-    assert first["payload"]["facts"]["windowBytes"] == page_size
-    assert first["payload"]["facts"]["totalBytes"] == page_size * 2
-    assert first["payload"]["facts"]["hasMore"] is True
-    assert first["payload"]["facts"]["nextPageToken"] == str(page_size)
-    assert second["payload"]["facts"]["offset"] == page_size
-    assert second["payload"]["facts"]["hasMore"] is False
+    # Each window passes through verbatim (the raw bytes the model asked for),
+    # never summarized or compacted to a digest.
+    assert "compacted" not in first["payload"]
+    assert "semanticSummary" not in first["payload"]
+    assert "FIRST_PAGE_ALPHA" in first["payload"]["content"]
+    assert "SECOND_PAGE_BETA" not in first["payload"]["content"]
+    assert "SECOND_PAGE_BETA" in second["payload"]["content"]
+    assert "FIRST_PAGE_ALPHA" not in second["payload"]["content"]
+    assert first["payload"]["offset"] == 0
+    assert first["payload"]["hasMore"] is True
+    assert first["limits"]["nextPageToken"] == str(page_size)
+    assert first["limits"]["rawBytes"] == page_size * 2
+    assert second["payload"]["offset"] == page_size
+    assert second["payload"]["hasMore"] is False
     assert first["references"][0]["referenceId"] == model.reference_id
     assert second["references"][0]["referenceId"] == model.reference_id
+    # Exempt tools never mint a new artifact; only the original source blob exists.
     assert len(list((tmp_path / "tool_outputs").glob("**/*.blob"))) == 1

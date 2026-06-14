@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterable
 
+from src.business.agents.tools.builtin_contracts import BUILTIN_WEB_USER_AGENT
 from src.data.unified_config import get_unified_config
 
 logger = logging.getLogger(__name__)
@@ -39,11 +40,6 @@ _SEARCH_TIMEOUT_SECONDS = 10
 # Circuit breaker: 连续 N 次返回空结果后暂时禁用 provider
 _EMPTY_RESULT_THRESHOLD = 2
 _EMPTY_RESULT_COOLDOWN_SECONDS = 600  # 10 分钟
-_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
 
 
 class WebSearchProviderError(RuntimeError):
@@ -209,7 +205,7 @@ class BraveSearchProvider(WebSearchProvider):
             headers={
                 "Accept": "application/json",
                 "Accept-Encoding": "identity",
-                "User-Agent": _USER_AGENT,
+                "User-Agent": BUILTIN_WEB_USER_AGENT,
                 "X-Subscription-Token": api_key,
             },
             method="GET",
@@ -305,7 +301,7 @@ class DdgHtmlSearchProvider(WebSearchProvider):
                 "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.2",
                 "Accept-Encoding": "identity",
                 "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "User-Agent": _USER_AGENT,
+                "User-Agent": BUILTIN_WEB_USER_AGENT,
             },
             method="GET",
         )

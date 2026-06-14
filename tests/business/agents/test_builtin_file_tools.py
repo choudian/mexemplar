@@ -260,3 +260,27 @@ def test_apply_patch_replacement_failure_does_not_partially_mutate(tmp_path, mon
     assert result["error"]["code"] == "edit_target_not_found"
     assert first.read_text(encoding="utf-8") == "old\n"
     assert second.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_mutation_lock_eviction_does_not_deadlock_on_non_reentrant_guard(monkeypatch):
+    """Regression: _evict_oldest_half must NOT run while _mutation_locks_guard is held.
+
+    `_mutation_locks_guard` is a non-reentrant `threading.Lock`. If eviction is
+    called inside the `with _mutation_locks_guard:` block, the second acquire
+    inside `_evict_oldest_half` deadlocks the thread once the dict overflows the
+    cap. A small cap reproduces the scenario without needing 1024 entries.
+    """
+    from pathlib import Path
+
+    monkeypatch.setattr(file_tools, "_MUTATION_LOCKS_MAX", 4)
+    file_tools._mutation_locks.clear()
+
+    # Fill past the cap; without the fix, this call hangs forever.
+    for index in range(8):
+        file_tools._mutation_lock(Path(f"/tmp/regression_lock_{index}.txt"))
+
+    # Eviction trimmed back to roughly max_size // 2 entries.
+    assert len(file_tools._mutation_locks) <= 4
+    # Cache still functional: same path returns the same RLock instance.
+    again = file_tools._mutation_lock(Path("/tmp/regression_lock_after.txt"))
+    assert again is file_tools._mutation_lock(Path("/tmp/regression_lock_after.txt"))

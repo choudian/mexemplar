@@ -9,6 +9,7 @@
 """
 
 import logging
+import threading
 from collections import OrderedDict
 from typing import Callable, List, Optional, Set, Tuple
 
@@ -127,6 +128,7 @@ class DynamicToolManager:
         self._allowed_tool_ids = allowed_tool_ids
         self._allowed_composition_ids = allowed_composition_ids
         self._revalidate_activated = revalidate_activated
+        self._search_lock = threading.Lock()
         self._tool_repo = ToolRepository()
         self._composition_service: Optional[SkillCompositionService] = None
 
@@ -168,30 +170,36 @@ class DynamicToolManager:
 
     def search_tools(self, query: str) -> str:
         """按关键词搜索已发布的用户技能与技能组合"""
-        query = (query or "").strip()
-        if not query:
-            return "请输入要搜索的关键词。"
+        # The manager keeps Repository/Service sessions for its lifetime. Protect
+        # those shared sessions while still allowing this call to overlap with
+        # unrelated concurrency-safe tools in the AgentLoop.
+        with self._search_lock:
+            query = (query or "").strip()
+            if not query:
+                return "请输入要搜索的关键词。"
 
-        tools = [
-            tool for tool in self._tool_repo.search_published(query) if self._is_allowed_tool(tool)
-        ]
-        compositions = [
-            composition
-            for composition in self.composition_service.search_published_compositions(query)
-            if self._is_allowed_composition(composition)
-        ]
+            tools = [
+                tool
+                for tool in self._tool_repo.search_published(query)
+                if self._is_allowed_tool(tool)
+            ]
+            compositions = [
+                composition
+                for composition in self.composition_service.search_published_compositions(query)
+                if self._is_allowed_composition(composition)
+            ]
 
-        if not tools and not compositions:
-            return "没有找到匹配的技能或技能组合。"
+            if not tools and not compositions:
+                return "没有找到匹配的技能或技能组合。"
 
-        lines = []
-        for composition in compositions[:5]:
-            mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
-            desc = composition.description or composition.applicability
-            lines.append(f"- [技能组合/{mode_text}] {composition.composition_name}：{desc}")
-        for tool in tools[:5]:
-            lines.append(f"- [技能] {tool.tool_name}：{tool.description or '（无描述）'}")
-        return "找到以下能力：\n" + "\n".join(lines[:10])
+            lines = []
+            for composition in compositions[:5]:
+                mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
+                desc = composition.description or composition.applicability
+                lines.append(f"- [技能组合/{mode_text}] {composition.composition_name}：{desc}")
+            for tool in tools[:5]:
+                lines.append(f"- [技能] {tool.tool_name}：{tool.description or '（无描述）'}")
+            return "找到以下能力：\n" + "\n".join(lines[:10])
 
     def get_tool_detail(self, tool_name: str) -> str:
         """查看技能或技能组合详情，同时激活对应的 FC schema"""
@@ -562,11 +570,15 @@ def create_assistant_search_tools(manager: "DynamicToolManager") -> List[ToolDef
             schema=SEARCH_TOOLS_SCHEMA,
             handler=lambda query: manager.search_tools(query),
             has_side_effects=False,
+            is_concurrency_safe=True,
         ),
         ToolDefinition(
             name="get_tool_detail",
             schema=GET_TOOL_DETAIL_SCHEMA,
             handler=lambda tool_name: manager.get_tool_detail(tool_name),
             has_side_effects=False,
+            # Not concurrency-safe: it mutates activation state (_register_activated_definition
+            # activates the FC schema), unlike search_tools which self-guards via _search_lock.
+            is_concurrency_safe=False,
         ),
     ]

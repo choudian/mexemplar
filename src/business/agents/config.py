@@ -103,6 +103,7 @@ class ToolDefinition:
     handler: Callable[..., Union[str, ToolSignal]]
     is_interrupting: bool = False
     has_side_effects: bool = True
+    is_concurrency_safe: bool = False
     pre_hook: Optional[PreHook] = None
     post_hook: Optional[PostHook] = None
 

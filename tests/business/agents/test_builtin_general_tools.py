@@ -23,6 +23,7 @@ class FakeWebResponse:
         reason: str = "OK",
     ) -> None:
         self._body = body
+        self._pos = 0
         self._url = url
         self.status = status
         self.reason = reason
@@ -38,8 +39,12 @@ class FakeWebResponse:
 
     def read(self, size=-1) -> bytes:
         if size is None or size < 0:
-            return self._body
-        return self._body[:size]
+            result = self._body[self._pos :]
+            self._pos = len(self._body)
+            return result
+        result = self._body[self._pos : self._pos + size]
+        self._pos += len(result)
+        return result
 
     def geturl(self) -> str:
         return self._url

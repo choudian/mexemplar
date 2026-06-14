@@ -7,6 +7,7 @@ Agent Loop 与记忆系统的唯一接口。
 
 import json
 import logging
+import threading
 import uuid
 from typing import List, Optional, Dict
 
@@ -44,6 +45,10 @@ class ContextManager:
 
         # 初始化压缩处理器
         self._compression_handler = CompressionHandler(config)
+
+        # load_reference 复用共享 Repository session，并发访问需串行化；
+        # 锁与受保护的资源同位（见 load_reference）。
+        self._reference_lock = threading.Lock()
 
     # --- 上下文组装 ---
 
@@ -257,23 +262,26 @@ class ContextManager:
         Raises:
             ValueError: 如果引用不存在
         """
-        # 摘要 ID 路由：ss_ (会话摘要), gs_ (分组摘要), global_ (全局摘要)
-        if reference_id.startswith(("ss_", "gs_", "global_")):
-            from src.data.repositories import AssistantSummaryRepository
+        # load_reference 复用共享 MessageRepository session（见 __init__），
+        # 并发工具调用时必须串行化访问。
+        with self._reference_lock:
+            # 摘要 ID 路由：ss_ (会话摘要), gs_ (分组摘要), global_ (全局摘要)
+            if reference_id.startswith(("ss_", "gs_", "global_")):
+                from src.data.repositories import AssistantSummaryRepository
 
-            summary = AssistantSummaryRepository().get_by_summary_id(reference_id)
-            if not summary:
-                raise ValueError(f"摘要不存在: {reference_id}")
-            logger.info(f"[引用加载] 摘要 {reference_id}: {len(summary.content or '')} 字符")
-            return summary.content or ""
+                summary = AssistantSummaryRepository().get_by_summary_id(reference_id)
+                if not summary:
+                    raise ValueError(f"摘要不存在: {reference_id}")
+                logger.info(f"[引用加载] 摘要 {reference_id}: {len(summary.content or '')} 字符")
+                return summary.content or ""
 
-        # 消息 ID 路由（默认路径）
-        msg = self._msg_repo.get_by_id(reference_id)
-        if not msg:
-            raise ValueError(f"消息不存在: {reference_id}")
+            # 消息 ID 路由（默认路径）
+            msg = self._msg_repo.get_by_id(reference_id)
+            if not msg:
+                raise ValueError(f"消息不存在: {reference_id}")
 
-        logger.info(f"[引用加载] {reference_id}: {len(msg.content or '')} 字符")
-        return msg.content or ""
+            logger.info(f"[引用加载] {reference_id}: {len(msg.content or '')} 字符")
+            return msg.content or ""
 
     # --- 会话管理 ---
 

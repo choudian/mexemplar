@@ -260,7 +260,9 @@ tool pre_hook
 
 pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCallContext.args` 是递归只读隔离视图。post_hook 只接收 handler 的原始字符串结果或普通 handler 异常转换出的标准化错误字符串；多个 post_hook 不形成结果流水线，最后一个返回非空 `PostHookResult.result` 的 hook 决定最终展示文本。
 
-多工具批处理语义先于 hook 生效：同轮混合中断型工具时直接写入 `invalid_model_output`，不执行 hook 或 handler；普通批次中 hook 拒绝、handler 异常、标准化错误结果或 handler 返回类型与 `is_interrupting` 不匹配都会触发后续工具的 `not_executed`。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。批次失败级联策略按 `ToolDefinition.has_side_effects` 区分：副作用工具（write_file、exec）失败时中止后续调用，无副作用工具（web_search、web_fetch、read_file、list_dir、用户工具、组合工具）失败时仅记录日志继续执行。
+多工具批处理语义先于 hook 生效：同轮混合中断型工具时直接写入 `invalid_model_output`，不执行 hook 或 handler。普通批次按原调用顺序分区，连续且显式声明 `ToolDefinition.is_concurrency_safe=True` 的无副作用工具使用最多 4 个 worker 并发执行 handler、hook 和 output governance；未知工具及未声明安全的工具各自形成串行屏障。治理后的结果仍由 AgentLoop 调用线程按模型原顺序写入 messages 并发出活动事件，保证 assistant tool_calls 与 tool results 的配对和序列稳定。
+
+并发分区内单个读取失败只保存该调用的错误，不取消同分区其他调用，也不阻断后续串行分区。串行路径继续按 `ToolDefinition.has_side_effects` 级联：副作用工具（write_file、exec）失败时后续调用写 `not_executed`；未标记并发安全的无副作用工具仍串行执行且失败后可继续。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。当前并发白名单只包含确认线程安全的 web/file/search/raw-output 读取工具、`search_tools` 和 `load_reference`；会修改激活缓存的 `get_tool_detail`、增加加载计数的 `load_skill_methodology`、用户工具、组合工具、process 系列及所有写入/执行/委派工具保持串行。
 
 `load_reference` 和 `talk_to_user` 是 AgentLoop 内建注入工具，继续用于上下文引用和用户交互，但不进入 tool/global hook 管线。
 
@@ -718,3 +720,4 @@ assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入�
 *更新：2026-05-16 — 同步前端事件层：新增后端 UI Event Registry、per-subscriber event stream、same-session replay/resync、typed frontend event consumption 和桌面 Trial preview 确认闭环*
 *更新：2026-05-05 — 同步桌面录制：新增桌面 recorder / Service / mode dispatch / 桌面专属工具 / sanity check / Trial runner / syntax gate / DPI 与 blinker 事件边界*
 *更新：2026-05-24 — 新增隐藏 Debug Inspector、runtime-only trace lifecycle、Agent Flow provenance、fail-isolated model observation 和 opt-in Real Grand Tour 边界*
+*更新：2026-06-12 — AgentLoop 对显式并发安全的连续读取工具并行执行 handler 与 output governance，结果保持主线程原序持久化*

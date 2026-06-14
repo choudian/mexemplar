@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from src.business.agents.tools.builtin_config import get_config_int
 from src.business.agents.tools.builtin_contracts import (
+    COMPACTION_EXEMPT_TOOL_NAMES,
     OUTCOME_REJECTED,
     UPGRADED_BUILTIN_TOOL_NAMES,
     ToolOutputReference,
@@ -254,12 +255,20 @@ def govern_tool_result(
             warnings=["invalid_tool_result_withheld"],
         )
 
+    # Redact and serialize: shared by both exempt and normal paths.
     raw_reference_text = content
     visible_obj = copy.deepcopy(obj)
     visible_obj["payload"] = _redact_value(visible_obj.get("payload") or {})
     if "error" in visible_obj:
         visible_obj["error"] = _redact_value(visible_obj["error"])
     raw_text = _json_dumps(visible_obj)
+
+    if tool_name in COMPACTION_EXEMPT_TOOL_NAMES:
+        # Raw-retrieval escape hatch (e.g. load_tool_output): never summarize or
+        # re-compact. The model explicitly asked to see the original bytes, so the
+        # only governance applied here is deterministic redaction. Output size is
+        # bounded upstream by the handler's offset/maxBytes pagination, not here.
+        return raw_text
     max_artifact = get_config_int(
         "get_agent_tools_output_max_artifact_bytes", 10_485_760, maximum=104_857_600
     )
@@ -280,11 +289,7 @@ def govern_tool_result(
         workspace_root=workspace_root,
     )
     payload_keys = sorted(str(key) for key in (visible_obj.get("payload") or {}).keys())
-    source_for_normalization = (
-        raw_reference_text
-        if tool_name == "load_tool_output"
-        else referenced_source or raw_reference_text
-    )
+    source_for_normalization = referenced_source or raw_reference_text
     normalized = normalize_tool_output(
         tool_name,
         source_for_normalization,
@@ -441,7 +446,10 @@ def load_tool_output_handler(
         )
     data = loaded.data
     start = max(0, int(offset or 0))
-    limit = max(1, min(int(maxBytes or 64000), 1_000_000))
+    max_window = get_config_int(
+        "get_agent_tools_output_load_max_bytes", 131072, maximum=1_048_576
+    )
+    limit = max(1, min(int(maxBytes or 64000), max_window))
     window = data[start : start + limit]
     if renderAs != "text" or _looks_binary(Path(referenceId), window[:4096]):
         return error_json(

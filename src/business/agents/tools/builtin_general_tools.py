@@ -42,6 +42,7 @@ from src.business.agents.tools import (
     web_search_providers,
 )
 from src.business.agents.tools.builtin_contracts import (
+    BUILTIN_WEB_USER_AGENT,
     OUTCOME_REJECTED,
     current_tool_runtime,
     error_json as builtin_error_json,
@@ -105,11 +106,6 @@ _WEB_FETCH_DOMAIN_CHECK_CACHE_TTL_SECONDS = 5 * 60
 _WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES = 128
 _WEB_FETCH_PROMPT_PREVIEW_CHARS = 900
 _WEB_FETCH_TITLE_FALLBACK_CHARS = 600
-_WEB_FETCH_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/122.0.0.0 Safari/537.36"
-)
 _WEB_FETCH_REDIRECT_STATUSES = {301, 302, 307, 308}
 _WEB_FETCH_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _WEB_FETCH_DOMAIN_INFO_URL = "https://api.anthropic.com/api/web/domain_info"
@@ -663,15 +659,16 @@ def _get_with_permitted_redirects(
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": _WEB_FETCH_USER_AGENT,
+            "User-Agent": BUILTIN_WEB_USER_AGENT,
             "Accept": "text/markdown, text/html, */*",
             "Accept-Encoding": "identity",
         },
         method="GET",
     )
     try:
+        deadline = time.monotonic() + _WEB_FETCH_TIMEOUT
         with _open_web_fetch_url(request, timeout=_WEB_FETCH_TIMEOUT) as resp:
-            raw = _read_web_fetch_response_bytes(resp)
+            raw = _read_web_fetch_response_bytes(resp, deadline)
             status = getattr(resp, "status", None)
             return (
                 resp.geturl(),
@@ -711,7 +708,10 @@ def _open_web_fetch_url(request: urllib.request.Request, timeout: int):
     return _WEB_FETCH_OPENER.open(request, timeout=timeout)
 
 
-def _read_web_fetch_response_bytes(resp) -> bytes:
+_READ_CHUNK = 65536
+
+
+def _read_web_fetch_response_bytes(resp, deadline: float) -> bytes:
     content_length = resp.headers.get("Content-Length")
     if content_length:
         try:
@@ -720,10 +720,20 @@ def _read_web_fetch_response_bytes(resp) -> bytes:
         except ValueError as exc:
             if "10MB" in str(exc):
                 raise
-    raw = resp.read(_WEB_FETCH_MAX_BYTES + 1)
-    if len(raw) > _WEB_FETCH_MAX_BYTES:
-        raise ValueError("web_fetch 响应超过 10MB 下载限制")
-    return raw
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"web_fetch 响应读取超过 {_WEB_FETCH_TIMEOUT} 秒总超时限制")
+        to_read = min(_READ_CHUNK, _WEB_FETCH_MAX_BYTES + 1 - total)
+        chunk = resp.read(to_read)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > _WEB_FETCH_MAX_BYTES:
+            raise ValueError("web_fetch 响应超过 10MB 下载限制")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _decode_web_fetch_bytes(raw: bytes, content_type: str) -> str:
@@ -757,7 +767,7 @@ def _check_web_fetch_domain_blocklist(domain: str) -> None:
     request = urllib.request.Request(
         url,
         headers={
-            "User-Agent": _WEB_FETCH_USER_AGENT,
+            "User-Agent": BUILTIN_WEB_USER_AGENT,
             "Accept": "application/json",
             "Accept-Encoding": "identity",
         },
@@ -1624,7 +1634,7 @@ PROCESS_LIST_SCHEMA = make_tool_schema(
 )
 
 
-def _process_id_schema(name: str, description: str) -> dict:
+def _make_process_id_tool_schema(name: str, description: str) -> dict:
     return make_tool_schema(
         name=name,
         description=description,
@@ -1676,7 +1686,17 @@ PROCESS_SEND_INPUT_SCHEMA = make_tool_schema(
 
 LOAD_TOOL_OUTPUT_SCHEMA = make_tool_schema(
     name="load_tool_output",
-    description="Load a bounded redacted text window from an authorized persistent raw-output reference.",
+    description=(
+        "加载被压缩（compacted）的工具输出原始内容。"
+        "仅当 compacted envelope 的 preview 不足以完成任务时使用。\n\n"
+        "使用场景：\n"
+        "- preview 中标注了内容被截断，且缺失的信息对完成任务必需\n"
+        "- 你需要验证某个具体数据点，而 preview 中没有\n\n"
+        "不要使用：\n"
+        "- preview/facts 已包含足够信息（大多数情况如此）\n"
+        "- 仅为了\"确认\"或\"补充\"已有信息\n\n"
+        "注意：每次调用会触发额外一轮 LLM 推理，优先用 preview 完成任务。"
+    ),
     properties={
         "referenceId": {"type": "string"},
         "offset": {"type": "integer"},
@@ -1758,12 +1778,14 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         schema=WEB_SEARCH_SCHEMA,
         handler=web_search_handler,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
     ToolDefinition(
         name="web_fetch",
         schema=WEB_FETCH_SCHEMA,
         handler=web_fetch_handler,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
     ToolDefinition(
         name="read_file",
@@ -1771,6 +1793,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         handler=read_file_handler,
         pre_hook=read_file_pre_hook,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
     ToolDefinition(
         name="write_file",
@@ -1794,12 +1817,14 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         schema=SEARCH_FILES_SCHEMA,
         handler=search_files_handler,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
     ToolDefinition(
         name="search_content",
         schema=SEARCH_CONTENT_SCHEMA,
         handler=search_content_handler,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
     ToolDefinition(
         name="list_dir",
@@ -1807,6 +1832,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         handler=list_dir_handler,
         pre_hook=list_dir_pre_hook,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
     ToolDefinition(name="exec", schema=EXEC_SCHEMA, handler=exec_handler, pre_hook=exec_pre_hook),
     ToolDefinition(
@@ -1817,7 +1843,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
     ),
     ToolDefinition(
         name="process_poll",
-        schema=_process_id_schema("process_poll", "Poll a current-session background process."),
+        schema=_make_process_id_tool_schema("process_poll", "Poll a current-session background process."),
         handler=command_tools.process_poll_handler,
         has_side_effects=False,
     ),
@@ -1845,7 +1871,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
     ),
     ToolDefinition(
         name="process_close",
-        schema=_process_id_schema("process_close", "Close a completed or stopped process record."),
+        schema=_make_process_id_tool_schema("process_close", "Close a completed or stopped process record."),
         handler=command_tools.process_close_handler,
     ),
     ToolDefinition(
@@ -1853,6 +1879,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         schema=LOAD_TOOL_OUTPUT_SCHEMA,
         handler=load_tool_output_handler,
         has_side_effects=False,
+        is_concurrency_safe=True,
     ),
 ]
 

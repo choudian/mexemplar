@@ -6,6 +6,7 @@ import hashlib
 import mimetypes
 import re
 import threading
+from collections import OrderedDict
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -63,27 +64,20 @@ _SECRET_PATTERNS = [
 
 _REPEAT_READS_MAX = 4096
 _MUTATION_LOCKS_MAX = 1024
-_repeat_reads: dict[str, int] = {}
+_repeat_reads: OrderedDict[str, int] = OrderedDict()
 _repeat_lock = threading.Lock()
-_mutation_locks: dict[str, threading.RLock] = {}
+_mutation_locks: OrderedDict[str, threading.RLock] = OrderedDict()
 _mutation_locks_guard = threading.Lock()
 
 
-def _cleanup_maps_if_needed() -> None:
-    """Evict oldest entries when module-level maps exceed their bounds."""
-    if len(_repeat_reads) > _REPEAT_READS_MAX:
-        with _repeat_lock:
-            if len(_repeat_reads) > _REPEAT_READS_MAX:
-                # Evict oldest half
-                keys = list(_repeat_reads.keys())
-                for k in keys[: len(keys) // 2]:
-                    del _repeat_reads[k]
-    if len(_mutation_locks) > _MUTATION_LOCKS_MAX:
-        with _mutation_locks_guard:
-            if len(_mutation_locks) > _MUTATION_LOCKS_MAX:
-                keys = list(_mutation_locks.keys())
-                for k in keys[: len(keys) // 2]:
-                    del _mutation_locks[k]
+def _evict_oldest_half(d: OrderedDict, lock: threading.Lock, max_size: int) -> None:
+    """Evict oldest half of *d* when it exceeds *max_size*."""
+    if len(d) <= max_size:
+        return
+    with lock:
+        excess = len(d) - max_size // 2
+        for _ in range(excess):
+            d.popitem(last=False)
 
 
 @dataclass(frozen=True)
@@ -425,8 +419,9 @@ def _record_repeat_read(
     key = hashlib.sha256(key_src.encode("utf-8", errors="replace")).hexdigest()
     with _repeat_lock:
         _repeat_reads[key] = _repeat_reads.get(key, 0) + 1
+        _repeat_reads.move_to_end(key)
         seen = _repeat_reads[key]
-    _cleanup_maps_if_needed()
+    _evict_oldest_half(_repeat_reads, _repeat_lock, _REPEAT_READS_MAX)
     return {
         "windowKey": key,
         "seenCount": seen,
@@ -441,8 +436,13 @@ def _mutation_lock(path: Path) -> threading.RLock:
         if lock is None:
             lock = threading.RLock()
             _mutation_locks[key] = lock
-        _cleanup_maps_if_needed()
-        return lock
+        else:
+            _mutation_locks.move_to_end(key)
+    # Eviction must run AFTER releasing _mutation_locks_guard: _evict_oldest_half
+    # reacquires the same Lock, and threading.Lock is non-reentrant — taking it
+    # twice on one thread would deadlock once the dict exceeds the cap.
+    _evict_oldest_half(_mutation_locks, _mutation_locks_guard, _MUTATION_LOCKS_MAX)
+    return lock
 
 
 def _mutation_permission_error(tool: str, check) -> str:
