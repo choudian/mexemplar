@@ -1,0 +1,38 @@
+{
+  "feature_id": "018-assistant-failed-message-retry",
+  "current_stage": "D",
+  "counters": {
+    "a": 1,
+    "b": 1,
+    "c": 1,
+    "d": 0,
+    "total": 3
+  },
+  "extra_quotas": {
+    "a": 0,
+    "b": 0,
+    "c": 0,
+    "d": 0,
+    "total": 0
+  },
+  "stale_files": [],
+  "known_issues": [],
+  "deferred_path": null,
+  "gate_passes": 1,
+  "project_type": "desktop-app",
+  "checklist_dimensions": [
+    "completeness",
+    "clarity",
+    "consistency",
+    "security",
+    "ux",
+    "a11y",
+    "performance",
+    "api-contract",
+    "reliability"
+  ],
+  "overflow_warnings": [],
+  "constitution_hash": "3.0.0-2026-06-12",
+  "last_checkpoint": "stage:GATE:approved",
+  "rollback_counts": {}
+}

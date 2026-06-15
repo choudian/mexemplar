@@ -184,4 +184,56 @@ describe("DebugScreen", () => {
     );
     expect(screen.queryByLabelText("Trace detail")).not.toBeInTheDocument();
   });
+
+  test("filters by session and auto-selects the newest failed trace", async () => {
+    window.history.replaceState({}, "", "/debug?sessionId=ast_failed");
+    vi.mocked(debugApi.getControlStatus).mockResolvedValue(enabledStatus);
+    vi.mocked(debugApi.listTraces).mockResolvedValue({
+      items: [
+        { ...trace, traceId: "trace_failed", sessionId: "ast_failed", outcome: "failed" },
+      ],
+      retainedBytes: 128,
+      omittedCount: 0,
+      warning: "armed",
+    });
+    vi.mocked(debugApi.getTraceDetail).mockResolvedValue({
+      ...trace,
+      traceId: "trace_failed",
+      sessionId: "ast_failed",
+      outcome: "failed",
+      inputMessages: [],
+      inputMedia: [],
+      inputTools: [],
+      outputContent: null,
+      outputToolCalls: [],
+      errorSummary: "safe failure",
+    });
+
+    render(<DebugScreen />);
+
+    expect(await screen.findByText("ast_failed")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(debugApi.listTraces).toHaveBeenCalledWith({
+        sessionId: "ast_failed",
+        limit: 50,
+      }),
+    );
+    expect(debugApi.listFlows).toHaveBeenCalledWith({
+      sessionId: "ast_failed",
+      limit: 20,
+    });
+    await waitFor(() => expect(debugApi.getTraceDetail).toHaveBeenCalledWith("trace_failed"));
+    window.history.replaceState({}, "", "/debug");
+  });
+
+  test("explains that unarmed historical detail cannot be backfilled", async () => {
+    window.history.replaceState({}, "", "/debug?sessionId=ast_missing");
+
+    render(<DebugScreen />);
+
+    expect(
+      await screen.findByText(/未提前启用 trace 时，失败发生前的原始调试详情无法补录/),
+    ).toBeInTheDocument();
+    window.history.replaceState({}, "", "/debug");
+  });
 });

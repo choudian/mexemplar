@@ -355,6 +355,16 @@ AssistantScreen → desktop API → ChatService.get_display_messages() → Messa
 
 前端通过 `/api/assistant/sessions/{session_id}/messages` 加载历史消息；API 调用 `ChatService.get_display_messages(session_id, limit=10, before_sequence=None)`，由 `MessageRepository.get_display_page()` 在 SQLite `messages` 表上执行 keyset 分页。展示过滤规则：保留 `role` 为 `user`、`assistant`、`summary` 的消息；`message_type=compressed` 且 `role=summary` 的消息保留展示；其余 compressed 消息过滤掉；排除空内容、已归档和仅工具调用的消息。`summary` 角色在前端以可折叠 `<details>` 元素渲染（"之前的对话内容"）。返回 `ChatHistoryPage`（包含 `DisplayChatMessage` DTO 列表和 `has_more_before` 分页标志）。UI 向上滚动时传入 `before_sequence` 加载更早展示消息。
 
+### Assistant 失败消息恢复
+
+Assistant 终止性失败通过 SQLite v14 的 `assistant_run_failures` 持久化，并由 `AssistantRunFailureRepository` 和 `AssistantFailureService` 管理。记录关联会话和触发失败的用户消息序号，状态机为 `failed → retrying → resolved|failed`；sidecar 启动时把上次进程中断遗留的 `retrying` 恢复为 `failed`。每个会话只允许一个当前未解决失败，并发重试通过条件更新保证最多一个请求进入 `retrying`。
+
+`AssistantRuntime` 在终止失败时先保存失败记录，再补发本回合持久化消息及带安全 `failure` 投影的用户消息，最后发布 `assistant.progress(status=failed)`。普通聊天 DTO 和 `assistant.message` 只包含 `category / message / suggestion / attemptCount / failedAt`；内部状态码和异常类型只保存在数据层，原始响应体、endpoint、密钥、异常正文和 stack trace 不进入普通日志、DTO 或 UI event。普通终止失败不再发布 `assistant.error`，避免和内联恢复卡产生重复 Toast。
+
+`POST /api/assistant/sessions/{session_id}/retry` 接受 `{ messageSequence, content? }`。缺省 `content` 时从后端读取原消息并复用原回合；提供 `content` 时创建新的用户回合，不修改原消息。成功后源失败转 `resolved` 并通过权威 `assistant.message` 更新移除旧卡；再次失败时，原样重试更新原失败，编辑后重试把新失败关联到新用户消息。用户直接发送新的普通消息也会先解决旧失败。手动重试不限次数，不改变既有 provider 自动重试策略，也不切换备用模型。
+
+前端恢复卡紧贴对应用户气泡，提供“重试”“编辑后重试”和“查看调试信息”。提交期间所有操作禁用；API 自身失败才走现有错误 Toast，运行终止失败只更新卡片。Debug 操作进入 `/debug?sessionId=...`，按会话过滤并选择最新失败 trace；trace 未提前启用时明确说明历史原始详情不能补录。事件流缺口仍通过 `backend.resync_required` 重新加载消息权威快照，前端不根据本地 progress 推测失败归属。
+
 ### Markdown 渲染边界
 
 assistant 消息在前端通过 `SafeMarkdown` 渲染。渲染前剥离 raw HTML/script 和不安全链接目标；用户消息按纯文本显示。后端 DTO 用 `rendering` 字段标识 `safe_markdown` 或 `plain_text`，但不向 UI 暴露 archive/compression 内部术语。
@@ -718,6 +728,7 @@ assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入�
 *更新：2026-04-13 — 新增技能组合架构（第九节）：双模执行、数据模型、Assistant 集成、试用机制、needs_review 标记；删除已完成的优先级跟踪表，保留细化设计文档索引*
 *更新：2026-04-21 — 同步当前实现形态：补充 assistant 后台任务队列为何不走 blinker；更正 AgentOrchestrator 为“对外单一入口 + 内部拆分子模块”的现状*
 *更新：2026-05-16 — 同步前端事件层：新增后端 UI Event Registry、per-subscriber event stream、same-session replay/resync、typed frontend event consumption 和桌面 Trial preview 确认闭环*
+*更新：2026-06-15 — 新增 Assistant 失败消息持久化、原样/编辑后重试、内联恢复卡和会话过滤 Debug Inspector 链路*
 *更新：2026-05-05 — 同步桌面录制：新增桌面 recorder / Service / mode dispatch / 桌面专属工具 / sanity check / Trial runner / syntax gate / DPI 与 blinker 事件边界*
 *更新：2026-05-24 — 新增隐藏 Debug Inspector、runtime-only trace lifecycle、Agent Flow provenance、fail-isolated model observation 和 opt-in Real Grand Tour 边界*
 *更新：2026-06-12 — AgentLoop 对显式并发安全的连续读取工具并行执行 handler 与 output governance，结果保持主线程原序持久化*

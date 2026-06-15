@@ -23,6 +23,15 @@ class FakeAssistantRuntime:
         self.calls.append((session_id, content, continue_subagent))
         return True
 
+    def retry_message(
+        self,
+        session_id: str,
+        message_sequence: int,
+        content: str | None = None,
+    ) -> bool:
+        self.calls.append((session_id, str(message_sequence), {"content": content}))
+        return True
+
 
 def test_assistant_session_lifecycle(desktop_api_client):
     created = desktop_api_client.post(
@@ -168,6 +177,64 @@ def test_assistant_send_message_passes_structured_continue_subagent(desktop_api_
     assert fake_runtime.calls == [
         ("ast_1", "继续任务", {"subagentId": "sub_1", "supplemental": "补充"})
     ]
+
+
+def test_assistant_retry_endpoint_dispatches_original_or_edited_content(desktop_api_client):
+    fake_runtime = FakeAssistantRuntime()
+    desktop_api_client.app.dependency_overrides[assistant_router.get_assistant_runtime] = (
+        lambda: fake_runtime
+    )
+    try:
+        original = desktop_api_client.post(
+            "/api/assistant/sessions/ast_1/retry",
+            json={"messageSequence": 7},
+        )
+        edited = desktop_api_client.post(
+            "/api/assistant/sessions/ast_1/retry",
+            json={"messageSequence": 7, "content": "edited"},
+        )
+    finally:
+        desktop_api_client.app.dependency_overrides.clear()
+
+    assert original.status_code == 200
+    assert edited.status_code == 200
+    assert fake_runtime.calls == [
+        ("ast_1", "7", {"content": None}),
+        ("ast_1", "7", {"content": "edited"}),
+    ]
+
+
+def test_assistant_retry_endpoint_maps_domain_errors(desktop_api_client):
+    from src.business.services.assistant_failure_service import (
+        AssistantRetryConflict,
+        AssistantRetryValidation,
+        AssistantSessionNotFound,
+    )
+
+    class ErrorRuntime(FakeAssistantRuntime):
+        error: Exception
+
+        def retry_message(self, *_args, **_kwargs) -> bool:
+            raise self.error
+
+    runtime = ErrorRuntime()
+    desktop_api_client.app.dependency_overrides[assistant_router.get_assistant_runtime] = (
+        lambda: runtime
+    )
+    try:
+        for error, expected in [
+            (AssistantSessionNotFound("missing"), 404),
+            (AssistantRetryConflict("stale"), 409),
+            (AssistantRetryValidation("empty"), 422),
+        ]:
+            runtime.error = error
+            response = desktop_api_client.post(
+                "/api/assistant/sessions/ast_1/retry",
+                json={"messageSequence": 1},
+            )
+            assert response.status_code == expected
+    finally:
+        desktop_api_client.app.dependency_overrides.clear()
 
 
 def test_confirmation_decision_unknown_request_is_stable(desktop_api_client):

@@ -1030,6 +1030,56 @@ def migrate_to_v13(engine):
             raise
 
 
+def migrate_to_v14(engine):
+    """迁移到版本 14：Assistant 终止失败与手动重试状态。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_run_failures (
+                    failure_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    message_sequence INTEGER NOT NULL,
+                    category TEXT NOT NULL
+                        CHECK (category IN (
+                            'authentication', 'invalid_request', 'quota', 'network',
+                            'provider', 'iteration_limit', 'internal'
+                        )),
+                    safe_message TEXT NOT NULL,
+                    safe_suggestion TEXT NOT NULL,
+                    internal_code TEXT,
+                    exception_type TEXT,
+                    attempt_count INTEGER NOT NULL DEFAULT 1
+                        CHECK (attempt_count >= 1),
+                    status TEXT NOT NULL DEFAULT 'failed'
+                        CHECK (status IN ('failed', 'retrying', 'resolved')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    failed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_run_failure_current_session
+                ON assistant_run_failures(session_id)
+                WHERE status IN ('failed', 'retrying')
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_assistant_run_failure_message
+                ON assistant_run_failures(session_id, message_sequence)
+            """))
+            conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS idx_assistant_run_failure_status
+                ON assistant_run_failures(status)
+            """))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 14})
+            conn.commit()
+            logger.info("数据库迁移到版本 14 完成：Assistant 失败重试状态表")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 14 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1043,6 +1093,7 @@ _MIGRATIONS = [
     (11, migrate_to_v11),
     (12, migrate_to_v12),
     (13, migrate_to_v13),
+    (14, migrate_to_v14),
 ]
 
 

@@ -48,9 +48,21 @@ def create_app(session_token: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         RecordingStartupService().ensure_recovered()
+        try:
+            from src.business.services.assistant_failure_service import AssistantFailureService
+
+            recovered_failures = AssistantFailureService().recover_interrupted_retries()
+            if recovered_failures:
+                logger.info(
+                    "Recovered interrupted Assistant retries",
+                    extra={"count": recovered_failures},
+                )
+        except Exception:
+            logger.warning("Assistant retry recovery failed", exc_info=True)
         ensure_builtin_deps()
         try:
             from src.data.real_tour_audit import ensure_initialized
+
             ensure_initialized()
         except Exception:
             logger.warning("Real tour audit initialization failed", exc_info=True)

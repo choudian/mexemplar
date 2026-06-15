@@ -103,12 +103,29 @@ class AssistantRenameSessionRequest(BaseModel):
     title: str
 
 
+class AssistantMessageFailure(BaseModel):
+    category: Literal[
+        "authentication",
+        "invalid_request",
+        "quota",
+        "network",
+        "provider",
+        "iteration_limit",
+        "internal",
+    ]
+    message: str
+    suggestion: str
+    attemptCount: int = Field(ge=1)
+    failedAt: datetime
+
+
 class AssistantMessage(BaseModel):
     sequence: int
     role: Literal["user", "assistant", "summary"]
     content: str
     createdAt: datetime | None = None
     rendering: Literal["plain_text", "safe_markdown"]
+    failure: AssistantMessageFailure | None = None
 
 
 class AssistantMessagesResponse(BaseModel):
@@ -130,6 +147,17 @@ class AssistantSendMessageRequest(BaseModel):
 class AssistantSendMessageResponse(BaseModel):
     accepted: bool
     sessionId: str
+
+
+class AssistantRetryRequest(BaseModel):
+    messageSequence: int = Field(ge=1)
+    content: str | None = None
+
+
+class AssistantRetryResponse(BaseModel):
+    accepted: bool
+    sessionId: str
+    messageSequence: int
 
 
 class AssistantStopRequest(BaseModel):

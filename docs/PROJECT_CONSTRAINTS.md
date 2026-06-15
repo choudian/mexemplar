@@ -83,6 +83,17 @@
 - Embedding/vectorization 不生成 LLMTraceRecord，但 credential/callsite 必须登记在 provider/redaction inventory；新增 `LangChainLLMClient(`、`OpenAIEmbeddings(`、`.invoke(`、`embed_query(` 或 credential getter callsite 必须同步 inventory 和 guard tests。
 - Assistant delegated task/result 只能作为 trace-gated ephemeral debug detail 暂存，不得持久化到 workflow transition payload、UI event 或普通日志。
 
+## Assistant Failure Recovery Boundaries
+
+- Assistant 终止性失败必须经 `AssistantFailureService` 和 `AssistantRunFailureRepository` 持久化；router、React store 和 `AssistantRuntime` 不得直接写 `assistant_run_failures`。
+- 当前失败状态机固定为 `failed → retrying → resolved|failed`。开始重试必须使用原子条件更新拒绝并发重复请求；sidecar 启动必须把遗留 `retrying` 恢复为 `failed`。
+- 失败分类器可以内部读取异常链、状态码和异常类型，但普通日志、DTO、`assistant.message` 与 `assistant.progress` 只能包含安全分类和友好文案。原始响应体、endpoint、API key、异常正文、stack trace 和 provider request detail 不得进入这些边界。
+- `assistant.message.failure` 只允许 `category / message / suggestion / attemptCount / failedAt`。内部状态码和异常类型只能留在持久化诊断记录或受控 Debug Inspector 路径。
+- 终止失败必须先持久化失败记录并发布本回合消息，再发布 `assistant.progress(status=failed)`；普通运行失败不得同时写入前端全局 `lastError` 或发布 `assistant.error` 造成重复 Toast。
+- 原样重试必须从后端按 `messageSequence` 读取原用户消息；编辑后重试必须创建新用户回合且不得修改原消息。非当前失败返回冲突，空编辑内容拒绝，手动次数不限。
+- 成功重试或新的普通消息必须解决旧失败；编辑后重试再次失败时，新失败只能挂到新用户消息。前端卡片移除和迁移以消息 API / typed event 为准，不得根据本地 progress 自行推测。
+- 现有 provider 自动重试策略保持不变；失败恢复不得引入备用模型切换或新的 secret/config 路径。
+
 ## Real Grand Tour Boundaries
 
 - 默认 `npm run test:e2e` 必须保持 mock-backed、cost-free、无 live capture；真实验收只走独立 `npm run test:e2e:grand-tour`。
@@ -120,6 +131,7 @@ Reviewer 必须拒绝下列改动：
 - 在业务层、desktop API、前端或 Tauri 层直接管理内置工具执行状态、后台进程 registry、tool-output SQL 或私有 blob 路径。
 - 让既有文件写入/编辑/patch 在缺少当前 baseline 时落盘，或允许 workspace 外写入、删除、patch、执行命令。
 - 将 assistant 高危确认改回模态阻塞确认，或让普通 Toast 与高危确认浮层复用同一个生命周期引用。
+- 让 Assistant 终止失败只存在于乐观前端消息、绕过 Repository 状态机重试，或把原始 provider 错误暴露到普通聊天 DTO、UI event、Toast 或日志。
 - 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。
 - 让 AgentLoop 内建注入的 `load_reference` 或 `talk_to_user` 进入 tool/global hook 链。
 - 绕过 `src/recording/filtering/` 的 SQL 改写或 DuckDB 代理边界读取录制网络数据。

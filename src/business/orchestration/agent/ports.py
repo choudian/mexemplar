@@ -17,6 +17,7 @@ class AgentExecutionPort(Protocol):
         workflow_id: str = None,
         session_id: str = None,
         assistant_continue_intent: dict | None = None,
+        assistant_reuse_user_message: bool = False,
     ) -> AgentResult | None: ...
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None: ...
@@ -30,6 +31,7 @@ class AssistantTaskPort(Protocol):
         workflow_id: str = None,
         session_id: str = None,
         assistant_continue_intent: dict | None = None,
+        assistant_reuse_user_message: bool = False,
     ) -> None: ...
 
     def start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None: ...

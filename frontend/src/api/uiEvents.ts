@@ -236,6 +236,20 @@ export type AssistantMessageEvent = UiEventEnvelope<
     content: string;
     createdAt: string | null;
     rendering: AssistantMessageRendering;
+    failure?: {
+      category:
+        | "authentication"
+        | "invalid_request"
+        | "quota"
+        | "network"
+        | "provider"
+        | "iteration_limit"
+        | "internal";
+      message: string;
+      suggestion: string;
+      attemptCount: number;
+      failedAt: string;
+    };
   }
 >;
 
@@ -459,6 +473,15 @@ export type UiEvent =
 const UI_EVENT_TYPE_SET = new Set<string>(UI_EVENT_TYPES);
 const ASSISTANT_MESSAGE_ROLE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.message"].role);
 const ASSISTANT_MESSAGE_RENDERING_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.message"].rendering);
+const ASSISTANT_FAILURE_CATEGORY_SET = new Set<string>([
+  "authentication",
+  "invalid_request",
+  "quota",
+  "network",
+  "provider",
+  "iteration_limit",
+  "internal",
+]);
 const ASSISTANT_CONFIRMATION_ACTION_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.confirmation"].actionType);
 const ASSISTANT_CONFIRMATION_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.confirmation"].status);
 const TEACHING_STAGE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["teaching.stage_changed"].stage);
@@ -548,12 +571,37 @@ function parseAssistantMessagePayload(payload: Record<string, unknown>): Assista
   ) {
     return null;
   }
+  const rawFailure = payload.failure;
+  let failure: AssistantMessageEvent["payload"]["failure"];
+  if (rawFailure !== undefined) {
+    if (
+      payload.role !== "user" ||
+      !isRecord(rawFailure) ||
+      !ASSISTANT_FAILURE_CATEGORY_SET.has(String(rawFailure.category)) ||
+      typeof rawFailure.message !== "string" ||
+      typeof rawFailure.suggestion !== "string" ||
+      typeof rawFailure.attemptCount !== "number" ||
+      !Number.isInteger(rawFailure.attemptCount) ||
+      rawFailure.attemptCount < 1 ||
+      !isValidDateString(rawFailure.failedAt)
+    ) {
+      return null;
+    }
+    failure = {
+      category: rawFailure.category as NonNullable<typeof failure>["category"],
+      message: rawFailure.message,
+      suggestion: rawFailure.suggestion,
+      attemptCount: rawFailure.attemptCount,
+      failedAt: rawFailure.failedAt,
+    };
+  }
   return {
     sequence: payload.sequence,
     role: payload.role,
     content: payload.content,
     createdAt: payload.createdAt ?? null,
     rendering: payload.rendering,
+    ...(failure ? { failure } : {}),
   };
 }
 

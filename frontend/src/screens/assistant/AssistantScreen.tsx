@@ -8,6 +8,7 @@ import type { AssistantTurnActivity, PendingAssistantMessage } from "../../state
 import { emptyTurn, turnIdFromMessage } from "../../state/assistantStore";
 import { useShellStore } from "../../state/shellStore";
 import ActivityTimeline from "./ActivityTimeline";
+import AssistantFailureCard from "./AssistantFailureCard";
 import ConfirmationToast from "./ConfirmationToast";
 import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
@@ -22,6 +23,12 @@ type ThreadBlock =
 
 function messageKey(message: AssistantDisplayMessage): string | number {
   return "optimisticId" in message ? message.optimisticId : message.sequence;
+}
+
+function openDebugForSession(sessionId: string): void {
+  const nextUrl = `/debug?sessionId=${encodeURIComponent(sessionId)}`;
+  window.history.pushState({}, "", nextUrl);
+  window.dispatchEvent(new PopStateEvent("popstate"));
 }
 
 function buildThreadBlocks(
@@ -81,6 +88,8 @@ export function AssistantScreen(): JSX.Element {
   const turnActivityBySession = useAssistantStore((state) => state.turnActivityBySession);
   const activeTurnIdBySession = useAssistantStore((state) => state.activeTurnIdBySession);
   const continueSubagent = useAssistantStore((state) => state.continueSubagent);
+  const retryFailedMessage = useAssistantStore((state) => state.retryFailedMessage);
+  const retryingFailureBySession = useAssistantStore((state) => state.retryingFailureBySession);
   const decideConfirmation = useAssistantStore((state) => state.decideConfirmation);
   const autoApprove = useAssistantStore((state) => state.autoApprove);
   const setAutoApprove = useAssistantStore((state) => state.setAutoApprove);
@@ -240,6 +249,20 @@ export function AssistantScreen(): JSX.Element {
                     ) : (
                       <p>{message.content}</p>
                     )}
+                    {message.role === "user"
+                    && "sequence" in message
+                    && message.failure
+                    && activeSessionId ? (
+                      <AssistantFailureCard
+                        failure={message.failure}
+                        originalContent={message.content}
+                        loading={retryingFailureBySession[activeSessionId] === message.sequence}
+                        onRetry={(content) => {
+                          void retryFailedMessage(activeSessionId, message.sequence, content);
+                        }}
+                        onDebug={() => openDebugForSession(activeSessionId)}
+                      />
+                    ) : null}
                   </div>
                 </article>
               );

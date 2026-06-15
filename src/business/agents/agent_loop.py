@@ -1017,6 +1017,7 @@ class AgentLoop:
         session_id: str,
         user_input: Optional[Union[str, dict]],
         system_prompt_override: Optional[str],
+        resume_existing_turn: bool = False,
     ) -> Optional[AgentResult]:
         """
         会话初始化：设置 system prompt、处理用户输入、恢复会话状态。
@@ -1038,7 +1039,7 @@ class AgentLoop:
             logger.debug(f"[Agent Loop] 已设置 system prompt: {session_id}")
 
         # 无新输入时检查是否需要等待用户
-        if user_input is None:
+        if user_input is None and not resume_existing_turn:
             last_msg = ctx.get_last_message()
             if last_msg and last_msg.role == "assistant" and last_msg.content:
                 ctx.update_session_status("suspended")
@@ -1055,7 +1056,7 @@ class AgentLoop:
             logger.debug(f"[Agent Loop] 会话恢复（{session_status} → active）: {session_id}")
 
         # 保存用户输入
-        if user_input is not None:
+        if user_input is not None and not resume_existing_turn:
             if isinstance(user_input, dict):
                 role = user_input.get("role")
                 content = user_input.get("content")
@@ -1101,6 +1102,7 @@ class AgentLoop:
         tools: Optional[Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]] = None,
         system_prompt_override: Optional[str] = None,
         initial_tool_calls: Optional[List[ToolCallInfo]] = None,
+        resume_existing_turn: bool = False,
     ) -> AgentResult:
         """
         执行 Agent 循环
@@ -1128,7 +1130,13 @@ class AgentLoop:
         workflow_id = self._get_workflow_id(session_id)
 
         # 会话初始化（设置 prompt、处理输入、恢复状态）
-        init_result = self._initialize_session(ctx, session_id, user_input, system_prompt_override)
+        init_result = self._initialize_session(
+            ctx,
+            session_id,
+            user_input,
+            system_prompt_override,
+            resume_existing_turn=resume_existing_turn,
+        )
         if init_result is not None:
             return init_result
 

@@ -1165,6 +1165,118 @@ select:focus-visible,
   white-space: pre-wrap;
 }
 
+.assistant-failure-card {
+  width: min(440px, 100%);
+  margin: 8px 0 0 auto;
+  border: 1px solid color-mix(in oklch, #b45309 30%, var(--border-1));
+  border-radius: 12px 4px 12px 12px;
+  background:
+    linear-gradient(135deg, color-mix(in oklch, #f59e0b 8%, var(--surface-1)), var(--surface-1));
+  box-shadow: 0 8px 24px color-mix(in oklch, #78350f 8%, transparent);
+  color: var(--text);
+  padding: 12px;
+}
+
+.assistant-failure-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.assistant-failure-card-heading strong {
+  font-size: 13px;
+}
+
+.assistant-failure-card-heading > span:last-child {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.assistant-failure-pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #d97706;
+  box-shadow: 0 0 0 4px color-mix(in oklch, #f59e0b 16%, transparent);
+}
+
+.assistant-failure-card > p {
+  margin: 8px 0 3px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.assistant-failure-card > small,
+.assistant-failure-editor label {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.assistant-failure-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.assistant-failure-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 6px 9px;
+}
+
+.assistant-failure-action:hover:not(:disabled),
+.assistant-failure-action:focus-visible {
+  border-color: color-mix(in oklch, #d97706 55%, var(--border-1));
+  outline: none;
+}
+
+.assistant-failure-action-primary {
+  border-color: #b45309;
+  background: #b45309;
+  color: #fff7ed;
+}
+
+.assistant-failure-action:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.assistant-failure-editor {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.assistant-failure-editor textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  padding: 8px 9px;
+}
+
+.assistant-failure-editor textarea:focus {
+  border-color: #d97706;
+  outline: 2px solid color-mix(in oklch, #f59e0b 18%, transparent);
+}
+
 .assistant-markdown > *:first-child {
   margin-top: 0;
 }
@@ -5207,6 +5319,36 @@ select:focus-visible,
   color: #991b1b;
   padding: 10px 12px;
   font-size: 13px;
+}
+
+.debug-session-filter,
+.debug-history-unavailable {
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  color: var(--text-2);
+  padding: 10px 12px;
+  font-size: 12.5px;
+}
+
+.debug-session-filter {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.debug-session-filter code {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-history-unavailable {
+  border-color: color-mix(in oklch, #d97706 28%, var(--border-1));
+  background: color-mix(in oklch, #f59e0b 7%, var(--surface-1));
+  line-height: 1.55;
 }
 
 .debug-warning-panel,

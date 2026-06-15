@@ -19,6 +19,7 @@ from .skill_composition_repository import SkillCompositionRepository
 from .brain_repository import BrainRepository
 from .specialist_repository import SpecialistRepository
 from .tool_output_repository import ToolOutputRepository
+from .assistant_run_failure_repository import AssistantRunFailureRepository
 
 __all__ = [
     "BaseRepository",
@@ -35,4 +36,5 @@ __all__ = [
     "BrainRepository",
     "SpecialistRepository",
     "ToolOutputRepository",
+    "AssistantRunFailureRepository",
 ]
