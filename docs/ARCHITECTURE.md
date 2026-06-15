@@ -373,6 +373,10 @@ assistant 消息在前端通过 `SafeMarkdown` 渲染。渲染前剥离 raw HTML
 
 前端 assistant store 控制输入栏免确认 Toggle 的显隐：欢迎页/新对话空态时隐藏，当前会话启动过 assistant 运行后显示。高危确认仍由 `builtin_general_tools` 的 `request_id + threading.Event` 等待模型管理，sidecar 用 emit-compatible shim 发布 `assistant.confirmation` 事件，前端通过非模态确认浮层回写决策。用户可通过两个入口开启会话级免确认：(1) MessageComposer 输入栏的"全部允许" Toggle；(2) ConfirmationToast 中的"全部允许"按钮。开启后通过 `POST /api/assistant/confirmations/auto-approve` 同步后端状态并放行所有挂起确认。状态仅存于进程会话内存，新建会话时自动复位。
 
+### 结构化多选澄清（ask_user_question，019）
+
+主助理专属的 `ask_user_question` 是**需独占调用的非中断阻塞工具**：模型在关键决策无法可靠推断时，单次抛出 1–4 道结构化问题（每题 2–4 选项、单/多选、始终可填"其他"）。生命周期由 `src/business/agents/tools/clarification_manager.py` 用 `request_id + threading.Event + lock + first-decision-wins` 管理，结构对标高危确认但**完全独立**（独立 pending 表、独立信号、独立终态集，不复用确认链路）。默认 5 分钟超时，全程**内存态**——无 SQLite/DuckDB 表、无迁移、无配置项，sidecar 重启即失效。`ToolDefinition.requires_exclusive_call` 让 AgentLoop 对"独占工具与其他工具混批"零执行 + 全批 `invalid_model_output`；solo 调用阻塞等用户决策后在同一回合续跑。desktop adapter（`src/desktop_api/clarifications.py`）发布两个公开 UI 事件 `assistant.clarification_requested` / `assistant.clarification_resolved`（后者不含答案），前端 `ClarificationCard` 在输入框上方以非模态卡片整组提交，与高危确认浮层互不复用生命周期。停止当前回合结算为 `stopped`、应用关闭结算为 `shutdown`，普通 SSE 断线不取消、重连经 `GET …/clarifications/pending` 或事件回放恢复。超时/取消/停止/关闭一律 fail-closed，模型绝不获得猜测答案。
+
 **职责分离：**
 - **Agent Loop** — 纯执行引擎，只负责跑循环和返回 AgentResult，不感知事件系统
 - **AgentOrchestrator** — 根据 loop.run() 的返回值发出业务事件、通过 `_dispatch_next` 显式调度下一个 Agent
@@ -672,6 +676,7 @@ Agent 与 prompt：
 - **新增 blinker 事件**（`src/utils/events.py`）：`assistant_agent_step`（逐步过程，仅可观测运行时 emit、单回合上限）、`assistant_subagent_started/finished/paused`（子任务生命周期，session_id=父会话）。
 - **公开 UI 事件**（Registry + projector，payload 走 009 allowlist 脱敏）：`assistant.activity`（过程时间线，按 `subagentId` 归类；`text` 字段保留原文 + `redacted` 标记——命中敏感规则的步骤 UI 默认隐藏、双击查看，原文本就明文存于 messages 表）、`assistant.subagent`（子任务卡片壳与状态，仍脱敏）；`assistant.progress.status` 新增 `cancelled` 取值，运行中 payload 带 `runId` 供停止请求绑定当前代际。非助理 agent_type 在 projector 处过滤，零 UI 噪声。
 - **新增端点**（`src/desktop_api/routers/assistant.py`，经 `AssistantRuntime` facade）：`POST …/sessions/{id}/stop`（协作式停止，可选 body `{runId}` 防迟到旧停止误停新回合，pending 高危确认 fail-closed 唤醒，不破坏 CC-001）、`GET …/sessions/{id}/transcript?subagentId=`（过程时间线读模型）、`GET …/sessions/{id}/subagents`（子任务权威列表）。读模型在 `src/business/agents/observability.py`，由 `MessageRepository`/`WorkflowTransitionRepository`/`SessionRepository` **只读**重建，**无新表/迁移**；已压缩回合带 `compressed` 标志供前端按规整概要渲染。
+- **结构化澄清端点**（019，`src/desktop_api/routers/assistant.py`）：`GET …/sessions/{id}/clarifications/pending`（当前会话待答澄清快照，无则 `clarification:null`，不含答案/草稿）、`POST …/sessions/{id}/clarifications/{requestId}/decision`（提交/取消，归属错配 404、答案校验失败 422 且不结算、已结算幂等 200）。状态仅在 `clarification_manager` 进程内存，**无新表/迁移/配置**。
 - **"继续任务"**复用助理消息派发（不新增端点）：暂停子任务卡片发带 `subagent_id` 的续跑指令唤醒主助理，由主助理调既有 `continue_subagent` 续跑（守 100% 调度）。
 - **前端**（`frontend/src/screens/assistant/`）：运行态输入门控 + 停止三态（`MessageComposer`）、单条原地排队三态机（`assistantStore`）、默认折叠限高内滚的活动时间线（`ActivityTimeline`）、子任务卡片 + 双击详情抽屉（`SubagentCard`/`SubagentDetailDrawer`），缺口走 `backend.resync_required` + 权威端点兜底。
 

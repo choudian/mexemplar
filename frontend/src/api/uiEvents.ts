@@ -127,7 +127,7 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
     "status": ["pending"],
   },
   "assistant.clarification_resolved": {
-    "status": ["answered", "cancelled", "timeout", "stopped", "shutdown"],
+    "status": ["answered", "cancelled", "shutdown", "stopped", "timeout"],
   },
   "assistant.progress": {
     "status": ["cancelled", "failed", "running", "succeeded", "waiting_for_user"],

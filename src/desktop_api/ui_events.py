@@ -138,9 +138,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                     "question": "选择执行方式？",
                     "header": "执行方式",
                     "multiSelect": False,
-                    "options": [
-                        {"optionId": "q1o1", "label": "按顺序执行", "description": None, "preview": None}
-                    ],
+                    "options": [{"optionId": "q1o1", "label": "按顺序执行"}],
                 }
             ],
             "expiresAt": "2026-06-15T08:05:00Z",

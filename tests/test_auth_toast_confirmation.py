@@ -77,13 +77,13 @@ def test_skill_confirmation_payload_carries_safe_metadata():
 
 
 def test_write_summary_only_contains_target_path():
-    summary = general_tools._build_write_summary(Path("demo.txt"))
+    summary = general_tools.build_write_summary(Path("demo.txt"))
     assert "demo.txt" in summary
     assert "content" not in summary.lower()
 
 
 def test_edit_summary_truncates_old_and_new_text():
-    summary = general_tools._build_edit_summary(
+    summary = general_tools.build_edit_summary(
         Path("demo.txt"),
         "before-" * 40,
         "after-" * 40,
@@ -95,7 +95,7 @@ def test_edit_summary_truncates_old_and_new_text():
 
 
 def test_summary_helpers_redact_obvious_secrets():
-    summary = general_tools._build_edit_summary(
+    summary = general_tools.build_edit_summary(
         Path("demo.txt"),
         "password=super-secret-value",
         "token=secret-token-value",
@@ -107,7 +107,7 @@ def test_summary_helpers_redact_obvious_secrets():
 
 
 def test_exec_summary_keeps_only_first_line():
-    summary = general_tools._build_exec_summary("python --version\nRemove-Item important.txt")
+    summary = general_tools.build_exec_summary("python --version\nRemove-Item important.txt")
     assert "python --version" in summary
     assert "Remove-Item" not in summary
 
