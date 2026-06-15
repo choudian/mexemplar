@@ -1,7 +1,7 @@
 # Merged Features Log
 
-**Last Updated:** 2026-06-11
-**Revision:** 2026-06-11 — Archived `specs/016-tool-output-semantic-summary`
+**Last Updated:** 2026-06-12
+**Revision:** 2026-06-12 — Removed the system-wide external credential-store dependency
 
 ## 录制数据大字段按需读取 — 2026-04-25
 
@@ -193,7 +193,7 @@
 - US-022 (P1): Redesigned AI Assistant，支持会话管理、连续时间线、安全 Markdown、执行摘要和非模态高危确认。
 - US-023 (P1): Redesigned Skill Teaching，覆盖三种录制模式、准备状态、录制、意图、学习和 trial 阶段。
 - US-024 (P1): Redesigned Skill List 和 Skill Composition，支持分类动作、range/ordered 组合创建、试用、发布和需复核状态。
-- US-025 (P1): Redesigned Settings，非密钥配置走统一配置入口，secret 走 keyring，设计可见 actions 接入真实业务路径或真实错误。
+- US-025 (P1): Redesigned Settings，配置和 secret 统一走 `UnifiedConfigManager`，secret 仅遮罩展示，设计可见 actions 接入真实业务路径或真实错误。
 
 **New Components:**
 - `frontend/` — React 18 + TypeScript + Vite/Tailwind/Zustand 主 UI、unit tests 和 Playwright e2e。
@@ -345,12 +345,13 @@
 **Branch:** `016-tool-output-semantic-summary`
 **Spec:** `specs/016-tool-output-semantic-summary`
 **Revision note:** Archived the completed feature into project memory with deterministic facts remaining authoritative and semantic summaries explicitly advisory.
+**Credential note (2026-06-12):** Removed the external credential-store path. `agent_tools.output.semantic_summary.api_key` and all other provider credentials now use `UnifiedConfigManager`, with local `config.json` defaults and `app_settings` runtime overrides.
 
 **What was added:**
 - US-049 (P1): 所有大或截断文本工具结果进入统一 compact 治理，保留确定性 facts/preview、原始大小、payload keys 和可授权恢复的 raw reference。
 - US-050 (P1): 独立低成本模型可生成固定 JSON 结构的单块或 Map-Reduce advisory 摘要；非法输出、provider 失败和超时确定性省略摘要。
 - US-051 (P2): `extractionGoal`、`web_fetch.prompt` 和 custom tool 常见 goal/query/prompt/pattern 参数可引导摘要重点，但不改变执行或权限语义。
-- US-052 (P2): Settings 新增“工具输出”分区，支持 provider/model/endpoint/temperature、高级预算、独立 keyring 密钥和脱敏连接测试。
+- US-052 (P2): Settings 新增“工具输出”分区，支持 provider/model/endpoint/temperature、高级预算、独立密钥和脱敏连接测试；部署配置可通过专用字段提供本地默认值。
 
 **New Components:**
 - `src/business/agents/tools/semantic_summary.py` — 工具感知文本提取、15/35/35/15 选择预算、goal 推断、单块/Map-Reduce 调用、deadline、JSON validation 和脱敏。
@@ -360,7 +361,7 @@
 **Modified Components:**
 - `src/business/agents/agent_loop.py` / `tools/output_governance.py` — 原始工具参数传入保存边界；所有文本结果统一治理、reference-first、确定性 facts/preview 和 exactly-one fallback。
 - `src/business/agents/tools/builtin_general_tools.py` / `command_tools.py` — `extractionGoal` schema 与 centralized raw-reference ownership。
-- `src/data/config_models.py` / `unified_config.py` / `credential_resolver.py` — `agent_tools.output.semantic_summary.*` 配置和 `tool_output_summary_api_key` keyring-only secret。
+- `src/data/config_models.py` / `unified_config.py` — `agent_tools.output.semantic_summary.*` 配置、统一 secret getter/setter、遮罩状态和日志脱敏；Real Grand Tour 复用普通只读 getter。
 - `src/business/services/settings_service.py` / `settings_actions_service.py` / `src/desktop_api/schemas.py` — 设置 descriptor、状态、secret 操作和只返回 provider/model metadata 的连接测试。
 - `frontend/src/api/settings.ts` / `frontend/src/screens/settings/SettingControls.tsx` — typed advanced descriptor 和工具输出设置 UI。
 - `src/utils/agent_tool_health.py` / Debug provider inventory / Real Grand Tour coverage — 摘要运行计数、trace、credential 和 budget 门卫。

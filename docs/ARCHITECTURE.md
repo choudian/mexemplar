@@ -18,7 +18,7 @@ React UI (frontend/)
 ```
 
 - Tauri 负责窗口、custom chrome、sidecar 生命周期、端口/token handoff 和打包。
-- React 负责普通主界面：AI Assistant、Tool Teaching、Tool List、Tool Composition、Skill Methodology、Settings、Brain Management、Specialist Management；`/debug` 是隐藏的 Debug Inspector 直达路由，不进入普通导航。
+- React 负责普通主界面：AI Assistant、Skill Teaching、Skill List、Skill Composition、Skill Methodology、Settings、Brain Management、Specialist Management；`/debug` 是隐藏的 Debug Inspector 直达路由，不进入普通导航。
 - `src/desktop_api/` 是 UI adapter，router 不直接访问 Repository；默认只调用 business services，并把 `src/utils/events.py` 的 blinker 事件投影成受注册表约束的前端 UI event stream。`orchestrator_runtime.py` 里为复用既有 `AgentSessionStore` 组装的 Repository 触点是当前收敛例外，不得扩散到 router 或新 API。
 - UI event stream 由后端 `UI Event Registry` 拥有公开契约；前端只消费注册 UI event type，不使用内部 blinker 事件名或 `sourceEvent` 推断展示行为。事件 envelope 包含 `eventId`、当前桌面事件会话内单调递增的 `sequence`、`sessionId`、`causationId`、`type`、`scope`、安全校验后的 `payload` 和 `createdAt`。
 - sidecar event stream 为每个订阅者维护独立队列，并保留当前进程内的有界 replay buffer。前端重连时携带同一事件会话的 last-seen sequence；buffer 能覆盖缺口时按序回放，不能覆盖或事件会话不匹配时发送 `backend.resync_required`，由前端刷新权威快照恢复状态。

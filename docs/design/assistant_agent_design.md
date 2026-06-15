@@ -69,7 +69,7 @@ assistant_profile:
   updated_at     DATETIME
 ```
 
-引导对话采用**硬编码 UI 表单**（PyQt Dialog），不走 AgentLoop。参考 nanobot（传统 CLI 问答）和 openclaw（step-by-step Wizard 表单）的做法，两者都选择了确定性流程而非 LLM 驱动。理由：确定性强、不浪费 token、用户体验可控。
+引导对话采用**硬编码 UI 表单**（React 组件），不走 AgentLoop。参考 nanobot（传统 CLI 问答）和 openclaw（step-by-step Wizard 表单）的做法，两者都选择了确定性流程而非 LLM 驱动。理由：确定性强、不浪费 token、用户体验可控。
 
 ### 2.3 Profile 修改
 

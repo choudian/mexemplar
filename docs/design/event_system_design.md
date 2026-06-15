@@ -13,13 +13,13 @@
 **一个录制对应一个工作流，生成一个工具。**
 
 ```
-UI 层（PyQt）
-    ↕ PyQt 信号
-AgentUIBridge（线程管理）
+React UI (frontend/)
+    ↕ typed API client / event stream
+Desktop API (src/desktop_api/)
     ↓ 调用
 AgentOrchestrator（编排器）
     ↓ 调用 loop.run()          ↓ 发出业务事件
-AgentLoop（执行引擎）        UI / 日志 / transition 记录
+AgentLoop（执行引擎）        UI Event Registry / 日志 / transition 记录
     ↓                          （监听事件）
 ContextManager / LLM
 ```

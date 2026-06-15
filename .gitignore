@@ -150,11 +150,10 @@ AI.md
 .specify/*
 !.specify/archive/
 !.specify/archive/**
+!.specify/memory/
+!.specify/memory/**
 
-# Scripts (local development tools)
-/scripts/*
-!/scripts/
-!/scripts/build_desktop_sidecar.ps1
+# Scripts: tool scripts (init/migrate/view/cli/etc.) are tracked normally
 
 # Browser extension private key (DO NOT COMMIT)
 extension_key.txt

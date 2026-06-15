@@ -59,65 +59,66 @@ Agent 框架维护者可以在任意调用方传入或动态构建的 `ToolDefin
 ### US-013: 压缩后"继续"能正常恢复 (Priority: P3)
 
 当因边缘 case 导致孤立 tool result 残留时，用户点击"继续"恢复会话，系统能自动检测并清理孤立消息，会话能正常运行。 [Source: specs/005-fix-compression-tool-pairing]
-### US-011: 单次确认改为非阻塞浮层 (Priority: P1)
+
+### US-014: 单次确认改为非阻塞浮层 (Priority: P1)
 
 Assistant Agent 触发高危工具时，主窗口右下角出现非阻塞浮层，显示工具名与关键参数摘要，提供"全部允许 / 同意 / 拒绝"三按钮。用户可正常浏览聊天记录、滚动页面、打开侧边栏。 [Source: specs/004-auth-toast]
 
-### US-012: 会话级"全部允许"快捷通道 (Priority: P2)
+### US-015: 会话级"全部允许"快捷通道 (Priority: P2)
 
 浮层"全部允许"按钮一键开启会话级豁免：本次会话内后续所有 Assistant 高危工具请求自动放行。新建对话时自动复位。 [Source: specs/004-auth-toast]
 
-### US-013: 顶栏 Toggle 与浮层状态双向同步 (Priority: P3)
+### US-016: 顶栏 Toggle 与浮层状态双向同步 (Priority: P3)
 
 对话窗口顶栏提供"免确认" Toggle，与浮层"全部允许"共享同一会话级状态，任一入口变化后另一处可视状态立刻同步。新对话时一并复位。 [Source: specs/004-auth-toast]
 
-### US-014: AI 回复消息以富文本展示 Markdown (Priority: P1)
+### US-017: AI 回复消息以富文本展示 Markdown (Priority: P1)
 
 AI 回复包含标题、列表、代码块、加粗、链接、图片、表格等 Markdown 元素时，聊天气泡将 AI 回复渲染为富文本结构。用户消息保持纯文本。Markdown 链接/图片不触发外部导航。 [Source: specs/006-chat-ui-polish]
 
-### US-015: 压缩后的旧聊天记录仍可回看 (Priority: P2)
+### US-018: 压缩后的旧聊天记录仍可回看 (Priority: P2)
 
 长会话触发上下文压缩后，被归档的早期用户消息与助手回复仍按原时间顺序出现在同一聊天时间线中。不显示归档/压缩分区标签。工具调用/结果/压缩摘要不作为普通聊天记录展示。初始展示最近 10 条，滚动向上分页加载。 [Source: specs/006-chat-ui-polish]
 
-### US-016: 新对话/欢迎界面不展示"免确认"Toggle (Priority: P3)
+### US-019: 新对话/欢迎界面不展示"免确认"Toggle (Priority: P3)
 
 "免确认" Toggle 仅在当前对话已启动过 Agent 会话后可见。欢迎界面、新对话起始态、清空后的会话不展示。 [Source: specs/006-chat-ui-polish]
 
-### US-017: 录制桌面操作并产出可分析数据 (Priority: P1)
+### US-020: 录制桌面操作并产出可分析数据 (Priority: P1)
 
 用户在录制页选择桌面模式后，应用最小化主窗并在 minimize 完成后启动全局键鼠 hook、UIA 查询、剪贴板订阅和帧缓冲。停止录制后主窗恢复，sanity check 对话框展示健康统计，用户可继续进入 intent 分析。 [Source: specs/007-desktop-recording]
 
-### US-018: Agent 使用桌面录制数据生成方案 (Priority: P1)
+### US-021: Agent 使用桌面录制数据生成方案 (Priority: P1)
 
 PM / Programmer / Trial 在桌面 mode 下使用 5 个通用录制数据工具的 mode dispatch 和 3 个桌面专属工具分析 `desktop_recordings` / `desktop_actions`，同时浏览器路径工具和 prompt 保持不退化。 [Source: specs/007-desktop-recording]
 
-### US-019: 桌面 Programmer 代码进入隔离 Trial 子进程 (Priority: P2)
+### US-022: 桌面 Programmer 代码进入隔离 Trial 子进程 (Priority: P2)
 
 Programmer 输出的 `async def execute() -> dict` 先经过 `ast.parse` syntax gate 和最多 2 次自动反馈重试，再由 execution 层子进程在 `data/trials/<trial_id>/` 隔离 cwd、env 白名单和 120s 超时兜底下试用执行。 [Source: specs/007-desktop-recording]
 
-### US-020: 桌面录制健康反馈与早期止损 (Priority: P3)
+### US-023: 桌面录制健康反馈与早期止损 (Priority: P3)
 
 录制停止后，用户通过 sanity check 颜色、动作总数、UIA 命中率、clip 成功率和三按钮状态机决定继续分析、放弃录制或重新录制；`vision_model` 缺失时以设置区说明和一次性 toast 透明提示降级。 [Source: specs/007-desktop-recording]
 
-### US-021: 使用重新设计的桌面应用壳 (Priority: P1)
+### US-024: 使用重新设计的桌面应用壳 (Priority: P1)
 
 用户启动打包后的桌面应用后，进入 Tauri + React 应用壳，使用同一个窗口内的持久导航栏访问 AI Assistant、技能教学、技能列表、技能组合和设置；红/黄/绿自定义窗口控件执行真实关闭、最小化、最大化/还原动作。 [Source: specs/008-ui-stack-redesign]
 
-### US-022: 在重新设计的 AI Assistant 中工作 (Priority: P1)
+### US-025: 在重新设计的 AI Assistant 中工作 (Priority: P1)
 
 用户可以创建、选择、搜索、重命名和删除对话，发送消息，查看连续聊天时间线、安全 Markdown 回复、紧凑执行摘要和非模态高危确认；旧消息仍以普通聊天历史呈现，不暴露归档/压缩术语。 [Source: specs/008-ui-stack-redesign]
 
-### US-023: 在重新设计流程中教学技能 (Priority: P1)
+### US-026: 在重新设计流程中教学技能 (Priority: P1)
 
 用户在技能教学页选择 Browser Recording、Extension Recording 或 Desktop Recording，经过准备检查、录制、意图确认、学习和试用验证等可见阶段；桌面录制保留 minimize 后启动 hook、健康检查和三按钮决策语义。 [Source: specs/008-ui-stack-redesign]
 
-### US-024: 管理技能和技能组合 (Priority: P1)
+### US-027: 管理技能和技能组合 (Priority: P1)
 
 用户可以查看待验证、已发布和失败技能分类并执行对应操作；也可以创建范围型或顺序型技能组合，选择已发布成员、调整顺序、填写适用场景、试用并发布，成员变化时已发布组合会进入需复核状态。 [Source: specs/008-ui-stack-redesign]
 
-### US-025: 在重新设计设置中配置应用 (Priority: P1)
+### US-028: 在重新设计设置中配置应用 (Priority: P1)
 
-用户可以在设置页查看和更新 AI、录制、数据和产品信息；非密钥配置通过统一配置入口保存，密钥只以遮罩状态展示并通过 keyring 写入，设计中可见的操作按钮必须执行真实支持流程或返回真实业务错误。 [Source: specs/008-ui-stack-redesign]
+用户可以在设置页查看和更新 AI、录制、数据和产品信息；所有配置和密钥通过统一配置入口保存，密钥只以遮罩状态展示，设计中可见的操作按钮必须执行真实支持流程或返回真实业务错误。 [Source: specs/008-ui-stack-redesign]
 
 ---
 
@@ -284,14 +285,14 @@ Programmer 输出的 `async def execute() -> dict` 先经过 `ast.parse` syntax 
 - **FR-113**: sanity check 对话框 MUST 通过 `DesktopRecordingService.get_health_stats(recording_id)` 间接读取 `desktop_recordings.health_stats`，显示健康指标并提供"继续分析 / 放弃录制 / 重新录制"三按钮状态机。
 - **FR-114**: 浏览器、桌面、扩展触发三种录制模式 MUST 两两互斥，互斥判定基于 in-memory active recorder state，UI 禁用和业务拒绝双保险。
 - **FR-115**: 系统 MUST 新增 `recording.desktop.enable_clip`（默认 true）和 `recording.desktop.vision_model`（无默认）配置，均通过 `get_unified_config()` 入口读写。
-- **FR-116**: `recording.desktop.vision_model` 未配置时 MUST 不注入 `analyze_desktop_action`，并在设置页说明和桌面 intent 页一次性 toast 中提示降级；provider 和 API key 沿用 `analyze_image` 现有 provider/keyring entry。
+- **FR-116**: `recording.desktop.vision_model` 未配置时 MUST 不注入 `analyze_desktop_action`，并在设置页说明和桌面 intent 页一次性 toast 中提示降级；provider 和 API key 沿用 `analyze_image` 现有统一配置 entry。
 - **FR-117**: Phase 1 MUST 不引入录制数据 retention、cleanup、compress 或 disk quota；放弃录制为软删除状态，Trial 调试目录 7 天 startup cleanup 与录制数据保留边界分开。
 
 ### UI Stack Redesign [Source: specs/008-ui-stack-redesign]
 
 - **FR-118**: 系统 MUST 以 Tauri 2 + React 18 + TypeScript + Vite 作为维护中的主桌面 UI 栈，并把现有 Python 业务/数据/执行/录制能力作为打包 sidecar 暴露给前端。
 - **FR-119**: 系统 MUST 启动到同一个重新设计的桌面应用壳，覆盖 AI Assistant、技能教学、技能列表、技能组合和设置五个主屏；正常用户流程不得再依赖单独的 legacy PyQt 窗口。
-- **FR-120**: 前端 MUST 只通过 typed API/Tauri command/Bridge 访问能力，不得直接 import Repository、SQLite、DuckDB、配置文件、keyring 或 Python 数据层实现。
+- **FR-120**: 前端 MUST 只通过 typed API/Tauri command/Bridge 访问能力，不得直接 import Repository、SQLite、DuckDB、配置文件或 Python 数据层实现。
 - **FR-121**: Python sidecar API MUST 绑定 `127.0.0.1` 的随机端口，并要求每次启动生成的 runtime token；token 不得持久化、不得写入普通日志，Tauri 权限必须按 HTTP/shell/window 能力收敛。
 - **FR-122**: `src/desktop_api` MUST 作为 FastAPI adapter 调用业务服务、orchestrator 和事件适配器，不得成为新的数据访问层；跨模块通知继续以 `src/utils/events.py` blinker 为后端来源。
 - **FR-123**: 应用壳 MUST 展示 backend `starting | ready | degraded | failed | shutting_down` 等连接状态，并在启动、健康检查、失败和关闭路径提供可恢复用户状态。
@@ -305,7 +306,7 @@ Programmer 输出的 `async def execute() -> dict` 先经过 `ast.parse` syntax 
 - **FR-131**: 技能列表 MUST 展示 pending、published、failed 三类技能及真实计数，并通过现有业务工作流支持 trial、元数据更新、删除验证、失败重试和忽略/关闭。
 - **FR-132**: 技能组合 MUST 支持列表、创建、更新、适用场景生成、推荐顺序、试用和发布；range 模式表示可选工具箱，ordered 模式表示显式顺序执行契约。
 - **FR-133**: 已发布技能组合在成员技能变化或下线时 MUST 标记 `needs_review`，对 Assistant 隐藏直到复核完成，并在 UI/API 中以独立展示状态呈现。
-- **FR-134**: 设置页 MUST 通过 `UnifiedConfigManager` 和 keyring-backed secret 方法读取/更新 AI、录制、数据和产品设置；密钥值只允许遮罩展示和写入/删除动作，不得明文返回。
+- **FR-134**: 设置页 MUST 通过 `UnifiedConfigManager` 读取/更新 AI、录制、数据和产品设置；密钥值只允许遮罩展示和写入/删除动作，不得明文返回。
 - **FR-135**: 设置页的连接测试、备份、导出、清除记忆、更新检查、文档、changelog 和证书安装等设计可见 action MUST 调用真实支持流程或返回真实业务验证/不可用错误。
 - **FR-136**: 系统 MUST 新增并维护 `frontend/`、`src-tauri/`、`src/desktop_api/`、相关业务 service/facade 和前端 Zustand/API/state/screen 结构，且这些结构必须与分层边界一致。
 - **FR-137**: 旧 PyQt 正常启动入口和主 UI 模块 MUST 在新 shell 通过验收后移除或降级为 legacy 失败提示；guard test 必须阻止正常路径重新打开维护中的 PyQt UI。
@@ -379,7 +380,7 @@ tool 组中 assistant(tool_calls) 消息位于压缩区，但其部分或全部 
 高危工具确认请求的运行时记录。字段：`request_id`（UUID）、`tool_name`（write_file/edit_file/exec）、`summary`（脱敏摘要）、`created_at`（monotonic 时间戳）、`event`（threading.Event）、`result`（bool）、`decision`（枚举：accepted/rejected/timeout/auto_approved/confirm_error）、`source`（枚举：toast_accept/toast_reject/toast_timeout/toast_allow_all/top_toggle/auto_scope/new_chat_reset/system_error）。每个请求恰好到达一个终态决策。
 
 ### AutoApproveScope [Source: specs/004-auth-toast]
-会话级自动放行状态。字段：`enabled`（bool，默认 False）、`source`（最近变更来源）。生命周期等于一次对话；新对话复位。不持久化到 config/DB/keyring。
+会话级自动放行状态。字段：`enabled`（bool，默认 False）、`source`（最近变更来源）。生命周期等于一次对话；新对话复位。不持久化到 config/DB。
 
 ### AuthToastSurface [Source: specs/004-auth-toast]
 UI 层非模态确认浮层组件。字段：`request_id`、`tool_name`、`summary`、`timeout_timer`（QTimer singleShot）。三按钮："全部允许"/"同意"/"拒绝"。无普通关闭按钮；不响应外部点击关闭。与普通 Toast 独立生命周期。
@@ -409,7 +410,7 @@ ChatWidget 内部视图状态，不持久化。状态：`session_list`→隐藏�
 桌面 Trial 子进程结果 DTO。字段至少包含 `ok`、`summary`、`details`、`exit_code`、`timed_out`、`stdout_path`、`stderr_path`、`trial_id`。SC-003 的"试用通过"要求 exit code 0、stdout 末行 JSON 解析成功且 `ok=True`。
 
 ### DesktopRecordingConfig [Source: specs/007-desktop-recording]
-运行时配置 namespace `recording.desktop.*`。字段：`enable_clip`（bool，默认 true）、`vision_model`（str | None，无默认）。provider 和 API key 沿用 `analyze_image` 当前 provider/keyring entry。
+运行时配置 namespace `recording.desktop.*`。字段：`enable_clip`（bool，默认 true）、`vision_model`（str | None，无默认）。provider 和 API key 沿用 `analyze_image` 当前统一配置 entry。
 
 ### HighRiskApiDetection [Source: specs/007-desktop-recording]
 桌面 Trial 事前提示与"走捷径"判定共用的静态检测结果。命中规则覆盖 `subprocess`、`os.startfile`、`webbrowser`、Win32 协议 URL（排除 Windows 盘符路径）、pywin32 高级 API、pywinauto 控件级 API；纯 pyautogui 坐标点击不算捷径。
@@ -445,7 +446,7 @@ Python sidecar 的用户可见状态。字段：`status`（starting/ready/degrad
 组合和已发布技能的成员关系视图。字段：`member_id`、`composition_id`、`tool_id`、`selected_order`、`execution_order`、`created_at`。ordered 模式要求连续执行顺序。
 
 ### AppSetting [Source: specs/008-ui-stack-redesign]
-设置页展示的配置/动作项。字段：`key`、`label`、`section`、`value_kind`、`value`、`masked_display_value`、`validation_rules`、`effective_change`、`status`。secret 类型只能遮罩展示并通过 keyring 写入/删除。
+设置页展示的配置/动作项。字段：`key`、`label`、`section`、`value_kind`、`value`、`masked_display_value`、`validation_rules`、`effective_change`、`status`。secret 类型只能遮罩展示，并通过 `UnifiedConfigManager` 写入/删除。
 
 ### SidecarApiSession [Source: specs/008-ui-stack-redesign]
 Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`、`auth_token`、`tauri_origin`、`started_at`、`expires_at`；不持久化。
@@ -518,12 +519,12 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 ### UI Stack Redesign [Source: specs/008-ui-stack-redesign]
 
 - **CC-036**: 008 是完整主 UI 替换，不是单页实验；五个主屏必须在同一接受版本内完成。
-- **CC-037**: 前端和 desktop API adapter 不得绕过业务服务直接触达 Repository、SQLite、DuckDB、配置文件或 keyring。
+- **CC-037**: 前端和 desktop API adapter 不得绕过业务服务直接触达 Repository、SQLite、DuckDB 或配置文件。
 - **CC-038**: 设计词汇必须面向用户：使用"技能教学"、"技能列表"、"技能组合"、"范围型"、"顺序型"等概念，不把归档/压缩或内部方法名暴露为 UI 概念。
 - **CC-039**: 2026-05-09 prototype 约束可见设置和动作；无样例数据、假计数、假按钮可进入验收状态。
 - **CC-040**: 新 UI 接受后，legacy PyQt 不再是正常用户或开发者可依赖的维护 fallback；恢复 PyQt 正常入口必须先变更规格和活文档。
 - **CC-041**: Sidecar API 只绑定 loopback，使用 per-launch token；日志、DTO 和前端状态不得泄漏 token 或明文 secret。
-- **CC-042**: 新增 settings/action 能力必须遵守统一配置、keyring、业务验证和事件边界，不得为了完成设计按钮而引入文件直写或直接 SQL。
+- **CC-042**: 新增 settings/action 能力必须遵守统一配置、secret 遮罩/日志脱敏、业务验证和事件边界，不得为了完成设计按钮而引入文件直写或直接 SQL。
 - **CC-043**: Fresh-install profile 是主要验收路径；不迁移旧本地数据可以接受，但不得静默破坏或修改旧数据。
 
 ---
@@ -734,7 +735,7 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 ### Constraints & Compatibility
 
 - **CC-044**: 后端 blinker 仍是跨模块通知来源；business/execution/recording/data 不依赖前端 UI 或 event-stream 投递。
-- **CC-045**: 前端不得读 Repository、local DB、config、keyring 来补偿缺失的事件数据。
+- **CC-045**: 前端不得读 Repository、local DB 或 config 来补偿缺失的事件数据。
 - **CC-046**: sidecar event stream 必须带 runtime session header；token 不进 URL、cookie、持久化、日志、event payload 或错误响应。
 - **CC-047**: 单次最终契约切换；不维护新旧事件契约并行。
 - **CC-048**: UI 事件是会话内通知，不是持久业务事实，不是长期 replay log。
@@ -1028,7 +1029,7 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 
 - **CC-069**: 015 对 handler 参数和结构化 envelope 的升级范围仅限 Agent 内置 foundational tools；用户创建的业务工具、录制 workflow tools 和 specialist methodology assets 不采用该 handler 契约。016 仅把共享的保存时文本结果治理扩展到 legacy/custom 工具结果，不改变其 handler 参数、权限或业务语义。 [Updated by Source: specs/016-tool-output-semantic-summary]
 - **CC-070**: AgentLoop 既有 tool-call/tool-result pairing 语义 MUST 保持，单工具和多工具轮次都不得出现孤立 tool result 或重复配对。
-- **CC-071**: 高危确认必须继续是 session-scoped、fail-closed，且"全部允许/免确认"不得持久化到配置、keyring、SQLite 或 DuckDB。
+- **CC-071**: 高危确认必须继续是 session-scoped、fail-closed，且"全部允许/免确认"不得持久化到配置、SQLite 或 DuckDB。
 - **CC-072**: permission 和 confirmation summary 不得包含完整文件内容、完整替换文本、完整多行命令、凭据或 raw large output。
 - **CC-073**: UI 和 desktop API 不得直接管理内置工具执行状态；未来可见状态必须走既有 bridge 和 UI Event Registry 公开契约。
 - **CC-074**: 新增 retention、threshold、workspace/output cap 配置必须走 `get_unified_config()` / `UnifiedConfigManager` 和安全数据边界。
@@ -1066,12 +1067,14 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 
 **Revision note (2026-06-11)**: Archived merged feature 016 into main memory; continued user-story, requirement, compatibility, and success-criteria numbering from the existing project memory.
 
+**Credential revision (2026-06-12)**: Removed the external credential-store contract. All credentials now use `UnifiedConfigManager`; `config.json` supplies local defaults and `app_settings` supplies runtime overrides.
+
 ### User Stories
 
 - **US-049 (P1)**: Agent 面对大或截断的工具结果时，获得有界 compact envelope，其中确定性 `facts`、`preview`、原始字符数、payload keys 和可授权恢复的 raw reference 不依赖模型可用性。
 - **US-050 (P1)**: Agent 可获得固定结构的 advisory 语义摘要，用于快速理解概览、关键发现、错误、重要数据和下一步；无效 JSON、provider 失败、Map-Reduce 失败或超时会确定性省略摘要。
 - **US-051 (P2)**: Agent 可通过 `extractionGoal`、`web_fetch.prompt` 或保守推断的常见 goal/query/prompt/pattern 参数，让摘要聚焦当前工具调用目的，而不改变工具执行和权限语义。
-- **US-052 (P2)**: 用户可在 Settings“工具输出”分区配置独立低成本摘要模型、兼容端点、温度、预算和 keyring-only 密钥，并执行不返回模型原文的连接测试。
+- **US-052 (P2)**: 用户可在 Settings“工具输出”分区配置独立低成本摘要模型、兼容端点、温度、预算和独立密钥，并执行不返回模型原文的连接测试；部署方也可通过统一配置文件提供本地默认值。
 
 ### Functional Requirements
 
@@ -1086,7 +1089,7 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - **FR-224**: `semanticSummary` MUST 标记 `advisory=true`，且 MUST NOT 覆盖已验证的 facts、exit code、错误码或状态。
 - **FR-225**: Extraction goal MUST 只影响摘要 prompt，MUST NOT 改变工具执行、权限判断或 handler 语义。
 - **FR-226**: 摘要配置及全部高级限额 MUST 通过 `get_unified_config()` / `UnifiedConfigManager` 访问。
-- **FR-227**: 独立摘要 API key MUST 只使用 keyring username `tool_output_summary_api_key`，不得回退到 plaintext 配置。
+- **FR-227**: 独立摘要 API key MUST 使用 `agent_tools.output.semantic_summary.api_key`，只允许通过 `UnifiedConfigManager` 读写，不得回退主模型密钥；`config.json` 提供本地默认值，`app_settings` 可覆盖。
 - **FR-228**: 支持的 provider MUST 包含 Anthropic、OpenAI、DeepSeek、Qwen、Zhipu、Moonshot 和 custom OpenAI-compatible endpoint。
 - **FR-229**: Runtime health counters MUST 覆盖 attempts、successes、timeouts、partial summaries、invalid summaries、map/reduce failures 和 input characters。
 - **FR-230**: 新 provider callsite MUST 注册到 Debug provider inventory 和 Real Grand Tour credential/budget coverage，并使用 trace source `tool_output_summary`。
@@ -1099,7 +1102,7 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - **Semantic Summary**: 可省略的 advisory JSON，固定字段为 `overview`、`keyFindings`、`errors`、`importantData`、`nextActions`、`extractionGoal`、`coverage`、`mode` 和 `advisory`。
 - **Extraction Goal**: 最长 1000 字符的摘要聚焦提示；来源可以是显式 `extractionGoal`、`web_fetch.prompt` 或 custom tool 常见参数，不传入 handler 执行分支。
 - **Semantic Summary Configuration**: `agent_tools.output.semantic_summary.*` 下的 provider/model/base URL/temperature、触发阈值、采样、Map-Reduce、deadline、token 和输出字符预算。
-- **Tool Output Summary Credential**: keyring 中 username 为 `tool_output_summary_api_key` 的独立 secret；配置、DTO、日志和 UI 只暴露 masked presence/status。
+- **Tool Output Summary Credential**: `agent_tools.output.semantic_summary.api_key` 下的独立 secret；由 `UnifiedConfigManager` 按 `app_settings` 覆盖 `config.json` 默认值的规则解析。DTO、日志和 UI 只暴露 masked presence/status；Real Grand Tour 使用相同的只读 getter。
 - **Semantic Summary Health Metrics**: log-safe 进程内计数器，记录摘要尝试、成功、超时、部分成功、非法结果、Map/Reduce 失败和输入字符数。
 
 ### Constraints & Compatibility
@@ -1110,7 +1113,7 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - **CC-081**: 已授权的现有 raw reference 必须复用；需要新 reference 时必须先完成持久化，再进行摘要调用，摘要失败不得丢失恢复入口。
 - **CC-082**: 原始工具输出属于不可信数据；prompt 必须阻止其覆盖摘要协议，输入/输出和最终 compact envelope 都必须执行敏感值脱敏与字符上限。
 - **CC-083**: `extractionGoal` 只用于摘要语义，不得进入 workspace policy、高危确认、工具参数改写或业务执行条件。
-- **CC-084**: 摘要配置必须走统一配置，secret 必须 keyring-only；disabled、空 model、缺 secret 或无效 compatible endpoint 时不得发起 provider 调用。
+- **CC-084**: 摘要配置和 secret 必须走 `UnifiedConfigManager`；响应 DTO、UI state 和普通日志不得暴露明文。Real Grand Tour 使用相同的只读 getter；disabled、空 model、缺 secret 或无效 compatible endpoint 时不得发起 provider 调用。
 - **CC-085**: 本特性不新增数据库 schema；既有 `ToolOutputRepository`、message persistence 和 exactly-one pairing 边界保持不变。
 
 ### Success Criteria
@@ -1120,7 +1123,8 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - **SC-107**: 摘要成功、provider 失败、非法 JSON、超时和 fallback 场景中，每个 tool call 均只持久化一条结果。
 - **SC-108**: 原始 secret 不出现在 semantic prompt、summary、普通日志、UI event 或可见 compact envelope 中。
 - **SC-109**: 现有 reference 被复用，且 Repository 重新实例化后仍可按授权加载。
-- **SC-110**: 后端设置、keyring、连接动作、前端保存/删除/测试和可行动错误展示测试全部通过。
+- **SC-110**: 后端设置、统一 secret 存储、连接动作、前端保存/删除/测试和可行动错误展示测试全部通过。
+- **SC-111**: `config.json` 默认值、`app_settings` 覆盖、空值清除、DTO 遮罩和普通日志脱敏均有自动化覆盖。
 
 ### Edge Cases
 
@@ -1130,3 +1134,4 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - Map-Reduce 允许部分 map 成功后 reduce；所有 map 失败、reduce 失败或总超时均省略摘要。
 - 工具输出中的 prompt injection 文本只能作为待总结数据，不能修改固定 JSON 协议或系统指令。
 - `load_tool_output` 读取出的第二阶段大结果会再次进入同一治理边界，同时保持授权和可见上限。
+- 配置文件密钥作为本地默认值；Settings 写入后由 `app_settings` 覆盖，Settings 删除会写入空覆盖值并屏蔽文件默认值，直到再次保存或显式移除该覆盖。

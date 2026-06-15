@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-06-11
-**Revision**: 2026-06-11 — Merged `specs/016-tool-output-semantic-summary`
+**Last Updated**: 2026-06-12
+**Revision**: 2026-06-12 — Removed the system-wide external credential-store dependency
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Language/Version**: Python 3.11+ (runtime 3.12), Rust stable/Tauri 2, TypeScript 5.x, React 18
 **Primary Dependencies**: Tauri 2, React 18, Vite, Tailwind CSS, Zustand, FastAPI, Uvicorn, Pydantic, PyInstaller, SQLite (SQLAlchemy/Alembic), DuckDB, Playwright/Vitest, blinker, sqlglot, LangChain, mitmproxy, AgentLoop (自研), pynput, mss, opencv-python, Pillow, comtypes, pywinauto, pywin32
-**Storage**: SQLite (业务数据, via Repository); DuckDB (录制分析数据, via FilteredDuckDBConnection/sql_rewriter; desktop_recordings/desktop_actions); keyring (secrets); filesystem (`data/recordings/<recording_id>/`, `data/trials/<trial_id>/`, packaged sidecar artifacts)
+**Storage**: SQLite (业务数据和 `app_settings` 配置覆盖, via Repository/UnifiedConfigManager); DuckDB (录制分析数据, via FilteredDuckDBConnection/sql_rewriter; desktop_recordings/desktop_actions); local `config.json` defaults; filesystem (`data/recordings/<recording_id>/`, `data/trials/<trial_id>/`, packaged sidecar artifacts)
 **Testing**: pytest (`tests/`), Vitest + React Testing Library (`frontend/tests/unit`), Playwright/Tauri smoke (`frontend/tests/e2e`), guardrail tests (`tests/guardrails`)
 **Target Platform**: Windows desktop first via Tauri/WebView2; desktop recording remains Windows-only
 **Project Type**: Tauri desktop application with React frontend and packaged Python FastAPI sidecar
@@ -26,7 +26,7 @@ frontend/
 │   ├── app/                        # App shell, route registry, custom titlebar, backend status
 │   ├── api/                        # typed frontend clients for Python sidecar contracts
 │   ├── components/                 # shared primitives and shell UI controls
-│   ├── screens/                    # assistant, teaching, skills, compositions, settings
+│   ├── screens/                    # assistant, teaching, skills, compositions, settings, BrainScreen, SpecialistScreen, SkillMethodologyScreen, debug
 │   ├── state/                      # Zustand local UI/session stores
 │   ├── styles/                     # Tailwind/theme tokens and reduced-motion/contrast baseline
 │   └── test/                       # frontend mocks and component helpers
@@ -70,8 +70,9 @@ src/
 │   │   ├── settings_actions_service.py
 │   │   ├── skills_service.py
 │   │   └── teaching_service.py
-│   └── agents/                     # AgentLoop, tools, prompts, assistant memory
-├── data/                           # repositories, config models, migrations, keyring/unified config
+│   ├── agents/                     # AgentLoop, tools, prompts, assistant memory
+│   └── brain/                      # 大脑业务层：segment, distillation, context, decay, archive, retrieval, specialist, prediction, management, skill
+├── data/                           # repositories, config models, migrations, unified config
 ├── execution/                      # tool execution and desktop trial runner
 ├── recording/                      # browser/extension/desktop recording and DuckDB filtering
 ├── utils/                          # blinker events and shared helpers
@@ -170,7 +171,7 @@ PyQt desktop recording widgets were retired with the primary PyQt UI. The deskto
 | `recording.desktop.enable_clip` | bool | `true` | 控制桌面录制是否生成 mp4 clip；关闭后仍保留多帧 PNG |
 | `recording.desktop.vision_model` | string/null | `null` | 独立指定桌面多模态分析 model；缺失时不注入 `analyze_desktop_action` |
 
-provider routing 和 API key 复用 `analyze_image` 当前 provider/keyring entry；不新增 `recording.desktop.vision_provider`。
+provider routing 和 API key 复用 `analyze_image` 当前统一配置 entry；不新增 `recording.desktop.vision_provider`。
 
 [Source: specs/007-desktop-recording]
 
@@ -438,7 +439,7 @@ Phase 1 不引入录制数据 retention、cleanup、compress、disk quota、运�
 
 ### Configuration And Secrets
 
-Settings API 通过 `UnifiedConfigManager` 读写非密钥配置，通过 keyring-backed methods 写入/删除 secrets。secret values 不以明文进入 response DTO、frontend store、日志或配置示例。设计中可见的 test connection、backup、export、clear memory、update check、docs、changelog、certificate install 等 action 要么调用真实业务路径，要么返回真实不可用/验证错误。
+Settings API 通过 `UnifiedConfigManager` 读写所有配置和 secrets；`config.json` 提供本地默认值，`app_settings` 可覆盖。secret values 不以明文进入 response DTO、frontend store、普通日志或配置示例。设计中可见的 test connection、backup、export、clear memory、update check、docs、changelog、certificate install 等 action 要么调用真实业务路径，要么返回真实不可用/验证错误。
 
 ### Packaging And Commands
 
@@ -708,7 +709,7 @@ frontend/tests/
 
 ### Runtime And Cancellation
 
-- `src/business/agents/run_context.py` 是取消原语唯一入口；desktop API 只能调用业务层 API，不把取消状态落到配置、keyring、SQLite 或 DuckDB。
+- `src/business/agents/run_context.py` 是取消原语唯一入口；desktop API 只能调用业务层 API，不把取消状态落到配置、SQLite 或 DuckDB。
 - 每次运行登记代际 token，`end()` 清理 session→Event 表；停止早于 worker `begin()` 的竞态通过待停止集合兜底。
 - 深度取消依赖"父助理与子代理/专员同线程同步委派"这一承重不变量；门卫测试必须在委派改走线程或异步时失败。
 - `ResultType.CANCELLED` 表示用户主动停止后的可恢复暂停，不走错误路径；子任务暂停线索先落库，再由主助理下一轮可见并可 `continue_subagent` 续跑。
@@ -872,13 +873,15 @@ Diagnostics must omit raw command bodies, local blob paths, file contents, crede
 
 **Revision note (2026-06-11)**: Archived merged feature 016 into main implementation memory; records the implemented deterministic compaction, optional advisory summarization, dedicated settings/credential path, and verification coverage.
 
+**Credential revision (2026-06-12)**: Removed the external credential-store path. All provider credentials, including the dedicated tool-output summary key, now use `UnifiedConfigManager`; `config.json` supplies local defaults and `app_settings` supplies runtime overrides.
+
 ### Technical Context
 
 - **Runtime**: Python 3.11+ source with Python 3.12 sidecar runtime; React 18 + TypeScript/Vite Settings UI.
-- **Dependencies**: no new external package. The implementation reuses `AgentLoop`, `ToolOutputRepository`, `LangChainLLMClient`, `TraceContext`, unified config, keyring, pytest, Vitest, and the existing typed settings API.
+- **Dependencies**: no new external package. The implementation reuses `AgentLoop`, `ToolOutputRepository`, `LangChainLLMClient`, `TraceContext`, unified config, pytest, Vitest, and the existing typed settings API.
 - **Storage**: semantic summaries remain inside persisted tool-result message content. Raw output continues to use existing SQLite reference metadata and private blobs through `ToolOutputRepository`; no migration is introduced.
 - **Performance**: the default total summary deadline is 12 seconds, with at most 6 map calls and concurrency 3. Visible results remain bounded by `agent_tools.output.visible_char_cap`.
-- **Safety**: exactly-one result pairing, deterministic fail-open fallback, keyring-only secret storage, and no raw prompt/model output in ordinary logs, UI events, or connection-test responses.
+- **Safety**: exactly-one result pairing, deterministic fail-open fallback, UnifiedConfigManager-only secret access, masked DTO/UI state, redacted ordinary logs, and no raw prompt/model output in UI events or connection-test responses.
 
 ### Configuration
 
@@ -889,6 +892,7 @@ agent_tools.output.semantic_summary.enabled              # true
 agent_tools.output.semantic_summary.provider             # anthropic
 agent_tools.output.semantic_summary.model                # ""
 agent_tools.output.semantic_summary.base_url             # ""
+agent_tools.output.semantic_summary.api_key              # "" (dedicated secret)
 agent_tools.output.semantic_summary.temperature          # 0.2
 agent_tools.output.semantic_summary.trigger_chars        # 20000
 agent_tools.output.semantic_summary.max_input_chars      # 120000
@@ -901,7 +905,7 @@ agent_tools.output.semantic_summary.reduce_max_tokens    # 900
 agent_tools.output.semantic_summary.summary_max_chars    # 4000
 ```
 
-The dedicated secret uses keyring username `tool_output_summary_api_key`. Plaintext configuration fallback is forbidden.
+The dedicated runtime secret is `agent_tools.output.semantic_summary.api_key`. It follows the same unified-config precedence as other credentials: `config.json` provides the local default and `app_settings` may override it. Settings save/delete operations call `UnifiedConfigManager`; Real Grand Tour uses the same read-only getter and does not introduce a separate credential path.
 
 ### Source Code Structure
 
@@ -920,8 +924,7 @@ src/
 │       └── settings_actions_service.py       # sanitized connection test
 ├── data/
 │   ├── config_models.py                      # semantic-summary config dataclass
-│   ├── unified_config.py                     # validated getters + keyring-backed secret helpers
-│   └── credential_resolver.py                # read-only summary credential resolution
+│   └── unified_config.py                     # validated getters + unified secret helpers
 ├── desktop_api/
 │   └── schemas.py                            # settings descriptor `advanced` metadata
 └── utils/
@@ -966,6 +969,6 @@ frontend/
 - Unit tests cover deterministic selection budgets, diagnostics at different positions, redaction, prompt injection text, extraction goals, single call, Map-Reduce, partial maps, invalid JSON, provider failure, and timeout.
 - Governance tests cover legacy/custom/upgraded result shapes, all trigger rules, existing-reference reuse, artifact-limit fallback, visible caps, and second-stage `load_tool_output` governance.
 - Integration tests prove AgentLoop argument propagation and exactly-one result pairing across summary success/failure and multi-tool batches.
-- Settings/data/API tests cover defaults, validation, keyring-only storage, read-only credential resolution, connection action, provider metadata, and advanced descriptor shape.
+- Settings/data/API tests cover defaults, validation, config persistence and precedence, secret masking/log redaction, read-only Real Grand Tour credential resolution, connection action, provider metadata, and advanced descriptor shape.
 - Frontend tests cover Tool Output navigation, advanced disclosure, value save, secret write/delete, connection status, and actionable error display.
 - Guardrails cover provider inventory, Real Grand Tour credential/budget registration, secret/log/UI-event leakage, active documentation, and AI entry mirrors.

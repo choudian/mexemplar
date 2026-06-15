@@ -11,15 +11,17 @@
 Agent Loop 是三个 Agent（PM、程序员、试用）共用的运行时引擎。它是一个纯粹的同步循环，只负责驱动 LLM 调用、工具执行，不感知 UI 和事件系统。
 
 ```
-UI 层（PyQt）
-    ↓ 用户操作 / 用户回复
-AgentUIBridge（优先级 4）
-    ↓ 线程管理、PyQt 信号桥接
-AgentOrchestrator（优先级 4）
+React UI (frontend/)
+    ↓ typed API client / event stream
+Tauri Shell (src-tauri/)
+    ↓ localhost FastAPI sidecar
+Desktop API (src/desktop_api/)
+    ↓ business services
+AgentOrchestrator (src/business/orchestration/)
     ↓ session 创建、Agent 选择、事件发送
     ↓ AgentLoop.run(session_id, user_input, tools)
     ↑ 返回 AgentResult
-AgentLoop（本模块）
+AgentLoop (src/business/agents/)
     ↓ assemble_context() / save_*()    ↓ chat_with_tools()
 ContextManager（记忆层）            LangChainLLMClient（LLM 客户端）
     ↓                                  ↓
@@ -28,20 +30,20 @@ MessageRepository / SessionRepository    Anthropic / OpenAI API
 SQLite
 ```
 
-**AgentLoop 上方的两层（优先级 4 设计）**：
+**AgentLoop 上方的架构层次**：
 
 | 层 | 职责 | 关注点 |
 |----|------|--------|
-| **AgentUIBridge** | 后台线程运行 Loop、AgentResult 转 PyQt 信号、接收用户回复 | UI 框架相关 |
+| **Desktop API** | FastAPI sidecar adapter，处理 DTO、auth、错误映射、事件流 | UI 适配 |
 | **AgentOrchestrator** | 创建 session、选择 AgentConfig、根据 AgentResult 发事件、Agent 间调度 | 业务流程 |
 
-拆成两层的原因：改编排逻辑不影响 UI 桥接，换 UI 框架不影响编排逻辑。
+架构说明：React UI 通过 typed API client 调用 Desktop API，Desktop API 调用 AgentOrchestrator，AgentOrchestrator 驱动 AgentLoop 执行。
 
 **关键原则**：
 
 - Agent Loop 自身不知道事件系统和 UI 的存在——它只负责运行循环、返回结果
 - AgentOrchestrator 根据 AgentResult 决定是否发事件、启动下一个 Agent
-- AgentUIBridge 负责线程管理和 PyQt 信号转换
+- Desktop API 负责前端事件流适配和请求路由
 - 三个 Agent 共用同一个 `AgentLoop` 类，通过 `AgentConfig` 区分行为
 
 ---
