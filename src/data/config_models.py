@@ -362,6 +362,17 @@ class AgentToolsProcessConfig:
 
 
 @dataclass
+class AgentToolsDiscoveryConfig:
+    """User capability catalog discovery and prompt limits."""
+
+    full_catalog_max_items: int = 20
+    full_catalog_max_chars: int = 6000
+    search_default_limit: int = 10
+    search_max_limit: int = 25
+    result_description_max_chars: int = 500
+
+
+@dataclass
 class AgentToolsConfig:
     """Agent built-in foundational tool configuration."""
 
@@ -369,6 +380,7 @@ class AgentToolsConfig:
     output: AgentToolsOutputConfig = field(default_factory=AgentToolsOutputConfig)
     search: AgentToolsSearchConfig = field(default_factory=AgentToolsSearchConfig)
     process: AgentToolsProcessConfig = field(default_factory=AgentToolsProcessConfig)
+    discovery: AgentToolsDiscoveryConfig = field(default_factory=AgentToolsDiscoveryConfig)
 
 
 @dataclass
@@ -460,6 +472,7 @@ class AppConfig:
                 ("file", AgentToolsFileConfig),
                 ("search", AgentToolsSearchConfig),
                 ("process", AgentToolsProcessConfig),
+                ("discovery", AgentToolsDiscoveryConfig),
             ):
                 val = agent_tools_data.get(key)
                 if isinstance(val, dict):

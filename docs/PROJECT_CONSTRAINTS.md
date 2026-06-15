@@ -46,6 +46,9 @@
 - `recording_data_tools.execute_code` 的受限 builtins、import 控制和超时属于执行内核，不迁移到 hook。
 - `src/execution/tool_executor.py` 的 venv 隔离和命令白名单位于 handler 层之下，不迁移到 hook。
 - `dynamic_tool_manager` 的发布状态、允许列表、技能发现和技能组合激活属于工具发现阶段，不迁移到 hook。
+- 用户能力 FC schema 继续由 `get_tool_detail` 按需激活；`agent_tools.discovery.*` 控制的是 system prompt 中技能/组合摘要目录的 full/deferred 模式，不得把两者混为“全量 schema 注入”。主助理、临时子代理和固定专员必须先按各自授权范围过滤，再计算条目数/字符数阈值；deferred prompt 不得泄漏隐藏名称或描述。
+- `search_tools` 是 deferred 目录的权威发现入口：空 query 可浏览，`kind/offset/limit` 提供稳定类型过滤和分页，返回 selector 供 `get_tool_detail` 使用。搜索与详情每次调用必须重校验发布状态、组合可用性、成员授权和白名单；Prompt 或旧激活缓存不得作为授权事实。
+- `agent_tools.discovery.*` 通过 `get_unified_config().get_agent_tools_discovery_*` 读取，运行时覆盖影响后续 Prompt/搜索；与 file/search/process 工程限额一致，Settings UI 不暴露。
 
 ## Desktop Recording Boundaries
 

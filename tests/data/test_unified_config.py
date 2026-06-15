@@ -66,6 +66,67 @@ def test_tool_output_semantic_summary_defaults_and_bounds(tmp_path):
     assert config.get_agent_tools_output_semantic_summary_summary_max_chars() == 4000
 
 
+def test_agent_tools_discovery_defaults_and_bounds(tmp_path):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    store = _SettingsStore()
+    config._sa = store
+
+    assert config.get_agent_tools_discovery_full_catalog_max_items() == 20
+    assert config.get_agent_tools_discovery_full_catalog_max_chars() == 6000
+    assert config.get_agent_tools_discovery_search_default_limit() == 10
+    assert config.get_agent_tools_discovery_search_max_limit() == 25
+    assert config.get_agent_tools_discovery_result_description_max_chars() == 500
+
+    config.set("agent_tools.discovery.full_catalog_max_items", 0, persist="runtime")
+    config.set(
+        "agent_tools.discovery.full_catalog_max_chars",
+        200000,
+        persist="runtime",
+    )
+    config.set("agent_tools.discovery.search_default_limit", 80, persist="runtime")
+    config.set("agent_tools.discovery.search_max_limit", 12, persist="runtime")
+    config.set(
+        "agent_tools.discovery.result_description_max_chars",
+        "bad",
+        persist="runtime",
+    )
+
+    assert config.get_agent_tools_discovery_full_catalog_max_items() == 20
+    assert config.get_agent_tools_discovery_full_catalog_max_chars() == 100000
+    assert config.get_agent_tools_discovery_search_max_limit() == 12
+    assert config.get_agent_tools_discovery_search_default_limit() == 12
+    assert config.get_agent_tools_discovery_result_description_max_chars() == 500
+
+
+def test_agent_tools_discovery_nested_config_loads(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agent_tools": {
+                    "discovery": {
+                        "full_catalog_max_items": 7,
+                        "full_catalog_max_chars": 2500,
+                        "search_default_limit": 4,
+                        "search_max_limit": 9,
+                        "result_description_max_chars": 240,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    discovery = config.get_agent_tools_discovery_config()
+    assert discovery.full_catalog_max_items == 7
+    assert discovery.full_catalog_max_chars == 2500
+    assert discovery.search_default_limit == 4
+    assert discovery.search_max_limit == 9
+    assert discovery.result_description_max_chars == 240
+
+
 def test_all_api_keys_are_read_from_unified_config(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(

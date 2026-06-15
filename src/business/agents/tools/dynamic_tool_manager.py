@@ -14,6 +14,11 @@ from collections import OrderedDict
 from typing import Callable, List, Optional, Set, Tuple
 
 from src.business.agents.config import ToolDefinition
+from src.business.agents.tools.capability_catalog import (
+    CapabilityCatalogItem,
+    load_capability_discovery_policy,
+    search_capability_catalog,
+)
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
 from src.business.services.skill_composition_service import SkillCompositionService
 from src.data.models import MODE_DISPLAY_TEXT, sort_composition_members
@@ -86,11 +91,29 @@ def _check_tool_suggestion(tool_name: str) -> Optional[str]:
 
 SEARCH_TOOLS_SCHEMA = make_tool_schema(
     name="search_tools",
-    description="按关键词搜索可用的用户技能或技能组合。当不确定该用哪个时使用。",
+    description="浏览或搜索当前获授权的用户技能与技能组合，支持类型过滤和稳定分页。",
     properties={
-        "query": {"type": "string", "description": "搜索关键词或意图描述"},
+        "query": {
+            "type": "string",
+            "description": "可选搜索关键词或意图描述；留空时浏览目录",
+        },
+        "kind": {
+            "type": "string",
+            "enum": ["all", "tool", "composition"],
+            "description": "能力类型过滤，默认 all",
+        },
+        "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "分页偏移，默认 0",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "页大小；省略时使用统一配置默认值",
+        },
     },
-    required=["query"],
+    required=[],
 )
 
 GET_TOOL_DETAIL_SCHEMA = make_tool_schema(
@@ -168,38 +191,61 @@ class DynamicToolManager:
             short = f"{prefix}_{entity_id}"
         return short
 
-    def search_tools(self, query: str) -> str:
-        """按关键词搜索已发布的用户技能与技能组合"""
+    def search_tools(
+        self,
+        query: str = "",
+        kind: str = "all",
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> str:
+        """浏览或搜索当前获授权的用户技能与技能组合。"""
         # The manager keeps Repository/Service sessions for its lifetime. Protect
         # those shared sessions while still allowing this call to overlap with
         # unrelated concurrency-safe tools in the AgentLoop.
         with self._search_lock:
-            query = (query or "").strip()
-            if not query:
-                return "请输入要搜索的关键词。"
+            try:
+                page = search_capability_catalog(
+                    self._current_catalog_items(),
+                    load_capability_discovery_policy(),
+                    query=query,
+                    kind=kind,
+                    offset=offset,
+                    limit=limit,
+                )
+            except ValueError as exc:
+                return error_json(str(exc))
+            return to_json(page.to_dict())
 
-            tools = [
-                tool
-                for tool in self._tool_repo.search_published(query)
-                if self._is_allowed_tool(tool)
-            ]
-            compositions = [
-                composition
-                for composition in self.composition_service.search_published_compositions(query)
-                if self._is_allowed_composition(composition)
-            ]
-
-            if not tools and not compositions:
-                return "没有找到匹配的技能或技能组合。"
-
-            lines = []
-            for composition in compositions[:5]:
-                mode_text = MODE_DISPLAY_TEXT.get(composition.mode, composition.mode)
-                desc = composition.description or composition.applicability
-                lines.append(f"- [技能组合/{mode_text}] {composition.composition_name}：{desc}")
-            for tool in tools[:5]:
-                lines.append(f"- [技能] {tool.tool_name}：{tool.description or '（无描述）'}")
-            return "找到以下能力：\n" + "\n".join(lines[:10])
+    def _current_catalog_items(self) -> list[CapabilityCatalogItem]:
+        items = [
+            CapabilityCatalogItem(
+                kind="tool",
+                name=tool.tool_name,
+                description=tool.description or "",
+            )
+            for tool in self._tool_repo.get_all_published()
+            if self._is_allowed_tool(tool)
+        ]
+        for composition in self.composition_service.get_assistant_published_summaries():
+            member_tool_ids = set(composition["member_tool_ids"])
+            if (
+                self._allowed_composition_ids is not None
+                and composition["composition_id"] not in self._allowed_composition_ids
+            ):
+                continue
+            if self._allowed_tool_ids is not None and not member_tool_ids.issubset(
+                self._allowed_tool_ids
+            ):
+                continue
+            items.append(
+                CapabilityCatalogItem(
+                    kind="composition",
+                    name=composition["composition_name"],
+                    description=composition["description"] or "",
+                    applicability=composition["applicability"] or "",
+                )
+            )
+        return items
 
     def get_tool_detail(self, tool_name: str) -> str:
         """查看技能或技能组合详情，同时激活对应的 FC schema"""
@@ -568,7 +614,12 @@ def create_assistant_search_tools(manager: "DynamicToolManager") -> List[ToolDef
         ToolDefinition(
             name="search_tools",
             schema=SEARCH_TOOLS_SCHEMA,
-            handler=lambda query: manager.search_tools(query),
+            handler=lambda query="", kind="all", offset=0, limit=None: manager.search_tools(
+                query=query,
+                kind=kind,
+                offset=offset,
+                limit=limit,
+            ),
             has_side_effects=False,
             is_concurrency_safe=True,
         ),

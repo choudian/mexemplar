@@ -294,6 +294,127 @@ def test_get_tool_detail_accepts_display_labels_shown_to_assistant():
     assert "技能组合已激活" in composition_detail
 
 
+def test_search_tools_supports_browse_filter_pagination_and_legacy_query():
+    for index in range(6):
+        _seed_published_tool(
+            f"tool_search_{index}",
+            f"报告能力{index}",
+            f"生成报告 {index}",
+        )
+    _seed_published_tool("tool_search_unrelated", "无关能力", "其它用途")
+    service = SkillCompositionService()
+    composition = service.create_composition(
+        composition_name="报告组合",
+        description="组合报告流程",
+        applicability="适合报告任务",
+        mode="range",
+        assistant_enabled=True,
+        recommend_order=False,
+        members=[
+            {"tool_id": "tool_search_0", "selected_order": 1},
+            {"tool_id": "tool_search_1", "selected_order": 2},
+        ],
+    )
+    service.publish_composition(composition.composition_id)
+    manager = DynamicToolManager()
+
+    first = json.loads(manager.search_tools(query="", offset=0, limit=3))
+    second = json.loads(manager.search_tools(query="", offset=first["nextOffset"], limit=3))
+    legacy = json.loads(manager.search_tools("报告"))
+    compositions = json.loads(manager.search_tools(query="", kind="composition"))
+
+    assert first["total"] == 8
+    assert len(first["items"]) == 3
+    assert first["nextOffset"] == 3
+    assert {item["selector"] for item in first["items"]}.isdisjoint(
+        {item["selector"] for item in second["items"]}
+    )
+    assert legacy["query"] == "报告"
+    assert legacy["total"] == 7
+    assert compositions["total"] == 1
+    assert compositions["items"][0]["selector"] == "技能组合:报告组合"
+
+
+def test_search_tools_applies_tool_and_composition_authorization():
+    _seed_published_tool("tool_allowed", "允许技能", "允许")
+    _seed_published_tool("tool_allowed_2", "允许技能2", "允许")
+    _seed_published_tool("tool_denied", "拒绝技能", "拒绝")
+    service = SkillCompositionService()
+    allowed_composition = service.create_composition(
+        composition_name="允许组合",
+        description="成员都允许",
+        applicability="测试",
+        mode="range",
+        assistant_enabled=True,
+        recommend_order=False,
+        members=[
+            {"tool_id": "tool_allowed", "selected_order": 1},
+            {"tool_id": "tool_allowed_2", "selected_order": 2},
+        ],
+    )
+    denied_composition = service.create_composition(
+        composition_name="拒绝组合",
+        description="含未授权成员",
+        applicability="测试",
+        mode="range",
+        assistant_enabled=True,
+        recommend_order=False,
+        members=[
+            {"tool_id": "tool_allowed", "selected_order": 1},
+            {"tool_id": "tool_denied", "selected_order": 2},
+        ],
+    )
+    service.publish_composition(allowed_composition.composition_id)
+    service.publish_composition(denied_composition.composition_id)
+
+    manager = DynamicToolManager(allowed_tool_ids={"tool_allowed", "tool_allowed_2"})
+    page = json.loads(manager.search_tools())
+    selectors = {item["selector"] for item in page["items"]}
+
+    assert selectors == {
+        "技能:允许技能",
+        "技能:允许技能2",
+        "技能组合:允许组合",
+    }
+
+
+def test_search_tools_and_activated_schema_revalidate_status_changes():
+    _seed_published_tool("tool_runtime_status", "状态技能", "会被停用")
+    manager = DynamicToolManager()
+    manager.get_tool_detail("技能:状态技能")
+
+    before = json.loads(manager.search_tools("状态技能"))
+    assert before["total"] == 1
+    assert manager.get_activated_tools()
+
+    with ToolRepository() as tool_repo:
+        tool_repo.update_status("tool_runtime_status", "pending")
+
+    after = json.loads(manager.search_tools("状态技能"))
+    assert after["total"] == 0
+    assert "不存在或当前不可用" in manager.get_tool_detail("技能:状态技能")
+    assert manager.get_activated_tools() == []
+
+
+def test_search_tools_invalid_parameters_return_error_without_changing_activation():
+    _seed_published_tool("tool_search_error", "参数校验技能", "验证错误路径")
+    manager = DynamicToolManager()
+    manager.get_tool_detail("技能:参数校验技能")
+    activated_before = [tool.name for tool in manager.get_activated_tools()]
+
+    for kwargs in (
+        {"kind": "unknown"},
+        {"offset": -1},
+        {"offset": "bad"},
+        {"limit": 0},
+        {"limit": "bad"},
+    ):
+        payload = json.loads(manager.search_tools(**kwargs))
+        assert payload["success"] is False
+
+    assert [tool.name for tool in manager.get_activated_tools()] == activated_before
+
+
 def test_activated_composition_is_removed_after_it_needs_review():
     _seed_published_tool("tool_stale_member", "待失效成员", "用于验证重校验")
     _seed_published_tool("tool_stale_member_2", "待失效成员2", "第二个成员")
@@ -316,9 +437,12 @@ def test_activated_composition_is_removed_after_it_needs_review():
     manager.get_tool_detail("技能组合:待失效组合")
     composition_short_id = manager._make_short_id(composition.composition_id, "comp")
     assert composition_short_id in {tool.name for tool in manager.get_activated_tools()}
+    assert json.loads(manager.search_tools("待失效组合"))["total"] == 1
 
     service.mark_needs_review_by_tool("tool_stale_member")
 
+    assert json.loads(manager.search_tools("待失效组合"))["total"] == 0
+    assert "不存在或当前不可用" in manager.get_tool_detail("技能组合:待失效组合")
     assert composition_short_id not in {tool.name for tool in manager.get_activated_tools()}
 
 

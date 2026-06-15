@@ -2,7 +2,11 @@ import logging
 from typing import Optional
 
 from src.business.agents.config import AgentConfig, AgentType
-from src.data.models import MODE_DISPLAY_TEXT
+from src.business.agents.tools.capability_catalog import (
+    CapabilityCatalogItem,
+    load_capability_discovery_policy,
+    render_capability_catalog,
+)
 from src.data.repositories import AssistantProfileRepository
 from src.utils.helpers import safe_format_template
 
@@ -32,36 +36,17 @@ class AssistantPromptBuilder:
         session = self._session_store.get_session(session_id)
         allowed_tool_ids = session.get_tool_id_set() if session else None
 
-        all_published = self._tool_repo.get_published_summaries()
-        all_compositions = self._composition_catalog.get_assistant_published_summaries()
-        if allowed_tool_ids is not None:
-            tools = [tool for tool in all_published if tool["tool_id"] in allowed_tool_ids]
-            compositions = [
-                composition
-                for composition in all_compositions
-                if set(composition["member_tool_ids"]).issubset(allowed_tool_ids)
-            ]
-        else:
-            tools = all_published
-            compositions = all_compositions
-
-        tool_list = [
-            {"name": f"[技能] {tool['tool_name']}", "description": tool["description"]}
-            for tool in tools
-        ]
-        tool_list.extend(
-            {
-                "name": f"[技能组合/{MODE_DISPLAY_TEXT.get(comp['mode'], comp['mode'])}] "
-                f"{comp['composition_name']}",
-                "description": comp["description"] or comp["applicability"],
-            }
-            for comp in compositions
+        capability_catalog_section = self.format_capability_catalog(
+            allowed_tool_ids,
+            agent_type=AgentType.ASSISTANT.value,
+            include_descriptions=True,
         )
 
         # Build brain context (new path)
         brain_context_text = ""
         try:
             from src.business.brain.context_builder import BrainContextBuilder
+
             builder = BrainContextBuilder()
             context = builder.build_context(
                 session_id,
@@ -84,10 +69,62 @@ class AssistantPromptBuilder:
 
         return format_assistant_prompt(
             profile=profile,
-            tools=tool_list if tool_list else None,
             memory_summary=memory_summary,
             brain_context=brain_context_text if brain_context_text else None,
+            capability_catalog_section=capability_catalog_section,
         )
+
+    def format_capability_catalog(
+        self,
+        allowed_tool_ids: set[str] | None,
+        *,
+        agent_type: str,
+        include_descriptions: bool,
+    ) -> str:
+        all_published = self._tool_repo.get_published_summaries()
+        all_compositions = self._composition_catalog.get_assistant_published_summaries()
+        if allowed_tool_ids is not None:
+            tools = [tool for tool in all_published if tool["tool_id"] in allowed_tool_ids]
+            compositions = [
+                composition
+                for composition in all_compositions
+                if set(composition["member_tool_ids"]).issubset(allowed_tool_ids)
+            ]
+        else:
+            tools = all_published
+            compositions = all_compositions
+
+        catalog_items = [
+            CapabilityCatalogItem(
+                kind="tool",
+                name=tool["tool_name"],
+                description=tool["description"] or "",
+            )
+            for tool in tools
+        ]
+        catalog_items.extend(
+            CapabilityCatalogItem(
+                kind="composition",
+                name=comp["composition_name"],
+                description=comp["description"] or "",
+                applicability=comp["applicability"] or "",
+            )
+            for comp in compositions
+        )
+        rendered = render_capability_catalog(
+            catalog_items,
+            load_capability_discovery_policy(),
+            include_descriptions=include_descriptions,
+        )
+        self._logger.info(
+            "Capability catalog mode selected: agent_type=%s item_count=%d "
+            "rendered_chars=%d mode=%s",
+            agent_type,
+            rendered.item_count,
+            rendered.rendered_chars,
+            rendered.mode,
+        )
+        return rendered.content
 
     def _is_revived_session(self, session_id: str) -> bool:
         """Return true when prompt construction is for an existing assistant session."""
