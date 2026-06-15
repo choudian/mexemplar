@@ -29,6 +29,19 @@ class ProcessOperationError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class ProcessEvent:
+    """A coarse-grained signal about a background process.
+
+    Three types: state_changed / stalled / log_chunked. Payload never carries
+    stdout/stderr content; use process_logs to read the real output.
+    """
+
+    sequence: int
+    type: str
+    payload: dict[str, Any]
+
+
 @dataclass
 class ProcessRecord:
     process_id: str
@@ -46,13 +59,24 @@ class ProcessRecord:
     stdout_chunks: deque[str] = field(default_factory=lambda: deque(maxlen=512))
     stderr_chunks: deque[str] = field(default_factory=lambda: deque(maxlen=512))
     closed: bool = False
+    # Event push (022 process-event-push). Fields are initialised after construction
+    # by ProcessManager.start; defaults here keep dataclass instantiation safe.
+    events: deque = field(default_factory=lambda: deque(maxlen=64))
+    event_sequence: int = 0
+    event_condition: threading.Condition | None = None
+    last_output_at: float = field(default_factory=time.time)
+    last_chunk_announce: int = 0
+    total_output_chars: int = 0
+    last_stalled_announce_output_at: float | None = None
+    _chunk_threshold_chars: int = 4096
     _duplicate_key: tuple[str, str, str] | None = field(default=None, repr=False)
 
     @property
     def duplicate_key(self) -> tuple[str, str, str]:
         if self._duplicate_key is None:
             object.__setattr__(
-                self, "_duplicate_key",
+                self,
+                "_duplicate_key",
                 (self.session_id, str(self.cwd.resolve()), " ".join(self.command.split())),
             )
         return self._duplicate_key
@@ -62,6 +86,17 @@ class ProcessManager:
     def __init__(self) -> None:
         self._records: dict[str, ProcessRecord] = {}
         self._lock = threading.RLock()
+
+    def _load_event_config(self) -> tuple[int, int, int]:
+        """Read 022 event config; isolated for monkeypatch friendliness."""
+        from src.data.unified_config import get_unified_config
+
+        cfg = get_unified_config()
+        return (
+            cfg.get_agent_tools_process_event_buffer_size(),
+            cfg.get_agent_tools_process_stalled_threshold_ms(),
+            cfg.get_agent_tools_process_chunk_threshold_chars(),
+        )
 
     def start(
         self,
@@ -107,6 +142,12 @@ class ProcessManager:
                 bufsize=1,
                 **popen_kwargs,
             )
+            try:
+                buffer_size, _stalled_ms, chunk_threshold = self._load_event_config()
+            except Exception:
+                # Config layer not initialised in some edge-case test contexts;
+                # fall back to dataclass defaults rather than crash start().
+                buffer_size, chunk_threshold = 64, 4096
             record = ProcessRecord(
                 process_id=f"proc_{uuid.uuid4().hex}",
                 session_id=session_id,
@@ -116,7 +157,12 @@ class ProcessManager:
                 cwd_display=cwd_display,
                 process=proc,
                 allow_stdin=allow_stdin,
+                events=deque(maxlen=max(1, int(buffer_size))),
             )
+            # 022: bind event condition to the manager's lock so wait/emit share it.
+            record.event_condition = threading.Condition(self._lock)
+            record.last_output_at = record.started_at
+            record._chunk_threshold_chars = max(1, int(chunk_threshold))
             self._records[record.process_id] = record
             self._start_reader(record, "stdout")
             self._start_reader(record, "stderr")
@@ -197,6 +243,12 @@ class ProcessManager:
                 record.exit_code = record.process.poll()
                 record.finished_at = record.finished_at or time.time()
                 record.status = "terminated"
+                # 022: explicit terminate path emits state_changed too.
+                self._emit_event_locked(
+                    record,
+                    "state_changed",
+                    {"status": record.status, "exitCode": record.exit_code},
+                )
             else:
                 self._refresh_locked(record)
             return self._summary(record)
@@ -246,6 +298,145 @@ class ProcessManager:
         record_process_cleanup(result)
         return result
 
+    # ===== 022 process-event-push =====
+
+    def _emit_event_locked(
+        self, record: ProcessRecord, event_type: str, payload: dict[str, Any]
+    ) -> None:
+        """Append a ProcessEvent and notify any wait_for_event waiters.
+
+        Caller MUST already hold self._lock.
+        """
+        record.event_sequence += 1
+        event = ProcessEvent(
+            sequence=record.event_sequence,
+            type=event_type,
+            payload=dict(payload),
+        )
+        record.events.append(event)
+        if record.event_condition is not None:
+            record.event_condition.notify_all()
+
+    def wait_for_event(
+        self,
+        process_id: str,
+        *,
+        since_cursor: int | None,
+        timeout_ms: int,
+    ) -> dict[str, Any] | None:
+        """Block until a new event arrives past since_cursor, or timeout.
+
+        Returns None when the process is missing (caller maps to process_missing).
+        Otherwise returns:
+          {
+            "events":       [event dicts, sequence > since_cursor, ascending],
+            "cursor":       int (next sinceCursor; monotonically non-decreasing),
+            "status":       str,
+            "exitCode":     int | None,
+            "cursorTooOld": bool,
+          }
+        """
+        cursor = 0 if since_cursor is None else max(0, int(since_cursor))
+        deadline = time.time() + max(0.0, timeout_ms / 1000)
+        with self._lock:
+            record = self._records.get(process_id)
+            if record is None:
+                return None
+            stalled_ms = 0
+            try:
+                _bufsize, stalled_ms, _chunk = self._load_event_config()
+            except Exception:
+                stalled_ms = 10000
+            while True:
+                # First always refresh terminal status; this may emit state_changed.
+                self._refresh_locked_with_emit(record)
+                # Lazy stalled judgement before deque scan (T020).
+                self._maybe_emit_stalled_locked(record, stalled_ms)
+                # Filter deque against cursor.
+                events_after = [e for e in record.events if e.sequence > cursor]
+                oldest_seq = record.events[0].sequence if record.events else None
+                cursor_too_old = oldest_seq is not None and cursor > 0 and cursor < oldest_seq - 1
+                # If we have anything to return (events or terminal status), return.
+                if events_after:
+                    new_cursor = events_after[-1].sequence
+                    return self._build_wait_result(record, events_after, new_cursor, cursor_too_old)
+                if record.status != "running":
+                    # Process already done: don't block.
+                    new_cursor = self._compute_cursor(record)
+                    return self._build_wait_result(record, [], new_cursor, cursor_too_old)
+                if cursor_too_old:
+                    new_cursor = self._compute_cursor(record)
+                    return self._build_wait_result(record, [], new_cursor, True)
+                # Wait on condition until timeout.
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    new_cursor = self._compute_cursor(record)
+                    return self._build_wait_result(record, [], new_cursor, False)
+                if record.event_condition is None:
+                    # Defensive: fall through to timeout if not initialised.
+                    new_cursor = self._compute_cursor(record)
+                    return self._build_wait_result(record, [], new_cursor, False)
+                record.event_condition.wait(timeout=remaining)
+                # Loop and re-evaluate.
+
+    def _refresh_locked_with_emit(self, record: ProcessRecord) -> None:
+        """Like _refresh_locked but emits state_changed on terminal transition.
+
+        Caller MUST already hold self._lock.
+        """
+        prev_status = record.status
+        self._refresh_locked(record)
+        if prev_status == "running" and record.status in {"completed", "failed"}:
+            self._emit_event_locked(
+                record,
+                "state_changed",
+                {"status": record.status, "exitCode": record.exit_code},
+            )
+
+    def _maybe_emit_stalled_locked(self, record: ProcessRecord, stalled_ms: int) -> None:
+        """Lazy stalled judgement; called from wait_for_event entry.
+
+        Caller MUST already hold self._lock.
+        """
+        if record.status != "running":
+            return
+        if stalled_ms <= 0:
+            return
+        idle_ms = int((time.time() - record.last_output_at) * 1000)
+        if idle_ms < stalled_ms:
+            return
+        if record.last_stalled_announce_output_at == record.last_output_at:
+            return
+        self._emit_event_locked(record, "stalled", {"idleMs": idle_ms})
+        record.last_stalled_announce_output_at = record.last_output_at
+
+    def _compute_cursor(self, record: ProcessRecord) -> int:
+        """Cursor to return when there are no new events to deliver.
+
+        - When deque has events: latest event's sequence
+        - When deque is empty: record.event_sequence (i.e. 'no events newer than my watermark')
+        """
+        if record.events:
+            return record.events[-1].sequence
+        return record.event_sequence
+
+    def _build_wait_result(
+        self,
+        record: ProcessRecord,
+        events_after: list,
+        cursor: int,
+        cursor_too_old: bool,
+    ) -> dict[str, Any]:
+        return {
+            "events": [{"sequence": e.sequence, "type": e.type, **e.payload} for e in events_after],
+            "cursor": int(cursor),
+            "status": record.status,
+            "exitCode": record.exit_code,
+            "cursorTooOld": bool(cursor_too_old),
+        }
+
+    # ===== end 022 =====
+
     def _terminate_tree(self, record: ProcessRecord, *, force: bool) -> bool:
         if os.name == "nt":
             cmd = ["taskkill", "/PID", str(record.process.pid), "/T"]
@@ -282,6 +473,7 @@ class ProcessManager:
     def _start_reader(self, record: ProcessRecord, stream_name: str) -> None:
         stream = getattr(record.process, stream_name)
         chunks = record.stdout_chunks if stream_name == "stdout" else record.stderr_chunks
+        threshold = record._chunk_threshold_chars
 
         def reader() -> None:
             if stream is None:
@@ -290,6 +482,20 @@ class ProcessManager:
                 for line in stream:
                     with self._lock:
                         chunks.append(line)
+                        # 022: track output statistics for log_chunked / stalled.
+                        record.total_output_chars += len(line)
+                        record.last_output_at = time.time()
+                        if record.total_output_chars - record.last_chunk_announce >= threshold:
+                            delta = record.total_output_chars - record.last_chunk_announce
+                            record.last_chunk_announce = record.total_output_chars
+                            self._emit_event_locked(
+                                record,
+                                "log_chunked",
+                                {
+                                    "totalChars": record.total_output_chars,
+                                    "deltaChars": delta,
+                                },
+                            )
             except (OSError, ValueError):
                 return
 

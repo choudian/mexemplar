@@ -1,7 +1,42 @@
 # Merged Features Log
 
 **Last Updated:** 2026-06-15
-**Revision:** 2026-06-15 — Backfilled archives for 011, 012, 017, 018, and 019
+**Revision:** 2026-06-15 — Archived 022 process event push (子进程事件推送)
+
+## 子进程事件推送 — 2026-06-15
+
+**Branch:** `022-process-event-push`
+**Spec:** `specs/022-process-event-push`
+
+**What was added:**
+- US-075 (P1): subagent / specialist 用新工具 `wait_for_process_event` 阻塞等到 state_changed (running→completed/failed/terminated) 即返回,毫秒级拿到 status + exitCode,超时返回空事件 + 当前状态(非错误)
+- US-076 (P2): 累计输出过阈值 emit log_chunked(totalChars / deltaChars,无原文),subagent 用 `process_logs` 拉真实日志
+- US-077 (P3): wait 入口懒判定 stalled(idleMs),同一静默周期不刷屏,纯静默(从未输出)场景也按 `last_output_at = started_at` 触发
+
+**New Components:**
+- `ProcessEvent` frozen dataclass + `ProcessRecord` 7 个事件字段
+- `ProcessManager.wait_for_event` 公共方法 + `_emit_event_locked` / `_refresh_locked_with_emit` / `_maybe_emit_stalled_locked` / `_compute_cursor` / `_build_wait_result` 私有方法
+- `wait_for_process_event_handler` + `WAIT_FOR_PROCESS_EVENT_SCHEMA` + ToolDefinition(非 concurrency_safe)
+- 三个新配置键 `agent_tools.process.event_buffer_size / stalled_threshold_ms / chunk_threshold_chars` + `AgentToolsProcessConfig` 字段 + 三 getter
+
+**Modified Components:**
+- `src/execution/process_manager.py` — 事件机制核心
+- `src/business/agents/tools/command_tools.py` — handler
+- `src/business/agents/tools/builtin_general_tools.py` — schema + registration
+- `src/data/config_models.py` / `src/data/unified_config.py` — 三配置键
+
+**New Tests:**
+- `tests/execution/test_process_manager_events.py` — 16 个单测(emit / cursor / wait / state_changed / log_chunked / stalled,含 SC-162 200 ms 唤醒延迟显式断言)
+- `tests/business/agents/test_process_event_tool.py` — 6 个工具层单测
+- `tests/integration/test_process_event_flow.py` — 3 个集成行为契约
+
+**Key Decisions:**
+- 仅 per-process deque + Condition,不抽通用 event bus(YAGNI,设计文档 R-001)
+- 事件不进 UI Event Registry / 不持久化 / 主助理不订阅 / 100% 调度纯净
+- cursorTooOld 也返回 cursor,subagent 单调推进无须切换兜底(clarify Q1)
+- 纯静默场景 `last_output_at = started_at`,与"有过输出再静默"同口径(clarify Q2)
+
+**Tasks Completed:** 28/28 tasks(Setup 1 + Foundational 6 + US1 7 + US2 3 + US3 3 + Polish 8)
 
 ## 录制数据大字段按需读取 — 2026-04-25
 

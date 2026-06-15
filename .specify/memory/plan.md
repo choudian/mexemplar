@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
 **Last Updated**: 2026-06-15
-**Revision**: 2026-06-15 — Archived feature 021 tool catalog deferred loading
+**Revision**: 2026-06-15 — Archived feature 022 process event push (子进程事件推送)
 
 ---
 
@@ -1183,3 +1183,42 @@ manual quickstart smoke checklist remains open.
 - Clarify 因无 `NEEDS CLARIFICATION` 或范围未决项而跳过；归档前补跑 Analyze/Verify，14/14 FR、18/18 tasks 和宪法检查无发现。
 - 最终全量验证为 1474 passed、3 skipped、5 个已在未修改基线复现的既有失败；功能相关测试、Black、Flake8 和 diff check 通过。
 - Feature tasks: 18/18 completed。
+
+---
+
+## 子进程事件推送 [Source: specs/022-process-event-push]
+
+**Revision note (2026-06-15)**: 022 process-event-push 落地;为 subagent / specialist 提供低延迟"等事件、有进展叫我"能力,替代循环 poll。事件机制完全内嵌于 ProcessManager,不抽通用 event bus、不进 UI Event Registry、不持久化。
+
+### Modified Components
+
+- `src/execution/process_manager.py`(+约 140 行,核心扩展):
+  - 新增 `ProcessEvent` frozen dataclass(sequence / type / payload)。
+  - `ProcessRecord` 加 7 个字段:`events`(有界 deque)、`event_sequence`、`event_condition`(共享 `_lock` 的 `threading.Condition`)、`last_output_at`、`last_chunk_announce`、`total_output_chars`、`last_stalled_announce_output_at`,以及 closure 用的 `_chunk_threshold_chars`。
+  - `ProcessManager.start()` 内显式初始化 condition、events deque(从配置取 maxlen)、`last_output_at = started_at`。
+  - 新增 `_emit_event_locked`、`wait_for_event`、`_refresh_locked_with_emit`、`_maybe_emit_stalled_locked`、`_compute_cursor`、`_build_wait_result`、`_load_event_config`(便于测试 monkeypatch)。
+  - `_start_reader.reader` 内累加字符 + emit log_chunked(顺序:先存 delta、再推基线、再 emit)。
+  - `stop()` 的 terminated 分支显式 emit state_changed。`close()` 路径不触发事件。
+- `src/business/agents/tools/command_tools.py`(+约 35 行):新增 `wait_for_process_event_handler`,复用 `_process_for_current_session` 归属校验 + `get_config_int` 钳位 timeoutMs + 内部异常映射到 `internal_error`(沿用 ERROR_CODES 注册表)。
+- `src/business/agents/tools/builtin_general_tools.py`(+约 20 行):新增 `WAIT_FOR_PROCESS_EVENT_SCHEMA` + `ToolDefinition`(**未**标记 `is_concurrency_safe`,沿用 process_* 系列约束)。
+- `src/data/config_models.py`:`AgentToolsProcessConfig` 加三字段 `event_buffer_size=64`、`stalled_threshold_ms=10000`、`chunk_threshold_chars=4096`。
+- `src/data/unified_config.py`:加三个 getter `get_agent_tools_process_event_buffer_size`(上限 512)、`get_agent_tools_process_stalled_threshold_ms`(上限 600000)、`get_agent_tools_process_chunk_threshold_chars`(上限 65536),沿用 `_get_bounded_positive_int` 模式。
+
+### Configuration
+
+| Key | Default | Bound |
+|-----|---------|-------|
+| `agent_tools.process.event_buffer_size` | 64 | 1..512 |
+| `agent_tools.process.stalled_threshold_ms` | 10000 | 1..600000 |
+| `agent_tools.process.chunk_threshold_chars` | 4096 | 1..65536 |
+
+均通过 `UnifiedConfigManager` 读取,默认值随代码下发,SQLite `app_settings` 可覆盖,Settings UI 暂不暴露。无新增 secret / schema / migration / UI 事件。
+
+### Testing
+
+- `tests/execution/test_process_manager_events.py`(新建,16 个测试):覆盖 `_emit_event_locked` 单调 + 环形覆盖、cursorTooOld 续 cursor、空队列 cursor=event_sequence、state_changed completed/failed、wait 立即返回/超时/200 ms 唤醒断言(SC-162)、log_chunked 阈值/复位/无原文 payload、stalled 懒判定/不刷屏/纯静默/仅 running。
+- `tests/business/agents/test_process_event_tool.py`(新建,6 个测试):覆盖归属 permission_denied、process_missing、timeoutMs 钳位、default_timeout 接线、cursorTooOld 时 cursor 字段保留、内部异常 → `internal_error`。
+- `tests/integration/test_process_event_flow.py`(新建,3 个测试):走工具入口起真子进程,验证 state_changed end-to-end、log_chunked + process_logs 链路、典型 7 步交互(log_chunked → process_logs → 终态)。
+- 既有 `tests/integration/test_agent_builtin_process_lifecycle.py`(process_poll / logs / wait / stop / send_input)零回归;`tests/business/agents/test_builtin_command_tools.py` / `test_builtin_general_tools.py` 零回归;guardrails 103 全过。
+- 22 步 speckit 流程含 clarify 两条契约边界澄清(cursor 续约 / 纯静默 stalled)和 analyze 两条 medium 修订(SC-001 200 ms 显式断言、log_chunked delta 计算顺序)。
+- Feature tasks: 28/28 completed。

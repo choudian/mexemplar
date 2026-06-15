@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
 **Last Updated**: 2026-06-15
-**Revision**: 2026-06-15 — Archived feature 021 tool catalog deferred loading
+**Revision**: 2026-06-15 — Archived feature 022 process event push (子进程事件推送)
 
 ---
 
@@ -1557,3 +1557,58 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - **SC-159**: 阈值边界、授权隔离、排序、分页、非法参数、失效重校验、动态激活和安全日志均有自动化行为测试。
 - **SC-160**: 小目录完整摘要和只传 query 的旧调用保持兼容。
 - **SC-161**: 运行时配置在下一次 Prompt/搜索生效，无需重启或数据迁移。
+
+---
+
+## 子进程事件推送 [Source: specs/022-process-event-push]
+
+**Revision note (2026-06-15)**: Archived the completed 022 feature after merge into
+`prepare-github`. 主要替代 subagent / specialist 循环 poll 后台进程的旧模式。
+
+### User Stories
+
+- **US-075 (P1)**: subagent / specialist 对自己起的后台进程使用 `wait_for_process_event` 阻塞等到状态边界(running→completed/failed/terminated)即返回，毫秒级拿到 status + exitCode，超时返回空事件 + 当前状态(非错误)。
+- **US-076 (P2)**: 进程累计写出字符过配置阈值时,subagent 收到一条不含原文的 log_chunked 信号(totalChars / deltaChars),可继续走 `process_logs` 读真实日志,token 友好。
+- **US-077 (P3)**: 进程在 running 状态下静默时长超阈值时收到一条 stalled 信号(idleMs);同一静默周期不刷屏;进程从未输出过的纯 sleep 场景也按 `last_output_at = started_at` 基线触发一次。
+
+### Functional Requirements
+
+- **FR-370**: 系统 MUST 暴露新工具 `wait_for_process_event`,签名 `(processId, sinceCursor?, timeoutMs?)`;仅供 subagent / specialist 调用,主助理不暴露。
+- **FR-371**: 工具 MUST 复用 `_process_for_current_session` 归属校验;跨会话调用返回 `permission_denied` 且不暴露目标进程存在性。
+- **FR-372**: `ProcessRecord` MUST 维护有界事件队列、per-process 单调 `event_sequence`、与 `ProcessManager._lock` 共享的 `threading.Condition`,以及 `last_output_at` / `last_chunk_announce` / `total_output_chars` / `last_stalled_announce_output_at` 状态字段。
+- **FR-373**: 三类事件 MUST 均不携带原文 payload —— `state_changed` 含 status/exitCode、`stalled` 含 idleMs、`log_chunked` 含 totalChars/deltaChars。
+- **FR-374**: `state_changed` MUST 在 status 从 running 转到 completed/failed/terminated 时由 `_refresh_locked_with_emit` 或 `stop()` 内 emit;`close()` 路径不触发事件。
+- **FR-375**: `log_chunked` MUST 由 reader 线程在累计输出字符过阈值时 emit;阈值复位顺序 MUST 为"先保存 delta、再推进 last_chunk_announce、最后 emit",避免 delta 计算错乱。
+- **FR-376**: `stalled` MUST 由 `wait_for_event` 入口懒判定;`last_output_at` MUST 在 ProcessRecord 创建时初始化为进程启动时刻,所以"从未输出 + 静默达阈值"等同"产生过输出后再静默达阈值"。
+- **FR-377**: `wait_for_event` MUST 在 deque 中存在 sequence > sinceCursor 的事件时立即按 sequence 升序返回;否则在 `event_condition` 上阻塞至超时,超时返回空 events + 当前 status(非错误)。
+- **FR-378**: `wait_for_event` MUST 始终返回 `cursor` 字段:若 deque 非空取最新事件 sequence,空队列取 `record.event_sequence`;`cursorTooOld=true` 路径同样返回 cursor,subagent 可直接续 wait 无须切换兜底。
+- **FR-379**: 工具 MUST 沿用 process_* 系列约束 —— **不**标记 `is_concurrency_safe`、`timeoutMs` 钳位到 `[1, max_timeout_ms]`、内部异常映射到 `internal_error`(沿用 `builtin_contracts.ERROR_CODES` 通用码)。
+- **FR-380**: 三个新配置键 `agent_tools.process.event_buffer_size`(默认 64,上限 512)、`stalled_threshold_ms`(默认 10000,上限 600000)、`chunk_threshold_chars`(默认 4096,上限 65536) MUST 走 `UnifiedConfigManager`;Settings UI 不暴露。
+- **FR-381**: 既有 `process_poll` / `process_logs` / `process_wait` 签名 + 行为 + 既有测试 MUST 全程零回归。
+- **FR-382**: 事件 MUST NOT 进入 `UI Event Registry` / blinker / SSE / 前端;主助理也不订阅 —— 100% 调度纯净。
+- **FR-383**: 事件 MUST NOT 跨 sidecar 进程持久化;旧 processId 在重启后走既有 `process_missing` / `process_unavailable_after_restart` 路径。
+- **FR-384**: 环形 deque 满后 MUST 自动覆盖旧事件,`event_sequence` 仍单调,不抛错;sinceCursor 早于 deque 最旧 sequence 时返回 `cursorTooOld=true`。
+
+### Key Entities
+
+- **ProcessEvent**: 一条派生信号,frozen dataclass 含 `sequence`(per-process 单调)、`type`(state_changed / stalled / log_chunked)和 type-conditional payload 字段;不携带原文。
+- **ProcessEventCursor**: 调用方在连续 wait 调用间传递的整数游标,单调推进;仅在单个 processId 上下文有效。
+- **ProcessRecord(扩展)**: 既有进程记录新增 events deque + sequence + condition + 输出时间戳/累积统计字段,均为内部状态。
+
+### Constraints & Compatibility
+
+- **CC-123**: 既有 `process_poll` / `process_logs` / `process_wait` 工具 MUST 不变;不允许借本 feature 顺手重构。
+- **CC-124**: 100% 调度约束 MUST 保留 —— 主助理对子进程的可见度仍走既有 014 子任务活动事件,不开新通道。
+- **CC-125**: secret 与日志原文 MUST NOT 出现在事件 payload。
+- **CC-126**: 归属判定 MUST 100% 复用 `_process_for_current_session`,无新分支。
+- **CC-127**: 配置 MUST 仅来自 `UnifiedConfigManager`(`agent_tools.process.*` 命名空间),不引入新文件 / 表 / migration。
+- **CC-128**: 事件机制 MUST 不增加跨进程 / 持久化 / 通用事件总线等基础设施;第二类事件源出现再做增量重构。
+
+### Success Criteria
+
+- **SC-162**: 进程状态切换到 subagent 唤醒的延迟在本机 idle 环境下 ≤ 200 ms(由 `test_wait_wakes_up_on_new_event_within_200ms` 显式断言)。
+- **SC-163**: 进程产生 ~16 KB 输出时 subagent 至少收到一条 log_chunked,totalChars 与同期 process_logs 实际差异 ≤ 阈值;事件 payload 字段集 ⊆ {sequence, type, totalChars, deltaChars}。
+- **SC-164**: 同一静默周期内 wait 任意次只产生一条 stalled,新输出后再次静默达阈值才再发一条。
+- **SC-165**: 跨会话调用、processId 不存在、cursor 已被覆盖三种异常路径返回各自既定语义(permission_denied / process_missing / cursorTooOld=true + cursor 字段非空),且不污染其它工具或 ProcessManager 状态。
+- **SC-166**: 既有 `process_poll` / `process_logs` / `process_wait` 测试 + guardrails 在引入本 feature 后 100% 通过。
+- **SC-167**: 三层测试金字塔(ProcessManager 单测 16 个、工具层单测 6 个、集成行为契约 3 个)全绿。
