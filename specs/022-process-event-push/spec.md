@@ -2,7 +2,7 @@
 
 **Feature Branch**: `022-process-event-push`
 **Created**: 2026-06-15
-**Status**: Draft
+**Status**: Completed
 **Input**: User description: "基于 docs/superpowers/specs/2026-06-15-process-event-push-design.md 的已定稿设计,为 subagent / specialist 提供一种'等事件、有进展叫我'的低延迟进程订阅能力,不再循环 poll。"
 
 ## Clarifications
