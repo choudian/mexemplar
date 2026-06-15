@@ -14,6 +14,10 @@ from src.business.services.assistant_failure_service import (
     AssistantFailureService,
     AssistantRetryConflict,
 )
+from src.desktop_api.clarifications import (
+    install_clarification_signal,
+    settle_clarifications_for_session_stopped,
+)
 from src.desktop_api.confirmations import (
     clear_confirmation_session_context,
     fail_closed_confirmations_for_session,
@@ -61,6 +65,7 @@ class AssistantRuntime:
         self._workers_lock = threading.Lock()
         self._observability: Optional["AssistantObservability"] = None
         install_confirmation_signal()
+        install_clarification_signal()
 
     @property
     def _obs(self) -> "AssistantObservability":
@@ -204,6 +209,8 @@ class AssistantRuntime:
         # （FR-006b / C2-X1）；CC-001 同步确认协议 first-decision-wins / expires_at 不被破坏。
         if accepted:
             fail_closed_confirmations_for_session(sid)
+            # 同理结算该会话仍 pending 的澄清为 stopped 并唤醒阻塞 worker（FR-013）。
+            settle_clarifications_for_session_stopped(sid)
         return accepted
 
     def get_transcript(

@@ -104,6 +104,10 @@ class ToolDefinition:
     is_interrupting: bool = False
     has_side_effects: bool = True
     is_concurrency_safe: bool = False
+    # 需独占调用：与其他工具在同一批 tool_calls 中出现时，AgentLoop 不执行该批任一工具，
+    # 全部记为 invalid_model_output 并完整配对返回（提示模型单独调用）。solo 时正常执行。
+    # 与 is_interrupting 区分：独占工具非中断型，handler 返回 str 后 loop 在同一回合继续。
+    requires_exclusive_call: bool = False
     pre_hook: Optional[PreHook] = None
     post_hook: Optional[PostHook] = None
 

@@ -19,6 +19,7 @@
 - `edit_file` 的 `old_text` 查找与唯一性校验属于编辑执行准备，留在 handler。
 - assistant 高危确认必须只展示和记录脱敏摘要：`write_file` 只含目标路径，`edit_file` 只含截断片段，`exec` 只含命令首行；不得记录完整文件内容、完整替换文本或多行命令体。
 - assistant “全部允许/免确认”只允许是当前进程会话级内存状态，不得写入配置、SQLite 或 DuckDB；新对话入口必须复位该状态并收敛旧 pending 请求。
+- 结构化多选澄清（`ask_user_question` / `clarification_manager`，019）必须与高危确认链路**完全分离**：独立 pending 表、独立信号、独立终态集，不复用确认的 `_pending_confirms`、审计日志或确认 Toast 生命周期；前端 ClarificationCard 不显示"全部允许"。澄清请求与未提交答案只允许驻留 sidecar 进程内存，不得新增 SQLite/DuckDB 表、迁移或配置项；超时/取消/停止/关闭一律 fail-closed 唤醒 worker，模型不得获得猜测答案；`assistant.clarification_resolved` 事件与普通 DTO 不得携带用户答案，问题/选项/预览不得含 secret。`ask_user_question` 仅主助理工具集注册，PM/Trial/specialist/subagent 不暴露。
 - `recording_data_tools.query_data` 的 SQL 拒绝策略属于 pre_hook，但 handler 仍可再次调用 `rewrite(sql)` 生成实际执行 SQL。
 - `recording_data_tools.analyze_image` 的单次最多 5 个 action_index 限制属于 pre_hook。
 - `trial_tools.run_command` 的单次 `AgentLoop.run()` 调用上限属于 `create_trial_tools()` 内创建的 pre_hook 闭包。

@@ -3,6 +3,8 @@ export const UI_EVENT_TYPES = [
   "assistant.progress",
   "assistant.error",
   "assistant.confirmation",
+  "assistant.clarification_requested",
+  "assistant.clarification_resolved",
   "assistant.activity",
   "assistant.subagent",
   "recording.progress",
@@ -35,6 +37,22 @@ export const UI_EVENT_EXAMPLES = {
     "sanitizedSummary": "命令首行: npm test",
     "status": "active",
   },
+  "assistant.clarification_requested": {
+    "requestId": "clr_1",
+    "sessionId": "sess_1",
+    "questions": [
+      {
+        "questionId": "q1",
+        "question": "选择执行方式？",
+        "header": "执行方式",
+        "multiSelect": false,
+        "options": [{ "optionId": "q1o1", "label": "按顺序执行" }],
+      },
+    ],
+    "expiresAt": "2026-06-15T08:05:00Z",
+    "status": "pending",
+  },
+  "assistant.clarification_resolved": { "requestId": "clr_1", "sessionId": "sess_1", "status": "answered" },
   "assistant.activity": { "kind": "tool_call", "toolName": "delegate_to_subagent", "text": "派发子任务", "seq": 1 },
   "assistant.subagent": {
     "subagentId": "sess_child_1",
@@ -104,6 +122,12 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
       "write_file",
     ],
     "status": ["active"],
+  },
+  "assistant.clarification_requested": {
+    "status": ["pending"],
+  },
+  "assistant.clarification_resolved": {
+    "status": ["answered", "cancelled", "shutdown", "stopped", "timeout"],
   },
   "assistant.progress": {
     "status": ["cancelled", "failed", "running", "succeeded", "waiting_for_user"],
@@ -181,6 +205,8 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "assistant.progress": "assistant",
   "assistant.error": "assistant",
   "assistant.confirmation": "assistant",
+  "assistant.clarification_requested": "assistant",
+  "assistant.clarification_resolved": "assistant",
   "assistant.activity": "assistant",
   "assistant.subagent": "assistant",
   "recording.progress": "teaching",
@@ -265,6 +291,41 @@ export type AssistantConfirmationEvent = UiEventEnvelope<
     affectedSkillId?: string;
     affectedEquipmentCount?: number;
     affectedSpecialistNames?: string[];
+  }
+>;
+
+export interface ClarificationOptionPayload {
+  optionId: string;
+  label: string;
+  description?: string | null;
+  preview?: string | null;
+}
+
+export interface ClarificationQuestionPayload {
+  questionId: string;
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: ClarificationOptionPayload[];
+}
+
+export type ClarificationRequestedEvent = UiEventEnvelope<
+  "assistant.clarification_requested",
+  {
+    requestId: string;
+    sessionId: string;
+    questions: ClarificationQuestionPayload[];
+    expiresAt?: string | null;
+    status: "pending";
+  }
+>;
+
+export type ClarificationResolvedEvent = UiEventEnvelope<
+  "assistant.clarification_resolved",
+  {
+    requestId: string;
+    sessionId: string;
+    status: "answered" | "cancelled" | "timeout" | "stopped" | "shutdown";
   }
 >;
 
@@ -436,6 +497,8 @@ export type SkillEquipmentChangedEvent = UiEventEnvelope<
 export type UiEvent =
   | AssistantMessageEvent
   | AssistantConfirmationEvent
+  | ClarificationRequestedEvent
+  | ClarificationResolvedEvent
   | TeachingStageChangedEvent
   | RecordingProgressEvent
   | TeachingProgressEvent
@@ -454,6 +517,8 @@ export type UiEvent =
         UiEventType,
         | "assistant.message"
         | "assistant.confirmation"
+        | "assistant.clarification_requested"
+        | "assistant.clarification_resolved"
         | "recording.progress"
         | "teaching.stage_changed"
         | "teaching.progress"
@@ -484,6 +549,9 @@ const ASSISTANT_FAILURE_CATEGORY_SET = new Set<string>([
 ]);
 const ASSISTANT_CONFIRMATION_ACTION_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.confirmation"].actionType);
 const ASSISTANT_CONFIRMATION_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.confirmation"].status);
+const CLARIFICATION_RESOLVED_STATUS_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["assistant.clarification_resolved"].status,
+);
 const TEACHING_STAGE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["teaching.stage_changed"].stage);
 const TRIAL_PREVIEW_REQUEST_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["trial.preview_requested"].status);
 const TRIAL_PREVIEW_DECISION_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["trial.preview_resolved"].decision);
@@ -635,6 +703,71 @@ function parseAssistantConfirmationPayload(
   };
 }
 
+function parseClarificationOption(value: unknown): ClarificationOptionPayload | null {
+  if (!isRecord(value)) return null;
+  if (typeof value.optionId !== "string" || typeof value.label !== "string") return null;
+  if (!isOptionalNullableString(value.description) || !isOptionalNullableString(value.preview)) return null;
+  return {
+    optionId: value.optionId,
+    label: value.label,
+    description: (value.description ?? null) as string | null,
+    preview: (value.preview ?? null) as string | null,
+  };
+}
+
+function parseClarificationQuestion(value: unknown): ClarificationQuestionPayload | null {
+  if (!isRecord(value)) return null;
+  if (
+    typeof value.questionId !== "string" ||
+    typeof value.question !== "string" ||
+    typeof value.header !== "string" ||
+    typeof value.multiSelect !== "boolean" ||
+    !Array.isArray(value.options)
+  ) {
+    return null;
+  }
+  const options: ClarificationOptionPayload[] = [];
+  for (const raw of value.options) {
+    const option = parseClarificationOption(raw);
+    if (!option) return null;
+    options.push(option);
+  }
+  return {
+    questionId: value.questionId,
+    question: value.question,
+    header: value.header,
+    multiSelect: value.multiSelect,
+    options,
+  };
+}
+
+function parseClarificationRequestedPayload(
+  payload: Record<string, unknown>,
+): ClarificationRequestedEvent["payload"] | null {
+  if (
+    typeof payload.requestId !== "string" ||
+    typeof payload.sessionId !== "string" ||
+    payload.status !== "pending" ||
+    !Array.isArray(payload.questions) ||
+    !isOptionalNullableString(payload.expiresAt)
+  ) {
+    return null;
+  }
+  const questions: ClarificationQuestionPayload[] = [];
+  for (const raw of payload.questions) {
+    const question = parseClarificationQuestion(raw);
+    if (!question) return null;
+    questions.push(question);
+  }
+  return {
+    requestId: payload.requestId,
+    sessionId: payload.sessionId,
+    questions,
+    expiresAt: (payload.expiresAt ?? null) as string | null,
+    status: "pending",
+  };
+}
+
 function parseSkillChangedPayload(payload: Record<string, unknown>): SkillChangedEvent["payload"] | null {
   if (
     !isSkillChangedReason(payload.reason) ||
@@ -730,6 +863,20 @@ export function parseUiEvent(value: unknown): UiEvent | null {
     const payload = parseAssistantConfirmationPayload(event.payload);
     if (!payload) return null;
     return { ...event, payload } as AssistantConfirmationEvent;
+  }
+  if (event.type === "assistant.clarification_requested") {
+    const payload = parseClarificationRequestedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as ClarificationRequestedEvent;
+  }
+  if (event.type === "assistant.clarification_resolved") {
+    if (
+      !hasStringPayloadFields(event.payload, ["requestId", "sessionId"]) ||
+      !CLARIFICATION_RESOLVED_STATUS_SET.has(String(event.payload.status))
+    ) {
+      return null;
+    }
+    return event as ClarificationResolvedEvent;
   }
   if (event.type === "teaching.stage_changed") {
     if (!hasWorkflowScope(event) || !TEACHING_STAGE_SET.has(String(event.payload.stage))) return null;

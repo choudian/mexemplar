@@ -542,6 +542,8 @@ __all__ = [
     "create_continue_subagent_handler",
     "INSPECT_SUBAGENT_SCHEMA",
     "create_inspect_subagent_handler",
+    "ASK_USER_QUESTION_SCHEMA",
+    "create_ask_user_question_handler",
 ]
 
 
@@ -670,6 +672,83 @@ INVALIDATE_MEMORY_ENTRY = ToolDefinition(
     schema=INVALIDATE_MEMORY_ENTRY_SCHEMA,
     handler=create_invalidate_memory_entry_handler(None),
 )
+
+
+# ===== 结构化多选澄清工具（仅主助理）=====
+
+
+ASK_USER_QUESTION_SCHEMA = make_tool_schema(
+    name="ask_user_question",
+    description=(
+        "在关键决策无法可靠推断时，向用户提出 1-4 道结构化问题（每题 2-4 个选项，单选或多选，"
+        "始终可填\"其他\"）。仅用于关键岔路口；关联问题一次问齐；不得询问或展示任何密钥/令牌等"
+        "敏感信息。取消或超时后不得在同一回合重复追问或基于猜测继续执行有副作用的动作。"
+    ),
+    properties={
+        "questions": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 4,
+            "description": "1-4 道问题",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string", "description": "完整问题文本"},
+                    "header": {"type": "string", "description": "短标题（建议 ≤12 字符）"},
+                    "multiSelect": {
+                        "type": "boolean",
+                        "description": "true 为多选，默认 false 单选",
+                    },
+                    "options": {
+                        "type": "array",
+                        "minItems": 2,
+                        "maxItems": 4,
+                        "description": "2-4 个候选项",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "label": {"type": "string", "description": "选项标签"},
+                                "description": {
+                                    "type": "string",
+                                    "description": "可选的选项说明",
+                                },
+                                "preview": {
+                                    "type": "string",
+                                    "description": "可选的纯文本预览（前端不渲染 HTML/Markdown）",
+                                },
+                            },
+                            "required": ["label"],
+                        },
+                    },
+                },
+                "required": ["question", "header", "options"],
+            },
+        },
+    },
+    required=["questions"],
+)
+
+
+def create_ask_user_question_handler(session_id: str):
+    """工厂函数：创建绑定 session_id 的 ask_user_question handler。
+
+    阻塞型工具（非中断）：handler 内等用户决策，返回 str 结果后 AgentLoop 在同一回合继续。
+    入参校验失败返回 error_json（不创建 pending）；澄清机制未注册返回 status=unavailable。
+    """
+
+    def ask_user_question_handler(questions: list) -> str:
+        from src.business.agents.tools import clarification_manager
+
+        try:
+            result = clarification_manager.ask_user_question(questions, session_id=session_id)
+        except clarification_manager.ClarificationValidationError as exc:
+            return error_json(str(exc))
+        except Exception as exc:
+            logger.error("[ask_user_question] 发起澄清失败: %s", exc, exc_info=True)
+            return error_json("发起用户澄清失败，请稍后重试或直接继续。")
+        return to_json(result)
+
+    return ask_user_question_handler
 
 
 # ===== 调度工具 =====

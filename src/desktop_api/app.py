@@ -95,6 +95,13 @@ def create_app(session_token: str | None = None) -> FastAPI:
         finally:
             if brain_worker is not None:
                 brain_worker.stop()
+            # 关闭前把所有仍 pending 的澄清结算为 shutdown 并唤醒阻塞 worker（FR-013）。
+            try:
+                from src.desktop_api.clarifications import settle_all_clarifications_shutdown
+
+                settle_all_clarifications_shutdown()
+            except Exception:
+                logger.warning("Clarification shutdown settle failed", exc_info=True)
             event_queue.shutdown()
 
     app = FastAPI(title="Mexemplar Desktop API", version="0.1.0", lifespan=lifespan)

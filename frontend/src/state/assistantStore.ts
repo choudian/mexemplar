@@ -4,6 +4,7 @@ import {
   createAssistantSession,
   decideAssistantConfirmation,
   deleteAssistantSession,
+  getPendingClarification,
   getSubagentTranscript,
   listAssistantMessages,
   listAssistantSessions,
@@ -13,10 +14,17 @@ import {
   sendAssistantMessage,
   setAssistantAutoApprove,
   stopAssistantRun,
+  submitClarificationDecision,
   triggerAssistantSegmentBoundary,
   triggerAssistantSegmentIdle,
 } from "../api/assistant";
-import type { AssistantConfirmation, AssistantMessage, AssistantSession } from "../api/assistant";
+import type {
+  AssistantConfirmation,
+  AssistantMessage,
+  AssistantSession,
+  ClarificationAnswerInput,
+  ClarificationRequest,
+} from "../api/assistant";
 import type { UiEvent } from "../api/client";
 import { toErrorMessage } from "./helpers";
 
@@ -52,10 +60,37 @@ import {
 export type { ActivityStepKind, ActivityStep, AssistantTurnActivity, PendingAssistantMessage, QueuedMessage, QueuedMessageState, Subagent } from "./assistantTypes";
 export { emptyTurn, turnIdFromMessage } from "./assistantHelpers";
 
+// 单题未提交草稿（019 结构化多选澄清）
+export type ClarificationQuestionDraft = {
+  optionIds: string[];
+  // "其他"是否被选中——区分"选了其他但还没填"与"没选其他"
+  otherSelected: boolean;
+  otherText: string;
+};
+
 async function sealPreviousSegment(prevSessionId: string | null): Promise<void> {
   if (prevSessionId) {
     try { await triggerAssistantSegmentBoundary(prevSessionId, "new_session"); } catch { /* best-effort */ }
   }
+}
+
+// 清理某会话的澄清状态（pending + 草稿 + 提交态）。resolved 事件、提交/取消成功、快照为空时调用。
+function clearClarificationForSession(
+  set: (partial: Partial<AssistantState>) => void,
+  get: () => AssistantState,
+  sessionId: string,
+): void {
+  const pending = { ...get().pendingClarificationBySession };
+  const drafts = { ...get().clarificationDraftsBySession };
+  const submitting = { ...get().clarificationSubmittingBySession };
+  delete pending[sessionId];
+  delete drafts[sessionId];
+  delete submitting[sessionId];
+  set({
+    pendingClarificationBySession: pending,
+    clarificationDraftsBySession: drafts,
+    clarificationSubmittingBySession: submitting,
+  });
 }
 
 let _idleTimerRef: ReturnType<typeof setTimeout> | null = null;
@@ -82,6 +117,12 @@ export type AssistantState = {
   progressBySession: Record<string, AssistantProgress>;
   stoppingBySession: Record<string, boolean>;
   confirmations: AssistantConfirmation[];
+  // === 019 结构化多选澄清（按 session，内存态，与高危确认完全分离）===
+  // 当前会话待答澄清；切换会话保留草稿，resolved 后清理。
+  pendingClarificationBySession: Record<string, ClarificationRequest>;
+  // 未提交草稿：sessionId → questionId → { optionIds, otherText }
+  clarificationDraftsBySession: Record<string, Record<string, ClarificationQuestionDraft>>;
+  clarificationSubmittingBySession: Record<string, boolean>;
   lastError: string | null;
   idleThresholdMs: number | null;
   autoApprove: boolean;
@@ -128,6 +169,15 @@ export type AssistantState = {
   ) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   decideConfirmation: (requestId: string, decision: "approve" | "deny") => Promise<void>;
+  // 澄清草稿/提交/取消/快照刷新（019）
+  setClarificationDraft: (
+    sessionId: string,
+    questionId: string,
+    draft: ClarificationQuestionDraft,
+  ) => void;
+  submitClarification: (sessionId: string) => Promise<void>;
+  cancelClarification: (sessionId: string) => Promise<void>;
+  refreshPendingClarification: (sessionId: string) => Promise<void>;
   setAutoApprove: (enabled: boolean) => Promise<void>;
   resetIdleTimer: () => void;
   clearIdleTimer: () => void;
@@ -151,6 +201,9 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   progressBySession: {},
   stoppingBySession: {},
   confirmations: [],
+  pendingClarificationBySession: {},
+  clarificationDraftsBySession: {},
+  clarificationSubmittingBySession: {},
   lastError: null,
   idleThresholdMs: null,
   autoApprove: false,
@@ -278,6 +331,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
       // 子任务权威列表兜底（重开会话恢复卡片与状态）
       void get().refreshSubagents(sessionId);
+      // 待答澄清快照兜底（重开/重连恢复卡片，019 FR-014）
+      void get().refreshPendingClarification(sessionId);
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法加载对话消息。") });
     } finally {
@@ -820,6 +875,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         void get().selectSession(sessionId);
         void get().refreshSubagents(sessionId);
         void get().refreshActivityTranscript(sessionId);
+        void get().refreshPendingClarification(sessionId);
       }
       return;
     }
@@ -853,6 +909,35 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
           confirmation,
         ],
       });
+      return;
+    }
+    if (event.type === "assistant.clarification_requested") {
+      const clarification = event.payload as unknown as ClarificationRequest;
+      const sid = clarification.sessionId;
+      if (!sid) {
+        return;
+      }
+      set({
+        pendingClarificationBySession: {
+          ...get().pendingClarificationBySession,
+          [sid]: clarification,
+        },
+      });
+      return;
+    }
+    if (event.type === "assistant.clarification_resolved") {
+      const sid = String(event.payload["sessionId"] ?? event.scope.sessionId ?? "");
+      const requestId = String(event.payload["requestId"] ?? "");
+      if (!sid) {
+        return;
+      }
+      const current = get().pendingClarificationBySession[sid];
+      // 仅当 resolved 的是当前会话当前请求才清理（避免迟到事件误清新卡）
+      if (!current || (requestId && current.requestId !== requestId)) {
+        return;
+      }
+      clearClarificationForSession(set, get, sid);
+      return;
     }
   },
   decideConfirmation: async (requestId, decision) => {
@@ -863,6 +948,94 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
     } catch (error) {
       set({ lastError: toErrorMessage(error, "操作确认失败。") });
+    }
+  },
+  setClarificationDraft: (sessionId, questionId, draft) => {
+    const bySession = get().clarificationDraftsBySession;
+    set({
+      clarificationDraftsBySession: {
+        ...bySession,
+        [sessionId]: { ...(bySession[sessionId] ?? {}), [questionId]: draft },
+      },
+    });
+  },
+  submitClarification: async (sessionId) => {
+    const pending = get().pendingClarificationBySession[sessionId];
+    if (!pending) {
+      return;
+    }
+    const drafts = get().clarificationDraftsBySession[sessionId] ?? {};
+    const answers: ClarificationAnswerInput[] = pending.questions.map((q) => {
+      const d = drafts[q.questionId] ?? { optionIds: [], otherSelected: false, otherText: "" };
+      const otherText = d.otherSelected ? d.otherText.trim() : "";
+      return {
+        questionId: q.questionId,
+        selectedOptionIds: d.optionIds,
+        otherText: otherText ? otherText : null,
+      };
+    });
+    set({
+      clarificationSubmittingBySession: {
+        ...get().clarificationSubmittingBySession,
+        [sessionId]: true,
+      },
+    });
+    try {
+      await submitClarificationDecision(sessionId, pending.requestId, { decision: "submit", answers });
+      // 成功：以 resolved 事件为权威清理；这里同步清理兜底（事件可能先到也可能后到）
+      clearClarificationForSession(set, get, sessionId);
+    } catch (error) {
+      set({
+        clarificationSubmittingBySession: {
+          ...get().clarificationSubmittingBySession,
+          [sessionId]: false,
+        },
+        lastError: toErrorMessage(error, "提交回答失败，请检查每题是否已作答。"),
+      });
+    }
+  },
+  cancelClarification: async (sessionId) => {
+    const pending = get().pendingClarificationBySession[sessionId];
+    if (!pending) {
+      return;
+    }
+    set({
+      clarificationSubmittingBySession: {
+        ...get().clarificationSubmittingBySession,
+        [sessionId]: true,
+      },
+    });
+    try {
+      await submitClarificationDecision(sessionId, pending.requestId, { decision: "cancel", answers: [] });
+      clearClarificationForSession(set, get, sessionId);
+    } catch (error) {
+      set({
+        clarificationSubmittingBySession: {
+          ...get().clarificationSubmittingBySession,
+          [sessionId]: false,
+        },
+        lastError: toErrorMessage(error, "取消失败，请稍后重试。"),
+      });
+    }
+  },
+  refreshPendingClarification: async (sessionId) => {
+    if (!sessionId) {
+      return;
+    }
+    try {
+      const pending = await getPendingClarification(sessionId);
+      if (pending) {
+        set({
+          pendingClarificationBySession: {
+            ...get().pendingClarificationBySession,
+            [sessionId]: pending,
+          },
+        });
+      } else {
+        clearClarificationForSession(set, get, sessionId);
+      }
+    } catch {
+      /* best-effort 快照刷新，失败保留现状 */
     }
   },
   setAutoApprove: async (enabled) => {

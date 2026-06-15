@@ -145,3 +145,62 @@ test("US4/US5 子任务卡片权威恢复，已暂停可继续任务", async ({ 
     )
     .toBeGreaterThan(0);
 });
+
+test("019 结构化澄清卡渲染、单选提交调用 decision 端点", async ({ page }) => {
+  await installMockApi(page);
+
+  // 会话打开时 refreshPendingClarification 拉到一道单选澄清
+  await page.route(/\/api\/assistant\/sessions\/ast_1\/clarifications\/pending/, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        clarification: {
+          requestId: "clr_e2e",
+          sessionId: "ast_1",
+          status: "pending",
+          questions: [
+            {
+              questionId: "q1",
+              question: "选择执行方式？",
+              header: "执行方式",
+              multiSelect: false,
+              options: [
+                { optionId: "q1o1", label: "按顺序执行", description: "稳", preview: null },
+                { optionId: "q1o2", label: "并行执行", description: null, preview: null },
+              ],
+            },
+          ],
+          expiresAt: new Date(Date.now() + 120_000).toISOString(),
+        },
+      }),
+    });
+  });
+  let decisionBody: { decision?: string; answers?: unknown[] } | null = null;
+  await page.route(/\/api\/assistant\/sessions\/ast_1\/clarifications\/clr_e2e\/decision/, async (route) => {
+    decisionBody = JSON.parse(route.request().postData() ?? "{}");
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({ requestId: "clr_e2e", status: "answered", accepted: true }),
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /E2E conversation/ }).click();
+
+  // 卡片在输入框上方渲染
+  await expect(page.getByText("选择执行方式？")).toBeVisible();
+  const submit = page.getByRole("button", { name: "提交" });
+  await expect(submit).toBeDisabled();
+
+  // 选一个选项后可提交
+  await page.getByText("按顺序执行").click();
+  await expect(submit).toBeEnabled();
+  await submit.click();
+
+  // decision 端点被调用，提交体携带所选选项（submit + selectedOptionIds 含 q1o1）
+  await expect.poll(() => decisionBody !== null).toBeTruthy();
+  expect(decisionBody?.decision).toBe("submit");
+  expect(JSON.stringify(decisionBody?.answers)).toContain("q1o1");
+});

@@ -843,6 +843,27 @@ class AgentLoop:
                 )
             return None
 
+        # Exclusive-call batch check: an exclusive tool (e.g. ask_user_question) must be the
+        # only call in its batch. Mixed with anything else → reject the entire batch as invalid
+        # output with full pairing, leaving the loop to retry. Mirrors the interrupting check.
+        exclusive_count = sum(
+            1 for _, _, td in classified if td is not None and td.requires_exclusive_call
+        )
+        if batch_size > 1 and exclusive_count > 0:
+            logger.info(
+                f"[Agent Loop] 非法混合工具调用: {batch_size} 个调用中有 "
+                f"{exclusive_count} 个需独占调用，拒绝执行"
+            )
+            for tc, _, _ in classified:
+                self._save_error(
+                    tc,
+                    ctx,
+                    "invalid_model_output",
+                    "同轮响应包含需独占调用的工具与其他工具调用，不执行任何工具。"
+                    "请单独调用该工具后再继续。",
+                )
+            return None
+
         # Solo interrupting tool
         if batch_size == 1 and interrupting_count == 1:
             tc, _, tool_def = classified[0]

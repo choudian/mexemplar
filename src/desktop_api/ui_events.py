@@ -124,6 +124,45 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("status", frozenset({"active"})),
         ),
     ),
+    "assistant.clarification_requested": UiEventDefinition(
+        "assistant.clarification_requested",
+        "interactive",
+        frozenset({"requestId", "sessionId", "questions", "expiresAt", "status"}),
+        frozenset({"sessionId"}),
+        {
+            "requestId": "clr_1",
+            "sessionId": "sess_1",
+            "questions": [
+                {
+                    "questionId": "q1",
+                    "question": "选择执行方式？",
+                    "header": "执行方式",
+                    "multiSelect": False,
+                    "options": [{"optionId": "q1o1", "label": "按顺序执行"}],
+                }
+            ],
+            "expiresAt": "2026-06-15T08:05:00Z",
+            "status": "pending",
+        },
+        required_payload_keys=frozenset({"requestId", "sessionId", "questions", "status"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(("status", frozenset({"pending"})),),
+    ),
+    "assistant.clarification_resolved": UiEventDefinition(
+        "assistant.clarification_resolved",
+        "interactive",
+        frozenset({"requestId", "sessionId", "status"}),
+        frozenset({"sessionId"}),
+        {"requestId": "clr_1", "sessionId": "sess_1", "status": "answered"},
+        required_payload_keys=frozenset({"requestId", "sessionId", "status"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(
+            (
+                "status",
+                frozenset({"answered", "cancelled", "timeout", "stopped", "shutdown"}),
+            ),
+        ),
+    ),
     "assistant.activity": UiEventDefinition(
         "assistant.activity",
         "notification",

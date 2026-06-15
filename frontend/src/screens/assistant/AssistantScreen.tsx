@@ -9,6 +9,7 @@ import { emptyTurn, turnIdFromMessage } from "../../state/assistantStore";
 import { useShellStore } from "../../state/shellStore";
 import ActivityTimeline from "./ActivityTimeline";
 import AssistantFailureCard from "./AssistantFailureCard";
+import ClarificationCard from "./ClarificationCard";
 import ConfirmationToast from "./ConfirmationToast";
 import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
@@ -91,6 +92,14 @@ export function AssistantScreen(): JSX.Element {
   const retryFailedMessage = useAssistantStore((state) => state.retryFailedMessage);
   const retryingFailureBySession = useAssistantStore((state) => state.retryingFailureBySession);
   const decideConfirmation = useAssistantStore((state) => state.decideConfirmation);
+  const pendingClarificationBySession = useAssistantStore((state) => state.pendingClarificationBySession);
+  const clarificationDraftsBySession = useAssistantStore((state) => state.clarificationDraftsBySession);
+  const clarificationSubmittingBySession = useAssistantStore(
+    (state) => state.clarificationSubmittingBySession,
+  );
+  const setClarificationDraft = useAssistantStore((state) => state.setClarificationDraft);
+  const submitClarification = useAssistantStore((state) => state.submitClarification);
+  const cancelClarification = useAssistantStore((state) => state.cancelClarification);
   const autoApprove = useAssistantStore((state) => state.autoApprove);
   const setAutoApprove = useAssistantStore((state) => state.setAutoApprove);
   const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
@@ -293,6 +302,18 @@ export function AssistantScreen(): JSX.Element {
             />
           ))}
         </div>
+        {activeSessionId && pendingClarificationBySession[activeSessionId] ? (
+          <ClarificationCard
+            clarification={pendingClarificationBySession[activeSessionId]}
+            drafts={clarificationDraftsBySession[activeSessionId] ?? {}}
+            submitting={Boolean(clarificationSubmittingBySession[activeSessionId])}
+            onDraftChange={(questionId, draft) =>
+              setClarificationDraft(activeSessionId, questionId, draft)
+            }
+            onSubmit={() => void submitClarification(activeSessionId)}
+            onCancel={() => void cancelClarification(activeSessionId)}
+          />
+        ) : null}
         <MessageComposer
           key={activeSessionId ?? "new"}
           autoApprove={autoApprove}
