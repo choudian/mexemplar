@@ -147,7 +147,7 @@ test("US4/US5 子任务卡片权威恢复，已暂停可继续任务", async ({ 
 });
 
 test("019 结构化澄清卡渲染、单选提交调用 decision 端点", async ({ page }) => {
-  const harness = await installMockApi(page);
+  await installMockApi(page);
 
   // 会话打开时 refreshPendingClarification 拉到一道单选澄清
   await page.route(/\/api\/assistant\/sessions\/ast_1\/clarifications\/pending/, async (route) => {
@@ -176,7 +176,9 @@ test("019 结构化澄清卡渲染、单选提交调用 decision 端点", async 
       }),
     });
   });
+  let decisionBody: { decision?: string; answers?: unknown[] } | null = null;
   await page.route(/\/api\/assistant\/sessions\/ast_1\/clarifications\/clr_e2e\/decision/, async (route) => {
+    decisionBody = JSON.parse(route.request().postData() ?? "{}");
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -197,13 +199,8 @@ test("019 结构化澄清卡渲染、单选提交调用 decision 端点", async 
   await expect(submit).toBeEnabled();
   await submit.click();
 
-  await expect
-    .poll(() =>
-      harness.requests.filter(
-        (r) =>
-          r.method === "POST" &&
-          r.path === "/api/assistant/sessions/ast_1/clarifications/clr_e2e/decision",
-      ).length,
-    )
-    .toBeGreaterThan(0);
+  // decision 端点被调用，提交体携带所选选项（submit + selectedOptionIds 含 q1o1）
+  await expect.poll(() => decisionBody !== null).toBeTruthy();
+  expect(decisionBody?.decision).toBe("submit");
+  expect(JSON.stringify(decisionBody?.answers)).toContain("q1o1");
 });
