@@ -19,6 +19,7 @@ import dataclasses
 from src.utils.helpers import normalize_thinking_level
 from src.data.config_models import (
     AppConfig,
+    AgentToolsDiscoveryConfig,
     AgentToolsFileConfig,
     AgentToolsOutputConfig,
     AgentToolsOutputSemanticSummaryConfig,
@@ -403,6 +404,55 @@ class UnifiedConfigManager:
 
     def get_agent_tools_process_config(self) -> AgentToolsProcessConfig:
         return self._load_dataclass_config("agent_tools.process", AgentToolsProcessConfig)
+
+    def get_agent_tools_discovery_config(self) -> AgentToolsDiscoveryConfig:
+        return AgentToolsDiscoveryConfig(
+            full_catalog_max_items=self.get_agent_tools_discovery_full_catalog_max_items(),
+            full_catalog_max_chars=self.get_agent_tools_discovery_full_catalog_max_chars(),
+            search_default_limit=self.get_agent_tools_discovery_search_default_limit(),
+            search_max_limit=self.get_agent_tools_discovery_search_max_limit(),
+            result_description_max_chars=(
+                self.get_agent_tools_discovery_result_description_max_chars()
+            ),
+        )
+
+    def get_agent_tools_discovery_full_catalog_max_items(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.discovery.full_catalog_max_items",
+            20,
+            maximum=1000,
+        )
+
+    def get_agent_tools_discovery_full_catalog_max_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.discovery.full_catalog_max_chars",
+            6000,
+            minimum=500,
+            maximum=100000,
+        )
+
+    def get_agent_tools_discovery_search_max_limit(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.discovery.search_max_limit",
+            25,
+            maximum=100,
+        )
+
+    def get_agent_tools_discovery_search_default_limit(self) -> int:
+        maximum = self.get_agent_tools_discovery_search_max_limit()
+        return self._get_bounded_positive_int(
+            "agent_tools.discovery.search_default_limit",
+            min(10, maximum),
+            maximum=maximum,
+        )
+
+    def get_agent_tools_discovery_result_description_max_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.discovery.result_description_max_chars",
+            500,
+            minimum=50,
+            maximum=5000,
+        )
 
     def get_agent_tools_file_default_max_lines(self) -> int:
         return self._get_bounded_positive_int(

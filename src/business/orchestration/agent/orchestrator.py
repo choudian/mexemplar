@@ -485,16 +485,24 @@ class AgentOrchestrator:
                 "delegation_type": "ephemeral_subagent",
             }
 
+        allowed_tool_ids = self._resolve_user_tool_ids(
+            parent_session_id=parent_session_id,
+            tool_whitelist=tool_whitelist,
+        )
+        capability_catalog_section = self._prompt_builder.format_capability_catalog(
+            allowed_tool_ids,
+            agent_type=AgentType.EPHEMERAL_SUBAGENT.value,
+            include_descriptions=True,
+        )
+        system_prompt = self._build_ephemeral_subagent_prompt(
+            tool_whitelist,
+            capability_catalog_section=capability_catalog_section,
+        )
         workflow_id = self._new_delegation_workflow_id(parent_session_id)
         child_session_id = self._session_store.create_session(
             workflow_id,
             AgentType.EPHEMERAL_SUBAGENT,
         )
-        allowed_tool_ids = self._resolve_user_tool_ids(
-            parent_session_id=parent_session_id,
-            tool_whitelist=tool_whitelist,
-        )
-        system_prompt = self._build_ephemeral_subagent_prompt(tool_whitelist)
         user_input = self._format_delegated_task_input(task, execution_context)
         result = self._run_delegated_executor(
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
@@ -550,8 +558,6 @@ class AgentOrchestrator:
             }
 
         whitelist = parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
-        workflow_id = self._new_delegation_workflow_id(parent_session_id)
-        child_session_id = self._session_store.create_session(workflow_id, AgentType.SPECIALIST)
         allowed_tool_ids = self._resolve_user_tool_ids(
             parent_session_id=parent_session_id,
             tool_whitelist=whitelist,
@@ -568,10 +574,16 @@ class AgentOrchestrator:
                 "specialist_name": name,
             }
         try:
+            capability_catalog_section = self._prompt_builder.format_capability_catalog(
+                allowed_tool_ids,
+                agent_type=AgentType.SPECIALIST.value,
+                include_descriptions=True,
+            )
             system_prompt = self._build_specialist_prompt(
                 specialist,
                 whitelist,
                 equipped_skills=equipped_skills_snapshot,
+                capability_catalog_section=capability_catalog_section,
             )
         except RuntimeError as exc:
             logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
@@ -582,6 +594,8 @@ class AgentOrchestrator:
                 "specialist_id": specialist.specialist_id,
                 "specialist_name": name,
             }
+        workflow_id = self._new_delegation_workflow_id(parent_session_id)
+        child_session_id = self._session_store.create_session(workflow_id, AgentType.SPECIALIST)
         allowed_methodology_skill_ids = {
             str(item.get("skill_id") or "")
             for item in equipped_skills_snapshot
@@ -1262,12 +1276,16 @@ class AgentOrchestrator:
         return "\n".join(lines)
 
     @staticmethod
-    def _build_ephemeral_subagent_prompt(tool_whitelist: list[str] | None) -> str:
+    def _build_ephemeral_subagent_prompt(
+        tool_whitelist: list[str] | None,
+        capability_catalog_section: str | None = None,
+    ) -> str:
         whitelist_text = "、".join(tool_whitelist) if tool_whitelist else "继承主助理当前可用技能池"
+        capability_section = capability_catalog_section or f"用户技能白名单：{whitelist_text}"
         return (
             "你是一个临时子代理，只为当前一次委派任务服务。\n"
             "你可以使用被授予的工具完成任务，但不要再委派给其他 Agent。\n"
-            f"用户技能白名单：{whitelist_text}\n"
+            f"{capability_section}\n"
             "\n" + _SUBAGENT_WORK_RULES
         )
 
@@ -1276,8 +1294,10 @@ class AgentOrchestrator:
         specialist,
         whitelist: list[str],
         equipped_skills: list[dict] | None = None,
+        capability_catalog_section: str | None = None,
     ) -> str:
         whitelist_text = "、".join(whitelist) if whitelist else "无用户技能白名单"
+        capability_section = capability_catalog_section or f"用户技能白名单：{whitelist_text}"
         equipment_section = ""
         try:
             from src.business.brain.context_builder import BrainContextBuilder
@@ -1300,7 +1320,7 @@ class AgentOrchestrator:
             f"描述：{getattr(specialist, 'description', '') or '无'}\n\n"
             "角色定义：\n"
             f"{getattr(specialist, 'role_definition', '') or '按专员职责完成主助理委派的任务。'}\n\n"
-            f"用户技能白名单：{whitelist_text}\n"
+            f"{capability_section}\n"
             "你只能处理主助理委派的任务；完成后直接输出最终结果。"
             f"{equipment_section}"
         )

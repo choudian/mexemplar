@@ -184,6 +184,13 @@
       "max_timeout_ms": 600000,
       "log_tail_chars": 4000,
       "max_background_processes": 16
+    },
+    "discovery": {
+      "full_catalog_max_items": 20,
+      "full_catalog_max_chars": 6000,
+      "search_default_limit": 10,
+      "search_max_limit": 25,
+      "result_description_max_chars": 500
     }
   }
 }

@@ -43,3 +43,14 @@
 - `token_budget.warn_threshold`: 方法论装备清单 token 计量条黄色阈值，默认 4096。
 - `token_budget.danger_threshold`: 方法论装备清单 token 计量条红色阈值，默认 8192。
 - `seed_file_path`: "如何创建方法论"内置 seed 文件路径，默认 `src/business/brain/seed/how_to_create_skill_methodology.md`。
+
+## `agent_tools.discovery`
+
+用户技能与技能组合目录的渐进式延迟加载参数。运行时读取必须走
+`get_unified_config()`；这些工程调优项不在 Settings UI 中展示。
+
+- `full_catalog_max_items`: 完整目录允许的最大能力数，默认 20。
+- `full_catalog_max_chars`: 完整目录区段允许的最大字符数，默认 6000。
+- `search_default_limit`: `search_tools` 默认页大小，默认 10。
+- `search_max_limit`: `search_tools` 最大页大小，默认 25。
+- `result_description_max_chars`: 单条搜索结果描述字符上限，默认 500。

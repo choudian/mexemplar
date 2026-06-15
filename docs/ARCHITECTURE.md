@@ -246,6 +246,8 @@ PM/程序员/试用 Agent 采用全量 FC 注入——工具少（3-4 个），t
 
 办公助理 Agent 采用 **FC + 懒加载**——内置工具全量 FC 注入，用户动态工具和技能组合按需注入。技能组合作为虚拟 ToolDefinition 注册，固定 schema（`task` + `context`），内部按模式分发到成员技能。详见 [assistant_agent_design.md](design/assistant_agent_design.md) 4.1-4.4 节和第九节。
 
+用户能力目录采用**渐进式延迟加载**。主助理、临时子代理和固定专员先按各自会话/专员白名单过滤已发布技能与可用组合；授权目录同时满足 `agent_tools.discovery.full_catalog_max_items`（默认 20）和 `full_catalog_max_chars`（默认 6000）时，system prompt 注入完整摘要，否则只注入技能/组合数量与发现说明，不写入隐藏能力名称。Agent 通过增强后的 `search_tools(query?, kind?, offset?, limit?)` 浏览或搜索授权目录，结果返回稳定分页、总数、`nextOffset` 和可直接传给 `get_tool_detail` 的无歧义 selector；`get_tool_detail` 继续负责激活 FC schema。搜索和详情每次调用都重校验发布状态、组合可用性、成员授权和白名单，Prompt 快照不能成为越权依据。
+
 ### 工具执行 Hook
 
 `AgentLoop` 对调用方传入或动态构建的 `ToolDefinition` 支持同步 pre/post hook。执行顺序为：
@@ -286,6 +288,8 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session、tool_call、tool_name、workspace root），handler 返回统一 JSON envelope。保存任何文本 tool result 前统一经过 output governance：小型 legacy/custom 结果保持原格式；大结果、截断结果或已有 raw reference 的结果先复用/创建 `ToolOutputRepository` 私有 artifact，再生成有界 compact envelope。compact payload 的 `facts` 与 `preview` 来自确定性提取，独立低成本模型只追加 advisory `semanticSummary`，不能覆盖 exit code、错误码、状态等可验证事实。
 
 语义摘要配置位于 `agent_tools.output.semantic_summary.*`，运行时使用独立的 `agent_tools.output.semantic_summary.api_key`，不得回退主模型密钥。该密钥由 `UnifiedConfigManager` 管理：`config.json` 提供本地默认值，`app_settings` 可覆盖，Settings 保存/删除操作写入统一配置。输入按工具类型优先提取 stdout/stderr、文件内容、搜索结果、网页正文或 reference 内容；超过输入预算时按 head/error context/uniform/tail 选择，再以最多 6 个 map、并发 3 和一次 reduce 在默认 12 秒总预算内同步生成。摘要调用失败、超时或 JSON 畸形时只移除 `semanticSummary`，原有 facts、preview 和 raw reference 保留，仍只持久化一条 tool result。Debug trace source 为 `tool_output_summary`；Real Grand Tour 使用相同的只读配置 getter，并继续受付费调用预算约束。
+
+能力目录参数位于 `agent_tools.discovery.*`：完整目录条目/字符双阈值、搜索默认/最大页大小和单项描述上限。它们由 `UnifiedConfigManager` 在每次 Prompt 构建或搜索调用时读取，运行时覆盖无需重启即可影响后续调用；属于工程调优参数，不在 Settings UI 暴露。
 
 文件修改采用先读后写模型：`read_file` 返回基于原始字节的 baseline；已存在文件的 `write_file`、`edit_file` 和 `apply_patch` update/delete 必须带当前 baseline，过期或缺失在落盘前拒绝。`list_dir` 和搜索返回有界、相对路径的结构化结果，搜索默认使用原生遍历而非 shell 解析。命令解析为 argv 后以 `shell=False` 启动，只允许 workspace 内 cwd 和路径参数；shell 控制语法、shell host 与内联解释器代码在执行前拒绝。后台进程受会话级数量、日志和等待上限约束，只在当前 sidecar 进程会话内可管理，重启后旧 `proc_*` id 返回 unavailable。
 

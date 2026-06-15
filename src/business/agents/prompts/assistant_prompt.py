@@ -103,6 +103,7 @@ def format_assistant_prompt(
     tools: list | None = None,
     memory_summary: str | None = None,
     brain_context: str | None = None,
+    capability_catalog_section: str | None = None,
 ) -> str:
     """
     格式化助理 Agent 的 system prompt，替换所有占位符。
@@ -147,7 +148,13 @@ def format_assistant_prompt(
         memory_section = ""
 
     # Tools section
-    if tools:
+    if capability_catalog_section is not None:
+        tools_section = (
+            "### 内置工具\n\n"
+            "内置工具可直接调用，无需额外操作。\n\n"
+            f"{capability_catalog_section}"
+        )
+    elif tools:
         tool_lines = []
         for t in tools:
             name = t.get("name", "") if isinstance(t, dict) else getattr(t, "name", "")
