@@ -4,12 +4,16 @@ import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from src.business.agents import run_context
 from src.business.agents.config import AgentType, ResultType
 from src.business.orchestration.agent import AgentOrchestrator
 from src.business.services.chat_service import ChatService
+from src.business.services.assistant_failure_service import (
+    AssistantFailureService,
+    AssistantRetryConflict,
+)
 from src.desktop_api.confirmations import (
     clear_confirmation_session_context,
     fail_closed_confirmations_for_session,
@@ -18,6 +22,9 @@ from src.desktop_api.confirmations import (
 )
 from src.desktop_api.events import event_queue
 from src.desktop_api.orchestrator_runtime import build_default_orchestrator
+
+if TYPE_CHECKING:
+    from src.business.agents.observability import AssistantObservability
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +36,13 @@ class ContinueSubagentDirective:
     initial_return_transition_count: int = 0
 
 
+@dataclass(frozen=True)
+class RetryDirective:
+    failure_id: str
+    source_message_sequence: int
+    reuse_user_message: bool
+
+
 class AssistantRuntime:
     """Background dispatch adapter for assistant messages in the desktop sidecar."""
 
@@ -36,9 +50,11 @@ class AssistantRuntime:
         self,
         orchestrator_factory: Callable[[], AgentOrchestrator] = build_default_orchestrator,
         chat_service: Optional[ChatService] = None,
+        failure_service: Optional[AssistantFailureService] = None,
     ) -> None:
         self._orchestrator_factory = orchestrator_factory
         self._chat_service = chat_service or ChatService()
+        self._failure_service = failure_service or AssistantFailureService()
         self._orchestrator: AgentOrchestrator | None = None
         self._orchestrator_lock = threading.Lock()
         self._workers: dict[str, threading.Thread] = {}
@@ -81,10 +97,13 @@ class AssistantRuntime:
             if existing is not None and existing.is_alive():
                 return False
 
+            resolved_sequence = self._failure_service.resolve_current_for_new_message(session_id)
+            if resolved_sequence is not None:
+                self._publish_display_message(session_id, resolved_sequence)
             after_sequence = self._chat_service.get_latest_display_sequence(session_id)
             worker = threading.Thread(
                 target=self._run_assistant,
-                args=(session_id, content, after_sequence, continue_directive),
+                args=(session_id, content, after_sequence, continue_directive, None),
                 name=f"AssistantRuntime-{session_id}",
                 daemon=True,
             )
@@ -93,6 +112,42 @@ class AssistantRuntime:
                 worker.start()
             except Exception:
                 self._workers.pop(session_id, None)
+                raise
+        return True
+
+    def retry_message(
+        self,
+        session_id: str,
+        message_sequence: int,
+        content: str | None = None,
+    ) -> bool:
+        with self._workers_lock:
+            existing = self._workers.get(session_id)
+            if existing is not None and existing.is_alive():
+                raise AssistantRetryConflict("assistant session is already running")
+            preparation = self._failure_service.prepare_retry(
+                session_id,
+                message_sequence,
+                content,
+            )
+            after_sequence = self._chat_service.get_latest_display_sequence(session_id)
+            directive = RetryDirective(
+                failure_id=preparation.failure_id,
+                source_message_sequence=preparation.source_message_sequence,
+                reuse_user_message=preparation.reuse_user_message,
+            )
+            worker = threading.Thread(
+                target=self._run_assistant,
+                args=(session_id, preparation.content, after_sequence, None, directive),
+                name=f"AssistantRuntime-{session_id}",
+                daemon=True,
+            )
+            self._workers[session_id] = worker
+            try:
+                worker.start()
+            except Exception:
+                self._workers.pop(session_id, None)
+                self._failure_service.restore_failed(preparation.failure_id)
                 raise
         return True
 
@@ -210,21 +265,107 @@ class AssistantRuntime:
     def _publish_display_messages(self, session_id: str, after_sequence: int) -> None:
         """把回合新增的可展示消息按序补发到前端（停止/完成/反问后保证已产内容不丢）。"""
         for message in self._chat_service.get_display_messages_after(session_id, after_sequence):
-            event_queue.publish_nowait(
-                "assistant.message",
-                {
-                    "sequence": message.sequence,
-                    "role": message.role,
-                    "content": message.content,
-                    "createdAt": (message.created_at.isoformat() if message.created_at else None),
-                    "rendering": (
-                        "safe_markdown"
-                        if message.role in ("assistant", "summary")
-                        else "plain_text"
-                    ),
-                },
-                {"sessionId": session_id},
+            self._publish_message(session_id, message)
+
+    def _publish_display_message(self, session_id: str, sequence: int) -> None:
+        message = self._chat_service.get_display_message(session_id, sequence)
+        if message is not None:
+            self._publish_message(session_id, message)
+
+    @staticmethod
+    def _publish_message(session_id: str, message) -> None:
+        payload = {
+            "sequence": message.sequence,
+            "role": message.role,
+            "content": message.content,
+            "createdAt": (message.created_at.isoformat() if message.created_at else None),
+            "rendering": (
+                "safe_markdown" if message.role in ("assistant", "summary") else "plain_text"
+            ),
+        }
+        if message.failure is not None:
+            payload["failure"] = message.failure.to_public_dict()
+        event_queue.publish_nowait(
+            "assistant.message",
+            payload,
+            {"sessionId": session_id},
+        )
+
+    def _latest_user_sequence_after(self, session_id: str, after_sequence: int) -> int | None:
+        messages = self._chat_service.get_display_messages_after(session_id, after_sequence)
+        for message in reversed(messages):
+            if message.role == "user":
+                return message.sequence
+        return None
+
+    def _publish_terminal_failure(
+        self,
+        *,
+        session_id: str,
+        after_sequence: int,
+        result_type: ResultType | None,
+        error: str | None,
+        exception: BaseException | None,
+        retry_directive: RetryDirective | None,
+    ) -> None:
+        message_sequence = (
+            retry_directive.source_message_sequence
+            if retry_directive is not None and retry_directive.reuse_user_message
+            else self._latest_user_sequence_after(session_id, after_sequence)
+        )
+        if message_sequence is None:
+            if retry_directive is not None:
+                self._failure_service.restore_failed(retry_directive.failure_id)
+                self._publish_display_message(
+                    session_id,
+                    retry_directive.source_message_sequence,
+                )
+            logger.error(
+                "Assistant terminal failure has no user message",
+                extra={"session_id": session_id},
             )
+            safe_headline = "处理这条消息时发生了内部错误。"
+        else:
+            summary = self._failure_service.record_terminal_failure(
+                session_id=session_id,
+                message_sequence=message_sequence,
+                result_type=result_type,
+                error=error,
+                exception=exception,
+                source_failure_id=(
+                    retry_directive.failure_id if retry_directive is not None else None
+                ),
+            )
+            safe_headline = summary.message
+            if retry_directive is not None:
+                self._publish_display_message(
+                    session_id,
+                    retry_directive.source_message_sequence,
+                )
+            self._publish_display_messages(session_id, after_sequence)
+        event_queue.publish_nowait(
+            "assistant.progress",
+            {"status": "failed", "headline": safe_headline},
+            {"sessionId": session_id},
+        )
+
+    def _resolve_retry(self, session_id: str, retry_directive: RetryDirective) -> None:
+        self._failure_service.resolve(retry_directive.failure_id)
+        self._publish_display_message(
+            session_id,
+            retry_directive.source_message_sequence,
+        )
+
+    def _restore_cancelled_retry(
+        self,
+        session_id: str,
+        retry_directive: RetryDirective,
+    ) -> None:
+        self._failure_service.restore_failed(retry_directive.failure_id)
+        self._publish_display_message(
+            session_id,
+            retry_directive.source_message_sequence,
+        )
 
     def _publish_continue_fallback_if_needed(
         self,
@@ -255,6 +396,7 @@ class AssistantRuntime:
         content: str,
         after_sequence: int,
         continue_directive: ContinueSubagentDirective | None = None,
+        retry_directive: RetryDirective | None = None,
     ) -> None:
         set_confirmation_session_context(session_id)
         # 在 worker 线程入口登记取消上下文（ContextVar + session→Event）；同线程同步派出的
@@ -278,26 +420,37 @@ class AssistantRuntime:
                     if continue_directive is not None
                     else None
                 ),
+                assistant_reuse_user_message=(
+                    retry_directive.reuse_user_message if retry_directive is not None else False
+                ),
             )
             if result is None or result.result_type == ResultType.MAX_ITERATIONS_REACHED:
                 message = result.error if result is not None else "Assistant did not complete."
-                event_queue.publish_nowait(
-                    "assistant.progress",
-                    {"status": "failed", "headline": message},
-                    {"sessionId": session_id},
+                self._publish_terminal_failure(
+                    session_id=session_id,
+                    after_sequence=after_sequence,
+                    result_type=(result.result_type if result is not None else ResultType.ERROR),
+                    error=message,
+                    exception=None,
+                    retry_directive=retry_directive,
                 )
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if result.result_type == ResultType.ERROR:
-                event_queue.publish_nowait(
-                    "assistant.progress",
-                    {"status": "failed", "headline": result.error or "Assistant failed."},
-                    {"sessionId": session_id},
+                self._publish_terminal_failure(
+                    session_id=session_id,
+                    after_sequence=after_sequence,
+                    result_type=result.result_type,
+                    error=result.error,
+                    exception=None,
+                    retry_directive=retry_directive,
                 )
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if result.result_type == ResultType.CANCELLED:
                 # 用户主动停止（014）：flush 已产增量消息（已产内容不丢，FR-008），发"已停止"进度。
+                if retry_directive is not None:
+                    self._restore_cancelled_retry(session_id, retry_directive)
                 self._publish_display_messages(session_id, after_sequence)
                 event_queue.publish_nowait(
                     "assistant.progress",
@@ -306,6 +459,8 @@ class AssistantRuntime:
                 )
                 return
             if result.result_type == ResultType.NEEDS_USER_INPUT:
+                if retry_directive is not None:
+                    self._resolve_retry(session_id, retry_directive)
                 self._publish_display_messages(session_id, after_sequence)
                 event_queue.publish_nowait(
                     "assistant.progress",
@@ -314,6 +469,8 @@ class AssistantRuntime:
                 )
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
+            if retry_directive is not None:
+                self._resolve_retry(session_id, retry_directive)
             self._publish_display_messages(session_id, after_sequence)
             event_queue.publish_nowait(
                 "assistant.progress",
@@ -323,20 +480,16 @@ class AssistantRuntime:
             self._publish_continue_fallback_if_needed(session_id, continue_directive)
         except Exception as exc:
             logger.error(
-                "Assistant runtime failed for session %s: %s", session_id, exc, exc_info=True
+                "Assistant runtime failed",
+                extra={"session_id": session_id, "exception_type": type(exc).__name__},
             )
-            event_queue.publish_nowait(
-                "assistant.progress",
-                {"status": "failed", "headline": "Assistant failed to complete the request."},
-                {"sessionId": session_id},
-            )
-            event_queue.publish_nowait(
-                "assistant.error",
-                {
-                    "message": "Assistant failed to complete the request.",
-                    "type": type(exc).__name__,
-                },
-                {"sessionId": session_id},
+            self._publish_terminal_failure(
+                session_id=session_id,
+                after_sequence=after_sequence,
+                result_type=ResultType.ERROR,
+                error=None,
+                exception=exc,
+                retry_directive=retry_directive,
             )
         finally:
             run_context.end()

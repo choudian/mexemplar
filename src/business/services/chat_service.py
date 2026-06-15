@@ -20,6 +20,10 @@ from src.business.agents.tools.builtin_general_tools import (
 )
 from src.data.models_sqlite import Session
 from src.data.repositories import AssistantProfileRepository, MessageRepository, SessionRepository
+from src.business.services.assistant_failure_service import (
+    AssistantFailureService,
+    AssistantFailureSummary,
+)
 from src.utils.timezone import format_local
 
 logger = logging.getLogger(__name__)
@@ -33,6 +37,7 @@ class DisplayChatMessage:
     role: str
     content: str
     created_at: datetime | None = None
+    failure: AssistantFailureSummary | None = None
 
 
 @dataclass
@@ -130,6 +135,10 @@ class ChatService:
         """返回用户可见的展示消息分页，不含内部状态字段。"""
         repo = MessageRepository()
         rows = repo.get_display_page(session_id, limit=limit, before_sequence=before_sequence)
+        failures = AssistantFailureService().get_summaries(
+            session_id,
+            [m.sequence for m in rows if m.role == "user"],
+        )
 
         if before_sequence is not None:
             has_more = repo.has_more_before(session_id, before_sequence=before_sequence)
@@ -145,6 +154,7 @@ class ChatService:
                 role=m.role,
                 content=m.content,
                 created_at=m.created_at,
+                failure=failures.get(m.sequence),
             )
             for m in rows
         ]
@@ -160,15 +170,45 @@ class ChatService:
     ) -> list[DisplayChatMessage]:
         """返回指定 sequence 之后新增的用户可见消息。"""
         rows = MessageRepository().get_display_after(session_id, after_sequence=after_sequence)
+        failures = AssistantFailureService().get_summaries(
+            session_id,
+            [m.sequence for m in rows if m.role == "user"],
+        )
         return [
             DisplayChatMessage(
                 sequence=m.sequence,
                 role=m.role,
                 content=m.content or "",
                 created_at=m.created_at,
+                failure=failures.get(m.sequence),
             )
             for m in rows
         ]
+
+    def get_display_message(
+        self,
+        session_id: str,
+        sequence: int,
+    ) -> DisplayChatMessage | None:
+        row = MessageRepository().get_by_sequence(session_id, sequence)
+        if (
+            row is None
+            or row.role not in ("user", "assistant")
+            or not row.content
+            or row.message_type not in ("normal", None)
+        ):
+            return None
+        failures = AssistantFailureService().get_summaries(
+            session_id,
+            [sequence] if row.role == "user" else [],
+        )
+        return DisplayChatMessage(
+            sequence=row.sequence,
+            role=row.role,
+            content=row.content,
+            created_at=row.created_at,
+            failure=failures.get(sequence),
+        )
 
     def get_latest_display_sequence(self, session_id: str) -> int:
         """返回当前最新展示消息 sequence，无展示消息时返回 0。"""

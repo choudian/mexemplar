@@ -18,4 +18,5 @@ from src.data.repos import (  # noqa: F401
     TeachingFailureRepository,
     SkillCompositionRepository,
     ToolOutputRepository,
+    AssistantRunFailureRepository,
 )

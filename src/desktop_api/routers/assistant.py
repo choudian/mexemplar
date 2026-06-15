@@ -5,6 +5,11 @@ import logging
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from src.business.services.chat_service import ChatService, DisplayChatMessage
+from src.business.services.assistant_failure_service import (
+    AssistantRetryConflict,
+    AssistantRetryValidation,
+    AssistantSessionNotFound,
+)
 from src.desktop_api.assistant_runtime import AssistantRuntime
 from src.desktop_api.confirmations import record_confirmation_decision
 from src.desktop_api.schemas import (
@@ -17,6 +22,8 @@ from src.desktop_api.schemas import (
     AssistantMessage,
     AssistantMessagesResponse,
     AssistantRenameSessionRequest,
+    AssistantRetryRequest,
+    AssistantRetryResponse,
     AssistantSendMessageRequest,
     AssistantSendMessageResponse,
     AssistantSessionListResponse,
@@ -67,6 +74,7 @@ def _message_to_dto(message: DisplayChatMessage) -> AssistantMessage:
         content=message.content,
         createdAt=message.created_at,
         rendering="safe_markdown" if role in ("assistant", "summary") else "plain_text",
+        failure=message.failure.to_public_dict() if message.failure is not None else None,
     )
 
 
@@ -121,7 +129,11 @@ def delete_session(
     return {"archived": True, "sessionId": session_id}
 
 
-@router.get("/sessions/{session_id}/messages", response_model=AssistantMessagesResponse)
+@router.get(
+    "/sessions/{session_id}/messages",
+    response_model=AssistantMessagesResponse,
+    response_model_exclude_none=True,
+)
 def get_messages(
     session_id: str,
     limit: int = Query(10, ge=1, le=100),
@@ -157,6 +169,34 @@ def send_message(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return AssistantSendMessageResponse(accepted=accepted, sessionId=session_id)
+
+
+@router.post(
+    "/sessions/{session_id}/retry",
+    response_model=AssistantRetryResponse,
+)
+def retry_message(
+    session_id: str,
+    request: AssistantRetryRequest,
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> AssistantRetryResponse:
+    try:
+        accepted = runtime.retry_message(
+            session_id,
+            request.messageSequence,
+            request.content,
+        )
+    except AssistantSessionNotFound as exc:
+        raise HTTPException(status_code=404, detail="assistant session not found") from exc
+    except AssistantRetryConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except AssistantRetryValidation as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AssistantRetryResponse(
+        accepted=accepted,
+        sessionId=session_id,
+        messageSequence=request.messageSequence,
+    )
 
 
 @router.post("/sessions/{session_id}/stop", response_model=AssistantStopResponse)

@@ -83,6 +83,38 @@ def test_event_queue_accepts_background_thread_publications(desktop_api_client):
     assert event.scope == {"sessionId": "ast_thread"}
 
 
+def test_assistant_message_event_accepts_safe_failure_projection(desktop_api_client):
+    drain_events()
+    event_queue.publish_nowait(
+        "assistant.message",
+        {
+            "sequence": 3,
+            "role": "user",
+            "content": "retry me",
+            "createdAt": "2026-06-15T00:00:00+00:00",
+            "rendering": "plain_text",
+            "failure": {
+                "category": "network",
+                "message": "连接模型服务时中断了。",
+                "suggestion": "请检查网络连接后重试。",
+                "attemptCount": 1,
+                "failedAt": "2026-06-15T00:00:01+00:00",
+            },
+        },
+        {"sessionId": "ast_failure"},
+    )
+
+    event = event_queue.queue.get_nowait()
+    assert event.payload["failure"]["category"] == "network"
+    assert set(event.payload["failure"]) == {
+        "category",
+        "message",
+        "suggestion",
+        "attemptCount",
+        "failedAt",
+    }
+
+
 def test_pm_agent_needs_user_input_routes_to_teaching_progress(desktop_api_client):
     drain_events()
     install_blinker_event_adapter()

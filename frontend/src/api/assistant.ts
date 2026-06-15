@@ -16,6 +16,22 @@ export interface AssistantMessage {
   content: string;
   createdAt: string | null;
   rendering: "plain_text" | "safe_markdown";
+  failure?: AssistantMessageFailure;
+}
+
+export interface AssistantMessageFailure {
+  category:
+    | "authentication"
+    | "invalid_request"
+    | "quota"
+    | "network"
+    | "provider"
+    | "iteration_limit"
+    | "internal";
+  message: string;
+  suggestion: string;
+  attemptCount: number;
+  failedAt: string;
 }
 
 export interface AssistantMessagesResponse {
@@ -99,6 +115,23 @@ export function sendAssistantMessage(
       body: JSON.stringify({
         content,
         ...(options.continueSubagent ? { continueSubagent: options.continueSubagent } : {}),
+      }),
+    },
+  );
+}
+
+export function retryAssistantMessage(
+  sessionId: string,
+  messageSequence: number,
+  content?: string,
+): Promise<{ accepted: boolean; sessionId: string; messageSequence: number }> {
+  return requestJson<{ accepted: boolean; sessionId: string; messageSequence: number }>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/retry`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        messageSequence,
+        ...(content !== undefined ? { content } : {}),
       }),
     },
   );

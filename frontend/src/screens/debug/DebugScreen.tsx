@@ -39,7 +39,10 @@ const REQUIRED_WARNING_COPY = [
   "启用期间应用壳会显示持续停止入口。",
 ];
 
+const FAILED_TRACE_OUTCOMES = new Set(["error", "failed", "timeout", "cancelled"]);
+
 export default function DebugScreen(): JSX.Element {
+  const sessionFilter = new URLSearchParams(window.location.search).get("sessionId")?.trim() || null;
   const [status, setStatus] = useState<DebugControlStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -55,6 +58,7 @@ export default function DebugScreen(): JSX.Element {
 
   // Reference state (memory only)
   const [referenceResult, setReferenceResult] = useState<ReferenceResponse | null>(null);
+  const [sessionLookupDone, setSessionLookupDone] = useState(false);
   const statusRequestVersion = useRef(0);
 
   const purgeLocalState = useCallback(() => {
@@ -63,6 +67,7 @@ export default function DebugScreen(): JSX.Element {
     setFlows([]);
     setSelectedFlow(null);
     setReferenceResult(null);
+    setSessionLookupDone(false);
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -146,12 +151,16 @@ export default function DebugScreen(): JSX.Element {
 
   const handleRefreshTraces = useCallback(async () => {
     try {
-      const result = await listTraces({ limit: 50 });
+      const result = await listTraces({
+        limit: 50,
+        ...(sessionFilter ? { sessionId: sessionFilter } : {}),
+      });
       setTraces(result.items);
+      setSessionLookupDone(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load traces");
     }
-  }, []);
+  }, [sessionFilter]);
 
   const handleSelectTrace = useCallback(async (traceId: string) => {
     try {
@@ -164,12 +173,15 @@ export default function DebugScreen(): JSX.Element {
 
   const handleRefreshFlows = useCallback(async () => {
     try {
-      const result = await listFlows({ limit: 20 });
+      const result = await listFlows({
+        limit: 20,
+        ...(sessionFilter ? { sessionId: sessionFilter } : {}),
+      });
       setFlows(result.items);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load flows");
     }
-  }, []);
+  }, [sessionFilter]);
 
   const handleSelectFlow = useCallback(async (workflowId: string) => {
     try {
@@ -191,6 +203,38 @@ export default function DebugScreen(): JSX.Element {
 
   const enabled = status?.enabled ?? false;
 
+  useEffect(() => {
+    if (!enabled || !sessionFilter) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [traceResult, flowResult] = await Promise.all([
+          listTraces({ sessionId: sessionFilter, limit: 50 }),
+          listFlows({ sessionId: sessionFilter, limit: 20 }),
+        ]);
+        if (cancelled) return;
+        setTraces(traceResult.items);
+        setFlows(flowResult.items);
+        setSessionLookupDone(true);
+        const latestFailed = [...traceResult.items]
+          .filter((item) => FAILED_TRACE_OUTCOMES.has(item.outcome))
+          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+        if (latestFailed) {
+          const detail = await getTraceDetail(latestFailed.traceId);
+          if (!cancelled) setSelectedTrace(detail);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Failed to load session diagnostics");
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [enabled, sessionFilter]);
+
   return (
     <div className="debug-screen">
       <div className="debug-header">
@@ -201,6 +245,17 @@ export default function DebugScreen(): JSX.Element {
       </div>
 
       {error ? <div className="debug-error">{error}</div> : null}
+      {sessionFilter ? (
+        <div className="debug-session-filter" role="status">
+          <strong>会话筛选</strong>
+          <code>{sessionFilter}</code>
+        </div>
+      ) : null}
+      {sessionFilter && (!enabled || (sessionLookupDone && traces.length === 0)) ? (
+        <div className="debug-history-unavailable">
+          未提前启用 trace 时，失败发生前的原始调试详情无法补录。这里仍会按会话展示可用的持久流程记录。
+        </div>
+      ) : null}
 
       {!enabled ? (
         <div className="debug-warning-panel">

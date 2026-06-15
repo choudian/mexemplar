@@ -548,6 +548,57 @@ class ToolOutputReference(Base):
         )
 
 
+class AssistantRunFailure(Base):
+    """Persistent recovery state for a terminal Assistant turn failure."""
+
+    __tablename__ = "assistant_run_failures"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('authentication', 'invalid_request', 'quota', 'network', "
+            "'provider', 'iteration_limit', 'internal')",
+            name="ck_assistant_run_failures_category",
+        ),
+        CheckConstraint(
+            "status IN ('failed', 'retrying', 'resolved')",
+            name="ck_assistant_run_failures_status",
+        ),
+        CheckConstraint("attempt_count >= 1", name="ck_assistant_run_failures_attempt_count"),
+        Index(
+            "uq_assistant_run_failure_current_session",
+            "session_id",
+            unique=True,
+            sqlite_where=text("status IN ('failed', 'retrying')"),
+        ),
+        Index(
+            "idx_assistant_run_failure_message",
+            "session_id",
+            "message_sequence",
+        ),
+        Index("idx_assistant_run_failure_status", "status"),
+    )
+
+    failure_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    message_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    safe_message: Mapped[str] = mapped_column(Text, nullable=False)
+    safe_suggestion: Mapped[str] = mapped_column(Text, nullable=False)
+    internal_code: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    exception_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="failed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    failed_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<AssistantRunFailure(failure_id={self.failure_id!r}, "
+            f"session_id={self.session_id!r}, status={self.status!r})>"
+        )
+
+
 class BrainSkillEquipment(Base):
     """装备者与方法论之间的状态化关系。"""
 

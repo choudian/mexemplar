@@ -33,6 +33,14 @@ class MessageRepository(BaseRepository):
         """根据 ID 获取消息"""
         return self.session.query(Message).filter(Message.message_id == message_id).first()
 
+    def get_by_sequence(self, session_id: str, sequence: int) -> Optional[Message]:
+        """按会话与序号读取单条消息。"""
+        return (
+            self.session.query(Message)
+            .filter(Message.session_id == session_id, Message.sequence == sequence)
+            .first()
+        )
+
     def get_first(self, session_id: str) -> Optional[Message]:
         """获取会话的第一条消息（最小序列号）"""
         return (

@@ -9,6 +9,7 @@ import {
   listAssistantSessions,
   listSubagents,
   renameAssistantSession,
+  retryAssistantMessage,
   sendAssistantMessage,
   setAssistantAutoApprove,
   stopAssistantRun,
@@ -92,6 +93,7 @@ export type AssistantState = {
   activeTurnIdBySession: Record<string, string>;
   // 每会话至多一条排队消息；跨会话切换保留，不持久化到后端。
   queuedMessageBySession: Record<string, QueuedMessage>;
+  retryingFailureBySession: Record<string, number>;
   markHydrated: () => void;
   setError: (message: string | null) => void;
   setQuery: (query: string) => void;
@@ -119,6 +121,11 @@ export type AssistantState = {
   refreshActivityTranscript: (sessionId: string, turnId?: string) => Promise<void>;
   // 继续暂停子任务（US5）：经主助理消息派发唤醒续跑（守 100% 调度，不新增端点）
   continueSubagent: (sessionId: string, subagentId: string, supplemental?: string) => Promise<void>;
+  retryFailedMessage: (
+    sessionId: string,
+    messageSequence: number,
+    content?: string,
+  ) => Promise<void>;
   applyEvent: (event: UiEvent) => void;
   decideConfirmation: (requestId: string, decision: "approve" | "deny") => Promise<void>;
   setAutoApprove: (enabled: boolean) => Promise<void>;
@@ -151,6 +158,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
   turnActivityBySession: {},
   activeTurnIdBySession: {},
   queuedMessageBySession: {},
+  retryingFailureBySession: {},
   markHydrated: () => set({ hydrated: true }),
   setError: (message) => set({ lastError: message }),
   setQuery: (query) => set({ query }),
@@ -333,6 +341,8 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
     delete nextProgress[sessionId];
     const nextStopping = { ...get().stoppingBySession };
     delete nextStopping[sessionId];
+    const nextRetryingFailures = { ...get().retryingFailureBySession };
+    delete nextRetryingFailures[sessionId];
     set({
       sessions: get().sessions.filter((session) => session.sessionId !== sessionId),
       activeSessionId: get().activeSessionId === sessionId ? null : get().activeSessionId,
@@ -343,6 +353,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       progressBySession: nextProgress,
       stopping: get().activeSessionId === sessionId ? false : get().stopping,
       stoppingBySession: nextStopping,
+      retryingFailureBySession: nextRetryingFailures,
       turnActivityBySession: nextTurnActivity,
       activeTurnIdBySession: nextActiveTurns,
       pendingOptimisticMessages: get().pendingOptimisticMessages.filter(
@@ -516,6 +527,40 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
     }
   },
+  retryFailedMessage: async (sessionId, messageSequence, content) => {
+    if (get().retryingFailureBySession[sessionId] !== undefined) return;
+    const runningProgress: AssistantProgress = { status: "running", headline: "正在重试" };
+    set({
+      retryingFailureBySession: {
+        ...get().retryingFailureBySession,
+        [sessionId]: messageSequence,
+      },
+      progress: get().activeSessionId === sessionId ? runningProgress : get().progress,
+      progressBySession: {
+        ...get().progressBySession,
+        [sessionId]: runningProgress,
+      },
+      lastError: null,
+    });
+    try {
+      const result = await retryAssistantMessage(sessionId, messageSequence, content);
+      if (!result.accepted) {
+        throw new Error("重试请求未被接受。");
+      }
+    } catch (error) {
+      const retrying = { ...get().retryingFailureBySession };
+      delete retrying[sessionId];
+      set({
+        retryingFailureBySession: retrying,
+        progress: get().activeSessionId === sessionId ? idleProgress : get().progress,
+        progressBySession: {
+          ...get().progressBySession,
+          [sessionId]: idleProgress,
+        },
+        lastError: toErrorMessage(error, "重试失败，请稍后再试。"),
+      });
+    }
+  },
   refreshSubagents: async (sessionId) => {
     try {
       const items = await listSubagents(sessionId);
@@ -644,6 +689,10 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         ...get().stoppingBySession,
         [sessionId]: status === "running" ? Boolean(get().stoppingBySession[sessionId]) : false,
       };
+      const nextRetryingFailures = { ...get().retryingFailureBySession };
+      if (status !== "running") {
+        delete nextRetryingFailures[sessionId];
+      }
       set({
         progress: isActiveSession ? nextProgress : get().progress,
         progressBySession: { ...get().progressBySession, [sessionId]: nextProgress },
@@ -653,6 +702,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
           ? (status === "running" ? Boolean(nextStoppingBySession[sessionId]) : false)
           : get().stopping,
         stoppingBySession: nextStoppingBySession,
+        retryingFailureBySession: nextRetryingFailures,
       });
       // 排队消息：回合离开 running 时按结果处理（US2）。
       if (sessionId && status !== "running") {
@@ -767,6 +817,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       // 缺口/会话不匹配：以权威端点刷新子任务列表与当前回合过程（FR-032），不凭内部事件名猜测
       const sessionId = get().activeSessionId;
       if (sessionId) {
+        void get().selectSession(sessionId);
         void get().refreshSubagents(sessionId);
         void get().refreshActivityTranscript(sessionId);
       }

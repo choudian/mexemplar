@@ -59,7 +59,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     "assistant.message": UiEventDefinition(
         "assistant.message",
         "notification",
-        frozenset({"sequence", "role", "content", "createdAt", "rendering"}),
+        frozenset({"sequence", "role", "content", "createdAt", "rendering", "failure"}),
         frozenset({"sessionId"}),
         {"sequence": 1, "role": "assistant", "content": "Ready.", "rendering": "safe_markdown"},
         required_payload_keys=frozenset({"sequence", "role", "content", "rendering"}),
@@ -78,7 +78,10 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"status"}),
         required_scope_keys=frozenset({"sessionId"}),
         payload_enum_values=(
-            ("status", frozenset({"running", "waiting_for_user", "succeeded", "failed", "cancelled"})),
+            (
+                "status",
+                frozenset({"running", "waiting_for_user", "succeeded", "failed", "cancelled"}),
+            ),
         ),
     ),
     "assistant.error": UiEventDefinition(
@@ -489,10 +492,46 @@ def validate_ui_event_payload(event_type: str, payload: dict[str, Any]) -> None:
             raise UiEventValidationError(
                 f"UI event {event_type} contains invalid enum value for {key}: {payload[key]}"
             )
+    if event_type == "assistant.message" and payload.get("failure") is not None:
+        _validate_assistant_failure_payload(payload)
     for key, value in payload.items():
         if key in definition.unredacted_payload_keys:
             continue  # 有意保留原文（UI 默认隐藏 + 双击查看），不做 forbidden value 脱敏校验
         _validate_payload_value(key, value)
+
+
+def _validate_assistant_failure_payload(payload: dict[str, Any]) -> None:
+    if payload.get("role") != "user":
+        raise UiEventValidationError("assistant.message failure is only valid for user messages")
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        raise UiEventValidationError("assistant.message failure must be an object")
+    expected = {"category", "message", "suggestion", "attemptCount", "failedAt"}
+    if set(failure) != expected:
+        raise UiEventValidationError("assistant.message failure contains invalid fields")
+    if failure.get("category") not in {
+        "authentication",
+        "invalid_request",
+        "quota",
+        "network",
+        "provider",
+        "iteration_limit",
+        "internal",
+    }:
+        raise UiEventValidationError("assistant.message failure category is invalid")
+    if not isinstance(failure.get("message"), str) or not isinstance(
+        failure.get("suggestion"), str
+    ):
+        raise UiEventValidationError("assistant.message failure copy is invalid")
+    if not isinstance(failure.get("attemptCount"), int) or failure["attemptCount"] < 1:
+        raise UiEventValidationError("assistant.message failure attemptCount is invalid")
+    failed_at = failure.get("failedAt")
+    if not isinstance(failed_at, str):
+        raise UiEventValidationError("assistant.message failure failedAt is invalid")
+    try:
+        datetime.fromisoformat(failed_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise UiEventValidationError("assistant.message failure failedAt is invalid") from exc
 
 
 def build_ui_event(

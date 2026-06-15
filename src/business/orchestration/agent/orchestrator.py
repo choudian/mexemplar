@@ -37,6 +37,7 @@ from src.data.repositories import (
     ToolRepository,
     WorkflowTransitionRepository,
 )
+from src.data.models_sqlite import Message
 from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.recording.browser.recorder import RecordingMode
@@ -109,13 +110,19 @@ class _AgentExecutionAdapter(AgentExecutionPort):
         workflow_id: str = None,
         session_id: str = None,
         assistant_continue_intent: dict | None = None,
+        assistant_reuse_user_message: bool = False,
     ) -> AgentResult | None:
+        optional_args = {}
+        if assistant_continue_intent is not None:
+            optional_args["assistant_continue_intent"] = assistant_continue_intent
+        if assistant_reuse_user_message:
+            optional_args["assistant_reuse_user_message"] = True
         return self._run_agent(
             agent_type,
             user_input,
             workflow_id=workflow_id,
             session_id=session_id,
-            assistant_continue_intent=assistant_continue_intent,
+            **optional_args,
         )
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
@@ -134,13 +141,19 @@ class _AssistantTaskAdapter(AssistantTaskPort):
         workflow_id: str = None,
         session_id: str = None,
         assistant_continue_intent: dict | None = None,
+        assistant_reuse_user_message: bool = False,
     ) -> None:
+        optional_args = {}
+        if assistant_continue_intent is not None:
+            optional_args["assistant_continue_intent"] = assistant_continue_intent
+        if assistant_reuse_user_message:
+            optional_args["assistant_reuse_user_message"] = True
         self._run_agent(
             agent_type,
             user_input,
             workflow_id=workflow_id,
             session_id=session_id,
-            assistant_continue_intent=assistant_continue_intent,
+            **optional_args,
         )
 
     def start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
@@ -247,6 +260,38 @@ class AgentOrchestrator:
     def task_worker(self) -> AssistantTaskWorker:
         return self._task_worker
 
+    def _persist_assistant_input(
+        self,
+        session_id: str,
+        user_input: str,
+        *,
+        system_prompt: str | None = None,
+    ) -> None:
+        """Persist the recoverable user turn before fallible Assistant setup continues."""
+        if system_prompt is not None:
+            has_system = any(
+                message.role == "system" for message in self._message_repo.get_all(session_id)
+            )
+            if not has_system:
+                self._message_repo.create(
+                    Message(
+                        message_id=str(uuid.uuid4()),
+                        session_id=session_id,
+                        sequence=self._message_repo.get_next_sequence(session_id),
+                        role="system",
+                        content=system_prompt,
+                    )
+                )
+        self._message_repo.create(
+            Message(
+                message_id=str(uuid.uuid4()),
+                session_id=session_id,
+                sequence=self._message_repo.get_next_sequence(session_id),
+                role="user",
+                content=user_input,
+            )
+        )
+
     def run_agent(
         self,
         agent_type: str,
@@ -254,15 +299,28 @@ class AgentOrchestrator:
         workflow_id: str = None,
         session_id: str = None,
         assistant_continue_intent: dict | None = None,
+        assistant_reuse_user_message: bool = False,
     ) -> AgentResult | None:
+        assistant_input_persisted = False
+        assistant_should_persist = False
         if agent_type == AgentType.ASSISTANT:
             assert session_id, "assistant 类型必须传 session_id"
+            if user_input is not None and not assistant_reuse_user_message:
+                if not isinstance(user_input, str) or not user_input:
+                    return AgentResult(
+                        result_type=ResultType.ERROR,
+                        error="assistant input must be non-empty text",
+                    )
+                assistant_should_persist = True
         elif not session_id:
             session_id = self._session_store.get_or_create_session(workflow_id, agent_type)
 
         try:
             loop = self._get_loop(agent_type, workflow_id=workflow_id)
         except Exception as exc:
+            if assistant_should_persist:
+                self._persist_assistant_input(session_id, user_input)
+                assistant_input_persisted = True
             message = f"无法创建 {agent_type} Loop"
             logger.error("[Orchestrator] %s: %s", message, exc, exc_info=True)
             self._emit_agent_error(
@@ -279,16 +337,26 @@ class AgentOrchestrator:
         )
 
         try:
-            tools = self._build_tools(agent_type, workflow_id=workflow_id, session_id=session_id)
             formatted_prompt = (
                 self._prompt_builder.format_assistant_prompt(session_id)
                 if agent_type == AgentType.ASSISTANT
                 else loop.format_system_prompt(recording_id=workflow_id)
             )
+            if assistant_should_persist:
+                self._persist_assistant_input(
+                    session_id,
+                    user_input,
+                    system_prompt=formatted_prompt,
+                )
+                assistant_input_persisted = True
+            tools = self._build_tools(agent_type, workflow_id=workflow_id, session_id=session_id)
 
             if agent_type == AgentType.ASSISTANT:
                 self._seal_assistant_segment_at_memory_limit(session_id)
         except Exception as exc:
+            if assistant_should_persist and not assistant_input_persisted:
+                self._persist_assistant_input(session_id, user_input)
+                assistant_input_persisted = True
             message = f"无法准备 {agent_type} Agent"
             logger.error("[Orchestrator] %s: %s", message, exc, exc_info=True)
             self._emit_agent_error(
@@ -312,6 +380,7 @@ class AgentOrchestrator:
                 tools=tools,
                 system_prompt_override=formatted_prompt,
                 initial_tool_calls=initial_tool_calls,
+                resume_existing_turn=(assistant_reuse_user_message or assistant_input_persisted),
             )
         except Exception as exc:
             message = f"{agent_type} Agent 执行失败"
