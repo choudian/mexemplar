@@ -1180,5 +1180,6 @@ manual quickstart smoke checklist remains open.
 - `tests/integration/test_agent_orchestrator_architecture.py`：三类 Agent 接线、授权隔离、运行时阈值和日志不泄漏。
 - `tests/data/test_unified_config.py`：默认值、边界、非法值和嵌套配置。
 - `tests/integration/test_agent_loop_parallel_tools.py`：`search_tools` 并发安全、`get_tool_detail` 串行声明。
+- Clarify 因无 `NEEDS CLARIFICATION` 或范围未决项而跳过；归档前补跑 Analyze/Verify，14/14 FR、18/18 tasks 和宪法检查无发现。
 - 最终全量验证为 1474 passed、3 skipped、5 个已在未修改基线复现的既有失败；功能相关测试、Black、Flake8 和 diff check 通过。
 - Feature tasks: 18/18 completed。
