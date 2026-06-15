@@ -74,7 +74,7 @@ description: "Tasks for 022-process-event-push"
 ### Tests for User Story 1 ⚠️(先写,RED → 验证 fail → 再 GREEN)
 
 - [ ] T008 [P] [US1] 在 `tests/execution/test_process_manager_events.py` 加用例:`test_state_changed_emitted_on_running_to_completed` 与 `test_state_changed_emitted_on_running_to_failed`,起真子进程(`python -c "import sys; sys.exit(0)"` / `sys.exit(1)`),`wait_for_event(timeout_ms=5000)` 返回事件含 `state_changed`,status/exitCode 与实际一致
-- [ ] T009 [P] [US1] 在 `tests/execution/test_process_manager_events.py` 加用例:`test_wait_returns_immediately_when_event_already_in_deque`(进程已退出,wait 不阻塞)、`test_wait_blocks_until_timeout_when_no_event`(长 sleep 进程,wait 接近 timeoutMs 后返回空)、`test_wait_wakes_up_on_new_event`(wait 阻塞中、另一线程触发状态切换,wait 立即返回)
+- [ ] T009 [P] [US1] 在 `tests/execution/test_process_manager_events.py` 加用例:`test_wait_returns_immediately_when_event_already_in_deque`(进程已退出,wait 不阻塞)、`test_wait_blocks_until_timeout_when_no_event`(长 sleep 进程,wait 接近 timeoutMs 后返回空)、`test_wait_wakes_up_on_new_event`(wait 阻塞中、另一线程触发状态切换,wait 立即返回,并断言 t1-t0 < 200 ms;直接覆盖 spec SC-001 唤醒延迟上限)
 - [ ] T010 [P] [US1] 在 `tests/business/agents/tools/test_process_event_tool.py` 新建文件,加用例:`test_permission_denied_for_other_session`(伪造 session_id 不同时返回 permission_denied)、`test_process_missing`(不存在 processId 返回 process_missing)、`test_timeout_ms_clamped_to_max`(传 timeoutMs=10_000_000 被钳位到 `get_agent_tools_process_max_timeout_ms`)、`test_default_timeout_used_when_missing`(不传 timeoutMs 用 `default_timeout_ms`)
 - [ ] T011 [P] [US1] 在 `tests/integration/test_process_event_flow.py` 新建:`test_state_changed_end_to_end` —— 通过 `wait_for_process_event_handler` 入口(而非直接 `ProcessManager.wait_for_event`)起一个会失败的真进程,断言从 `success_json` payload 中解出 events 含 `state_changed: failed, exitCode=1`
 
@@ -101,7 +101,7 @@ description: "Tasks for 022-process-event-push"
 
 ### Implementation for User Story 2
 
-- [ ] T017 [US2] 在 `src/execution/process_manager.py` 的 `_start_reader.reader` 函数内,既有 `chunks.append(line)` 之后(仍在持 `_lock` 段)加:`record.total_output_chars += len(line)`;`record.last_output_at = time.time()`;若 `record.total_output_chars - record.last_chunk_announce >= chunk_threshold` 则 `record.last_chunk_announce = record.total_output_chars`、`self._emit_event_locked(record, "log_chunked", {"totalChars": record.total_output_chars, "deltaChars": record.total_output_chars - record.last_chunk_announce_before})`;其中 chunk_threshold 在 reader 启动前从配置 snapshot 进 closure,避免每条 line 都 hit 配置层(可在 record 上挂 `_chunk_threshold_chars: int`,start 内一次写入)
+- [ ] T017 [US2] 在 `src/execution/process_manager.py` 的 `_start_reader.reader` 函数内,既有 `chunks.append(line)` 之后(仍在持 `_lock` 段)加:`record.total_output_chars += len(line)`;`record.last_output_at = time.time()`;若 `record.total_output_chars - record.last_chunk_announce >= chunk_threshold`,按以下顺序执行:(1) `delta = record.total_output_chars - record.last_chunk_announce`(先保存增量);(2) `record.last_chunk_announce = record.total_output_chars`(再推进基线);(3) `self._emit_event_locked(record, "log_chunked", {"totalChars": record.total_output_chars, "deltaChars": delta})`。其中 chunk_threshold 在 reader 启动前从配置 snapshot 进 closure,避免每条 line 都 hit 配置层(可在 record 上挂 `_chunk_threshold_chars: int`,start 内一次写入)
 
 **Checkpoint**: US2 完成后,wait 既能等状态边界又能等累积输出信号;US1 测试与所有既有 process_* 测试持续全绿。
 
