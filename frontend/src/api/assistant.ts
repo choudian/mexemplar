@@ -52,6 +52,65 @@ export interface AssistantConfirmation {
   affectedSpecialistNames?: string[];
 }
 
+export interface ClarificationOption {
+  optionId: string;
+  label: string;
+  description?: string | null;
+  preview?: string | null;
+}
+
+export interface ClarificationQuestion {
+  questionId: string;
+  question: string;
+  header: string;
+  multiSelect: boolean;
+  options: ClarificationOption[];
+}
+
+export interface ClarificationRequest {
+  requestId: string;
+  sessionId: string;
+  questions: ClarificationQuestion[];
+  expiresAt?: string | null;
+  status: "pending";
+}
+
+export interface ClarificationAnswerInput {
+  questionId: string;
+  selectedOptionIds: string[];
+  otherText: string | null;
+}
+
+export type ClarificationResolvedStatus =
+  | "answered"
+  | "cancelled"
+  | "timeout"
+  | "stopped"
+  | "shutdown";
+
+export async function getPendingClarification(
+  sessionId: string,
+): Promise<ClarificationRequest | null> {
+  const response = await requestJson<{ clarification: ClarificationRequest | null }>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/clarifications/pending`,
+  );
+  return response.clarification ?? null;
+}
+
+export function submitClarificationDecision(
+  sessionId: string,
+  requestId: string,
+  body: { decision: "submit" | "cancel"; answers: ClarificationAnswerInput[] },
+): Promise<{ requestId: string; status: ClarificationResolvedStatus; accepted: boolean }> {
+  return requestJson<{ requestId: string; status: ClarificationResolvedStatus; accepted: boolean }>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/clarifications/${encodeURIComponent(requestId)}/decision`,
+    {
+      method: "POST",
+      body: JSON.stringify(body),
+    },
+  );
+}
+
 export async function listAssistantSessions(query = "", limit = 200): Promise<AssistantSession[]> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (query.trim()) {

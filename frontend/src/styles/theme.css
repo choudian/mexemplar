@@ -1476,6 +1476,85 @@ select:focus-visible,
   gap: 8px;
 }
 
+/* 019 结构化多选澄清卡：输入框上方非模态卡片，中性色调区别于高危确认（danger） */
+.assistant-clarification {
+  margin: 0 24px 10px;
+  padding: var(--toast-padding);
+  border: 1px solid color-mix(in oklch, var(--accent) 30%, var(--border-1));
+  border-radius: var(--toast-radius);
+  background: var(--surface-1);
+  box-shadow: var(--toast-shadow);
+  animation: me-toast-in 240ms ease both;
+}
+
+.assistant-clarification-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--accent);
+  font-weight: 750;
+}
+
+.assistant-clarification-countdown {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.assistant-clarification-question {
+  margin: 12px 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.assistant-clarification-question > legend {
+  margin-bottom: 6px;
+  padding: 0;
+  color: var(--text-1);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.assistant-clarification-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--text-2);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.assistant-clarification-option-desc,
+.assistant-clarification-option-preview {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.assistant-clarification-option-preview {
+  font-family: var(--font-mono, monospace);
+  white-space: pre-wrap;
+}
+
+.assistant-clarification-other-input {
+  width: calc(100% - 24px);
+  margin: 4px 0 4px 24px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text-1);
+  font-size: 13px;
+}
+
+.assistant-clarification-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
 .assistant-composer {
   flex-shrink: 0;
   padding: 12px 24px 18px;

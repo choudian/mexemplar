@@ -1863,6 +1863,8 @@ class AgentOrchestrator:
             RETRIEVE_ARCHIVE_SCHEMA,
             RETRIEVE_FAILURE_ZONE_SCHEMA,
             SAVE_PROFILE_SCHEMA,
+            ASK_USER_QUESTION_SCHEMA,
+            create_ask_user_question_handler,
             create_codify_as_tool_handler,
             create_create_specialist_handler,
             create_delegate_to_specialist_handler,
@@ -1974,6 +1976,14 @@ class AgentOrchestrator:
             schema=INVALIDATE_MEMORY_ENTRY_SCHEMA,
             handler=create_invalidate_memory_entry_handler(session_id),
         )
+        ask_user_question_tool = ToolDefinition(
+            name="ask_user_question",
+            schema=ASK_USER_QUESTION_SCHEMA,
+            handler=create_ask_user_question_handler(session_id),
+            # 需独占调用：与其他工具同批 → 全批 invalid_model_output；非中断，拿到答案同回合续跑。
+            requires_exclusive_call=True,
+            has_side_effects=False,
+        )
         create_skill_methodology_tool = ToolDefinition(
             name="create_skill_methodology",
             schema=CREATE_SKILL_METHODOLOGY_SCHEMA,
@@ -1997,6 +2007,7 @@ class AgentOrchestrator:
             retrieve_archive_tool,
             retrieve_failure_zone_tool,
             invalidate_memory_entry_tool,
+            ask_user_question_tool,
             reply_to_user_tool,
             delegate_to_subagent_tool,
             continue_subagent_tool,

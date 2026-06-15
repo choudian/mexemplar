@@ -187,7 +187,20 @@ describe("specialistStore", () => {
         tool_whitelist: ["tool-1"],
         change_reason: "",
       },
-      versions: [{ version_id: "v1", specialist_id: "spec-1", version: 1, name: "报表专员" }],
+      versions: [
+        {
+          version_id: "v1",
+          specialist_id: "spec-1",
+          version: 1,
+          name: "报表专员",
+          description: "处理周期报表",
+          role_definition: "你负责处理报表。",
+          tool_whitelist: ["tool-1"],
+          changed_by: "user",
+          change_reason: null,
+          changed_at: null,
+        },
+      ],
     });
 
     useSpecialistStore.getState().applyEvent({

@@ -204,6 +204,50 @@ class AssistantConfirmationDecisionResponse(BaseModel):
     accepted: bool
 
 
+class AssistantClarificationOption(BaseModel):
+    optionId: str
+    label: str
+    description: str | None = None
+    preview: str | None = None
+
+
+class AssistantClarificationQuestion(BaseModel):
+    questionId: str
+    question: str
+    header: str
+    multiSelect: bool = False
+    options: list[AssistantClarificationOption]
+
+
+class AssistantClarificationSnapshot(BaseModel):
+    requestId: str
+    sessionId: str
+    questions: list[AssistantClarificationQuestion]
+    expiresAt: str | None = None
+    status: Literal["pending"] = "pending"
+
+
+class AssistantClarificationPendingResponse(BaseModel):
+    clarification: AssistantClarificationSnapshot | None = None
+
+
+class AssistantClarificationAnswerInput(BaseModel):
+    questionId: str
+    selectedOptionIds: list[str] = Field(default_factory=list)
+    otherText: str | None = None
+
+
+class AssistantClarificationDecisionRequest(BaseModel):
+    decision: Literal["submit", "cancel"]
+    answers: list[AssistantClarificationAnswerInput] = Field(default_factory=list)
+
+
+class AssistantClarificationDecisionResponse(BaseModel):
+    requestId: str
+    status: Literal["answered", "cancelled", "timeout", "stopped", "shutdown"]
+    accepted: bool
+
+
 class AssistantAutoApproveRequest(BaseModel):
     enabled: bool
 

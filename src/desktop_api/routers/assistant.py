@@ -10,11 +10,20 @@ from src.business.services.assistant_failure_service import (
     AssistantRetryValidation,
     AssistantSessionNotFound,
 )
+from src.business.agents.tools.clarification_manager import ClarificationValidationError
 from src.desktop_api.assistant_runtime import AssistantRuntime
+from src.desktop_api.clarifications import (
+    pending_clarification_snapshot,
+    record_clarification_decision,
+)
 from src.desktop_api.confirmations import record_confirmation_decision
 from src.desktop_api.schemas import (
     AssistantAutoApproveRequest,
     AssistantAutoApproveResponse,
+    AssistantClarificationDecisionRequest,
+    AssistantClarificationDecisionResponse,
+    AssistantClarificationPendingResponse,
+    AssistantClarificationSnapshot,
     AssistantConfirmationDecisionRequest,
     AssistantConfirmationDecisionResponse,
     AssistantCreateSessionRequest,
@@ -263,6 +272,47 @@ def decide_confirmation(
         requestId=result.request_id,
         decision=result.decision,
         accepted=result.accepted,
+    )
+
+
+@router.get(
+    "/sessions/{session_id}/clarifications/pending",
+    response_model=AssistantClarificationPendingResponse,
+)
+def get_pending_clarification(session_id: str) -> AssistantClarificationPendingResponse:
+    """返回该会话当前 pending 澄清快照（重连 / 会话打开 / resync 兜底）；无则 clarification=null。"""
+    snapshot = pending_clarification_snapshot(session_id)
+    return AssistantClarificationPendingResponse(
+        clarification=AssistantClarificationSnapshot(**snapshot) if snapshot else None
+    )
+
+
+@router.post(
+    "/sessions/{session_id}/clarifications/{request_id}/decision",
+    response_model=AssistantClarificationDecisionResponse,
+)
+def decide_clarification(
+    session_id: str,
+    request_id: str,
+    request: AssistantClarificationDecisionRequest,
+) -> AssistantClarificationDecisionResponse:
+    try:
+        result = record_clarification_decision(
+            session_id,
+            request_id,
+            request.decision,
+            [a.model_dump() for a in request.answers],
+        )
+    except LookupError as exc:
+        # 归属错配/缺失一并 404，不泄漏存在性
+        raise HTTPException(status_code=404, detail="clarification not found") from exc
+    except ClarificationValidationError as exc:
+        # 答案校验失败：422，不结算，前端保留卡片可重试
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return AssistantClarificationDecisionResponse(
+        requestId=result["requestId"],
+        status=result["status"],
+        accepted=result["accepted"],
     )
 
 
