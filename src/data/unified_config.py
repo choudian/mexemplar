@@ -643,6 +643,21 @@ class UnifiedConfigManager:
     def get_agent_tools_process_max_background_processes(self) -> int:
         return self._get_bounded_positive_int("agent_tools.process.max_background_processes", 16)
 
+    def get_agent_tools_process_event_buffer_size(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.process.event_buffer_size", 64, maximum=512
+        )
+
+    def get_agent_tools_process_stalled_threshold_ms(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.process.stalled_threshold_ms", 10000, maximum=600000
+        )
+
+    def get_agent_tools_process_chunk_threshold_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.process.chunk_threshold_chars", 4096, maximum=65536
+        )
+
     # ===== 便捷方法：录制配置 =====
 
     def get_websocket_host(self) -> str:

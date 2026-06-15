@@ -1668,6 +1668,24 @@ PROCESS_WAIT_SCHEMA = make_tool_schema(
 )
 
 
+WAIT_FOR_PROCESS_EVENT_SCHEMA = make_tool_schema(
+    name="wait_for_process_event",
+    description=(
+        "Block until a new event on a current-session background process or "
+        "timeout. Events are coarse signals (state_changed / log_chunked / "
+        "stalled) without log content; read actual stdout/stderr via "
+        "process_logs. On the first call omit sinceCursor; on subsequent "
+        "calls pass the cursor from the previous response."
+    ),
+    properties={
+        "processId": {"type": "string"},
+        "sinceCursor": {"type": "integer", "minimum": 0},
+        "timeoutMs": {"type": "integer"},
+    },
+    required=["processId"],
+)
+
+
 PROCESS_STOP_SCHEMA = make_tool_schema(
     name="process_stop",
     description="Stop a current-session background process.",
@@ -1694,7 +1712,7 @@ LOAD_TOOL_OUTPUT_SCHEMA = make_tool_schema(
         "- 你需要验证某个具体数据点，而 preview 中没有\n\n"
         "不要使用：\n"
         "- preview/facts 已包含足够信息（大多数情况如此）\n"
-        "- 仅为了\"确认\"或\"补充\"已有信息\n\n"
+        '- 仅为了"确认"或"补充"已有信息\n\n'
         "注意：每次调用会触发额外一轮 LLM 推理，优先用 preview 完成任务。"
     ),
     properties={
@@ -1843,7 +1861,9 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
     ),
     ToolDefinition(
         name="process_poll",
-        schema=_make_process_id_tool_schema("process_poll", "Poll a current-session background process."),
+        schema=_make_process_id_tool_schema(
+            "process_poll", "Poll a current-session background process."
+        ),
         handler=command_tools.process_poll_handler,
         has_side_effects=False,
     ),
@@ -1860,6 +1880,12 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         has_side_effects=False,
     ),
     ToolDefinition(
+        name="wait_for_process_event",
+        schema=WAIT_FOR_PROCESS_EVENT_SCHEMA,
+        handler=command_tools.wait_for_process_event_handler,
+        has_side_effects=False,
+    ),
+    ToolDefinition(
         name="process_stop",
         schema=PROCESS_STOP_SCHEMA,
         handler=command_tools.process_stop_handler,
@@ -1871,7 +1897,9 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
     ),
     ToolDefinition(
         name="process_close",
-        schema=_make_process_id_tool_schema("process_close", "Close a completed or stopped process record."),
+        schema=_make_process_id_tool_schema(
+            "process_close", "Close a completed or stopped process record."
+        ),
         handler=command_tools.process_close_handler,
     ),
     ToolDefinition(

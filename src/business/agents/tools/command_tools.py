@@ -327,6 +327,41 @@ def process_wait_handler(
     return success_json("process_wait", payload)
 
 
+def wait_for_process_event_handler(
+    processId: str,
+    sinceCursor: int | None = None,
+    timeoutMs: int | None = None,
+) -> str:
+    """022 process-event-push: block until next event or timeout."""
+    _, rejected = _process_for_current_session("wait_for_process_event", processId)
+    if rejected is not None:
+        return rejected
+    default_timeout = get_config_int("get_agent_tools_process_default_timeout_ms", 30_000)
+    max_timeout = get_config_int("get_agent_tools_process_max_timeout_ms", 600_000)
+    timeout = max(1, min(int(timeoutMs or default_timeout), max_timeout))
+    try:
+        payload = get_process_manager().wait_for_event(
+            processId, since_cursor=sinceCursor, timeout_ms=int(timeout)
+        )
+    except Exception:
+        logger.warning(
+            "[agent_tools] wait_for_process_event internal failure: process_id=%s",
+            processId,
+            exc_info=True,
+        )
+        return error_json(
+            "wait_for_process_event",
+            "internal_error",
+            "Internal error while waiting for process event.",
+            outcome=OUTCOME_REJECTED,
+            payload={"processId": processId},
+        )
+    if payload is None:
+        return _process_missing("wait_for_process_event", processId)
+    payload = {"processId": processId, **payload}
+    return success_json("wait_for_process_event", payload)
+
+
 def process_stop_handler(processId: str, force: bool = False) -> str:
     _, rejected = _process_for_current_session("process_stop", processId)
     if rejected is not None:

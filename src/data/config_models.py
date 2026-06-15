@@ -359,6 +359,9 @@ class AgentToolsProcessConfig:
     max_timeout_ms: int = 600000
     log_tail_chars: int = 4000
     max_background_processes: int = 16
+    event_buffer_size: int = 64
+    stalled_threshold_ms: int = 10000
+    chunk_threshold_chars: int = 4096
 
 
 @dataclass
