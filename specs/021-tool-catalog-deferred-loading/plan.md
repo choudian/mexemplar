@@ -83,3 +83,9 @@ tests/
 ## Complexity Tracking
 
 无宪法例外。
+
+## Verification Result
+
+- 功能相关测试、Black、Flake8 和 `git diff --check` 通过。
+- 最终全量测试为 `1474 passed, 3 skipped, 5 failed`。
+- 5 个失败均在合并前的未修改基线工作树复现：一个 debug client 测试对象缺少既有 `audit_source`，两个 migration 测试仍断言 schema version 13 而当前为 14，两个 Settings 测试的既有 `FakeConfig` 缺少语义摘要 API key getter。本功能未修改这些路径，不引入新增失败。
