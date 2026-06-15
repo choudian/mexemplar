@@ -5,6 +5,13 @@
 **Status**: Draft
 **Input**: User description: "基于 docs/superpowers/specs/2026-06-15-process-event-push-design.md 的已定稿设计,为 subagent / specialist 提供一种'等事件、有进展叫我'的低延迟进程订阅能力,不再循环 poll。"
 
+## Clarifications
+
+### Session 2026-06-15
+
+- Q: 当 `wait_for_process_event` 返回 `cursorTooOld=true` 后,subagent 下一次再调用时 `sinceCursor` 该用什么值? → A: 同一次响应里仍返回 `cursor` 字段(等于事件队列里最新事件的 `sequence`;队列为空时等于该进程历史上分配过的最大 `sequence`,即"没有任何更新的事件");subagent 直接用这个 cursor 续,不切换策略。
+- Q: 进程从启动到第一次输出之前已经长时间静默(例如纯 `sleep` 60 秒,从不写 stdout/stderr),`stalled` 应不应该触发? → A: 触发——`last_output_at` 在 ProcessRecord 创建时初始化为进程启动时刻,"从未输出 + 静默达阈值"等同"有过输出后再静默达阈值",一律按懒计算口径产生一次 stalled。
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - subagent 阻塞等到状态边界即返回 (Priority: P1)
@@ -58,7 +65,8 @@ subagent 起的命令长时间不输出(卡在等用户输入、远端无响应�
 
 - subagent A 试图等 subagent B 起的进程: 跨会话归属校验拒绝,返回 permission_denied;不通告任何事件,也不暴露该进程的存在
 - subagent 传入的 processId 不存在(从未创建 / 已被清理): 返回 process_missing 错误码,与既有 process_poll / process_wait 一致
-- subagent 传入的 sinceCursor 早于当前事件 deque 最旧 sequence(被环形 buffer 覆盖): 返回 cursorTooOld 标志 + 当前状态,subagent 改走 process_poll + process_logs 兜底,不阻塞、不抛错
+- subagent 传入的 sinceCursor 早于当前事件 deque 最旧 sequence(被环形 buffer 覆盖): 返回 cursorTooOld=true + 当前状态 + 一个新的 cursor(队列最新事件 sequence,或空队列时为该进程历史最大 sequence);subagent 可直接用该 cursor 续 wait,不必切换到 process_poll + process_logs;若担心漏掉中间事件,subagent 可选择先调一次 process_logs 拉全量日志再续 wait
+- 进程从启动起就纯静默(从不写 stdout/stderr,例如 sleep 60): 静默时长按"进程启动时刻"作为基线计算,达到阈值后下一次 wait 调用照常返回一条 stalled,与"已输出过再静默"路径口径一致
 - 进程在 wait_for_process_event 调用前就已退出: 立刻返回(条件 1 命中——deque 中有未消费 state_changed),无超时等待
 - 多个 log_chunked 在等待期间累积: 一次调用返回多条事件,按 sequence 升序;游标推到最新一条
 - 子进程仅在 stdout 或 stderr 单边吐输出: stalled 与 log_chunked 都按累计输出统一判断,不区分流向
@@ -80,13 +88,13 @@ subagent 起的命令长时间不输出(卡在等用户输入、远端无响应�
 - **FR-005**: `wait_for_process_event` MUST 在 deque 中存在大于 `sinceCursor` 的事件时立即返回该次及之后所有未消费事件,按 sequence 升序;首次调用未传 sinceCursor 等价于从 0 开始
 - **FR-006**: `wait_for_process_event` MUST 在没有新事件时阻塞等待,直到出现新事件被唤醒或达到 `timeoutMs` 超时;超时 MUST 返回空事件列表 + 当前进程状态,且 MUST NOT 视为错误
 - **FR-007**: `wait_for_process_event` MUST 返回当前进程的 `status` 与 `exitCode`,以及调用方下一次需传入的 `cursor`(单调推进)
-- **FR-008**: 当 `sinceCursor` 早于当前事件队列中最旧 sequence(被环形 buffer 覆盖)时,`wait_for_process_event` MUST 返回 `cursorTooOld=true` + 当前状态,subagent 据此走 process_poll + process_logs 兜底
+- **FR-008**: 当 `sinceCursor` 早于当前事件队列中最旧 sequence(被环形 buffer 覆盖)时,`wait_for_process_event` MUST 返回 `cursorTooOld=true` + 当前状态;同一次响应 MUST 仍然返回 `cursor` 字段,其值等于事件队列中最新事件的 `sequence`(若队列为空,则等于该进程历史上分配过的最大 `sequence`);subagent 直接使用该 `cursor` 作为下一次调用的 `sinceCursor`,无须改走兜底路径即可继续订阅后续事件
 - **FR-009**: 系统 MUST 让 `stalled` 与 `log_chunked` 阈值、事件队列容量可通过配置调节;配置项 MUST 走 UnifiedConfigManager,不允许业务代码硬编码,不暴露在 Settings UI
 - **FR-010**: 系统 MUST 保持既有进程工具 `process_poll` / `process_logs` / `process_wait` 行为与签名完全不变;`wait_for_process_event` 与它们并存,不替代任何一个
 - **FR-011**: 事件 MUST NOT 进入 UI Event Registry,也 MUST NOT 出现在公开 SSE / 事件流;前端不直接订阅或感知这些事件,主助理也不直接订阅
 - **FR-012**: 事件 MUST NOT 跨 sidecar 进程生命周期持久化;sidecar 重启后,旧 processId 与对应事件队列一并失效
 - **FR-013**: `wait_for_process_event` MUST NOT 被声明为 `is_concurrency_safe`,与既有进程工具的并发约束保持一致
-- **FR-014**: `wait_for_process_event` MUST 在静默期内"懒"判定 stalled——只在被调用时检查"距上次输出是否过阈值且尚未通告",而不是后台线程定时扫描
+- **FR-014**: `wait_for_process_event` MUST 在静默期内"懒"判定 stalled——只在被调用时检查"距上次输出是否过阈值且尚未通告",而不是后台线程定时扫描;`last_output_at` MUST 在 ProcessRecord 创建时即初始化为进程启动时刻,因此"从未产生过任何输出 + 静默达阈值"与"产生过输出后又静默达阈值"按同一懒判定口径处理
 - **FR-015**: 进程事件累积过事件队列容量时,旧事件 MUST 被环形覆盖;系统 MUST NOT 通过抛错或丢弃新事件来表达"队列满"
 
 ### Key Entities *(include if feature involves data)*
