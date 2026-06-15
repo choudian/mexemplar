@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-06-12
-**Revision**: 2026-06-12 — Removed the system-wide external credential-store dependency
+**Last Updated**: 2026-06-15
+**Revision**: 2026-06-15 — Backfilled implementation memory for features 011, 012, 017, 018, and 019
 
 ---
 
@@ -972,3 +972,175 @@ frontend/
 - Settings/data/API tests cover defaults, validation, config persistence and precedence, secret masking/log redaction, read-only Real Grand Tour credential resolution, connection action, provider metadata, and advanced descriptor shape.
 - Frontend tests cover Tool Output navigation, advanced disclosure, value save, secret write/delete, connection status, and actionable error display.
 - Guardrails cover provider inventory, Real Grand Tour credential/budget registration, secret/log/UI-event leakage, active documentation, and AI entry mirrors.
+
+---
+
+## 大脑记忆质量提示词升级 [Source: specs/020-brain-memory-quality]
+
+**Revision note (2026-06-15)**: Archived the migrated business-only prompt update and its explicit
+verification gaps without changing brain schemas, services, contracts, or runtime wiring.
+
+### Technical Scope
+
+- Runtime: Python 3.11+（当前 3.12），沿用现有 LLM client、`BrainRepository` 和 `BrainBackgroundWorker`。
+- Source files:
+  - `src/business/brain/distillation_service.py` — Segment 多分区沉淀与周期性潜意识沉淀 prompt。
+  - `src/business/brain/prediction_service.py` — Prediction 生成与验证 prompt。
+- Storage、config、secret、API、event、frontend、Tauri：均无变化。
+- 性能影响：不增加 LLM 调用次数，只增加少量 prompt 输入 token。
+
+### Implemented Prompt Strategy
+
+1. Segment 沉淀使用“未来不看这条信息会造成什么影响”作为价值筛选问题。
+2. 记忆条目必须自包含、一条一事；聊天过程、通用知识、宽泛印象和单次事件误判被列为反例。
+3. P1/P2/P4 继续按 phase 拼接已激活 zone 的判断问题、适用内容和示例。
+4. 没有合格内容时允许所有分区为空；feedback signal 只作参考，不逐条复制。
+5. 潜意识沉淀聚焦跨对话重复行为模式，排除单次事件、明确偏好和泛化人格判断。
+6. Prediction 生成要求具体、可证伪、带 checkpoint 且至少有两条记忆支撑；验证 prompt 明确四种状态语义。
+
+### Compatibility
+
+- 保持 `distillation_output`、`subconscious_distillation_output`、
+  `prediction_generation_output` 名称和 schema 不变。
+- 保持 phase-aware validation、事务写入、all-empty retry、prediction retry/expired fallback
+  和 startswith verification parser 不变。
+- “至少两条证据”当前仅由 prompt 指导，未增加 schema 或业务代码硬校验。
+
+### Testing
+
+- 迁移时运行：
+  `uv run pytest tests/business/brain/test_distillation_service.py tests/business/brain/test_prediction_worker.py -q`
+  — 41 passed，7 个既有 Python 3.12 SQLite datetime adapter 弃用警告。
+- 现有覆盖验证 schema、结构化解析、事务/all-empty 行为、prediction 生成/验证和 worker 调度。
+- 待补 gap：关键 prompt 语义与 P1/P2/P4 zone 边界的低脆弱性回归测试；不使用整段字符串快照。
+
+---
+
+## Desktop UX、Debug Inspector 与真实 Grand Tour [Source: specs/011-desktop-ux-debug-regression]
+
+**Revision note (2026-06-15)**: Backfilled 011 and reconciled its historical credential design with
+the current UnifiedConfigManager-only constitution.
+
+### Implemented Structure
+
+- `frontend/src/hooks/useLongPasteCollapse.ts` + `LongPastePreview.tsx` 为 Assistant/Teaching composer 提供共享长粘贴交互。
+- `src/business/debug/` 拥有 control、epoch-scoped buffer、observation、redaction、flow projection 和 reference facade。
+- `src/desktop_api/routers/debug.py` 只做鉴权 DTO adapter；`/debug` 是隐藏 route，不进入普通导航。
+- `LangChainLLMClient`、vision helper、AgentLoop、review、compression 和 brain worker 通过 context/source inventory 进入统一 observation 边界。
+- Real Grand Tour 使用独立 Playwright config/runtime、public event watcher、预算审计、安全 fixture 和 summary reporter。
+
+### Runtime Boundaries
+
+- `debug.trace.enabled` 仅 runtime-only，默认 false；初始上限为 200 records、1 MiB/record、16 MiB total。
+- Raw trace 和 debug-only handoff detail 不持久化；disable/clear/restart 使用 epoch invalidation。
+- Trace API 使用 no-store，前端 raw state 只驻留内存；媒体只保留安全 metadata。
+- Real Grand Tour 通过 UnifiedConfigManager 只读使用现有 credential，secret mutation 被拒绝；历史 keyring resolver 已删除。
+- Real suite 最多 30 次付费请求、20 分钟，并与默认 mock E2E 完全分离。
+
+### Testing
+
+- Composer paste/selection/keyboard、debug control/buffer/redaction/reference/API、flow correlation、provider inventory 和 raw leakage guard。
+- Real-tour runtime、event watcher、budget、cleanup、safe report 和 controlled failure tests。
+- Feature tasks: 104/104 completed。
+
+---
+
+## Skill Methodology 方法论资产层 [Source: .specify/archive/012-skill-methodology-layer]
+
+**Revision note (2026-06-15)**: Backfilled 012 from the physical archive folder.
+
+### Data And Services
+
+- v12 SQLite: `brain_skills`、`brain_skill_source_segments`、`brain_skill_equipment`，含 closed enums、partial unique indexes 和 no-DELETE triggers。
+- `SkillRepository`、`SkillService`、`SkillEquipmentService`、`SkillBootstrapService` 和 `SkillReferenceCounter`。
+- Seed: `src/business/brain/seed/how_to_create_skill_methodology.md`，读取失败使用内置 fallback。
+- Config: `brain.skill.token_budget.warn_threshold`、`danger_threshold`、`seed_file_path`，统一由 UnifiedConfigManager 管理。
+
+### Runtime Model
+
+- Tool Teaching/List/Composition 使用 `/tools/*` 和 `tools.changed`；Skill Methodology 使用 `/skills/methodology` 和独立 `skill.*` events。
+- Assistant/specialist system prompt 只注入有序轻量 equipment list，正文经 `load_skill_methodology` 工具进入 messages。
+- 派活时冻结 equipment snapshot，in-flight 执行不受后续装备变化影响。
+- Supersede、编辑、soft-delete 和 equipment transfer 使用单事务；方法论和 equipment history 均不物理删除。
+- `create_skill_methodology` 由 Assistant 调度并按 specialist whitelist 授权；`system_bootstrap` 链根有默认装备和编辑/删除保护。
+
+### Frontend And Events
+
+- `SkillMethodologyScreen`：active list、排序/筛选、详情/编辑、版本链、equipment audit、bootstrap status。
+- `SpecialistScreen`：Assistant 固定装备卡和 specialist equipment panels，含 token meter、tool warning、排序。
+- Blinker: `brain_skill_changed`、`brain_skill_equipment_changed`、`brain_skill_supersede_completed`、fallback signal。
+- UI events: `skill.changed`、`skill.equipment.changed`；Tool 域唯一事件为 `tools.changed`。
+
+### Testing
+
+- 26 项 success criteria 映射到 Repository/business/integration/guardrail/frontend tests。
+- 重点覆盖 no physical delete、origin enum、supersede atomicity、frozen snapshot、body 不进 prompt、load/reference count、terminology/event rename。
+- Feature tasks: 79/79 completed。
+
+---
+
+## AgentLoop 并行工具执行 [Source: specs/017-parallel-tool-execution]
+
+**Revision note (2026-06-15)**: Backfilled 017.
+
+- `ToolDefinition.is_concurrency_safe` 保守默认 false。
+- AgentLoop 将连续 safe calls 分组到最多 4-worker 的 `ThreadPoolExecutor`，并复制 `contextvars`。
+- Handler/hook/output governance 在 worker 执行；message persistence 和 activity emission 在 caller thread 按模型顺序完成。
+- 并发读取失败不触发 sibling cancellation 或串行 cascade；side-effect tools 保持原有 `not_executed` 级联。
+- 只有审查后的 immutable/read-only tools opt-in；`get_tool_detail`、`load_skill_methodology`、process、用户工具、写入/执行/委派保持串行。
+- Verification: `tests/integration/test_agent_loop_parallel_tools.py` 及既有 AgentLoop/hook/cancellation/output suites。
+- Feature tasks: 12/12 completed。
+
+---
+
+## Assistant 失败消息重试与恢复 [Source: specs/018-assistant-failed-message-retry]
+
+**Revision note (2026-06-15)**: Backfilled 018.
+
+### Data And Business
+
+- v14 `assistant_run_failures` + `AssistantRunFailureRepository`。
+- `AssistantFailureClassifier` 只输出 allowlisted category/message/suggestion。
+- `AssistantFailureService` 管理 `failed -> retrying -> resolved|failed`、atomic retry claim 和 startup recovery。
+- Message repository 提供按 session/sequence 读取原 user text 和 failure projection。
+
+### Runtime And API
+
+- Terminal failure 先持久化/发布 display messages，再发布 failed progress。
+- `POST /api/assistant/sessions/{sessionId}/retry` 支持原样或编辑后新回合重试。
+- 普通新消息会 supersede 旧 failure；成功重试通过权威 messages 移除卡片。
+- Debug action 按 session 打开隐藏 inspector；未预先 arm trace 时显示历史 raw detail unavailable。
+
+### Frontend And Testing
+
+- `AssistantFailureCard` 内联显示 retry/edit/debug；提交期间锁定，API 失败后恢复。
+- Store 不从 `lastError`/progress 猜失败，resync 后重拉 messages。
+- Repository/migration/classifier/runtime/API/event、React unit 和 Playwright E2E 覆盖。
+- Feature tasks: 31/31 completed。
+
+---
+
+## 结构化多选澄清 [Source: specs/019-structured-user-clarification]
+
+**Revision note (2026-06-15)**: Backfilled 019; automated implementation is complete, while the
+manual quickstart smoke checklist remains open.
+
+### Runtime Design
+
+- `clarification_manager.py` 使用 `request_id + threading.Event + lock + first-decision-wins` 管理 per-session pending。
+- `ask_user_question` 是主助理专属、非中断、需独占调用的阻塞工具；solo 返回后继续同一 AgentLoop。
+- 混批时 AgentLoop 对全批零执行并写 `invalid_model_output`。
+- 默认 5 分钟超时；cancel/stop/shutdown/unavailable 均返回明确终态，不提供猜测答案。
+
+### API, Events, Frontend
+
+- GET pending snapshot + POST decision，沿用 sidecar auth 并校验 session ownership。
+- UI Registry: `assistant.clarification_requested` / `assistant.clarification_resolved`，resolved 不含答案。
+- `ClarificationCard` 使用 fieldset/radio/checkbox/other text，按 session 保存内存 draft/submitting。
+- SSE disconnect 不结算请求；replay 或 pending snapshot 恢复卡片。
+- 与 confirmation manager/Toast 完全独立，无数据库、migration 或配置。
+
+### Testing
+
+- Manager、exclusive batch、API、integration flow、tool scope、UI card、E2E 和 confirmation regression。
+- Feature tasks: 47/48 completed；T048 手工 quickstart smoke 未勾选。

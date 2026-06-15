@@ -1,7 +1,7 @@
 # Merged Features Log
 
-**Last Updated:** 2026-06-12
-**Revision:** 2026-06-12 — Removed the system-wide external credential-store dependency
+**Last Updated:** 2026-06-15
+**Revision:** 2026-06-15 — Backfilled archives for 011, 012, 017, 018, and 019
 
 ## 录制数据大字段按需读取 — 2026-04-25
 
@@ -368,3 +368,109 @@
 - `docs/ARCHITECTURE.md` / `docs/PROJECT_CONSTRAINTS.md` / `config.example.json` / AI entry mirrors — 当前架构、约束、配置和协作知识同步。
 
 **Tasks Completed:** 23/23 tasks
+
+## 大脑记忆质量提示词升级 — 2026-06-15
+
+**Branch:** `020-brain-memory-quality`
+**Spec:** `specs/020-brain-memory-quality`
+**Revision note:** Migrated an implementation that was completed on `prepare-github` without the normal
+Spec Kit workflow, then archived its recovered specification and known verification gaps.
+
+**What was added:**
+- US-053 (P1): Segment 沉淀使用未来价值、自包含、一条一事和宁缺毋滥标准，明确排除聊天过程摘要、通用知识和宽泛印象。
+- US-054 (P2): 潜意识沉淀只归纳有跨对话重复证据的具体行为模式，并要求说明证据来源。
+- US-055 (P3): Prediction 生成要求具体、可证伪、有验证时机且由多条记忆支撑；验证明确四状态语义。
+
+**Modified Components:**
+- `src/business/brain/distillation_service.py` — Segment 分区规则、低质量反例、空结果许可、feedback signal 边界和潜意识模式判断 prompt。
+- `src/business/brain/prediction_service.py` — Prediction 生成质量标准和 `hit / partial / miss / expired` 验证说明。
+- `.specify/memory/spec.md` / `.specify/memory/plan.md` / AI entry mirrors — 当前行为、兼容边界和软约束说明。
+
+**Verification:**
+- 聚焦 brain tests：41 passed；7 个既有 Python 3.12 SQLite datetime adapter 弃用警告。
+- 未完成：3 项 prompt regression tests，继续记录在 `specs/020-brain-memory-quality/tasks.md` T018-T020。
+
+**Tasks Completed:** 18/21 tasks
+
+## Desktop UX、Debug Inspector 与真实 Grand Tour — 2026-05-28
+
+**Branch:** `011-desktop-ux-debug-regression`
+**Spec:** `specs/011-desktop-ux-debug-regression`
+**Revision note:** Backfilled on 2026-06-15; historical keyring details were reconciled to the current UnifiedConfigManager-only credential architecture.
+
+**What was added:**
+- Shared long-paste collapse for Assistant and Teaching composers.
+- Authenticated hidden Debug Inspector with bounded ephemeral traces, Agent Flow, reference expansion and failure-isolated observation.
+- Opt-in real Grand Tour with isolated data, public-state synchronization, paid-call/time budgets, cleanup and sanitized reports.
+
+**New Components:**
+- `src/business/debug/`, `/api/debug`, hidden `/debug` frontend route.
+- `useLongPasteCollapse`, trace/flow/reference panels.
+- Real Grand Tour runtime, event watcher, audit, fixture and report helpers.
+
+**Tasks Completed:** 104/104 tasks
+
+## Skill Methodology 方法论资产层 — 2026-06-01
+
+**Branch:** `012-skill-methodology-layer`
+**Spec:** `.specify/archive/012-skill-methodology-layer`
+**Revision note:** The feature spec had been physically moved to `.specify/archive/`, but was backfilled into main memory only on 2026-06-15.
+
+**What was added:**
+- Tool/Skill terminology split and `/tools/*` routes with `tools.changed`.
+- Versioned Skill Methodology assets, source provenance, stateful equipment and no-physical-delete protection.
+- Assistant/specialist lightweight methodology lists plus on-demand `load_skill_methodology`.
+- SkillMethodologyScreen, equipment management, statistics, audit and bootstrap protection.
+
+**New Components:**
+- v12 `brain_skills`, `brain_skill_source_segments`, `brain_skill_equipment`.
+- Brain skill services/repositories/tools/seed and methodology frontend/API/event layer.
+
+**Tasks Completed:** 79/79 tasks
+
+## AgentLoop 并行工具执行 — 2026-06-14
+
+**Branch:** `017-parallel-tool-execution`
+**Spec:** `specs/017-parallel-tool-execution`
+
+**What was added:**
+- Explicit `ToolDefinition.is_concurrency_safe` opt-in.
+- Contiguous safe partitions executed with at most four workers.
+- Caller-thread ordered persistence and failure isolation for parallel reads.
+
+**Modified Components:**
+- AgentLoop execution/governance split and reviewed read-tool classification.
+
+**Tasks Completed:** 12/12 tasks
+
+## Assistant 失败消息重试与恢复 — 2026-06-15
+
+**Branch:** `018-assistant-failed-message-retry`
+**Spec:** `specs/018-assistant-failed-message-retry`
+
+**What was added:**
+- v14 persistent Assistant failure state and safe classification.
+- Inline recovery card with original retry, edited new-turn retry and Debug Inspector navigation.
+- Atomic retry claim, startup recovery and authoritative resync behavior.
+
+**New Components:**
+- `AssistantRunFailureRepository`, `AssistantFailureService`, `AssistantFailureClassifier`, `AssistantFailureCard`.
+
+**Tasks Completed:** 31/31 tasks
+
+## 结构化多选澄清 — 2026-06-15
+
+**Branch:** `019-structured-user-clarification`
+**Spec:** `specs/019-structured-user-clarification`
+
+**What was added:**
+- Main-Assistant-only `ask_user_question` with 1–4 structured single/multi-choice questions and “other” input.
+- Exclusive-call AgentLoop contract, in-memory first-decision-wins lifecycle and same-loop continuation.
+- Pending/decision APIs, typed UI events and non-modal ClarificationCard.
+
+**New Components:**
+- `clarification_manager.py`, `clarifications.py`, ClarificationCard and session-scoped frontend state.
+
+**Outstanding:** T048 manual quickstart smoke checklist remains open.
+
+**Tasks Completed:** 47/48 tasks

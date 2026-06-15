@@ -168,10 +168,13 @@ class PredictionService:
 
     def _build_prediction_prompt(self) -> str:
         return (
-            "基于以下记忆条目，生成 1-3 个关于用户未来可能行为的可验证猜测。\n\n"
-            "每个猜测必须包含 content、verification_checkpoint、reason。\n"
-            "猜测必须能在未来某个对话或时间点被验证，不要生成无法验证的人格判断。\n"
-            "请调用 prediction_generation_output 工具输出结果。"
+            "基于记忆条目，生成 1-3 个关于用户未来行为的具体猜测。\n\n"
+            "好猜测：可验证（一次对话/事件能证实/证伪）、有时间窗（verification_checkpoint 写明验证时机）、具体到行动。\n"
+            "✓「用户下次写新功能会要求先写测试」\n"
+            "✗「用户重视质量」（不可证伪）\n"
+            "✗「用户会继续用 Python」（太宽泛）\n\n"
+            "至少 2 条记忆支撑一个猜测。没有足够依据就留空。\n"
+            "调用 prediction_generation_output 输出。"
         )
 
     def _prediction_items_from_response(self, response: Any) -> list[dict]:
@@ -201,12 +204,16 @@ class PredictionService:
         evidence: str = "",
     ) -> tuple[Optional[str], str]:
         prompt = (
-            "以下是一个关于用户行为的猜测，请判断其是否已验证。\n\n"
+            "判断以下猜测是否已被验证。\n\n"
             f"猜测：{content}\n"
             f"验证点：{checkpoint}\n\n"
-            "验证期内已沉淀的记忆证据：\n"
+            "验证期内的记忆证据：\n"
             f"{evidence or '（没有相关记忆证据）'}\n\n"
-            "请以 hit、miss、partial 或 expired 开头，并在后面给出一句理由。"
+            "用以下前缀之一回答，后跟一句简要理由：\n"
+            "- hit: 猜测被证据明确证实\n"
+            "- partial: 部分证实，有模糊或矛盾之处\n"
+            "- miss: 猜测被证据否定\n"
+            "- expired: 验证窗口已过，无足够证据判断"
         )
         response = llm_client.chat(prompt)
         text = str(response or "").strip()

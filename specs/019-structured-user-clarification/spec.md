@@ -2,7 +2,7 @@
 
 **Feature Branch**: `019-structured-user-clarification`
 **Created**: 2026-06-15
-**Status**: Draft
+**Status**: Completed
 **Input**: User description: "新增主助理专属 ask_user_question 工具：一次询问 1–4 题，每题 2–4 个选项，单/多选 + 始终可用的"其他"自由输入，以输入框上方非模态卡片整组提交，默认 5 分钟超时，超时/取消/停止均不允许模型猜测答案，请求仅存于当前 sidecar 内存。"
 
 ## User Scenarios & Testing *(mandatory)*

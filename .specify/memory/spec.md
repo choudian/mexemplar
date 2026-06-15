@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-06-11
-**Revision**: 2026-06-11 — Merged `specs/016-tool-output-semantic-summary`
+**Last Updated**: 2026-06-15
+**Revision**: 2026-06-15 — Backfilled archives for features 011, 012, 017, 018, and 019
 
 ---
 
@@ -1135,3 +1135,373 @@ Tauri 与 Python sidecar 之间的运行期连接授权状态。字段：`port`�
 - 工具输出中的 prompt injection 文本只能作为待总结数据，不能修改固定 JSON 协议或系统指令。
 - `load_tool_output` 读取出的第二阶段大结果会再次进入同一治理边界，同时保持授权和可见上限。
 - 配置文件密钥作为本地默认值；Settings 写入后由 `app_settings` 覆盖，Settings 删除会写入空覆盖值并屏蔽文件默认值，直到再次保存或显式移除该覆盖。
+
+---
+
+## 大脑记忆质量提示词升级 [Source: specs/020-brain-memory-quality]
+
+**Revision note (2026-06-15)**: Archived the migrated feature into main memory; records the implemented
+brain prompt quality rules while preserving the distinction between LLM guidance and deterministic validation.
+
+### User Stories
+
+- **US-053 (P1)**: 办公助理大脑只沉淀未来对话中有决策价值、可减少重复询问或避免重复踩坑的信息；聊天过程摘要、通用知识和缺少证据的宽泛印象被明确列为低质量输出。
+- **US-054 (P2)**: 潜意识区只归纳跨对话反复出现、可帮助预判用户取舍的具体行为模式；单次事件、用户已明确表达的偏好和泛化人格标签不构成潜意识模式。
+- **US-055 (P3)**: 猜测区只生成具体、可证伪、带验证时机且有多条记忆支撑的未来行为预测；后台验证使用一致的 `hit / partial / miss / expired` 状态语义。
+
+### Functional Requirements
+
+- **FR-232**: Segment 沉淀 prompt MUST 提供面向未来使用价值的筛选标准。
+- **FR-233**: Segment 沉淀 prompt MUST 要求记忆自包含且一条只表达一个事实或判断。
+- **FR-234**: Segment 沉淀 prompt MUST 明确排除聊天过程摘要、通用知识、无证据宽泛印象和把单次事件误判为稳定偏好等低质量输出。
+- **FR-235**: 各 phase 已激活认知分区 MUST 提供可操作的判断问题、适用内容和正反例；低 phase MUST NOT 提前包含未激活分区指导。
+- **FR-236**: Prompt MUST 明确允许没有合格内容时返回空数组，不得要求模型为填满分区而提取。
+- **FR-237**: 用户反馈信号 MUST 仅作为提取参考，不得要求模型逐条转换为新记忆。
+- **FR-238**: 潜意识沉淀 prompt MUST 将跨对话重复证据作为模式判断依据，并要求 `reason` 指明支撑该模式的记忆来源。
+- **FR-239**: Prediction 生成 prompt MUST 要求猜测具体、可证伪、带 `verification_checkpoint`，并由至少两条记忆支撑；依据不足时允许空结果。
+- **FR-240**: Prediction 验证 prompt MUST 明确定义 `hit`、`partial`、`miss` 和 `expired` 的判定语义，并保持既有前缀解析兼容。
+- **FR-241**: `distillation_output`、`subconscious_distillation_output` 和 `prediction_generation_output` 的工具名称、schema、phase 激活范围、Repository 写入、worker 调度、重试和解析行为 MUST 保持兼容。
+
+### Constraints & Compatibility
+
+- **CC-086**: 本特性仅修改 `src/business/brain/` 内部 LLM prompt，不新增 SQLite、DuckDB、Repository、migration、配置、secret、API、事件或前端契约。
+- **CC-087**: “至少两条记忆/不同对话证据”属于 LLM prompt 软约束；在 schema 或业务代码加入确定性校验前，不得宣称为运行时硬保证。
+- **CC-088**: Prompt 允许诚实返回空数组，但 Segment 仍保留 010 定义的既有 all-empty 一次重试行为。
+- **CC-089**: Prompt 更长可以增加少量输入 token，但 MUST NOT 增加额外 LLM 调用、二次模型评审或规则引擎。
+
+### Success Criteria
+
+- **SC-112**: Prompt 回归测试可验证 P1/P2/P4 只包含各自已激活分区及既有结构化输出指令。
+- **SC-113**: Prompt 回归测试可验证价值判断、自包含、一条一事、低质量反例、空结果许可和反馈信号边界。
+- **SC-114**: 潜意识 prompt 回归测试可验证重复证据规则、排除项和证据来源要求。
+- **SC-115**: Prediction prompt 回归测试可验证多条证据、可证伪性、验证点及四种验证状态语义。
+- **SC-116**: 既有 brain distillation 和 prediction worker 聚焦测试继续通过，且无 schema 或持久化回归。
+
+### Edge Cases
+
+- 所有候选信息都不值得保存时，结构化输出允许为空；Segment service 仍按既有规则执行一次 all-empty 重试。
+- 近期用户反馈信号只影响提取方向，不能被机械复制成新记忆。
+- P1/P2 prompt 不包含 P4 的潜意识区和失败区规则。
+- 模型可能违反证据数量指导；当前系统依赖结构化 schema 保证形状，不对证据数量做确定性计数。
+- Prediction 验证仍依赖既有前缀解析，调用失败继续按既有重试和 `expired` 回退处理。
+
+---
+
+## Desktop UX、Debug Inspector 与真实 Grand Tour [Source: specs/011-desktop-ux-debug-regression]
+
+**Revision note (2026-06-15)**: Backfilled the completed 011 feature. The original keyring-specific
+Grand Tour credential design is superseded by the current constitution and 2026-06-14 UnifiedConfigManager migration.
+
+### User Stories
+
+- **US-056 (P1)**: Assistant 与 Skill Teaching 的长文本粘贴会折叠为紧凑预览，同时保留完整草稿、插入位置和发送内容。
+- **US-057 (P2)**: 开发者可通过隐藏且鉴权的 Debug Inspector 检视有界 LLM trace、Agent Flow 和当前进程可寻址 reference。
+- **US-058 (P3)**: 开发者可手动运行显式 opt-in 的真实 Grand Tour，在隔离数据、费用/时长预算和安全报告边界内验收桌面主流程。
+
+### Functional Requirements
+
+- **FR-242**: Assistant 与 Teaching composer MUST 共享长粘贴折叠规则；只有满足阈值的 paste 自动折叠，手工输入不自动折叠。
+- **FR-243**: 折叠状态 MUST 保留完整 draft、既有文本和 selection 插入语义，并展示预览、省略提示和内容大小。
+- **FR-244**: 用户 MUST 可通过键盘展开、重新折叠、清空或发送长草稿；发送 MUST 提交完整原文并重置临时展示状态。
+- **FR-245**: 系统 MUST 提供不进入普通导航的隐藏 `/debug` 诊断入口，并继续使用 sidecar runtime token 鉴权。
+- **FR-246**: Trace capture MUST 默认关闭，仅能在明确敏感信息警告后由 authenticated control 以 runtime-only `debug.trace.enabled` arm；armed 时 shell MUST 显示持续可见的停止入口。
+- **FR-247**: Trace 开启时，受支持的文本、tool-enabled 和 vision/multimodal LLM 路径 MUST 产生有界 trace 或明确 omission；媒体只保留不可还原的安全元数据。
+- **FR-248**: Trace MUST 记录可用的 source/session/workflow/work-unit 关联；无法关联的调用 MUST 标记 unknown source，不能静默消失。
+- **FR-249**: Debug Inspector MUST 支持按 source/work unit 浏览、筛选和展开 trace，并明确标注因预算省略或不可用的内容。
+- **FR-250**: Trace 开启且调用方已鉴权时，Debug Inspector MUST 可展开当前进程仍可寻址的 reference；响应必须有界并执行同等脱敏。
+- **FR-251**: Raw trace、额外 handoff detail 和 correlation MUST 仅存在于记录数、单记录字节和总字节均有上限的进程内 epoch。
+- **FR-252**: clear、disable、离开 debug 页面或 sidecar restart MUST 使当前 ephemeral epoch 不可读不可写；迟到请求不得重新填充旧 epoch。
+- **FR-253**: Trace 保存和返回 MUST 脱敏应用已知 secret、provider credential 和 runtime token，并明确警告无法保证识别开发者自行粘贴的任意 secret。
+- **FR-254**: 普通日志 MUST NOT 包含 raw prompt/response、完整 tool args、raw diagnostic handoff/result、credential 或 runtime authorization token。
+- **FR-255**: Observation、redaction、correlation 或 buffer 故障 MUST 与业务调用隔离，不得改变 provider 成功结果、失败语义或重试行为。
+- **FR-256**: Trace、flow 和 reference API MUST 在 trace disabled、鉴权失败或数据不可用时 fail-closed，并使用 `no-store` 响应边界。
+- **FR-257**: Agent Flow MUST 从权威 orchestration transition 投影 chronological workflow timeline，而不是从模型文本或普通进度 UI 猜测。
+- **FR-258**: Agent Flow MUST 覆盖 Teaching 的 PM/Programmer/Review/Trial 路径和 Assistant 到 ephemeral subagent/fixed specialist 的委派及返回。
+- **FR-259**: Flow transition MUST 展示 workflow correlation、顺序/时间、source/target、状态、reason 和可用 detail，并支持与 trace 双向导航。
+- **FR-260**: 没有相关 trace 的 transition MUST 保留并标记 unlinked；已有持久 transition 与仅 trace epoch 存在的 raw delegated task/result MUST 明确区分来源。
+- **FR-261**: 真实 Grand Tour MUST 是显式人工 opt-in 的独立 Playwright suite，运行前提示真实模型费用和桌面/浏览器录制隐私风险。
+- **FR-262**: Grand Tour MUST 独立报告 readiness、Assistant、Teaching live recording、skills/compositions、settings 和跨屏稳定性场景。
+- **FR-263**: 长流程 MUST 依靠公开 workflow state/UI event 推进；模型输出断言只验证阶段、完成状态和可用结果，不依赖精确措辞。
+- **FR-264**: 每次 Grand Tour MUST 使用隔离业务数据和非敏感配置；所有 provider/secret 读取通过 UnifiedConfigManager 的只读路径，secret mutation 必须拒绝。
+- **FR-265**: Grand Tour MUST 限制付费调用数和总时长，预算耗尽、失败、超时或取消时停止录制并清理资源。
+- **FR-266**: Routine E2E MUST 保持 mock-backed、无真实 credential、无付费调用；controlled tests MUST 覆盖 real-tour timeout/cancel/cleanup/budget failure。
+- **FR-267**: 每次人工 Grand Tour MUST 生成不含 prompt、response、media 或 secret 的 summary report，关联 commit、journey、scenario outcomes、last state、预算和 cleanup。
+
+### Key Entities
+
+- **Composer Draft**: 未发送文本及其临时折叠展示状态，不是新的持久业务数据。
+- **LLM Trace Record**: 当前 trace epoch 内的一次模型调用诊断记录，包含安全文本、来源、结果/失败和字节计量。
+- **Trace Arm State**: 当前 sidecar 进程内的 trace authorization state，重启后默认关闭。
+- **Agent Flow Timeline**: 权威 workflow transitions 与可选 ephemeral trace detail 的诊断投影。
+- **Grand Tour Run**: 一次隔离、预算受控、可清理并产生安全报告的真实验收运行。
+
+### Constraints & Compatibility
+
+- **CC-090**: Debug UI 必须保持 `frontend -> desktop_api -> business` 分层，router 不直接读 Repository 或拥有 raw trace 生命周期。
+- **CC-091**: Diagnostic raw data 不得持久化到 SQLite/DuckDB、普通日志、公共 UI event、URL、浏览器缓存或前端持久化状态。
+- **CC-092**: Reference expansion 的保护边界是 trace enabled + 当前 sidecar auth + process lifetime；它不是 selected-trace scoped。
+- **CC-093**: Debug observation 只能观察，不能改变 Assistant、Teaching、brain worker、provider 或 workflow 行为。
+- **CC-094**: Real Grand Tour 是受控的人工验收例外；默认自动化仍必须无费用、无真实捕获。
+- **CC-095**: Grand Tour credential 路径以当前 `UnifiedConfigManager` 为权威，不得恢复 011 历史 keyring resolver。
+- **CC-096**: 011 不引入 trace export、远程 debug、生产 trace 收集或模型文本的确定性评分。
+
+### Success Criteria
+
+- **SC-117**: 两个 composer 的合格 paste 100% 折叠但发送原文，手工多行输入自动折叠次数为 0。
+- **SC-118**: 开启 trace 后，开发者能在 30 秒内定位并展开前台或后台模型调用，或看到明确 omission。
+- **SC-119**: 支持的 text/tool/vision 调用不会静默缺失，trace 中可还原媒体字节数量为 0。
+- **SC-120**: clear/disable/restart 后旧 raw trace 与 debug-only detail 可访问数量为 0。
+- **SC-121**: 应用控制 secret/runtime token 在 trace、普通日志、公共事件和前端持久化状态中的泄漏数量为 0。
+- **SC-122**: 代表性 workflow transition 全部按权威顺序显示，linked trace 可在两次交互内双向导航。
+- **SC-123**: 诊断故障注入不会改变被观察调用的成功或 provider failure 结果。
+- **SC-124**: 默认 frontend regression 发起真实模型付费调用数量为 0。
+- **SC-125**: Real Grand Tour 的失败、超时、取消和预算耗尽均报告 last safe state 并完成录制/资源 cleanup。
+- **SC-126**: 同一 commit/journey 的三次人工 run 可仅凭安全 summary 证明场景、预算、cleanup 和 credential mutation 状态。
+
+---
+
+## Skill Methodology 方法论资产层 [Source: .specify/archive/012-skill-methodology-layer]
+
+**Revision note (2026-06-15)**: Backfilled the completed 012 feature from `.specify/archive/`.
+The physical spec folder had been archived previously, but its requirements were never merged into main memory.
+
+### User Stories
+
+- **US-059 (P1)**: 原“工具技能”三屏面向用户统一使用 Tool 术语，为 Skill Methodology 方法论资产腾出 Skill 语义。
+- **US-060 (P2)**: 用户可通过 Assistant 创建/修订方法论，并在 Skill Methodology 页面事后编辑、软删除和查看版本链。
+- **US-061 (P3)**: Assistant 本体和 specialists 可装备有序的方法论轻量清单，执行时按需加载完整 SKILL.md 正文。
+- **US-062 (P4)**: 方法论的来源、版本、装备历史、加载/引用统计和 supersede 演化可审计且不物理删除。
+
+### Functional Requirements
+
+- **FR-268**: 原 Skill Teaching/List/Composition 的用户导航和文案 MUST 使用 Tool 术语；旧 `/skills` 路由 MUST 重定向到 `/tools/*`，方法论保留 `/skills/methodology`。
+- **FR-269**: 原 `skills.*` Tool 域公开事件 MUST 直接切换为 `tools.*`；方法论域使用独立的 `skill.changed` / `skill.equipment.changed`。
+- **FR-270**: 方法论 MUST 作为与 specialist 平级的 Brain 资产持久化，包含 name、description、trigger conditions、required tools、Markdown body、status、version chain、origin、source、统计和可装备元数据。
+- **FR-271**: 方法论核心字段 MUST 可渲染为 Anthropic Agent Skills 风格 SKILL.md；trigger conditions 至少一条非空字符串，required tools 可为空。
+- **FR-272**: 方法论 origin MUST 是封闭枚举：`system_bootstrap`、`user_edit`、`assistant_tool_call`、`specialist_tool_call`、`external_import`；非法值在业务、Repository 和数据库边界拒绝。
+- **FR-273**: 方法论状态 MUST 为 `active -> superseded|soft_deleted`，记录永不物理删除；全库同名精确字符串最多一个 active 版本。
+- **FR-274**: 每个方法论 MUST 保留 archive/failure source segments 及 session provenance；创建工具缺少合法来源时拒绝。
+- **FR-275**: Supersede MUST 在单事务内完成旧版本失活、新版本 active、统计继承和所有 active equipment 转移；并发 supersede 采用 first-writer-wins 的线性接力链。
+- **FR-276**: Assistant/specialist 与方法论之间 MUST 使用带状态和时间/原因的 N:M equipment rows；unequip、soft-delete 裁剪和 supersede transfer 不得物理删除历史行。
+- **FR-277**: 每对装备者/方法论最多一条 active equipment；再次装备必须创建新 active 行并保留历史 unequipped 行。
+- **FR-278**: 新 specialist 默认装备当时所有普通 active 方法论；新普通 active 方法论默认传播到现有 specialists 和 Assistant。
+- **FR-279**: `system_bootstrap` 链根默认只装备 Assistant，不自动传播给 specialists；用户主动装备后的 specialist 在后续 supersede 中继续跟随版本。
+- **FR-280**: SpecialistScreen MUST 支持 specialist 和固定 Assistant 卡片的装备、卸下、排序、required-tool warning 和 token 计量；风险颜色只提示，不阻断保存。
+- **FR-281**: 派活时 system prompt MUST 只注入按顺序排列的轻量清单（id/name/description/trigger conditions），不得注入 body Markdown。
+- **FR-282**: `load_skill_methodology(skill_id)` MUST 仅允许加载调用方冻结装备快照内的 active 方法论，以 SKILL.md 文本返回正文并增加 loaded count。
+- **FR-283**: `load_skill_methodology` MUST 无单轮频次硬上限；失败仅限越权、soft-deleted 或 superseded 等契约错误。
+- **FR-284**: Equipment 修改对正在执行的派单轮不生效；调用权限按派活时冻结快照判断，最快下一轮生效。
+- **FR-285**: `create_skill_methodology` MUST 同时支持新建和 supersede，并由工具白名单鉴权；未授权 specialist 不得调用。
+- **FR-286**: 所有对话式创建/修订方法论请求 MUST 经 Assistant 调度；SpecialistScreen 不提供绕过 Assistant 的直接命令入口。
+- **FR-287**: 创建结果默认直接 active；新建模式遇精确同名 active 必须拒绝，supersede 模式允许沿用名称。
+- **FR-288**: 创建和 supersede MUST 校验非空 trigger conditions 与至少一个 archive/failure source segment。
+- **FR-289**: Assistant 默认拥有创建工具和“如何创建方法论”bootstrap 方法论；specialists 默认不拥有写方法论能力。
+- **FR-290**: 新 active、supersede、编辑和 equipment 变化 MUST 经 blinker 事件和 UI Event Registry 通知前端，公开 payload 不含完整 body。
+- **FR-291**: Bootstrap seed 缺失、空白或读取失败时 MUST fail-open 使用内置 fallback，记录状态并发非阻塞提示；后续真实 seed 可覆盖未被用户编辑的 fallback 版本。
+- **FR-292**: `system_bootstrap` 链根 MUST 禁止软删除；用户编辑需走高危确认，拒绝时不产生新版本。
+- **FR-293**: 普通方法论用户编辑 MUST 直接形成 supersede 接力，不增加二次确认；软删除被装备方法论必须走高危确认并原子裁剪 equipment。
+- **FR-294**: Skill Methodology UI MUST 展示 active 列表、详情、编辑器、版本链、source、equipment audit 和 bootstrap 状态。
+- **FR-295**: 列表 MUST 支持按最近变更、loaded count、referenced count、equipped count 排序，并支持从未引用/最近 30 天未引用筛选。
+- **FR-296**: loaded count 只在 agent 成功调用 load 工具时增加；人工查看不增加。
+- **FR-297**: referenced count MUST 从 reply metadata `skills_referenced` 计数，重复归一化去重、旧版本归一到当前 active 链；缺失或格式错误 fail-soft 跳过。
+- **FR-298**: Supersede 后的新版本 MUST 继承资产维度的 loaded/referenced/last-referenced 统计；equipped count 随 equipment 转移自然继承。
+- **FR-299**: 审计视图 MUST 可双向回放方法论版本演化和装备者的 equip/unequip 历史。
+- **FR-300**: `external_import` 仅作为未来扩展枚举锚点；当前 desktop API MUST 拒绝外部导入写入且不得创建导入 endpoint。
+- **FR-301**: v12 MUST 在 SQLite 创建 `brain_skills`、`brain_skill_source_segments`、`brain_skill_equipment` 及状态/枚举/唯一性/防 DELETE 约束。
+- **FR-302**: 方法论数据 MUST 经 `SkillRepository` / `SkillEquipmentService` / `SkillService` 访问，desktop API 不直接读写表。
+- **FR-303**: `brain.skill.*` token threshold 和 seed path MUST 走 UnifiedConfigManager；无新 secret。
+- **FR-304**: Tool 录制/list/composition 的既有业务行为 MUST 在术语切换后保持不变。
+
+### Key Entities
+
+- **Skill Methodology**: 有版本、来源、正文、状态、统计和 origin 的方法论资产。
+- **Skill Source Segment**: 方法论与 archive/failure Segment 的审计关联。
+- **Skill Equipment**: Assistant 或 specialist 与方法论之间永不物理删除的状态化装备记录。
+- **Methodology Version Chain**: 以 chain root、parent 和 superseded_by 形成的线性演化链。
+- **Bootstrap Methodology**: 系统内置“如何创建方法论”，默认只装备 Assistant 并受额外保护。
+
+### Constraints & Compatibility
+
+- **CC-097**: 方法论和 equipment 与 brain memory 一样永不物理删除。
+- **CC-098**: 012 不改变 Assistant 100% 调度，不新增固定“方法论工匠”专员。
+- **CC-099**: UI/API/业务/Repository 依赖方向保持不变；新增表只能经 Repository 访问。
+- **CC-100**: 方法论正文不得进入 system prompt、UI event 或 Tool 域事件 payload。
+- **CC-101**: `skills.* -> tools.*` 是一次性公开事件切换，不恢复双发兼容。
+- **CC-102**: 装备修改不影响 in-flight executor，创建/接力/删除的多表修改必须单事务。
+- **CC-103**: 本 feature 不允许 subconscious 自动创建方法论。
+- **CC-104**: Tool Teaching/List/Composition 只改用户术语和路由，不改变录制/发布/组合业务语义。
+
+### Success Criteria
+
+- **SC-127**: 旧 Tool 三屏和旧 `/skills` 路径全部使用新术语/重定向，旧 `skills.*` Tool 事件发布数量为 0。
+- **SC-128**: 用户从 Assistant 要求沉淀方法论到 active 卡片出现可在 30 秒内完成或返回明确错误。
+- **SC-129**: 编辑/supersede 后 3 秒内版本链、列表和全部 equipment 指向一致，无旧 active 残留。
+- **SC-130**: Effective system prompt 中方法论 body 出现次数为 0，完整正文只通过 load tool result 进入 messages。
+- **SC-131**: 方法论和 equipment 的 API/Repository/直连 SQL 物理 DELETE 尝试均被拒绝。
+- **SC-132**: 未授权 specialist、非法 source、空 trigger、非法 origin 和同名 active 新建请求 100% 被拒绝。
+- **SC-133**: system_bootstrap 默认传播、保护编辑、seed fallback 和后续 seed 修复行为都有守卫测试。
+- **SC-134**: Supersede 的版本、统计和 equipment 转移在成功时全部提交，故障时整体回滚。
+- **SC-135**: Skill Methodology 页面提供四种排序、两种引用筛选和三项统计展示。
+- **SC-136**: `skills_referenced` 的正常、重复、旧版本归一、soft-delete 和 malformed 路径均有 fail-soft 测试。
+- **SC-137**: `load_skill_methodology` 的成功计数、越权拒绝、无频次硬上限和人工查看不计数均有自动化覆盖。
+- **SC-138**: Equipment 历史可按方法论和装备者双向回放，并保持最多一条 active pair。
+- **SC-139**: Tool Teaching/List/Composition 既有 E2E 全部继续通过。
+- **SC-140**: 前端 token 计量随装备和排序实时更新，超过阈值只变色不阻断保存。
+
+---
+
+## AgentLoop 并行工具执行 [Source: specs/017-parallel-tool-execution]
+
+**Revision note (2026-06-15)**: Backfilled the completed 017 feature.
+
+### User Stories
+
+- **US-063 (P1)**: 同一模型响应内连续且显式标记安全的独立读取工具可并行完成。
+- **US-064 (P2)**: 副作用或未证明安全的工具继续串行，失败级联语义保持不变。
+- **US-065 (P3)**: 并行读取中的单个失败不取消 sibling，也不阻断后续串行分区。
+
+### Functional Requirements
+
+- **FR-305**: `ToolDefinition` MUST 提供默认 `False` 的 `is_concurrency_safe` opt-in 标志。
+- **FR-306**: 只有经过线程安全审查的无副作用工具可以标记为并发安全。
+- **FR-307**: AgentLoop MUST 将普通调用划分为连续 safe partitions 和单调用 serial partitions，并保持模型顺序。
+- **FR-308**: 每个并发分区最多使用 4 个 worker。
+- **FR-309**: Handler、hook 和 output governance MAY 在 worker 执行，使摘要等延迟可重叠。
+- **FR-310**: Tool result persistence 和 activity sequence emission MUST 回到 caller thread 按原顺序完成。
+- **FR-311**: 并发分区内失败 MUST 正常保存，但不得建立串行副作用失败级联。
+- **FR-312**: Unknown、interrupting、single-call 和 side-effect failure semantics MUST 保持既有行为。
+- **FR-313**: 会修改缓存/计数的 discovery/methodology、process、用户工具、写入、执行和委派工具默认保持串行。
+
+### Constraints & Compatibility
+
+- **CC-105**: 并发只改变 business 层执行调度，不新增事件、schema、配置或 secret。
+- **CC-106**: SQLite message persistence 和活动 sequence allocation 必须保持 caller-thread 串行。
+- **CC-107**: 并发资格必须显式 opt-in，不能根据工具名或“看起来只读”动态猜测。
+- **CC-108**: Tool-call/result pairing、interrupting tool、hook、cancellation 和 output governance 契约不得回归。
+
+### Success Criteria
+
+- **SC-141**: 两个 safe calls 的 handler 和 governance 执行时间发生重叠。
+- **SC-142**: `[safe, safe, unsafe, safe]` 被划分为三个有序分区。
+- **SC-143**: 保存的 tool results 与 assistant tool calls 顺序和配对 100% 一致。
+- **SC-144**: 并发读取失败不取消 sibling，既有 AgentLoop 回归测试继续通过。
+
+---
+
+## Assistant 失败消息重试与恢复 [Source: specs/018-assistant-failed-message-retry]
+
+**Revision note (2026-06-15)**: Backfilled the completed 018 feature; root AI guidance existed,
+but main specification, plan, and changelog were missing.
+
+### User Stories
+
+- **US-066 (P1)**: Assistant 回合终止失败后，用户消息下显示可跨重启恢复的内联失败卡并可原样重试。
+- **US-067 (P2)**: 用户可编辑失败请求后创建新回合重试，原消息保持不可变。
+- **US-068 (P3)**: 用户可从失败卡按 session 打开 Debug Inspector，并理解未预先开启 trace 时历史 raw detail 不可用。
+
+### Functional Requirements
+
+- **FR-314**: 每个终止性 Assistant 回合失败 MUST 在发布 failed progress 前持久化。
+- **FR-315**: Failure record MUST 关联 session 和触发 user message sequence，并保存安全分类、建议、内部稳定码、异常类型名、attempt count、状态和时间。
+- **FR-316**: Failure 状态机 MUST 为 `failed -> retrying -> resolved|failed`；sidecar 启动时遗留 `retrying` MUST 恢复为 `failed`。
+- **FR-317**: 分类 MUST 覆盖 authentication、invalid request、quota/rate limit、network、provider/server、iteration limit 和 internal。
+- **FR-318**: 普通 DTO、UI event 和日志 MUST NOT 暴露 provider raw response、endpoint、credential、stack trace 或异常正文。
+- **FR-319**: 失败时 backend MUST 先发布已持久化 display messages，再发布 `assistant.progress(status=failed)`。
+- **FR-320**: User message DTO/event MAY 带一个安全 failure projection：category/message/suggestion/attemptCount/failedAt。
+- **FR-321**: Retry API MUST 接收 `messageSequence` 与可选 `content`；缺省 content 原样重试，提供 content 则创建新 user turn。
+- **FR-322**: Retry MUST 拒绝非当前 failure、空编辑内容、缺失/非 Assistant session。
+- **FR-323**: 并发 retry MUST 通过数据库条件更新确保最多一个 claim 到 `retrying`。
+- **FR-324**: Manual retry 次数 MUST 不设上限，且不得改变既有自动 provider retry 或增加备用模型。
+- **FR-325**: 成功 retry MUST resolve source failure 并从权威消息历史移除卡片。
+- **FR-326**: 编辑后 retry 再失败时，新 failure MUST 归属新 user message。
+- **FR-327**: 同 session 发送新的普通消息前 MUST resolve 旧的 unresolved failure。
+- **FR-328**: 前端 MUST 将恢复卡渲染在对应 user bubble 下方，提供 retry、edit-and-retry、cancel edit 和 debug。
+- **FR-329**: Retry 提交期间控件 MUST disabled；retry API 自身失败后卡片 MUST 恢复可操作。
+- **FR-330**: Assistant terminal failure MUST NOT 写入产生重复 Toast 的全局 `lastError`；其他 API/debug errors 保持既有行为。
+- **FR-331**: Debug action MUST 导航到 `/debug?sessionId=...`，按 session 过滤并优先选择最新 failed trace。
+- **FR-332**: 未在失败前 arm trace 时，Debug Inspector MUST 明确说明历史 raw detail 不可恢复。
+- **FR-333**: `backend.resync_required` 后前端 MUST 重拉权威 messages/failures，不从本地 progress 推断失败卡。
+
+### Key Entities
+
+- **AssistantRunFailure**: v14 SQLite 中与 session/message 关联的失败生命周期记录。
+- **Failure Summary**: 仅包含 allowlisted 用户可见字段的安全投影。
+- **Retry Request**: 指向当前 failed message、可携带替换文本的用户动作。
+
+### Constraints & Compatibility
+
+- **CC-109**: Failure 业务数据必须经 Repository 和 `AssistantFailureService`，router 不直连 SQLite。
+- **CC-110**: 原始 provider 诊断只可内部分类使用，不得进入普通 DTO/event/log。
+- **CC-111**: Persisted message/failure state 是权威来源，event replay 仅用于通知。
+- **CC-112**: Cancellation、paused subagent、confirmation、queueing 和 100% dispatch 语义保持不变。
+- **CC-113**: 018 不增加备用模型或修改 AgentLoop 自动重试。
+
+### Success Criteria
+
+- **SC-145**: 终止失败跨应用重启后 100% 恢复到正确 user message。
+- **SC-146**: 并发重复 retry 只接受一次并只触发一次 Assistant dispatch。
+- **SC-147**: 分类 fixture 不泄漏 secret、endpoint 或 raw response text。
+- **SC-148**: 原样与编辑重试均通过 backend、frontend unit 和 mock E2E。
+- **SC-149**: Assistant failure journey 产生重复全局 error Toast 的数量为 0。
+- **SC-150**: Focused pytest、Vitest、Playwright、lint/format 和 diff checks 通过。
+
+---
+
+## 结构化多选澄清 [Source: specs/019-structured-user-clarification]
+
+**Revision note (2026-06-15)**: Backfilled the merged 019 feature. One manual quickstart smoke task
+remains explicitly incomplete; automated implementation and regression tasks are complete.
+
+### User Stories
+
+- **US-069 (P1)**: 主助理在无法可靠推断的关键岔路口，一次提出结构化问题并在同一 AgentLoop 回合中根据答案继续。
+- **US-070 (P2)**: 用户可“暂不回答”，主助理收到 cancelled 后不得猜测或在同一回合换一种说法重复追问。
+- **US-071 (P3)**: 超时、停止、关闭和 SSE 重连均有确定性生命周期；pending 卡片可通过 replay/快照恢复。
+
+### Functional Requirements
+
+- **FR-334**: 系统 MUST 提供仅主助理可用的 `ask_user_question`，每次包含 1–4 题、每题 2–4 选项。
+- **FR-335**: 每题 MUST 支持单选/多选并始终提供最多 1000 字符的“其他”文本。
+- **FR-336**: Handler MUST 校验 question/header/label、批次问题唯一性和题内 label 唯一性。
+- **FR-337**: 稳定 `questionId` / `optionId` MUST 由后端生成，忽略模型提供的 ID。
+- **FR-338**: Tool result 状态 MUST 限定为 answered/cancelled/timeout/stopped/shutdown/unavailable；answered 返回 question/selectedLabels/otherText。
+- **FR-339**: `ask_user_question` MUST `requires_exclusive_call=True`；与任何其他工具混批时全批零执行并完整写 `invalid_model_output` 配对。
+- **FR-340**: Solo clarification MUST 阻塞等待用户决策，返回结果后在同一 AgentLoop 内继续。
+- **FR-341**: 该工具 MUST 只注册到主助理，PM/Programmer/Trial/specialist/subagent 均不得暴露。
+- **FR-342**: API MUST 提供按 session 查询 pending 快照和按 session/request 提交 decision。
+- **FR-343**: Submit MUST 校验每题有答案、单选互斥、多选可组合 other、option ownership 和 other 长度。
+- **FR-344**: UI Event Registry MUST 注册 `assistant.clarification_requested` 与 `assistant.clarification_resolved`；resolved payload 不含答案。
+- **FR-345**: 请求 MUST 默认 5 分钟超时并唤醒等待 worker。
+- **FR-346**: Stop 和 shutdown MUST 分别结算 stopped/shutdown；普通 SSE disconnect 不取消请求。
+- **FR-347**: 并发 decision MUST first-decision-wins；重复/过期提交幂等拒绝。
+- **FR-348**: Decision API MUST 校验 session ownership，归属失败不泄漏请求存在性。
+- **FR-349**: 前端 MUST 在输入框上方用可访问的非模态 fieldset/radio/checkbox 卡片展示，preview 只作纯文本。
+- **FR-350**: 单选“其他” MUST 排斥普通选项；多选 MUST 允许普通选项与“其他”并存。
+- **FR-351**: Pending、draft 和 submitting MUST 按 session 保存在内存 store；切换会话保留草稿，resolved 后统一清理。
+- **FR-352**: 澄清链路 MUST 与高危确认完全分离，不显示“全部允许”且不复用 confirmation Toast lifecycle。
+- **FR-353**: Assistant prompt MUST 限制仅关键决策使用、关联问题一次问齐、不得询问 secret、非 answered 后不得猜测继续。
+- **FR-354**: Pending 与未提交答案 MUST 仅驻留当前 sidecar/frontend 内存，不新增数据库、migration 或配置。
+- **FR-355**: Existing high-risk confirmation、stop、queue 和 UI event contracts MUST 保持回归通过。
+
+### Key Entities
+
+- **PendingClarification**: `request_id + session_id + questions + threading.Event + status + answers` 的权威进程内记录。
+- **NormalizedQuestion/Option**: 后端生成稳定 ID 的校验后题目和选项。
+- **ResolvedAnswer**: 仅进入 tool result、不进入公开 resolved event 的答案。
+- **Clarification Draft**: 前端按 session 保存且不持久化的未提交选择。
+
+### Constraints & Compatibility
+
+- **CC-114**: 澄清状态完全内存化，不新增 SQLite/DuckDB 表、migration 或配置键。
+- **CC-115**: Confirmation、Assistant stop、queue 和 UI Event Registry 边界不得被澄清实现污染。
+- **CC-116**: 请求/选项/event payload 必须经过公开 UI event safety 检查；resolved event、普通 DTO 和持久化状态不得包含答案或 secret。
+- **CC-117**: Non-answered 结果必须 fail-closed，模型获得猜测答案的次数为 0。
+
+### Success Criteria
+
+- **SC-151**: 关键岔路口可在同一回合完成提问、作答和继续执行。
+- **SC-152**: 单选、多选、其他、取消、超时、停止、关闭和重连路径均有自动化覆盖。
+- **SC-153**: timeout/cancel/stop/shutdown 后模型获得猜测答案的次数为 0。
+- **SC-154**: Resolved event/普通 DTO 泄漏答案或 secret 的次数为 0。
+- **SC-155**: 新增数据库表、migration 和配置键数量为 0。
+- **SC-156**: Confirmation、stop、queue、UI event、pytest、frontend unit/lint/build 回归继续通过。
