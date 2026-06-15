@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
 **Last Updated**: 2026-06-15
-**Revision**: 2026-06-15 — Backfilled archives for features 011, 012, 017, 018, and 019
+**Revision**: 2026-06-15 — Archived feature 021 tool catalog deferred loading
 
 ---
 
@@ -1505,3 +1505,55 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - **SC-154**: Resolved event/普通 DTO 泄漏答案或 secret 的次数为 0。
 - **SC-155**: 新增数据库表、migration 和配置键数量为 0。
 - **SC-156**: Confirmation、stop、queue、UI event、pytest、frontend unit/lint/build 回归继续通过。
+
+---
+
+## 工具目录渐进式延迟加载 [Source: specs/021-tool-catalog-deferred-loading]
+
+**Revision note (2026-06-15)**: Archived the completed 021 feature after merge into
+`prepare-github`.
+
+### User Stories
+
+- **US-072 (P1)**: 主助理、临时子代理和固定专员在授权能力目录较小时继续看到完整名称和描述；目录超过条目数或字符数阈值时只看到统计和按需发现说明，避免每轮重复携带大目录。
+- **US-073 (P1)**: Agent 可通过 `search_tools` 空查询浏览或按关键词、类型稳定分页搜索全部当前授权能力，并使用无歧义 selector 调用 `get_tool_detail` 激活定义。
+- **US-074 (P2)**: 技能发布状态、组合可用性、白名单或运行时发现配置变化后，下一次 Prompt、搜索、详情和激活刷新立即使用当前事实，不允许旧目录或缓存扩大权限。
+
+### Functional Requirements
+
+- **FR-356**: 系统 MUST 对授权过滤后的技能与技能组合目录同时应用条目数阈值和完整渲染字符数阈值。
+- **FR-357**: 目录不超过两个阈值时 MUST 为三类 Agent 注入完整名称和描述；仅当严格超过任一阈值时进入 deferred 模式。
+- **FR-358**: Deferred Prompt MUST 只包含技能数、组合数、总数和 `search_tools` / `get_tool_detail` 使用说明，不得包含隐藏能力的名称、描述、适用场景或成员名称。
+- **FR-359**: 主助理、临时子代理和固定专员 MUST 复用同一目录策略，并在各自授权过滤之后独立判断模式。
+- **FR-360**: `search_tools` MUST 支持可选 query、`all|tool|composition` 类型过滤、offset/limit 分页和无关键词目录浏览。
+- **FR-361**: 搜索结果 MUST 返回 query、kind、offset、实际 limit、total、items、nextOffset；每项 MUST 包含 kind、name、无歧义 selector 和有界描述。
+- **FR-362**: 搜索排序 MUST 按名称精确、名称前缀、名称包含、描述/适用场景包含的优先级确定性排序，同级按类型和名称稳定排序。
+- **FR-363**: 搜索、详情加载和激活定义刷新 MUST 重新校验当前发布状态、组合可用性、组合成员授权和 Agent 白名单。
+- **FR-364**: `get_tool_detail` MUST 保持非并发安全和现有动态激活/LRU 语义；受局部锁保护的 `search_tools` MAY 保持并发安全。
+- **FR-365**: 发现策略 MUST 通过 `agent_tools.discovery.*` 和 `UnifiedConfigManager` 管理，运行时覆盖在下一次 Prompt 或搜索生效，且不新增 Settings UI。
+- **FR-366**: 模式选择日志 MUST 只记录 Agent 类型、授权条目数、完整候选字符数和模式，不得记录能力名称、描述或 secret。
+- **FR-367**: 现有仅传 query 的 `search_tools` 调用 MUST 保持兼容；非法 kind、offset 或 limit MUST 返回可恢复结构化错误且不得改变激活状态。
+- **FR-368**: 系统 MUST 支持至少 100 项授权目录的无重复、无遗漏分页遍历；100 项 deferred 目录区段 MUST 小于 1000 字符。
+- **FR-369**: 本功能 MUST NOT 新增 UI、desktop API、公开 UI event、数据库 schema、迁移、secret 或前端持久化状态。
+
+### Key Entities
+
+- **Authorized Capability Catalog**: 经过发布状态、组合状态、成员完整性和当前 Agent 白名单过滤后的技能与技能组合集合。
+- **Capability Discovery Policy**: 完整目录双阈值、搜索页大小和结果描述长度的统一配置快照。
+- **Capability Search Page**: 带稳定排序、total、nextOffset 和 selector 的授权目录分页结果。
+
+### Constraints & Compatibility
+
+- **CC-118**: 目录读取继续经 `ToolRepository` / `SkillCompositionService`，业务代码不得直接写 SQL 或绕过 Repository。
+- **CC-119**: 阈值必须在授权过滤后计算；Prompt 快照不得被当作搜索或详情调用时的授权事实。
+- **CC-120**: Deferred Prompt 和安全日志不得泄漏隐藏目录内容；搜索结果只能包含调用时仍获授权的能力。
+- **CC-121**: `agent_tools.discovery.*` 只能通过统一配置入口读取，默认值必须同步配置模型、示例和文档。
+- **CC-122**: AgentLoop 工具配对、动态激活 LRU、并发安全声明和三类 Agent 的既有委派语义不得回归。
+
+### Success Criteria
+
+- **SC-157**: 100 项授权目录在三类 Agent 中均进入 deferred 模式，目录区段小于 1000 字符且隐藏名称/描述泄漏数为 0。
+- **SC-158**: 100 项目录可通过连续分页遍历 100%，无重复、无遗漏。
+- **SC-159**: 阈值边界、授权隔离、排序、分页、非法参数、失效重校验、动态激活和安全日志均有自动化行为测试。
+- **SC-160**: 小目录完整摘要和只传 query 的旧调用保持兼容。
+- **SC-161**: 运行时配置在下一次 Prompt/搜索生效，无需重启或数据迁移。

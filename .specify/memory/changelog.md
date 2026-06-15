@@ -474,3 +474,25 @@ Spec Kit workflow, then archived its recovered specification and known verificat
 **Outstanding:** T048 manual quickstart smoke checklist remains open.
 
 **Tasks Completed:** 47/48 tasks
+
+## 工具目录渐进式延迟加载 — 2026-06-15
+
+**Branch:** `021-tool-catalog-deferred-loading`
+**Spec:** `specs/021-tool-catalog-deferred-loading`
+**Revision note:** Archived after merge into `prepare-github`; no unresolved conflicts or constitution exceptions.
+
+**What was added:**
+- 主助理、临时子代理和固定专员统一使用授权后的完整/deferred 能力目录策略。
+- 默认超过 20 项或 6000 字符时隐藏目录内容，只保留统计和按需发现说明。
+- `search_tools` 支持空查询浏览、类型过滤、稳定排序、offset/limit 分页和无歧义 selector。
+- 搜索、详情和激活刷新在调用时重新校验发布状态、组合状态、成员授权和 Agent 白名单。
+- `agent_tools.discovery.*` 统一运行时配置和不含目录内容的模式选择日志。
+
+**New Components:**
+- `src/business/agents/tools/capability_catalog.py` — 共享目录模型、策略、Prompt 渲染、搜索排序和分页。
+- `tests/business/agents/test_capability_catalog.py` — 100 项目录、阈值、排序、分页和错误边界覆盖。
+
+**Modified Components:**
+- `DynamicToolManager`、`AssistantPromptBuilder`、`AgentOrchestrator`、统一配置模型/管理器和相关活文档。
+
+**Tasks Completed:** 18/18 tasks

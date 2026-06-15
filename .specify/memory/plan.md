@@ -2,7 +2,7 @@
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
 **Last Updated**: 2026-06-15
-**Revision**: 2026-06-15 — Backfilled implementation memory for features 011, 012, 017, 018, and 019
+**Revision**: 2026-06-15 — Archived feature 021 tool catalog deferred loading
 
 ---
 
@@ -1144,3 +1144,40 @@ manual quickstart smoke checklist remains open.
 
 - Manager、exclusive batch、API、integration flow、tool scope、UI card、E2E 和 confirmation regression。
 - Feature tasks: 47/48 completed；T048 手工 quickstart smoke 未勾选。
+
+---
+
+## 工具目录渐进式延迟加载 [Source: specs/021-tool-catalog-deferred-loading]
+
+**Revision note (2026-06-15)**: Archived the merged 021 implementation.
+
+### Runtime Design
+
+- `src/business/agents/tools/capability_catalog.py` 提供共享的 `CapabilityCatalogItem`、`CapabilityDiscoveryPolicy`、完整/deferred Prompt 渲染、确定性相关度排序和 offset 分页。
+- `AssistantPromptBuilder.format_capability_catalog()` 从 Repository/Service 读取发布能力，在 Agent 授权过滤后决定 `empty|full|deferred` 模式；主助理、临时子代理和固定专员统一使用该路径。
+- 小目录注入名称和描述；超过 20 项或完整候选超过 6000 字符时只注入技能/组合统计和 `search_tools` / `get_tool_detail` 说明。
+- `DynamicToolManager.search_tools()` 每次调用重新读取当前发布目录并校验工具、组合、成员和 Agent 白名单；返回 JSON 分页和 `技能:<name>` / `技能组合:<name>` selector。
+- `get_tool_detail` 继续负责按需激活 FC schema 和现有 LRU；搜索使用局部锁保护共享 Repository/Service 会话，并保持 `is_concurrency_safe=True`。
+
+### Configuration
+
+`agent_tools.discovery.*` 由 `UnifiedConfigManager` 管理，不进入 Settings UI：
+
+| Key | Default | Bound / Effect |
+|-----|---------|----------------|
+| `full_catalog_max_items` | 20 | 1..1000；完整目录条目上限 |
+| `full_catalog_max_chars` | 6000 | 500..100000；完整候选字符上限 |
+| `search_default_limit` | 10 | 1..`search_max_limit` |
+| `search_max_limit` | 25 | 1..100 |
+| `result_description_max_chars` | 500 | 50..5000 |
+
+配置在每次 Prompt 构建和搜索时读取，因此运行时覆盖无需重启即可生效。无新增 secret、schema、migration、UI/API 或事件。
+
+### Testing
+
+- `tests/business/agents/test_capability_catalog.py`：双阈值、100 项隐藏/有界 Prompt、空目录、排序、selector、分页、描述截断和非法参数。
+- `tests/test_skill_composition_regressions.py`：浏览/旧 query 兼容、组合授权、状态失效、非法参数不改变激活状态和详情激活。
+- `tests/integration/test_agent_orchestrator_architecture.py`：三类 Agent 接线、授权隔离、运行时阈值和日志不泄漏。
+- `tests/data/test_unified_config.py`：默认值、边界、非法值和嵌套配置。
+- `tests/integration/test_agent_loop_parallel_tools.py`：`search_tools` 并发安全、`get_tool_detail` 串行声明。
+- Feature tasks: 18/18 completed。
