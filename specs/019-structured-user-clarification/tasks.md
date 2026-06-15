@@ -30,8 +30,8 @@ description: "Task list for 019 结构化多选澄清"
 
 **Purpose**: 确认隔离工作区基线干净，铺设独占工具机制的最小入口
 
-- [ ] T001 在 worktree 根运行基线冒烟（`uv run pytest tests/business tests/desktop_api -q` 抽样 + `cd frontend && npm install`），确认起点干净；记录预存在失败（若有）
-- [ ] T002 [P] 在 `src/business/agents/config.py` 的 `ToolDefinition` 增加字段 `requires_exclusive_call: bool = False`，更新 docstring 说明"需独占调用：与其他工具同批则全批 invalid_model_output"
+- [x] T001 在 worktree 根运行基线冒烟（`uv run pytest tests/business tests/desktop_api -q` 抽样 + `cd frontend && npm install`），确认起点干净；记录预存在失败（若有）
+- [x] T002 [P] 在 `src/business/agents/config.py` 的 `ToolDefinition` 增加字段 `requires_exclusive_call: bool = False`，更新 docstring 说明"需独占调用：与其他工具同批则全批 invalid_model_output"
 
 **Checkpoint**: 独占语义的声明位就绪
 
@@ -45,32 +45,32 @@ description: "Task list for 019 结构化多选澄清"
 
 ### 后端机制
 
-- [ ] T003 [P] 新建 `src/business/agents/tools/clarification_manager.py`：`PendingClarification` / `NormalizedQuestion` / `NormalizedOption` / `ResolvedAnswer` 数据类，模块级 `_pending_clarifications` + `_clarification_lock` + 可注入 `_clarification_signal`，常量 `CLARIFICATION_TIMEOUT_S=300`；实现 `register_clarification_signal` / `create_pending` / `get_pending` / `get_pending_for_session` / `get_remaining_timeout_ms` / `reset_clarification_state_for_tests`（结构对标 `builtin_general_tools` 确认机制，但完全独立）
-- [ ] T004 在 `clarification_manager.py` 实现 first-decision-wins 终态与唤醒：`submit_decision(session_id, request_id, decision, answers)`（归属校验 + 答案校验 + selectedOptionIds→selectedLabels + 设 answered/cancelled + `event.set()`，已结算幂等忽略）、`settle_clarifications_for_session(session_id, status)`（stopped）、`settle_all_clarifications(status)`（shutdown），全部经 `event.is_set()` 守门
-- [ ] T005 在 `src/business/agents/tools/assistant_tools.py` 新增 `ASK_USER_QUESTION_SCHEMA` + `create_ask_user_question_handler(session_id)`：输入校验（1–4 题/2–4 选项/必填/批次内问题不重复/同题标签不重复）失败返回 `error_json` 不创建 pending；后端生成 `q{i}`/`q{i}o{j}` 稳定 ID；从 `run_context` 取归属会话；创建 pending→emit requested→`event.wait(300s)`→按终态组装 `{status, answers}` 结果；signal 未注册返回 `status="unavailable"`；导出到 `__all__`
-- [ ] T006 在 `src/business/orchestration/agent/orchestrator.py` 的 `_build_assistant_tools`（`static_tools`）注册 `ask_user_question` 工具（`requires_exclusive_call=True, is_interrupting=False`），handler 用 `create_ask_user_question_handler(session_id)`；确认 `_build_delegated_executor_tools` 不含此工具
-- [ ] T007 在 `src/business/agents/agent_loop.py` 的 `_execute_tool_batch` 增加独占混批检查（紧随中断型混批检查后）：`batch_size>1` 且批内任一 `tool_def.requires_exclusive_call` → 对全部 call `_save_error(..., "invalid_model_output", ...)` 并 `return None`；solo 独占 call 落入既有 ordinary 串行路径阻塞执行
+- [x] T003 [P] 新建 `src/business/agents/tools/clarification_manager.py`：`PendingClarification` / `NormalizedQuestion` / `NormalizedOption` / `ResolvedAnswer` 数据类，模块级 `_pending_clarifications` + `_clarification_lock` + 可注入 `_clarification_signal`，常量 `CLARIFICATION_TIMEOUT_S=300`；实现 `register_clarification_signal` / `create_pending` / `get_pending` / `get_pending_for_session` / `get_remaining_timeout_ms` / `reset_clarification_state_for_tests`（结构对标 `builtin_general_tools` 确认机制，但完全独立）
+- [x] T004 在 `clarification_manager.py` 实现 first-decision-wins 终态与唤醒：`submit_decision(session_id, request_id, decision, answers)`（归属校验 + 答案校验 + selectedOptionIds→selectedLabels + 设 answered/cancelled + `event.set()`，已结算幂等忽略）、`settle_clarifications_for_session(session_id, status)`（stopped）、`settle_all_clarifications(status)`（shutdown），全部经 `event.is_set()` 守门
+- [x] T005 在 `src/business/agents/tools/assistant_tools.py` 新增 `ASK_USER_QUESTION_SCHEMA` + `create_ask_user_question_handler(session_id)`：输入校验（1–4 题/2–4 选项/必填/批次内问题不重复/同题标签不重复）失败返回 `error_json` 不创建 pending；后端生成 `q{i}`/`q{i}o{j}` 稳定 ID；从 `run_context` 取归属会话；创建 pending→emit requested→`event.wait(300s)`→按终态组装 `{status, answers}` 结果；signal 未注册返回 `status="unavailable"`；导出到 `__all__`
+- [x] T006 在 `src/business/orchestration/agent/orchestrator.py` 的 `_build_assistant_tools`（`static_tools`）注册 `ask_user_question` 工具（`requires_exclusive_call=True, is_interrupting=False`），handler 用 `create_ask_user_question_handler(session_id)`；确认 `_build_delegated_executor_tools` 不含此工具
+- [x] T007 在 `src/business/agents/agent_loop.py` 的 `_execute_tool_batch` 增加独占混批检查（紧随中断型混批检查后）：`batch_size>1` 且批内任一 `tool_def.requires_exclusive_call` → 对全部 call `_save_error(..., "invalid_model_output", ...)` 并 `return None`；solo 独占 call 落入既有 ordinary 串行路径阻塞执行
 
 ### 事件与 desktop adapter
 
-- [ ] T008 [P] 在 `src/desktop_api/ui_events.py` 的 `UI_EVENT_REGISTRY` 注册 `assistant.clarification_requested`（payload `requestId/sessionId/questions/expiresAt/status`，required 去掉 expiresAt，enum `status∈{pending}`，scope `sessionId`）与 `assistant.clarification_resolved`（payload `requestId/sessionId/status`，enum `status∈{answered,cancelled,timeout,stopped,shutdown}`，scope `sessionId`），均按 contracts/events_clarification.md
-- [ ] T009 新建 `src/desktop_api/clarifications.py`：`_DesktopClarificationSignal`（emit→`event_queue.publish_nowait("assistant.clarification_requested", payload, {"sessionId":...})`）、`install_clarification_signal`、`clarification_requested_payload(request_id)`、`record_clarification_decision(session_id, request_id, decision, answers)`、`pending_clarification_snapshot(session_id)`、`settle_clarifications_for_session_stopped(session_id)`、`settle_all_clarifications_shutdown()`；resolved 事件经 `event_queue` 发出且不含答案（对标 `confirmations.py`）
-- [ ] T010 [P] 在 `src/desktop_api/schemas.py` 增加 DTO：`AssistantClarificationOption/Question/Snapshot`、`AssistantClarificationPendingResponse`、`AssistantClarificationAnswerInput`、`AssistantClarificationDecisionRequest`、`AssistantClarificationDecisionResponse`
-- [ ] T011 在 `src/desktop_api/routers/assistant.py` 增加 `POST /sessions/{sessionId}/clarifications/{requestId}/decision`（调 `record_clarification_decision`，422 校验失败/404 归属/200 幂等），按 contracts/api_clarifications.md
-- [ ] T012 在 `src/desktop_api/assistant_runtime.py` 构造期 `install_clarification_signal()`（与 `install_confirmation_signal` 并列）
+- [x] T008 [P] 在 `src/desktop_api/ui_events.py` 的 `UI_EVENT_REGISTRY` 注册 `assistant.clarification_requested`（payload `requestId/sessionId/questions/expiresAt/status`，required 去掉 expiresAt，enum `status∈{pending}`，scope `sessionId`）与 `assistant.clarification_resolved`（payload `requestId/sessionId/status`，enum `status∈{answered,cancelled,timeout,stopped,shutdown}`，scope `sessionId`），均按 contracts/events_clarification.md
+- [x] T009 新建 `src/desktop_api/clarifications.py`：`_DesktopClarificationSignal`（emit→`event_queue.publish_nowait("assistant.clarification_requested", payload, {"sessionId":...})`）、`install_clarification_signal`、`clarification_requested_payload(request_id)`、`record_clarification_decision(session_id, request_id, decision, answers)`、`pending_clarification_snapshot(session_id)`、`settle_clarifications_for_session_stopped(session_id)`、`settle_all_clarifications_shutdown()`；resolved 事件经 `event_queue` 发出且不含答案（对标 `confirmations.py`）
+- [x] T010 [P] 在 `src/desktop_api/schemas.py` 增加 DTO：`AssistantClarificationOption/Question/Snapshot`、`AssistantClarificationPendingResponse`、`AssistantClarificationAnswerInput`、`AssistantClarificationDecisionRequest`、`AssistantClarificationDecisionResponse`
+- [x] T011 在 `src/desktop_api/routers/assistant.py` 增加 `POST /sessions/{sessionId}/clarifications/{requestId}/decision`（调 `record_clarification_decision`，422 校验失败/404 归属/200 幂等），按 contracts/api_clarifications.md
+- [x] T012 在 `src/desktop_api/assistant_runtime.py` 构造期 `install_clarification_signal()`（与 `install_confirmation_signal` 并列）
 
 ### 前端基础
 
-- [ ] T013 [P] 在 `frontend/src/api/assistant.ts` 增加类型（`ClarificationOption/Question/Request`、Answer 输入）与 `getPendingClarifications(sessionId)`、`submitClarificationDecision(sessionId, requestId, body)`
-- [ ] T014 新建 `frontend/src/screens/assistant/ClarificationCard.tsx`：可访问 `fieldset`+`radio`/`checkbox`，每题含选项（label/description/纯文本 preview）+ "其他"输入；"提交"/"暂不回答" 按钮 + 倒计时；提交期间全部控件 `disabled`；独立于 `ConfirmationToast`，不显示"全部允许"
-- [ ] T015 在 `frontend/src/state/assistantStore.ts` 增加按 session 的 `pendingClarification` / `clarificationDrafts` / `clarificationSubmitting`，消费 `assistant.clarification_requested`（upsert）与 `assistant.clarification_resolved`（清理 pending+草稿）；`submitClarification` / `cancelClarification` action（提交置 submitting、成功清理、失败置友好错误）；切换会话保留草稿
-- [ ] T016 在 `frontend/src/screens/assistant/AssistantScreen.tsx` 输入框上方渲染 `ClarificationCard`（仅当前会话有 pending 时），接 store action
+- [x] T013 [P] 在 `frontend/src/api/assistant.ts` 增加类型（`ClarificationOption/Question/Request`、Answer 输入）与 `getPendingClarifications(sessionId)`、`submitClarificationDecision(sessionId, requestId, body)`
+- [x] T014 新建 `frontend/src/screens/assistant/ClarificationCard.tsx`：可访问 `fieldset`+`radio`/`checkbox`，每题含选项（label/description/纯文本 preview）+ "其他"输入；"提交"/"暂不回答" 按钮 + 倒计时；提交期间全部控件 `disabled`；独立于 `ConfirmationToast`，不显示"全部允许"
+- [x] T015 在 `frontend/src/state/assistantStore.ts` 增加按 session 的 `pendingClarification` / `clarificationDrafts` / `clarificationSubmitting`，消费 `assistant.clarification_requested`（upsert）与 `assistant.clarification_resolved`（清理 pending+草稿）；`submitClarification` / `cancelClarification` action（提交置 submitting、成功清理、失败置友好错误）；切换会话保留草稿
+- [x] T016 在 `frontend/src/screens/assistant/AssistantScreen.tsx` 输入框上方渲染 `ClarificationCard`（仅当前会话有 pending 时），接 store action
 
 ### Foundational 门卫测试
 
-- [ ] T017 [P] 新建 `tests/business/test_agent_loop_exclusive_tool.py`：独占工具 solo 阻塞执行后 loop 续跑；与普通/中断/副作用工具混批 → 全批 `invalid_model_output` 零执行且配对完整
-- [ ] T018 [P] 新建 `tests/guardrails/test_clarification_tool_scope.py`：`ask_user_question` 在主助理工具集存在；`_build_delegated_executor_tools`（subagent/specialist）不含此工具；PM/Programmer/Trial 工具集不含
-- [ ] T019 [P] 在 `tests/desktop_api/` 新增 UI 事件注册契约测试：两个 clarification 事件已注册、payload allowlist/enum 生效、嵌套 questions 含禁用值（如 `api_key=`/私钥）被 `validate_ui_event_payload` 拒绝、resolved 不接受 answers 键
+- [x] T017 [P] 新建 `tests/business/test_agent_loop_exclusive_tool.py`：独占工具 solo 阻塞执行后 loop 续跑；与普通/中断/副作用工具混批 → 全批 `invalid_model_output` 零执行且配对完整
+- [x] T018 [P] 新建 `tests/guardrails/test_clarification_tool_scope.py`：`ask_user_question` 在主助理工具集存在；`_build_delegated_executor_tools`（subagent/specialist）不含此工具；PM/Programmer/Trial 工具集不含
+- [x] T019 [P] 在 `tests/desktop_api/` 新增 UI 事件注册契约测试：两个 clarification 事件已注册、payload allowlist/enum 生效、嵌套 questions 含禁用值（如 `api_key=`/私钥）被 `validate_ui_event_payload` 拒绝、resolved 不接受 answers 键
 
 **Checkpoint**: 后端机制 + 前端卡可端到端跑通"提交/取消"；门卫就位
 
@@ -84,17 +84,17 @@ description: "Task list for 019 结构化多选澄清"
 
 ### Tests for User Story 1 ⚠️（先写并失败）
 
-- [ ] T020 [P] [US1] 在 `tests/business/test_clarification_manager.py` 写 answered 路径单测：单选（一个 optionId）、多选（多 optionId + otherText 组合）、仅 otherText；selectedOptionIds→selectedLabels 映射正确
-- [ ] T021 [P] [US1] 新建 `tests/integration/test_clarification_flow.py`：mock 模型发起单道单选题 → requested 事件 → decision API 提交 → tool result 进上下文 → 主助理继续（answered）
-- [ ] T022 [P] [US1] 新建 `frontend/tests/unit/clarificationCard.test.tsx`：渲染问题/选项/预览（纯文本不渲染 HTML）、单选选项可选、键盘可达、提交调用 store action
+- [x] T020 [P] [US1] 在 `tests/business/test_clarification_manager.py` 写 answered 路径单测：单选（一个 optionId）、多选（多 optionId + otherText 组合）、仅 otherText；selectedOptionIds→selectedLabels 映射正确
+- [x] T021 [P] [US1] 新建 `tests/integration/test_clarification_flow.py`：mock 模型发起单道单选题 → requested 事件 → decision API 提交 → tool result 进上下文 → 主助理继续（answered）
+- [x] T022 [P] [US1] 新建 `frontend/tests/unit/clarificationCard.test.tsx`：渲染问题/选项/预览（纯文本不渲染 HTML）、单选选项可选、键盘可达、提交调用 store action
 
 ### Implementation for User Story 1
 
-- [ ] T023 [US1] 完善 `clarification_manager.submit_decision` answered 校验：单选恰好一个 optionId 或一段 otherText（二选一）、多选可组合、每题必答、otherText≤1000；非法 → 返回校验错误且不结算
-- [ ] T024 [US1] 完善 `ask_user_question` handler 的 answered 结果组装（`question/selectedLabels/otherText`），确保 tool result 为合法 JSON 字符串
-- [ ] T025 [US1] `ClarificationCard` 单选交互：选普通选项与"其他"互斥（选"其他"取消普通选项），提交按钮在"每题已答"前 disabled
-- [ ] T026 [US1] `assistantStore` 提交流程：optimistic submitting→调 API→成功由 resolved 事件或返回清理；草稿映射到 `selectedOptionIds/otherText`
-- [ ] T027 [US1] 在 `src/business/agents/prompts/assistant_prompt.py` 增加 `ask_user_question` 使用指引：仅关键决策无法可靠推断时用、关联问题一次问齐、不得询问/展示 secret
+- [x] T023 [US1] 完善 `clarification_manager.submit_decision` answered 校验：单选恰好一个 optionId 或一段 otherText（二选一）、多选可组合、每题必答、otherText≤1000；非法 → 返回校验错误且不结算
+- [x] T024 [US1] 完善 `ask_user_question` handler 的 answered 结果组装（`question/selectedLabels/otherText`），确保 tool result 为合法 JSON 字符串
+- [x] T025 [US1] `ClarificationCard` 单选交互：选普通选项与"其他"互斥（选"其他"取消普通选项），提交按钮在"每题已答"前 disabled
+- [x] T026 [US1] `assistantStore` 提交流程：optimistic submitting→调 API→成功由 resolved 事件或返回清理；草稿映射到 `selectedOptionIds/otherText`
+- [x] T027 [US1] 在 `src/business/agents/prompts/assistant_prompt.py` 增加 `ask_user_question` 使用指引：仅关键决策无法可靠推断时用、关联问题一次问齐、不得询问/展示 secret
 
 **Checkpoint**: US1 端到端可独立验证（MVP）
 
@@ -108,14 +108,14 @@ description: "Task list for 019 结构化多选澄清"
 
 ### Tests for User Story 2 ⚠️
 
-- [ ] T028 [P] [US2] 在 `tests/business/test_clarification_manager.py` 加 cancelled 路径单测（decision=cancel 不带答案，event set，结果 answers=[]）
-- [ ] T029 [P] [US2] 在 `frontend/tests/unit/clarificationCard.test.tsx` 加"暂不回答"用例：调 cancel action、卡片移除、提交期间控件 disabled
+- [x] T028 [P] [US2] 在 `tests/business/test_clarification_manager.py` 加 cancelled 路径单测（decision=cancel 不带答案，event set，结果 answers=[]）
+- [x] T029 [P] [US2] 在 `frontend/tests/unit/clarificationCard.test.tsx` 加"暂不回答"用例：调 cancel action、卡片移除、提交期间控件 disabled
 
 ### Implementation for User Story 2
 
-- [ ] T030 [US2] `clarification_manager.submit_decision` 的 cancel 分支：置 cancelled、answers 空、event set、幂等
-- [ ] T031 [US2] `ClarificationCard` + `assistantStore` 接 cancel：调 decision API（decision=cancel）→ resolved 清理
-- [ ] T032 [US2] 在 `assistant_prompt.py` 增加规则：用户取消/超时后不得在同一回合重复发起同一澄清或基于猜测继续执行有副作用动作
+- [x] T030 [US2] `clarification_manager.submit_decision` 的 cancel 分支：置 cancelled、answers 空、event set、幂等
+- [x] T031 [US2] `ClarificationCard` + `assistantStore` 接 cancel：调 decision API（decision=cancel）→ resolved 清理
+- [x] T032 [US2] 在 `assistant_prompt.py` 增加规则：用户取消/超时后不得在同一回合重复发起同一澄清或基于猜测继续执行有副作用动作
 
 **Checkpoint**: US1 + US2 均可独立验证
 
@@ -129,18 +129,18 @@ description: "Task list for 019 结构化多选澄清"
 
 ### Tests for User Story 3 ⚠️
 
-- [ ] T033 [P] [US3] 在 `tests/business/test_clarification_manager.py` 加：超时（缩短常量后 event.wait 超时→timeout）、`settle_clarifications_for_session`（stopped）、`settle_all_clarifications`（shutdown）、并发两次 submit 仅首个生效、signal 未注册→unavailable、emit 异常不悬挂
-- [ ] T034 [P] [US3] 在 `tests/desktop_api/test_clarification_api.py` 写：GET pending 快照（有/无 pending、不含答案）、decision 归属错配 404、重复/过期提交幂等、resolved 事件不泄漏答案
-- [ ] T035 [P] [US3] 在 `tests/integration/test_clarification_flow.py` 加停止链路：pending 期间 stop → worker 收到 stopped → 主助理不续用猜测
-- [ ] T036 [P] [US3] 在 `frontend/tests/unit/clarificationCard.test.tsx` 加倒计时显示与会话切换保留草稿、resync 刷新用例
+- [x] T033 [P] [US3] 在 `tests/business/test_clarification_manager.py` 加：超时（缩短常量后 event.wait 超时→timeout）、`settle_clarifications_for_session`（stopped）、`settle_all_clarifications`（shutdown）、并发两次 submit 仅首个生效、signal 未注册→unavailable、emit 异常不悬挂
+- [x] T034 [P] [US3] 在 `tests/desktop_api/test_clarification_api.py` 写：GET pending 快照（有/无 pending、不含答案）、decision 归属错配 404、重复/过期提交幂等、resolved 事件不泄漏答案
+- [x] T035 [P] [US3] 在 `tests/integration/test_clarification_flow.py` 加停止链路：pending 期间 stop → worker 收到 stopped → 主助理不续用猜测
+- [x] T036 [P] [US3] 在 `frontend/tests/unit/clarificationCard.test.tsx` 加倒计时显示与会话切换保留草稿、resync 刷新用例
 
 ### Implementation for User Story 3
 
-- [ ] T037 [US3] 在 `src/desktop_api/routers/assistant.py` 增加 `GET /sessions/{sessionId}/clarifications/pending`（调 `pending_clarification_snapshot`，无 pending 返回 `{clarification: null}`）
-- [ ] T038 [US3] 在 `src/desktop_api/assistant_runtime.py` 的 `cancel_session`（`fail_closed_confirmations_for_session` 旁）并排调用 `settle_clarifications_for_session_stopped(sid)`
-- [ ] T039 [US3] 在 `src/desktop_api/app.py` lifespan shutdown（`event_queue.shutdown()` 处）调用 `settle_all_clarifications_shutdown()`
-- [ ] T040 [US3] `assistantStore`：会话打开与收到 `backend.resync_required` 时调 `getPendingClarifications` 刷新权威快照；断线不清理 pending
-- [ ] T041 [US3] `ClarificationCard` 倒计时基于 `expiresAt`，到点 disable 控件（不自行判定终态，等后端 resolved）
+- [x] T037 [US3] 在 `src/desktop_api/routers/assistant.py` 增加 `GET /sessions/{sessionId}/clarifications/pending`（调 `pending_clarification_snapshot`，无 pending 返回 `{clarification: null}`）
+- [x] T038 [US3] 在 `src/desktop_api/assistant_runtime.py` 的 `cancel_session`（`fail_closed_confirmations_for_session` 旁）并排调用 `settle_clarifications_for_session_stopped(sid)`
+- [x] T039 [US3] 在 `src/desktop_api/app.py` lifespan shutdown（`event_queue.shutdown()` 处）调用 `settle_all_clarifications_shutdown()`
+- [x] T040 [US3] `assistantStore`：会话打开与收到 `backend.resync_required` 时调 `getPendingClarifications` 刷新权威快照；断线不清理 pending
+- [x] T041 [US3] `ClarificationCard` 倒计时基于 `expiresAt`，到点 disable 控件（不自行判定终态，等后端 resolved）
 
 **Checkpoint**: 三个故事均独立可用，边界完备
 
@@ -150,12 +150,12 @@ description: "Task list for 019 结构化多选澄清"
 
 **Purpose**: 技术债清理、文档同步、全门禁
 
-- [ ] T042 修复 `tests/test_auth_toast_confirmation.py`：`_build_write_summary/_build_edit_summary/_build_exec_summary` 已迁至 `builtin_permissions.py` 改名 `build_*`，更新引用（核对 `_confirm_or_reject` 现状），使该文件重新通过
-- [ ] T043 [P] 扩展 `frontend/tests/e2e/assistant.spec.ts`：mock API 下澄清卡渲染/提交/取消 e2e
-- [ ] T044 [P] 更新活文档：`docs/ARCHITECTURE.md`（澄清机制概述）、`docs/PROJECT_CONSTRAINTS.md`（澄清与高危确认分离、内存态约束）
-- [ ] T045 [P] 同步 AI 入口镜像：根 `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` 与 `src/AGENTS.md`(+镜像)、`frontend/AGENTS.md`(+镜像)，新增澄清工具/事件约束；在 `docs/local/todo/agent-tool-patterns.md` 标记第 ② 项已实现
-- [ ] T046 回归门禁：`uv run pytest tests/business tests/desktop_api tests/integration tests/guardrails -q`（含高危确认/停止/排队/UI event 回归）、`uv run python -m py_compile src/desktop_api/app.py`
-- [ ] T047 前端门禁：`cd frontend && npm run test && npm run lint && npm run build`
+- [x] T042 修复 `tests/test_auth_toast_confirmation.py`：`_build_write_summary/_build_edit_summary/_build_exec_summary` 已迁至 `builtin_permissions.py` 改名 `build_*`，更新引用（核对 `_confirm_or_reject` 现状），使该文件重新通过
+- [x] T043 [P] 扩展 `frontend/tests/e2e/assistant.spec.ts`：mock API 下澄清卡渲染/提交/取消 e2e
+- [x] T044 [P] 更新活文档：`docs/ARCHITECTURE.md`（澄清机制概述）、`docs/PROJECT_CONSTRAINTS.md`（澄清与高危确认分离、内存态约束）
+- [x] T045 [P] 同步 AI 入口镜像：根 `AGENTS.md`/`CLAUDE.md`/`GEMINI.md` 与 `src/AGENTS.md`(+镜像)、`frontend/AGENTS.md`(+镜像)，新增澄清工具/事件约束；在 `docs/local/todo/agent-tool-patterns.md` 标记第 ② 项已实现
+- [x] T046 回归门禁：`uv run pytest tests/business tests/desktop_api tests/integration tests/guardrails -q`（含高危确认/停止/排队/UI event 回归）、`uv run python -m py_compile src/desktop_api/app.py`
+- [x] T047 前端门禁：`cd frontend && npm run test && npm run lint && npm run build`
 - [ ] T048 按 quickstart.md 手动冒烟清单逐项核对
 
 ---
