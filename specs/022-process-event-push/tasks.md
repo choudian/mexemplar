@@ -33,9 +33,9 @@ description: "Tasks for 022-process-event-push"
 - 业务源:`src/business/agents/tools/command_tools.py`
 - 执行源:`src/execution/process_manager.py`
 - 数据源:`src/data/config_models.py`、`src/data/unified_config.py`
-- 单测:`tests/execution/test_process_manager_events.py`、`tests/business/agents/tools/test_process_event_tool.py`
+- 单测:`tests/execution/test_process_manager_events.py`、`tests/business/agents/test_process_event_tool.py`
 - 集成测:`tests/integration/test_process_event_flow.py`
-- 测试命令:`uv run python -m pytest tests/execution/test_process_manager_events.py tests/business/agents/tools/test_process_event_tool.py tests/integration/test_process_event_flow.py -q`
+- 测试命令:`uv run python -m pytest tests/execution/test_process_manager_events.py tests/business/agents/test_process_event_tool.py tests/integration/test_process_event_flow.py -q`
 - Linter:`uv run python -m black src/ tests/` + `uv run python -m flake8 src/ tests/`
 
 ---
@@ -75,7 +75,7 @@ description: "Tasks for 022-process-event-push"
 
 - [X] T008 [P] [US1] 在 `tests/execution/test_process_manager_events.py` 加用例:`test_state_changed_emitted_on_running_to_completed` 与 `test_state_changed_emitted_on_running_to_failed`,起真子进程(`python -c "import sys; sys.exit(0)"` / `sys.exit(1)`),`wait_for_event(timeout_ms=5000)` 返回事件含 `state_changed`,status/exitCode 与实际一致
 - [X] T009 [P] [US1] 在 `tests/execution/test_process_manager_events.py` 加用例:`test_wait_returns_immediately_when_event_already_in_deque`(进程已退出,wait 不阻塞)、`test_wait_blocks_until_timeout_when_no_event`(长 sleep 进程,wait 接近 timeoutMs 后返回空)、`test_wait_wakes_up_on_new_event`(wait 阻塞中、另一线程触发状态切换,wait 立即返回,并断言 t1-t0 < 200 ms;直接覆盖 spec SC-001 唤醒延迟上限)
-- [X] T010 [P] [US1] 在 `tests/business/agents/tools/test_process_event_tool.py` 新建文件,加用例:`test_permission_denied_for_other_session`(伪造 session_id 不同时返回 permission_denied)、`test_process_missing`(不存在 processId 返回 process_missing)、`test_timeout_ms_clamped_to_max`(传 timeoutMs=10_000_000 被钳位到 `get_agent_tools_process_max_timeout_ms`)、`test_default_timeout_used_when_missing`(不传 timeoutMs 用 `default_timeout_ms`)
+- [X] T010 [P] [US1] 在 `tests/business/agents/test_process_event_tool.py` 新建文件,加用例:`test_permission_denied_for_other_session`(伪造 session_id 不同时返回 permission_denied)、`test_process_missing`(不存在 processId 返回 process_missing)、`test_timeout_ms_clamped_to_max`(传 timeoutMs=10_000_000 被钳位到 `get_agent_tools_process_max_timeout_ms`)、`test_default_timeout_used_when_missing`(不传 timeoutMs 用 `default_timeout_ms`)
 - [X] T011 [P] [US1] 在 `tests/integration/test_process_event_flow.py` 新建:`test_state_changed_end_to_end` —— 通过 `wait_for_process_event_handler` 入口(而非直接 `ProcessManager.wait_for_event`)起一个会失败的真进程,断言从 `success_json` payload 中解出 events 含 `state_changed: failed, exitCode=1`
 
 ### Implementation for User Story 1
@@ -131,10 +131,10 @@ description: "Tasks for 022-process-event-push"
 **Purpose**:cursor 续约边界、配置接线、文档对齐、回归全绿。
 
 - [X] T021 [P] 在 `tests/execution/test_process_manager_events.py` 加用例:`test_cursor_too_old_returns_new_cursor_for_continued_wait`(快速产生大量 chunks 使环形 buffer 覆盖;旧 sinceCursor 调 wait 得 `cursorTooOld=true` 且 `cursor != since_cursor` 且 `cursor` 单调递增;再用该 cursor wait,不再 cursorTooOld)、`test_empty_deque_cursor_equals_event_sequence`(队列已被全部消费时,wait 返回 cursor == record.event_sequence)
-- [X] T022 [P] 在 `tests/business/agents/tools/test_process_event_tool.py` 加用例:`test_handler_returns_cursor_field_even_on_cursor_too_old`(走工具入口,断言 `success_json` payload 含 cursorTooOld=true 且 cursor 字段非空)
+- [X] T022 [P] 在 `tests/business/agents/test_process_event_tool.py` 加用例:`test_handler_returns_cursor_field_even_on_cursor_too_old`(走工具入口,断言 `success_json` payload 含 cursorTooOld=true 且 cursor 字段非空)
 - [X] T023 [P] 在 `tests/integration/test_process_event_flow.py` 加用例:`test_full_lifecycle_log_then_state_change` —— 一次性走完 wait(等 log_chunked)→ process_logs(读原文)→ wait(等 state_changed)→ 终态返回,覆盖 spec 数据流章节的"典型一次交互"7 步
 - [X] T024 跑 `uv run python -m pytest tests/execution tests/business/agents/tools tests/integration tests/guardrails -q`(本 feature 全套 + guardrail 全绿);若任一 process_* 既有测试回归,回到对应 impl 任务修复,**不**修改既有测试
-- [X] T025 [P] 跑 `uv run python -m black src/data/config_models.py src/data/unified_config.py src/execution/process_manager.py src/business/agents/tools/command_tools.py tests/execution/test_process_manager_events.py tests/business/agents/tools/test_process_event_tool.py tests/integration/test_process_event_flow.py` 与 `uv run python -m flake8 ` 同上文件集;有 warning 修齐
+- [X] T025 [P] 跑 `uv run python -m black src/data/config_models.py src/data/unified_config.py src/execution/process_manager.py src/business/agents/tools/command_tools.py tests/execution/test_process_manager_events.py tests/business/agents/test_process_event_tool.py tests/integration/test_process_event_flow.py` 与 `uv run python -m flake8 ` 同上文件集;有 warning 修齐
 - [X] T026 走一遍 `specs/022-process-event-push/quickstart.md` 的"集成行为契约"与"手动跑通(可选)"两节,确认本机端到端通过;若失败,把现象登记到 quickstart 的"常见故障排查"表
 - [X] T027 对照 `src/CLAUDE.md` 的"Agent 与工具约束" + "Brain Service / 录制与执行约束",确认本 feature 的新工具描述、并发安全声明、Repository 边界都与之一致;无需变更则在 PR 描述里显式标注"无 AI 入口文档变更";若需要新增"process 系列又多一个 wait_for_process_event,非并发安全"提示,**只**改 `src/AGENTS.md`,然后镜像到 `src/CLAUDE.md` / `src/GEMINI.md`(同内容)
 - [X] T028 验证 `docs/superpowers/specs/2026-06-15-process-event-push-design.md` 仍是历史脑暴稿(本 feature 不动它);本次实现产物全部活在 `specs/022-process-event-push/`,不污染主仓 `docs/`
@@ -182,7 +182,7 @@ description: "Tasks for 022-process-event-push"
 # 同时跑(不同文件):
 Task: "T008 ProcessManager state_changed 单测 in tests/execution/test_process_manager_events.py"
 Task: "T009 wait_for_event 阻塞/唤醒/超时单测 in tests/execution/test_process_manager_events.py"
-Task: "T010 工具层归属/钳位单测 in tests/business/agents/tools/test_process_event_tool.py"
+Task: "T010 工具层归属/钳位单测 in tests/business/agents/test_process_event_tool.py"
 Task: "T011 集成 state_changed 端到端 in tests/integration/test_process_event_flow.py"
 # 全 RED 后:
 Task: "T012 _refresh_locked emit state_changed in src/execution/process_manager.py"

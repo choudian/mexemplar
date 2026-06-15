@@ -187,7 +187,7 @@ def test_handler_returns_cursor_field_even_on_cursor_too_old(tmp_path, monkeypat
         get_process_manager().stop(pid, force=True)
 
 
-def test_handler_returns_tool_internal_error_on_manager_exception(tmp_path, monkeypatch):
+def test_handler_returns_internal_error_on_manager_exception(tmp_path, monkeypatch):
     """U2: ProcessManager internal exception maps to tool_internal_error."""
     monkeypatch.chdir(tmp_path)
     pid = _start_in_session(

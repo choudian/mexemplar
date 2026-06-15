@@ -79,7 +79,7 @@
 |---|---|
 | `process_missing` | `processId` 在 ProcessManager 中不存在(从未创建 / 已被 cleanup / sidecar 重启后) |
 | `permission_denied` | `processId` 属于其他会话(跨会话归属校验失败);**不**泄露该进程是否存在 |
-| (内部异常) | `ProcessManager.wait_for_event` 抛任何未捕获异常 → logger.warning + `error_json` `tool_internal_error`(沿用既有 `process_stop` 内部异常映射) |
+| `internal_error` | `ProcessManager.wait_for_event` 抛任何未捕获异常 → logger.warning + `error_json` 返回(沿用 `builtin_contracts.ERROR_CODES` 注册表中的通用 `internal_error`,与既有 process_stop / process_send_input 内部异常映射一致) |
 
 错误返回**不**阻塞工具管线;失败不级联到其它工具调用。
 
