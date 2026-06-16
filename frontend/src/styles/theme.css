@@ -1165,68 +1165,109 @@ select:focus-visible,
   white-space: pre-wrap;
 }
 
-.assistant-failure-card {
-  width: min(440px, 100%);
-  margin: 8px 0 0 auto;
-  border: 1px solid color-mix(in oklch, #b45309 30%, var(--border-1));
-  border-radius: 12px 4px 12px 12px;
-  background:
-    linear-gradient(135deg, color-mix(in oklch, #f59e0b 8%, var(--surface-1)), var(--surface-1));
-  box-shadow: 0 8px 24px color-mix(in oklch, #78350f 8%, transparent);
-  color: var(--text);
-  padding: 12px;
+/* 失败消息就地编辑：textarea 复用气泡外观（青底白字、右下小圆角尾巴），
+   加一圈暖橙边 + focus 光晕表示「正在编辑」，与失败态的 warn 呼应。 */
+.assistant-message[data-role="user"] .assistant-message-edit-input {
+  display: block;
+  /* field-sizing: content 让编辑框尺寸跟随内容（宽=最长行、高=行数），
+     与展示态 <p> 的 fit-content 一致——编辑时气泡「原来多大就多大」，
+     不再缩成 textarea 默认的窄条。WebView2(Chromium 123+) 支持。 */
+  width: auto;
+  max-width: 100%;
+  field-sizing: content;
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in oklch, var(--warn) 50%, transparent);
+  border-radius: 14px 14px 4px;
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-fg);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  resize: none;
+  caret-color: var(--bubble-user-fg);
 }
 
-.assistant-failure-card-heading {
+.assistant-message[data-role="user"] .assistant-message-edit-input:focus {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--warn) 22%, transparent);
+  outline: none;
+}
+
+.assistant-message-edit-input::placeholder {
+  color: color-mix(in oklch, var(--bubble-user-fg) 55%, transparent);
+}
+
+/* 失败重试：贴在用户消息下方的一行状态——刻意零背景、零边框，
+   让它回到「边缘状态」而非醒目卡片。橙色脉冲点是唯一的视觉锚点；
+   失败原因藏在状态区的悬停提示里以保持单行。暖橙沿用可恢复语义（warn）。 */
+.assistant-failure-card {
   display: flex;
+  justify-content: flex-end;
+  margin: 4px 0 0;
+  color: var(--text-2);
+}
+
+.assistant-failure-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(440px, 100%);
+}
+
+.assistant-failure-status {
+  display: inline-flex;
   align-items: center;
   gap: 7px;
+  min-width: 0;
+  cursor: help;
 }
 
-.assistant-failure-card-heading strong {
-  font-size: 13px;
+.assistant-failure-status strong {
+  font-size: 12.5px;
+  font-weight: 650;
+  color: var(--text);
 }
 
-.assistant-failure-card-heading > span:last-child {
-  margin-left: auto;
+.assistant-failure-attempt {
   color: var(--text-muted);
   font-size: 11px;
+  white-space: nowrap;
 }
 
 .assistant-failure-pulse {
+  flex: none;
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: #d97706;
-  box-shadow: 0 0 0 4px color-mix(in oklch, #f59e0b 16%, transparent);
+  background: var(--warn);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--warn) 16%, transparent);
+  animation: assistant-failure-pulse 1.8s ease-in-out infinite;
 }
 
-.assistant-failure-card > p {
-  margin: 8px 0 3px;
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.assistant-failure-card > small,
-.assistant-failure-editor label {
-  color: var(--text-muted);
-  font-size: 11.5px;
-  line-height: 1.45;
+@keyframes assistant-failure-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 4px color-mix(in oklch, var(--warn) 16%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in oklch, var(--warn) 7%, transparent);
+  }
 }
 
 .assistant-failure-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .assistant-failure-action {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 5px;
   border: 1px solid var(--border-1);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   color: var(--text-2);
   cursor: pointer;
@@ -1236,34 +1277,79 @@ select:focus-visible,
   padding: 6px 9px;
 }
 
-.assistant-failure-action:hover:not(:disabled),
-.assistant-failure-action:focus-visible {
-  border-color: color-mix(in oklch, #d97706 55%, var(--border-1));
-  outline: none;
+.assistant-failure-action-icon {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
 }
 
-.assistant-failure-action-primary {
-  border-color: #b45309;
-  background: #b45309;
-  color: #fff7ed;
+.assistant-failure-action:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--warn) 45%, var(--border-1));
+  background: var(--surface-hover);
+}
+
+.assistant-failure-action-icon:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--surface-hover);
+  color: var(--text-2);
+}
+
+.assistant-failure-action:focus-visible {
+  outline: 2px solid color-mix(in oklch, var(--warn) 40%, transparent);
+  outline-offset: 1px;
+}
+
+/* 主操作：默认态重试 icon 用暖橙强调；编辑态提交为暖橙实心按钮。 */
+.assistant-failure-action-icon.assistant-failure-action-primary {
+  color: var(--warn);
+}
+
+.assistant-failure-action-icon.assistant-failure-action-primary:hover:not(:disabled) {
+  background: color-mix(in oklch, var(--warn) 14%, transparent);
+  color: var(--warn);
+}
+
+.assistant-failure-action-primary:not(.assistant-failure-action-icon) {
+  border-color: var(--warn);
+  background: var(--warn);
+  color: var(--text);
+}
+
+.assistant-failure-action-primary:not(.assistant-failure-action-icon):hover:not(:disabled) {
+  background: color-mix(in oklch, var(--warn) 82%, #000 18%);
+  border-color: color-mix(in oklch, var(--warn) 82%, #000 18%);
 }
 
 .assistant-failure-action:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.5;
+}
+
+/* 编辑态：无卡片背景，textarea 自带边框。 */
+.assistant-failure-card-editing {
+  max-width: min(440px, 100%);
+  margin-left: auto;
 }
 
 .assistant-failure-editor {
   display: grid;
   gap: 6px;
-  margin-top: 10px;
+}
+
+.assistant-failure-editor label {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .assistant-failure-editor textarea {
   width: 100%;
   resize: vertical;
   border: 1px solid var(--border-1);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   background: var(--surface-1);
   color: var(--text);
   font: inherit;
@@ -1273,8 +1359,14 @@ select:focus-visible,
 }
 
 .assistant-failure-editor textarea:focus {
-  border-color: #d97706;
-  outline: 2px solid color-mix(in oklch, #f59e0b 18%, transparent);
+  border-color: var(--warn);
+  outline: 2px solid color-mix(in oklch, var(--warn) 18%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .assistant-failure-pulse {
+    animation: none;
+  }
 }
 
 .assistant-markdown > *:first-child {

@@ -1,107 +1,96 @@
-import { Bug, Pencil, RotateCcw, Send, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Loader2, Pencil, RotateCcw, X } from "lucide-react";
 
 import type { AssistantMessageFailure } from "../../api/assistant";
 
 interface AssistantFailureCardProps {
   failure: AssistantMessageFailure;
-  originalContent: string;
   loading: boolean;
-  onRetry: (content?: string) => void;
-  onDebug: () => void;
+  onRetry: () => void;
+  editing: boolean;
+  onStartEdit: () => void;
+  onSubmitEdit: () => void;
+  onCancelEdit: () => void;
 }
 
 export default function AssistantFailureCard({
   failure,
-  originalContent,
   loading,
   onRetry,
-  onDebug,
+  editing,
+  onStartEdit,
+  onSubmitEdit,
+  onCancelEdit,
 }: AssistantFailureCardProps): JSX.Element {
-  const [editing, setEditing] = useState(false);
-  const [editedContent, setEditedContent] = useState(originalContent);
-
-  useEffect(() => {
-    if (!editing) setEditedContent(originalContent);
-  }, [editing, originalContent]);
-
-  const submitEdited = () => {
-    if (!editedContent.trim() || loading) return;
-    onRetry(editedContent);
-  };
-
-  return (
-    <section className="assistant-failure-card" aria-label="消息恢复操作">
-      <div className="assistant-failure-card-heading">
-        <span className="assistant-failure-pulse" aria-hidden="true" />
-        <strong>{loading ? "正在重新处理" : "这条消息没有完成"}</strong>
-        <span>第 {failure.attemptCount} 次尝试</span>
-      </div>
-      <p>{failure.message}</p>
-      <small>{failure.suggestion}</small>
-
-      {editing ? (
-        <div className="assistant-failure-editor">
-          <label htmlFor={`failure-edit-${failure.failedAt}`}>编辑后重试</label>
-          <textarea
-            id={`failure-edit-${failure.failedAt}`}
-            value={editedContent}
-            disabled={loading}
-            onChange={(event) => setEditedContent(event.currentTarget.value)}
-            rows={3}
-          />
-          <div className="assistant-failure-actions">
-            <button
-              type="button"
-              className="assistant-failure-action assistant-failure-action-primary"
-              disabled={loading || !editedContent.trim()}
-              onClick={submitEdited}
-            >
-              <Send size={13} />
-              {loading ? "处理中" : "提交重试"}
-            </button>
-            <button
-              type="button"
-              className="assistant-failure-action"
-              disabled={loading}
-              onClick={() => setEditing(false)}
-            >
-              <X size={13} />
-              取消
-            </button>
-          </div>
-        </div>
-      ) : (
+  // 编辑态：可编辑框已就地渲染在用户气泡里（见 AssistantScreen），
+  // 失败卡这里只放提交 / 取消，贴在气泡下方。
+  if (editing) {
+    return (
+      <section className="assistant-failure-card assistant-failure-card-editing" aria-label="消息恢复操作">
         <div className="assistant-failure-actions">
           <button
             type="button"
             className="assistant-failure-action assistant-failure-action-primary"
             disabled={loading}
-            onClick={() => onRetry()}
+            onClick={onSubmitEdit}
           >
-            <RotateCcw size={13} />
-            {loading ? "处理中" : "重试"}
+            {loading ? "处理中" : "提交重试"}
           </button>
           <button
             type="button"
             className="assistant-failure-action"
             disabled={loading}
-            onClick={() => setEditing(true)}
+            onClick={onCancelEdit}
           >
-            <Pencil size={13} />
-            编辑后重试
-          </button>
-          <button
-            type="button"
-            className="assistant-failure-action"
-            disabled={loading}
-            onClick={onDebug}
-          >
-            <Bug size={13} />
-            查看调试信息
+            <X size={13} aria-hidden="true" />
+            取消
           </button>
         </div>
-      )}
+      </section>
+    );
+  }
+
+  // 默认态：单行紧凑状态条——状态点 + 一句话 + icon 动作。
+  // 文案节点与 aria-label 是既有单测/e2e 的断言依据，改动时必须保留。
+  const retryLabel = loading ? "处理中" : "重试";
+
+  return (
+    <section className="assistant-failure-card" aria-label="消息恢复操作">
+      <div className="assistant-failure-row">
+        <div
+          className="assistant-failure-status"
+          title={`${failure.message}${failure.suggestion ? ` ${failure.suggestion}` : ""}`}
+        >
+          <span className="assistant-failure-pulse" aria-hidden="true" />
+          <strong>{loading ? "正在重新处理" : "这条消息没有完成"}</strong>
+          <span className="assistant-failure-attempt">第 {failure.attemptCount} 次尝试</span>
+        </div>
+        <div className="assistant-failure-actions">
+          <button
+            type="button"
+            className="assistant-failure-action assistant-failure-action-icon assistant-failure-action-primary"
+            disabled={loading}
+            onClick={onRetry}
+            aria-label={retryLabel}
+            title={retryLabel}
+          >
+            {loading ? (
+              <Loader2 size={14} aria-hidden="true" className="assistant-spin" />
+            ) : (
+              <RotateCcw size={14} aria-hidden="true" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="assistant-failure-action assistant-failure-action-icon"
+            disabled={loading}
+            onClick={onStartEdit}
+            aria-label="编辑后重试"
+            title="编辑后重试"
+          >
+            <Pencil size={14} aria-hidden="true" />
+          </button>
+        </div>
+      </div>
     </section>
   );
 }

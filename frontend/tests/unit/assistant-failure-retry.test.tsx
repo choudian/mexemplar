@@ -81,7 +81,8 @@ describe("Assistant failed-message recovery", () => {
     render(<AssistantScreen />);
 
     expect(await screen.findByText("这条消息没有完成")).toBeInTheDocument();
-    expect(screen.getByText(failure.message)).toBeInTheDocument();
+    // 失败原因收进状态区的悬停提示（title），保持单行无背景
+    expect(screen.getByTitle(failure.message, { exact: false })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "重试" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "编辑后重试" })).toBeEnabled();
   });
@@ -105,7 +106,7 @@ describe("Assistant failed-message recovery", () => {
     fireEvent.click(retry);
 
     expect(await screen.findByRole("button", { name: "处理中" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "查看调试信息" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "编辑后重试" })).toBeDisabled();
     expect(
       fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/api/assistant/sessions/ast_1/retry")),
     ).toHaveLength(1);
@@ -130,7 +131,7 @@ describe("Assistant failed-message recovery", () => {
     fireEvent.click(await screen.findByRole("button", { name: "重试" }));
 
     await waitFor(() => expect(screen.getByRole("button", { name: "重试" })).toBeEnabled());
-    expect(screen.getByRole("button", { name: "查看调试信息" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "编辑后重试" })).toBeEnabled();
     expect(useAssistantStore.getState().retryingFailureBySession).toEqual({});
     expect(useAssistantStore.getState().lastError).toBe("desktop bridge unavailable");
   });
@@ -143,14 +144,15 @@ describe("Assistant failed-message recovery", () => {
     render(<AssistantScreen />);
 
     fireEvent.click(await screen.findByRole("button", { name: "编辑后重试" }));
-    const editor = screen.getByLabelText("编辑后重试");
+    const editor = screen.getByLabelText("编辑这条消息");
     fireEvent.change(editor, { target: { value: "缩小范围后重新完成报告" } });
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(screen.queryByLabelText("编辑后重试")).not.toBeInTheDocument();
+    // 取消后退出编辑态：编辑框收回气泡，默认态只剩 icon 化的重试/编辑。
+    expect(screen.queryByRole("button", { name: "提交重试" })).not.toBeInTheDocument();
     expect(screen.getByText("完成季度报告")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "编辑后重试" }));
-    fireEvent.change(screen.getByLabelText("编辑后重试"), {
+    fireEvent.change(screen.getByLabelText("编辑这条消息"), {
       target: { value: "缩小范围后重新完成报告" },
     });
     fireEvent.click(screen.getByRole("button", { name: "提交重试" }));
@@ -218,13 +220,39 @@ describe("Assistant failed-message recovery", () => {
     expect(useAssistantStore.getState().lastError).toBeNull();
   });
 
-  test("debug action navigates with the owning session id", async () => {
+  test("失败回合隐藏思考过程，即使该回合已有活动步骤", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => response({ items: [] })));
+    useAssistantStore.setState({
+      turnActivityBySession: {
+        ast_1: {
+          seq_1: {
+            turnId: "seq_1",
+            fromSequence: 1,
+            steps: [{ kind: "reasoning" as const, text: "正在拆解任务…", seq: 2, subagentId: null }],
+            subagents: [],
+          },
+        },
+      },
+    });
+
     render(<AssistantScreen />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "查看调试信息" }));
+    await screen.findByText("这条消息没有完成");
+    // 失败回合不渲染思考过程时间线
+    expect(screen.queryByText("查看这一回合的思考过程")).not.toBeInTheDocument();
 
-    expect(window.location.pathname).toBe("/debug");
-    expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("ast_1");
+    // 清除失败后，同一回合的思考过程恢复展示——门控只取决于 failure。
+    act(() => {
+      useAssistantStore.getState().applyEvent({
+        eventId: "evt_clear_failure",
+        sequence: 1,
+        sessionId: "ui_1",
+        type: "assistant.message",
+        scope: { sessionId: "ast_1" },
+        payload: { ...failedMessage, failure: undefined },
+        createdAt: "2026-06-15T00:00:05Z",
+      });
+    });
+    expect(await screen.findByText("查看这一回合的思考过程")).toBeInTheDocument();
   });
 });

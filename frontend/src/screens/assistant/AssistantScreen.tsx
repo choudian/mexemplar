@@ -26,12 +26,6 @@ function messageKey(message: AssistantDisplayMessage): string | number {
   return "optimisticId" in message ? message.optimisticId : message.sequence;
 }
 
-function openDebugForSession(sessionId: string): void {
-  const nextUrl = `/debug?sessionId=${encodeURIComponent(sessionId)}`;
-  window.history.pushState({}, "", nextUrl);
-  window.dispatchEvent(new PopStateEvent("popstate"));
-}
-
 function buildThreadBlocks(
   messages: AssistantDisplayMessage[],
   turns: Record<string, AssistantTurnActivity>,
@@ -48,7 +42,12 @@ function buildThreadBlocks(
     if (!turnId) continue;
     const turn = turns[turnId] ?? emptyTurn(turnId);
     const isRunning = running && activeTurnId === turnId;
-    if (isRunning || turn.steps.length > 0 || turn.subagents.length > 0 || turn.fromSequence !== undefined) {
+    // 失败回合不展示思考过程——都失败了，中间步骤对用户没有价值，只留恢复入口。
+    const failed = message.role === "user" && "sequence" in message && Boolean(message.failure);
+    if (
+      !failed &&
+      (isRunning || turn.steps.length > 0 || turn.subagents.length > 0 || turn.fromSequence !== undefined)
+    ) {
       blocks.push({ kind: "transparency", turnId, turn, running: isRunning });
     }
   }
@@ -105,6 +104,8 @@ export function AssistantScreen(): JSX.Element {
   const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
+  const [editingFailureSeq, setEditingFailureSeq] = useState<number | null>(null);
+  const [editedContent, setEditedContent] = useState("");
 
   const activeTurns = activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {};
   const activeTurnId = activeSessionId ? activeTurnIdBySession[activeSessionId] : undefined;
@@ -121,6 +122,12 @@ export function AssistantScreen(): JSX.Element {
   useEffect(() => {
     return () => { clearIdleTimer(); };
   }, [clearIdleTimer]);
+
+  // 切换会话时退出失败消息编辑态，避免编辑框残留在别的会话上。
+  useEffect(() => {
+    setEditingFailureSeq(null);
+    setEditedContent("");
+  }, [activeSessionId]);
 
   const activeSession = sessions.find((session) => session.sessionId === activeSessionId);
   const visibleMessages = useMemo<AssistantDisplayMessage[]>(
@@ -139,6 +146,20 @@ export function AssistantScreen(): JSX.Element {
     [activeTurnId, activeTurns, isRunning, visibleMessages],
   );
   const conversationTitle = activeSession?.title ?? (visibleMessages.length > 0 ? "当前对话" : "新对话");
+
+  const startEditFailure = (sequence: number, content: string) => {
+    setEditingFailureSeq(sequence);
+    setEditedContent(content);
+  };
+  const submitEditFailure = (sessionId: string, sequence: number) => {
+    const content = editedContent;
+    setEditingFailureSeq(null);
+    void retryFailedMessage(sessionId, sequence, content);
+  };
+  const cancelEditFailure = () => {
+    setEditingFailureSeq(null);
+    setEditedContent("");
+  };
 
   return (
     <section className={`assistant-screen${historyOpen ? "" : " assistant-screen-collapsed"}`} aria-label="AI 助手">
@@ -241,6 +262,10 @@ export function AssistantScreen(): JSX.Element {
                 ) : null;
               }
               const { message } = block;
+              const failureSequence = "sequence" in message ? message.sequence : undefined;
+              const failure = "sequence" in message ? message.failure : undefined;
+              const isEditingFailure =
+                failureSequence !== undefined && failure != null && editingFailureSeq === failureSequence;
               return message.role === "summary" ? (
                 <details className="assistant-summary" key={messageKey(message)}>
                   <summary>之前的对话内容</summary>
@@ -255,21 +280,43 @@ export function AssistantScreen(): JSX.Element {
                     <div className="assistant-message-meta">{message.role === "user" ? "你" : "Assistant"}</div>
                     {message.rendering === "safe_markdown" ? (
                       <SafeMarkdown content={message.content} />
+                    ) : isEditingFailure ? (
+                      <textarea
+                        className="assistant-message-edit-input"
+                        aria-label="编辑这条消息"
+                        value={editedContent}
+                        rows={3}
+                        autoFocus
+                        onChange={(event) => setEditedContent(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            event.preventDefault();
+                            cancelEditFailure();
+                          } else if (
+                            (event.metaKey || event.ctrlKey)
+                            && event.key === "Enter"
+                            && activeSessionId
+                            && failureSequence !== undefined
+                          ) {
+                            event.preventDefault();
+                            submitEditFailure(activeSessionId, failureSequence);
+                          }
+                        }}
+                      />
                     ) : (
                       <p>{message.content}</p>
                     )}
-                    {message.role === "user"
-                    && "sequence" in message
-                    && message.failure
-                    && activeSessionId ? (
+                    {message.role === "user" && failureSequence !== undefined && failure && activeSessionId ? (
                       <AssistantFailureCard
-                        failure={message.failure}
-                        originalContent={message.content}
-                        loading={retryingFailureBySession[activeSessionId] === message.sequence}
-                        onRetry={(content) => {
-                          void retryFailedMessage(activeSessionId, message.sequence, content);
+                        failure={failure}
+                        loading={retryingFailureBySession[activeSessionId] === failureSequence}
+                        onRetry={() => {
+                          void retryFailedMessage(activeSessionId, failureSequence);
                         }}
-                        onDebug={() => openDebugForSession(activeSessionId)}
+                        editing={editingFailureSeq === failureSequence}
+                        onStartEdit={() => startEditFailure(failureSequence, message.content)}
+                        onSubmitEdit={() => submitEditFailure(activeSessionId, failureSequence)}
+                        onCancelEdit={cancelEditFailure}
                       />
                     ) : null}
                   </div>

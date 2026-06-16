@@ -57,7 +57,7 @@ test("failed Assistant history restores the inline recovery card", async ({ page
 
   await openFailedConversation(page);
 
-  await expect(page.getByText(failure.message)).toBeVisible();
+  await expect(page.getByTitle(failure.message)).toBeVisible();
   await expect(page.getByRole("button", { name: "重试", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "编辑后重试" })).toBeEnabled();
 });
@@ -130,7 +130,7 @@ test("edited retry submits new content without changing the original bubble", as
 
   await openFailedConversation(page);
   await page.getByRole("button", { name: "编辑后重试" }).click();
-  await page.getByLabel("编辑后重试").fill("缩小范围后重新完成报告");
+  await page.getByLabel("编辑这条消息").fill("缩小范围后重新完成报告");
   await page.getByRole("button", { name: "提交重试" }).click();
 
   await expect.poll(() => retryBody).toEqual({
@@ -138,18 +138,4 @@ test("edited retry submits new content without changing the original bubble", as
     content: "缩小范围后重新完成报告",
   });
   await expect(page.getByText("完成季度报告")).toBeVisible();
-});
-
-test("debug action opens the Inspector filtered by the failed session", async ({ page }) => {
-  await installMockApi(page);
-  await installFailedHistory(page);
-
-  await openFailedConversation(page);
-  await page.getByRole("button", { name: "查看调试信息" }).click();
-
-  await expect(page).toHaveURL(/\/debug\?sessionId=ast_1$/);
-  await expect(page.getByRole("heading", { name: "Debug Inspector" })).toBeVisible();
-  const sessionFilter = page.getByRole("status").filter({ hasText: "会话筛选" });
-  await expect(sessionFilter.getByText("ast_1")).toBeVisible();
-  await expect(page.getByText(/失败发生前的原始调试详情无法补录/)).toBeVisible();
 });
