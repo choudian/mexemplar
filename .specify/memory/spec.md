@@ -1612,3 +1612,53 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - **SC-165**: 跨会话调用、processId 不存在、cursor 已被覆盖三种异常路径返回各自既定语义(permission_denied / process_missing / cursorTooOld=true + cursor 字段非空),且不污染其它工具或 ProcessManager 状态。
 - **SC-166**: 既有 `process_poll` / `process_logs` / `process_wait` 测试 + guardrails 在引入本 feature 后 100% 通过。
 - **SC-167**: 三层测试金字塔(ProcessManager 单测 16 个、工具层单测 6 个、集成行为契约 3 个)全绿。
+
+---
+
+## 统一任务模型 + 多范式协作 [Source: specs/023-unified-task-collaboration]
+
+**Revision note (2026-06-24)**: Archived 023 after merge. 把隐式子任务/委派收口为显式一等 Task 图 + TaskAttempt 运行时 + 父侧裁定,并提供委派/会议/认领三种协作范式 + 私人 Todo。作为跨全栈大 feature,完整 FR-001~026、Key Entities 字段、Data Model、Contracts、Acceptance Scenarios 见 `specs/023-unified-task-collaboration/spec.md`,这里摘录最稳定的契约。
+
+### User Stories
+
+- **US-078 (P1)**: 多步任务可观测、可恢复地完成 — 复杂请求拆成带依赖的 Task 图,跨执行者真并行,实时看进度;崩溃围栏旧 attempt、从 checkpoint 续跑,迟到结果幂等拒绝,不留永久 running 僵任务。
+- **US-079 (P2)**: 干完/卡住都交裁定,失败有交代,随时可叫停 — 执行者交回派活方裁定(认可/打回/放弃),失败沿链冒泡到根触发 run 级失败卡(安全投影);停止作用于整个请求图(留工可续),取消终态不返工不复活。
+- **US-080 (P3)**: 协调者临场切换协作范式 — 点名委派 / 看板开放认领(原子认领 + 租约 + 兜底临时执行者) / 受监督二方会议(轮次/时长预算 + 结论 + 仅传消息不扩权)。
+- **US-081 (P4)**: 执行者私人 Todo 防遗忘 — 单任务私人 checklist,持久化,不进任务图/裁定/大脑,状态词独立。
+
+### Key Contracts / Entities
+
+- **Task**:持久工作项/编排节点,六态(pending_dispatch / running / suspended / completed / failed / cancelled);"等待裁定"是父侧项,**不是** Task 状态值。
+- **TaskAttempt**:一次易朽运行,带 lease / heartbeat / checkpoint / fence_token;重启围栏崩溃前 running attempt → Task `suspended(waiting_system)`,只从 checkpoint 续跑,缺则交父侧裁定。
+- **Adjudication**:父侧待裁定项(独立表),承载 accept(→完成) / return(→返工) / abandon(→失败 + 级联取消下游)。
+- **Board Claim / Meeting Channel / Todo**:看板认领(原子 + 租约 + reject history + 兜底)、受监督二方消息通道(预算 + 结论要求 + message-only,不得借工具/扩权)、执行者私人清单(独立状态词,永不进 brain distillation)。
+- **容量=1**:DB-backed(条件 UPDATE + active-attempt partial unique index),非进程锁;paused/fenced/terminal 都释放槽。
+- **副作用幂等**:Operation(stable operation_key)+ completion marker;非幂等或未知副作用崩溃后交裁定,**不**自动重放;迟到 fenced 结果幂等拒绝。
+- **run 级失败桥接**:主助理显式 `abandon_request_graph` → root FAILED → `failure_bridge` → `AssistantRunFailure` 卡(018 安全投影);仅 root 终态失败冒到用户。
+- **Typed UI events**:`assistant.task_graph.changed` / `task_board.changed` / `meeting.changed` / `todo.changed` / `task_question.changed` 经 UI Event Registry + allowlist + 脱敏投影;缺口走 `backend.resync_required` 拉权威全图快照。
+
+### Constraints & Compatibility
+
+- **CC-129**: 沿用现状拓扑(枢纽单层 + 一级延伸),唯一增量是专员起至多一个临时子代理;结构上杜绝调用环。
+- **CC-130**: 复用既有安全协议(高危确认 fail-closed、面向用户澄清仅进程内、子进程/越权 fail-closed、密钥不入日志/明文 DTO/前端持久化)。
+- **CC-131**: 用户停(可恢复暂停)映射为 `suspended(user_stop)`;新增取消(终态作废)是不同语义,显式区分,不得复用同名概念。
+- **CC-132**: 任务级失败在图内消化,只有冒到顶仍无法挽回(经 `abandon_request_graph`)才升级为 run 级;run 级只暴露安全投影。
+- **CC-133**: 委派起点的隐式状态(transition + 子会话重建)整体迁移到显式 Task 实体;单用户未发布一次性切换(clean-start guard),不双写。
+- **CC-134**: 跨执行者并行不破坏既有并发安全(共享 session / 可变激活缓存 / 计数写入 / 进程状态须线程安全或独立 session)。
+- **CC-135**: 100% 调度边界保留 — user-work `TaskAttempt.executor_type` 只能是 `ephemeral_subagent` / `specialist`,主助理只协调;PM/Programmer/Trial 不进调度池。
+
+### Success Criteria
+
+- **SC-168**: ≥3 步、≥2 执行者请求全程可见结构化任务进度(节点 + 状态);互不依赖子任务真并行,总耗时显著短于串行。
+- **SC-169**: 有 checkpoint 的崩溃/暂停 100% 从断点续跑、0 重复副作用、0 丢步;无 checkpoint 100% 进父侧裁定并给安全说明;注入式崩溃/重启 0 个永久 running。
+- **SC-170**: 停止后整个用户请求图在"当前轮结束"内暂停、产出保留、可继续;不影响其他会话/请求;取消自上而下传播,被取消下游不被 late planning 复活。
+- **SC-171**: 同一开放看板任务并发认领压力下 0 次双认领/重复执行。
+- **SC-172**: run 级失败对用户仅呈现安全说明;0 次原始 provider 错误/密钥/堆栈泄露。
+- **SC-173**: Task / Adjudication / Todo 三者 UI 与数据始终可区分(独立状态词/渲染/表)。
+- **SC-174**: 既有安全与边界回归全绿(高危确认 fail-closed、澄清不落库、100% 调度、并发安全门卫、顺图取消契约)。
+
+### Edge Cases
+
+- 跨专员并行崩溃 / 同步子树崩溃释放专员占用 / 取消 × 重规划竞态(新下游不漏取消)/ 一条消息多顶层部分失败归属 / 向上提问无人答 → 挂起等回话(fail-closed)/ 会议死锁(等待环)/ 资源权限被拒落"放弃"/ 暂停三因(等回话 / 等系统恢复 / 用户停)唤醒方式不同。
+
+完整功能需求(FR-001~026)、Key Entities 字段、Data Model、Contracts、Acceptance Scenarios 见 `specs/023-unified-task-collaboration/spec.md` 与 `data-model.md` / `contracts/assistant-task-collaboration.md`。

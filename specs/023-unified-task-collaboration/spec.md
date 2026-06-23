@@ -2,7 +2,7 @@
 
 **Feature Branch**: `023-unified-task-collaboration`
 **Created**: 2026-06-17
-**Status**: Draft
+**Status**: Completed
 **Input**: User description: "统一任务模型 + 多范式协作：把隐式子任务/委派收口成显式一等 Task（子六态+父侧裁定）+ TaskAttempt 运行时 + 委派执行异步化，并在其上提供委派/会议/认领三种可临场切换的协作范式；含看板认领、容量=1、急停顺图传、Todo 私人清单。"
 
 > 设计依据(主仓工作文档,gitignored):`docs/local/todo/unified-task-collaboration-design.md`。本 spec 是其用户向收口;实现层契约(异步执行、状态机映射、表结构、各协议)在 plan 阶段落实。

@@ -1,7 +1,42 @@
 # Merged Features Log
 
-**Last Updated:** 2026-06-15
-**Revision:** 2026-06-15 — Archived 022 process event push (子进程事件推送)
+**Last Updated:** 2026-06-24
+**Revision:** 2026-06-24 — Archived 023 unified task collaboration (统一任务模型 + 多范式协作)
+
+## 统一任务模型 + 多范式协作 — 2026-06-24
+
+**Branch:** `023-unified-task-collaboration`
+**Spec:** `specs/023-unified-task-collaboration`
+
+**What was added:**
+- US-078 (P1): 复杂多步请求收口为持久 Task 图(节点+依赖),跨执行者真并行、实时可观测进度、崩溃围栏恢复 + 迟到结果幂等拒绝,不留永久 running 僵任务
+- US-079 (P2): 执行者干完/卡住都交回派活方裁定(认可/打回/放弃),失败沿链冒泡到根 → `abandon_request_graph` 桥接 run 级失败卡;停止作用于整个请求图(留工可续),取消是终态不返工不复活
+- US-080 (P3): 协调者临场切换委派/看板认领/受监督二方会议三种范式;看板原子认领 + 租约 + 兜底临时执行者;会议仅传消息不扩权
+- US-081 (P4): 执行者私人 Todo 清单(不进任务图/裁定/大脑),持久化、状态词独立、防遗忘
+
+**New Components:**
+- `src/business/task_collaboration/`(service / dispatcher / recovery / adjudication / board / meetings / todos / questions / cutover / failure_bridge / health / models / unit_of_work / events / reentry_briefing / parent_reentry_sink / background_worker / run_control)
+- 8 个 Repository(task / attempt / operation / question / adjudication / board / meeting / todo)+ v15/v16 SQLite migration + active-attempt partial unique index
+- `src/desktop_api/`:routers/assistant_tasks、schemas(派生 displayPhase DTO)、ui_events(5 个 task 事件 Registry)、ui_event_projector、权威快照端点
+- `frontend/`:api/assistantTasks、state/assistantTaskStore、TaskGraphPanel / TaskBoardPanel / MeetingChannelDrawer / TodoChecklistPanel、AppShell transport-resync 接线
+- 工具:decide_task_adjudication、abandon_request_graph、ask_parent、open_meeting_channel、meeting_send_message、todo_update
+
+**Modified Components:**
+- orchestrator(异步 dispatch 接线 + 专员/子代理 spawn 深度封顶 + capability subset)、assistant_tools、assistant_failure_service(record_task_root_failure)、assistant_runtime(reentry 续跑 + 不再用 build_subagent_list 作 task 真相)
+- events.py(task blinker 事件)、unified_config(assistant_tasks.* 13 键)、pending_task_repository(legacy 兼容)
+- docs/ARCHITECTURE.md、docs/PROJECT_CONSTRAINTS.md、AI 入口 mirror(023 同步)
+
+**Key Decisions:**
+- Task 图是新业务事实源;`workflow_transitions` 降级为 debug/audit breadcrumb(不双写,clean-start cutover)
+- Task / TaskAttempt 分离;六态状态机 + 父侧裁定(非 Task 状态);容量=1 DB-backed(条件 UPDATE + partial unique index,非进程锁)
+- 副作用前写 Operation(operation_key)+ completion marker;非幂等崩溃后交裁定不自动重放
+- run 级失败桥接:主助理显式 `abandon_request_graph` → root FAILED → failure_bridge → AssistantRunFailure 卡(补 FR-008 "冒到顶→桥接 run 卡" 缺口)
+- Todo `replace_for_executor` 物理删除为例外(不进 brain,no-physical-delete 规则限 brain-eligible 数据)
+
+**Known Infrastructure Note:**
+- task collaboration 测试套件多文件同 process 跑时,`in_memory_db` fixture teardown 可能撞 `Cannot operate on a closed database`(多线程/dispatch 残留 session)——单文件/分批跑稳定,非被测代码 bug。
+
+**Tasks Completed:** 119/119 tasks
 
 ## 子进程事件推送 — 2026-06-15
 

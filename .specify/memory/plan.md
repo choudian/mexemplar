@@ -1222,3 +1222,36 @@ manual quickstart smoke checklist remains open.
 - 既有 `tests/integration/test_agent_builtin_process_lifecycle.py`(process_poll / logs / wait / stop / send_input)零回归;`tests/business/agents/test_builtin_command_tools.py` / `test_builtin_general_tools.py` 零回归;guardrails 103 全过。
 - 22 步 speckit 流程含 clarify 两条契约边界澄清(cursor 续约 / 纯静默 stalled)和 analyze 两条 medium 修订(SC-001 200 ms 显式断言、log_chunked delta 计算顺序)。
 - Feature tasks: 28/28 completed。
+
+---
+
+## 统一任务模型 + 多范式协作 [Source: specs/023-unified-task-collaboration]
+
+**Revision note (2026-06-24)**: Archived 023 after merge. 完整 Technical Context、Project Structure、Dispatch/Concurrency、Checkpoint/Idempotency、Stop/Cancel/Replan Ordering、Privacy/Brain Boundary、UI Event Contract Sync、Observability/Failure Bridge 见 `specs/023-unified-task-collaboration/plan.md`,这里摘录模块与架构落点。
+
+### New Modules
+
+- `src/business/task_collaboration/`:service(权威 task graph facade / snapshot / stop / continue / cascading cancel)、dispatcher(异步 dispatch / parking / 父重入 / per-worker 独立 session)、recovery(TaskAttempt lease / fence / checkpoint / 迟到结果拒绝)、adjudication(父侧裁定 accept/return/abandon + `fail_root_graph`)、board(原子认领 / 租约过期 / 兜底临时执行者)、meetings(受监督 message-only 通道 + 预算 + 结论)、todos(私人清单)、questions(ask_parent / capability request 路由)、cutover(clean-start guard)、failure_bridge(仅 root 桥接 run 卡)、health(运行计数)、unit_of_work(共享 session 重入事务)、events / reentry_briefing / parent_reentry_sink / background_worker / run_control。
+- `src/data/repos/`:8 个 assistant_task* / assistant_meeting / assistant_todo Repository;v15(建表)+ v16(active-attempt partial unique index)SQLite migration。
+- `src/desktop_api/`:routers/assistant_tasks、schemas(派生 `displayPhase` DTO,不暴露 TaskAttempt/fenced 等内部术语)、ui_events(5 个 task 事件 Registry + allowlist)、ui_event_projector(内部 blinker → typed envelope + 三层脱敏)、权威全图快照端点。
+- `frontend/`:api/assistantTasks、state/assistantTaskStore、screens/assistant/(TaskGraphPanel / TaskBoardPanel / MeetingChannelDrawer / TodoChecklistPanel)、AppShell transport-resync → `needsResync` 接线。
+
+### Architecture Changes
+
+- Orchestrator:委派从同步阻塞改为异步 dispatch + 结果回流重入;主助理是图协调者非执行器;专员 spawn 深度封顶(`_MAX_DELEGATION_DEPTH=2`),临时子代理不得再向下派。
+- 委派工具返回 durable `accepted + taskId/graphId`(不阻塞等 child);新增 `decide_task_adjudication` / `abandon_request_graph` / `ask_parent` / `open_meeting_channel` / `meeting_send_message` / `todo_update` 工具。
+- 跨模块通知:内部 task blinker 事件 → UI Event Registry typed envelope + allowlist + 脱敏投影;缺口走 `backend.resync_required` 拉权威快照。
+- 数据:cutover `clean-start guard`(检测 legacy active delegation 则禁用统一 dispatch);`workflow_transitions` 降级为 debug/audit breadcrumb;`pending_assistant_tasks` 保留为 legacy codify/bug 队列。
+
+### Configuration
+
+`assistant_tasks.*`(13 键)统一走 `UnifiedConfigManager` + `config.json` 默认:`unified_dispatch.enabled` / `cutover.clean_start_guard` / `dispatch.max_workers` / `graph.max_tasks` / `board.capacity` / `board.fallback_seconds` / `recruitment.min_fallback_count` / `attempt.lease_seconds` / `recovery.scan_interval_seconds` / `meeting.turn_budget` / `meeting.time_budget_seconds` / `meeting.mutual_wait_window` / `api.default_limit`。
+
+### Testing
+
+状态机表驱动 / dispatch async / recovery fence + late-result / 裁定 + 级联取消 / 幂等 + negative / 看板原子认领 + 双认领拒绝 / 会议预算 + no-tool-proxy / 提问 fail-closed + 用户答案不持久化 / Todo 不进 brain / cutover clean-start / failure bridge(root 桥接 + child 不桥接 + 无 sequence 不桥接)/ 200 节点 graph 性能 / 两类 guardrail(router 不直连 Repository、不从 workflow_transitions 派生真相、前端 store 同)/ 前端 store + panels + e2e。
+
+### Known Infrastructure Note
+
+- task collaboration 测试套件多文件同 process 跑时,`in_memory_db` fixture teardown 可能撞 `Cannot operate on a closed database`(多线程/dispatch 残留 session)——单文件/分批跑稳定;跨 service 读状态用新 repo 实例避免 identity map 缓存 stale;非被测代码 bug。
+- Feature tasks: 119/119 completed。
