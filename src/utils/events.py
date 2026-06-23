@@ -152,6 +152,27 @@ assistant_subagent_finished = _signals.signal("assistant_subagent_finished")
 assistant_subagent_paused = _signals.signal("assistant_subagent_paused")
 """子任务委派暂停事件（用户停止/取消，status=suspended，session_id=父助理会话）"""
 
+assistant_task_graph_changed = _signals.signal("assistant_task_graph_changed")
+"""Assistant Task 图变化事件，经 desktop_api projector 投影为 assistant.task_graph.changed。"""
+
+assistant_task_board_changed = _signals.signal("assistant_task_board_changed")
+"""Assistant Task 看板变化事件，经 desktop_api projector 投影为 assistant.task_board.changed。"""
+
+assistant_task_question_changed = _signals.signal("assistant_task_question_changed")
+"""Assistant Task question/resource request 变化事件，经 projector 投影为 assistant.task_question.changed。"""
+
+assistant_meeting_changed = _signals.signal("assistant_meeting_changed")
+"""Assistant meeting channel 变化事件，经 desktop_api projector 投影为 assistant.meeting.changed。"""
+
+assistant_todo_changed = _signals.signal("assistant_todo_changed")
+"""Assistant Todo checklist 变化事件，经 desktop_api projector 投影为 assistant.todo.changed。"""
+
+assistant_task_adjudication_changed = _signals.signal("assistant_task_adjudication_changed")
+"""Assistant task 父侧裁定变化事件。"""
+
+assistant_task_root_failed = _signals.signal("assistant_task_root_failed")
+"""Assistant root task graph terminal failure 事件。"""
+
 # =============================================================================
 # 事件数据类
 # =============================================================================
@@ -307,6 +328,13 @@ _signal_names = [
     "assistant_subagent_started",
     "assistant_subagent_finished",
     "assistant_subagent_paused",
+    "assistant_task_graph_changed",
+    "assistant_task_board_changed",
+    "assistant_task_question_changed",
+    "assistant_meeting_changed",
+    "assistant_todo_changed",
+    "assistant_task_adjudication_changed",
+    "assistant_task_root_failed",
 ]
 
 
@@ -367,6 +395,13 @@ __all__ = [
     "assistant_subagent_started",
     "assistant_subagent_finished",
     "assistant_subagent_paused",
+    "assistant_task_graph_changed",
+    "assistant_task_board_changed",
+    "assistant_task_question_changed",
+    "assistant_meeting_changed",
+    "assistant_todo_changed",
+    "assistant_task_adjudication_changed",
+    "assistant_task_root_failed",
     # 数据类
     "RecordingEventData",
     # 函数

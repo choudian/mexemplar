@@ -57,6 +57,20 @@ class MessageRepository(BaseRepository):
             query = query.filter(Message.is_archived.is_(False))
         return query.order_by(Message.sequence.desc()).first()
 
+    def get_latest_user_message_sequence(self, session_id: str) -> Optional[int]:
+        """返回会话中最新一条 user 消息的序号；用于把当前请求的任务图按消息隔离。"""
+        row = (
+            self.session.query(Message.sequence)
+            .filter(
+                Message.session_id == session_id,
+                Message.role == "user",
+            )
+            .order_by(Message.sequence.desc())
+            .limit(1)
+            .first()
+        )
+        return row[0] if row else None
+
     def get_first_user_message(self, session_id: str) -> str:
         """返回会话中第一条非空 user 消息的 content，不存在时返回空字符串。"""
         row = (

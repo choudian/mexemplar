@@ -144,6 +144,41 @@
       "seed_file_path": "src/business/brain/seed/how_to_create_skill_methodology.md"
     }
   },
+  "assistant_tasks": {
+    "unified_dispatch": {
+      "enabled": true
+    },
+    "cutover": {
+      "clean_start_guard": true
+    },
+    "dispatch": {
+      "max_workers": 4
+    },
+    "graph": {
+      "max_tasks": 200
+    },
+    "board": {
+      "capacity": 50,
+      "fallback_seconds": 60
+    },
+    "recruitment": {
+      "min_fallback_count": 3
+    },
+    "attempt": {
+      "lease_seconds": 120
+    },
+    "recovery": {
+      "scan_interval_seconds": 30
+    },
+    "meeting": {
+      "turn_budget": 12,
+      "time_budget_seconds": 900,
+      "mutual_wait_window": 4
+    },
+    "api": {
+      "default_limit": 50
+    }
+  },
   "agent_tools": {
     "file": {
       "default_max_lines": 200,

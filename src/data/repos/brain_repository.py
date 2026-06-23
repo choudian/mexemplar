@@ -548,14 +548,30 @@ class BrainRepository(BaseRepository):
             raise
 
     def invalidate_entry(self, entry_id: str, reason: str) -> bool:
-        """Mark an entry invalidated and record a feedback signal."""
+        """Mark an entry invalidated and record a feedback signal.
+
+        原子条件 UPDATE：只在条目仍非 soft-deleted 时置为 invalidated，避免与后台 decay
+        并发时把已软删条目“复活”成 invalidated、断掉演化链。读写之间被并发软删则返回 False。
+        """
         entry_id = getattr(entry_id, "entry_id", entry_id)
         entry = self.get_entry(entry_id)
         if entry is None or entry.status == "soft-deleted":
             return False
         try:
-            entry.status = "invalidated"
-            entry.updated_at = utc_now_naive()
+            invalidated = (
+                self.session.query(BrainMemoryEntry)
+                .filter(
+                    BrainMemoryEntry.entry_id == entry_id,
+                    BrainMemoryEntry.status != "soft-deleted",
+                )
+                .update(
+                    {"status": "invalidated", "updated_at": utc_now_naive()},
+                    synchronize_session=False,
+                )
+            )
+            if not invalidated:
+                # 读写之间被并发软删：不复活、不建 feedback。
+                return False
             self.session.commit()
         except Exception as e:
             self.session.rollback()
@@ -589,12 +605,31 @@ class BrainRepository(BaseRepository):
         *,
         origin: str = "system_supersession",
     ) -> Optional[str]:
-        """Create a replacement entry and soft-delete the old one through superseded_by."""
+        """Create a replacement entry and soft-delete the old one through superseded_by.
+
+        原子条件 UPDATE 守卫旧条目软删：只在仍非 soft-deleted 时执行，赢了才建后继条目。
+        与后台 decay 并发时，若旧条目已被 decay 软删（已自带后继），放弃本次 supersede
+        返回 None，避免演化链分叉。
+        """
         old_entry = self.get_entry(old_entry_id)
         if old_entry is None:
             return None
         new_entry_id = _new_id()
         try:
+            superseded = (
+                self.session.query(BrainMemoryEntry)
+                .filter(
+                    BrainMemoryEntry.entry_id == old_entry_id,
+                    BrainMemoryEntry.status != "soft-deleted",
+                )
+                .update(
+                    {"status": "soft-deleted", "superseded_by": new_entry_id},
+                    synchronize_session=False,
+                )
+            )
+            if not superseded:
+                # 旧条目已被并发软删（通常 decay 已建后继）：放弃，不新建条目、不分叉链。
+                return None
             replacement = BrainMemoryEntry(
                 entry_id=new_entry_id,
                 zone=old_entry.zone,
@@ -608,8 +643,6 @@ class BrainRepository(BaseRepository):
                 source_session_id=old_entry.source_session_id,
                 relevance_score=old_entry.relevance_score,
             )
-            old_entry.status = "soft-deleted"
-            old_entry.superseded_by = new_entry_id
             self.session.add(replacement)
             self.session.commit()
             return new_entry_id
@@ -625,16 +658,33 @@ class BrainRepository(BaseRepository):
         feedback_operation: Optional[str] = None,
         commit: bool = True,
     ) -> bool:
-        """软删除 entry（status='soft-deleted'），可选设置 superseded_by。返回 True 表示成功。"""
+        """软删除 entry（status='soft-deleted'），可选设置 superseded_by。返回 True 表示成功。
+
+        原子条件 UPDATE：只软删仍非 soft-deleted 的条目，由数据库保证并发只有一个成功
+        （避免后台衰减与用户删除并发时重复创建 feedback signal，或衰减路由重复建 archive 条目）。
+        对已是 soft-deleted 的条目返回 False——不重复软删、不创建 feedback。
+        """
         entry_id = getattr(entry_id, "entry_id", entry_id)
         superseded_by = getattr(superseded_by, "entry_id", superseded_by)
+        # 先读：feedback signal 需要 entry.content/zone；也用于判断条目是否存在。
         entry = self.get_entry(entry_id)
         if entry is None:
             return False
         try:
-            entry.status = "soft-deleted"
+            values = {"status": "soft-deleted"}
             if superseded_by is not None:
-                entry.superseded_by = superseded_by
+                values["superseded_by"] = superseded_by
+            superseded = (
+                self.session.query(BrainMemoryEntry)
+                .filter(
+                    BrainMemoryEntry.entry_id == entry_id,
+                    BrainMemoryEntry.status != "soft-deleted",
+                )
+                .update(values, synchronize_session=False)
+            )
+            if not superseded:
+                # 已被并发软删（或本就是 soft-deleted）：不创建 feedback、不重复软删。
+                return False
             if commit:
                 self.session.commit()
             else:
@@ -663,8 +713,11 @@ class BrainRepository(BaseRepository):
     ) -> Optional[str]:
         """用户编辑 entry：旧条目 soft-delete + 创建新条目 + superseded_by 链接。
 
+        原子条件 UPDATE 守卫旧条目软删：只在仍非 soft-deleted 时执行，赢了才建新条目。
+        与后台 decay 并发时若旧条目已被软删，放弃编辑返回 None，避免演化链分叉。
+
         Returns:
-            新 entry_id，失败返回 None
+            新 entry_id，失败/被并发软删返回 None
         """
         old_entry = self.get_entry(old_entry_id)
         if old_entry is None:
@@ -672,8 +725,20 @@ class BrainRepository(BaseRepository):
 
         new_entry_id = _new_id()
         try:
-            old_entry.status = "soft-deleted"
-            old_entry.superseded_by = new_entry_id
+            superseded = (
+                self.session.query(BrainMemoryEntry)
+                .filter(
+                    BrainMemoryEntry.entry_id == old_entry_id,
+                    BrainMemoryEntry.status != "soft-deleted",
+                )
+                .update(
+                    {"status": "soft-deleted", "superseded_by": new_entry_id},
+                    synchronize_session=False,
+                )
+            )
+            if not superseded:
+                # 旧条目已被并发软删：放弃编辑，不新建条目、不分叉演化链。
+                return None
 
             new_entry = BrainMemoryEntry(
                 entry_id=new_entry_id,
