@@ -14,6 +14,10 @@ from src.business.services.assistant_failure_service import (
     AssistantFailureService,
     AssistantRetryConflict,
 )
+from src.business.task_collaboration.reentry_briefing import (
+    build_reentry_briefing,
+    filter_pending_entries,
+)
 from src.desktop_api.clarifications import (
     install_clarification_signal,
     settle_clarifications_for_session_stopped,
@@ -63,6 +67,7 @@ class AssistantRuntime:
         self._orchestrator_lock = threading.Lock()
         self._workers: dict[str, threading.Thread] = {}
         self._workers_lock = threading.Lock()
+        self._reentry_sink = None
         self._observability: Optional["AssistantObservability"] = None
         install_confirmation_signal()
         install_clarification_signal()
@@ -81,7 +86,178 @@ class AssistantRuntime:
             if self._orchestrator is None:
                 self._orchestrator = self._orchestrator_factory()
                 self._orchestrator.task_worker.start()
+                self._install_reentry_sink()
             return self._orchestrator
+
+    def _install_reentry_sink(self) -> None:
+        """创建父侧回流 sink 并注入 orchestrator 的 dispatcher。
+
+        sink 通过本 runtime 的 has_active_worker / kick_reentry_run 与 worker 池协作，
+        是 dispatcher 线程池 → 续跑 worker 的受控直连（非 blinker，constitution 原则 I）。
+        """
+        from src.business.task_collaboration.parent_reentry_sink import ParentReentrySink
+
+        sink = ParentReentrySink(
+            has_active_worker=self.has_active_worker,
+            kick_reentry_run=self.kick_reentry_run,
+        )
+        self._reentry_sink = sink
+        self._orchestrator.set_parent_reentry_callback(sink.dispatch)
+
+    def has_active_worker(self, session_id: str) -> bool:
+        with self._workers_lock:
+            worker = self._workers.get(session_id)
+            return worker is not None and worker.is_alive()
+
+    def _spawn_session_worker(
+        self,
+        session_id: str,
+        build_worker: "Callable[[], tuple[threading.Thread, Callable[[], None] | None]]",
+        *,
+        raise_on_conflict: bool = False,
+    ) -> bool:
+        """单会话 worker 的统一 first-wins 启动协议。
+
+        在 ``_workers_lock`` 下守住"查活跃 worker → 注册 → 启动失败回滚"的不变量，
+        三个调用方（dispatch / retry / reentry）只提供各自的准备逻辑。``build_worker``
+        仅在锁内、确认无活跃 worker 后调用，返回 ``(worker, on_start_failure)``：``worker``
+        是待启动的 daemon 线程，``on_start_failure`` 是 ``worker.start()`` 抛错时的额外
+        回滚（无则为 ``None``）。已有活跃 worker 时按 ``raise_on_conflict`` 决定返回 False
+        还是抛 :class:`AssistantRetryConflict`。
+        """
+        with self._workers_lock:
+            existing = self._workers.get(session_id)
+            if existing is not None and existing.is_alive():
+                if raise_on_conflict:
+                    raise AssistantRetryConflict("assistant session is already running")
+                return False
+            worker, on_start_failure = build_worker()
+            self._workers[session_id] = worker
+            try:
+                worker.start()
+            except Exception:
+                self._workers.pop(session_id, None)
+                if on_start_failure is not None:
+                    on_start_failure()
+                raise
+        return True
+
+    def kick_reentry_run(self, session_id: str, graph_id: str) -> bool:
+        """回流唤醒：起一个续跑 worker 消费 pending 回流结果并驱动父侧裁定。
+
+        与 ``dispatch_message`` 同构（起新 daemon worker），共享 ``_workers`` +
+        ``_workers_lock`` first-wins：已有活跃 worker 时返回 False，回流留队列由该
+        worker 首轮 drain。
+        """
+
+        def build() -> tuple[threading.Thread, None]:
+            after_sequence = self._chat_service.get_latest_display_sequence(session_id)
+            worker = threading.Thread(
+                target=self._run_assistant_reentry,
+                args=(session_id, graph_id, after_sequence),
+                name=f"AssistantReentry-{session_id}",
+                daemon=True,
+            )
+            return worker, None
+
+        return self._spawn_session_worker(session_id, build)
+
+    def _run_assistant_reentry(
+        self,
+        session_id: str,
+        graph_id: str,
+        after_sequence: int,
+    ) -> None:
+        """续跑 worker：drain 回流 → 组装摘要注入主助理 → 续跑决策。"""
+        set_confirmation_session_context(session_id)
+        run_ctx = run_context.begin(session_id)
+        event_queue.publish_nowait(
+            "assistant.progress",
+            {"status": "running", "headline": "正在处理子任务结果", "runId": run_ctx.run_id},
+            {"sessionId": session_id},
+        )
+        entries: list[dict] = []
+        re_enqueued = False
+        try:
+            entries = self._reentry_sink.drain(session_id) if self._reentry_sink else []
+            entries = self._drop_decided_entries(graph_id, entries)
+            summary = build_reentry_briefing(entries)
+            result = self._get_orchestrator().run_agent(
+                AgentType.ASSISTANT,
+                {"role": "program", "content": summary},
+                session_id=session_id,
+            )
+            self._publish_display_messages(session_id, after_sequence)
+            if result is not None and result.result_type in (
+                ResultType.COMPLETED,
+                ResultType.NEEDS_USER_INPUT,
+            ):
+                event_queue.publish_nowait(
+                    "assistant.progress",
+                    {"status": "succeeded", "headline": "子任务结果已处理"},
+                    {"sessionId": session_id},
+                )
+            else:
+                # ERROR / 异常结果：续跑未成功，必须发 failed（不能照发 succeeded 让
+                # 前端卡在成功）。reentry 失败不接 AssistantFailureService——它没有
+                # 自然归属的用户消息回合，重试靠下次 dispatch 回流或用户新消息。
+                logger.warning(
+                    "[reentry] session %s reentry run ended with %s",
+                    session_id,
+                    result.result_type if result else None,
+                )
+                self._publish_reentry_failure(session_id)
+                # ERROR 终态同样会让 drained 回流搁浅（has_pending=False → tail-kick
+                # 不触发），须像 except 分支一样回填，防 pending adjudication 永久卡在
+                # DB；本次不 tail-kick 以免失败立即重试死循环，留待下次 dispatch/新消息。
+                if entries and self._reentry_sink is not None:
+                    self._reentry_sink.re_enqueue(session_id, entries)
+                    re_enqueued = True
+        except Exception:
+            logger.error("[reentry] session %s reentry run failed", session_id, exc_info=True)
+            # drain 已取走的回流回填队列，避免 run_agent 异常导致条目永久丢失。
+            # 下次 dispatch（新子任务完成）会重新消费；本次不 tail-kick 以免失败
+            # 立即重试死循环。
+            if entries and self._reentry_sink is not None:
+                self._reentry_sink.re_enqueue(session_id, entries)
+                re_enqueued = True
+            self._publish_reentry_failure(session_id)
+        finally:
+            run_context.end()
+            clear_confirmation_session_context()
+            with self._workers_lock:
+                if self._workers.get(session_id) is threading.current_thread():
+                    self._workers.pop(session_id, None)
+            # tail-kick：续跑期间到达的回流（当时 has_active=True 未 kick）现在补 kick。
+            # 但 except 回填的回流不立即重试（re_enqueued），留待下次 dispatch。
+            if (
+                not re_enqueued
+                and self._reentry_sink is not None
+                and self._reentry_sink.has_pending(session_id)
+            ):
+                self.kick_reentry_run(session_id, graph_id)
+
+    def _drop_decided_entries(self, graph_id: str, entries: list[dict]) -> list[dict]:
+        """剔除已决定的回流条目，避免 briefing 重提已 decide 的裁定。
+
+        run_agent 异常回填后，上一轮已 decide 的裁定可能残留队列；不过滤会让 LLM 重复
+        裁定撞 LookupError。查询走 business service（adapter 不直接碰 repo）。
+        """
+        if not entries:
+            return entries
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            pending_ids = service.pending_adjudication_ids(graph_id)
+        return filter_pending_entries(entries, pending_ids)
+
+    def _publish_reentry_failure(self, session_id: str) -> None:
+        """续跑失败终态事件（安全 headline，不泄漏内部诊断）。"""
+        event_queue.publish_nowait(
+            "assistant.progress",
+            {"status": "failed", "headline": "处理子任务结果时发生错误，请稍后重试或发新消息。"},
+            {"sessionId": session_id},
+        )
 
     def dispatch_message(
         self,
@@ -97,11 +273,7 @@ class AssistantRuntime:
             continue_subagent,
         )
 
-        with self._workers_lock:
-            existing = self._workers.get(session_id)
-            if existing is not None and existing.is_alive():
-                return False
-
+        def build() -> tuple[threading.Thread, None]:
             resolved_sequence = self._failure_service.resolve_current_for_new_message(session_id)
             if resolved_sequence is not None:
                 self._publish_display_message(session_id, resolved_sequence)
@@ -112,13 +284,9 @@ class AssistantRuntime:
                 name=f"AssistantRuntime-{session_id}",
                 daemon=True,
             )
-            self._workers[session_id] = worker
-            try:
-                worker.start()
-            except Exception:
-                self._workers.pop(session_id, None)
-                raise
-        return True
+            return worker, None
+
+        return self._spawn_session_worker(session_id, build)
 
     def retry_message(
         self,
@@ -126,10 +294,7 @@ class AssistantRuntime:
         message_sequence: int,
         content: str | None = None,
     ) -> bool:
-        with self._workers_lock:
-            existing = self._workers.get(session_id)
-            if existing is not None and existing.is_alive():
-                raise AssistantRetryConflict("assistant session is already running")
+        def build() -> tuple[threading.Thread, Callable[[], None]]:
             preparation = self._failure_service.prepare_retry(
                 session_id,
                 message_sequence,
@@ -147,14 +312,9 @@ class AssistantRuntime:
                 name=f"AssistantRuntime-{session_id}",
                 daemon=True,
             )
-            self._workers[session_id] = worker
-            try:
-                worker.start()
-            except Exception:
-                self._workers.pop(session_id, None)
-                self._failure_service.restore_failed(preparation.failure_id)
-                raise
-        return True
+            return worker, lambda: self._failure_service.restore_failed(preparation.failure_id)
+
+        return self._spawn_session_worker(session_id, build, raise_on_conflict=True)
 
     def _validate_continue_subagent_directive(
         self,
@@ -213,6 +373,40 @@ class AssistantRuntime:
             settle_clarifications_for_session_stopped(sid)
         return accepted
 
+    def stop_task_graph(self, session_id: str, graph_id: str, run_id: str | None = None) -> dict:
+        """Stop the persisted task graph and signal any active graph workers."""
+        from src.business.task_collaboration.run_control import graph_cancel_key
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            affected = service.stop_graph(session_id=session_id, graph_id=graph_id)
+        signaled = run_context.request_cancel_key(graph_cancel_key(graph_id))
+        if run_id:
+            signaled = self.cancel_session(session_id, run_id=run_id) or signaled
+        if signaled:
+            fail_closed_confirmations_for_session(session_id)
+            settle_clarifications_for_session_stopped(session_id)
+        return {"affected": affected, "cancel_signal_accepted": signaled}
+
+    def continue_task_graph(self, session_id: str, graph_id: str) -> dict:
+        """Resume user-stopped tasks and dispatch assigned work again."""
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            resumed = service.continue_graph(session_id=session_id, graph_id=graph_id)
+        started = self._get_orchestrator().resume_pending_graph_tasks(
+            session_id=session_id,
+            graph_id=graph_id,
+        )
+        return {"resumed": resumed, "started": started}
+
+    def resume_recovered_task(self, task_id: str, checkpoint_ref: str) -> bool:
+        """Background recovery callback for checkpoint-backed tasks."""
+        return self._get_orchestrator().resume_recovered_task(
+            task_id=task_id,
+            checkpoint_ref=checkpoint_ref,
+        )
+
     def get_transcript(
         self,
         session_id: str,
@@ -253,7 +447,11 @@ class AssistantRuntime:
         }
 
     def list_subagents(self, session_id: str) -> dict:
-        """子任务权威列表读模型 facade（014）：重连/重开会话兜底与卡片渲染。"""
+        """Legacy 子任务卡片读模型 facade。
+
+        新的统一任务图 UI/API 读取 `TaskCollaborationService` 快照；此方法只服务
+        `/subagents` 兼容端点和旧过程观察面，不能作为 Task 图事实来源。
+        """
         items = self._obs.build_subagent_list(session_id)
         return {
             "items": [

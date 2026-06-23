@@ -17,6 +17,7 @@ from src.desktop_api.confirmations import install_confirmation_signal
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
 from src.desktop_api.routers import (
     assistant,
+    assistant_tasks,
     brain,
     compositions,
     debug,
@@ -90,11 +91,33 @@ def create_app(session_token: str | None = None) -> FastAPI:
             except Exception as e:
                 brain_worker = None
                 logger.warning("BrainBackgroundWorker failed to start: %s", e)
+        task_worker = None
+        try:
+            from src.business.task_collaboration.background_worker import (
+                TaskCollaborationBackgroundWorker,
+            )
+
+            task_worker = TaskCollaborationBackgroundWorker(
+                resume_callback=assistant.get_assistant_runtime().resume_recovered_task,
+            )
+            task_worker.start()
+        except Exception:
+            task_worker = None
+            # I4：worker 起不来 = lease/fence 恢复、claim 过期、通道/问题超时全部静默空转，
+            # 撞崩执行者的任务会永久卡在 running 无人回收。升到 ERROR + 堆栈，避免被当成
+            # 一行 WARNING 在启动日志里漏掉。
+            logger.error(
+                "TaskCollaborationBackgroundWorker failed to start; "
+                "recovery/timeout jobs are DISABLED for this process",
+                exc_info=True,
+            )
         try:
             yield
         finally:
             if brain_worker is not None:
                 brain_worker.stop()
+            if task_worker is not None:
+                task_worker.stop()
             # 关闭前把所有仍 pending 的澄清结算为 shutdown 并唤醒阻塞 worker（FR-013）。
             try:
                 from src.desktop_api.clarifications import settle_all_clarifications_shutdown
@@ -130,6 +153,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(assistant.router)
+    app.include_router(assistant_tasks.router)
     app.include_router(teaching.router)
     app.include_router(skills.router)
     app.include_router(skills_methodology.router)

@@ -31,6 +31,7 @@ TrialPreviewStatus = Literal[
 
 _MAX_PREVIEW_CHARS = 1200
 _DEFAULT_PREVIEW_TIMEOUT_SECONDS = 30.0
+_SESSION_SCOPE = frozenset({"sessionId"})
 
 
 @dataclass(frozen=True)
@@ -188,6 +189,165 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"subagentId", "status"}),
         required_scope_keys=frozenset({"sessionId"}),
         payload_enum_values=(("status", frozenset({"running", "done", "suspended", "failed"})),),
+    ),
+    "assistant.task_graph.changed": UiEventDefinition(
+        "assistant.task_graph.changed",
+        "notification",
+        frozenset(
+            {
+                "graphId",
+                "taskId",
+                "changeType",
+                "status",
+                "displayPhase",
+                "requiresReview",
+                "safeExplanation",
+                "suspendReason",
+                "sequence",
+            }
+        ),
+        _SESSION_SCOPE,
+        {
+            "graphId": "tg_123",
+            "taskId": "tsk_1",
+            "changeType": "task_updated",
+            "status": "running",
+            "displayPhase": "reviewing",
+            "requiresReview": True,
+            "safeExplanation": "等待上级检查结果",
+            "suspendReason": None,
+            "sequence": 42,
+        },
+        required_payload_keys=frozenset({"graphId", "changeType"}),
+        required_scope_keys=_SESSION_SCOPE,
+        payload_enum_values=(
+            (
+                "changeType",
+                frozenset(
+                    {
+                        "graph_created",
+                        "task_created",
+                        "task_updated",
+                        "edge_created",
+                        "adjudication_created",
+                        "adjudication_decided",
+                        "graph_completed",
+                        "graph_stopped",
+                        "graph_continued",
+                        "graph_cancelled",
+                        "root_failed",
+                    }
+                ),
+            ),
+            (
+                "status",
+                frozenset(
+                    {
+                        "pending_dispatch",
+                        "running",
+                        "suspended",
+                        "completed",
+                        "failed",
+                        "cancelled",
+                    }
+                ),
+            ),
+            (
+                "displayPhase",
+                frozenset({"running", "reviewing", "needs_attention", "paused", "done"}),
+            ),
+            (
+                "suspendReason",
+                frozenset({"waiting_user", "waiting_system", "user_stop"}),
+            ),
+        ),
+    ),
+    "assistant.task_board.changed": UiEventDefinition(
+        "assistant.task_board.changed",
+        "notification",
+        frozenset({"taskId", "graphId", "changeType", "claimStatus", "updatedAt"}),
+        _SESSION_SCOPE,
+        {"taskId": "tsk_9", "graphId": "tg_123", "changeType": "claimed"},
+        required_payload_keys=frozenset({"taskId", "changeType"}),
+        required_scope_keys=_SESSION_SCOPE,
+        payload_enum_values=(
+            (
+                "changeType",
+                frozenset({"opened", "claimed", "released", "expired", "completed", "rejected"}),
+            ),
+        ),
+    ),
+    "assistant.task_question.changed": UiEventDefinition(
+        "assistant.task_question.changed",
+        "notification",
+        frozenset({"questionId", "taskId", "graphId", "kind", "status", "changeType"}),
+        _SESSION_SCOPE,
+        {
+            "questionId": "qst_1",
+            "taskId": "tsk_1",
+            "graphId": "tg_123",
+            "kind": "resource_request",
+            "status": "escalated_to_parent",
+            "changeType": "created",
+        },
+        required_payload_keys=frozenset({"questionId", "taskId", "changeType"}),
+        required_scope_keys=_SESSION_SCOPE,
+        payload_enum_values=(
+            ("kind", frozenset({"clarification", "resource_request", "capability_request"})),
+            (
+                "status",
+                frozenset(
+                    {
+                        "open",
+                        "escalated_to_parent",
+                        "escalated_to_user",
+                        "answered",
+                        "cancelled",
+                        "expired",
+                    }
+                ),
+            ),
+            (
+                "changeType",
+                frozenset({"created", "escalated_to_user", "answered", "cancelled", "expired"}),
+            ),
+        ),
+    ),
+    "assistant.meeting.changed": UiEventDefinition(
+        "assistant.meeting.changed",
+        "notification",
+        frozenset({"channelId", "graphId", "taskId", "changeType", "sequence", "status"}),
+        _SESSION_SCOPE,
+        {"channelId": "mtg_1", "graphId": "tg_123", "changeType": "message_added"},
+        required_payload_keys=frozenset({"channelId", "changeType"}),
+        required_scope_keys=_SESSION_SCOPE,
+        payload_enum_values=(
+            (
+                "changeType",
+                frozenset(
+                    {
+                        "opened",
+                        "message_added",
+                        "concluded",
+                        "closed_timeout",
+                        "closed_abandoned",
+                    }
+                ),
+            ),
+        ),
+    ),
+    "assistant.todo.changed": UiEventDefinition(
+        "assistant.todo.changed",
+        "notification",
+        frozenset({"taskId", "todoId", "changeType", "status", "sortOrder"}),
+        _SESSION_SCOPE,
+        {"taskId": "tsk_1", "todoId": "todo_1", "changeType": "updated"},
+        required_payload_keys=frozenset({"taskId", "todoId", "changeType"}),
+        required_scope_keys=_SESSION_SCOPE,
+        payload_enum_values=(
+            ("changeType", frozenset({"created", "updated", "deleted", "reordered"})),
+            ("status", frozenset({"todo", "doing", "done", "skipped"})),
+        ),
     ),
     "recording.progress": UiEventDefinition(
         "recording.progress",
