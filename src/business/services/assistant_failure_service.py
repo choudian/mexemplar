@@ -99,6 +99,20 @@ class AssistantFailureService:
         )
         return self._summary(row)
 
+    def record_task_root_failure(
+        self,
+        *,
+        session_id: str,
+        message_sequence: int,
+        safe_summary: str,
+    ) -> AssistantFailureSummary:
+        return self.record_terminal_failure(
+            session_id=session_id,
+            message_sequence=message_sequence,
+            result_type=ResultType.ERROR,
+            error=safe_summary,
+        )
+
     def prepare_retry(
         self,
         session_id: str,

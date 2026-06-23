@@ -308,7 +308,7 @@ class LangChainLLMClient:
             try:
                 from src.data.real_tour_audit import record_paid_call
 
-                record_paid_call(self.audit_source or "llm_chat")
+                record_paid_call(getattr(self, "audit_source", None) or "llm_chat")
             except ImportError:
                 pass
             from langchain_core.messages import HumanMessage
@@ -367,7 +367,7 @@ class LangChainLLMClient:
             try:
                 from src.data.real_tour_audit import record_paid_call
 
-                record_paid_call(self.audit_source or "llm_chat_with_tools")
+                record_paid_call(getattr(self, "audit_source", None) or "llm_chat_with_tools")
             except ImportError:
                 pass
             # 转换为 LangChain 消息对象

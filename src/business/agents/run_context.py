@@ -15,7 +15,7 @@ import contextvars
 import logging
 import threading
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +28,7 @@ class RunContext:
     cancel_event: threading.Event
     generation: int
     run_id: str
+    cancel_keys: tuple[str, ...] = ()
 
 
 @dataclass
@@ -35,6 +36,7 @@ class _SessionCancel:
     event: threading.Event
     generation: int
     run_id: str
+    cancel_keys: tuple[str, ...] = ()
 
 
 _run_context: contextvars.ContextVar[Optional[RunContext]] = contextvars.ContextVar(
@@ -44,6 +46,9 @@ _run_context: contextvars.ContextVar[Optional[RunContext]] = contextvars.Context
 # 进程内 session_id → Event 注册表，由停止端点按会话查找并 set。
 _lock = threading.Lock()
 _registry: dict[str, _SessionCancel] = {}
+# 额外取消键 → 当前运行事件。统一任务派发跨线程运行，ContextVar 不会从主助理线程传播；
+# worker 用 graph/task/attempt key 显式注册，graph stop 可精准 set 当前图的事件。
+_key_registry: dict[str, set[threading.Event]] = {}
 # 待停止集合：停止早于 begin() 登记 Event 时记录意图，begin 命中即按取消起步（C2-E3）。
 _pending_cancel: set[str] = set()
 # 代际计数器：每次运行 +1，使陈旧 set / end 无法影响复用同一 session 的新一轮运行（E2）。
@@ -66,7 +71,7 @@ def _run_id_for_generation(generation: int) -> str:
     return f"run-{generation}"
 
 
-def begin(root_session_id: str) -> RunContext:
+def begin(root_session_id: str, cancel_keys: Iterable[str] | None = None) -> RunContext:
     """在 worker 线程入口登记一次运行的取消上下文。
 
     返回的 RunContext 同时写入 ContextVar——同线程同步派出的子 loop 会自动继承。
@@ -74,6 +79,9 @@ def begin(root_session_id: str) -> RunContext:
     global _generation_counter
     sid = _require_session_id(root_session_id)
     event = threading.Event()
+    keys = tuple(
+        dict.fromkeys(str(key).strip() for key in (cancel_keys or ()) if str(key).strip())
+    )
     with _lock:
         _generation_counter += 1
         generation = _generation_counter
@@ -85,12 +93,20 @@ def begin(root_session_id: str) -> RunContext:
         # 代际 token（E2）：每次运行配新 generation；end() 只清除同代条目。陈旧 set 作用在
         # 旧 event 上，而新一轮从 ContextVar 读到的是新 event，故不会被误取消。
         run_id = _run_id_for_generation(generation)
-        _registry[sid] = _SessionCancel(event=event, generation=generation, run_id=run_id)
+        _registry[sid] = _SessionCancel(
+            event=event,
+            generation=generation,
+            run_id=run_id,
+            cancel_keys=keys,
+        )
+        for key in keys:
+            _key_registry.setdefault(key, set()).add(event)
     ctx = RunContext(
         root_session_id=sid,
         cancel_event=event,
         generation=generation,
         run_id=run_id,
+        cancel_keys=keys,
     )
     _run_context.set(ctx)
     return ctx
@@ -106,6 +122,13 @@ def end() -> None:
             if current is not None and current.generation == ctx.generation:
                 _registry.pop(ctx.root_session_id, None)
                 _activity_seq.pop(ctx.root_session_id, None)
+            for key in ctx.cancel_keys:
+                events = _key_registry.get(key)
+                if events is None:
+                    continue
+                events.discard(ctx.cancel_event)
+                if not events:
+                    _key_registry.pop(key, None)
     _run_context.set(None)
 
 
@@ -144,6 +167,18 @@ def request_cancel(session_id: str, expected_run_id: str | None = None) -> bool:
         return True
 
 
+def request_cancel_key(cancel_key: str) -> bool:
+    """Cancel all current runs registered under a graph/task/attempt key."""
+    key = str(cancel_key or "").strip()
+    if not key:
+        return False
+    with _lock:
+        events = tuple(_key_registry.get(key, ()))
+    for event in events:
+        event.set()
+    return bool(events)
+
+
 def mark_pending_cancel(session_id: str) -> None:
     """记录"待停止"意图，由下一次 begin() 命中即取消（覆盖停止早于 begin 登记的早停竞态 C2-E3）。
 
@@ -167,6 +202,7 @@ def reset_for_tests() -> None:
     global _generation_counter
     with _lock:
         _registry.clear()
+        _key_registry.clear()
         _pending_cancel.clear()
         _activity_seq.clear()
         _generation_counter = 0
