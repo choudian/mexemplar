@@ -13,11 +13,13 @@ from src.desktop_api.ui_event_types import UiEventDraft
 
 # assistant.activity / assistant.subagent 仅对可观测的助理执行链路投影；其余 agent_type 零 UI 噪声。
 # 从 AgentType 枚举派生，新增可观测类型时只需改枚举一处。
-_OBSERVABLE_AGENT_TYPES = frozenset({
-    AgentType.ASSISTANT.value,
-    AgentType.EPHEMERAL_SUBAGENT.value,
-    AgentType.SPECIALIST.value,
-})
+_OBSERVABLE_AGENT_TYPES = frozenset(
+    {
+        AgentType.ASSISTANT.value,
+        AgentType.EPHEMERAL_SUBAGENT.value,
+        AgentType.SPECIALIST.value,
+    }
+)
 
 
 def _is_observable_agent_type(agent_type: Any) -> bool:
@@ -98,6 +100,15 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
             )
         ]
 
+    # --- Task collaboration events: declarative mapping ---
+    _task_event = _TASK_EVENT_PROJECTIONS.get(event_name)
+    if _task_event is not None:
+        public_type, field_map = _task_event
+        projected = {}
+        for public_key, (internal_key, converter) in field_map.items():
+            projected[public_key] = converter(payload.get(internal_key))
+        return [UiEventDraft(public_type, projected, scope, causation_id)]
+
     if event_name == "recording_started":
         return [
             UiEventDraft(
@@ -171,33 +182,19 @@ def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiE
         question = _safe_text(payload.get("question") or payload.get("message"))
         raw_agent_type = payload.get("agent_type")
         agent_type = str(getattr(raw_agent_type, "value", raw_agent_type or "")).lower()
+        base_payload = {"status": "waiting_for_user", "headline": question}
         if agent_type == "pm":
             event_type = "teaching.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-                "question": question,
-            }
+            event_payload = {**base_payload, "question": question}
         elif agent_type == "trial":
             event_type = "trial.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-            }
+            event_payload = base_payload
         elif scope.get("sessionId"):
             event_type = "assistant.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-                "question": question,
-            }
+            event_payload = {**base_payload, "question": question}
         elif scope.get("workflowId"):
             event_type = "teaching.progress"
-            event_payload = {
-                "status": "waiting_for_user",
-                "headline": question,
-                "question": question,
-            }
+            event_payload = {**base_payload, "question": question}
         else:
             return []
         return [
@@ -599,3 +596,74 @@ def _string_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(item) for item in value]
     return [str(value)]
+
+
+def _value_or_false(value: Any):
+    """Nullable flag：None → False，其余原样透传（与其它 converter 命名风格一致）。"""
+    return value if value is not None else False
+
+
+_TASK_GRAPH_FIELD_MAP: dict[str, tuple[str, Any]] = {
+    "graphId": ("graph_id", _string_or_none),
+    "taskId": ("task_id", _string_or_none),
+    "changeType": ("change_type", _string_or_none),
+    "status": ("status", _string_or_none),
+    "displayPhase": ("display_phase", _string_or_none),
+    "requiresReview": ("requires_review", _value_or_false),
+    "safeExplanation": ("safe_explanation", _safe_short_text),
+    "suspendReason": ("suspend_reason", _string_or_none),
+    "sequence": ("sequence", _int_or_none),
+}
+
+
+# Declarative mapping for task-collaboration internal events → public UI events.
+# Each entry: internal_event_name → (public_type, field_map)
+# field_map: {public_key: (internal_key, converter)}
+# 三个 graph 类事件共享 _TASK_GRAPH_FIELD_MAP；改字段时只改一处。
+_TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
+    "assistant_task_graph_changed": ("assistant.task_graph.changed", _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_adjudication_changed": ("assistant.task_graph.changed", _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_root_failed": ("assistant.task_graph.changed", _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_board_changed": (
+        "assistant.task_board.changed",
+        {
+            "taskId": ("task_id", _string_or_none),
+            "graphId": ("graph_id", _string_or_none),
+            "changeType": ("change_type", _string_or_none),
+            "claimStatus": ("claim_status", _string_or_none),
+            "updatedAt": ("updated_at", _string_or_none),
+        },
+    ),
+    "assistant_task_question_changed": (
+        "assistant.task_question.changed",
+        {
+            "questionId": ("question_id", _string_or_none),
+            "taskId": ("task_id", _string_or_none),
+            "graphId": ("graph_id", _string_or_none),
+            "kind": ("kind", _string_or_none),
+            "status": ("status", _string_or_none),
+            "changeType": ("change_type", _string_or_none),
+        },
+    ),
+    "assistant_meeting_changed": (
+        "assistant.meeting.changed",
+        {
+            "channelId": ("channel_id", _string_or_none),
+            "graphId": ("graph_id", _string_or_none),
+            "taskId": ("task_id", _string_or_none),
+            "changeType": ("change_type", _string_or_none),
+            "sequence": ("sequence", _int_or_none),
+            "status": ("status", _string_or_none),
+        },
+    ),
+    "assistant_todo_changed": (
+        "assistant.todo.changed",
+        {
+            "taskId": ("task_id", _string_or_none),
+            "todoId": ("todo_id", _string_or_none),
+            "changeType": ("change_type", _string_or_none),
+            "status": ("status", _string_or_none),
+            "sortOrder": ("sort_order", _int_or_none),
+        },
+    ),
+}

@@ -26,12 +26,28 @@ class FakeTaskWorker:
 class FailingOrchestrator:
     task_worker = FakeTaskWorker()
 
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
+
     def run_agent(self, *args, **kwargs) -> AgentResult:
         return AgentResult(result_type=ResultType.ERROR, error="LLM 调用失败")
 
 
+class ExplodingOrchestrator:
+    task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
+
+    def run_agent(self, *args, **kwargs) -> AgentResult:
+        raise RuntimeError("LLM API 超时")
+
+
 class CompletingOrchestrator:
     task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
 
     def run_agent(self, *args, **kwargs) -> AgentResult:
         return AgentResult(result_type=ResultType.COMPLETED)
@@ -39,6 +55,9 @@ class CompletingOrchestrator:
 
 class ResultOrchestrator:
     task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
 
     def __init__(self, result: AgentResult) -> None:
         self.result = result
@@ -49,6 +68,9 @@ class ResultOrchestrator:
 
 class RecordingOrchestrator:
     task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
 
     def __init__(self) -> None:
         self.calls: list[tuple[tuple, dict]] = []
@@ -69,6 +91,9 @@ class FakeChatService:
 class BlockingOrchestrator:
     task_worker = FakeTaskWorker()
 
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
+
     def __init__(self) -> None:
         self.entered = threading.Event()
         self.release = threading.Event()
@@ -83,6 +108,9 @@ class BlockingOrchestrator:
 
 class PersistingFailOrchestrator:
     task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
 
     def __init__(self, *, edited: bool = False) -> None:
         self.edited = edited
@@ -113,6 +141,9 @@ class PersistingFailOrchestrator:
 
 class RetryCompletingOrchestrator:
     task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
 
     def __init__(self) -> None:
         self.kwargs: dict | None = None
@@ -182,6 +213,103 @@ def test_assistant_runtime_does_not_publish_success_after_agent_error() -> None:
     assert ("assistant.progress", "failed") in [
         (event.type, event.payload.get("status")) for event in events
     ]
+
+
+def test_reentry_run_publishes_failed_when_agent_errors(monkeypatch) -> None:
+    # 续跑 run_agent 返回 ERROR 时必须发 failed 事件（不能照发 succeeded 让前端卡在成功）。
+    drain_events()
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: FailingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+    runtime._get_orchestrator()
+    # 注册当前线程为 active worker，防 dispatch 触发后台 kick 与同步调用竞争。
+    runtime._workers["ast_reentry_err"] = threading.current_thread()
+    runtime._reentry_sink.dispatch(
+        {
+            "accepted": True,
+            "taskId": "t_err",
+            "sessionId": "ast_reentry_err",
+            "graphId": "g_err",
+        }
+    )
+    monkeypatch.setattr(runtime, "_publish_display_messages", lambda *a, **k: None)
+    runtime._run_assistant_reentry("ast_reentry_err", "g_err", 0)
+
+    statuses: list[str] = []
+    while True:
+        try:
+            event = event_queue.queue.get_nowait()
+        except queue.Empty:
+            break
+        if event.type == "assistant.progress":
+            statuses.append(event.payload.get("status"))
+    assert "succeeded" not in statuses
+    assert "failed" in statuses
+
+
+def test_reentry_run_re_enqueues_drained_entries_on_exception(monkeypatch) -> None:
+    # run_agent 抛异常时，drain 取走的回流必须回填 sink（不丢失），并发 failed 事件。
+    drain_events()
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: ExplodingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+    runtime._get_orchestrator()
+    runtime._workers["ast_reentry_ex"] = threading.current_thread()
+    runtime._reentry_sink.dispatch(
+        {
+            "accepted": True,
+            "taskId": "t_ex",
+            "sessionId": "ast_reentry_ex",
+            "graphId": "g_ex",
+        }
+    )
+    monkeypatch.setattr(runtime, "_publish_display_messages", lambda *a, **k: None)
+    runtime._run_assistant_reentry("ast_reentry_ex", "g_ex", 0)
+
+    # 回流回填，未丢失
+    assert runtime._reentry_sink.has_pending("ast_reentry_ex") is True
+    re_drained = runtime._reentry_sink.drain("ast_reentry_ex")
+    assert [entry["taskId"] for entry in re_drained] == ["t_ex"]
+
+    statuses: list[str] = []
+    while True:
+        try:
+            event = event_queue.queue.get_nowait()
+        except queue.Empty:
+            break
+        if event.type == "assistant.progress":
+            statuses.append(event.payload.get("status"))
+    assert "failed" in statuses
+
+
+def test_reentry_run_re_enqueues_drained_entries_on_agent_error(monkeypatch) -> None:
+    # run_agent 返回 ERROR（非抛异常）时，drain 取走的回流也必须回填 sink：否则
+    # has_pending=False → tail-kick 不触发 → pending adjudication 在 DB 中永久搁浅，
+    # 直到用户新消息或同 session 新 dispatch。except 分支已有回填，ERROR 分支须对称。
+    drain_events()
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: FailingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+    runtime._get_orchestrator()
+    runtime._workers["ast_reentry_err_re"] = threading.current_thread()
+    runtime._reentry_sink.dispatch(
+        {
+            "accepted": True,
+            "taskId": "t_err_re",
+            "sessionId": "ast_reentry_err_re",
+            "graphId": "g_err_re",
+        }
+    )
+    monkeypatch.setattr(runtime, "_publish_display_messages", lambda *a, **k: None)
+    runtime._run_assistant_reentry("ast_reentry_err_re", "g_err_re", 0)
+
+    # 回流回填，未丢失
+    assert runtime._reentry_sink.has_pending("ast_reentry_err_re") is True
+    re_drained = runtime._reentry_sink.drain("ast_reentry_err_re")
+    assert [entry["taskId"] for entry in re_drained] == ["t_err_re"]
 
 
 def test_continue_subagent_request_emits_fallback_when_main_assistant_does_not_resume(

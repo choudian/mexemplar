@@ -343,6 +343,146 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
       if (!equipmentByEntity.spec_1.includes("sk_created")) equipmentByEntity.spec_1.push("sk_created");
       return json(route, { accepted: true, sessionId: "ast_1" });
     }
+    if (path === "/api/assistant/sessions/ast_1/task-graphs/current" && method === "GET") {
+      return json(route, {
+        graph: {
+          graphId: "tg_fixture",
+          sessionId: "ast_1",
+          userMessageSequence: 1,
+          version: 1,
+          tasks: [
+            {
+              taskId: "tsk_fixture_root",
+              graphId: "tg_fixture",
+              parentTaskId: null,
+              title: "整理报销",
+              descriptionPreview: "整理本月报销并生成摘要",
+              status: "running",
+              displayPhase: "running",
+              requiresReview: false,
+              safeExplanation: "",
+              suspendReason: null,
+              assignee: null,
+              adjudicationId: null,
+              updatedAt: new Date().toISOString(),
+            },
+            {
+              taskId: "tsk_fixture_child",
+              graphId: "tg_fixture",
+              parentTaskId: "tsk_fixture_root",
+              title: "核对发票",
+              descriptionPreview: "检查发票日期和金额",
+              status: "suspended",
+              displayPhase: "paused",
+              requiresReview: false,
+              safeExplanation: "等待继续",
+              suspendReason: "user_stop",
+              assignee: { type: "specialist", id: "spec_1", label: "财务专员" },
+              adjudicationId: null,
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+          edges: [
+            { sourceTaskId: "tsk_fixture_root", targetTaskId: "tsk_fixture_child", type: "delegation" },
+          ],
+          adjudications: [],
+        },
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/task-graphs/tg_fixture" && method === "GET") {
+      return json(route, {
+        graphId: "tg_fixture",
+        sessionId: "ast_1",
+        userMessageSequence: 1,
+        version: 1,
+        tasks: [],
+        edges: [],
+        adjudications: [],
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/task-board" && method === "GET") {
+      return json(route, {
+        items: [
+          {
+            taskId: "tsk_fixture_board",
+            graphId: "tg_fixture",
+            title: "补充票据截图",
+            status: "pending_dispatch",
+            claimStatus: "open",
+            claimId: null,
+            assignee: null,
+            updatedAt: new Date().toISOString(),
+          },
+        ],
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/task-board/tsk_fixture_board/claim" && method === "POST") {
+      return json(route, {
+        accepted: true,
+        claimId: "clm_fixture",
+        taskId: "tsk_fixture_board",
+        status: "claimed",
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/task-board/claims/clm_fixture/release" && method === "POST") {
+      return json(route, {
+        accepted: true,
+        claimId: "clm_fixture",
+        taskId: "tsk_fixture_board",
+        status: "released",
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/meetings/mtg_fixture" && method === "GET") {
+      return json(route, {
+        channelId: "mtg_fixture",
+        status: "open",
+        participants: [
+          { type: "specialist", id: "spec_1", label: "财务专员" },
+          { type: "specialist", id: "spec_2", label: "邮件专员" },
+        ],
+        turnsUsed: 2,
+        turnBudget: 12,
+        messages: [
+          {
+            sequence: 1,
+            senderId: "spec_1",
+            content: "按日期核对票据。",
+            createdAt: new Date().toISOString(),
+          },
+        ],
+        nextAfterSequence: null,
+        conclusion: null,
+      });
+    }
+    if (path === "/api/assistant/sessions/ast_1/tasks/tsk_fixture_root/todos" && method === "GET") {
+      return json(route, { taskId: "tsk_fixture_root", items: [] });
+    }
+    if (path === "/api/assistant/sessions/ast_1/tasks/tsk_fixture_child/todos" && method === "GET") {
+      return json(route, {
+        taskId: "tsk_fixture_child",
+        items: [
+          {
+            todoId: "todo_fixture_1",
+            text: "核对票据日期",
+            status: "doing",
+            sortOrder: 1,
+          },
+          {
+            todoId: "todo_fixture_2",
+            text: "标记缺失附件",
+            status: "todo",
+            sortOrder: 2,
+          },
+        ],
+      });
+    }
+    if (path.endsWith("/todos") && path.startsWith("/api/assistant/sessions/ast_1/tasks/") && method === "PUT") {
+      const body = request.postDataJSON() as { items?: unknown[] };
+      return json(route, {
+        taskId: path.split("/")[6],
+        items: body.items ?? [],
+      });
+    }
     if (path === "/api/assistant/sessions/ast_1/stop" && method === "POST") {
       return json(route, { accepted: true });
     }

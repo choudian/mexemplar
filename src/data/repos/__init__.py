@@ -20,6 +20,14 @@ from .brain_repository import BrainRepository
 from .specialist_repository import SpecialistRepository
 from .tool_output_repository import ToolOutputRepository
 from .assistant_run_failure_repository import AssistantRunFailureRepository
+from .assistant_task_adjudication_repository import AssistantTaskAdjudicationRepository
+from .assistant_task_attempt_repository import AssistantTaskAttemptRepository
+from .assistant_task_board_repository import AssistantTaskClaimRepository
+from .assistant_task_operation_repository import AssistantTaskOperationRepository
+from .assistant_task_question_repository import AssistantTaskQuestionRepository
+from .assistant_task_repository import AssistantTaskRepository
+from .assistant_meeting_repository import AssistantMeetingRepository
+from .assistant_todo_repository import AssistantTodoRepository
 
 __all__ = [
     "BaseRepository",
@@ -37,4 +45,12 @@ __all__ = [
     "SpecialistRepository",
     "ToolOutputRepository",
     "AssistantRunFailureRepository",
+    "AssistantTaskAdjudicationRepository",
+    "AssistantTaskAttemptRepository",
+    "AssistantTaskClaimRepository",
+    "AssistantTaskOperationRepository",
+    "AssistantTaskQuestionRepository",
+    "AssistantTaskRepository",
+    "AssistantMeetingRepository",
+    "AssistantTodoRepository",
 ]

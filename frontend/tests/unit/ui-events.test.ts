@@ -32,6 +32,11 @@ const EXAMPLE_SCOPES: Partial<Record<UiEventType, Record<string, string>>> = {
   "assistant.progress": { sessionId: "ast_1" },
   "assistant.error": { sessionId: "ast_1" },
   "assistant.confirmation": { sessionId: "ast_1" },
+  "assistant.task_graph.changed": { sessionId: "ast_1" },
+  "assistant.task_board.changed": { sessionId: "ast_1" },
+  "assistant.task_question.changed": { sessionId: "ast_1" },
+  "assistant.meeting.changed": { sessionId: "ast_1" },
+  "assistant.todo.changed": { sessionId: "ast_1" },
   "recording.progress": { workflowId: "rec_1" },
   "teaching.stage_changed": { workflowId: "rec_1" },
   "teaching.progress": { workflowId: "rec_1" },
@@ -258,6 +263,142 @@ describe("uiEvents", () => {
       entityType: "assistant",
       skillId: "sk_1",
     }))).toBeNull();
+  });
+
+  test("parses task board, meeting and todo events and rejects malformed change types", () => {
+    const graph = parseUiEvent(enveloped(
+      "assistant.task_graph.changed",
+      {
+        graphId: "tg_1",
+        taskId: "tsk_1",
+        changeType: "task_updated",
+        status: "suspended",
+        displayPhase: "paused",
+        requiresReview: false,
+        safeExplanation: "等待继续",
+        suspendReason: "user_stop",
+        sequence: 3,
+      },
+      { sessionId: "ast_1" },
+    ));
+    const board = parseUiEvent(enveloped(
+      "assistant.task_board.changed",
+      { taskId: "tsk_1", graphId: "tg_1", changeType: "opened" },
+      { sessionId: "ast_1" },
+    ));
+    const question = parseUiEvent(enveloped(
+      "assistant.task_question.changed",
+      {
+        questionId: "qst_1",
+        taskId: "tsk_1",
+        graphId: "tg_1",
+        kind: "resource_request",
+        status: "escalated_to_parent",
+        changeType: "created",
+      },
+      { sessionId: "ast_1" },
+    ));
+    const meeting = parseUiEvent(enveloped(
+      "assistant.meeting.changed",
+      { channelId: "mtg_1", graphId: "tg_1", changeType: "message_added" },
+      { sessionId: "ast_1" },
+    ));
+    const todo = parseUiEvent(enveloped(
+      "assistant.todo.changed",
+      { taskId: "tsk_1", todoId: "todo_1", changeType: "created", status: "done" },
+      { sessionId: "ast_1" },
+    ));
+
+    expect(graph?.type).toBe("assistant.task_graph.changed");
+    expect(board?.type).toBe("assistant.task_board.changed");
+    expect(question?.type).toBe("assistant.task_question.changed");
+    expect(meeting?.type).toBe("assistant.meeting.changed");
+    expect(todo?.type).toBe("assistant.todo.changed");
+    expect(parseUiEvent(enveloped(
+      "assistant.task_board.changed",
+      { taskId: "tsk_1", graphId: "tg_1", changeType: "completed" },
+      { sessionId: "ast_1" },
+    ))?.type).toBe("assistant.task_board.changed");
+    expect(parseUiEvent(enveloped(
+      "assistant.todo.changed",
+      { taskId: "tsk_1", todoId: "todo_1", changeType: "deleted", status: "done" },
+      { sessionId: "ast_1" },
+    ))?.type).toBe("assistant.todo.changed");
+    expect(parseUiEvent(enveloped(
+      "assistant.todo.changed",
+      { taskId: "tsk_1", todoId: "todo_1", changeType: "reordered", status: "done" },
+      { sessionId: "ast_1" },
+    ))?.type).toBe("assistant.todo.changed");
+    expect(parseUiEvent(enveloped(
+      "assistant.task_graph.changed",
+      { graphId: "tg_1", taskId: "tsk_1", changeType: "unknown", status: "running" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_graph.changed",
+      { graphId: "tg_1", taskId: "tsk_1", changeType: "task_updated", status: "completedish" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_graph.changed",
+      { graphId: "tg_1", taskId: "tsk_1", changeType: "task_updated", displayPhase: "fenced" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_graph.changed",
+      { graphId: "tg_1", taskId: "tsk_1", changeType: "task_updated", suspendReason: "manual" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_board.changed",
+      { taskId: "tsk_1", changeType: "unknown" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_question.changed",
+      { questionId: "qst_1", taskId: "tsk_1", changeType: "unknown" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_question.changed",
+      { questionId: "qst_1", taskId: "tsk_1", changeType: "created", kind: "tool_grant" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.task_question.changed",
+      { questionId: "qst_1", taskId: "tsk_1", changeType: "created", status: "pending" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.meeting.changed",
+      { channelId: "mtg_1", changeType: "tool_granted" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+    expect(parseUiEvent(enveloped(
+      "assistant.todo.changed",
+      { taskId: "tsk_1", todoId: "todo_1", changeType: "updated", status: "completed" },
+      { sessionId: "ast_1" },
+    ))).toBeNull();
+  });
+
+  test("accepts meeting changed event with null sequence (opened/concluded carry none)", () => {
+    // 后端 emit_meeting_changed 对 opened/concluded/closed_timeout/closed_abandoned 发
+    // sequence=None（只有 message_added 带序号）→ JSON null。parser 不能因此丢弃整条
+    // 事件，否则 store 永远收不到 meeting.changed、不触发 resync，用户看不到会议开启/关闭。
+    const opened = parseUiEvent(enveloped(
+      "assistant.meeting.changed",
+      { channelId: "mtg_1", graphId: "tg_1", changeType: "opened", sequence: null },
+      { sessionId: "ast_1" },
+    ));
+    const concluded = parseUiEvent(enveloped(
+      "assistant.meeting.changed",
+      { channelId: "mtg_1", graphId: "tg_1", changeType: "concluded", sequence: null },
+      { sessionId: "ast_1" },
+    ));
+
+    expect(opened?.type).toBe("assistant.meeting.changed");
+    expect((opened?.payload as Record<string, unknown>).sequence).toBeNull();
+    expect(concluded?.type).toBe("assistant.meeting.changed");
   });
 
   test("parses exported registry payload examples", () => {

@@ -81,3 +81,38 @@ def test_v14_migration_creates_assistant_failure_state_table() -> None:
     }.issubset(columns)
     assert "uq_assistant_run_failure_current_session" in indexes
     assert version == 14
+
+
+def test_v16_migration_creates_attempt_partial_unique_indexes() -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE schema_version (version INTEGER NOT NULL)"))
+        conn.execute(text("INSERT INTO schema_version (version) VALUES (15)"))
+        # 预建 v15 状态的 attempts 表（无 partial unique index），供 v16 升级
+        conn.execute(text(
+            "CREATE TABLE assistant_task_attempts ("
+            "attempt_id TEXT PRIMARY KEY, "
+            "task_id TEXT NOT NULL, "
+            "executor_type TEXT NOT NULL, "
+            "executor_id TEXT NOT NULL, "
+            "status TEXT NOT NULL, "
+            "lease_owner TEXT NOT NULL, "
+            "lease_expires_at DATETIME NOT NULL)"
+        ))
+
+    migrations.migrate_to_v16(engine)
+
+    with engine.connect() as conn:
+        indexes = {
+            row[1] for row in conn.execute(text("PRAGMA index_list(assistant_task_attempts)"))
+        }
+        version = conn.execute(text("SELECT version FROM schema_version")).scalar_one()
+
+    assert "uq_assistant_task_attempts_active_task" in indexes
+    assert "uq_assistant_task_attempts_active_executor" in indexes
+    assert version == 16
+
+
+def test_v16_registered_in_migration_steps() -> None:
+    versions = [version for version, _ in migrations._MIGRATIONS]
+    assert 16 in versions

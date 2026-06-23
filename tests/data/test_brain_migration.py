@@ -40,7 +40,7 @@ class TestV11MigrationTables:
             result = conn.execute(text("SELECT version FROM schema_version"))
             row = result.fetchone()
             assert row is not None
-            assert row[0] == 13
+            assert row[0] == 16
 
     def test_profile_backfill_handles_legacy_profile_without_raw_answers(self, tmp_path):
         from src.data.migrations import migrate_to_v11

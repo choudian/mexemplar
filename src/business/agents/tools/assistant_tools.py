@@ -11,7 +11,7 @@ import time
 import uuid
 from src.utils.timezone import utc_now
 
-from src.business.agents.config import ToolDefinition
+from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
 from src.business.brain.specialist_service import SpecialistService
 from src.business.brain.retrieval_service import RetrievalService
@@ -414,8 +414,8 @@ def dismiss_suggestion_handler(task_pattern: str) -> str:
 
         return to_json({"success": True, "message": "好的，不再建议了"})
     except Exception as e:
-        logger.error(f"[dismiss_suggestion] 失败: {e}")
-        return error_json(e)
+        logger.error("[dismiss_suggestion] 失败: %s", e, exc_info=True)
+        return error_json("处理建议时发生内部错误，请稍后重试。")
 
 
 DISMISS_SUGGESTION = ToolDefinition(
@@ -483,11 +483,11 @@ def retrieve_archive_handler(query: str, session_id: str | None = None) -> str:
             }
         )
     except Exception as e:
-        logger.error("[retrieve_archive] failed: %s", e)
+        logger.error("[retrieve_archive] failed: %s", e, exc_info=True)
         return to_json(
             {
                 "success": False,
-                "message": str(e),
+                "message": "检索归档记忆时发生内部错误，请稍后重试。",
                 "results": [],
             }
         )
@@ -544,6 +544,16 @@ __all__ = [
     "create_inspect_subagent_handler",
     "ASK_USER_QUESTION_SCHEMA",
     "create_ask_user_question_handler",
+    "ASK_PARENT_SCHEMA",
+    "create_ask_parent_handler",
+    "ANSWER_TASK_QUESTION_SCHEMA",
+    "create_answer_task_question_handler",
+    "OPEN_MEETING_CHANNEL_SCHEMA",
+    "create_open_meeting_channel_handler",
+    "MEETING_SEND_MESSAGE_SCHEMA",
+    "create_meeting_send_message_handler",
+    "TODO_UPDATE_SCHEMA",
+    "create_todo_update_handler",
 ]
 
 
@@ -582,8 +592,8 @@ def retrieve_failure_zone_handler(context: str, session_id: str | None = None) -
             }
         )
     except Exception as e:
-        logger.error("[retrieve_failure_zone] failed: %s", e)
-        return error_json(e)
+        logger.error("[retrieve_failure_zone] failed: %s", e, exc_info=True)
+        return error_json("检索失败记忆时发生内部错误，请稍后重试。")
 
 
 RETRIEVE_FAILURE_ZONE = ToolDefinition(
@@ -645,8 +655,8 @@ def create_invalidate_memory_entry_handler(session_id: str | None = None):
                 )
                 return to_json(_annotate_invalidation_disclosure(result, invalidation_type))
         except Exception as e:
-            logger.error("[invalidate_memory_entry] failed: %s", e)
-            return error_json(e)
+            logger.error("[invalidate_memory_entry] failed: %s", e, exc_info=True)
+            return error_json("标记记忆失效时发生内部错误，请稍后重试。")
 
     return invalidate_memory_entry_handler
 
@@ -681,7 +691,7 @@ ASK_USER_QUESTION_SCHEMA = make_tool_schema(
     name="ask_user_question",
     description=(
         "在关键决策无法可靠推断时，向用户提出 1-4 道结构化问题（每题 2-4 个选项，单选或多选，"
-        "始终可填\"其他\"）。仅用于关键岔路口；关联问题一次问齐；不得询问或展示任何密钥/令牌等"
+        '始终可填"其他"）。仅用于关键岔路口；关联问题一次问齐；不得询问或展示任何密钥/令牌等'
         "敏感信息。取消或超时后不得在同一回合重复追问或基于猜测继续执行有副作用的动作。"
     ),
     properties={
@@ -749,6 +759,347 @@ def create_ask_user_question_handler(session_id: str):
         return to_json(result)
 
     return ask_user_question_handler
+
+
+# ===== 任务协作工具 =====
+
+
+def _run_task_service(tool_name: str, generic_error_msg: str, fn):
+    """Run a task-collaboration service call with two-tier error handling.
+
+    业务校验异常（LookupError / ValueError / PermissionError）的文案是安全字面量，原样
+    回给 LLM；其余异常可能含内部细节，只入后端日志并对 LLM 返回通用文案。session 生命周期
+    由各调用方的 ``with ...Service()`` 负责，不在此函数内管理。
+    """
+    try:
+        return fn()
+    except (LookupError, ValueError, PermissionError) as e:
+        # 业务校验异常的文案是我们自己写的安全字面量，可直接回给 LLM。
+        return error_json(str(e))
+    except Exception:
+        # 其余异常可能携带 DB 错误/路径等内部细节，只入后端日志，对 LLM 给通用文案。
+        logger.error("[%s] failed", tool_name, exc_info=True)
+        return error_json(generic_error_msg)
+
+
+def _resolve_bound_task_id(supplied_task_id: str | None, bound_task_id: str | None) -> str:
+    task_id = (bound_task_id or supplied_task_id or "").strip()
+    if not task_id:
+        raise ValueError("taskId is required for this task collaboration tool")
+    return task_id
+
+
+ASK_PARENT_SCHEMA = make_tool_schema(
+    name="ask_parent",
+    description=(
+        "向当前任务的派活方提问或请求资源/能力。用于执行前或执行中对齐目标；"
+        "如果问题最终上冒到用户，用户待答和原始答案仍不会持久化。"
+    ),
+    properties={
+        "taskId": {"type": "string", "description": "当前统一任务 ID"},
+        "question": {"type": "string", "description": "问题或请求内容"},
+        "kind": {
+            "type": "string",
+            "enum": ["clarification", "resource_request", "capability_request"],
+            "description": "问题类型",
+        },
+        "capabilityDelta": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "能力请求的工具/能力 ID 列表，必须是父任务能力范围的子集",
+        },
+    },
+    required=["taskId", "question", "kind"],
+)
+
+
+def create_ask_parent_handler(
+    executor_type: str = "specialist",
+    executor_id: str = "",
+    *,
+    bound_task_id: str | None = None,
+    interrupt: bool = False,
+):
+    def ask_parent_handler(
+        taskId: str = "",
+        question: str = "",
+        kind: str = "",
+        capabilityDelta: list[str] | None = None,
+    ) -> str | ToolSignal:
+        def _action():
+            from src.business.task_collaboration.questions import TaskQuestionService
+
+            effective_task_id = _resolve_bound_task_id(taskId, bound_task_id)
+            with TaskQuestionService() as service:
+                row = service.ask_parent(
+                    task_id=effective_task_id,
+                    asker_type=executor_type,
+                    asker_id=executor_id or executor_type,
+                    kind=kind,
+                    question=question,
+                    capability_delta=capabilityDelta,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "questionId": row.question_id,
+                        "taskId": row.task_id,
+                        "status": row.status,
+                        "kind": row.kind,
+                    }
+                )
+
+        if interrupt:
+            try:
+                return ToolSignal(
+                    result_type=ResultType.NEEDS_USER_INPUT,
+                    display_text=_action(),
+                )
+            except (LookupError, ValueError, PermissionError) as e:
+                return ToolSignal(
+                    result_type=ResultType.ERROR,
+                    display_text=error_json(str(e)),
+                )
+            except Exception:
+                logger.error("[ask_parent] failed", exc_info=True)
+                return ToolSignal(
+                    result_type=ResultType.ERROR,
+                    display_text=error_json("处理向上提问请求时发生内部错误，请稍后重试。"),
+                )
+
+        return _run_task_service(
+            "ask_parent", "处理向上提问请求时发生内部错误，请稍后重试。", _action
+        )
+
+    return ask_parent_handler
+
+
+ANSWER_TASK_QUESTION_SCHEMA = make_tool_schema(
+    name="answer_task_question",
+    description=(
+        "答复子任务通过 ask_parent 提交的问题或资源/能力请求。"
+        "可选 capabilityDelta 只能授予当前父任务能力范围内的子集。"
+    ),
+    properties={
+        "questionId": {"type": "string", "description": "待答问题 ID"},
+        "safeAnswerSummary": {
+            "type": "string",
+            "description": "给子任务继续执行用的安全答复摘要",
+        },
+        "capabilityDelta": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "可选：授予的工具/能力 ID 列表",
+        },
+    },
+    required=["questionId", "safeAnswerSummary"],
+)
+
+
+def create_answer_task_question_handler(redispatch_callback=None):
+    def answer_task_question_handler(
+        questionId: str,
+        safeAnswerSummary: str,
+        capabilityDelta: list[str] | None = None,
+    ) -> str:
+        def _action():
+            from src.business.task_collaboration.questions import TaskQuestionService
+
+            with TaskQuestionService() as service:
+                answered = service.answer_question(
+                    questionId,
+                    safe_answer_summary=safeAnswerSummary,
+                    capability_delta=capabilityDelta,
+                )
+            redispatched = False
+            if redispatch_callback is not None:
+                redispatched = bool(redispatch_callback(answered.task_id))
+            return to_json(
+                {
+                    "success": True,
+                    "questionId": answered.question_id,
+                    "taskId": answered.task_id,
+                    "status": answered.status,
+                    "redispatched": redispatched,
+                }
+            )
+
+        return _run_task_service(
+            "answer_task_question", "答复子任务问题时发生内部错误，请稍后重试。", _action
+        )
+
+    return answer_task_question_handler
+
+
+OPEN_MEETING_CHANNEL_SCHEMA = make_tool_schema(
+    name="open_meeting_channel",
+    description=(
+        "为两个执行者开一条受监督、仅传消息的两方会议通道。会议不会代理工具调用或扩大授权。"
+    ),
+    properties={
+        "taskId": {"type": "string", "description": "上级任务 ID"},
+        "participantA": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": ["ephemeral_subagent", "specialist"]},
+                "id": {"type": "string"},
+            },
+            "required": ["type", "id"],
+        },
+        "participantB": {
+            "type": "object",
+            "properties": {
+                "type": {"type": "string", "enum": ["ephemeral_subagent", "specialist"]},
+                "id": {"type": "string"},
+            },
+            "required": ["type", "id"],
+        },
+    },
+    required=["taskId", "participantA", "participantB"],
+)
+
+
+def create_open_meeting_channel_handler():
+    def open_meeting_channel_handler(
+        taskId: str,
+        participantA: dict,
+        participantB: dict,
+    ) -> str:
+        def _action():
+            from src.business.task_collaboration.meetings import TaskMeetingService
+
+            with TaskMeetingService() as service:
+                channel = service.open_channel(
+                    parent_task_id=taskId,
+                    participant_a=participantA,
+                    participant_b=participantB,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "channelId": channel.channel_id,
+                        "taskId": channel.parent_task_id,
+                        "turnBudget": channel.turn_budget,
+                        "timeBudgetSeconds": channel.time_budget_seconds,
+                    }
+                )
+
+        return _run_task_service(
+            "open_meeting_channel", "打开会议通道时发生内部错误，请稍后重试。", _action
+        )
+
+    return open_meeting_channel_handler
+
+
+MEETING_SEND_MESSAGE_SCHEMA = make_tool_schema(
+    name="meeting_send_message",
+    description=(
+        "向已打开的会议通道发送消息。只能传消息；不得请求对方代用工具、共享密钥或扩大授权。"
+    ),
+    properties={
+        "channelId": {"type": "string", "description": "会议通道 ID"},
+        "content": {"type": "string", "description": "消息内容"},
+        "conclusion": {"type": "string", "description": "可选结论；非空时关闭会议为已达成结论"},
+    },
+    required=["channelId", "content"],
+)
+
+
+def create_meeting_send_message_handler(
+    executor_type: str = "specialist",
+    executor_id: str = "",
+):
+    """Create a meeting_send_message handler with bound executor identity.
+
+    The executor identity is bound at construction time (like ask_parent and
+    todo_update handlers) so the LLM cannot impersonate other participants.
+    """
+
+    def meeting_send_message_handler(
+        channelId: str,
+        content: str,
+        conclusion: str = "",
+    ) -> str:
+        def _action():
+            from src.business.task_collaboration.meetings import TaskMeetingService
+
+            with TaskMeetingService() as service:
+                channel = service.send_message(
+                    channel_id=channelId,
+                    sender_type=executor_type,
+                    sender_id=executor_id,
+                    content=content,
+                    conclusion=conclusion or None,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "channelId": channel.channel_id,
+                        "status": channel.status,
+                        "turnsUsed": channel.turns_used,
+                        "conclusion": channel.conclusion,
+                    }
+                )
+
+        return _run_task_service(
+            "meeting_send_message", "发送会议消息时发生内部错误，请稍后重试。", _action
+        )
+
+    return meeting_send_message_handler
+
+
+TODO_UPDATE_SCHEMA = make_tool_schema(
+    name="todo_update",
+    description="更新当前被派任务的私人 checklist。Todo 不委派、不裁定、不进入任务图。",
+    properties={
+        "taskId": {"type": "string", "description": "当前统一任务 ID"},
+        "items": {
+            "type": "array",
+            "description": "完整 Todo 列表，按 sortOrder 排序",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "todoId": {"type": "string"},
+                    "text": {"type": "string"},
+                    "status": {
+                        "type": "string",
+                        "enum": ["todo", "doing", "done", "skipped"],
+                    },
+                    "sortOrder": {"type": "integer"},
+                },
+                "required": ["text", "status", "sortOrder"],
+            },
+        },
+    },
+    required=["taskId", "items"],
+)
+
+
+def create_todo_update_handler(
+    executor_type: str = "specialist",
+    executor_id: str = "",
+    *,
+    bound_task_id: str | None = None,
+):
+    def todo_update_handler(taskId: str = "", items: list[dict] | None = None) -> str:
+        def _action():
+            from src.business.task_collaboration.todos import TaskTodoService
+
+            effective_task_id = _resolve_bound_task_id(taskId, bound_task_id)
+            with TaskTodoService() as service:
+                projected = service.update_todos(
+                    task_id=effective_task_id,
+                    executor_type=executor_type,
+                    executor_id=executor_id or executor_type,
+                    items=items or [],
+                )
+                return to_json({"success": True, "taskId": effective_task_id, "items": projected})
+
+        return _run_task_service(
+            "todo_update", "更新任务 Todo 时发生内部错误，请稍后重试。", _action
+        )
+
+    return todo_update_handler
 
 
 # ===== 调度工具 =====
@@ -879,6 +1230,8 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
                         tool_whitelist=tool_whitelist,
                     )
                 )
+            # 无 dispatch_callback（仅测试场景）时只返回占位结果；统一任务派发由
+            # orchestrator 注入的 dispatch_callback 经 _dispatch_task_via_unified_model 收口。
             return to_json(
                 {
                     "success": True,
@@ -887,10 +1240,104 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
                 }
             )
         except Exception as e:
-            logger.error("[delegate_to_subagent] 委派失败: %s", e)
-            return error_json(e)
+            logger.error("[delegate_to_subagent] 委派失败: %s", e, exc_info=True)
+            return error_json("委派任务时发生内部错误，请稍后重试。")
 
     return delegate_to_subagent_handler
+
+
+DECIDE_ADJUDICATION_SCHEMA = make_tool_schema(
+    name="decide_task_adjudication",
+    description=(
+        "对子任务回传的结果做父侧裁定。认可→完成；打回→返工（需给 instruction）；"
+        "放弃→失败并尝试别的办法。adjudication_id 来自任务结果回流提示。"
+    ),
+    properties={
+        "adjudication_id": {
+            "type": "string",
+            "description": "回流结果提供的裁定ID",
+        },
+        "decision": {
+            "type": "string",
+            "enum": ["accepted", "returned", "abandoned"],
+            "description": "认可 / 打回 / 放弃",
+        },
+        "instruction": {
+            "type": "string",
+            "description": "打回时的返工指示（打回必填）",
+        },
+    },
+    required=["adjudication_id", "decision"],
+)
+
+
+def create_decide_task_adjudication_handler(session_id: str):
+    """工厂函数：创建 decide_task_adjudication handler（主助理对子任务结果裁定）。"""
+
+    def decide_task_adjudication_handler(
+        adjudication_id: str,
+        decision: str,
+        instruction: str = "",
+    ) -> str:
+        """对子任务结果做裁定（认可/打回/放弃）"""
+        def _action():
+            from src.business.task_collaboration.adjudication import TaskAdjudicationService
+
+            with TaskAdjudicationService() as service:
+                result = service.decide(
+                    adjudication_id=adjudication_id,
+                    decision=decision,
+                    decided_by="agent",
+                    instruction=instruction or None,
+                    session_id=session_id,
+                )
+            return to_json(result)
+
+        return _run_task_service(
+            "decide_task_adjudication", "裁定任务结果时发生内部错误。", _action
+        )
+
+    return decide_task_adjudication_handler
+
+
+ABANDON_REQUEST_GRAPH_SCHEMA = make_tool_schema(
+    name="abandon_request_graph",
+    description=(
+        "当子任务失败导致本次用户请求（整张任务图）已无法继续完成时，显式放弃整个请求。"
+        "根任务转 FAILED、级联取消下游，并触发安全失败卡告知用户'这步没办成'。"
+        "仅在整个请求确实无法挽回时调用；单个子任务失败优先用 decide_task_adjudication "
+        "放弃该子任务。safeSummary 必须是给用户看的安全文案，不得包含密钥/路径/原始错误。"
+    ),
+    properties={
+        "safeSummary": {
+            "type": "string",
+            "description": "给用户看的安全失败摘要（已脱敏，不泄露密钥/路径/原始 provider 错误）",
+        },
+    },
+    required=["safeSummary"],
+)
+
+
+def create_abandon_request_graph_handler(session_id: str):
+    """工厂函数：创建 abandon_request_graph handler（主助理放弃整个用户请求）。"""
+
+    def abandon_request_graph_handler(safeSummary: str) -> str:
+        """放弃整个用户请求任务图（根任务失败，触发安全失败卡）"""
+        def _action():
+            from src.business.task_collaboration.adjudication import TaskAdjudicationService
+
+            with TaskAdjudicationService() as service:
+                result = service.fail_root_graph(
+                    session_id=session_id,
+                    safe_summary=safeSummary,
+                )
+            return to_json(result)
+
+        return _run_task_service(
+            "abandon_request_graph", "放弃请求时发生内部错误。", _action
+        )
+
+    return abandon_request_graph_handler
 
 
 CONTINUE_SUBAGENT_SCHEMA = make_tool_schema(
@@ -945,8 +1392,8 @@ def create_continue_subagent_handler(session_id: str, continue_callback=None):
                 )
             return to_json({"success": False, "error": "续跑回调未注册"})
         except Exception as e:
-            logger.error("[continue_subagent] 续跑失败: %s", e)
-            return error_json(e)
+            logger.error("[continue_subagent] 续跑失败: %s", e, exc_info=True)
+            return error_json("续跑子代理时发生内部错误，请稍后重试。")
 
     return continue_subagent_handler
 
@@ -987,8 +1434,8 @@ def create_inspect_subagent_handler(session_id: str, inspect_callback=None):
                 )
             return to_json({"success": False, "error": "查看回调未注册"})
         except Exception as e:
-            logger.error("[inspect_subagent] 查看失败: %s", e)
-            return error_json(e)
+            logger.error("[inspect_subagent] 查看失败: %s", e, exc_info=True)
+            return error_json("查看子代理时发生内部错误，请稍后重试。")
 
     return inspect_subagent_handler
 
@@ -1030,6 +1477,8 @@ def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=Non
                         task=task,
                     )
                 )
+            # 无 dispatch_callback（仅测试场景）时只返回占位结果；统一任务派发由
+            # orchestrator 注入的 dispatch_callback 经 _dispatch_task_via_unified_model 收口。
             return to_json(
                 {
                     "success": True,
@@ -1038,8 +1487,8 @@ def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=Non
                 }
             )
         except Exception as e:
-            logger.error("[delegate_to_specialist] 委派失败: %s", e)
-            return error_json(e)
+            logger.error("[delegate_to_specialist] 委派失败: %s", e, exc_info=True)
+            return error_json("委派专员任务时发生内部错误，请稍后重试。")
 
     return delegate_to_specialist_handler
 
@@ -1101,7 +1550,7 @@ def create_create_specialist_handler(session_id: str):
         except ValueError as e:
             return error_json(str(e))
         except Exception as e:
-            logger.error("[create_specialist] 创建失败: %s", e)
-            return error_json(e)
+            logger.error("[create_specialist] 创建失败: %s", e, exc_info=True)
+            return error_json("创建专员时发生内部错误，请稍后重试。")
 
     return create_specialist_handler

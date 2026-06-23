@@ -1053,6 +1053,80 @@ select:focus-visible,
   padding: 24px 0 12px;
 }
 
+.assistant-collab-panel {
+  width: 100%;
+  max-height: 320px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  margin: var(--space-2) 0;
+  padding: var(--space-2);
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.assistant-collab-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: var(--space-1);
+}
+.assistant-collab-panel header strong {
+  font-size: var(--text-sm);
+}
+.assistant-collab-panel button {
+  font-size: var(--text-xs);
+  padding: 2px 6px;
+}
+.assistant-collab-panel ul,
+.assistant-collab-panel ol {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.assistant-collab-panel li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border-1);
+}
+.assistant-collab-panel li:last-child {
+  border-bottom: none;
+}
+.assistant-collab-panel li span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  margin-right: var(--space-1);
+}
+.assistant-collab-panel li small {
+  flex-shrink: 0;
+  color: var(--text-2);
+}
+
+.assistant-task-graph {
+  /* uses shared .assistant-collab-panel styles */
+}
+
+.assistant-task-graph-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.assistant-task-todos article {
+  display: grid;
+  gap: 6px;
+}
+
+.assistant-task-todos h3 {
+  margin: 10px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
 .assistant-thread {
   display: flex;
   max-width: 720px;

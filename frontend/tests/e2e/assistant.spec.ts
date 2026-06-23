@@ -201,6 +201,7 @@ test("019 结构化澄清卡渲染、单选提交调用 decision 端点", async 
 
   // decision 端点被调用，提交体携带所选选项（submit + selectedOptionIds 含 q1o1）
   await expect.poll(() => decisionBody !== null).toBeTruthy();
-  expect(decisionBody?.decision).toBe("submit");
-  expect(JSON.stringify(decisionBody?.answers)).toContain("q1o1");
+  const submittedDecision = decisionBody as { decision?: string; answers?: unknown[] } | null;
+  expect(submittedDecision?.decision).toBe("submit");
+  expect(JSON.stringify(submittedDecision?.answers)).toContain("q1o1");
 });

@@ -142,7 +142,8 @@ class SkillService:
         change_reason: str,
     ) -> dict[str, Any]:
         try:
-            self._begin_immediate_transaction()
+            # 并发安全由 mark_superseded 的原子条件 UPDATE 保证（WHERE status='active'）：
+            # 两个并发 supersede 只有一个能把 base 标记为 superseded，另一个抛 skill_supersede_conflict。
             base = self._skill_repo.get_current_active_for_chain(target_skill_id)
             if base is None:
                 raise KeyError("skill_not_found")
@@ -468,9 +469,6 @@ class SkillService:
             skill_repo=self._skill_repo,
             equipment_repo=self._equipment_repo,
         )
-
-    def _begin_immediate_transaction(self) -> None:
-        self._skill_repo.ensure_immediate_transaction()
 
     def _entity_name(self, entity_type: str, entity_id: str) -> str:
         if entity_type == "assistant":

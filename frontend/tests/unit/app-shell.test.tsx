@@ -609,6 +609,62 @@ describe("AppShell", () => {
     expect(useAssistantStore.getState().turnActivityBySession.ast_1.seq_1.steps[0].toolName).toBe("snapshot");
   });
 
+  test("refreshes task collaboration snapshot on assistant resync", async () => {
+    // FR-022：transport 级 resync（SSE 重连/缺口，domains 含 assistant）必须重拉任务协作
+    // 权威快照，不能只刷 subagents/transcript 让任务面板停留在陈旧状态。
+    useAssistantStore.setState({ activeSessionId: "ast_1" });
+    const streamFrames = [
+      eventFrame({
+        eventId: "evt_task_resync",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: null,
+        type: "backend.resync_required",
+        scope: {},
+        payload: { reason: "replay_gap", domains: ["assistant"], eventSessionId: "ui_sess_test" },
+        createdAt: "2026-05-10T00:00:00Z",
+      }),
+    ];
+    let graphCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/events")) return eventStreamResponse(streamFrames, { close: true });
+      if (url.endsWith("/api/assistant/sessions/ast_1/task-graphs/current")) {
+        graphCalls += 1;
+        return jsonResponse({
+          graph: {
+            graphId: "tg_1",
+            sessionId: "ast_1",
+            userMessageSequence: 1,
+            version: 1,
+            tasks: [],
+            edges: [],
+            adjudications: [],
+          },
+        });
+      }
+      if (url.endsWith("/api/assistant/sessions/ast_1/task-board")) {
+        return jsonResponse({ items: [] });
+      }
+      if (url.endsWith("/api/assistant/sessions/ast_1/subagents")) {
+        return jsonResponse({ items: [] });
+      }
+      if (url.includes("/api/assistant/sessions/ast_1/transcript")) {
+        return jsonResponse({ steps: [], compressed: false });
+      }
+      if (url.includes("/api/assistant/sessions?")) return jsonResponse({ items: [] });
+      return jsonResponse(bootstrapPayload);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AppShell />);
+
+    // 初始挂载拉一次权威 task graph 快照
+    await waitFor(() => expect(graphCalls).toBeGreaterThanOrEqual(1));
+    // transport 级 resync 后必须重拉任务协作权威快照
+    await waitFor(() => expect(graphCalls).toBeGreaterThanOrEqual(2));
+  });
+
   test("does not apply incremental events after a failed authoritative resync", async () => {
     useTeachingStore.setState({
       run: { workflowId: "rec_1", mode: "browser", stage: "recording", summary: {} },

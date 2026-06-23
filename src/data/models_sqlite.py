@@ -221,6 +221,373 @@ class PendingAssistantTask(Base):
         return f"<PendingAssistantTask(task_id={self.task_id!r}, task_type={self.task_type!r}, status={self.status!r})>"
 
 
+class AssistantTask(Base):
+    """Assistant 协作任务图中的持久工作项。"""
+
+    __tablename__ = "assistant_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending_dispatch', 'running', 'suspended', 'completed', 'failed', 'cancelled')",
+            name="ck_assistant_tasks_status",
+        ),
+        CheckConstraint(
+            "suspend_reason IS NULL OR suspend_reason IN ('waiting_user', 'waiting_system', 'user_stop')",
+            name="ck_assistant_tasks_suspend_reason",
+        ),
+        CheckConstraint(
+            "(status = 'suspended' AND suspend_reason IS NOT NULL) OR "
+            "(status != 'suspended' AND suspend_reason IS NULL)",
+            name="ck_assistant_tasks_suspend_reason_required",
+        ),
+        CheckConstraint(
+            "assignee_type IS NULL OR assignee_type IN ('ephemeral_subagent', 'specialist')",
+            name="ck_assistant_tasks_assignee_type",
+        ),
+        Index("idx_assistant_tasks_graph_status", "graph_id", "status"),
+        Index("idx_assistant_tasks_graph_parent", "graph_id", "parent_task_id"),
+        Index("idx_assistant_tasks_session_message", "session_id", "user_message_sequence"),
+        Index("idx_assistant_tasks_graph_version", "graph_id", "task_version"),
+    )
+
+    task_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    graph_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    root_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    parent_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    user_message_sequence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_dispatch")
+    suspend_reason: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    assignee_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    assignee_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    owner_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    capability_scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    graph_version: Mapped[int] = mapped_column(Integer, default=1)
+    task_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    failed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AssistantTaskEdge(Base):
+    """Assistant Task 图的有向边。"""
+
+    __tablename__ = "assistant_task_edges"
+    __table_args__ = (
+        CheckConstraint(
+            "edge_type IN ('dependency', 'delegation', 'question', 'meeting_channel', 'resource_request')",
+            name="ck_assistant_task_edges_type",
+        ),
+        CheckConstraint(
+            "propagation IN ('blocking', 'cancel_cascade', 'message_only', 'none')",
+            name="ck_assistant_task_edges_propagation",
+        ),
+        Index("idx_assistant_task_edges_graph_source", "graph_id", "source_task_id"),
+        Index("idx_assistant_task_edges_graph_target", "graph_id", "target_task_id"),
+    )
+
+    edge_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    graph_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    edge_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    propagation: Mapped[str] = mapped_column(String(30), nullable=False, default="none")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class AssistantTaskQuestion(Base):
+    """持久化的 agent-to-agent question/resource/capability request route。"""
+
+    __tablename__ = "assistant_task_questions"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('clarification', 'resource_request', 'capability_request')",
+            name="ck_assistant_task_questions_kind",
+        ),
+        CheckConstraint(
+            "status IN ('open', 'escalated_to_parent', 'escalated_to_user', 'answered', 'cancelled', 'expired')",
+            name="ck_assistant_task_questions_status",
+        ),
+        Index("idx_assistant_task_questions_task_status", "task_id", "status"),
+        Index("idx_assistant_task_questions_graph_status", "graph_id", "status"),
+        Index("idx_assistant_task_questions_status_expires", "status", "expires_at"),
+    )
+
+    question_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    graph_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    parent_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    asker_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    asker_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    recipient_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    recipient_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    kind: Mapped[str] = mapped_column(String(30), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="open")
+    question_text: Mapped[str] = mapped_column(Text, nullable=False)
+    safe_answer_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    capability_delta: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    escalated_to_user: Mapped[bool] = mapped_column(Boolean, default=False)
+    user_request_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AssistantTaskAttempt(Base):
+    """一次 Task 运行实例，保存 lease、heartbeat、checkpoint 和 fence token。"""
+
+    __tablename__ = "assistant_task_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "executor_type IN ('ephemeral_subagent', 'specialist')",
+            name="ck_assistant_task_attempts_executor_type",
+        ),
+        CheckConstraint(
+            "status IN ('starting', 'running', 'succeeded', 'paused', 'failed', 'cancelled', 'fenced')",
+            name="ck_assistant_task_attempts_status",
+        ),
+        Index("idx_assistant_task_attempts_task_status", "task_id", "status"),
+        Index("idx_assistant_task_attempts_status_lease", "status", "lease_expires_at"),
+        # FR-003 容量=1：按 executor 查"是否已有 active attempt"的支撑索引。
+        Index(
+            "idx_assistant_task_attempts_executor_status",
+            "executor_type",
+            "executor_id",
+            "status",
+        ),
+        # FR-003 容量=1 的 DB 层兜底：应用层 read-check-write 在并发下可能双双通过
+        # active=None 守卫，partial unique index 是最后防线——同一 task、或同一
+        # executor 不允许出现两个 active（starting/running）attempt。仅约束 active 状态；
+        # I3：paused 不算 active（暂停即释放执行者槽，续跑开新 attempt），与终态行
+        # （succeeded/failed/cancelled/fenced）一样不占名额。
+        Index(
+            "uq_assistant_task_attempts_active_task",
+            "task_id",
+            unique=True,
+            sqlite_where=text("status IN ('starting', 'running')"),
+        ),
+        Index(
+            "uq_assistant_task_attempts_active_executor",
+            "executor_type",
+            "executor_id",
+            unique=True,
+            sqlite_where=text("status IN ('starting', 'running')"),
+        ),
+    )
+
+    attempt_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    executor_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    executor_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="starting")
+    lease_owner: Mapped[str] = mapped_column(String(80), nullable=False)
+    lease_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    heartbeat_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    fence_token: Mapped[int] = mapped_column(Integer, default=1)
+    checkpoint_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    result_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_category: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AssistantTaskOperation(Base):
+    """TaskAttempt 内部副作用步骤的幂等性记录。"""
+
+    __tablename__ = "assistant_task_operations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('planned', 'in_progress', 'completed', 'failed', 'unsafe_to_retry')",
+            name="ck_assistant_task_operations_status",
+        ),
+        Index("idx_assistant_task_operations_task_key", "task_id", "operation_key"),
+        Index(
+            "uq_assistant_task_operations_non_failed_key",
+            "task_id",
+            "operation_key",
+            unique=True,
+            sqlite_where=text("status != 'failed'"),
+        ),
+    )
+
+    operation_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    attempt_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    operation_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    operation_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    idempotency_scope: Mapped[str] = mapped_column(String(30), nullable=False, default="unknown")
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="planned")
+    safe_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    result_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AssistantTaskAdjudication(Base):
+    """父侧待裁定项。"""
+
+    __tablename__ = "assistant_task_adjudications"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'decided')", name="ck_assistant_task_adjudications_status"
+        ),
+        CheckConstraint(
+            "delivered_status IN ('done', 'stuck', 'failed_input')",
+            name="ck_assistant_task_adjudications_delivered_status",
+        ),
+        CheckConstraint(
+            "decision IS NULL OR decision IN ('accepted', 'returned', 'abandoned')",
+            name="ck_assistant_task_adjudications_decision",
+        ),
+        Index("idx_assistant_task_adjudications_task_status", "task_id", "status"),
+        Index("idx_assistant_task_adjudications_parent_status", "parent_session_id", "status"),
+        Index(
+            "uq_assistant_task_adjudications_pending_task",
+            "task_id",
+            unique=True,
+            sqlite_where=text("status = 'pending'"),
+        ),
+    )
+
+    adjudication_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    graph_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    parent_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    delivered_status: Mapped[str] = mapped_column(String(30), nullable=False)
+    safe_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_result_ref: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decision: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    instruction: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AssistantTaskClaim(Base):
+    """看板认领 lease 和拒绝历史。"""
+
+    __tablename__ = "assistant_task_claims"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('claimed', 'released', 'rejected', 'completed', 'expired')",
+            name="ck_assistant_task_claims_status",
+        ),
+        CheckConstraint(
+            "claimer_type IN ('ephemeral_subagent', 'specialist')",
+            name="ck_assistant_task_claims_claimer_type",
+        ),
+        Index("idx_assistant_task_claims_task_status", "task_id", "status"),
+        Index("idx_assistant_task_claims_status_lease", "status", "lease_expires_at"),
+        # FR-003 容量=1：按 claimer 查"是否已有进行中的认领"的支撑索引。
+        Index(
+            "idx_assistant_task_claims_claimer_status",
+            "claimer_type",
+            "claimer_id",
+            "status",
+        ),
+        Index(
+            "uq_assistant_task_claims_active_claimer",
+            "claimer_type",
+            "claimer_id",
+            unique=True,
+            sqlite_where=text("status = 'claimed'"),
+        ),
+    )
+
+    claim_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    claimer_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    claimer_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="claimed")
+    lease_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    reject_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    task_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+
+class AssistantMeetingChannel(Base):
+    """受监督的两方消息通道。"""
+
+    __tablename__ = "assistant_meeting_channels"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('open', 'concluded', 'closed_timeout', 'closed_abandoned')",
+            name="ck_assistant_meeting_channels_status",
+        ),
+        Index("idx_assistant_meeting_channels_graph", "graph_id"),
+        Index("idx_assistant_meeting_channels_parent", "parent_task_id"),
+    )
+
+    channel_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    graph_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    parent_task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    supervisor_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    participant_a_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    participant_a_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    participant_b_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    participant_b_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default="open")
+    turn_budget: Mapped[int] = mapped_column(Integer, nullable=False)
+    time_budget_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    turns_used: Mapped[int] = mapped_column(Integer, default=0)
+    conclusion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class AssistantMeetingMessage(Base):
+    """Meeting channel 中的一条消息。"""
+
+    __tablename__ = "assistant_meeting_messages"
+    __table_args__ = (
+        Index("idx_assistant_meeting_messages_channel_sequence", "channel_id", "sequence"),
+    )
+
+    message_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    channel_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    sender_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    sender_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+class AssistantTodoItem(Base):
+    """执行者私有 Todo checklist 项。"""
+
+    __tablename__ = "assistant_todo_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('todo', 'doing', 'done', 'skipped')", name="ck_assistant_todo_items_status"
+        ),
+        CheckConstraint(
+            "executor_type IN ('ephemeral_subagent', 'specialist')",
+            name="ck_assistant_todo_items_executor_type",
+        ),
+        Index("idx_assistant_todo_items_task_sort", "task_id", "sort_order"),
+    )
+
+    todo_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    executor_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    executor_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="todo")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class TeachingFailureRecord(Base):
     """技能教学失败记录表"""
 

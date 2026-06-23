@@ -658,6 +658,97 @@ class UnifiedConfigManager:
             "agent_tools.process.chunk_threshold_chars", 4096, maximum=65536
         )
 
+    # ===== 便捷方法：Assistant Task Collaboration 配置 =====
+
+    def get_assistant_tasks_unified_dispatch_enabled(self) -> bool:
+        return bool(self.get("assistant_tasks.unified_dispatch.enabled", default=True))
+
+    def get_assistant_tasks_clean_start_guard_enabled(self) -> bool:
+        return bool(self.get("assistant_tasks.cutover.clean_start_guard", default=True))
+
+    def get_assistant_tasks_dispatch_max_workers(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.dispatch.max_workers",
+            4,
+            maximum=20,
+        )
+
+    def get_assistant_tasks_graph_max_tasks(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.graph.max_tasks",
+            200,
+            minimum=2,
+            maximum=1000,
+        )
+
+    def get_assistant_tasks_board_capacity(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.board.capacity",
+            50,
+            maximum=200,
+        )
+
+    def get_assistant_tasks_board_fallback_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.board.fallback_seconds",
+            60,
+            maximum=86400,
+        )
+
+    def get_assistant_tasks_recruitment_min_fallback_count(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.recruitment.min_fallback_count",
+            3,
+            maximum=100,
+        )
+
+    def get_assistant_tasks_attempt_lease_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.attempt.lease_seconds",
+            120,
+            minimum=10,
+            maximum=3600,
+        )
+
+    def get_assistant_tasks_recovery_scan_interval_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.recovery.scan_interval_seconds",
+            30,
+            minimum=5,
+            maximum=600,
+        )
+
+    def get_assistant_tasks_meeting_turn_budget(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.meeting.turn_budget",
+            12,
+            maximum=100,
+        )
+
+    def get_assistant_tasks_meeting_time_budget_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.meeting.time_budget_seconds",
+            900,
+            minimum=30,
+            maximum=7200,
+        )
+
+    def get_assistant_tasks_meeting_mutual_wait_window(self) -> int:
+        """最近多少条消息用于判定互等死锁；默认 4（双方各 2 轮等待）。"""
+        return self._get_bounded_positive_int(
+            "assistant_tasks.meeting.mutual_wait_window",
+            4,
+            minimum=2,
+            maximum=20,
+        )
+
+    def get_assistant_tasks_api_default_limit(self) -> int:
+        return self._get_bounded_positive_int(
+            "assistant_tasks.api.default_limit",
+            50,
+            maximum=200,
+        )
+
     # ===== 便捷方法：录制配置 =====
 
     def get_websocket_host(self) -> str:

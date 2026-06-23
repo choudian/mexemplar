@@ -259,15 +259,27 @@ class SkillRepository(BaseRepository):
         )
 
     def mark_superseded(self, old_skill_id: str, new_skill_id: str, *, commit: bool = True) -> bool:
-        skill = self.get(old_skill_id)
-        if skill is None or skill.status != "active":
-            return False
-        skill.status = "superseded"
-        skill.superseded_by = new_skill_id
-        skill.updated_at = utc_now_naive()
+        # 原子条件 UPDATE：把“skill 必须存在且仍是 active”写进 WHERE，由数据库保证并发
+        # supersede 只有一个成功——否则两个并发调用都读到 active、都计算出同一新版本号，
+        # 都往下 create_skill 会撞主键。第二个并发请求的 WHERE 已匹配不到，update 返回 0。
+        superseded = (
+            self.session.query(BrainSkill)
+            .filter(
+                BrainSkill.skill_id == old_skill_id,
+                BrainSkill.status == "active",
+            )
+            .update(
+                {
+                    BrainSkill.status: "superseded",
+                    BrainSkill.superseded_by: new_skill_id,
+                    BrainSkill.updated_at: utc_now_naive(),
+                },
+                synchronize_session=False,
+            )
+        )
         if commit:
             self.session.commit()
-        return True
+        return bool(superseded)
 
     def mark_soft_deleted(self, skill_id: str, *, commit: bool = True) -> bool:
         skill = self.get(skill_id)

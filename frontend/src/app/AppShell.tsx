@@ -14,6 +14,7 @@ import {
 import { getUiEventHandlerDomain, isResyncRequiredEvent } from "../api/uiEvents";
 import BrainToast from "../components/BrainToast";
 import { useAssistantStore } from "../state/assistantStore";
+import { useAssistantTaskStore } from "../state/assistantTaskStore";
 import { useBrainStore } from "../state/brainStore";
 import { useCompositionsStore } from "../state/compositionsStore";
 import { useSettingsStore } from "../state/settingsStore";
@@ -42,6 +43,14 @@ const FAILED_BACKEND: BackendConnectionState = {
   checks: [{ name: "sidecar", status: "failed", message: "Sidecar request failed." }],
   serverTime: "",
 };
+
+const TASK_COLLAB_EVENT_TYPES = new Set([
+  "assistant.task_graph.changed",
+  "assistant.task_board.changed",
+  "assistant.task_question.changed",
+  "assistant.meeting.changed",
+  "assistant.todo.changed",
+]);
 
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -186,6 +195,11 @@ export function AppShell(): JSX.Element {
         if (sessionId) {
           refreshes.push(assistantState.refreshSubagents(sessionId));
           refreshes.push(assistantState.refreshActivityTranscript(sessionId));
+          // FR-022：transport 级 resync（SSE 重连/缺口）也要刷新任务协作权威快照。
+          // graph/board/meeting/todos 由 AssistantScreen 的 needsResync effect 统一重拉
+          // （它持有具体 channelId/taskId）；这里置标记触发它，避免重连后任务面板停留
+          // 在陈旧快照。store 自身的 resync 分支是补充语义，transport 级入口在此。
+          useAssistantTaskStore.setState({ needsResync: true });
         }
       }
       if (!domains || domains.includes("brain")) {
@@ -203,6 +217,9 @@ export function AppShell(): JSX.Element {
       switch (getUiEventHandlerDomain(event)) {
         case "assistant":
           applyAssistantEvent(event);
+          if (TASK_COLLAB_EVENT_TYPES.has(event.type)) {
+            useAssistantTaskStore.getState().applyEvent(event);
+          }
           break;
         case "teaching":
           applyTeachingEvent(event);

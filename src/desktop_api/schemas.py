@@ -9,6 +9,7 @@ BackendStatus = Literal["starting", "ready", "degraded", "failed", "shutting_dow
 SessionStatus = Literal["active", "suspended", "completed", "failed", "archived"]
 UiTheme = Literal["light", "dark", "system", "sage"]
 UiDensity = Literal["compact", "comfy"]
+AssistantExecutorType = Literal["ephemeral_subagent", "specialist"]
 
 
 class ErrorDetail(BaseModel):
@@ -166,6 +167,179 @@ class AssistantStopRequest(BaseModel):
 
 class AssistantStopResponse(BaseModel):
     accepted: bool
+
+
+TaskStatus = Literal[
+    "pending_dispatch",
+    "running",
+    "suspended",
+    "completed",
+    "failed",
+    "cancelled",
+]
+TaskDisplayPhase = Literal["running", "reviewing", "needs_attention", "paused", "done"]
+TaskSuspendReason = Literal["waiting_user", "waiting_system", "user_stop"]
+
+
+class AssistantTaskAssignee(BaseModel):
+    type: AssistantExecutorType
+    id: str
+    label: str | None = None
+
+
+class AssistantTaskSnapshot(BaseModel):
+    taskId: str
+    graphId: str
+    parentTaskId: str | None = None
+    title: str
+    descriptionPreview: str
+    status: TaskStatus
+    displayPhase: TaskDisplayPhase
+    requiresReview: bool = False
+    safeExplanation: str = ""
+    suspendReason: TaskSuspendReason | None = None
+    assignee: AssistantTaskAssignee | None = None
+    adjudicationId: str | None = None
+    updatedAt: datetime | None = None
+
+
+class AssistantTaskEdgeSnapshot(BaseModel):
+    sourceTaskId: str
+    targetTaskId: str
+    type: Literal["dependency", "delegation", "question", "meeting_channel", "resource_request"]
+
+
+class AssistantTaskAdjudicationSnapshot(BaseModel):
+    adjudicationId: str
+    taskId: str
+    safeSummary: str
+    deliveredStatus: Literal["done", "stuck", "failed_input"]
+
+
+class AssistantTaskGraphSnapshot(BaseModel):
+    graphId: str
+    sessionId: str
+    userMessageSequence: int | None = None
+    version: int
+    tasks: list[AssistantTaskSnapshot] = Field(default_factory=list)
+    edges: list[AssistantTaskEdgeSnapshot] = Field(default_factory=list)
+    adjudications: list[AssistantTaskAdjudicationSnapshot] = Field(default_factory=list)
+
+
+class AssistantCurrentTaskGraphResponse(BaseModel):
+    graph: AssistantTaskGraphSnapshot | None = None
+
+
+class AssistantTaskGraphStopRequest(BaseModel):
+    runId: str | None = None
+
+
+class AssistantTaskGraphStopResponse(BaseModel):
+    accepted: bool
+    graphId: str
+    affectedTaskCount: int
+    cancelSignalAccepted: bool = False
+
+
+class AssistantTaskGraphContinueResponse(BaseModel):
+    accepted: bool
+    graphId: str
+    resumedTaskCount: int
+    startedAttemptCount: int = 0
+
+
+class AssistantTaskGraphCancelRequest(BaseModel):
+    expectedGraphVersion: int | None = None
+
+
+class AssistantTaskGraphCancelResponse(BaseModel):
+    accepted: bool
+    graphId: str
+    cancelledTaskCount: int
+
+
+class AssistantTaskAdjudicationDecisionRequest(BaseModel):
+    decision: Literal["accepted", "returned", "abandoned"]
+    instruction: str = ""
+
+
+class AssistantTaskAdjudicationDecisionResponse(BaseModel):
+    accepted: bool
+    adjudicationId: str
+    taskId: str
+    graphId: str
+    decision: Literal["accepted", "returned", "abandoned"]
+    taskStatus: TaskStatus
+
+
+class AssistantTaskBoardItem(BaseModel):
+    taskId: str
+    graphId: str
+    title: str
+    status: TaskStatus
+    claimStatus: Literal["open", "claimed"]
+    claimId: str | None = None
+    assignee: AssistantTaskAssignee | None = None
+    updatedAt: datetime | None = None
+
+
+class AssistantTaskBoardResponse(BaseModel):
+    items: list[AssistantTaskBoardItem] = Field(default_factory=list)
+
+
+class AssistantTaskBoardClaimRequest(BaseModel):
+    claimerType: AssistantExecutorType
+    claimerId: str = Field(min_length=1)
+    leaseSeconds: int = Field(default=60, ge=1, le=86_400)
+
+
+class AssistantTaskBoardClaimResponse(BaseModel):
+    accepted: bool
+    claimId: str
+    taskId: str
+    status: Literal["claimed", "released", "expired", "rejected", "completed"]
+
+
+class AssistantMeetingParticipant(BaseModel):
+    type: AssistantExecutorType
+    id: str
+    label: str | None = None
+
+
+class AssistantMeetingMessage(BaseModel):
+    sequence: int
+    senderId: str
+    content: str
+    createdAt: datetime | None = None
+
+
+class AssistantMeetingTranscriptResponse(BaseModel):
+    channelId: str
+    status: Literal["open", "concluded", "closed_timeout", "closed_abandoned"]
+    participants: list[AssistantMeetingParticipant] = Field(default_factory=list)
+    turnsUsed: int = 0
+    turnBudget: int = 0
+    messages: list[AssistantMeetingMessage] = Field(default_factory=list)
+    nextAfterSequence: int | None = None
+    conclusion: str | None = None
+
+
+class AssistantTodoItem(BaseModel):
+    todoId: str
+    text: str
+    status: Literal["todo", "doing", "done", "skipped"]
+    sortOrder: int
+
+
+class AssistantTodoResponse(BaseModel):
+    taskId: str
+    items: list[AssistantTodoItem] = Field(default_factory=list)
+
+
+class AssistantTodoUpdateRequest(BaseModel):
+    executorType: AssistantExecutorType
+    executorId: str = Field(min_length=1)
+    items: list[AssistantTodoItem] = Field(default_factory=list)
 
 
 class AssistantActivityStep(BaseModel):

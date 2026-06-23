@@ -7,6 +7,11 @@ export const UI_EVENT_TYPES = [
   "assistant.clarification_resolved",
   "assistant.activity",
   "assistant.subagent",
+  "assistant.task_graph.changed",
+  "assistant.task_board.changed",
+  "assistant.task_question.changed",
+  "assistant.meeting.changed",
+  "assistant.todo.changed",
   "recording.progress",
   "teaching.stage_changed",
   "teaching.progress",
@@ -59,6 +64,40 @@ export const UI_EVENT_EXAMPLES = {
     "label": "子助手 · 资料检索",
     "task": "检索最新季度报表",
     "status": "running",
+  },
+  "assistant.task_graph.changed": {
+    "graphId": "tg_123",
+    "taskId": "tsk_1",
+    "changeType": "task_updated",
+    "status": "running",
+    "displayPhase": "reviewing",
+    "requiresReview": true,
+    "safeExplanation": "等待上级检查结果",
+    "suspendReason": null,
+    "sequence": 42,
+  },
+  "assistant.task_board.changed": {
+    "taskId": "tsk_9",
+    "graphId": "tg_123",
+    "changeType": "claimed",
+  },
+  "assistant.task_question.changed": {
+    "questionId": "qst_1",
+    "taskId": "tsk_1",
+    "graphId": "tg_123",
+    "kind": "resource_request",
+    "status": "escalated_to_parent",
+    "changeType": "created",
+  },
+  "assistant.meeting.changed": {
+    "channelId": "mtg_1",
+    "graphId": "tg_123",
+    "changeType": "message_added",
+  },
+  "assistant.todo.changed": {
+    "taskId": "tsk_1",
+    "todoId": "todo_1",
+    "changeType": "updated",
   },
   "recording.progress": { "status": "recording", "message": "Recording started.", "recordingMode": "desktop" },
   "teaching.stage_changed": { "stage": "learning", "message": "Tool learning started." },
@@ -138,6 +177,69 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
   "assistant.subagent": {
     "status": ["done", "failed", "running", "suspended"],
   },
+  "assistant.task_graph.changed": {
+    "changeType": [
+      "adjudication_created",
+      "adjudication_decided",
+      "edge_created",
+      "graph_cancelled",
+      "graph_completed",
+      "graph_continued",
+      "graph_created",
+      "graph_stopped",
+      "root_failed",
+      "task_created",
+      "task_updated",
+    ],
+    "status": [
+      "cancelled",
+      "completed",
+      "failed",
+      "pending_dispatch",
+      "running",
+      "suspended",
+    ],
+    "displayPhase": [
+      "done",
+      "needs_attention",
+      "paused",
+      "reviewing",
+      "running",
+    ],
+    "suspendReason": [
+      "user_stop",
+      "waiting_system",
+      "waiting_user",
+    ],
+  },
+  "assistant.task_board.changed": {
+    "changeType": ["claimed", "completed", "expired", "opened", "rejected", "released"],
+  },
+  "assistant.task_question.changed": {
+    "kind": ["capability_request", "clarification", "resource_request"],
+    "status": [
+      "answered",
+      "cancelled",
+      "escalated_to_parent",
+      "escalated_to_user",
+      "expired",
+      "open",
+    ],
+    "changeType": ["answered", "cancelled", "created", "escalated_to_user", "expired"],
+  },
+  "assistant.meeting.changed": {
+    "changeType": [
+      "closed_abandoned",
+      "closed_timeout",
+      "concluded",
+      "message_added",
+      "opened",
+    ],
+  },
+  "assistant.todo.changed": {
+    "changeType": ["created", "deleted", "reordered", "updated"],
+    "status": ["doing", "done", "skipped", "todo"],
+  },
   "teaching.stage_changed": {
     "stage": [
       "abandoned",
@@ -209,6 +311,11 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "assistant.clarification_resolved": "assistant",
   "assistant.activity": "assistant",
   "assistant.subagent": "assistant",
+  "assistant.task_graph.changed": "assistant",
+  "assistant.task_board.changed": "assistant",
+  "assistant.task_question.changed": "assistant",
+  "assistant.meeting.changed": "assistant",
+  "assistant.todo.changed": "assistant",
   "recording.progress": "teaching",
   "teaching.stage_changed": "teaching",
   "teaching.progress": "teaching",
@@ -468,6 +575,78 @@ type SkillChangedReason = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["reas
 type SkillChangedCallerType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["callerType"][number];
 type SkillEquipmentChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.equipment.changed"]["changeType"][number];
 type SkillEquipmentEntityType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.equipment.changed"]["entityType"][number];
+type TaskBoardChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_board.changed"]["changeType"][number];
+type TaskGraphChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["changeType"][number];
+type TaskGraphStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["status"][number];
+type TaskGraphDisplayPhase = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["displayPhase"][number];
+type TaskGraphSuspendReason = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["suspendReason"][number];
+type TaskQuestionKind = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_question.changed"]["kind"][number];
+type TaskQuestionStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_question.changed"]["status"][number];
+type TaskQuestionChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_question.changed"]["changeType"][number];
+type MeetingChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.meeting.changed"]["changeType"][number];
+type TodoChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.todo.changed"]["changeType"][number];
+type TodoStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.todo.changed"]["status"][number];
+
+export type TaskBoardChangedEvent = UiEventEnvelope<
+  "assistant.task_board.changed",
+  {
+    taskId: string;
+    graphId?: string;
+    changeType: TaskBoardChangeType;
+    claimStatus?: string;
+    updatedAt?: string;
+  }
+>;
+
+export type TaskGraphChangedEvent = UiEventEnvelope<
+  "assistant.task_graph.changed",
+  {
+    graphId: string;
+    taskId?: string | null;
+    changeType: TaskGraphChangeType;
+    status?: TaskGraphStatus | null;
+    displayPhase?: TaskGraphDisplayPhase | null;
+    requiresReview?: boolean | null;
+    safeExplanation?: string | null;
+    suspendReason?: TaskGraphSuspendReason | null;
+    sequence?: number | null;
+  }
+>;
+
+export type TaskQuestionChangedEvent = UiEventEnvelope<
+  "assistant.task_question.changed",
+  {
+    questionId: string;
+    taskId: string;
+    graphId?: string;
+    kind?: TaskQuestionKind;
+    status?: TaskQuestionStatus;
+    changeType: TaskQuestionChangeType;
+  }
+>;
+
+export type MeetingChangedEvent = UiEventEnvelope<
+  "assistant.meeting.changed",
+  {
+    channelId: string;
+    graphId?: string;
+    taskId?: string;
+    changeType: MeetingChangeType;
+    sequence?: number | null;
+    status?: string;
+  }
+>;
+
+export type TodoChangedEvent = UiEventEnvelope<
+  "assistant.todo.changed",
+  {
+    taskId: string;
+    todoId: string;
+    changeType: TodoChangeType;
+    status?: TodoStatus;
+    sortOrder?: number;
+  }
+>;
 
 export type SkillChangedEvent = UiEventEnvelope<
   "skill.changed",
@@ -512,6 +691,11 @@ export type UiEvent =
   | BrainContextReadyEvent
   | SkillChangedEvent
   | SkillEquipmentChangedEvent
+  | TaskBoardChangedEvent
+  | TaskGraphChangedEvent
+  | TaskQuestionChangedEvent
+  | MeetingChangedEvent
+  | TodoChangedEvent
   | UiEventEnvelope<
       Exclude<
         UiEventType,
@@ -532,6 +716,11 @@ export type UiEvent =
         | "brain_context_ready"
         | "skill.changed"
         | "skill.equipment.changed"
+        | "assistant.task_graph.changed"
+        | "assistant.task_board.changed"
+        | "assistant.task_question.changed"
+        | "assistant.meeting.changed"
+        | "assistant.todo.changed"
       >
     >;
 
@@ -560,6 +749,17 @@ const SKILL_CHANGED_REASON_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.c
 const SKILL_CHANGED_CALLER_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.changed"].callerType);
 const SKILL_EQUIPMENT_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.equipment.changed"].changeType);
 const SKILL_EQUIPMENT_ENTITY_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["skill.equipment.changed"].entityType);
+const TASK_GRAPH_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].changeType);
+const TASK_GRAPH_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].status);
+const TASK_GRAPH_DISPLAY_PHASE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].displayPhase);
+const TASK_GRAPH_SUSPEND_REASON_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].suspendReason);
+const TASK_QUESTION_KIND_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_question.changed"].kind);
+const TASK_QUESTION_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_question.changed"].status);
+const TASK_QUESTION_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_question.changed"].changeType);
+const TASK_BOARD_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_board.changed"].changeType);
+const MEETING_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.meeting.changed"].changeType);
+const TODO_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.todo.changed"].changeType);
+const TODO_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.todo.changed"].status);
 
 function isUiEventType(value: string): value is UiEventType {
   return UI_EVENT_TYPE_SET.has(value);
@@ -605,6 +805,10 @@ function isOptionalNumber(value: unknown): value is number | undefined {
   return value === undefined || (typeof value === "number" && Number.isFinite(value));
 }
 
+function isOptionalNullableNumber(value: unknown): value is number | null | undefined {
+  return value === undefined || value === null || (typeof value === "number" && Number.isFinite(value));
+}
+
 function isEnumMember<T extends string>(set: Set<string>, value: unknown): value is T {
   return typeof value === "string" && set.has(value);
 }
@@ -624,6 +828,23 @@ const isAssistantConfirmationStatus = makeEnumGuard<AssistantConfirmationStatus>
 const isSkillChangedReason = makeEnumGuard<SkillChangedReason>(SKILL_CHANGED_REASON_SET);
 const isSkillEquipmentChangeType = makeEnumGuard<SkillEquipmentChangeType>(SKILL_EQUIPMENT_CHANGE_TYPE_SET);
 const isSkillEquipmentEntityType = makeEnumGuard<SkillEquipmentEntityType>(SKILL_EQUIPMENT_ENTITY_TYPE_SET);
+const isTaskGraphChangeType = makeEnumGuard<TaskGraphChangeType>(TASK_GRAPH_CHANGE_TYPE_SET);
+const isTaskQuestionChangeType = makeEnumGuard<TaskQuestionChangeType>(TASK_QUESTION_CHANGE_TYPE_SET);
+const isTaskBoardChangeType = makeEnumGuard<TaskBoardChangeType>(TASK_BOARD_CHANGE_TYPE_SET);
+const isMeetingChangeType = makeEnumGuard<MeetingChangeType>(MEETING_CHANGE_TYPE_SET);
+const isTodoChangeType = makeEnumGuard<TodoChangeType>(TODO_CHANGE_TYPE_SET);
+const isOptionalTaskGraphStatus = (v: unknown): v is TaskGraphStatus | null | undefined =>
+  isOptionalNullableEnumMember<TaskGraphStatus>(TASK_GRAPH_STATUS_SET, v);
+const isOptionalTaskGraphDisplayPhase = (v: unknown): v is TaskGraphDisplayPhase | null | undefined =>
+  isOptionalNullableEnumMember<TaskGraphDisplayPhase>(TASK_GRAPH_DISPLAY_PHASE_SET, v);
+const isOptionalTaskGraphSuspendReason = (v: unknown): v is TaskGraphSuspendReason | null | undefined =>
+  isOptionalNullableEnumMember<TaskGraphSuspendReason>(TASK_GRAPH_SUSPEND_REASON_SET, v);
+const isOptionalTaskQuestionKind = (v: unknown): v is TaskQuestionKind | undefined =>
+  v === undefined || isEnumMember<TaskQuestionKind>(TASK_QUESTION_KIND_SET, v);
+const isOptionalTaskQuestionStatus = (v: unknown): v is TaskQuestionStatus | undefined =>
+  v === undefined || isEnumMember<TaskQuestionStatus>(TASK_QUESTION_STATUS_SET, v);
+const isOptionalTodoStatus = (v: unknown): v is TodoStatus | undefined =>
+  v === undefined || isEnumMember<TodoStatus>(TODO_STATUS_SET, v);
 const isOptionalSkillChangedCallerType = (v: unknown): v is SkillChangedCallerType | null | undefined =>
   isOptionalNullableEnumMember<SkillChangedCallerType>(SKILL_CHANGED_CALLER_TYPE_SET, v);
 
@@ -826,6 +1047,113 @@ function parseSkillEquipmentChangedPayload(payload: Record<string, unknown>): Sk
   };
 }
 
+function parseTaskGraphChangedPayload(payload: Record<string, unknown>): TaskGraphChangedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["graphId"]) ||
+    !isTaskGraphChangeType(payload.changeType) ||
+    !isOptionalNullableString(payload.taskId) ||
+    !isOptionalTaskGraphStatus(payload.status) ||
+    !isOptionalTaskGraphDisplayPhase(payload.displayPhase) ||
+    (payload.requiresReview !== undefined &&
+      payload.requiresReview !== null &&
+      typeof payload.requiresReview !== "boolean") ||
+    !isOptionalNullableString(payload.safeExplanation) ||
+    !isOptionalTaskGraphSuspendReason(payload.suspendReason) ||
+    !isOptionalNullableNumber(payload.sequence)
+  ) {
+    return null;
+  }
+  return {
+    graphId: payload.graphId as string,
+    taskId: payload.taskId ?? null,
+    changeType: payload.changeType,
+    status: payload.status ?? null,
+    displayPhase: payload.displayPhase ?? null,
+    requiresReview: payload.requiresReview ?? null,
+    safeExplanation: payload.safeExplanation ?? null,
+    suspendReason: payload.suspendReason ?? null,
+    sequence: payload.sequence ?? null,
+  };
+}
+
+function parseTaskBoardChangedPayload(payload: Record<string, unknown>): TaskBoardChangedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["taskId"]) ||
+    !isTaskBoardChangeType(payload.changeType) ||
+    !isOptionalString(payload.graphId) ||
+    !isOptionalString(payload.claimStatus) ||
+    !isOptionalString(payload.updatedAt)
+  ) {
+    return null;
+  }
+  return {
+    taskId: payload.taskId as string,
+    graphId: payload.graphId,
+    changeType: payload.changeType,
+    claimStatus: payload.claimStatus,
+    updatedAt: payload.updatedAt,
+  };
+}
+
+function parseTaskQuestionChangedPayload(payload: Record<string, unknown>): TaskQuestionChangedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["questionId", "taskId"]) ||
+    !isTaskQuestionChangeType(payload.changeType) ||
+    !isOptionalString(payload.graphId) ||
+    !isOptionalTaskQuestionKind(payload.kind) ||
+    !isOptionalTaskQuestionStatus(payload.status)
+  ) {
+    return null;
+  }
+  return {
+    questionId: payload.questionId as string,
+    taskId: payload.taskId as string,
+    graphId: payload.graphId,
+    kind: payload.kind,
+    status: payload.status,
+    changeType: payload.changeType,
+  };
+}
+
+function parseMeetingChangedPayload(payload: Record<string, unknown>): MeetingChangedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["channelId"]) ||
+    !isMeetingChangeType(payload.changeType) ||
+    !isOptionalString(payload.graphId) ||
+    !isOptionalString(payload.taskId) ||
+    !isOptionalNullableNumber(payload.sequence) ||
+    !isOptionalString(payload.status)
+  ) {
+    return null;
+  }
+  return {
+    channelId: payload.channelId as string,
+    graphId: payload.graphId,
+    taskId: payload.taskId,
+    changeType: payload.changeType,
+    sequence: payload.sequence,
+    status: payload.status,
+  };
+}
+
+function parseTodoChangedPayload(payload: Record<string, unknown>): TodoChangedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["taskId", "todoId"]) ||
+    !isTodoChangeType(payload.changeType) ||
+    !isOptionalTodoStatus(payload.status) ||
+    !isOptionalNumber(payload.sortOrder)
+  ) {
+    return null;
+  }
+  return {
+    taskId: payload.taskId as string,
+    todoId: payload.todoId as string,
+    changeType: payload.changeType,
+    status: payload.status,
+    sortOrder: payload.sortOrder,
+  };
+}
+
 export function parseUiEvent(value: unknown): UiEvent | null {
   if (!isRecord(value)) return null;
   const candidate = value as Partial<UiEventEnvelope>;
@@ -947,6 +1275,36 @@ export function parseUiEvent(value: unknown): UiEvent | null {
     const payload = parseSkillEquipmentChangedPayload(event.payload);
     if (!payload) return null;
     return { ...event, payload } as SkillEquipmentChangedEvent;
+  }
+  if (event.type === "assistant.task_graph.changed") {
+    if (typeof event.scope.sessionId !== "string") return null;
+    const payload = parseTaskGraphChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as TaskGraphChangedEvent;
+  }
+  if (event.type === "assistant.task_board.changed") {
+    if (typeof event.scope.sessionId !== "string") return null;
+    const payload = parseTaskBoardChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as TaskBoardChangedEvent;
+  }
+  if (event.type === "assistant.task_question.changed") {
+    if (typeof event.scope.sessionId !== "string") return null;
+    const payload = parseTaskQuestionChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as TaskQuestionChangedEvent;
+  }
+  if (event.type === "assistant.meeting.changed") {
+    if (typeof event.scope.sessionId !== "string") return null;
+    const payload = parseMeetingChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as MeetingChangedEvent;
+  }
+  if (event.type === "assistant.todo.changed") {
+    if (typeof event.scope.sessionId !== "string") return null;
+    const payload = parseTodoChangedPayload(event.payload);
+    if (!payload) return null;
+    return { ...event, payload } as TodoChangedEvent;
   }
   return event as UiEvent;
 }

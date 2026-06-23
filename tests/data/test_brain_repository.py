@@ -392,6 +392,70 @@ class TestSoftDelete:
         entry = repo.get_entry_by_id(entry_id)
         assert entry.status == "soft-deleted"
 
+    def test_soft_delete_entry_is_atomic_only_first_call_wins(self, repo):
+        """并发/重复软删只有一个成功：对已 soft-deleted 的条目再调返回 False，不重复软删。
+
+        验证 soft_delete_entry 的原子条件 UPDATE（WHERE status != 'soft-deleted'）——
+        衰减路由与用户删除并发时，只有先把条目软删的那次返回 True 并（可选）建 feedback signal。
+        """
+        entry_id = uuid4().hex[:50]
+        repo.create_entry(
+            entry_id=entry_id,
+            zone="hot",
+            content="to delete",
+            origin="distillation",
+            reason="test",
+        )
+
+        first = repo.soft_delete_entry(entry_id)
+        second = repo.soft_delete_entry(entry_id)
+
+        assert first is True
+        assert second is False  # 已被第一次软删，条件 UPDATE 匹配 0 行
+
+    def test_invalidate_entry_does_not_revive_soft_deleted(self, repo):
+        """invalidate 与 decay 并发时不复活已软删条目：先软删再 invalidate 返回 False，状态不被覆盖。"""
+        entry_id = uuid4().hex[:50]
+        repo.create_entry(
+            entry_id=entry_id, zone="hot", content="x", origin="distillation", reason="t"
+        )
+        assert repo.soft_delete_entry(entry_id) is True
+
+        revived = repo.invalidate_entry(entry_id, reason="test")
+
+        assert revived is False
+        assert repo.get_entry_by_id(entry_id).status == "soft-deleted"  # 没被复活成 invalidated
+
+    def test_supersede_entry_does_not_fork_when_already_soft_deleted(self, repo):
+        """supersede 与 decay 并发时不分叉演化链：旧条目已软删则返回 None、不建后继、不覆盖 superseded_by。"""
+        entry_id = uuid4().hex[:50]
+        repo.create_entry(
+            entry_id=entry_id, zone="hot", content="x", origin="distillation", reason="t"
+        )
+        assert repo.soft_delete_entry(entry_id, superseded_by="decay-successor") is True
+
+        new_id = repo.supersede_entry(entry_id, new_content="edited", reason="user")
+
+        assert new_id is None
+        entry = repo.get_entry_by_id(entry_id)
+        assert entry.status == "soft-deleted"
+        assert entry.superseded_by == "decay-successor"  # decay 的链保留
+
+    def test_user_edit_entry_does_not_fork_when_already_soft_deleted(self, repo):
+        """user_edit 与 decay 并发时不分叉演化链：旧条目已软删则返回 None、不建新条目。"""
+        entry_id = uuid4().hex[:50]
+        repo.create_entry(
+            entry_id=entry_id, zone="hot", content="x", origin="distillation", reason="t"
+        )
+        assert repo.soft_delete_entry(entry_id, superseded_by="decay-successor") is True
+
+        new_id = repo.user_edit_entry(entry_id, new_content="edited")
+
+        assert new_id is None
+        entry = repo.get_entry_by_id(entry_id)
+        assert entry.status == "soft-deleted"
+        assert entry.superseded_by == "decay-successor"  # decay 的链保留
+
 
 # ────────────────────────────────────────────
 # 批量计数递增

@@ -1080,6 +1080,296 @@ def migrate_to_v14(engine):
             raise
 
 
+def migrate_to_v15(engine):
+    """迁移到版本 15：Assistant task collaboration schema。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    root_task_id TEXT,
+                    parent_task_id TEXT,
+                    session_id TEXT NOT NULL,
+                    user_message_sequence INTEGER,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending_dispatch'
+                        CHECK (status IN (
+                            'pending_dispatch', 'running', 'suspended',
+                            'completed', 'failed', 'cancelled'
+                        )),
+                    suspend_reason TEXT
+                        CHECK (suspend_reason IS NULL OR suspend_reason IN
+                               ('waiting_user', 'waiting_system', 'user_stop')),
+                    assignee_type TEXT
+                        CHECK (assignee_type IS NULL OR assignee_type IN ('ephemeral_subagent', 'specialist')),
+                    assignee_id TEXT,
+                    owner_session_id TEXT,
+                    capability_scope TEXT,
+                    graph_version INTEGER NOT NULL DEFAULT 1,
+                    task_version INTEGER NOT NULL DEFAULT 1,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME,
+                    failed_at DATETIME,
+                    cancelled_at DATETIME,
+                    CHECK (
+                        (status = 'suspended' AND suspend_reason IS NOT NULL)
+                        OR
+                        (status != 'suspended' AND suspend_reason IS NULL)
+                    )
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_task_edges (
+                    edge_id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    source_task_id TEXT NOT NULL,
+                    target_task_id TEXT NOT NULL,
+                    edge_type TEXT NOT NULL
+                        CHECK (edge_type IN (
+                            'dependency', 'delegation', 'question',
+                            'meeting_channel', 'resource_request'
+                        )),
+                    propagation TEXT NOT NULL DEFAULT 'none'
+                        CHECK (propagation IN ('blocking', 'cancel_cascade', 'message_only', 'none')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_task_questions (
+                    question_id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    parent_task_id TEXT,
+                    asker_type TEXT NOT NULL,
+                    asker_id TEXT NOT NULL,
+                    recipient_type TEXT,
+                    recipient_id TEXT,
+                    kind TEXT NOT NULL
+                        CHECK (kind IN ('clarification', 'resource_request', 'capability_request')),
+                    status TEXT NOT NULL DEFAULT 'open'
+                        CHECK (status IN (
+                            'open', 'escalated_to_parent', 'escalated_to_user',
+                            'answered', 'cancelled', 'expired'
+                        )),
+                    question_text TEXT NOT NULL,
+                    safe_answer_summary TEXT,
+                    capability_delta TEXT,
+                    escalated_to_user INTEGER NOT NULL DEFAULT 0,
+                    user_request_id TEXT,
+                    expires_at DATETIME,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_task_attempts (
+                    attempt_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    executor_type TEXT NOT NULL
+                        CHECK (executor_type IN ('ephemeral_subagent', 'specialist')),
+                    executor_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'starting'
+                        CHECK (status IN (
+                            'starting', 'running', 'succeeded',
+                            'paused', 'failed', 'cancelled', 'fenced'
+                        )),
+                    lease_owner TEXT NOT NULL,
+                    lease_expires_at DATETIME NOT NULL,
+                    heartbeat_at DATETIME,
+                    fence_token INTEGER NOT NULL DEFAULT 1,
+                    checkpoint_ref TEXT,
+                    result_ref TEXT,
+                    error_category TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    started_at DATETIME,
+                    finished_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_task_operations (
+                    operation_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    attempt_id TEXT NOT NULL,
+                    operation_key TEXT NOT NULL,
+                    operation_type TEXT NOT NULL,
+                    idempotency_scope TEXT NOT NULL DEFAULT 'unknown',
+                    status TEXT NOT NULL DEFAULT 'planned'
+                        CHECK (status IN (
+                            'planned', 'in_progress', 'completed', 'failed', 'unsafe_to_retry'
+                        )),
+                    safe_summary TEXT NOT NULL,
+                    result_ref TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_task_adjudications (
+                    adjudication_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    graph_id TEXT NOT NULL,
+                    parent_session_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'decided')),
+                    delivered_status TEXT NOT NULL
+                        CHECK (delivered_status IN ('done', 'stuck', 'failed_input')),
+                    safe_summary TEXT NOT NULL,
+                    raw_result_ref TEXT,
+                    decision TEXT CHECK (decision IS NULL OR decision IN ('accepted', 'returned', 'abandoned')),
+                    instruction TEXT,
+                    decided_by TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    decided_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_task_claims (
+                    claim_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    claimer_type TEXT NOT NULL
+                        CHECK (claimer_type IN ('ephemeral_subagent', 'specialist')),
+                    claimer_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'claimed'
+                        CHECK (status IN ('claimed', 'released', 'rejected', 'completed', 'expired')),
+                    lease_expires_at DATETIME,
+                    reject_reason TEXT,
+                    task_version INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_meeting_channels (
+                    channel_id TEXT PRIMARY KEY,
+                    graph_id TEXT NOT NULL,
+                    parent_task_id TEXT NOT NULL,
+                    supervisor_session_id TEXT NOT NULL,
+                    participant_a_type TEXT NOT NULL,
+                    participant_a_id TEXT NOT NULL,
+                    participant_b_type TEXT NOT NULL,
+                    participant_b_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open'
+                        CHECK (status IN ('open', 'concluded', 'closed_timeout', 'closed_abandoned')),
+                    turn_budget INTEGER NOT NULL,
+                    time_budget_seconds INTEGER NOT NULL,
+                    turns_used INTEGER NOT NULL DEFAULT 0,
+                    conclusion TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    closed_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_meeting_messages (
+                    message_id TEXT PRIMARY KEY,
+                    channel_id TEXT NOT NULL,
+                    sender_type TEXT NOT NULL,
+                    sender_id TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    sequence INTEGER NOT NULL,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS assistant_todo_items (
+                    todo_id TEXT PRIMARY KEY,
+                    task_id TEXT NOT NULL,
+                    executor_type TEXT NOT NULL
+                        CHECK (executor_type IN ('ephemeral_subagent', 'specialist')),
+                    executor_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'todo'
+                        CHECK (status IN ('todo', 'doing', 'done', 'skipped')),
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
+                )
+            """))
+
+            for index_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_assistant_tasks_graph_status ON assistant_tasks(graph_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_tasks_graph_parent ON assistant_tasks(graph_id, parent_task_id)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_tasks_session_message ON assistant_tasks(session_id, user_message_sequence)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_tasks_graph_version ON assistant_tasks(graph_id, task_version)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_edges_graph_source ON assistant_task_edges(graph_id, source_task_id)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_edges_graph_target ON assistant_task_edges(graph_id, target_task_id)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_attempts_task_status ON assistant_task_attempts(task_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_attempts_status_lease ON assistant_task_attempts(status, lease_expires_at)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_attempts_executor_status ON assistant_task_attempts(executor_type, executor_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_operations_task_key ON assistant_task_operations(task_id, operation_key)",
+                (
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_operations_non_failed_key "
+                    "ON assistant_task_operations(task_id, operation_key) WHERE status != 'failed'"
+                ),
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_adjudications_task_status ON assistant_task_adjudications(task_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_adjudications_parent_status ON assistant_task_adjudications(parent_session_id, status)",
+                (
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_adjudications_pending_task "
+                    "ON assistant_task_adjudications(task_id) WHERE status = 'pending'"
+                ),
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_claims_task_status ON assistant_task_claims(task_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_claims_status_lease ON assistant_task_claims(status, lease_expires_at)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_claims_claimer_status ON assistant_task_claims(claimer_type, claimer_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_questions_task_status ON assistant_task_questions(task_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_questions_graph_status ON assistant_task_questions(graph_id, status)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_task_questions_status_expires ON assistant_task_questions(status, expires_at)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_meeting_channels_graph ON assistant_meeting_channels(graph_id)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_meeting_channels_parent ON assistant_meeting_channels(parent_task_id)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_meeting_messages_channel_sequence ON assistant_meeting_messages(channel_id, sequence)",
+                "CREATE INDEX IF NOT EXISTS idx_assistant_todo_items_task_sort ON assistant_todo_items(task_id, sort_order)",
+            ]:
+                conn.execute(text(index_sql))
+
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 15})
+            conn.commit()
+            logger.info("数据库迁移到版本 15 完成：Assistant task collaboration schema")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 15 失败: {e}")
+            raise
+
+
+def migrate_to_v16(engine):
+    """迁移到版本 16：task attempt/claim 加 partial unique index，DB 层兜底容量=1。
+
+    应用层 read-check-write 在并发下可能双双通过 active=None 守卫；partial unique
+    index（active-per-task / active-per-executor / active-claim-per-claimer）
+    是最后防线，与 models_sqlite 的 Index 定义保持一致。Attempt 仅约束 active
+    （starting/running）；I3：paused 不算 active（暂停即释放执行者槽，续跑开新
+    attempt），与终态行一样不占名额。
+    """
+    with engine.connect() as conn:
+        try:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_attempts_active_task "
+                "ON assistant_task_attempts (task_id) "
+                "WHERE status IN ('starting', 'running')"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_attempts_active_executor "
+                "ON assistant_task_attempts (executor_type, executor_id) "
+                "WHERE status IN ('starting', 'running')"
+            ))
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_claims_active_claimer "
+                "ON assistant_task_claims (claimer_type, claimer_id) "
+                "WHERE status = 'claimed'"
+            ))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 16})
+            conn.commit()
+            logger.info("数据库迁移到版本 16 完成：assistant task partial unique indexes")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 16 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1094,6 +1384,8 @@ _MIGRATIONS = [
     (12, migrate_to_v12),
     (13, migrate_to_v13),
     (14, migrate_to_v14),
+    (15, migrate_to_v15),
+    (16, migrate_to_v16),
 ]
 
 

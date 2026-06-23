@@ -3,6 +3,7 @@ import logging
 import hashlib
 import threading
 import uuid
+import copy
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
@@ -469,6 +470,212 @@ class AgentOrchestrator:
             logger.warning("Memory-limit segment boundary check failed: %s", seg_exc)
             return None
 
+    def _dispatch_task_via_unified_model(
+        self,
+        *,
+        parent_session_id: str,
+        task: str,
+        context: str,
+        assignee_type: str,
+        assignee_id: str | None,
+        capability_scope: list[str] | None = None,
+    ) -> dict | None:
+        """Durably enqueue an Assistant task when the v15 task model is explicitly enabled.
+
+        Returns ``None`` on feature-flag off or on any infrastructure failure,
+        so callers fall back to the stable sync delegation path.
+        """
+        config = getattr(self, "_config", None)
+        if config is None or not config.get_assistant_tasks_unified_dispatch_enabled():
+            return None
+
+        try:
+            from src.business.task_collaboration.service import TaskCollaborationService
+
+            service = TaskCollaborationService()
+            try:
+                # 任务图按当前用户请求（最新一条 user 消息的 sequence）隔离：同一次请求内的多次
+                # 委派复用同一张图，新请求开新图，不把新任务粘到上一条消息的旧图上。
+                message_repo = getattr(self, "_message_repo", None)
+                request_sequence = (
+                    message_repo.get_latest_user_message_sequence(parent_session_id)
+                    if message_repo is not None
+                    else None
+                )
+                graph_id, root_task_id = service.get_or_create_request_graph_root(
+                    session_id=parent_session_id,
+                    user_message_sequence=request_sequence,
+                    title="Assistant request",
+                    description=task,
+                )
+
+                dispatcher = self._get_task_dispatcher()
+                result = dispatcher.delegate_task(
+                    service=service,
+                    graph_id=graph_id,
+                    session_id=parent_session_id,
+                    parent_task_id=root_task_id,
+                    task=task,
+                    context=context,
+                    assignee_type=assignee_type,
+                    assignee_id=assignee_id,
+                    capability_scope=json.dumps(capability_scope or [], ensure_ascii=False),
+                )
+            finally:
+                service.close()
+        except Exception:
+            logger.error(
+                "[_dispatch_task_via_unified_model] unified dispatch failed, falling back to sync",
+                exc_info=True,
+            )
+            return None
+        # 任务已 durable 入图。非阻塞派发执行：start_attempt_async 把 executor
+        # （TaskExecutorAdapter → _run_delegated_executor）提交到 dispatcher 线程池，主助理
+        # 线程不阻塞（FR-003 真并行 / FR-004 非阻塞回流）。start 失败不回退同步路径——任务已
+        # 持久化为 pending_dispatch，由 background recovery 或后续 redispatch 兜底。
+        try:
+            self._start_unified_attempt(
+                dispatcher,
+                task_id=result["taskId"],
+                assignee_type=assignee_type,
+                assignee_id=assignee_id,
+            )
+        except Exception:
+            logger.error(
+                "[_dispatch_task_via_unified_model] start_attempt_async failed; task %s remains pending",
+                result.get("taskId"),
+                exc_info=True,
+            )
+        try:
+            dispatcher.start_fallback_attempts(session_id=parent_session_id)
+        except Exception:
+            logger.error(
+                "[_dispatch_task_via_unified_model] fallback dispatch scan failed",
+                exc_info=True,
+            )
+        return {
+            **result,
+            "success": True,
+            "message": "任务已进入统一任务图，等待异步执行。",
+        }
+
+    def _start_unified_attempt(
+        self,
+        dispatcher,
+        *,
+        task_id: str,
+        assignee_type: str,
+        assignee_id: str | None,
+        checkpoint_ref: str | None = None,
+    ) -> None:
+        """非阻塞派发：建 attempt + 置 running + 提交 executor 到 dispatcher 线程池。
+
+        executor_id 取 capacity=1 语义：specialist 用 specialist_id（同一专员串行），
+        ephemeral 用 task_id（每任务一执行者，天然唯一、互不冲突）。
+        """
+        executor_id = (
+            assignee_id if assignee_type == AgentType.SPECIALIST.value and assignee_id else task_id
+        )
+        dispatcher.start_attempt_async(
+            task_id=task_id,
+            executor_type=assignee_type,
+            executor_id=executor_id,
+            lease_owner="unified_dispatch",
+            checkpoint_ref=checkpoint_ref,
+        )
+
+    def resume_pending_graph_tasks(self, *, session_id: str, graph_id: str) -> int:
+        return self._get_task_dispatcher().start_pending_graph_tasks(
+            session_id=session_id,
+            graph_id=graph_id,
+        )
+
+    def resume_recovered_task(self, *, task_id: str, checkpoint_ref: str) -> bool:
+        from src.data.repos import AssistantTaskRepository
+
+        with AssistantTaskRepository() as tasks:
+            task = tasks.get_task(task_id)
+        if task is None or not task.assignee_type:
+            return False
+        try:
+            self._start_unified_attempt(
+                self._get_task_dispatcher(),
+                task_id=task.task_id,
+                assignee_type=task.assignee_type,
+                assignee_id=task.assignee_id,
+                checkpoint_ref=checkpoint_ref,
+            )
+        except Exception:
+            logger.error("[Orchestrator] recovered task resume failed: %s", task_id, exc_info=True)
+            return False
+        return True
+
+    def _redispatch_answered_task(self, task_id: str) -> bool:
+        from src.data.repos import AssistantTaskRepository
+
+        with AssistantTaskRepository() as tasks:
+            task = tasks.get_task(task_id)
+        if task is None or task.status != "pending_dispatch" or not task.assignee_type:
+            return False
+        try:
+            self._start_unified_attempt(
+                self._get_task_dispatcher(),
+                task_id=task.task_id,
+                assignee_type=task.assignee_type,
+                assignee_id=task.assignee_id,
+            )
+        except Exception:
+            logger.error("[Orchestrator] answered task redispatch failed: %s", task_id, exc_info=True)
+            return False
+        return True
+
+    def _get_task_dispatcher(self):
+        """Return a cached TaskDispatcher wired with the unified-model executor and
+        parent reentry callback.
+
+        dispatcher 不持有 service/session（delegate_task 由调用方传入当次 service），
+        因此跨请求复用安全——否则缓存会持有第一次注入、随后被 close 的 service，
+        导致第二次起统一派发静默失败、回退同步路径。executor_callback /
+        parent_reentry_callback 在首次构造时固化，故 ``set_parent_reentry_callback``
+        必须在首次 unified dispatch 前调用（runtime 创建 orchestrator 后立即注入）。
+        """
+        dispatcher = getattr(self, "_task_dispatcher", None)
+        if dispatcher is None:
+            from src.business.orchestration.agent.task_executor_adapter import (
+                TaskExecutorAdapter,
+            )
+            from src.business.task_collaboration.dispatcher import TaskDispatcher
+
+            dispatcher = TaskDispatcher(
+                executor_callback=TaskExecutorAdapter(
+                    self,
+                    orchestrator_factory=self._new_task_executor_orchestrator,
+                ),
+                parent_reentry_callback=getattr(self, "_parent_reentry_callback", None),
+            )
+            self._task_dispatcher = dispatcher
+        return dispatcher
+
+    def _new_task_executor_orchestrator(self) -> "AgentOrchestrator":
+        """Create a per-attempt orchestrator so dispatcher workers do not share repo sessions."""
+        orchestrator = type(self)(
+            llm_client=self._llm,
+            config=self._config,
+            llm_reviewer=self._llm_reviewer,
+        )
+        callback = getattr(self, "_parent_reentry_callback", None)
+        if callback is not None:
+            orchestrator.set_parent_reentry_callback(callback)
+        return orchestrator
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        """注入父侧回流回调（``ParentReentrySink.dispatch``）。
+
+        由 AssistantRuntime 在创建本 orchestrator 后立即调用；dispatcher 首次构造时读取
+        此值并缓存，故必须在任何 unified dispatch 之前设置。
+        """
+        self._parent_reentry_callback = callback
+
     def _delegate_to_subagent(
         self,
         *,
@@ -485,6 +692,65 @@ class AgentOrchestrator:
                 "delegation_type": "ephemeral_subagent",
             }
 
+        unified = self._dispatch_task_via_unified_model(
+            parent_session_id=parent_session_id,
+            task=task,
+            context=execution_context or task,
+            assignee_type=AgentType.EPHEMERAL_SUBAGENT.value,
+            assignee_id=AgentType.EPHEMERAL_SUBAGENT.value,
+            capability_scope=tool_whitelist,
+        )
+        if unified is not None:
+            return {
+                **unified,
+                "delegation_type": "ephemeral_subagent",
+                "task_description": task,
+            }
+
+        return self._run_sync_ephemeral_subagent(
+            parent_session_id=parent_session_id,
+            task=task,
+            execution_context=execution_context,
+            tool_whitelist=tool_whitelist,
+        )
+
+    def _run_sync_ephemeral_subagent(
+        self,
+        *,
+        parent_session_id: str,
+        task: str,
+        execution_context: str = "",
+        tool_whitelist: list[str] | None = None,
+    ) -> dict:
+        """同步起一个临时子代理并返回结果（上下文隔离助手）。
+
+        主助理委派的临时子代理走此同步路径；专员的"至多一个"上下文隔离子代理（FR-019）
+        也复用它。临时子代理领到的工具集（``_build_delegated_executor_tools`` 的
+        ephemeral 分支）不含 ``delegate_to_subagent``，因此结构上不能再向下委派或找平级。
+        """
+        result = self._run_ephemeral_via_delegated_executor(
+            parent_session_id=parent_session_id,
+            task=task,
+            execution_context=execution_context,
+            tool_whitelist=tool_whitelist,
+        )
+        result["delegation_type"] = "ephemeral_subagent"
+        result["task_description"] = task
+        return result
+
+    def _run_ephemeral_via_delegated_executor(
+        self,
+        *,
+        parent_session_id: str,
+        task: str,
+        execution_context: str = "",
+        tool_whitelist: list[str] | None = None,
+        current_task_id: str | None = None,
+    ) -> dict:
+        """临时子代理的纯执行核心：resolve tools → build prompt → create session →
+        ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``（统一任务派发的
+        异步执行器）共用此方法，避免两处复制 session/prompt 构建逻辑。
+        """
         allowed_tool_ids = self._resolve_user_tool_ids(
             parent_session_id=parent_session_id,
             tool_whitelist=tool_whitelist,
@@ -512,9 +778,8 @@ class AgentOrchestrator:
             user_input=user_input,
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
+            current_task_id=current_task_id,
         )
-        result["delegation_type"] = "ephemeral_subagent"
-        result["task_description"] = task
         if result.get("success"):
             self._record_delegation_signal(
                 parent_session_id=parent_session_id,
@@ -558,21 +823,58 @@ class AgentOrchestrator:
             }
 
         whitelist = parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
+        unified = self._dispatch_task_via_unified_model(
+            parent_session_id=parent_session_id,
+            task=task_text,
+            context=task_text,
+            assignee_type=AgentType.SPECIALIST.value,
+            assignee_id=specialist.specialist_id,
+            capability_scope=whitelist,
+        )
+        if unified is not None:
+            return {
+                **unified,
+                "delegation_type": "specialist",
+                "specialist_id": specialist.specialist_id,
+                "specialist_name": name,
+                "task": task_text,
+            }
+
+        result = self._run_specialist_via_delegated_executor(
+            parent_session_id=parent_session_id,
+            specialist=specialist,
+            task=task_text,
+            tool_whitelist=whitelist,
+        )
+        result["delegation_type"] = "specialist"
+        result["specialist_id"] = specialist.specialist_id
+        result["specialist_name"] = name
+        result["task"] = task_text
+        return result
+
+    def _run_specialist_via_delegated_executor(
+        self,
+        *,
+        parent_session_id: str,
+        specialist,
+        task: str,
+        tool_whitelist: list[str] | None = None,
+        current_task_id: str | None = None,
+    ) -> dict:
+        """专员委派的纯执行核心：resolve tools → equipped skills → build prompt →
+        create session → ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``
+        （统一任务派发的异步执行器）共用此方法。装备/提示词构建异常返回 success=False
+        dict，不抛异常（让 dispatcher 把"没干完"记为 stuck 交父侧裁定）。
+        """
         allowed_tool_ids = self._resolve_user_tool_ids(
             parent_session_id=parent_session_id,
-            tool_whitelist=whitelist,
+            tool_whitelist=tool_whitelist,
         )
         try:
             equipped_skills_snapshot = self._specialist_equipped_skills_snapshot(specialist)
         except RuntimeError as exc:
             logger.error("[Orchestrator] 专员方法论装备快照加载失败: %s", exc, exc_info=True)
-            return {
-                "success": False,
-                "message": "专员方法论装备加载失败，已取消委派。",
-                "delegation_type": "specialist",
-                "specialist_id": specialist.specialist_id,
-                "specialist_name": name,
-            }
+            return {"success": False, "message": "专员方法论装备加载失败，已取消委派。"}
         try:
             capability_catalog_section = self._prompt_builder.format_capability_catalog(
                 allowed_tool_ids,
@@ -581,19 +883,13 @@ class AgentOrchestrator:
             )
             system_prompt = self._build_specialist_prompt(
                 specialist,
-                whitelist,
+                tool_whitelist,
                 equipped_skills=equipped_skills_snapshot,
                 capability_catalog_section=capability_catalog_section,
             )
         except RuntimeError as exc:
             logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
-            return {
-                "success": False,
-                "message": "专员方法论提示词构建失败，已取消委派。",
-                "delegation_type": "specialist",
-                "specialist_id": specialist.specialist_id,
-                "specialist_name": name,
-            }
+            return {"success": False, "message": "专员方法论提示词构建失败，已取消委派。"}
         workflow_id = self._new_delegation_workflow_id(parent_session_id)
         child_session_id = self._session_store.create_session(workflow_id, AgentType.SPECIALIST)
         allowed_methodology_skill_ids = {
@@ -607,17 +903,14 @@ class AgentOrchestrator:
             session_id=child_session_id,
             workflow_id=workflow_id,
             parent_session_id=parent_session_id,
-            user_input=self._format_delegated_task_input(task_text),
+            user_input=self._format_delegated_task_input(task),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
             specialist_id=specialist.specialist_id,
             allowed_methodology_skill_ids=allowed_methodology_skill_ids,
             methodology_equipment_snapshot=methodology_snapshot,
+            current_task_id=current_task_id,
         )
-        result["delegation_type"] = "specialist"
-        result["specialist_id"] = specialist.specialist_id
-        result["specialist_name"] = name
-        result["task"] = task_text
         return result
 
     def _run_delegated_executor(
@@ -633,6 +926,7 @@ class AgentOrchestrator:
         specialist_id: str | None = None,
         allowed_methodology_skill_ids: set[str] | None = None,
         methodology_equipment_snapshot: str = "",
+        current_task_id: str | None = None,
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -665,8 +959,10 @@ class AgentOrchestrator:
             tools = self._build_delegated_executor_tools(
                 allowed_tool_ids,
                 agent_type=agent_type,
+                executor_id=session_id,
                 specialist_id=specialist_id,
                 allowed_methodology_skill_ids=allowed_methodology_skill_ids,
+                current_task_id=current_task_id,
             )
             result = loop.run(
                 session_id,
@@ -757,6 +1053,69 @@ class AgentOrchestrator:
                 "workflow_id": workflow_id,
                 "result_type": result.result_type.value,
                 "reason": reason,
+            }
+
+        if (
+            result.result_type == ResultType.NEEDS_USER_INPUT
+            and getattr(result.signal_tool, "name", None) == "ask_parent"
+        ):
+            reason = "等待派活方答复"
+            signal_args = getattr(result.signal_tool, "args", {}) or {}
+            try:
+                signal_payload = json.loads(getattr(result.signal_tool, "display_text", "") or "{}")
+            except (TypeError, ValueError):
+                signal_payload = {}
+            question_summary = str(signal_args.get("question") or "").strip()
+            paused_transition_id = self._session_store.record_transition(
+                workflow_id,
+                event_type="assistant_delegation_paused",
+                from_session_id=session_id,
+                to_session_id=parent_session_id,
+                payload=json.dumps(
+                    {
+                        "subagent_id": session_id,
+                        "reason": reason,
+                        "tool": "ask_parent",
+                    },
+                    ensure_ascii=False,
+                ),
+            )
+            self._capture_delegation_debug_detail(
+                workflow_id=workflow_id,
+                transition_id=paused_transition_id,
+                input_detail={
+                    "parentSessionId": parent_session_id,
+                    "executorSessionId": session_id,
+                },
+                output_detail={
+                    "success": False,
+                    "paused": True,
+                    "cancelled": False,
+                    "resultType": result.result_type.value,
+                    "reason": reason,
+                    "tool": "ask_parent",
+                },
+            )
+            self._emit_subagent_paused(
+                parent_session_id=parent_session_id,
+                subagent_id=session_id,
+                reason=reason,
+            )
+            return {
+                "success": False,
+                "paused": True,
+                "cancelled": False,
+                "subagent_id": session_id,
+                "message": "子代理已暂停，等待派活方答复。",
+                "executor_session_id": session_id,
+                "workflow_id": workflow_id,
+                "result_type": result.result_type.value,
+                "reason": reason,
+                "suspend_reason": "waiting_system",
+                "reentry_type": "task_question",
+                "question_id": signal_payload.get("questionId"),
+                "question_kind": signal_payload.get("kind") or signal_args.get("kind"),
+                "safe_summary": question_summary or "子任务正在等待派活方答复。",
             }
 
         result_text = self._extract_latest_assistant_text(session_id)
@@ -932,6 +1291,7 @@ class AgentOrchestrator:
         tools = self._build_delegated_executor_tools(
             allowed_tool_ids,
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            executor_id=subagent_id,
         )
         user_input = instruction.strip() if (instruction or "").strip() else None
         workflow_id = getattr(session, "workflow_id", "") or ""
@@ -1170,9 +1530,19 @@ class AgentOrchestrator:
         allowed_tool_ids: set[str] | None,
         *,
         agent_type: str | None = None,
+        executor_id: str | None = None,
         specialist_id: str | None = None,
         allowed_methodology_skill_ids: set[str] | None = None,
+        current_task_id: str | None = None,
     ) -> Callable[[], List[ToolDefinition]]:
+        from src.business.agents.tools.assistant_tools import (
+            ASK_PARENT_SCHEMA,
+            MEETING_SEND_MESSAGE_SCHEMA,
+            TODO_UPDATE_SCHEMA,
+            create_ask_parent_handler,
+            create_meeting_send_message_handler,
+            create_todo_update_handler,
+        )
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
@@ -1186,16 +1556,137 @@ class AgentOrchestrator:
             caller_id=specialist_id or ASSISTANT_ENTITY_ID,
             allowed_skill_ids=allowed_methodology_skill_ids,
         )
+        executor_type = (
+            AgentType.SPECIALIST.value
+            if agent_type == AgentType.SPECIALIST
+            else AgentType.EPHEMERAL_SUBAGENT.value
+        )
+        resolved_executor_id = specialist_id or executor_id or executor_type
+        # ask_parent / meeting_send_message 共享 resolved（保留 session 维度的提问者/
+        # 会议发送者身份）；todo_update 单独绑定——其 executor_id 必须对齐
+        # task.assignee_id 才能通过 todos.py 归属校验。specialist 用 specialist_id；
+        # ephemeral 的 assignee_id 是 dispatch 设的类型占位 'ephemeral_subagent'
+        # （=executor_type），而非 child session，故不能用 resolved 里的 session_id。
+        ask_parent_schema = (
+            self._schema_with_bound_task_id(ASK_PARENT_SCHEMA)
+            if current_task_id
+            else ASK_PARENT_SCHEMA
+        )
+        todo_schema = (
+            self._schema_with_bound_task_id(TODO_UPDATE_SCHEMA)
+            if current_task_id
+            else TODO_UPDATE_SCHEMA
+        )
+        ask_parent_meeting_tools: List[ToolDefinition] = [
+            ToolDefinition(
+                name=ask_parent_schema["function"]["name"],
+                schema=ask_parent_schema,
+                handler=create_ask_parent_handler(
+                    executor_type=executor_type,
+                    executor_id=resolved_executor_id,
+                    bound_task_id=current_task_id,
+                    interrupt=bool(current_task_id),
+                ),
+                is_interrupting=bool(current_task_id),
+            ),
+            ToolDefinition(
+                name=MEETING_SEND_MESSAGE_SCHEMA["function"]["name"],
+                schema=MEETING_SEND_MESSAGE_SCHEMA,
+                handler=create_meeting_send_message_handler(
+                    executor_type=executor_type,
+                    executor_id=resolved_executor_id,
+                ),
+            ),
+        ]
+        todo_executor_id = specialist_id or executor_type
+        executor_collaboration_tools: List[ToolDefinition] = [
+            *ask_parent_meeting_tools,
+            ToolDefinition(
+                name=todo_schema["function"]["name"],
+                schema=todo_schema,
+                handler=create_todo_update_handler(
+                    executor_type=executor_type,
+                    executor_id=todo_executor_id,
+                    bound_task_id=current_task_id,
+                ),
+            ),
+        ]
+
+        # FR-019：仅专员可起"至多一个"临时子代理（隔离上下文）。该子代理走同步路径，且其
+        # 工具集（ephemeral 分支）不含 delegate_to_subagent，结构上不能再向下委派或找平级。
+        specialist_subagent_tools: List[ToolDefinition] = []
+        if agent_type == AgentType.SPECIALIST:
+            from src.business.agents.tools.assistant_tools import (
+                DELEGATE_TO_SUBAGENT_SCHEMA,
+                create_delegate_to_subagent_handler,
+            )
+
+            spawned_state = {"used": False}
+
+            def _specialist_subagent_callback(
+                *,
+                parent_session_id: str,
+                task_description: str,
+                execution_context: str = "",
+                tool_whitelist: list[str] | None = None,
+            ) -> dict:
+                task = (task_description or "").strip()
+                if not task:
+                    return {
+                        "success": False,
+                        "message": "task_description must not be empty",
+                        "delegation_type": "ephemeral_subagent",
+                    }
+                if spawned_state["used"]:
+                    return {
+                        "success": False,
+                        "message": "专员至多只能起一个临时子代理用于隔离上下文，本次已用尽。",
+                        "delegation_type": "ephemeral_subagent",
+                    }
+                spawned_state["used"] = True
+                return self._run_sync_ephemeral_subagent(
+                    parent_session_id=parent_session_id,
+                    task=task,
+                    execution_context=execution_context,
+                    tool_whitelist=tool_whitelist,
+                )
+
+            specialist_subagent_tools = [
+                ToolDefinition(
+                    name="delegate_to_subagent",
+                    schema=DELEGATE_TO_SUBAGENT_SCHEMA,
+                    handler=create_delegate_to_subagent_handler(
+                        executor_id or "",
+                        dispatch_callback=_specialist_subagent_callback,
+                    ),
+                )
+            ]
 
         def tool_factory() -> List[ToolDefinition]:
             return (
                 search_tools
-                + [load_skill_tool]
+                + [*executor_collaboration_tools, load_skill_tool]
+                + specialist_subagent_tools
                 + BUILTIN_GENERAL_TOOLS
                 + dynamic_manager.get_activated_tools()
             )
 
         return tool_factory
+
+    @staticmethod
+    def _schema_with_bound_task_id(schema: dict) -> dict:
+        """Make taskId optional when a tool is bound to the current Task row."""
+        cloned = copy.deepcopy(schema)
+        parameters = cloned.get("function", {}).get("parameters", {})
+        required = parameters.get("required")
+        if isinstance(required, list):
+            parameters["required"] = [item for item in required if item != "taskId"]
+        properties = parameters.get("properties")
+        if isinstance(properties, dict) and isinstance(properties.get("taskId"), dict):
+            properties["taskId"]["description"] = (
+                "可省略；统一任务执行器会自动使用当前任务 ID"
+            )
+        return cloned
 
     def _resolve_user_tool_ids(
         self,
@@ -1321,7 +1812,10 @@ class AgentOrchestrator:
             "角色定义：\n"
             f"{getattr(specialist, 'role_definition', '') or '按专员职责完成主助理委派的任务。'}\n\n"
             f"{capability_section}\n"
-            "你只能处理主助理委派的任务；完成后直接输出最终结果。"
+            "你只能处理主助理委派的任务；完成后直接输出最终结果。\n"
+            "如需把会产生大量噪音的子工作（如批量读取、嘈杂检索）隔离出去，可用 "
+            "delegate_to_subagent 起一个临时子代理代办、只取其干净结果——这种临时子代理"
+            "至多只能起一个，且它不能再向下委派或找平级。"
             f"{equipment_section}"
         )
 
@@ -1874,6 +2368,8 @@ class AgentOrchestrator:
             CREATE_SPECIALIST_SCHEMA,
             DELEGATE_TO_SPECIALIST_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
+            DECIDE_ADJUDICATION_SCHEMA,
+            ABANDON_REQUEST_GRAPH_SCHEMA,
             CONTINUE_SUBAGENT_SCHEMA,
             INSPECT_SUBAGENT_SCHEMA,
             DISMISS_SUGGESTION,
@@ -1884,14 +2380,20 @@ class AgentOrchestrator:
             RETRIEVE_FAILURE_ZONE_SCHEMA,
             SAVE_PROFILE_SCHEMA,
             ASK_USER_QUESTION_SCHEMA,
+            ANSWER_TASK_QUESTION_SCHEMA,
+            OPEN_MEETING_CHANNEL_SCHEMA,
             create_ask_user_question_handler,
+            create_answer_task_question_handler,
             create_codify_as_tool_handler,
             create_create_specialist_handler,
             create_delegate_to_specialist_handler,
             create_delegate_to_subagent_handler,
+            create_decide_task_adjudication_handler,
+            create_abandon_request_graph_handler,
             create_continue_subagent_handler,
             create_inspect_subagent_handler,
             create_invalidate_memory_entry_handler,
+            create_open_meeting_channel_handler,
             create_reply_to_user_handler,
             create_retrieve_archive_handler,
             create_retrieve_failure_zone_handler,
@@ -1962,6 +2464,16 @@ class AgentOrchestrator:
                 dispatch_callback=self._delegate_to_subagent,
             ),
         )
+        decide_task_adjudication_tool = ToolDefinition(
+            name="decide_task_adjudication",
+            schema=DECIDE_ADJUDICATION_SCHEMA,
+            handler=create_decide_task_adjudication_handler(session_id),
+        )
+        abandon_request_graph_tool = ToolDefinition(
+            name="abandon_request_graph",
+            schema=ABANDON_REQUEST_GRAPH_SCHEMA,
+            handler=create_abandon_request_graph_handler(session_id),
+        )
         continue_subagent_tool = ToolDefinition(
             name="continue_subagent",
             schema=CONTINUE_SUBAGENT_SCHEMA,
@@ -2004,6 +2516,18 @@ class AgentOrchestrator:
             requires_exclusive_call=True,
             has_side_effects=False,
         )
+        answer_task_question_tool = ToolDefinition(
+            name="answer_task_question",
+            schema=ANSWER_TASK_QUESTION_SCHEMA,
+            handler=create_answer_task_question_handler(
+                redispatch_callback=self._redispatch_answered_task
+            ),
+        )
+        open_meeting_channel_tool = ToolDefinition(
+            name="open_meeting_channel",
+            schema=OPEN_MEETING_CHANNEL_SCHEMA,
+            handler=create_open_meeting_channel_handler(),
+        )
         create_skill_methodology_tool = ToolDefinition(
             name="create_skill_methodology",
             schema=CREATE_SKILL_METHODOLOGY_SCHEMA,
@@ -2030,9 +2554,13 @@ class AgentOrchestrator:
             ask_user_question_tool,
             reply_to_user_tool,
             delegate_to_subagent_tool,
+            decide_task_adjudication_tool,
+            abandon_request_graph_tool,
+            answer_task_question_tool,
             continue_subagent_tool,
             inspect_subagent_tool,
             delegate_to_specialist_tool,
+            open_meeting_channel_tool,
             create_specialist_tool,
             create_skill_methodology_tool,
             load_skill_methodology_tool,

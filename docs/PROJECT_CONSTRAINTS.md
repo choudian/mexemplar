@@ -62,6 +62,20 @@
 - 桌面录制跨模块通知只能走 `src/utils/events.py` blinker 事件；sidecar 只做事件流 adapter，不允许 recording / business / execution 层 import 前端、Tauri 或 legacy UI。
 - 桌面 action 必须带 `monitor_index`；DPI awareness 在桌面 recorder/hook 启动前应用，失败只降级记录日志。
 
+## Assistant Task Collaboration Boundaries
+
+- Assistant 任务协作的业务事实源是 `assistant_tasks*` SQLite 表和 `src/business/task_collaboration/` services；`workflow_transitions` 只保留 Debug Inspector/audit breadcrumb，不得作为 task graph、看板、会议、Todo 或恢复语义的 UI/API 真相。
+- desktop API router 只能调用 `TaskCollaborationService`、`TaskDispatcher`、`TaskAdjudicationService`、`TaskBoardService`、`TaskMeetingService`、`TaskTodoService` 等业务入口，不得直接访问 Assistant task repositories 或手写 SQL。
+- Task 与 TaskAttempt 必须分离：Task 保存持久工作项六态；Attempt 保存 lease、heartbeat、checkpoint、fence token。崩溃恢复必须围栏过期 active attempt，缺安全 checkpoint 时交父侧裁定，不得自动重放未知副作用。
+- 所有副作用步骤必须先写 `AssistantTaskOperation` stable operation key，再执行；成功后写 completion marker。`unsafe_to_retry` 或未知幂等性只能进入裁定，不能由 dispatcher 静默重试。
+- 主 Assistant 是协调者，不得作为 user-work TaskAttempt executor。实际执行者只能是 `ephemeral_subagent` 或 `specialist`；PM / Programmer / Trial 不进入 assistant task 调度池。
+- 停止和取消必须分开：stop 只作用于当前请求 graph，落 `suspended/user_stop` 且可 continue；cancel 是终态级联，旧 replan 或迟到结果不得复活已取消任务。
+- 看板认领必须使用 Repository 条件更新和 task_version/claim lease 保障原子性；不得用前端状态或进程内锁单独判断“可认领”。
+- 会议通道只传消息，不代理工具调用、不共享工具池、不扩大能力授权；超出轮次/时长预算或无法产出结论时关闭并回父侧裁定。
+- agent-to-agent question/resource/capability route 可以持久化；上冒到用户的 pending clarification 和原始答案仍只能在 sidecar 进程内存中，失效后 Task 挂起 `waiting_user` 并重新发起澄清。
+- Todo 是 Task + executor scoped 的私人 checklist；不得创建 Task edge、adjudication、board claim 或 brain memory entry，前端展示必须使用独立状态词，不与 Task status 混用。
+- 新 task collaboration 前端事件只能通过 `src/desktop_api/ui_events.py` Registry 和 `ui_event_projector.py` 投影：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。事件只作通知；缺口必须用 graph/board/meeting/todo typed API 拉权威快照。
+
 ## Tauri / Frontend / Sidecar Boundaries
 
 - `frontend/` 只能通过 typed API client、Tauri window command 或前端本地状态访问产品能力；不得 import Python 业务代码、读取 SQLite/DuckDB/config，或持久化 secret。

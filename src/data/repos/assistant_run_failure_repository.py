@@ -62,7 +62,8 @@ class AssistantRunFailureRepository(BaseRepository):
         source_failure_id: str | None = None,
     ) -> AssistantRunFailure:
         now = datetime.now()
-        self.ensure_immediate_transaction()
+        # 同一会话的 agent run 串行执行，不会并发 record_failure；即便极端情况下重复插入，
+        # get_current 也按最新行兜底，无有害后果，因此不加并发守卫。
         row = (
             self.get_by_id(source_failure_id) if source_failure_id else self.get_current(session_id)
         )
@@ -99,18 +100,32 @@ class AssistantRunFailureRepository(BaseRepository):
         return row
 
     def claim_retry(self, session_id: str, message_sequence: int) -> AssistantRunFailure | None:
-        self.ensure_immediate_transaction()
-        row = self.get_current(session_id)
-        if row is None or row.status != "failed" or row.message_sequence != message_sequence:
-            self.session.rollback()
-            return None
-        row.status = "retrying"
-        row.attempt_count += 1
-        row.updated_at = datetime.now()
-        row.resolved_at = None
+        # 原子条件 UPDATE：把“status 必须是 failed 且序列号匹配”写进 WHERE，由数据库
+        # 保证并发重试只有一个成功（SQL 标准 CAS，不依赖 BEGIN IMMEDIATE 的手动时序）。
+        # 两个并发请求在 SQLite 单写者下排队：第一个把 status 改成 retrying 后，第二个的
+        # WHERE 已匹配不到，update 返回 0 行 → 返回 None，拒绝重复认领。
+        now = datetime.now()
+        claimed = (
+            self.session.query(AssistantRunFailure)
+            .filter(
+                AssistantRunFailure.session_id == session_id,
+                AssistantRunFailure.status == "failed",
+                AssistantRunFailure.message_sequence == message_sequence,
+            )
+            .update(
+                {
+                    AssistantRunFailure.status: "retrying",
+                    AssistantRunFailure.attempt_count: AssistantRunFailure.attempt_count + 1,
+                    AssistantRunFailure.updated_at: now,
+                    AssistantRunFailure.resolved_at: None,
+                },
+                synchronize_session=False,
+            )
+        )
         self.session.commit()
-        self.session.refresh(row)
-        return row
+        if not claimed:
+            return None
+        return self.get_current(session_id)
 
     def restore_failed(self, failure_id: str) -> bool:
         row = self.get_by_id(failure_id)

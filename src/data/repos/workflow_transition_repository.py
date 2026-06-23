@@ -76,6 +76,30 @@ class WorkflowTransitionRepository(BaseRepository):
             .first()
         )
 
+    def has_recent_event_types(self, event_types, *, window: int = 200) -> bool:
+        """最近 ``window`` 条交接记录里是否出现给定 event_type（clean-start cutover guard 用）。
+
+        只返回布尔：先按时间倒序取最近 ``window`` 条作子查询，再判断其中是否命中任一目标
+        event_type，避免把整批行 hydrate 成 ORM 对象后在 Python 端线性扫描。语义等同
+        “取最近 window 条再 ``any(event_type in ...)``”。
+        """
+        if not event_types:
+            return False
+        bounded = max(1, min(window, 500))
+        recent = (
+            self.session.query(WorkflowTransition.event_type)
+            .order_by(WorkflowTransition.created_at.desc())
+            .limit(bounded)
+            .subquery()
+        )
+        return bool(
+            self.session.query(
+                self.session.query(recent.c.event_type)
+                .filter(recent.c.event_type.in_(tuple(event_types)))
+                .exists()
+            ).scalar()
+        )
+
     def list_flow_summaries(
         self,
         *,

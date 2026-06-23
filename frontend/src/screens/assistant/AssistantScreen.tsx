@@ -1,11 +1,12 @@
 import { PanelLeft, Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
 import { useAssistantStore } from "../../state/assistantStore";
 import type { AssistantTurnActivity, PendingAssistantMessage } from "../../state/assistantStore";
 import { emptyTurn, turnIdFromMessage } from "../../state/assistantStore";
+import { useAssistantTaskStore } from "../../state/assistantTaskStore";
 import { useShellStore } from "../../state/shellStore";
 import ActivityTimeline from "./ActivityTimeline";
 import AssistantFailureCard from "./AssistantFailureCard";
@@ -15,6 +16,10 @@ import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
 import SubagentDetailDrawer from "./SubagentDetailDrawer";
+import { MeetingChannelDrawer } from "./MeetingChannelDrawer";
+import { TaskBoardPanel } from "./TaskBoardPanel";
+import { TaskGraphPanel } from "./TaskGraphPanel";
+import { TodoChecklistPanel } from "./TodoChecklistPanel";
 
 type AssistantDisplayMessage = AssistantMessage | PendingAssistantMessage;
 
@@ -102,17 +107,43 @@ export function AssistantScreen(): JSX.Element {
   const autoApprove = useAssistantStore((state) => state.autoApprove);
   const setAutoApprove = useAssistantStore((state) => state.setAutoApprove);
   const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
+  const currentTaskGraph = useAssistantTaskStore((state) => state.currentGraph);
+  const taskBoardItems = useAssistantTaskStore((state) => state.boardItems);
+  const activeMeeting = useAssistantTaskStore((state) => state.activeMeeting);
+  const activeMeetingChannelId = useAssistantTaskStore((state) => state.activeMeeting?.channelId ?? null);
+  const taskTodosByTaskId = useAssistantTaskStore((state) => state.todosByTaskId);
+  const todoLoadingTaskIds = useAssistantTaskStore((state) => state.todoLoadingTaskIds);
+  const taskGraphLoading = useAssistantTaskStore((state) => state.graphLoading);
+  const taskBoardLoading = useAssistantTaskStore((state) => state.boardLoading);
+  const taskMeetingLoading = useAssistantTaskStore((state) => state.meetingLoading);
+  const taskNeedsResync = useAssistantTaskStore((state) => state.needsResync);
+  const loadCurrentTaskGraph = useAssistantTaskStore((state) => state.loadCurrentGraph);
+  const loadTaskBoard = useAssistantTaskStore((state) => state.loadBoard);
+  const loadMeeting = useAssistantTaskStore((state) => state.loadMeeting);
+  const loadTaskTodos = useAssistantTaskStore((state) => state.loadTodos);
+  const stopTaskGraph = useAssistantTaskStore((state) => state.stopGraph);
+  const continueTaskGraph = useAssistantTaskStore((state) => state.continueGraph);
+  const decideTaskAdjudication = useAssistantTaskStore((state) => state.decideAdjudication);
+  const resetTaskGraph = useAssistantTaskStore((state) => state.reset);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
   const [editingFailureSeq, setEditingFailureSeq] = useState<number | null>(null);
   const [editedContent, setEditedContent] = useState("");
 
-  const activeTurns = activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {};
+  const activeTurns = useMemo(
+    () => (activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {}),
+    [activeSessionId, turnActivityBySession],
+  );
   const activeTurnId = activeSessionId ? activeTurnIdBySession[activeSessionId] : undefined;
   const activeSubagents = useMemo(
     () => Object.values(activeTurns).flatMap((turn) => turn.subagents),
     [activeTurns],
   );
+  const currentTaskIds = useMemo(
+    () => currentTaskGraph?.tasks.map((task) => task.taskId) ?? [],
+    [currentTaskGraph],
+  );
+  const currentTaskIdsKey = currentTaskIds.join("|");
   const openSubagent = activeSubagents.find((item) => item.subagentId === openSubagentId);
 
   useEffect(() => {
@@ -122,6 +153,69 @@ export function AssistantScreen(): JSX.Element {
   useEffect(() => {
     return () => { clearIdleTimer(); };
   }, [clearIdleTimer]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      resetTaskGraph();
+      return;
+    }
+    void loadCurrentTaskGraph(activeSessionId);
+    void loadTaskBoard(activeSessionId);
+  }, [activeSessionId, loadCurrentTaskGraph, loadTaskBoard, resetTaskGraph]);
+
+  useEffect(() => {
+    if (!activeSessionId || !activeMeetingChannelId) {
+      return;
+    }
+    void loadMeeting(activeSessionId, activeMeetingChannelId);
+  }, [activeMeetingChannelId, activeSessionId, loadMeeting]);
+
+  const loadedTodoTaskIds = useRef<Set<string>>(new Set());
+  const loadedTodoGraphKey = useRef<string>("");
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      loadedTodoTaskIds.current.clear();
+      loadedTodoGraphKey.current = "";
+      return;
+    }
+    // 任务图整体替换（currentTaskIdsKey 变）时，复用的旧 taskId 其 todo 可能已变；
+    // 清空已加载集合并重拉全部当前 taskId，避免面板残留陈旧 todo。
+    if (loadedTodoGraphKey.current !== currentTaskIdsKey) {
+      loadedTodoTaskIds.current = new Set();
+      loadedTodoGraphKey.current = currentTaskIdsKey;
+    }
+    for (const taskId of currentTaskIds) {
+      if (!loadedTodoTaskIds.current.has(taskId)) {
+        loadedTodoTaskIds.current.add(taskId);
+        void loadTaskTodos(activeSessionId, taskId);
+      }
+    }
+  }, [activeSessionId, currentTaskIds, currentTaskIdsKey, loadTaskTodos]);
+
+  useEffect(() => {
+    if (!activeSessionId || !taskNeedsResync) {
+      return;
+    }
+    void loadCurrentTaskGraph(activeSessionId);
+    void loadTaskBoard(activeSessionId);
+    if (activeMeetingChannelId) {
+      void loadMeeting(activeSessionId, activeMeetingChannelId);
+    }
+    for (const taskId of currentTaskIds) {
+      void loadTaskTodos(activeSessionId, taskId);
+    }
+  }, [
+    activeMeetingChannelId,
+    activeSessionId,
+    currentTaskIds,
+    currentTaskIdsKey,
+    loadCurrentTaskGraph,
+    loadMeeting,
+    loadTaskBoard,
+    loadTaskTodos,
+    taskNeedsResync,
+  ]);
 
   // 切换会话时退出失败消息编辑态，避免编辑框残留在别的会话上。
   useEffect(() => {
@@ -216,6 +310,30 @@ export function AssistantScreen(): JSX.Element {
             </IconButton>
           </div>
         </div>
+        <TaskGraphPanel
+          graph={currentTaskGraph}
+          loading={taskGraphLoading}
+          onContinue={(graphId) => {
+            if (activeSessionId) void continueTaskGraph(activeSessionId, graphId);
+          }}
+          onDecide={(adjudicationId, decision, instruction) => {
+            if (activeSessionId) {
+              void decideTaskAdjudication(activeSessionId, adjudicationId, decision, instruction);
+            }
+          }}
+          onStop={(graphId) => {
+            if (activeSessionId) void stopTaskGraph(activeSessionId, graphId, progress.runId);
+          }}
+        />
+        <TaskBoardPanel
+          items={taskBoardItems}
+          loading={taskBoardLoading}
+        />
+        <TodoChecklistPanel
+          tasks={currentTaskGraph?.tasks ?? []}
+          todosByTaskId={taskTodosByTaskId}
+          loadingTaskIds={todoLoadingTaskIds}
+        />
         <div className="assistant-timeline" aria-live="polite">
           {hasMoreBefore ? (
             <div className="assistant-history-more">
@@ -335,6 +453,13 @@ export function AssistantScreen(): JSX.Element {
             sessionId={activeSessionId}
             subagent={openSubagent}
             onClose={() => setOpenSubagentId(null)}
+          />
+        ) : null}
+        {activeMeeting ? (
+          <MeetingChannelDrawer
+            meeting={activeMeeting}
+            loading={taskMeetingLoading}
+            onClose={() => useAssistantTaskStore.getState().closeMeeting()}
           />
         ) : null}
         <div className="assistant-confirmation-stack">

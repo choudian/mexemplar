@@ -62,13 +62,21 @@ class SQLAlchemyManager:
                 is_memory = self.db_path == ":memory:"
                 self.engine = create_engine(
                     f"sqlite:///{self.db_path}",
-                    connect_args={"check_same_thread": False},
+                    connect_args={"check_same_thread": False, "timeout": 5.0},
                     poolclass=StaticPool if is_memory else NullPool,
                     echo=False,
                 )
 
                 @event.listens_for(self.engine, "connect")
                 def _load_sqlite_vec(dbapi_conn, _connection_record):
+                    try:
+                        # WAL：读连接不阻塞写，写不阻塞读；多 worker 并发写下写仍单写者，
+                        # 由 busy_timeout（connect_args timeout）排队而非立即 "database is locked"。
+                        cursor = dbapi_conn.cursor()
+                        cursor.execute("PRAGMA journal_mode=WAL")
+                        cursor.close()
+                    except Exception:
+                        pass
                     try:
                         import sqlite_vec
 
@@ -78,7 +86,9 @@ class SQLAlchemyManager:
                     except (ImportError, Exception):
                         pass
 
-                self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+                self.SessionLocal = sessionmaker(
+                    autocommit=False, autoflush=False, bind=self.engine
+                )
 
                 Base.metadata.create_all(self.engine)
 

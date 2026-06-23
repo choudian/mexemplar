@@ -344,6 +344,14 @@ _INTERNAL_EVENT_NAMES = [
     "brain_skill_equipment_changed",
     "brain_skill_supersede_completed",
     "brain_skill_bootstrap_fallback_used",
+    # 023 task collaboration
+    "assistant_task_graph_changed",
+    "assistant_task_board_changed",
+    "assistant_task_question_changed",
+    "assistant_meeting_changed",
+    "assistant_todo_changed",
+    "assistant_task_adjudication_changed",
+    "assistant_task_root_failed",
 ]
 
 

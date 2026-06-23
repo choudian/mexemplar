@@ -1,5 +1,7 @@
 """
-PendingTaskRepository -- 助理异步任务队列仓库
+PendingTaskRepository -- legacy 助理异步任务队列仓库。
+
+该仓库继续服务 codify/bugfix 等后台队列；不要把它作为 Assistant Task 图事实源。
 """
 
 import logging
