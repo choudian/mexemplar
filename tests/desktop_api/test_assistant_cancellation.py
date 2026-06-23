@@ -33,6 +33,9 @@ class CancellableOrchestrator:
 
     task_worker = FakeTaskWorker()
 
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
+
     def __init__(self) -> None:
         self.entered = threading.Event()
 
@@ -50,6 +53,9 @@ class TwoRunOrchestrator:
     """第一轮快速完成；第二轮保持运行，用于验证旧 runId 不误停新运行。"""
 
     task_worker = FakeTaskWorker()
+
+    def set_parent_reentry_callback(self, callback) -> None:
+        self.parent_reentry_callback = callback
 
     def __init__(self) -> None:
         self.calls = 0
@@ -207,6 +213,9 @@ def test_cancel_fail_closes_pending_confirmation() -> None:
 
     class ConfirmingOrchestrator:
         task_worker = FakeTaskWorker()
+
+        def set_parent_reentry_callback(self, callback) -> None:
+            self.parent_reentry_callback = callback
 
         def run_agent(self, *args, **kwargs) -> AgentResult:
             entered.set()

@@ -130,3 +130,32 @@ def test_continue_rejects_foreign_session(orch):
     foreign = _make_child_subagent(orch, "other-parent-014")
     res = orch._continue_subagent(parent_session_id="parent-mine", subagent_id=foreign)
     assert res["success"] is False
+
+
+def test_continue_subagent_binds_subagent_id_as_executor_id(orch, mock_config):
+    """continue 路径必须把 subagent_id 作为 executor_id 传给委派工具集。
+
+    首次委派路径已传 ``executor_id=session_id``；continue 路径若漏传，``ask_parent`` /
+    ``meeting_send_message`` 的 sender_id 会退回 'ephemeral_subagent' 类型占位符，
+    暂停子代理续跑后发会议消息会因 ``_is_participant`` 校验 PermissionError 硬失败，
+    ask_parent 的提问也无法关联到具体子代理 session。
+    """
+    parent = "parent-cont-exec-014"
+    child = _make_child_subagent(orch, parent, status="suspended")
+    orch._llm = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
+
+    captured: dict = {}
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return []
+
+    with (
+        patch.object(orch, "_build_delegated_executor_tools", side_effect=_capture),
+        patch.object(orch, "_resolve_user_tool_ids", return_value=set()),
+    ):
+        orch._continue_subagent(
+            parent_session_id=parent, subagent_id=child, instruction="接着做"
+        )
+
+    assert captured.get("executor_id") == child

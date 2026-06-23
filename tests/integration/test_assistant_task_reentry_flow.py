@@ -1,0 +1,422 @@
+"""端到端：统一任务派发执行链路接通 + 父侧回流（V-01）。
+
+验证 ``TaskDispatcher.start_attempt_async`` 经 ``TaskExecutorAdapter`` 真正执行任务
+（复用 Orchestrator 委派执行内核）、结果回流建父侧裁定、``ParentReentrySink`` 收到
+payload 并触发续跑唤醒——即 V-01「执行链路接通」的核心闭环。
+
+不依赖注入式 mock executor_callback：``TaskExecutorAdapter`` 是真实适配器，只把底层
+Orchestrator 执行内核替换为一个返回预设结果的替身（避免真实 LLM/AgentLoop）。
+"""
+
+from __future__ import annotations
+
+from threading import Barrier, BrokenBarrierError, Lock
+from time import sleep
+
+from src.business.orchestration.agent.task_executor_adapter import TaskExecutorAdapter
+from src.business.task_collaboration.dispatcher import TaskDispatcher
+from src.business.task_collaboration.parent_reentry_sink import ParentReentrySink
+from src.business.task_collaboration.service import TaskCollaborationService
+from src.data.repos import (
+    AssistantTaskAdjudicationRepository,
+    AssistantTaskAttemptRepository,
+    AssistantTaskRepository,
+)
+
+
+class _Config:
+    """最小 config stub：只满足 dispatcher 构造所需的两个 getter。"""
+
+    def get_assistant_tasks_dispatch_max_workers(self) -> int:
+        return 4
+
+    def get_assistant_tasks_attempt_lease_seconds(self) -> int:
+        return 60
+
+
+class _AllowGuard:
+    """cutover stub：测试直接构造 dispatcher，跳过 flag/legacy 判定。"""
+
+    def assert_can_dispatch(self) -> None:
+        return None
+
+
+class _FakeOrchestrator:
+    """替身 Orchestrator：记录调用并返回预设委派结果，避免真实 LLM/AgentLoop。"""
+
+    def __init__(self, result: dict) -> None:
+        self._result = result
+        self.calls: list[dict] = []
+
+    def _run_ephemeral_via_delegated_executor(
+        self,
+        *,
+        parent_session_id,
+        task,
+        execution_context="",
+        tool_whitelist=None,
+        current_task_id=None,
+    ) -> dict:
+        self.calls.append(
+            {
+                "parent_session_id": parent_session_id,
+                "task": task,
+                "current_task_id": current_task_id,
+            }
+        )
+        return self._result
+
+    def _run_specialist_via_delegated_executor(self, **kwargs) -> dict:
+        return self._result
+
+
+def _patch_dispatch_config(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.business.task_collaboration.dispatcher.get_unified_config",
+        lambda: _Config(),
+    )
+
+
+def _create_child_task(
+    service: TaskCollaborationService, *, session_id: str, title: str
+) -> tuple[str, str]:
+    graph_id, root_id = service.get_or_create_request_graph_root(
+        session_id=session_id,
+        user_message_sequence=None,
+        title="root",
+        description="root",
+    )
+    task_id = service.create_child_task(
+        graph_id=graph_id,
+        session_id=session_id,
+        parent_task_id=root_id,
+        title=title,
+        description=title,
+        assignee_type="ephemeral_subagent",
+        assignee_id="ephemeral_subagent",
+        capability_scope="[]",
+    )
+    return graph_id, task_id
+
+
+def test_adapter_executes_and_reentry_reaches_sink(monkeypatch):
+    """delegate→start_attempt→adapter 执行→attempt done→adjudication→sink 收到 payload+kick。"""
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    graph_id, task_id = _create_child_task(service, session_id="ast_reentry_a", title="整理报销")
+    service.close()
+
+    fake_orch = _FakeOrchestrator({"success": True, "result_text": "报销已整理完毕"})
+    adapter = TaskExecutorAdapter(fake_orch)
+
+    kicks: list[tuple[str, str]] = []
+    sink = ParentReentrySink(
+        has_active_worker=lambda session_id: False,
+        kick_reentry_run=lambda session_id, graph_id: kicks.append((session_id, graph_id)) or True,
+    )
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        executor_callback=adapter,
+        parent_reentry_callback=sink.dispatch,
+    )
+
+    future = dispatcher.start_attempt_async(
+        task_id=task_id,
+        executor_type="ephemeral_subagent",
+        executor_id=task_id,
+        lease_owner="test",
+    )
+    assert future is not None
+    payload = future.result(timeout=5)
+
+    # 1. adapter 真的被 dispatcher 调用（执行链路接通，而非注入式 mock callback）
+    assert len(fake_orch.calls) == 1
+    assert fake_orch.calls[0]["task"] == "整理报销"
+    assert fake_orch.calls[0]["current_task_id"] == task_id
+
+    # 2. attempt 完成 + 父侧裁定 pending（done）
+    with AssistantTaskAdjudicationRepository() as adjs:
+        adj = adjs.get_pending_for_task(task_id)
+    assert adj is not None
+    assert adj.delivered_status == "done"
+
+    # 3. 回流 payload 带足续跑所需信息（session/graph/结果）
+    assert payload["accepted"] is True
+    assert payload["deliveredStatus"] == "done"
+    assert payload["sessionId"] == "ast_reentry_a"
+    assert payload["graphId"] == graph_id
+
+    # 4. sink 收到 payload 并 kick 了续跑 worker
+    entries = sink.drain("ast_reentry_a")
+    assert len(entries) == 1
+    assert entries[0]["taskId"] == task_id
+    assert kicks == [("ast_reentry_a", graph_id)]
+
+
+def test_adapter_maps_non_paused_failure_to_stuck(monkeypatch):
+    """子代理 success=False 且非暂停 → adapter 抛异常 → dispatcher 记 stuck 交裁定。"""
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    _, task_id = _create_child_task(service, session_id="ast_reentry_b", title="发邮件")
+    service.close()
+
+    fake_orch = _FakeOrchestrator({"success": False, "message": "邮件服务不可用"})
+    adapter = TaskExecutorAdapter(fake_orch)
+    sink = ParentReentrySink(
+        has_active_worker=lambda session_id: False,
+        kick_reentry_run=lambda session_id, graph_id: True,
+    )
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        executor_callback=adapter,
+        parent_reentry_callback=sink.dispatch,
+    )
+
+    future = dispatcher.start_attempt_async(
+        task_id=task_id,
+        executor_type="ephemeral_subagent",
+        executor_id=task_id,
+        lease_owner="test",
+    )
+    payload = future.result(timeout=5)
+
+    assert payload["accepted"] is True
+    assert payload["deliveredStatus"] == "stuck"
+    with AssistantTaskAdjudicationRepository() as adjs:
+        adj = adjs.get_pending_for_task(task_id)
+    assert adj is not None
+    assert adj.delivered_status == "stuck"
+
+
+def test_adapter_maps_paused_result_to_suspended_task_without_adjudication(monkeypatch):
+    """子代理 paused/cancelled 是可续挂起，不是 done，也不应生成父侧裁定。"""
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    _, task_id = _create_child_task(service, session_id="ast_reentry_pause", title="等系统恢复")
+    service.close()
+
+    fake_orch = _FakeOrchestrator(
+        {
+            "success": False,
+            "paused": True,
+            "cancelled": False,
+            "message": "模型限流，稍后可继续",
+            "result_type": "paused",
+        }
+    )
+    adapter = TaskExecutorAdapter(fake_orch)
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        executor_callback=adapter,
+    )
+
+    future = dispatcher.start_attempt_async(
+        task_id=task_id,
+        executor_type="ephemeral_subagent",
+        executor_id=task_id,
+        lease_owner="test",
+    )
+    assert future is not None
+    payload = future.result(timeout=5)
+
+    assert payload["accepted"] is True
+    assert payload["taskStatus"] == "suspended"
+    assert payload["suspendReason"] == "waiting_system"
+    with AssistantTaskRepository() as tasks:
+        task = tasks.get_task(task_id)
+        assert task.status == "suspended"
+        assert task.suspend_reason == "waiting_system"
+    with AssistantTaskAttemptRepository() as attempts:
+        attempt = attempts.list_for_task(task_id)[0]
+        assert attempt.status == "paused"
+    with AssistantTaskAdjudicationRepository() as adjs:
+        assert adjs.get_pending_for_task(task_id) is None
+
+
+def test_question_pause_reentry_reaches_parent_sink(monkeypatch):
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    graph_id, task_id = _create_child_task(
+        service,
+        session_id="ast_reentry_question",
+        title="需要上级答复",
+    )
+    service.close()
+
+    fake_orch = _FakeOrchestrator(
+        {
+            "success": False,
+            "paused": True,
+            "cancelled": False,
+            "message": "子代理已暂停，等待派活方答复。",
+            "result_type": "needs_user_input",
+            "suspend_reason": "waiting_system",
+            "reentry_type": "task_question",
+            "question_id": "qst_1",
+            "question_kind": "clarification",
+            "safe_summary": "Need parent input.",
+        }
+    )
+    adapter = TaskExecutorAdapter(fake_orch)
+    kicks: list[tuple[str, str]] = []
+    sink = ParentReentrySink(
+        has_active_worker=lambda session_id: False,
+        kick_reentry_run=lambda session_id, graph_id: kicks.append((session_id, graph_id)) or True,
+    )
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        executor_callback=adapter,
+        parent_reentry_callback=sink.dispatch,
+    )
+
+    future = dispatcher.start_attempt_async(
+        task_id=task_id,
+        executor_type="ephemeral_subagent",
+        executor_id=task_id,
+        lease_owner="test",
+    )
+    assert future is not None
+    payload = future.result(timeout=5)
+
+    assert payload["accepted"] is True
+    assert payload["eventType"] == "task_question"
+    assert payload["questionId"] == "qst_1"
+    entries = sink.drain("ast_reentry_question")
+    assert entries == [payload]
+    assert kicks == [("ast_reentry_question", graph_id)]
+
+
+def test_adapter_uses_isolated_orchestrators_for_parallel_attempts(
+    monkeypatch, tmp_path, in_memory_db
+):
+    """真实 adapter callback 支持跨 attempt 并行，不复用同一个 orchestrator repository session。"""
+    _patch_dispatch_config(monkeypatch)
+
+    # 该用例刻意跑真实 worker 线程；生产 SQLite 是文件库，每个 session 独立连接。
+    # autouse 的 :memory: StaticPool 会让线程共享同一连接，容易测到 SQLite 测试替身竞态。
+    import src.data.sqlalchemy_manager as sm_module
+    from src.data.sqlalchemy_manager import SQLAlchemyManager
+
+    previous_manager = sm_module._sqlalchemy_instance
+    file_manager = SQLAlchemyManager(str(tmp_path / "parallel-attempts.db"))
+    file_manager.initialize()
+    sm_module._sqlalchemy_instance = file_manager
+
+    try:
+        service = TaskCollaborationService()
+        _, task_a = _create_child_task(service, session_id="ast_parallel", title="任务 A")
+        _, task_b = _create_child_task(service, session_id="ast_parallel", title="任务 B")
+        service.close()
+
+        calls: list[str] = []
+        barrier_passed: list[str] = []
+        calls_lock = Lock()
+        executor_barrier = Barrier(2)
+
+        class _SlowFakeOrchestrator(_FakeOrchestrator):
+            def __init__(self) -> None:
+                super().__init__({"success": True, "result_text": "done"})
+
+            def _run_ephemeral_via_delegated_executor(
+                self,
+                *,
+                parent_session_id,
+                task,
+                execution_context="",
+                tool_whitelist=None,
+                current_task_id=None,
+                ) -> dict:
+                    with calls_lock:
+                        calls.append(task)
+                    try:
+                        executor_barrier.wait(timeout=2)
+                    except BrokenBarrierError as exc:
+                        raise AssertionError("attempt executors did not overlap") from exc
+                    with calls_lock:
+                        barrier_passed.append(task)
+                    sleep(0.05)
+                    return {"success": True, "result_text": task}
+
+        base = _SlowFakeOrchestrator()
+        adapter = TaskExecutorAdapter(base, orchestrator_factory=_SlowFakeOrchestrator)
+        dispatcher = TaskDispatcher(
+            cutover_guard=_AllowGuard(),
+            executor_callback=adapter,
+        )
+
+        future_a = dispatcher.start_attempt_async(
+            task_id=task_a,
+            executor_type="ephemeral_subagent",
+            executor_id=task_a,
+            lease_owner="test",
+        )
+        future_b = dispatcher.start_attempt_async(
+            task_id=task_b,
+            executor_type="ephemeral_subagent",
+            executor_id=task_b,
+            lease_owner="test",
+        )
+        assert future_a is not None
+        assert future_b is not None
+        future_a.result(timeout=5)
+        future_b.result(timeout=5)
+
+        assert sorted(calls) == ["任务 A", "任务 B"]
+        assert sorted(barrier_passed) == ["任务 A", "任务 B"]
+        dispatcher.shutdown(wait=True)
+    finally:
+        file_manager.close()
+        sm_module._sqlalchemy_instance = previous_manager
+
+
+def test_sink_does_not_kick_when_worker_active(monkeypatch):
+    """回流到达时若父侧已有活跃 worker，sink 只入队不重复 kick（first-wins）。"""
+    sink = ParentReentrySink(
+        has_active_worker=lambda session_id: True,
+        kick_reentry_run=lambda session_id, graph_id: False,
+    )
+
+    sink.dispatch(
+        {
+            "accepted": True,
+            "taskId": "tsk_x",
+            "adjudicationId": "adj_x",
+            "deliveredStatus": "done",
+            "safeSummary": "ok",
+            "sessionId": "ast_active",
+            "graphId": "graph_x",
+        }
+    )
+
+    entries = sink.drain("ast_active")
+    assert len(entries) == 1  # 入队
+    # has_pending 仍可用于 worker 退出前 tail-kick 判定
+    assert sink.has_pending("ast_active") is False
+
+
+def test_sink_re_enqueues_drained_entries() -> None:
+    # drain 是破坏性读取；run_agent 异常后 re_enqueue 把条目重新入队，防永久丢失。
+    # 仅重新入队，不触发 kick（调用方决定是否重试，避免失败立即重试死循环）。
+    sink = ParentReentrySink(
+        has_active_worker=lambda session_id: False,
+        kick_reentry_run=lambda session_id, graph_id: True,
+    )
+    sink.dispatch(
+        {
+            "accepted": True,
+            "taskId": "tsk_re",
+            "sessionId": "ast_re",
+            "graphId": "g_re",
+        }
+    )
+    drained = sink.drain("ast_re")
+    assert len(drained) == 1
+    assert sink.has_pending("ast_re") is False
+
+    sink.re_enqueue("ast_re", drained)
+    assert sink.has_pending("ast_re") is True
+    assert [entry["taskId"] for entry in sink.drain("ast_re")] == ["tsk_re"]

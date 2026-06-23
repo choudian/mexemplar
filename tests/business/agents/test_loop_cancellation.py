@@ -172,6 +172,7 @@ def _patch_loop(orch, run_result):
         patch("src.business.orchestration.agent.orchestrator.AgentLoop"),
         patch.object(orch, "_build_delegated_executor_tools", return_value=[]),
         patch.object(orch, "_resolve_user_tool_ids", return_value=set()),
+        patch.object(orch, "_dispatch_task_via_unified_model", return_value=None),
     ]
     started = [p.start() for p in patches]
     started[0].return_value.run.return_value = run_result

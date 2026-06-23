@@ -320,6 +320,136 @@ def test_subagent_delegation_wires_shared_catalog_before_child_session_creation(
     )
 
 
+def test_subagent_delegation_uses_unified_dispatch_without_sync_child_execution():
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._dispatch_task_via_unified_model = MagicMock(
+        return_value={"accepted": True, "taskId": "tsk_1", "graphId": "tg_1"}
+    )
+    orchestrator._run_delegated_executor = MagicMock()
+
+    result = orchestrator._delegate_to_subagent(
+        parent_session_id="parent-session",
+        task_description="完成任务",
+        execution_context="上下文",
+        tool_whitelist=["tool-a"],
+    )
+
+    assert result["accepted"] is True
+    assert result["delegation_type"] == "ephemeral_subagent"
+    orchestrator._dispatch_task_via_unified_model.assert_called_once_with(
+        parent_session_id="parent-session",
+        task="完成任务",
+        context="上下文",
+        assignee_type="ephemeral_subagent",
+        assignee_id="ephemeral_subagent",
+        capability_scope=["tool-a"],
+    )
+    orchestrator._run_delegated_executor.assert_not_called()
+
+
+def test_unified_dispatch_helper_uses_task_dispatcher(monkeypatch):
+    from src.business.task_collaboration.service import TaskCollaborationService
+    from src.data.repos import AssistantTaskRepository
+
+    class _TaskConfig:
+        def get_assistant_tasks_unified_dispatch_enabled(self) -> bool:
+            return True
+
+        def get_assistant_tasks_clean_start_guard_enabled(self) -> bool:
+            return True
+
+        def get_assistant_tasks_dispatch_max_workers(self) -> int:
+            return 2
+
+        def get_assistant_tasks_attempt_lease_seconds(self) -> int:
+            return 60
+
+    monkeypatch.setattr(
+        "src.business.task_collaboration.dispatcher.get_unified_config",
+        lambda: _TaskConfig(),
+    )
+    monkeypatch.setattr(
+        "src.business.task_collaboration.cutover.get_unified_config",
+        lambda: _TaskConfig(),
+    )
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._config = _TaskConfig()
+
+    result = orchestrator._dispatch_task_via_unified_model(
+        parent_session_id="parent-session",
+        task="完成任务",
+        context="上下文",
+        assignee_type="ephemeral_subagent",
+        assignee_id="ephemeral_subagent",
+        capability_scope=["tool-a"],
+    )
+
+    assert result is not None
+    assert result["accepted"] is True
+    assert result["assignment"] == "directed"
+    snapshot = TaskCollaborationService().get_current_graph_snapshot("parent-session")
+    assert snapshot is not None
+    assert any(task.task_id == result["taskId"] for task in snapshot.tasks)
+    assert AssistantTaskRepository().get_task(result["taskId"]) is not None
+
+
+def test_unified_dispatch_repeated_calls_do_not_invalidate_cached_dispatcher(monkeypatch):
+    """Regression: 缓存的 dispatcher 不能持有首次注入、随后被 close 的 service。
+
+    修复前第二次 ``_dispatch_task_via_unified_model`` 会因缓存 dispatcher 持有已关闭
+    session 的 service 而静默失败、回退同步路径（返回 None）。dispatcher 无状态化后，
+    delegate_task 用当次 service，连续派发都应成功。
+    """
+
+    class _TaskConfig:
+        def get_assistant_tasks_unified_dispatch_enabled(self) -> bool:
+            return True
+
+        def get_assistant_tasks_clean_start_guard_enabled(self) -> bool:
+            return True
+
+        def get_assistant_tasks_dispatch_max_workers(self) -> int:
+            return 2
+
+        def get_assistant_tasks_attempt_lease_seconds(self) -> int:
+            return 60
+
+    monkeypatch.setattr(
+        "src.business.task_collaboration.dispatcher.get_unified_config",
+        lambda: _TaskConfig(),
+    )
+    monkeypatch.setattr(
+        "src.business.task_collaboration.cutover.get_unified_config",
+        lambda: _TaskConfig(),
+    )
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._config = _TaskConfig()
+    # 本测试关注 dispatcher 缓存不失效（delegate_task 用当次 service）；执行链路由
+    # test_assistant_task_reentry_flow 独立覆盖。裸 orchestrator 无法跑真实 executor，
+    # 故 no-op 掉 start_attempt_async，避免异步 worker 污染本测试的图/任务状态。
+    monkeypatch.setattr(orchestrator, "_start_unified_attempt", lambda *a, **kw: None)
+
+    first = orchestrator._dispatch_task_via_unified_model(
+        parent_session_id="parent-session",
+        task="第一次任务",
+        context="上下文",
+        assignee_type="ephemeral_subagent",
+        assignee_id="ephemeral_subagent",
+        capability_scope=["tool-a"],
+    )
+    second = orchestrator._dispatch_task_via_unified_model(
+        parent_session_id="parent-session",
+        task="第二次任务",
+        context="上下文",
+        assignee_type="ephemeral_subagent",
+        assignee_id="ephemeral_subagent",
+        capability_scope=["tool-a"],
+    )
+
+    assert first is not None and first["accepted"] is True
+    assert second is not None and second["accepted"] is True
+
+
 def test_specialist_delegation_wires_shared_catalog_before_child_session_creation():
     specialist = SimpleNamespace(
         specialist_id="specialist-1",
@@ -367,6 +497,65 @@ def test_specialist_delegation_wires_shared_catalog_before_child_session_creatio
         "wf-specialist",
         "specialist",
     )
+
+
+def test_specialist_delegation_uses_unified_dispatch_without_sync_child_execution():
+    specialist = SimpleNamespace(
+        specialist_id="specialist-1",
+        name="测试专员",
+        description="描述",
+        role_definition="职责",
+        tool_whitelist='["能力A"]',
+        is_active=1,
+    )
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._dispatch_task_via_unified_model = MagicMock(
+        return_value={"accepted": True, "taskId": "tsk_1", "graphId": "tg_1"}
+    )
+    orchestrator._run_delegated_executor = MagicMock()
+    specialist_repo = MagicMock()
+    specialist_repo.get_specialist_by_name.return_value = specialist
+
+    with patch(
+        "src.data.repos.specialist_repository.SpecialistRepository"
+    ) as MockSpecialistRepository:
+        MockSpecialistRepository.return_value.__enter__.return_value = specialist_repo
+        result = orchestrator._delegate_to_specialist(
+            parent_session_id="parent-session",
+            specialist_name="测试专员",
+            task="完成任务",
+        )
+
+    assert result["accepted"] is True
+    assert result["delegation_type"] == "specialist"
+    assert result["specialist_id"] == "specialist-1"
+    orchestrator._dispatch_task_via_unified_model.assert_called_once_with(
+        parent_session_id="parent-session",
+        task="完成任务",
+        context="完成任务",
+        assignee_type="specialist",
+        assignee_id="specialist-1",
+        capability_scope=["能力A"],
+    )
+    orchestrator._run_delegated_executor.assert_not_called()
+
+
+def test_delegated_executor_tools_include_question_and_message_only_meeting_tools():
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+
+    tools = orchestrator._build_delegated_executor_tools(
+        {"tool-a"},
+        agent_type="specialist",
+        executor_id="specialist-session",
+        specialist_id="specialist-1",
+    )()
+    by_name = {tool.name: tool for tool in tools}
+
+    assert "ask_parent" in by_name
+    assert "meeting_send_message" in by_name
+    assert "open_meeting_channel" not in by_name
+    assert by_name["ask_parent"].is_concurrency_safe is False
+    assert by_name["meeting_send_message"].is_concurrency_safe is False
 
 
 def test_old_shim_import_path_removed():

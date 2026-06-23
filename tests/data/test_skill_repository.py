@@ -37,6 +37,34 @@ def test_create_get_and_list_active_skill() -> None:
     assert [row.skill_id for row in repo.list_active()] == ["skill-1"]
 
 
+def test_mark_superseded_is_atomic_only_first_call_wins() -> None:
+    """并发/重复 supersede 只有一个成功：第二个 mark_superseded 对已 superseded 的 skill 返回 False。
+
+    验证 mark_superseded 的原子条件 UPDATE（WHERE status='active'）——两个并发请求在
+    SQLite 单写者下排队，第一个把 status 改成 superseded 后，第二个的 WHERE 已匹配不到。
+    """
+    repo = _repo()
+    root = repo.create_skill(
+        skill_id="skill-root",
+        name="链根",
+        description="v1",
+        trigger_conditions=["v1"],
+        required_tools=[],
+        body_markdown="v1",
+        origin="assistant_tool_call",
+    )
+
+    first = repo.mark_superseded(root.skill_id, "skill-v2")
+    second = repo.mark_superseded(root.skill_id, "skill-v3")
+
+    assert first is True
+    assert second is False  # 已被第一次 supersede，条件 UPDATE 匹配 0 行
+
+    skill = repo.get(root.skill_id)
+    assert skill.status == "superseded"
+    assert skill.superseded_by == "skill-v2"  # 第一次赢家结果保留，不被第二次覆盖
+
+
 def test_chain_root_queries_resolve_supersede_chain() -> None:
     repo = _repo()
     root = repo.create_skill(

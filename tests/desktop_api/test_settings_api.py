@@ -186,6 +186,9 @@ class FakeConfig:
     def get_web_brave_api_key(self):
         return None
 
+    def get_tool_output_summary_api_key(self):
+        return None
+
 
 def test_settings_real_actions_create_artifacts_and_report_business_errors(
     desktop_api_client, tmp_path
