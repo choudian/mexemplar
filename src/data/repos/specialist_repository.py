@@ -7,16 +7,12 @@ SpecialistRepository -- 专员 + 版本历史数据仓库
 import json
 import logging
 from typing import Optional
-from uuid import uuid4
+from src.utils.ids import new_id
 
 from ..models_sqlite import BrainSpecialist, BrainSpecialistVersion
 from .base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
-
-
-def _new_id() -> str:
-    return (uuid4().hex + uuid4().hex)[:50]
 
 
 class SpecialistRepository(BaseRepository):
@@ -38,7 +34,7 @@ class SpecialistRepository(BaseRepository):
         commit: bool = True,
     ) -> str:
         """创建一个新专员，同时创建第一条版本记录。返回 specialist_id。"""
-        specialist_id = _new_id()
+        specialist_id = new_id()
         whitelist_json = json.dumps(tool_whitelist, ensure_ascii=False)
         specialist = BrainSpecialist(
             specialist_id=specialist_id,
@@ -56,7 +52,7 @@ class SpecialistRepository(BaseRepository):
             self.session.flush()
 
             # 创建版本 1
-            version_id = _new_id()
+            version_id = new_id()
             version = BrainSpecialistVersion(
                 version_id=version_id,
                 specialist_id=specialist_id,
@@ -152,7 +148,7 @@ class SpecialistRepository(BaseRepository):
             specialist.tool_whitelist = new_whitelist_json
             specialist.current_version = new_version
 
-            version_id = _new_id()
+            version_id = new_id()
             version = BrainSpecialistVersion(
                 version_id=version_id,
                 specialist_id=specialist_id,
@@ -216,10 +212,3 @@ class SpecialistRepository(BaseRepository):
             .all()
         )
 
-    def get_version(self, version_id: str) -> Optional[BrainSpecialistVersion]:
-        """按 ID 查询版本记录。"""
-        return (
-            self.session.query(BrainSpecialistVersion)
-            .filter(BrainSpecialistVersion.version_id == version_id)
-            .first()
-        )

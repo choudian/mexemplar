@@ -98,6 +98,26 @@ class SegmentService:
         emit("segment_idle_trigger", session_id=session_id)
         return self.seal_segment(session_id, boundary_reason="idle")
 
+    def handle_idle_and_cleanup(self, session_id: str) -> Optional[str]:
+        """封存 idle 边界 Segment 并清理该会话已检索的上下文缓存（router 编排下沉）。"""
+        segment_id = self.handle_idle_trigger(session_id)
+        if segment_id is None:
+            return None
+        self._cleanup_retrieved_context(session_id)
+        return segment_id
+
+    def seal_and_cleanup(self, session_id: str, boundary_reason: str) -> Optional[str]:
+        """封存通用边界 Segment 并清理已检索的上下文缓存（router 编排下沉）。"""
+        segment_id = self.seal_segment(session_id, boundary_reason=boundary_reason)
+        if segment_id:
+            self._cleanup_retrieved_context(session_id)
+        return segment_id
+
+    def _cleanup_retrieved_context(self, session_id: str) -> None:
+        from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
+
+        cleanup_retrieved_context(session_id)
+
     def _has_active_subagent(self, session_id: str) -> bool:
         """会话是否仍有活跃（运行中）的子代理/专员。
 

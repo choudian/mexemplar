@@ -7,6 +7,7 @@ from typing import List, Optional
 from ..models_sqlite import Tool
 from .base_repository import BaseRepository
 from src.utils.timezone import utc_now_naive
+from src.data.helpers import build_like_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -93,18 +94,19 @@ class ToolRepository(BaseRepository):
 
     def search_published(self, query: str) -> List[Tool]:
         """搜索已发布的工具（参数化 LIKE 查询，防注入）"""
-        escaped = query.replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
-        return (
+        query_text = str(query or "").strip()
+        base_query = (
             self.session.query(Tool)
-            .filter(
-                Tool.status == "published",
-                (Tool.tool_name.like(pattern, escape="\\"))
-                | (Tool.description.like(pattern, escape="\\")),
-            )
+            .filter(Tool.status == "published")
             .order_by(Tool.created_at.desc())
-            .all()
         )
+        if not query_text:
+            return base_query.all()
+        pattern = build_like_pattern(query_text)
+        return base_query.filter(
+            (Tool.tool_name.like(pattern, escape="\\"))
+            | (Tool.description.like(pattern, escape="\\"))
+        ).all()
 
     def get_by_name(self, name: str) -> Optional[Tool]:
         """按工具名称精确查询"""

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Any
-from uuid import uuid4
+from src.utils.ids import new_id
 
 
 from src.data.models_sqlite import (
@@ -32,10 +32,6 @@ SKILL_ORIGINS = frozenset(
 )
 SKILL_STATUSES = frozenset({"active", "superseded", "soft_deleted"})
 SOURCE_ZONES = frozenset({"archive", "failure"})
-
-
-def new_skill_id() -> str:
-    return uuid4().hex[:50]
 
 
 def json_list(value: Any) -> str:
@@ -95,7 +91,7 @@ class SkillRepository(BaseRepository):
             trigger_conditions=trigger_conditions,
             body_markdown=body_markdown,
         )
-        skill_id = skill_id or new_skill_id()
+        skill_id = skill_id or new_id()
         chain_root_id = chain_root_id or skill_id
         now = utc_now_naive()
         skill = BrainSkill(

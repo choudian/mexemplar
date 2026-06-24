@@ -109,6 +109,27 @@ class AssistantRuntime:
             worker = self._workers.get(session_id)
             return worker is not None and worker.is_alive()
 
+    def set_auto_approve(self, enabled: bool) -> bool:
+        """开启/关闭"全部允许"免确认，并结算挂起确认（router 编排下沉）。
+
+        开启时同时结算当前挂起的确认队列（toast allow-all 来源）；关闭时仅切标志。
+        返回切换后的标志当前值。
+        """
+        from src.business.agents.tools.builtin_general_tools import (
+            CONFIRM_SOURCE_TOAST_ALLOW_ALL,
+            CONFIRM_SOURCE_TOP_TOGGLE,
+            is_auto_approve_enabled,
+            set_auto_approve_enabled,
+            settle_pending_confirmations,
+        )
+
+        if enabled:
+            set_auto_approve_enabled(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+            settle_pending_confirmations(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+        else:
+            set_auto_approve_enabled(False, CONFIRM_SOURCE_TOP_TOGGLE)
+        return is_auto_approve_enabled()
+
     def _spawn_session_worker(
         self,
         session_id: str,

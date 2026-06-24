@@ -1,7 +1,8 @@
 import pytest
 
 from src.business.brain.models import Zone
-from src.data.repos.brain_repository import BrainRepository, _like_contains_pattern
+from src.data.helpers import build_like_pattern
+from src.data.repos.brain_repository import BrainRepository
 
 
 def test_search_archive_entries_treats_like_wildcards_as_literals(in_memory_db):
@@ -44,6 +45,6 @@ def test_search_entries_treats_underscore_as_literal(in_memory_db):
     assert [entry.entry_id for entry in results] == [literal]
 
 
-def test_like_contains_pattern_rejects_empty_keyword():
-    with pytest.raises(ValueError, match="keyword"):
-        _like_contains_pattern("")
+def test_build_like_pattern_rejects_empty_keyword():
+    with pytest.raises(ValueError, match="term"):
+        build_like_pattern("")

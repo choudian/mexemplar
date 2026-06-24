@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from ..models_sqlite import Session
 from .base_repository import BaseRepository
+from src.data.helpers import build_like_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +58,9 @@ class SessionRepository(BaseRepository):
         prefix = str(prefix or "")
         if not prefix:
             return []
-        escaped = prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        pattern = build_like_pattern(prefix, contains=False)
         query = self.session.query(Session.session_id).filter(
-            Session.session_id.like(f"{escaped}%", escape="\\")
+            Session.session_id.like(pattern, escape="\\")
         )
         if agent_type:
             query = query.filter(Session.agent_type == agent_type)

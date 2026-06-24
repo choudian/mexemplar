@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional
 from ..models_sqlite import SkillComposition, SkillCompositionMember
 from .base_repository import BaseRepository
 from src.utils.timezone import utc_now_naive
+from src.data.helpers import build_like_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -71,26 +72,6 @@ class SkillCompositionRepository(BaseRepository):
         except Exception as e:
             self.session.rollback()
             logger.error(f"替换技能组合成员失败: {e}")
-            raise
-
-    def delete(self, composition_id: str) -> bool:
-        """删除技能组合及其成员"""
-        composition = self.get_by_id(composition_id)
-        if composition is None:
-            return False
-        try:
-            (
-                self.session.query(SkillCompositionMember)
-                .filter(SkillCompositionMember.composition_id == composition_id)
-                .delete(synchronize_session=False)
-            )
-            self.session.delete(composition)
-            self.session.commit()
-            logger.info(f"技能组合已删除: {composition.composition_name} ({composition_id})")
-            return True
-        except Exception as e:
-            self.session.rollback()
-            logger.error(f"删除技能组合失败: {e}")
             raise
 
     def get_by_id(self, composition_id: str) -> Optional[SkillComposition]:
@@ -166,21 +147,26 @@ class SkillCompositionRepository(BaseRepository):
 
     def search_published(self, query: str) -> List[SkillComposition]:
         """搜索已发布且可供 Assistant 使用的技能组合"""
-        escaped = query.replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
-        return (
+        query_text = str(query or "").strip()
+        base_query = (
             self.session.query(SkillComposition)
             .filter(
                 SkillComposition.status == "published",
                 SkillComposition.assistant_enabled.is_(True),
                 SkillComposition.needs_review.is_(False),
-                (SkillComposition.composition_name.like(pattern, escape="\\"))
-                | (SkillComposition.description.like(pattern, escape="\\"))
-                | (SkillComposition.applicability.like(pattern, escape="\\")),
             )
-            .order_by(SkillComposition.updated_at.desc(), SkillComposition.created_at.desc())
-            .all()
+            .order_by(
+                SkillComposition.updated_at.desc(), SkillComposition.created_at.desc()
+            )
         )
+        if not query_text:
+            return base_query.all()
+        pattern = build_like_pattern(query_text)
+        return base_query.filter(
+            (SkillComposition.composition_name.like(pattern, escape="\\"))
+            | (SkillComposition.description.like(pattern, escape="\\"))
+            | (SkillComposition.applicability.like(pattern, escape="\\"))
+        ).all()
 
     def get_published_assistant_enabled(self) -> List[SkillComposition]:
         """获取所有已发布且可供 Assistant 使用的技能组合"""

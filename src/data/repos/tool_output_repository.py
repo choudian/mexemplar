@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy import or_
 
-from src.business.agents.tools.builtin_permissions import workspace_hash
+from src.utils.workspace import workspace_hash
 from src.data.models_sqlite import ToolOutputReference as ToolOutputReferenceModel
 from src.data.repos.base_repository import BaseRepository
 from src.utils.helpers import get_default_data_dir

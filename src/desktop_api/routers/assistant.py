@@ -320,56 +320,38 @@ def decide_clarification(
     "/confirmations/auto-approve",
     response_model=AssistantAutoApproveResponse,
 )
-def set_auto_approve(request: AssistantAutoApproveRequest) -> AssistantAutoApproveResponse:
-    from src.business.agents.tools.builtin_general_tools import (
-        CONFIRM_SOURCE_TOAST_ALLOW_ALL,
-        CONFIRM_SOURCE_TOP_TOGGLE,
-        is_auto_approve_enabled,
-        set_auto_approve_enabled,
-        settle_pending_confirmations,
-    )
-
-    if request.enabled:
-        set_auto_approve_enabled(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
-        settle_pending_confirmations(True, CONFIRM_SOURCE_TOAST_ALLOW_ALL)
-    else:
-        set_auto_approve_enabled(False, CONFIRM_SOURCE_TOP_TOGGLE)
-
-    return AssistantAutoApproveResponse(enabled=is_auto_approve_enabled())
+def set_auto_approve(
+    request: AssistantAutoApproveRequest,
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> AssistantAutoApproveResponse:
+    return AssistantAutoApproveResponse(enabled=runtime.set_auto_approve(request.enabled))
 
 
 @router.post("/sessions/{session_id}/segment-idle")
 def trigger_segment_idle(session_id: str):
     """前端空闲计时器触发后调用，封存当前 Segment"""
-    from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
     from src.business.brain.segment_service import SegmentService
 
-    service = SegmentService()
     try:
-        segment_id = service.handle_idle_trigger(session_id)
+        segment_id = SegmentService().handle_idle_and_cleanup(session_id)
     except Exception as exc:
         logger.error("Segment idle trigger failed for session %s: %s", session_id, exc)
         raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
     if segment_id is None:
         return {"segment_id": None, "status": None}
-    cleanup_retrieved_context(session_id)
     return {"segment_id": segment_id, "status": "pending"}
 
 
 @router.post("/segment-boundary")
 def trigger_segment_boundary(body: SegmentBoundaryRequest):
     """通用 Segment 边界触发端点（window_close / new_session / token_limit）"""
-    from src.business.agents.tools.assistant_tools import cleanup_retrieved_context
     from src.business.brain.segment_service import SegmentService
 
-    service = SegmentService()
     try:
-        segment_id = service.seal_segment(body.session_id, boundary_reason=body.reason)
+        segment_id = SegmentService().seal_and_cleanup(body.session_id, boundary_reason=body.reason)
     except Exception as exc:
         logger.error("Segment boundary trigger failed for session %s: %s", body.session_id, exc)
         raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
-    if segment_id:
-        cleanup_retrieved_context(body.session_id)
     return (
         {"segment_id": segment_id, "status": "pending"}
         if segment_id

@@ -8,20 +8,16 @@ Segment 状态流转使用 CAS (Compare-And-Swap) 保证原子性。
 import json
 import logging
 from typing import Optional
-from uuid import uuid4
+from src.utils.ids import new_id
 
 from sqlalchemy import text
 
 from ..models_sqlite import BrainMemoryEntry, BrainRecruitmentSignal, BrainSegment, FeedbackSignal
 from .base_repository import BaseRepository
 from src.utils.timezone import utc_now_naive
+from src.data.helpers import build_like_pattern
 
 logger = logging.getLogger(__name__)
-
-
-def _new_id() -> str:
-    """生成 50 字符的唯一 ID（两个 UUID4 hex 拼接后截取）。"""
-    return (uuid4().hex + uuid4().hex)[:50]
 
 
 _BRAIN_ZONES = ("hot", "persistent", "archive", "subconscious", "failure", "prediction")
@@ -65,14 +61,6 @@ def _append_json_list_item(raw: Optional[str], item: Optional[str], *, limit: in
     return json.dumps(values[-limit:], ensure_ascii=False)
 
 
-def _like_contains_pattern(keyword: str) -> str:
-    term = str(keyword or "").strip()
-    if not term:
-        raise ValueError("keyword must not be empty")
-    escaped = term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
 class BrainRepository(BaseRepository):
     """大脑架构数据仓库"""
 
@@ -89,7 +77,7 @@ class BrainRepository(BaseRepository):
         segment_id: Optional[str] = None,
     ) -> str:
         """创建一个新的 segment（status='pending'），返回可当字符串使用的 segment 快照。"""
-        segment_id = segment_id or _new_id()
+        segment_id = segment_id or new_id()
         now = utc_now_naive()
         segment = BrainSegment(
             segment_id=segment_id,
@@ -341,7 +329,7 @@ class BrainRepository(BaseRepository):
         commit: bool = True,
     ) -> str:
         """创建一条记忆条目，返回可当字符串使用的 entry 快照。"""
-        entry_id = entry_id or _new_id()
+        entry_id = entry_id or new_id()
         entry = BrainMemoryEntry(
             entry_id=entry_id,
             zone=zone,
@@ -489,7 +477,7 @@ class BrainRepository(BaseRepository):
             BrainMemoryEntry.status.in_(("active", "invalidated")),
         )
         for keyword in keywords:
-            pattern = _like_contains_pattern(keyword)
+            pattern = build_like_pattern(keyword)
             search = search.filter(
                 (BrainMemoryEntry.content.like(pattern, escape="\\"))
                 | (BrainMemoryEntry.reason.like(pattern, escape="\\"))
@@ -517,7 +505,7 @@ class BrainRepository(BaseRepository):
             search = search.filter(BrainMemoryEntry.status.in_(tuple(statuses)))
 
         for keyword in keywords:
-            pattern = _like_contains_pattern(keyword)
+            pattern = build_like_pattern(keyword)
             search = search.filter(
                 (BrainMemoryEntry.content.like(pattern, escape="\\"))
                 | (BrainMemoryEntry.reason.like(pattern, escape="\\"))
@@ -579,7 +567,7 @@ class BrainRepository(BaseRepository):
             raise
         # 信号写失败不回滚已完成的 invalidation，独立处理
         try:
-            signal_id = _new_id()
+            signal_id = new_id()
             self.session.add(
                 FeedbackSignal(
                     signal_id=signal_id,
@@ -614,7 +602,7 @@ class BrainRepository(BaseRepository):
         old_entry = self.get_entry(old_entry_id)
         if old_entry is None:
             return None
-        new_entry_id = _new_id()
+        new_entry_id = new_id()
         try:
             superseded = (
                 self.session.query(BrainMemoryEntry)
@@ -723,7 +711,7 @@ class BrainRepository(BaseRepository):
         if old_entry is None:
             return None
 
-        new_entry_id = _new_id()
+        new_entry_id = new_id()
         try:
             superseded = (
                 self.session.query(BrainMemoryEntry)
@@ -823,7 +811,7 @@ class BrainRepository(BaseRepository):
         created_ids: list[str] = []
         try:
             for entry_data in entries:
-                entry_id = entry_data.get("entry_id") or _new_id()
+                entry_id = entry_data.get("entry_id") or new_id()
                 entry = BrainMemoryEntry(
                     entry_id=entry_id,
                     zone=entry_data.get("zone", "hot"),
@@ -884,7 +872,7 @@ class BrainRepository(BaseRepository):
                 return []
 
             for entry_data in entries:
-                entry_id = entry_data.get("entry_id") or _new_id()
+                entry_id = entry_data.get("entry_id") or new_id()
                 entry = BrainMemoryEntry(
                     entry_id=entry_id,
                     zone=entry_data.get("zone", "hot"),
@@ -1165,7 +1153,7 @@ class BrainRepository(BaseRepository):
         context_summary: str,
     ) -> str:
         """创建一条反馈信号，返回 signal_id。"""
-        signal_id = _new_id()
+        signal_id = new_id()
         signal = FeedbackSignal(
             signal_id=signal_id,
             zone=zone,
@@ -1226,7 +1214,7 @@ class BrainRepository(BaseRepository):
         try:
             if signal is None:
                 signal = FeedbackSignal(
-                    signal_id=_new_id(),
+                    signal_id=new_id(),
                     zone="specialist",
                     operation="skill_pool_remove",
                     target_id=tool_id,
@@ -1306,7 +1294,7 @@ class BrainRepository(BaseRepository):
         try:
             if signal is None:
                 signal = BrainRecruitmentSignal(
-                    signal_id=_new_id(),
+                    signal_id=new_id(),
                     task_pattern=normalized_pattern,
                     delegation_count=0,
                     example_session_ids="[]",

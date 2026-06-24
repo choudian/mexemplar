@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 import sys
 import threading
@@ -12,6 +11,7 @@ from typing import Iterable
 
 from src.business.agents.tools.builtin_contracts import PermissionDecision
 from src.execution.command_runner import CommandParseError, parse_command_argv
+from src.utils.workspace import resolve_workspace_root, workspace_hash
 
 _SUMMARY_SNIPPET_MAX = 80
 _SUMMARY_TOTAL_MAX = 240
@@ -113,15 +113,6 @@ class PermissionCheck:
     @property
     def allowed(self) -> bool:
         return self.decision.decision in {"allowed", "confirmed"}
-
-
-def workspace_hash(workspace_root: Path | str | None = None) -> str:
-    root = resolve_workspace_root(workspace_root)
-    return hashlib.sha256(str(root).encode("utf-8", errors="replace")).hexdigest()
-
-
-def resolve_workspace_root(workspace_root: Path | str | None = None) -> Path:
-    return Path(workspace_root or Path.cwd()).expanduser().resolve()
 
 
 def _resolve_candidate(path: str | Path, workspace_root: Path) -> tuple[Path, Path]:
