@@ -1,25 +1,27 @@
 import logging
 from src.utils.timezone import utc_now_naive
-from typing import Optional
+from typing import Callable, Optional
 
 from src.business.agents.config import AgentType
-
-from .ports import EventBusPort
+from src.utils.events import connect, emit
 
 
 class TeachingFailureTracker:
     def __init__(
         self,
         failure_repo,
-        event_bus: EventBusPort,
+        *,
+        connect_fn: Callable = connect,
+        emit_fn: Callable = emit,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._failure_repo = failure_repo
-        self._event_bus = event_bus
+        self._connect = connect_fn
+        self._emit = emit_fn
         self._logger = logger or logging.getLogger(__name__)
 
     def connect_signals(self) -> None:
-        self._event_bus.connect("agent_error", self.on_agent_error_for_failure)
+        self._connect("agent_error", self.on_agent_error_for_failure)
 
     def on_agent_error_for_failure(self, sender, **kwargs):
         del sender
@@ -44,7 +46,7 @@ class TeachingFailureTracker:
             existing.error_type = kwargs.get("error_type", "")
             existing.retry_count = (existing.retry_count or 0) + 1
             self._failure_repo.update(existing)
-            self._event_bus.emit(
+            self._emit(
                 "teaching_failure_updated",
                 workflow_id=workflow_id,
                 failed_stage=agent_type,
@@ -75,7 +77,7 @@ class TeachingFailureTracker:
             error_summary=(error_summary or "")[:500],
             error_type=error_type,
         )
-        self._event_bus.emit(
+        self._emit(
             "teaching_failure_updated",
             workflow_id=workflow_id,
             failed_stage=failed_stage,
@@ -94,7 +96,7 @@ class TeachingFailureTracker:
         if new_status == "resolved":
             record.resolved_at = utc_now_naive()
         self._failure_repo.update(record)
-        self._event_bus.emit(event_name, workflow_id=workflow_id)
+        self._emit(event_name, workflow_id=workflow_id)
 
     def resolve_failure_record(self, workflow_id: str) -> None:
         self.set_failure_status(workflow_id, "resolved", "teaching_failure_resolved")
@@ -110,7 +112,7 @@ class TeachingFailureTracker:
             record.status = "active"
             record.retry_count = (record.retry_count or 0) + 1
             self._failure_repo.update(record)
-            self._event_bus.emit(
+            self._emit(
                 "teaching_failure_updated",
                 workflow_id=workflow_id,
                 failed_stage=record.failed_stage,
@@ -123,7 +125,7 @@ class TeachingFailureTracker:
             self._logger.warning(
                 f"[Orchestrator] 重试失败：找不到 workflow_id={workflow_id} 的失败记录"
             )
-            self._event_bus.emit(
+            self._emit(
                 "agent_error",
                 workflow_id=workflow_id,
                 agent_type=AgentType.TRIAL,
@@ -140,7 +142,7 @@ class TeachingFailureTracker:
 
         record.status = "retrying"
         self._failure_repo.update(record)
-        self._event_bus.emit(
+        self._emit(
             "teaching_failure_retrying",
             workflow_id=workflow_id,
             failed_stage=record.failed_stage,
@@ -154,7 +156,7 @@ class TeachingFailureTracker:
 
         record.failed_stage = target_stage
         self._failure_repo.update(record)
-        self._event_bus.emit(
+        self._emit(
             "teaching_failure_updated",
             workflow_id=workflow_id,
             failed_stage=target_stage,

@@ -20,9 +20,14 @@ def test_phase3_split_modules_exist():
     from src.business.orchestration.agent.agent_session_store import AgentSessionStore
     from src.business.orchestration.agent.assistant_prompt_builder import AssistantPromptBuilder
     from src.business.orchestration.agent.assistant_task_worker import AssistantTaskWorker
+    from src.business.orchestration.agent.delegation_orchestrator import (
+        DelegationOrchestrator,
+    )
+    from src.business.orchestration.agent.teaching_orchestrator import TeachingOrchestrator
     from src.business.orchestration.agent.teaching_failure_tracker import (
         TeachingFailureTracker,
     )
+    from src.business.orchestration.agent.tool_registry import ToolRegistry
     from src.business.orchestration.agent.workflow_retry_coordinator import (
         WorkflowRetryCoordinator,
     )
@@ -30,7 +35,10 @@ def test_phase3_split_modules_exist():
     assert AgentSessionStore is not None
     assert AssistantPromptBuilder is not None
     assert AssistantTaskWorker is not None
+    assert DelegationOrchestrator is not None
+    assert TeachingOrchestrator is not None
     assert TeachingFailureTracker is not None
+    assert ToolRegistry is not None
     assert WorkflowRetryCoordinator is not None
 
 
@@ -38,9 +46,14 @@ def test_old_import_path_builds_new_collaborators(mock_config):
     from src.business.orchestration.agent.agent_session_store import AgentSessionStore
     from src.business.orchestration.agent.assistant_prompt_builder import AssistantPromptBuilder
     from src.business.orchestration.agent.assistant_task_worker import AssistantTaskWorker
+    from src.business.orchestration.agent.delegation_orchestrator import (
+        DelegationOrchestrator,
+    )
     from src.business.orchestration.agent.teaching_failure_tracker import (
         TeachingFailureTracker,
     )
+    from src.business.orchestration.agent.teaching_orchestrator import TeachingOrchestrator
+    from src.business.orchestration.agent.tool_registry import ToolRegistry
     from src.business.orchestration.agent.workflow_retry_coordinator import (
         WorkflowRetryCoordinator,
     )
@@ -52,6 +65,9 @@ def test_old_import_path_builds_new_collaborators(mock_config):
     assert isinstance(orchestrator._retry_coordinator, WorkflowRetryCoordinator)
     assert isinstance(orchestrator._task_worker, AssistantTaskWorker)
     assert isinstance(orchestrator._prompt_builder, AssistantPromptBuilder)
+    assert isinstance(orchestrator.delegation_orchestrator, DelegationOrchestrator)
+    assert isinstance(orchestrator.teaching_orchestrator, TeachingOrchestrator)
+    assert isinstance(orchestrator.tool_registry, ToolRegistry)
 
 
 def test_agent_error_still_records_failure_via_tracker(in_memory_db, mock_config):
@@ -84,23 +100,30 @@ def test_retry_coordinator_accessible_via_property(mock_config):
     mock_retry.assert_called_once_with("wf_retry_delegate")
 
 
-def test_agent_execution_adapter_returns_delegate_result():
-    from src.business.agents.config import AgentResult, ResultType
-    from src.business.orchestration.agent.orchestrator import _AgentExecutionAdapter
+def test_retry_coordinator_uses_injected_run_agent_callable():
+    from src.business.orchestration.agent.workflow_retry_coordinator import (
+        WorkflowRetryCoordinator,
+    )
 
-    expected = AgentResult(result_type=ResultType.COMPLETED)
     calls = []
 
     def run_agent(agent_type, user_input, workflow_id=None, session_id=None):
         calls.append((agent_type, user_input, workflow_id, session_id))
-        return expected
 
-    adapter = _AgentExecutionAdapter(run_agent, start_analysis=lambda *_: None)
+    coordinator = WorkflowRetryCoordinator(
+        failure_tracker=SimpleNamespace(),
+        session_store=SimpleNamespace(
+            find_old_session=lambda workflow_id, stage: "sess_1",
+            get_transition_payload=lambda *args, **kwargs: None,
+        ),
+        run_agent=run_agent,
+        start_analysis=lambda *_: None,
+        review_counts={},
+    )
 
-    result = adapter.run_agent("pm", "input", workflow_id="wf_1", session_id="sess_1")
+    coordinator.retry_stage("wf_1", SimpleNamespace(), "pm")
 
-    assert result is expected
-    assert calls == [("pm", "input", "wf_1", "sess_1")]
+    assert calls == [("pm", None, "wf_1", "sess_1")]
 
 
 def test_task_worker_accessible_via_property(mock_config):

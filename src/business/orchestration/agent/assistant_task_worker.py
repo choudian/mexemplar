@@ -6,20 +6,20 @@ from typing import Callable, Optional
 from src.data.repositories import PendingTaskRepository
 from src.business.agents.config import AgentType
 
-from .ports import AssistantTaskPort
-
 
 class AssistantTaskWorker:
     def __init__(
         self,
         tool_repo,
-        assistant_task_port: AssistantTaskPort,
+        run_agent: Callable,
+        start_triage: Callable,
         *,
         pending_task_repo_factory: Callable[[], PendingTaskRepository] = PendingTaskRepository,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._tool_repo = tool_repo
-        self._assistant_task_port = assistant_task_port
+        self._run_agent = run_agent
+        self._start_triage = start_triage
         self._pending_task_repo_factory = pending_task_repo_factory
         self._logger = logger or logging.getLogger(__name__)
         self._task_queue_event = threading.Event()
@@ -97,7 +97,7 @@ class AssistantTaskWorker:
         )
 
         workflow_id = f"codify_{task.task_id[:8]}"
-        self._assistant_task_port.run_agent(AgentType.PM, initial_input, workflow_id=workflow_id)
+        self._run_agent(AgentType.PM, initial_input, workflow_id=workflow_id)
 
     def process_bug_task(self, task) -> None:
         payload = json.loads(task.payload or "{}")
@@ -110,4 +110,4 @@ class AssistantTaskWorker:
             self._logger.warning("[TaskWorker] %s", message)
             raise ValueError(message)
 
-        self._assistant_task_port.start_triage(tool_id, error_message, tool.workflow_id)
+        self._start_triage(tool_id, error_message, tool.workflow_id)

@@ -19,7 +19,6 @@ from src.business.agents.config import (
     ToolDefinition,
     subagent_label,
 )
-from src.business.brain.specialist_service import parse_tool_whitelist
 from src.business.agents.tools.pm_output_tools import report_code_issue, submit_requirements
 from src.business.agents.prompts.desktop_prompts import build_pm_prompt, build_programmer_prompt
 from src.business.agents.tools.desktop_tools import create_desktop_specific_tools
@@ -42,15 +41,16 @@ from src.data.models_sqlite import Message
 from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.recording.browser.recorder import RecordingMode
-from src.utils.events import connect, emit
 
 from ..llm_reviewer import LLMReviewer, ReviewResult
 from .agent_session_store import AgentSessionStore
 from .assistant_prompt_builder import AssistantPromptBuilder
 from .assistant_task_worker import AssistantTaskWorker
+from .delegation_orchestrator import DelegationOrchestrator
 from .desktop_syntax_gate import check_code, log_terminal_failure, should_retry
-from .ports import AgentExecutionPort, AssistantTaskPort, EventBusPort, ReviewStatePort
+from .teaching_orchestrator import TeachingOrchestrator
 from .teaching_failure_tracker import TeachingFailureTracker
+from .tool_registry import ToolRegistry
 from .workflow_retry_coordinator import WorkflowRetryCoordinator
 
 if TYPE_CHECKING:
@@ -73,92 +73,6 @@ _EPHEMERAL_SUBAGENT_PROMPT = (
     "\n" + _SUBAGENT_WORK_RULES
 )
 _LEGACY_DELEGATION_PARENT_PREFIX_LENGTH = 12
-
-
-class _EventBusAdapter(EventBusPort):
-    def connect(self, event_name: str, handler):
-        return connect(event_name, handler)
-
-    def emit(self, event_name: str, sender=None, **payload) -> None:
-        emit(event_name, sender=sender, **payload)
-
-
-class _ReviewStateAdapter(ReviewStatePort):
-    def __init__(self, review_counts: Dict[str, int]) -> None:
-        self._review_counts = review_counts
-
-    def get_retry_count(self, workflow_id: str) -> int:
-        return self._review_counts.get(workflow_id, 0)
-
-    def increment_retry_count(self, workflow_id: str) -> int:
-        next_count = self._review_counts.get(workflow_id, 0) + 1
-        self._review_counts[workflow_id] = next_count
-        return next_count
-
-    def clear_retry_count(self, workflow_id: str) -> None:
-        self._review_counts.pop(workflow_id, None)
-
-
-class _AgentExecutionAdapter(AgentExecutionPort):
-    def __init__(self, run_agent: Callable, start_analysis: Callable) -> None:
-        self._run_agent = run_agent
-        self._start_analysis = start_analysis
-
-    def run_agent(
-        self,
-        agent_type: str,
-        user_input: Optional[Union[str, dict]],
-        workflow_id: str = None,
-        session_id: str = None,
-        assistant_continue_intent: dict | None = None,
-        assistant_reuse_user_message: bool = False,
-    ) -> AgentResult | None:
-        optional_args = {}
-        if assistant_continue_intent is not None:
-            optional_args["assistant_continue_intent"] = assistant_continue_intent
-        if assistant_reuse_user_message:
-            optional_args["assistant_reuse_user_message"] = True
-        return self._run_agent(
-            agent_type,
-            user_input,
-            workflow_id=workflow_id,
-            session_id=session_id,
-            **optional_args,
-        )
-
-    def start_analysis(self, recording_id: str, workflow_id: str) -> None:
-        self._start_analysis(recording_id, workflow_id)
-
-
-class _AssistantTaskAdapter(AssistantTaskPort):
-    def __init__(self, run_agent: Callable, start_triage: Callable) -> None:
-        self._run_agent = run_agent
-        self._start_triage = start_triage
-
-    def run_agent(
-        self,
-        agent_type: str,
-        user_input: Optional[Union[str, dict]],
-        workflow_id: str = None,
-        session_id: str = None,
-        assistant_continue_intent: dict | None = None,
-        assistant_reuse_user_message: bool = False,
-    ) -> None:
-        optional_args = {}
-        if assistant_continue_intent is not None:
-            optional_args["assistant_continue_intent"] = assistant_continue_intent
-        if assistant_reuse_user_message:
-            optional_args["assistant_reuse_user_message"] = True
-        self._run_agent(
-            agent_type,
-            user_input,
-            workflow_id=workflow_id,
-            session_id=session_id,
-            **optional_args,
-        )
-
-    def start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
-        self._start_triage(tool_id, user_feedback, workflow_id)
 
 
 @dataclass
@@ -208,8 +122,6 @@ class AgentOrchestrator:
         self._mode_cache: Dict[str, str] = {}
         self._composition_service = SkillCompositionService()
 
-        self._event_bus = _EventBusAdapter()
-        self._review_state = _ReviewStateAdapter(self._review_counts)
         self._session_store = AgentSessionStore(
             self._session_repo,
             self._message_repo,
@@ -218,19 +130,20 @@ class AgentOrchestrator:
         )
         self._failure_tracker = TeachingFailureTracker(
             self._failure_repo,
-            self._event_bus,
             logger=logger,
         )
         self._retry_coordinator = WorkflowRetryCoordinator(
             self._failure_tracker,
             self._session_store,
-            _AgentExecutionAdapter(self.run_agent, self.start_analysis),
-            self._review_state,
+            self.run_agent,
+            self.start_analysis,
+            self._review_counts,
             logger=logger,
         )
         self._task_worker = AssistantTaskWorker(
             self._tool_repo,
-            _AssistantTaskAdapter(self.run_agent, self._start_triage),
+            self.run_agent,
+            self._start_triage,
             logger=logger,
         )
         self._prompt_builder = AssistantPromptBuilder(
@@ -241,6 +154,9 @@ class AgentOrchestrator:
             profile_repo=AssistantProfileRepository(),
             logger=logger,
         )
+        self._tool_registry = ToolRegistry(self)
+        self._teaching_orchestrator = TeachingOrchestrator(self)
+        self._delegation_orchestrator = DelegationOrchestrator(self)
         self._failure_tracker.connect_signals()
 
     # --- Public sub-component accessors ---
@@ -258,8 +174,41 @@ class AgentOrchestrator:
         return self._retry_coordinator
 
     @property
+    def teaching_orchestrator(self) -> TeachingOrchestrator:
+        return self._get_teaching_orchestrator()
+
+    @property
+    def tool_registry(self) -> ToolRegistry:
+        return self._get_tool_registry()
+
+    @property
+    def delegation_orchestrator(self) -> DelegationOrchestrator:
+        return self._get_delegation_orchestrator()
+
+    @property
     def task_worker(self) -> AssistantTaskWorker:
         return self._task_worker
+
+    def _get_teaching_orchestrator(self) -> TeachingOrchestrator:
+        teaching = getattr(self, "_teaching_orchestrator", None)
+        if teaching is None:
+            teaching = TeachingOrchestrator(self)
+            self._teaching_orchestrator = teaching
+        return teaching
+
+    def _get_tool_registry(self) -> ToolRegistry:
+        registry = getattr(self, "_tool_registry", None)
+        if registry is None:
+            registry = ToolRegistry(self)
+            self._tool_registry = registry
+        return registry
+
+    def _get_delegation_orchestrator(self) -> DelegationOrchestrator:
+        delegation = getattr(self, "_delegation_orchestrator", None)
+        if delegation is None:
+            delegation = DelegationOrchestrator(self)
+            self._delegation_orchestrator = delegation
+        return delegation
 
     def _persist_assistant_input(
         self,
@@ -398,7 +347,12 @@ class AgentOrchestrator:
         if result.result_type == ResultType.COMPLETED:
             if agent_type != AgentType.ASSISTANT:
                 self._failure_tracker.try_resolve_failure(workflow_id)
-                self._dispatch_next(agent_type, result, session_id, workflow_id)
+                self.teaching_orchestrator.dispatch_next(
+                    agent_type,
+                    result,
+                    session_id,
+                    workflow_id,
+                )
             return result
 
         if result.result_type == ResultType.NEEDS_USER_INPUT:
@@ -684,32 +638,9 @@ class AgentOrchestrator:
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
     ) -> dict:
-        task = (task_description or "").strip()
-        if not task:
-            return {
-                "success": False,
-                "message": "task_description must not be empty",
-                "delegation_type": "ephemeral_subagent",
-            }
-
-        unified = self._dispatch_task_via_unified_model(
+        return self._get_delegation_orchestrator().delegate_to_subagent(
             parent_session_id=parent_session_id,
-            task=task,
-            context=execution_context or task,
-            assignee_type=AgentType.EPHEMERAL_SUBAGENT.value,
-            assignee_id=AgentType.EPHEMERAL_SUBAGENT.value,
-            capability_scope=tool_whitelist,
-        )
-        if unified is not None:
-            return {
-                **unified,
-                "delegation_type": "ephemeral_subagent",
-                "task_description": task,
-            }
-
-        return self._run_sync_ephemeral_subagent(
-            parent_session_id=parent_session_id,
-            task=task,
+            task_description=task_description,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
         )
@@ -722,21 +653,12 @@ class AgentOrchestrator:
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
     ) -> dict:
-        """同步起一个临时子代理并返回结果（上下文隔离助手）。
-
-        主助理委派的临时子代理走此同步路径；专员的"至多一个"上下文隔离子代理（FR-019）
-        也复用它。临时子代理领到的工具集（``_build_delegated_executor_tools`` 的
-        ephemeral 分支）不含 ``delegate_to_subagent``，因此结构上不能再向下委派或找平级。
-        """
-        result = self._run_ephemeral_via_delegated_executor(
+        return self._get_delegation_orchestrator().run_sync_ephemeral_subagent(
             parent_session_id=parent_session_id,
             task=task,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
         )
-        result["delegation_type"] = "ephemeral_subagent"
-        result["task_description"] = task
-        return result
 
     def _run_ephemeral_via_delegated_executor(
         self,
@@ -747,46 +669,13 @@ class AgentOrchestrator:
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
     ) -> dict:
-        """临时子代理的纯执行核心：resolve tools → build prompt → create session →
-        ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``（统一任务派发的
-        异步执行器）共用此方法，避免两处复制 session/prompt 构建逻辑。
-        """
-        allowed_tool_ids = self._resolve_user_tool_ids(
+        return self._get_delegation_orchestrator().run_ephemeral_via_delegated_executor(
             parent_session_id=parent_session_id,
+            task=task,
+            execution_context=execution_context,
             tool_whitelist=tool_whitelist,
-        )
-        capability_catalog_section = self._prompt_builder.format_capability_catalog(
-            allowed_tool_ids,
-            agent_type=AgentType.EPHEMERAL_SUBAGENT.value,
-            include_descriptions=True,
-        )
-        system_prompt = self._build_ephemeral_subagent_prompt(
-            tool_whitelist,
-            capability_catalog_section=capability_catalog_section,
-        )
-        workflow_id = self._new_delegation_workflow_id(parent_session_id)
-        child_session_id = self._session_store.create_session(
-            workflow_id,
-            AgentType.EPHEMERAL_SUBAGENT,
-        )
-        user_input = self._format_delegated_task_input(task, execution_context)
-        result = self._run_delegated_executor(
-            agent_type=AgentType.EPHEMERAL_SUBAGENT,
-            session_id=child_session_id,
-            workflow_id=workflow_id,
-            parent_session_id=parent_session_id,
-            user_input=user_input,
-            system_prompt=system_prompt,
-            allowed_tool_ids=allowed_tool_ids,
             current_task_id=current_task_id,
         )
-        if result.get("success"):
-            self._record_delegation_signal(
-                parent_session_id=parent_session_id,
-                task_pattern=task,
-                result_text=str(result.get("result_text") or ""),
-            )
-        return result
 
     def _delegate_to_specialist(
         self,
@@ -795,62 +684,11 @@ class AgentOrchestrator:
         specialist_name: str,
         task: str,
     ) -> dict:
-        name = (specialist_name or "").strip()
-        task_text = (task or "").strip()
-        if not name or not task_text:
-            return {
-                "success": False,
-                "message": "specialist_name and task must not be empty",
-                "delegation_type": "specialist",
-            }
-
-        from src.data.repos.specialist_repository import SpecialistRepository
-
-        with SpecialistRepository() as repo:
-            specialist = repo.get_specialist_by_name(name)
-        if specialist is None:
-            return {
-                "success": False,
-                "message": f"专员不存在: {name}",
-                "delegation_type": "specialist",
-            }
-        if not getattr(specialist, "is_active", 1):
-            return {
-                "success": False,
-                "message": f"专员已停用: {name}",
-                "specialist_id": specialist.specialist_id,
-                "delegation_type": "specialist",
-            }
-
-        whitelist = parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
-        unified = self._dispatch_task_via_unified_model(
+        return self._get_delegation_orchestrator().delegate_to_specialist(
             parent_session_id=parent_session_id,
-            task=task_text,
-            context=task_text,
-            assignee_type=AgentType.SPECIALIST.value,
-            assignee_id=specialist.specialist_id,
-            capability_scope=whitelist,
+            specialist_name=specialist_name,
+            task=task,
         )
-        if unified is not None:
-            return {
-                **unified,
-                "delegation_type": "specialist",
-                "specialist_id": specialist.specialist_id,
-                "specialist_name": name,
-                "task": task_text,
-            }
-
-        result = self._run_specialist_via_delegated_executor(
-            parent_session_id=parent_session_id,
-            specialist=specialist,
-            task=task_text,
-            tool_whitelist=whitelist,
-        )
-        result["delegation_type"] = "specialist"
-        result["specialist_id"] = specialist.specialist_id
-        result["specialist_name"] = name
-        result["task"] = task_text
-        return result
 
     def _run_specialist_via_delegated_executor(
         self,
@@ -861,58 +699,13 @@ class AgentOrchestrator:
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
     ) -> dict:
-        """专员委派的纯执行核心：resolve tools → equipped skills → build prompt →
-        create session → ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``
-        （统一任务派发的异步执行器）共用此方法。装备/提示词构建异常返回 success=False
-        dict，不抛异常（让 dispatcher 把"没干完"记为 stuck 交父侧裁定）。
-        """
-        allowed_tool_ids = self._resolve_user_tool_ids(
+        return self._get_delegation_orchestrator().run_specialist_via_delegated_executor(
             parent_session_id=parent_session_id,
+            specialist=specialist,
+            task=task,
             tool_whitelist=tool_whitelist,
-        )
-        try:
-            equipped_skills_snapshot = self._specialist_equipped_skills_snapshot(specialist)
-        except RuntimeError as exc:
-            logger.error("[Orchestrator] 专员方法论装备快照加载失败: %s", exc, exc_info=True)
-            return {"success": False, "message": "专员方法论装备加载失败，已取消委派。"}
-        try:
-            capability_catalog_section = self._prompt_builder.format_capability_catalog(
-                allowed_tool_ids,
-                agent_type=AgentType.SPECIALIST.value,
-                include_descriptions=True,
-            )
-            system_prompt = self._build_specialist_prompt(
-                specialist,
-                tool_whitelist,
-                equipped_skills=equipped_skills_snapshot,
-                capability_catalog_section=capability_catalog_section,
-            )
-        except RuntimeError as exc:
-            logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
-            return {"success": False, "message": "专员方法论提示词构建失败，已取消委派。"}
-        workflow_id = self._new_delegation_workflow_id(parent_session_id)
-        child_session_id = self._session_store.create_session(workflow_id, AgentType.SPECIALIST)
-        allowed_methodology_skill_ids = {
-            str(item.get("skill_id") or "")
-            for item in equipped_skills_snapshot
-            if str(item.get("skill_id") or "")
-        }
-        methodology_snapshot = self._extract_methodology_equipment_snapshot(system_prompt)
-        result = self._run_delegated_executor(
-            agent_type=AgentType.SPECIALIST,
-            session_id=child_session_id,
-            workflow_id=workflow_id,
-            parent_session_id=parent_session_id,
-            user_input=self._format_delegated_task_input(task),
-            system_prompt=system_prompt,
-            allowed_tool_ids=allowed_tool_ids,
-            specialist_id=specialist.specialist_id,
-            allowed_methodology_skill_ids=allowed_methodology_skill_ids,
-            methodology_equipment_snapshot=methodology_snapshot,
             current_task_id=current_task_id,
         )
-        return result
-
     def _run_delegated_executor(
         self,
         *,
@@ -1509,6 +1302,11 @@ class AgentOrchestrator:
         caller_id: str,
         allowed_skill_ids: set[str] | None = None,
     ) -> ToolDefinition:
+        return ToolRegistry.make_load_skill_tool(
+            caller_type=caller_type,
+            caller_id=caller_id,
+            allowed_skill_ids=allowed_skill_ids,
+        )
         from src.business.agents.tools.skill_methodology_tools import (
             LOAD_SKILL_METHODOLOGY_SCHEMA,
             create_load_skill_methodology_handler,
@@ -1535,6 +1333,14 @@ class AgentOrchestrator:
         allowed_methodology_skill_ids: set[str] | None = None,
         current_task_id: str | None = None,
     ) -> Callable[[], List[ToolDefinition]]:
+        return self.tool_registry.build_delegated_executor_tools(
+            allowed_tool_ids,
+            agent_type=agent_type,
+            executor_id=executor_id,
+            specialist_id=specialist_id,
+            allowed_methodology_skill_ids=allowed_methodology_skill_ids,
+            current_task_id=current_task_id,
+        )
         from src.business.agents.tools.assistant_tools import (
             ASK_PARENT_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
@@ -1675,6 +1481,7 @@ class AgentOrchestrator:
 
     @staticmethod
     def _schema_with_bound_task_id(schema: dict) -> dict:
+        return ToolRegistry.schema_with_bound_task_id(schema)
         """Make taskId optional when a tool is bound to the current Task row."""
         cloned = copy.deepcopy(schema)
         parameters = cloned.get("function", {}).get("parameters", {})
@@ -1838,12 +1645,14 @@ class AgentOrchestrator:
         return str(prompt or "")[marker_index:] if marker_index >= 0 else ""
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
+        return self.teaching_orchestrator.start_analysis(recording_id, workflow_id)
         initial_input = (
             f"请分析录制 {recording_id} 的操作流程，理解用户想要自动化的任务，并与用户确认需求。"
         )
         self.run_agent(AgentType.PM, initial_input, workflow_id)
 
     def start_trial(self, tool_id: str, user_input: str, workflow_id: str) -> None:
+        return self.teaching_orchestrator.start_trial(tool_id, user_input, workflow_id)
         del tool_id
         self.run_agent(AgentType.TRIAL, user_input, workflow_id)
 
@@ -1855,6 +1664,13 @@ class AgentOrchestrator:
         session_id: str,
         user_feedback: str = "",
     ) -> None:
+        return self.teaching_orchestrator.handle_trial_result(
+            tool_id,
+            success,
+            workflow_id,
+            session_id,
+            user_feedback,
+        )
         if success:
             tool = self._tool_repo.get_by_id(tool_id)
             if not tool:
@@ -2031,6 +1847,12 @@ class AgentOrchestrator:
         session_id: str,
         workflow_id: str,
     ) -> None:
+        return self.teaching_orchestrator.dispatch_next(
+            agent_type,
+            result,
+            session_id,
+            workflow_id,
+        )
         try:
             if agent_type == AgentType.PM:
                 self._on_pm_completed(result, session_id, workflow_id)
@@ -2049,6 +1871,7 @@ class AgentOrchestrator:
             )
 
     def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
+        return self.teaching_orchestrator.on_pm_completed(result, session_id, workflow_id)
         if result.signal_tool and result.signal_tool.name == "submit_requirements":
             requirements = result.signal_tool.args
             programmer_session_id = self._session_store.get_or_create_session(
@@ -2109,6 +1932,11 @@ class AgentOrchestrator:
         session_id: str,
         workflow_id: str,
     ) -> None:
+        return self.teaching_orchestrator.on_programmer_completed(
+            result,
+            session_id,
+            workflow_id,
+        )
         if not (result.signal_tool and result.signal_tool.name == "submit_code"):
             logger.warning(
                 f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}"
@@ -2181,6 +2009,7 @@ class AgentOrchestrator:
         self._run_review(code_data, session_id, workflow_id)
 
     def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
+        return self.teaching_orchestrator.on_trial_completed(result, session_id, workflow_id)
         signal_tool = result.signal_tool
         if signal_tool and signal_tool.name == "submit_trial_result":
             success = signal_tool.args["success"]
@@ -2212,12 +2041,13 @@ class AgentOrchestrator:
         self.handle_trial_result(tool.tool_id, success, workflow_id, session_id, feedback)
 
     def _run_review(self, code_data: dict, from_session_id: str, workflow_id: str) -> None:
+        return self.teaching_orchestrator.run_review(code_data, from_session_id, workflow_id)
         code = code_data["code"]
         requirement = {
             "description": code_data.get("description", ""),
             "parameters": code_data.get("parameters", []),
         }
-        retry_count = self._review_state.get_retry_count(workflow_id)
+        retry_count = self._review_counts.get(workflow_id, 0)
         try:
             review_result: ReviewResult = self._llm_reviewer.review(code, requirement)
         except Exception as exc:
@@ -2244,11 +2074,12 @@ class AgentOrchestrator:
                 session_id=from_session_id,
                 code=code,
             )
-            self._review_state.clear_retry_count(workflow_id)
+            self._review_counts.pop(workflow_id, None)
             self._save_tool(code_data, workflow_id, from_session_id)
             return
 
-        retry_count = self._review_state.increment_retry_count(workflow_id)
+        retry_count = self._review_counts.get(workflow_id, 0) + 1
+        self._review_counts[workflow_id] = retry_count
         if retry_count < 4:
             programmer_session_id = self._session_store.get_or_create_session(
                 workflow_id, AgentType.PROGRAMMER
@@ -2294,10 +2125,11 @@ class AgentOrchestrator:
             retry_count=retry_count,
             forced_save=True,
         )
-        self._review_state.clear_retry_count(workflow_id)
+        self._review_counts.pop(workflow_id, None)
         self._save_tool(code_data, workflow_id, from_session_id)
 
     def _start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
+        return self.teaching_orchestrator.start_triage(tool_id, user_feedback, workflow_id)
         failure_context = (
             f"用户反馈：{user_feedback}"
             if user_feedback
@@ -2316,6 +2148,11 @@ class AgentOrchestrator:
         workflow_id: str = None,
         session_id: str = None,
     ) -> Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]:
+        return self.tool_registry.build_tools(
+            agent_type,
+            workflow_id=workflow_id,
+            session_id=session_id,
+        )
         if agent_type == AgentType.ASSISTANT:
             return self._build_assistant_tools(session_id)
         mode = self._recording_mode(workflow_id)
@@ -2363,6 +2200,7 @@ class AgentOrchestrator:
         return mode
 
     def _build_assistant_tools(self, session_id: str) -> Callable[[], List[ToolDefinition]]:
+        return self.tool_registry.build_assistant_tools(session_id)
         from src.business.agents.tools.assistant_tools import (
             CODIFY_AS_TOOL_SCHEMA,
             CREATE_SPECIALIST_SCHEMA,

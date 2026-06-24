@@ -1,8 +1,7 @@
 """TaskAttempt executor adapter：统一任务派发的异步执行器。
 
 把 ``TaskDispatcher.executor_callback``（签名 ``Callable[[str], str|dict|None]``，入参仅
-``attempt_id``）接到 Orchestrator 现有的同步委派执行内核
-（``_run_ephemeral_via_delegated_executor`` / ``_run_specialist_via_delegated_executor``），
+``attempt_id``）接到 DelegationOrchestrator 的同步委派执行接口，
 让持久化的 ``TaskAttempt`` 真正在 dispatcher 线程池里被执行，而不是永久停在
 ``pending_dispatch``。这是 023 V-01「执行链路接通」的核心适配层。
 """
@@ -87,9 +86,6 @@ class TaskExecutorAdapter:
 
         return self._map_to_outcome(result)
 
-    # 注：复用 Orchestrator 的私有执行方法（_run_*_via_delegated_executor）。adapter 与
-    # orchestrator 同属 business/orchestration/agent 包、是同一执行子系统的两个协作面，
-    # 跨模块调用这些"执行核心"方法比复制 session/prompt 构建逻辑更可维护。
     def _new_executor_orchestrator(self):
         if self._orchestrator_factory is None:
             return self._orchestrator
@@ -104,7 +100,7 @@ class TaskExecutorAdapter:
         *,
         checkpoint_ref: str | None = None,
     ) -> dict:
-        return orchestrator._run_ephemeral_via_delegated_executor(
+        return orchestrator.delegation_orchestrator.run_ephemeral_via_delegated_executor(
             parent_session_id=parent_session_id,
             task=task.title,
             execution_context=_execution_context_with_checkpoint(
@@ -134,7 +130,7 @@ class TaskExecutorAdapter:
             return {"success": False, "message": f"专员不可用: {task.assignee_id}"}
         if not getattr(specialist, "is_active", 1):
             return {"success": False, "message": f"专员已停用: {task.assignee_id}"}
-        return orchestrator._run_specialist_via_delegated_executor(
+        return orchestrator.delegation_orchestrator.run_specialist_via_delegated_executor(
             parent_session_id=parent_session_id,
             specialist=specialist,
             task=_execution_context_with_checkpoint(task.title, checkpoint_ref),
