@@ -32,6 +32,6 @@ class DesktopStopHotkey:
             self._hotkey = None
 
     def _handle_stop(self) -> None:
-        from src.utils.events import desktop_stop_requested
+        from src.utils.events import emit
 
-        desktop_stop_requested.send(self)
+        emit("desktop_stop_requested", sender=self)

@@ -58,7 +58,9 @@ class TestBrainEventEmit:
 
     def test_segment_boundary_triggered_receives_payload(self):
         received = []
-        events.connect("segment_boundary_triggered", lambda sender, **kw: received.append(kw), weak=False)
+        events.connect(
+            "segment_boundary_triggered", lambda sender, **kw: received.append(kw), weak=False
+        )
         events.emit(
             "segment_boundary_triggered",
             session_id="sess-1",
@@ -78,7 +80,9 @@ class TestBrainEventEmit:
 
     def test_brain_specialist_recruited_receives_payload(self):
         received = []
-        events.connect("brain_specialist_recruited", lambda sender, **kw: received.append(kw), weak=False)
+        events.connect(
+            "brain_specialist_recruited", lambda sender, **kw: received.append(kw), weak=False
+        )
         events.emit(
             "brain_specialist_recruited",
             specialist_id="spec-1",
@@ -89,10 +93,40 @@ class TestBrainEventEmit:
         assert received[0]["name"] == "Data Analyst"
 
     def test_brain_event_names_in_signal_names_list(self):
-        brain_names = [n for n in events._signal_names if n.startswith("brain_") or n.startswith("segment_")]
+        brain_names = [
+            n for n in events._signal_names if n.startswith("brain_") or n.startswith("segment_")
+        ]
         assert "brain_zone_changed" in brain_names
         assert "brain_specialist_changed" in brain_names
         assert "segment_boundary_triggered" in brain_names
         assert "segment_idle_trigger" in brain_names
         assert "brain_specialist_recruited" in brain_names
         assert "brain_context_ready" in brain_names
+
+
+class TestTypedEventRegistry:
+    """Verify backend events are validated by the typed registry."""
+
+    def test_unknown_event_is_rejected(self):
+        with pytest.raises(events.EventValidationError, match="unknown backend event"):
+            events.emit("unknown_event", value=1)
+
+    def test_unknown_payload_field_is_rejected(self):
+        with pytest.raises(events.EventValidationError, match="unknown payload field"):
+            events.emit("brain_context_ready", session_id="sess-1", session="wrong-key")
+
+    def test_payload_type_is_dataclass_per_event(self):
+        payload_type = events._registry.payload_type("brain_context_ready")
+        payload = payload_type(session_id="sess-1")
+
+        assert payload.__class__.__name__ == "BrainContextReadyEvent"
+        assert payload.session_id == "sess-1"
+
+    def test_listener_exception_is_not_swallowed(self):
+        def broken(_sender, **_kwargs):
+            raise RuntimeError("listener failed")
+
+        events.connect("brain_context_ready", broken, weak=False)
+
+        with pytest.raises(RuntimeError, match="listener failed"):
+            events.emit("brain_context_ready", session_id="sess-1")

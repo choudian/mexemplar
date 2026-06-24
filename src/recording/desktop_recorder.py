@@ -24,12 +24,7 @@ from src.recording.desktop.pynput_hook import (
     RecorderStartFailed,
 )
 from src.recording.desktop.uia_querier import UiaQuerier
-from src.utils.events import (
-    desktop_action_count_changed,
-    desktop_recording_degraded,
-    desktop_recorder_start_failed,
-    recording_stopped,
-)
+from src.utils.events import emit
 from src.utils.helpers import get_default_data_dir
 
 logger = logging.getLogger(__name__)
@@ -155,7 +150,8 @@ class DesktopRecorder:
             ActiveDesktopRecorderRegistry.stop(self.recording_id)
             self._stop_optional_components()
             self._mark_start_failed("hook_register_failed")
-            desktop_recorder_start_failed.send(
+            emit(
+                "desktop_recorder_start_failed",
                 self,
                 recording_id=self.recording_id,
                 reason="hook_register_failed",
@@ -171,7 +167,8 @@ class DesktopRecorder:
                 exc_info=True,
             )
             self._mark_start_failed("start_failed")
-            desktop_recorder_start_failed.send(
+            emit(
+                "desktop_recorder_start_failed",
                 self,
                 recording_id=self.recording_id,
                 reason="start_failed",
@@ -193,7 +190,8 @@ class DesktopRecorder:
         )
         self.repository.update_desktop_recording_status(self.recording_id, "stopped")
         ActiveDesktopRecorderRegistry.stop(self.recording_id)
-        recording_stopped.send(
+        emit(
+            "recording_stopped",
             self,
             recording_id=self.recording_id,
             recording_mode="desktop",
@@ -246,7 +244,8 @@ class DesktopRecorder:
             self._ensure_frame_writer()
         action_count = self.get_action_count()
         if action_count % 5 == 0:
-            desktop_action_count_changed.send(
+            emit(
+                "desktop_action_count_changed",
                 self,
                 recording_id=self.recording_id,
                 action_count=action_count,
@@ -427,7 +426,8 @@ class DesktopRecorder:
             return
         self._emitted_degraded_reasons.add(reason)
         self.health.degraded_reasons.append(reason)
-        desktop_recording_degraded.send(
+        emit(
+            "desktop_recording_degraded",
             self,
             recording_id=self.recording_id,
             reason=reason,
