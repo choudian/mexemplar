@@ -45,6 +45,10 @@ class TestBrainLayering:
 
         for relative_path in (
             "src/data/repos/brain_repository.py",
+            "src/data/repos/brain_segment_repository.py",
+            "src/data/repos/brain_memory_repository.py",
+            "src/data/repos/brain_prediction_repository.py",
+            "src/data/repos/brain_feedback_repository.py",
             "src/data/repos/specialist_repository.py",
         ):
             content = Path(relative_path).read_text(encoding="utf-8")

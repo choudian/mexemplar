@@ -39,9 +39,9 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.BrainRepository") as MockRepo:
-            mock_repo = MagicMock()
-            MockRepo.return_value.__enter__.return_value = mock_repo
+        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+            facade = MagicMock()
+            MockFacade.return_value = facade
 
             result = handler(
                 text="基于你的偏好...",
@@ -49,8 +49,7 @@ class TestReplyToUser:
             )
 
             assert isinstance(result, ToolSignal)
-            mock_repo.batch_update_referenced_counts.assert_called_once_with(["entry-1", "entry-2"])
-            MockRepo.return_value.__exit__.assert_called_once()
+            facade.record_memory_references.assert_called_once_with(["entry-1", "entry-2"])
 
     def test_no_referenced_entries_skips_update(self):
         """不传 memory_entries_referenced 时不更新 referenced_count"""
@@ -58,11 +57,11 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.BrainRepository") as MockRepo:
+        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
             result = handler(text="简单回复")
 
             assert isinstance(result, ToolSignal)
-            MockRepo.assert_not_called()
+            MockFacade.assert_not_called()
 
     def test_empty_referenced_list_skips_update(self):
         """空列表 memory_entries_referenced 不触发更新"""
@@ -70,11 +69,11 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.BrainRepository") as MockRepo:
+        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
             result = handler(text="简单回复", memory_entries_referenced=[])
 
             assert isinstance(result, ToolSignal)
-            MockRepo.assert_not_called()
+            MockFacade.assert_not_called()
 
     def test_malformed_referenced_entries_skips_update(self):
         """memory_entries_referenced 结构错误时静默跳过计量更新。"""
@@ -82,23 +81,23 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.BrainRepository") as MockRepo:
+        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
             result = handler(
                 text="简单回复",
                 memory_entries_referenced="entry-1",  # type: ignore[arg-type]
             )
 
             assert isinstance(result, ToolSignal)
-            MockRepo.assert_not_called()
+            MockFacade.assert_not_called()
 
-        with patch("src.business.agents.tools.assistant_tools.BrainRepository") as MockRepo:
+        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
             result = handler(
                 text="简单回复",
                 memory_entries_referenced=["entry-1", 42],  # type: ignore[list-item]
             )
 
             assert isinstance(result, ToolSignal)
-            MockRepo.assert_not_called()
+            MockFacade.assert_not_called()
 
     def test_schema_has_correct_name(self):
         """Schema 名称应为 reply_to_user"""
@@ -231,10 +230,10 @@ class TestCreateSpecialist:
 
         handler = create_create_specialist_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.SpecialistService") as MockService:
-            mock_service = MagicMock()
-            MockService.return_value = mock_service
-            mock_service.create_specialist.return_value = {
+        with patch("src.business.agents.tools.assistant_tools.AssistantSpecialistToolFacade") as MockFacade:
+            facade = MagicMock()
+            MockFacade.return_value = facade
+            facade.create_from_conversation.return_value = {
                 "specialist_id": "sp-new-001",
                 "name": "天气专家",
             }
@@ -248,6 +247,7 @@ class TestCreateSpecialist:
             data = json.loads(result)
             assert data["success"] is True
             assert data["specialist_id"] == "sp-new-001"
+            facade.create_from_conversation.assert_called_once()
 
     def test_rejects_duplicate_name(self):
         """重复名称应返回错误"""
@@ -255,10 +255,10 @@ class TestCreateSpecialist:
 
         handler = create_create_specialist_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.SpecialistService") as MockService:
-            mock_service = MagicMock()
-            MockService.return_value = mock_service
-            mock_service.create_specialist.side_effect = ValueError("专员名称已存在: 天气专家")
+        with patch("src.business.agents.tools.assistant_tools.AssistantSpecialistToolFacade") as MockFacade:
+            facade = MagicMock()
+            MockFacade.return_value = facade
+            facade.create_from_conversation.side_effect = ValueError("专员名称已存在: 天气专家")
 
             result = handler(
                 name="天气专家",

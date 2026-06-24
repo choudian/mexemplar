@@ -13,10 +13,11 @@ from src.utils.timezone import utc_now
 
 from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
-from src.business.brain.specialist_service import SpecialistService
-from src.business.brain.retrieval_service import RetrievalService
+from src.business.brain.assistant_facades import (
+    AssistantMemoryToolFacade,
+    AssistantSpecialistToolFacade,
+)
 from src.data.models_sqlite import PendingAssistantTask
-from src.data.repos.brain_repository import BrainRepository
 from src.data.repositories import PendingTaskRepository, ToolRepository
 
 # 后台任务 Worker 唤醒回调（由 Orchestrator 注入）
@@ -453,8 +454,7 @@ def retrieve_archive_handler(query: str, session_id: str | None = None) -> str:
         )
 
     try:
-        service = RetrievalService()
-        results = service.retrieve_archive(query)
+        results = AssistantMemoryToolFacade().retrieve_archive(query)
         _record_retrieved_context_entry_ids(session_id, results)
 
         if not results:
@@ -573,8 +573,7 @@ RETRIEVE_FAILURE_ZONE_SCHEMA = make_tool_schema(
 def retrieve_failure_zone_handler(context: str, session_id: str | None = None) -> str:
     """从失败区检索与当前上下文相关的记忆条目"""
     try:
-        service = RetrievalService()
-        entries = service.retrieve_failure_zone(context)
+        entries = AssistantMemoryToolFacade().retrieve_failure_zone(context)
         _record_retrieved_context_entry_ids(session_id, entries)
         return to_json(
             {
@@ -626,12 +625,10 @@ INVALIDATE_MEMORY_ENTRY_SCHEMA = make_tool_schema(
 def _context_entry_ids_for_session(session_id: str | None) -> list[str] | None:
     if not session_id:
         return None
-    from src.business.brain.context_builder import BrainContextBuilder
-
-    context = BrainContextBuilder().build_context(session_id, track_loaded=False)
-    entry_ids = set(context.injected_entry_ids)
-    entry_ids.update(_retrieved_context_entry_ids_for_session(session_id))
-    return list(entry_ids)
+    return AssistantMemoryToolFacade().context_entry_ids_for_session(
+        session_id,
+        _retrieved_context_entry_ids_for_session(session_id),
+    )
 
 
 def create_invalidate_memory_entry_handler(session_id: str | None = None):
@@ -644,16 +641,12 @@ def create_invalidate_memory_entry_handler(session_id: str | None = None):
     ) -> str:
         """将当前上下文窗口内的一条记忆标记为 invalidated。"""
         try:
-            from src.data.repos.brain_repository import BrainRepository
-
-            with BrainRepository() as repo:
-                service = RetrievalService(brain_repo=repo)
-                result = service.invalidate_memory_entry(
-                    entry_id,
-                    reason,
-                    current_context_entry_ids=_context_entry_ids_for_session(session_id),
-                )
-                return to_json(_annotate_invalidation_disclosure(result, invalidation_type))
+            result = AssistantMemoryToolFacade().invalidate_memory_entry(
+                entry_id,
+                reason,
+                current_context_entry_ids=_context_entry_ids_for_session(session_id),
+            )
+            return to_json(_annotate_invalidation_disclosure(result, invalidation_type))
         except Exception as e:
             logger.error("[invalidate_memory_entry] failed: %s", e, exc_info=True)
             return error_json("标记记忆失效时发生内部错误，请稍后重试。")
@@ -1153,8 +1146,7 @@ def create_reply_to_user_handler(session_id: str):
         # 字段缺失或结构错误时静默跳过引用计数更新
         if referenced_ids:
             try:
-                with BrainRepository() as repo:
-                    repo.batch_update_referenced_counts(referenced_ids)
+                AssistantMemoryToolFacade().record_memory_references(referenced_ids)
                 logger.info(
                     "[reply_to_user] referenced_count updated for %d entries",
                     len(referenced_ids),
@@ -1164,13 +1156,7 @@ def create_reply_to_user_handler(session_id: str):
 
         if isinstance(skills_referenced, list):
             try:
-                from src.business.brain.skill_reference_counter import SkillReferenceCounterService
-                from src.data.repos.skill_repository import SkillRepository
-
-                with SkillRepository() as skill_repo:
-                    SkillReferenceCounterService(repo=skill_repo).process_reply_metadata(
-                        skills_referenced
-                    )
+                AssistantMemoryToolFacade().record_skill_references(skills_referenced)
             except Exception as e:
                 logger.warning("[reply_to_user] 更新方法论 referenced_count 失败: %s", e)
 
@@ -1530,14 +1516,12 @@ def create_create_specialist_handler(session_id: str):
     ) -> str:
         """创建新专员"""
         try:
-            service = SpecialistService()
-            specialist = service.create_specialist(
+            specialist = AssistantSpecialistToolFacade().create_from_conversation(
+                session_id=session_id,
                 name=name,
                 description=description,
                 role_definition=role_definition,
                 tool_whitelist=tool_whitelist,
-                origin="user_conversation",
-                reason=f"由用户在会话 {session_id[:8]}... 中创建",
             )
             logger.info("[create_specialist] 专员已创建: name=%s", name)
             return to_json(

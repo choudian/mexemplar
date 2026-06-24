@@ -6,24 +6,19 @@ ChatService — 助理聊天业务服务
 
 import json
 import logging
-import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
 from src.business.agents.config import AgentType
-from src.business.agents.tools.builtin_general_tools import (
-    CONFIRM_SOURCE_NEW_CHAT_RESET,
-    reset_auto_approve,
-    settle_pending_confirmations,
-)
 from src.data.models_sqlite import Session
 from src.data.repositories import AssistantProfileRepository, MessageRepository, SessionRepository
 from src.business.services.assistant_failure_service import (
     AssistantFailureService,
     AssistantFailureSummary,
 )
+from src.business.services.session_lifecycle import AssistantSessionLifecycle
 from src.utils.timezone import format_local
 
 logger = logging.getLogger(__name__)
@@ -247,16 +242,10 @@ class ChatService:
         """
         session_id = self.generate_session_id()
         tool_ids_str = json.dumps(tool_ids) if tool_ids is not None else None
-        reset_cutoff = time.monotonic()
         normalized_title = self._normalize_title(title) if title is not None else None
         if title is not None and not normalized_title:
             raise ValueError("title must not be empty")
-        reset_auto_approve(CONFIRM_SOURCE_NEW_CHAT_RESET)
-        settle_pending_confirmations(
-            False,
-            CONFIRM_SOURCE_NEW_CHAT_RESET,
-            created_before=reset_cutoff,
-        )
+        AssistantSessionLifecycle().reset_confirmation_state_for_new_chat()
         SessionRepository().create(
             Session(
                 session_id=session_id,

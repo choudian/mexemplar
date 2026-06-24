@@ -17,6 +17,10 @@ from .tool_suggestion_repository import ToolSuggestionRepository
 from .teaching_failure_repository import TeachingFailureRepository
 from .skill_composition_repository import SkillCompositionRepository
 from .brain_repository import BrainRepository
+from .brain_segment_repository import BrainSegmentRepository
+from .brain_memory_repository import BrainMemoryEntryRepository
+from .brain_prediction_repository import BrainPredictionRepository
+from .brain_feedback_repository import BrainFeedbackSignalRepository
 from .specialist_repository import SpecialistRepository
 from .tool_output_repository import ToolOutputRepository
 from .assistant_run_failure_repository import AssistantRunFailureRepository
@@ -42,6 +46,10 @@ __all__ = [
     "TeachingFailureRepository",
     "SkillCompositionRepository",
     "BrainRepository",
+    "BrainSegmentRepository",
+    "BrainMemoryEntryRepository",
+    "BrainPredictionRepository",
+    "BrainFeedbackSignalRepository",
     "SpecialistRepository",
     "ToolOutputRepository",
     "AssistantRunFailureRepository",
