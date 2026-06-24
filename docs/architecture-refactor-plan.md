@@ -1,7 +1,7 @@
 # 架构重构执行计划（交接文档）
 
 > 权威执行 + 交接文档。原始 12 项问题分析见 `docs/local/todo/architecture-improvements.md`（本地未入 repo）。
-> 截至 2026-06-24，已完成项在 commit `976dae2`（branch `prepare-github`）。
+> 截至 2026-06-24，批次 0-5 已完成至 commit `960c7ed`（branch `prepare-github`）；执行工具隔离按用户要求跳过。
 
 ## 进度
 
@@ -10,15 +10,15 @@
 | 0 | #7a / #7b / #7c / #3a | ✅ done（976dae2） | 小 |
 | 1 | #2 projector 注册表化 | ✅ done（976dae2） | 中 |
 | 1 | #4a assistant router 下沉 | ✅ done（976dae2） | 小 |
-| 1 | **#4bc skills_methodology / brain router** | ✅ done（本次） | 中 |
-| 1 | #11 typed blinker | ⏳ **下一步** | 巨型 |
-| 2 | #12 / #10 / #6 前端 | ⏳ | 中 |
-| 3 | #1 / #3c / #3b Brain | ⏳ | 巨型 |
-| 4 | #8 / #5 Orchestrator | ⏳ | 巨型 |
-| 5 | #9 task_collab | ⏳ | 中 |
-| - | 执行工具隔离（A−） | ⏳ 最后 | 中 |
+| 1 | **#4bc skills_methodology / brain router** | ✅ done（a834396） | 中 |
+| 1 | #11 typed blinker | ✅ done（4aad227） | 巨型 |
+| 2 | #12 / #10 / #6 前端 | ✅ done（7e18be5） | 中 |
+| 3 | #1 / #3c / #3b Brain | ✅ done（610c738） | 巨型 |
+| 4 | #8 / #5 Orchestrator | ✅ done（a159b64） | 巨型 |
+| 5 | #9 task_collab | ✅ done（960c7ed） | 中 |
+| - | 执行工具隔离（A−） | 跳过（用户要求） | 中 |
 
-执行顺序：**0 → 1 → 2 → 3 → 4 → 5**，执行工具隔离最后。
+执行顺序：**0 → 1 → 2 → 3 → 4 → 5** 已完成；执行工具隔离按本轮用户要求不执行。
 
 ## 接手须知（必读）
 
@@ -30,7 +30,7 @@
 
 ---
 
-## 已完成项（commit 976dae2；#4bc 为本次工作树，验证方式可参照）
+## 已完成项（commit 976dae2 → 960c7ed；验证方式可参照）
 
 ### 批次 0
 - **#3a** `workspace_hash` / `resolve_workspace_root` 下沉 `src/utils/workspace.py`，切断 `tool_output_repository` → `builtin_permissions` 的 data→business 反向 import。
@@ -50,9 +50,29 @@
 - Specialist 管理界面的创建/更新审计来源改为 router 传 `caller_type="user_management_ui"`，由 `SpecialistService` 生成 `origin` / `changed_by` 与默认中文原因。
 - 验证：`tests/desktop_api/test_skill_methodology_api.py`、`tests/desktop_api/test_brain_api.py`、`tests/desktop_api/test_skills_api.py`、`tests/business/brain/test_specialist_service.py`。
 
+### #11 typed blinker
+- commit `4aad227`：后端事件中心迁为 typed registry，emit/subscribe 改走类型化 payload，迁移 orchestration、brain、task collaboration 等调用点。
+- 验证：事件/投影/brain/orchestration 相关单测分批通过。
+
+### 批次 2 前端
+- commit `7e18be5`：`uiEvents.ts` 拆为类型与 parser registry；`assistantStore.applyEvent` 拆为 typed handler；抽出 `SkillCheckboxGrid`、`useFiltered`、`statusToTone`。
+- 验证：`frontend` unit 指定集、`npm run build`、`npm run lint` 通过。
+
+### 批次 3 Brain
+- commit `610c738`：`brain_repository.py` 拆为 Segment / Memory / Prediction / Feedback 子 Repository；assistant brain 工具调用改经窄 facade；`ChatService.create_session` 的确认状态重置下沉到 session lifecycle。
+- 验证：`tests/data/test_brain_repository.py`、brain guardrails、assistant brain tools、dispatch tools、desktop assistant API、auth toast confirmation、brain service 指定集通过；`tests/integration/test_assistant_dispatch.py` 保留 023 统一派发异步化导致的既有同步 `result_text` 期望失败。
+
+### 批次 4 Orchestrator
+- commit `a159b64`：新增 `TeachingOrchestrator`、`DelegationOrchestrator`、`ToolRegistry`；`TaskExecutorAdapter` 改走 DelegationOrchestrator 公有接口；删除 `ports.py` 与 4 个 adapter，review retry 状态改为直接持有 `_review_counts`。
+- 验证：`tests/integration/test_agent_orchestrator_architecture.py`、`tests/business/agents/test_specialist_subagent.py`、`tests/guardrails/test_clarification_tool_scope.py`、desktop mode/syntax gate 指定集通过；`tests/integration/test_assistant_dispatch.py` 的两个 `result_text` 同步期望仍为 023 既有失败。
+
+### 批次 5 task_collaboration
+- commit `960c7ed`：`run_control.py` / `cutover.py` 并入 `dispatcher.py`，`health.py` / `events.py` helper 并入 `service.py`，`failure_bridge.py` 并入 `adjudication.py`；保留 `TaskCollaborationCutoverGuard` 生产门卫，并未改动 `dispatcher.run_side_effect` 三事务幂等结构。
+- 验证：`test_task_idempotency.py`、`test_task_idempotency_negative.py`、task dispatcher/cutover/failure bridge/adjudication/recovery/meeting/atomicity/board/question/todo、desktop assistant task API/event 指定集通过。
+
 ---
 
-## 待办项（按执行顺序）
+## 原待办细节（已执行；保留红线/验证记录）
 
 ### #11 typed blinker（下一步，巨型，建议独占一个 session）
 
