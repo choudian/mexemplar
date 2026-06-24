@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import type { CompositionMember, CompositionMode } from "../../api/compositions";
 import type { SkillSummary } from "../../api/skills";
 import { Button, IconButton } from "../../components/primitives";
+import { useFiltered } from "../../hooks/useFiltered";
 
 function MemberSelector({
   mode,
@@ -79,15 +80,7 @@ export function SkillPicker({
 }): JSX.Element {
   const [query, setQuery] = useState("");
   const selectedToolIds = useMemo(() => new Set(members.map((member) => member.toolId)), [members]);
-  const availableSkills = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return skills;
-    return skills.filter((skill) =>
-      [skill.name, skill.description, skill.source]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle)),
-    );
-  }, [query, skills]);
+  const availableSkills = useFiltered(skills, query, (skill) => [skill.name, skill.description, skill.source]);
 
   return (
     <aside className="composition-builder-card composition-skill-picker">

@@ -2,6 +2,7 @@ import { AlertCircle, CheckCircle2, Loader2, Power } from "lucide-react";
 
 import type { BackendConnectionState, BackendStatus as BackendStatusValue } from "../api/client";
 import { Badge } from "../components/primitives";
+import { statusToTone } from "../components/statusTone";
 
 const labels: Record<BackendStatusValue, string> = {
   starting: "启动中",
@@ -11,10 +12,16 @@ const labels: Record<BackendStatusValue, string> = {
   shutting_down: "关闭中",
 };
 
+const BACKEND_STATUS_TONES = {
+  ready: "ok",
+  degraded: "warn",
+  failed: "danger",
+} as const;
+
 export function BackendStatus({ backend }: { backend: BackendConnectionState | null }): JSX.Element {
   const status = backend?.status ?? "starting";
   const Icon = status === "ready" ? CheckCircle2 : status === "failed" ? AlertCircle : status === "shutting_down" ? Power : Loader2;
-  const tone = status === "ready" ? "ok" : status === "failed" ? "danger" : status === "degraded" ? "warn" : "neutral";
+  const tone = statusToTone(status, BACKEND_STATUS_TONES);
 
   return (
     <div

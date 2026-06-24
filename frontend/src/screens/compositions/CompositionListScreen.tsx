@@ -3,6 +3,7 @@ import { ArrowRight, ChevronLeft, Edit3, Plus, Play, Shuffle, Workflow } from "l
 
 import type { CompositionSummary } from "../../api/compositions";
 import { Badge, Button } from "../../components/primitives";
+import { statusToTone } from "../../components/statusTone";
 import { useCompositionsStore } from "../../state/compositionsStore";
 import { useSkillsStore } from "../../state/skillsStore";
 import CompositionEditor from "./CompositionEditor";
@@ -19,11 +20,10 @@ function displayStatusFor(item: CompositionSummary): keyof typeof statusLabels {
   return item.needsReview ? "needs_review" : item.status;
 }
 
-function statusToneFor(status: keyof typeof statusLabels) {
-  if (status === "needs_review") return "warn";
-  if (status === "published") return "ok";
-  return "neutral";
-}
+const COMPOSITION_STATUS_TONES = {
+  needs_review: "warn",
+  published: "ok",
+} as const;
 
 function modeLabelFor(mode: CompositionSummary["mode"]) {
   return mode === "ordered" ? "顺序型 · 严格管线" : "范围型 · AI 自主调度";
@@ -167,7 +167,9 @@ function CompositionSummaryStrip({
             type="button"
           >
             <span>{item.name}</span>
-            <Badge tone={statusToneFor(displayStatus)}>{statusLabels[displayStatus]}</Badge>
+            <Badge tone={statusToTone(displayStatus, COMPOSITION_STATUS_TONES)}>
+              {statusLabels[displayStatus]}
+            </Badge>
           </button>
         );
       })}
@@ -240,7 +242,9 @@ function CompositionCard({
         <div>
           <div className="composition-card-title">
             <h3>{item.name}</h3>
-            <Badge tone={statusToneFor(displayStatus)}>{statusLabels[displayStatus]}</Badge>
+            <Badge tone={statusToTone(displayStatus, COMPOSITION_STATUS_TONES)}>
+              {statusLabels[displayStatus]}
+            </Badge>
           </div>
           <p>{item.description || "未填写描述"}</p>
         </div>

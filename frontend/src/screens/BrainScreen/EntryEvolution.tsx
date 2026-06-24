@@ -2,18 +2,19 @@ import { GitBranch } from "lucide-react";
 
 import type { BrainMemoryEntry } from "../../api/brain";
 import { Badge } from "../../components/primitives";
+import { statusToTone } from "../../components/statusTone";
 
 interface EntryEvolutionProps {
   chain: BrainMemoryEntry[];
   loading: boolean;
 }
 
-function statusTone(status: string) {
-  if (status === "active") return "ok";
-  if (status === "invalidated" || status === "fading") return "warn";
-  if (status === "soft-deleted") return "danger";
-  return "neutral";
-}
+const ENTRY_STATUS_TONES = {
+  active: "ok",
+  fading: "warn",
+  invalidated: "warn",
+  "soft-deleted": "danger",
+} as const;
 
 function changeHint(previous: BrainMemoryEntry | null, current: BrainMemoryEntry): string {
   if (!previous) return "初始版本";
@@ -38,7 +39,7 @@ export function EntryEvolution({ chain, loading }: EntryEvolutionProps): JSX.Ele
           <li key={entry.entry_id}>
             <div className="brain-evolution-meta">
               <span className="me-mono">v{index + 1}</span>
-              <Badge tone={statusTone(entry.status)}>{entry.status}</Badge>
+              <Badge tone={statusToTone(entry.status, ENTRY_STATUS_TONES)}>{entry.status}</Badge>
               <small>{changeHint(index > 0 ? chain[index - 1] : null, entry)}</small>
             </div>
             <p>{entry.content}</p>

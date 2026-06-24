@@ -1,9 +1,10 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { Plus, Search } from "lucide-react";
 
 import { SKILL_CATEGORIES } from "../../api/skills";
 import type { SkillCategory } from "../../api/skills";
 import { Button } from "../../components/primitives";
+import { useFiltered } from "../../hooks/useFiltered";
 import { useSkillsStore } from "../../state/skillsStore";
 import { useShellStore } from "../../state/shellStore";
 import SkillCards from "./SkillCards";
@@ -37,15 +38,12 @@ export function SkillListScreen(): JSX.Element {
     void loadAllCategories();
   }, [hydrated, loadAllCategories]);
 
-  const filteredSkills = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return data[activeCategory];
-    return data[activeCategory].filter((skill) =>
-      [skill.name, skill.description, skill.errorSummary, skill.source]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle)),
-    );
-  }, [data, activeCategory, query]);
+  const filteredSkills = useFiltered(data[activeCategory], query, (skill) => [
+    skill.name,
+    skill.description,
+    skill.errorSummary,
+    skill.source,
+  ]);
 
   return (
     <section className="skills-screen" aria-label="工具列表">

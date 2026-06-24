@@ -3,13 +3,13 @@ import { useState } from "react";
 
 import type { SettingDescriptor, SettingsActionResponse } from "../../api/settings";
 import { Badge, Button } from "../../components/primitives";
+import { statusToTone } from "../../components/statusTone";
 
-function tone(status: SettingsActionResponse["status"] | undefined) {
-  if (status === "completed") return "ok";
-  if (status === "failed") return "danger";
-  if (status === "unavailable") return "warn";
-  return "neutral";
-}
+const SETTINGS_ACTION_STATUS_TONES = {
+  completed: "ok",
+  failed: "danger",
+  unavailable: "warn",
+} as const;
 
 function SettingsActions({
   actions,
@@ -39,7 +39,9 @@ function SettingsActions({
               {destructive && confirming ? <span>再次点击确认执行。</span> : null}
               {result ? <span>{result.message}</span> : null}
             </div>
-            <Badge tone={tone(result?.status)}>{result?.status ?? action.status}</Badge>
+            <Badge tone={statusToTone(result?.status, SETTINGS_ACTION_STATUS_TONES)}>
+              {result?.status ?? action.status}
+            </Badge>
             <Button
               disabled={busy || unavailable}
               kind={destructive && confirming ? "danger" : "secondary"}

@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import type { SkillPoolItem } from "../../api/brain";
 import type { SkillDetail } from "../../api/skillsMethodology";
+import SkillCheckboxGrid from "../../components/SkillCheckboxGrid";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { SkillEditDraft } from "../../state/skillMethodologyStore";
 
@@ -133,38 +134,19 @@ export function SkillEditor({
               <small>{draft.required_tools.length} 个已选</small>
             </button>
             {!toolsCollapsed ? (
-              <>
-                {loadingSkillPool ? <div className="brain-empty">正在加载工具</div> : null}
-                <div className="specialist-skill-grid">
-                  {skillPool.map((skill) => {
-                    const checked = draft.required_tools.includes(skill.tool_id);
-                    return (
-                      <label className="specialist-skill-option" data-active={checked} key={skill.tool_id}>
-                        <input
-                          checked={checked}
-                          onChange={() => {
-                            const next = checked
-                              ? draft.required_tools.filter((id) => id !== skill.tool_id)
-                              : [...draft.required_tools, skill.tool_id];
-                            onDraftField("required_tools", next);
-                          }}
-                          type="checkbox"
-                        />
-                        <span>
-                          <div className="tool-card-title">
-                            <strong>{skill.name || skill.tool_id}</strong>
-                            {skill.is_builtin ? <Badge tone="neutral">内置</Badge> : null}
-                          </div>
-                          <small>{skill.description || "无描述"}</small>
-                        </span>
-                      </label>
-                    );
-                  })}
-                  {!loadingSkillPool && skillPool.length === 0 ? (
-                    <div className="brain-empty">暂无可用工具</div>
-                  ) : null}
-                </div>
-              </>
+              <SkillCheckboxGrid
+                emptyLabel="暂无可用工具"
+                loading={loadingSkillPool}
+                loadingLabel="正在加载工具"
+                onToggle={(toolId) => {
+                  const next = draft.required_tools.includes(toolId)
+                    ? draft.required_tools.filter((id) => id !== toolId)
+                    : [...draft.required_tools, toolId];
+                  onDraftField("required_tools", next);
+                }}
+                selectedIds={draft.required_tools}
+                skills={skillPool}
+              />
             ) : null}
           </div>
         </div>

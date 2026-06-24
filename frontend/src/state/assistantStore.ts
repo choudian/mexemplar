@@ -28,6 +28,7 @@ import type {
 import type { UiEvent } from "../api/client";
 import { toErrorMessage } from "./helpers";
 
+import { applyAssistantEvent } from "./assistantEventHandlers";
 import { idleProgress } from "./assistantTypes";
 import type {
   ActivityStep,
@@ -38,14 +39,10 @@ import type {
   Subagent,
 } from "./assistantTypes";
 import {
-  appendActivityStep,
   beginOptimisticTurn,
-  commitLiveTurn,
   emptyTurn,
   getTurn,
-  isPendingEcho,
   latestVisibleTurnId,
-  migrateTurn,
   reconcilePendingMessages,
   resolveTurnId,
   rollbackOptimisticTurn,
@@ -94,9 +91,6 @@ function clearClarificationForSession(
 }
 
 let _idleTimerRef: ReturnType<typeof setTimeout> | null = null;
-
-// 前端实时活动步骤上限：与后端单回合上限呼应，防极端长回合刷爆 store
-const MAX_LIVE_ACTIVITY_STEPS = 300;
 
 export type AssistantState = {
   hydrated: boolean;
@@ -691,255 +685,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       set({ lastError: "无法刷新执行过程，请重试。" });
     }
   },
-  applyEvent: (event) => {
-    if (event.type === "assistant.message") {
-      const message: AssistantMessage = event.payload;
-      const eventSessionId = event.scope.sessionId ?? "";
-      if (!eventSessionId) return;
-      const isActiveSession = eventSessionId === get().activeSessionId;
-      const pendingEcho = get().pendingOptimisticMessages.find((pending) =>
-        isPendingEcho(pending, eventSessionId, message),
-      );
-      const mergedMessages = isActiveSession
-        ? uniqueMessages([...get().messages, message])
-        : [message];
-      const existingTurns = get().turnActivityBySession[eventSessionId] ?? {};
-      let syncedTurns = syncTurnsFromMessages(mergedMessages, existingTurns);
-      let activeTurnIdBySession = get().activeTurnIdBySession;
-      if (message.role === "user") {
-        const newTurnId = turnIdFromSequence(message.sequence);
-        const currentActiveTurnId = get().activeTurnIdBySession[eventSessionId];
-        const oldTurnId = pendingEcho?.optimisticId
-          || (currentActiveTurnId?.startsWith("optimistic_") ? currentActiveTurnId : null);
-        syncedTurns = migrateTurn(syncedTurns, oldTurnId, newTurnId, message.sequence);
-        activeTurnIdBySession = { ...activeTurnIdBySession, [eventSessionId]: newTurnId };
-      }
-      const patch = {
-        pendingOptimisticMessages: reconcilePendingMessages(
-          get().pendingOptimisticMessages,
-          eventSessionId,
-          [message],
-        ),
-        turnActivityBySession: {
-          ...get().turnActivityBySession,
-          [eventSessionId]: syncedTurns,
-        },
-        activeTurnIdBySession,
-      };
-      set(isActiveSession ? { ...patch, messages: mergedMessages } : patch);
-      return;
-    }
-    if (event.type === "assistant.progress") {
-      const payload = event.payload;
-      const status = (typeof payload["status"] === "string" ? payload["status"] : "running") as AssistantProgress["status"];
-      const sessionId = event.scope.sessionId ?? get().activeSessionId ?? "";
-      if (!sessionId) return;
-      const isActiveSession = sessionId === get().activeSessionId;
-      const nextProgress: AssistantProgress = {
-        status,
-        headline: typeof payload["headline"] === "string" ? payload["headline"] : "",
-        runId: typeof payload["runId"] === "string" ? payload["runId"] : undefined,
-      };
-      const nextStoppingBySession = {
-        ...get().stoppingBySession,
-        [sessionId]: status === "running" ? Boolean(get().stoppingBySession[sessionId]) : false,
-      };
-      const nextRetryingFailures = { ...get().retryingFailureBySession };
-      if (status !== "running") {
-        delete nextRetryingFailures[sessionId];
-      }
-      set({
-        progress: isActiveSession ? nextProgress : get().progress,
-        progressBySession: { ...get().progressBySession, [sessionId]: nextProgress },
-        // 离开 running（含 cancelled/succeeded/failed/waiting）即清"停止中"过渡态、解锁输入；
-        // 已产内容由先到的 assistant.message 事件追加保留（FR-008）。
-        stopping: isActiveSession
-          ? (status === "running" ? Boolean(nextStoppingBySession[sessionId]) : false)
-          : get().stopping,
-        stoppingBySession: nextStoppingBySession,
-        retryingFailureBySession: nextRetryingFailures,
-      });
-      // 排队消息：回合离开 running 时按结果处理（US2）。
-      if (sessionId && status !== "running") {
-        const queued = get().queuedMessageBySession[sessionId];
-        if (queued) {
-          const map = { ...get().queuedMessageBySession };
-          delete map[sessionId];
-          const autoSend =
-            queued.state === "queued" && (status === "succeeded" || status === "waiting_for_user");
-          if (autoSend) {
-            // 已提交排队 + 成功/反问结束 → 自动派发（编辑态绝不外发，FR-015）
-            const autoRunningProgress: AssistantProgress = { status: "running", headline: "正在处理" };
-            const begun = beginOptimisticTurn(get(), sessionId, queued.text);
-            const queuedOptimisticId = begun.optimisticId;
-            // 失败时静默重排：在回滚时刻按最新状态重建，避免覆盖其它会话的并发排队改动
-            const requeueText = queued.text;
-            const requeueQueued = () => ({
-              ...get().queuedMessageBySession,
-              [sessionId]: { text: requeueText, state: "queued" as const },
-            });
-            set({
-              queuedMessageBySession: map,
-              progress: get().activeSessionId === sessionId ? autoRunningProgress : get().progress,
-              progressBySession: { ...get().progressBySession, [sessionId]: autoRunningProgress },
-              ...begun.patch,
-            });
-            void sendAssistantMessage(sessionId, queued.text)
-              .then((result) => {
-                if (!result.accepted) {
-                  // 并发安全网：撞 accepted=false 静默重排
-                  const busyProgress: AssistantProgress = { status: "running", headline: "上一条消息仍在处理中" };
-                  set({
-                    ...rollbackOptimisticTurn(get(), sessionId, queuedOptimisticId),
-                    queuedMessageBySession: requeueQueued(),
-                    progress: get().activeSessionId === sessionId ? busyProgress : get().progress,
-                    progressBySession: { ...get().progressBySession, [sessionId]: busyProgress },
-                  });
-                } else {
-                  set({
-                    progress: get().activeSessionId === sessionId ? autoRunningProgress : get().progress,
-                    progressBySession: { ...get().progressBySession, [sessionId]: autoRunningProgress },
-                  });
-                }
-              })
-              .catch(() => {
-                set({
-                  ...rollbackOptimisticTurn(get(), sessionId, queuedOptimisticId),
-                  queuedMessageBySession: requeueQueued(),
-                });
-              });
-          } else {
-            // 编辑态，或 failed/cancelled 结束 → 退回普通草稿、不派发（FR-014）
-            set({
-              queuedMessageBySession: map,
-              draft: get().activeSessionId === sessionId ? queued.text : get().draft,
-              draftBySession: { ...get().draftBySession, [sessionId]: queued.text },
-            });
-          }
-        }
-      }
-      return;
-    }
-    if (event.type === "assistant.activity") {
-      const sessionId = event.scope.sessionId ?? "";
-      if (!sessionId) return;
-      const turnId = resolveTurnId(get(), sessionId, "live");
-      const payload = event.payload as Record<string, unknown>;
-      const step: ActivityStep = {
-        seq: typeof payload["seq"] === "number" ? payload["seq"] : 0,
-        kind: (typeof payload["kind"] === "string" ? payload["kind"] : "reasoning") as ActivityStep["kind"],
-        toolName: typeof payload["toolName"] === "string" ? payload["toolName"] : undefined,
-        text: typeof payload["text"] === "string" ? payload["text"] : "",
-        subagentId: typeof payload["subagentId"] === "string" ? payload["subagentId"] : null,
-        redacted: payload["redacted"] === true,
-      };
-      // 去重（按 seq）+ 升序 + 前端上限（常态顺序追加免排序）
-      set(
-        commitLiveTurn(get(), sessionId, turnId, (turn) => ({
-          ...turn,
-          steps: appendActivityStep(turn.steps, step, MAX_LIVE_ACTIVITY_STEPS),
-        })),
-      );
-      return;
-    }
-    if (event.type === "assistant.subagent") {
-      const sessionId = event.scope.sessionId ?? "";
-      if (!sessionId) return;
-      const turnId = resolveTurnId(get(), sessionId, "live");
-      const payload = event.payload as Record<string, unknown>;
-      const subagentId = typeof payload["subagentId"] === "string" ? payload["subagentId"] : "";
-      if (!subagentId) return;
-      set(
-        commitLiveTurn(get(), sessionId, turnId, (turn) => {
-          const prev = turn.subagents.find((item) => item.subagentId === subagentId);
-          // 首次出现时锚定到主时间线末尾步骤的 seq（委派位置）；后续更新保留首次锚点，避免被往后推。
-          const lastStep = turn.steps[turn.steps.length - 1];
-          const anchorSeq = prev?.anchorSeq ?? lastStep?.seq;
-          const updated: Subagent = {
-            subagentId,
-            label: typeof payload["label"] === "string" ? payload["label"] : prev?.label ?? "子助手",
-            task: typeof payload["task"] === "string" ? payload["task"] : prev?.task ?? "",
-            status: (typeof payload["status"] === "string" ? payload["status"] : prev?.status ?? "running") as Subagent["status"],
-            lastOutput: typeof payload["lastOutput"] === "string" ? payload["lastOutput"] : prev?.lastOutput,
-            anchorSeq,
-          };
-          return { ...turn, subagents: upsertSubagent(turn.subagents, updated) };
-        }),
-      );
-      return;
-    }
-    if (event.type === "backend.resync_required") {
-      // 缺口/会话不匹配：以权威端点刷新子任务列表与当前回合过程（FR-032），不凭内部事件名猜测
-      const sessionId = get().activeSessionId;
-      if (sessionId) {
-        void get().selectSession(sessionId);
-        void get().refreshSubagents(sessionId);
-        void get().refreshActivityTranscript(sessionId);
-        void get().refreshPendingClarification(sessionId);
-      }
-      return;
-    }
-    if (event.type === "assistant.error") {
-      const payload = event.payload;
-      const message = typeof payload["message"] === "string" ? payload["message"] : "Assistant 处理失败";
-      const sessionId = event.scope.sessionId ?? "";
-      const failedProgress: AssistantProgress = { status: "failed", headline: message };
-      set({
-        progress: sessionId && sessionId !== get().activeSessionId ? get().progress : failedProgress,
-        progressBySession: sessionId
-          ? { ...get().progressBySession, [sessionId]: failedProgress }
-          : get().progressBySession,
-        lastError: sessionId && sessionId !== get().activeSessionId ? get().lastError : message,
-      });
-      return;
-    }
-    if (event.type === "assistant.confirmation") {
-      const confirmation: AssistantConfirmation = event.payload;
-      if (confirmation.sessionId && confirmation.sessionId !== get().activeSessionId) {
-        if (
-          confirmation.actionType !== "skill.edit_protected"
-          && confirmation.actionType !== "skill.soft_delete"
-        ) {
-          return;
-        }
-      }
-      set({
-        confirmations: [
-          ...get().confirmations.filter((item) => item.requestId !== confirmation.requestId),
-          confirmation,
-        ],
-      });
-      return;
-    }
-    if (event.type === "assistant.clarification_requested") {
-      const clarification = event.payload as unknown as ClarificationRequest;
-      const sid = clarification.sessionId;
-      if (!sid) {
-        return;
-      }
-      set({
-        pendingClarificationBySession: {
-          ...get().pendingClarificationBySession,
-          [sid]: clarification,
-        },
-      });
-      return;
-    }
-    if (event.type === "assistant.clarification_resolved") {
-      const sid = String(event.payload["sessionId"] ?? event.scope.sessionId ?? "");
-      const requestId = String(event.payload["requestId"] ?? "");
-      if (!sid) {
-        return;
-      }
-      const current = get().pendingClarificationBySession[sid];
-      // 仅当 resolved 的是当前会话当前请求才清理（避免迟到事件误清新卡）
-      if (!current || (requestId && current.requestId !== requestId)) {
-        return;
-      }
-      clearClarificationForSession(set, get, sid);
-      return;
-    }
-  },
+  applyEvent: (event) => applyAssistantEvent(event, { set, get, clearClarificationForSession }),
   decideConfirmation: async (requestId, decision) => {
     try {
       await decideAssistantConfirmation(requestId, decision);

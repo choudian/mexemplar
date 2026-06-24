@@ -1,8 +1,10 @@
 import { RefreshCcw, RotateCcw, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
 import { Badge, Button, IconButton } from "../../components/primitives";
+import { statusToTone } from "../../components/statusTone";
+import { useFiltered } from "../../hooks/useFiltered";
 import { useBrainStore } from "../../state/brainStore";
 import EntryEvolution from "./EntryEvolution";
 
@@ -27,12 +29,12 @@ function entryCountFor(zone: BrainZone, summaries: ReturnType<typeof useBrainSto
   return summary?.entry_count ?? 0;
 }
 
-function statusTone(status: BrainEntryStatus) {
-  if (status === "active") return "ok";
-  if (status === "fading" || status === "invalidated") return "warn";
-  if (status === "soft-deleted") return "danger";
-  return "neutral";
-}
+const BRAIN_ENTRY_STATUS_TONES = {
+  active: "ok",
+  fading: "warn",
+  invalidated: "warn",
+  "soft-deleted": "danger",
+} as const;
 
 export function BrainScreen(): JSX.Element {
   const zones = useBrainStore((state) => state.zones);
@@ -95,14 +97,12 @@ export function BrainScreen(): JSX.Element {
   }, [entries, loadEvolution, selectedId]);
 
   const selectedEntry = entries.find((entry) => entry.entry_id === selectedId) ?? null;
-  const filteredEntries = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return entries;
-    return entries.filter((entry) =>
-      [entry.content, entry.reason, entry.scope ?? "", entry.entry_type ?? ""]
-        .some((value) => value.toLowerCase().includes(needle)),
-    );
-  }, [entries, query]);
+  const filteredEntries = useFiltered(entries, query, (entry) => [
+    entry.content,
+    entry.reason,
+    entry.scope,
+    entry.entry_type,
+  ]);
 
   const chooseZone = (zone: BrainZone) => {
     setSelectedId(null);
@@ -210,7 +210,7 @@ export function BrainScreen(): JSX.Element {
             <section className="brain-editor">
               <div className="brain-section-title">
                 <span>条目详情</span>
-                <Badge tone={statusTone(selectedEntry.status)}>{selectedEntry.status}</Badge>
+                <Badge tone={statusToTone(selectedEntry.status, BRAIN_ENTRY_STATUS_TONES)}>{selectedEntry.status}</Badge>
               </div>
               <label>
                 <span>内容</span>
@@ -280,7 +280,7 @@ function EntryRow({
       <button onClick={onSelect} type="button">
         <span className="brain-entry-title">{entry.content}</span>
         <span className="brain-entry-meta">
-          <Badge tone={statusTone(entry.status)}>{entry.status}</Badge>
+          <Badge tone={statusToTone(entry.status, BRAIN_ENTRY_STATUS_TONES)}>{entry.status}</Badge>
           {entry.entry_type ? <small>{entry.entry_type}</small> : null}
           {entry.scope ? <small>{entry.scope}</small> : null}
         </span>

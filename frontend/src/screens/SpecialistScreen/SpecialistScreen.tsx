@@ -1,8 +1,10 @@
 import { Plus, Save, Search, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { BrainSpecialist } from "../../api/brain";
+import SkillCheckboxGrid from "../../components/SkillCheckboxGrid";
 import { Badge, Button, IconButton } from "../../components/primitives";
+import { useFiltered } from "../../hooks/useFiltered";
 import { useBrainStore } from "../../state/brainStore";
 import { useSpecialistStore } from "../../state/specialistStore";
 import AssistantEquipmentCard from "./AssistantEquipmentCard";
@@ -40,14 +42,12 @@ export function SpecialistScreen(): JSX.Element {
     void loadSkillPool();
   }, [load, loadSkillPool]);
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return items;
-    return items.filter((item) =>
-      [item.name, item.description, item.reason, item.role_definition]
-        .some((value) => value.toLowerCase().includes(needle)),
-    );
-  }, [items, query]);
+  const filtered = useFiltered(items, query, (item) => [
+    item.name,
+    item.description,
+    item.reason,
+    item.role_definition,
+  ]);
 
   return (
     <section className="specialist-screen" aria-label="专员管理">
@@ -140,30 +140,14 @@ export function SpecialistScreen(): JSX.Element {
               <span>工具白名单</span>
               <small>{draft.tool_whitelist.length} 个已选</small>
             </div>
-            {loadingSkillPool ? <div className="brain-empty">正在加载工具池</div> : null}
-            <div className="specialist-skill-grid">
-              {skillPool.map((skill) => {
-                const checked =
-                  draft.tool_whitelist.includes(skill.tool_id);
-                return (
-                  <label className="specialist-skill-option" data-active={checked} key={skill.tool_id}>
-                    <input
-                      checked={checked}
-                      onChange={() => toggleWhitelist(skill.tool_id)}
-                      type="checkbox"
-                    />
-                    <span>
-                      <div className="tool-card-title">
-                        <strong>{skill.name || skill.tool_id}</strong>
-                        {skill.is_builtin ? <Badge tone="neutral">内置</Badge> : null}
-                      </div>
-                      <small>{skill.description || "无描述"}</small>
-                    </span>
-                  </label>
-                );
-              })}
-              {!loadingSkillPool && skillPool.length === 0 ? <div className="brain-empty">暂无可授予工具</div> : null}
-            </div>
+            <SkillCheckboxGrid
+              emptyLabel="暂无可授予工具"
+              loading={loadingSkillPool}
+              loadingLabel="正在加载工具池"
+              onToggle={toggleWhitelist}
+              selectedIds={draft.tool_whitelist}
+              skills={skillPool}
+            />
           </section>
 
           {draft.specialist_id ? <EquipmentPanel entityId={draft.specialist_id} /> : null}

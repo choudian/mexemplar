@@ -1,8 +1,9 @@
 import { Search, ShieldAlert, Trash2, X } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 import type { AffectedSpecialist, SkillPoolItem } from "../../api/brain";
 import { Badge, Button, IconButton } from "../../components/primitives";
+import { useFiltered } from "../../hooks/useFiltered";
 
 interface SkillPoolPanelProps {
   skills: SkillPoolItem[];
@@ -23,15 +24,7 @@ export function SkillPoolPanel({
   onCancelPending,
 }: SkillPoolPanelProps): JSX.Element {
   const [query, setQuery] = useState("");
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return skills;
-    return skills.filter((skill) =>
-      [skill.name, skill.description, skill.tool_id]
-        .filter(Boolean)
-        .some((value) => value.toLowerCase().includes(needle)),
-    );
-  }, [query, skills]);
+  const filtered = useFiltered(skills, query, (skill) => [skill.name, skill.description, skill.tool_id]);
 
   return (
     <section className="brain-skill-pool" aria-label="工具池">
