@@ -7,7 +7,10 @@ from datetime import datetime
 from typing import Any
 
 from src.business.task_collaboration.models import MeetingChannelStatus, safe_public_preview
-from src.business.task_collaboration.service import TaskCollaborationService
+from src.business.task_collaboration.service import (
+    TaskCollaborationService,
+    emit_meeting_changed,
+)
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
 from src.data.repos import (
     AssistantMeetingRepository,
@@ -15,7 +18,6 @@ from src.data.repos import (
     AssistantTaskRepository,
 )
 from src.data.unified_config import get_unified_config
-from src.business.task_collaboration.events import emit_meeting_changed
 
 # 等待/反问语义关键词（中英文），用于互等检测。
 _MUTUAL_WAIT_PATTERNS = re.compile(

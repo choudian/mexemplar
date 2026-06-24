@@ -8,7 +8,7 @@ from sqlalchemy.orm import sessionmaker
 
 from src.business.agents import run_context
 from src.business.task_collaboration.dispatcher import TaskDispatcher
-from src.business.task_collaboration.run_control import graph_cancel_key
+from src.business.task_collaboration.dispatcher import graph_cancel_key
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.models_sqlite import Base
 from src.data.repos import AssistantTaskAdjudicationRepository, AssistantTaskRepository

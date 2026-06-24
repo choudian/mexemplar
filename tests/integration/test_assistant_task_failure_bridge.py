@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.business.task_collaboration.failure_bridge import TaskFailureBridge
+from src.business.task_collaboration.adjudication import TaskFailureBridge
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.repos import AssistantRunFailureRepository, AssistantTaskRepository
 

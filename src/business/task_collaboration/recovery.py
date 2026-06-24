@@ -6,13 +6,15 @@ import logging
 from datetime import datetime
 from typing import Callable
 
-from src.business.task_collaboration.events import emit_task_updated
-from src.business.task_collaboration.health import increment_task_collaboration_counter
 from src.business.task_collaboration.models import (
     SuspendReason,
     TERMINAL_TASK_STATUSES,
     TaskStatus,
     validate_task_transition,
+)
+from src.business.task_collaboration.service import (
+    emit_task_updated,
+    increment_task_collaboration_counter,
 )
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
 from src.data.repos import (

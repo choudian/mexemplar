@@ -396,7 +396,7 @@ class AssistantRuntime:
 
     def stop_task_graph(self, session_id: str, graph_id: str, run_id: str | None = None) -> dict:
         """Stop the persisted task graph and signal any active graph workers."""
-        from src.business.task_collaboration.run_control import graph_cancel_key
+        from src.business.task_collaboration.dispatcher import graph_cancel_key
         from src.business.task_collaboration.service import TaskCollaborationService
 
         with TaskCollaborationService() as service:

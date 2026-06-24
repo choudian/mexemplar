@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import threading
 
-from src.business.task_collaboration.events import emit_todo_changed
 from src.business.task_collaboration.models import TodoStatus, safe_public_preview
+from src.business.task_collaboration.service import emit_todo_changed
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
 from src.data.repos import AssistantTaskRepository, AssistantTodoRepository
 from src.data.repos.base_repository import generate_id

@@ -392,7 +392,7 @@ def test_unified_dispatch_helper_uses_task_dispatcher(monkeypatch):
         lambda: _TaskConfig(),
     )
     monkeypatch.setattr(
-        "src.business.task_collaboration.cutover.get_unified_config",
+        "src.business.task_collaboration.dispatcher.get_unified_config",
         lambda: _TaskConfig(),
     )
     orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
@@ -442,7 +442,7 @@ def test_unified_dispatch_repeated_calls_do_not_invalidate_cached_dispatcher(mon
         lambda: _TaskConfig(),
     )
     monkeypatch.setattr(
-        "src.business.task_collaboration.cutover.get_unified_config",
+        "src.business.task_collaboration.dispatcher.get_unified_config",
         lambda: _TaskConfig(),
     )
     orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)

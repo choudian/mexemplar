@@ -5,15 +5,14 @@ from __future__ import annotations
 import json
 import logging
 import threading
-from contextlib import contextmanager
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from collections.abc import Iterator
 from typing import Any, Callable
 
 from src.business.agents import run_context
-from src.business.task_collaboration.cutover import TaskCollaborationCutoverGuard
-from src.business.task_collaboration.health import increment_task_collaboration_counter
 from src.business.task_collaboration.models import (
     TERMINAL_TASK_STATUSES,
     DeliveredStatus,
@@ -22,12 +21,10 @@ from src.business.task_collaboration.models import (
     TaskStatus,
     safe_preview,
 )
-from src.business.task_collaboration.run_control import (
-    attempt_cancel_key,
-    graph_cancel_key,
-    task_cancel_key,
+from src.business.task_collaboration.service import (
+    TaskCollaborationService,
+    increment_task_collaboration_counter,
 )
-from src.business.task_collaboration.service import TaskCollaborationService
 from src.business.task_collaboration.unit_of_work import task_session_scope
 from src.data.repos import (
     AssistantTaskAdjudicationRepository,
@@ -35,6 +32,7 @@ from src.data.repos import (
     AssistantTaskOperationRepository,
     AssistantTaskRepository,
 )
+from src.data.repos.workflow_transition_repository import WorkflowTransitionRepository
 from src.data.unified_config import get_unified_config
 from src.utils.timezone import utc_now_naive
 
@@ -44,6 +42,67 @@ ExecutorCallback = Callable[[str], str | dict[str, Any] | None]
 ParentReentryCallback = Callable[[dict[str, Any]], None]
 
 _TASK_OUTCOME_SUSPENDED = "suspended"
+
+LEGACY_ACTIVE_DELEGATION_EVENTS = frozenset(
+    {
+        "assistant_delegation_started",
+        "assistant_subagent_started",
+        "subagent_started",
+    }
+)
+
+
+@dataclass(frozen=True)
+class CutoverState:
+    enabled: bool
+    reason: str = ""
+
+
+class TaskCollaborationCutoverGuard:
+    """Decides whether unified task dispatch may start for a clean graph."""
+
+    def __init__(self, transition_repo: WorkflowTransitionRepository | None = None):
+        self._transition_repo = transition_repo or WorkflowTransitionRepository()
+        self._config = get_unified_config()
+
+    def evaluate(self) -> CutoverState:
+        config = self._config
+        if not config.get_assistant_tasks_unified_dispatch_enabled():
+            return CutoverState(False, "unified_dispatch_disabled")
+        if not config.get_assistant_tasks_clean_start_guard_enabled():
+            return CutoverState(True, "clean_start_guard_disabled")
+        if self._has_legacy_active_delegation():
+            return CutoverState(False, "legacy_active_delegation")
+        return CutoverState(True, "")
+
+    def assert_can_dispatch(self) -> None:
+        state = self.evaluate()
+        if not state.enabled:
+            raise RuntimeError(state.reason or "assistant_task_dispatch_disabled")
+
+    def _has_legacy_active_delegation(self) -> bool:
+        try:
+            return self._transition_repo.has_recent_event_types(
+                LEGACY_ACTIVE_DELEGATION_EVENTS
+            )
+        except Exception:
+            logger.warning(
+                "cutover guard could not read legacy transitions; assuming legacy active",
+                exc_info=True,
+            )
+            return True
+
+
+def graph_cancel_key(graph_id: str) -> str:
+    return f"assistant_task_graph:{graph_id}"
+
+
+def task_cancel_key(task_id: str) -> str:
+    return f"assistant_task:{task_id}"
+
+
+def attempt_cancel_key(attempt_id: str) -> str:
+    return f"assistant_task_attempt:{attempt_id}"
 
 
 class TaskDispatcher:

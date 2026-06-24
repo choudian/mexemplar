@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.business.task_collaboration.cutover import TaskCollaborationCutoverGuard
+from src.business.task_collaboration.dispatcher import TaskCollaborationCutoverGuard
 
 
 class _Config:
@@ -31,7 +31,7 @@ class _Transitions:
 
 def test_clean_start_cutover_blocks_legacy_active_delegation(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.business.task_collaboration.cutover.get_unified_config",
+        "src.business.task_collaboration.dispatcher.get_unified_config",
         lambda: _Config(True),
     )
     guard = TaskCollaborationCutoverGuard(
@@ -51,7 +51,7 @@ class _BrokenTransitions:
 
 def test_cutover_fails_closed_when_legacy_state_unreadable(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.business.task_collaboration.cutover.get_unified_config",
+        "src.business.task_collaboration.dispatcher.get_unified_config",
         lambda: _Config(True),
     )
     guard = TaskCollaborationCutoverGuard(transition_repo=_BrokenTransitions())
@@ -65,7 +65,7 @@ def test_cutover_fails_closed_when_legacy_state_unreadable(monkeypatch) -> None:
 
 def test_cutover_disabled_is_safe_rollback(monkeypatch) -> None:
     monkeypatch.setattr(
-        "src.business.task_collaboration.cutover.get_unified_config",
+        "src.business.task_collaboration.dispatcher.get_unified_config",
         lambda: _Config(False),
     )
     guard = TaskCollaborationCutoverGuard(transition_repo=_Transitions([]))

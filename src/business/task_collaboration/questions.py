@@ -6,7 +6,6 @@ import json
 from datetime import datetime
 from typing import Iterable
 
-from src.business.task_collaboration.events import emit_question_changed, emit_task_updated
 from src.business.task_collaboration.models import (
     TERMINAL_TASK_STATUSES,
     SuspendReason,
@@ -16,6 +15,7 @@ from src.business.task_collaboration.models import (
     safe_preview,
     validate_task_transition,
 )
+from src.business.task_collaboration.service import emit_question_changed, emit_task_updated
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
 from src.data.repos import AssistantTaskQuestionRepository, AssistantTaskRepository
 

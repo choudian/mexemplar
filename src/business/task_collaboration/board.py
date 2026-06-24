@@ -7,9 +7,11 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
-from src.business.task_collaboration.events import emit_board_changed
-from src.business.task_collaboration.health import increment_task_collaboration_counter
 from src.business.task_collaboration.models import ClaimStatus, TaskStatus, safe_preview, safe_public_preview
+from src.business.task_collaboration.service import (
+    emit_board_changed,
+    increment_task_collaboration_counter,
+)
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
 from src.data.repos import AssistantTaskClaimRepository, AssistantTaskRepository
 from src.data.unified_config import get_unified_config
