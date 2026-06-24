@@ -57,6 +57,7 @@ class SpecialistService:
         tool_whitelist: list[str],
         origin: str = "user_conversation",
         reason: str = "",
+        caller_type: Optional[str] = None,
     ) -> dict:
         """
         创建新专员。
@@ -68,6 +69,7 @@ class SpecialistService:
             tool_whitelist: 工具白名单
             origin: 创建来源（auto_recruitment / user_conversation / user_management_ui）
             reason: 创建原因
+            caller_type: UI/API 调用者类型；提供时由 Service 生成审计来源和默认原因
 
         Returns:
             创建的专员信息 dict
@@ -75,6 +77,9 @@ class SpecialistService:
         Raises:
             ValueError: 名称已存在或白名单验证失败
         """
+        if caller_type is not None:
+            origin = caller_type
+            reason = reason or self._default_audit_reason(caller_type, operation="create")
         return self._create_specialist_record(
             name=name,
             description=description,
@@ -157,8 +162,15 @@ class SpecialistService:
         tool_whitelist: Optional[list[str]] = None,
         changed_by: str = "user",
         change_reason: Optional[str] = None,
+        caller_type: Optional[str] = None,
     ) -> dict:
         """更新专员信息，自动创建新版本记录。"""
+        if caller_type is not None:
+            changed_by = caller_type
+            change_reason = change_reason or self._default_audit_reason(
+                caller_type,
+                operation="update",
+            )
         specialist = self._repo.get_specialist(specialist_id)
         if specialist is None:
             raise KeyError("specialist_not_found")
@@ -469,6 +481,16 @@ class SpecialistService:
         reason = str(getattr(specialist, "reason", "") or "")
         parts = [part for part in (name, description, reason) if part]
         return " | ".join(parts)[:500] or "specialist changed"
+
+    @staticmethod
+    def _default_audit_reason(caller_type: str, *, operation: str) -> str:
+        if caller_type != "user_management_ui":
+            return ""
+        if operation == "create":
+            return "通过管理界面创建"
+        if operation == "update":
+            return "通过管理界面更新"
+        return ""
 
     @staticmethod
     def _record_specialist_feedback(

@@ -291,6 +291,13 @@ class TestCreateSpecialist:
             assert response.status_code == 200
             data = response.json()
             assert data["name"] == "天气专家"
+            mock_service.create_specialist.assert_called_once_with(
+                name="天气专家",
+                description="天气查询专员",
+                role_definition="你负责查询天气",
+                tool_whitelist=["get_weather"],
+                caller_type="user_management_ui",
+            )
 
     def test_create_specialist_missing_fields(self, desktop_api_client):
         """缺少必需字段应返回 422"""
@@ -400,6 +407,15 @@ class TestUpdateSpecialist:
             )
 
             assert response.status_code == 200
+            mock_service.update_specialist.assert_called_once_with(
+                specialist_id="sp-001",
+                name="更新后的名称",
+                description=None,
+                role_definition=None,
+                tool_whitelist=None,
+                caller_type="user_management_ui",
+                change_reason=None,
+            )
 
     def test_update_specialist_not_found(self, desktop_api_client):
         """PUT 不存在的专员返回 404"""

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 BackendStatus = Literal["starting", "ready", "degraded", "failed", "shutting_down"]
 SessionStatus = Literal["active", "suspended", "completed", "failed", "archived"]
@@ -526,6 +526,63 @@ BrainEntryStatus = Literal["active", "fading", "invalidated", "soft-deleted"]
 EquipmentStatus = Literal["active", "unequipped"]
 EquipmentEntityType = Literal["assistant", "specialist"]
 UnequippedReason = Literal["user_unequip", "force_remove_on_soft_delete", "supersede_transfer"]
+MAX_TOOL_WHITELIST_LENGTH = 200
+
+
+class BrainEditEntryRequest(BaseModel):
+    content: str = Field(..., min_length=1)
+    scope: str | None = None
+
+    @field_validator("content")
+    @classmethod
+    def content_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("content must not be blank")
+        return value
+
+
+class BrainCreateSpecialistRequest(BaseModel):
+    name: str = Field(..., min_length=1)
+    description: str = Field(..., min_length=1)
+    role_definition: str = Field(..., min_length=1)
+    tool_whitelist: list[str] = Field(default_factory=list, max_length=MAX_TOOL_WHITELIST_LENGTH)
+
+    @field_validator("name", "description", "role_definition")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must not be blank")
+        return value
+
+    @field_validator("tool_whitelist")
+    @classmethod
+    def whitelist_items_not_empty(cls, value: list[str]) -> list[str]:
+        return [item.strip() for item in value if item.strip()]
+
+
+class BrainUpdateSpecialistRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1)
+    description: str | None = Field(default=None, min_length=1)
+    role_definition: str | None = Field(default=None, min_length=1)
+    tool_whitelist: list[str] | None = Field(
+        default=None,
+        max_length=MAX_TOOL_WHITELIST_LENGTH,
+    )
+    change_reason: str | None = None
+
+    @field_validator("name", "description", "role_definition")
+    @classmethod
+    def optional_text_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
+        return value.strip() if value is not None else None
+
+    @field_validator("tool_whitelist")
+    @classmethod
+    def optional_whitelist_items_not_empty(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [item.strip() for item in value if item.strip()]
 
 
 class SkillSummary(BaseModel):

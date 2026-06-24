@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+from unittest.mock import patch
 
 from src.business.brain.skill_bootstrap_service import SkillBootstrapService
 from src.business.brain.skill_equipment_service import SkillEquipmentService
@@ -81,6 +82,29 @@ def _skill(
     )
 
 
+def _skill_detail_response(skill_id: str, *, name: str = "方法论") -> dict:
+    return {
+        "skill_id": skill_id,
+        "name": name,
+        "description": "测试方法论",
+        "trigger_conditions": ["需要测试时"],
+        "required_tools": [],
+        "version": 1,
+        "chain_root_id": skill_id,
+        "origin": "user_edit",
+        "is_protected": False,
+        "loaded_count": 0,
+        "referenced_count": 0,
+        "equipped_count": 0,
+        "last_referenced_at": None,
+        "created_at": None,
+        "body_markdown": "测试正文",
+        "parent_skill_id": None,
+        "status": "active",
+        "source_segments": [],
+    }
+
+
 def test_methodology_list_detail_and_equipped_count_include_assistant(
     desktop_api_client, in_memory_db
 ):
@@ -132,6 +156,45 @@ def test_methodology_edit_emits_safe_skill_changed_event(desktop_api_client, in_
     assert "bodyMarkdown" not in skill_changed.payload
 
 
+def test_methodology_edit_delegates_protection_workflow_to_service(desktop_api_client):
+    with patch("src.desktop_api.routers.skills_methodology.SkillService") as MockService:
+        service = MockService.return_value
+        service.edit_with_protection_check.return_value = _skill_detail_response(
+            "skill-edit.v2",
+            name="新名称",
+        )
+
+        response = desktop_api_client.put(
+            "/api/skills/methodology/skill-edit",
+            json={
+                "name": "新名称",
+                "description": "更新后的描述",
+                "trigger_conditions": ["场景更新"],
+                "required_tools": ["tool-a"],
+                "body_markdown": "更新后的正文",
+                "change_reason": "API 测试编辑",
+            },
+        )
+
+    assert response.status_code == 200
+    service.edit_with_protection_check.assert_called_once()
+    args, kwargs = service.edit_with_protection_check.call_args
+    assert args == (
+        "skill-edit",
+        {
+            "name": "新名称",
+            "description": "更新后的描述",
+            "trigger_conditions": ["场景更新"],
+            "required_tools": ["tool-a"],
+            "body_markdown": "更新后的正文",
+            "change_reason": "API 测试编辑",
+        },
+    )
+    assert callable(kwargs["require_confirmation"])
+    service.get_detail.assert_not_called()
+    service.user_edit_supersede.assert_not_called()
+
+
 def test_methodology_soft_delete_prunes_equipment_after_confirmation(
     desktop_api_client,
     in_memory_db,
@@ -163,6 +226,28 @@ def test_methodology_soft_delete_prunes_equipment_after_confirmation(
         )
         assert equipment.status == "unequipped"
         assert equipment.unequipped_reason == "force_remove_on_soft_delete"
+
+
+def test_methodology_soft_delete_delegates_confirmation_workflow_to_service(
+    desktop_api_client,
+):
+    with patch("src.desktop_api.routers.skills_methodology.SkillService") as MockService:
+        service = MockService.return_value
+        service.soft_delete_with_confirmation.return_value = {
+            "deleted_skill_id": "skill-delete",
+            "pruned_equipment_count": 0,
+            "affected_specialist_ids": [],
+        }
+
+        response = desktop_api_client.post("/api/skills/methodology/skill-delete/soft-delete")
+
+    assert response.status_code == 200
+    service.soft_delete_with_confirmation.assert_called_once()
+    args, kwargs = service.soft_delete_with_confirmation.call_args
+    assert args == ("skill-delete",)
+    assert callable(kwargs["require_confirmation"])
+    service.get_detail.assert_not_called()
+    service.force_soft_delete.assert_not_called()
 
 
 def test_bootstrap_status_contract(desktop_api_client):

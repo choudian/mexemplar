@@ -155,6 +155,41 @@ class TestSpecialistServiceCreate:
             call_kwargs = mock_repo.create_specialist.call_args[1]
             assert call_kwargs["origin"] == "user_conversation"
 
+    def test_create_with_caller_type_sets_management_audit_fields(self):
+        """管理界面创建时审计来源由 Service 根据 caller_type 生成。"""
+        from src.business.brain.specialist_service import SpecialistService
+
+        with (
+            patch("src.business.brain.specialist_service.SpecialistRepository") as MockRepo,
+            patch("src.business.brain.specialist_service.ToolRepository") as MockToolRepo,
+            patch(
+                "src.business.brain.skill_equipment_service.SkillEquipmentService"
+            ) as MockEquipmentService,
+        ):
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get_specialist_by_name.return_value = None
+            mock_repo.create_specialist.return_value = "sp-001"
+            mock_repo.get_specialist.return_value = _make_specialist_orm(
+                origin="user_management_ui",
+                reason="通过管理界面创建",
+            )
+            MockToolRepo.return_value.get_all_published.return_value = []
+            MockEquipmentService.return_value.default_equip_all.return_value = []
+
+            service = SpecialistService(repo=mock_repo)
+            service.create_specialist(
+                name="管理专员",
+                description="管理界面创建",
+                role_definition="负责管理任务",
+                tool_whitelist=[],
+                caller_type="user_management_ui",
+            )
+
+            call_kwargs = mock_repo.create_specialist.call_args[1]
+            assert call_kwargs["origin"] == "user_management_ui"
+            assert call_kwargs["reason"] == "通过管理界面创建"
+
     def test_create_fails_closed_when_default_equipment_fails(self):
         """默认装备方法论失败时不应静默创建无装备专员。"""
         from src.business.brain.specialist_service import SpecialistService
@@ -280,6 +315,30 @@ class TestSpecialistServiceUpdate:
             assert result["description"] == "更新后的描述"
             mock_repo.update_specialist.assert_called_once()
             assert received[-1]["operation"] == "update"
+
+    def test_update_with_caller_type_sets_management_audit_fields(self):
+        """管理界面更新时 changed_by/change_reason 由 Service 生成。"""
+        from src.business.brain.specialist_service import SpecialistService
+
+        existing = _make_specialist_orm()
+        updated = _make_specialist_orm(description="更新后的描述", current_version=2)
+
+        with patch("src.business.brain.specialist_service.SpecialistRepository") as MockRepo:
+            mock_repo = MagicMock()
+            MockRepo.return_value = mock_repo
+            mock_repo.get_specialist.side_effect = [existing, updated]
+            mock_repo.update_specialist.return_value = True
+
+            service = SpecialistService(repo=mock_repo)
+            service.update_specialist(
+                specialist_id="sp-001",
+                description="更新后的描述",
+                caller_type="user_management_ui",
+            )
+
+            call_kwargs = mock_repo.update_specialist.call_args[1]
+            assert call_kwargs["changed_by"] == "user_management_ui"
+            assert call_kwargs["change_reason"] == "通过管理界面更新"
 
     def test_update_rejects_nonexistent(self):
         """更新不存在的专员应抛出稳定的 not-found 异常。"""

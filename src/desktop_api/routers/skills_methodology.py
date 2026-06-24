@@ -77,15 +77,6 @@ def _require_confirmation(
     raise HTTPException(status_code=409, detail={"error": "confirmation_denied"})
 
 
-def _active_equipment_names(service: SkillService, skill_id: str) -> list[str]:
-    audit = service.get_equipment_audit(skill_id)
-    return [
-        str(row.get("equipped_entity_name") or row.get("equipped_entity_id") or "")
-        for row in audit.get("rows", [])
-        if row.get("status") == "active"
-    ]
-
-
 def _runtime_http_exception(exc: RuntimeError) -> HTTPException:
     error = str(exc).split(":", 1)[0]
     if error in _CONFLICT_RUNTIME_ERRORS:
@@ -128,17 +119,7 @@ async def get_methodology_skill(skill_id: str):
 def edit_methodology_skill(skill_id: str, body: SkillEditBody):
     try:
         service = SkillService()
-        detail = service.get_detail(skill_id)
-        if detail.get("is_protected"):
-            _require_confirmation(
-                "skill.edit_protected",
-                (
-                    f"将编辑受保护方法论 {detail.get('name') or skill_id}。"
-                    "保存会生成新版本并影响后续方法论创建指引。"
-                ),
-                extra_payload={"affectedSkillId": detail["skill_id"]},
-            )
-        result = service.user_edit_supersede(
+        return service.edit_with_protection_check(
             skill_id,
             {
                 "name": body.name,
@@ -148,9 +129,7 @@ def edit_methodology_skill(skill_id: str, body: SkillEditBody):
                 "body_markdown": body.body_markdown,
                 "change_reason": body.change_reason,
             },
-        )
-        return service.get_detail(
-            str(result.get("new_skill_id") or result.get("skill_id") or skill_id)
+            require_confirmation=_require_confirmation,
         )
     except KeyError:
         raise HTTPException(status_code=404, detail={"error": "skill_not_found"})
@@ -168,26 +147,10 @@ def edit_methodology_skill(skill_id: str, body: SkillEditBody):
 def soft_delete_methodology_skill(skill_id: str):
     try:
         service = SkillService()
-        detail = service.get_detail(skill_id)
-        if detail.get("is_protected"):
-            raise PermissionError("bootstrap_skill_not_softdeletable")
-        affected_names = _active_equipment_names(service, detail["skill_id"])
-        affected_preview = "、".join(name for name in affected_names if name)
-        _require_confirmation(
-            "skill.soft_delete",
-            (
-                f"将软删除方法论 {detail.get('name') or skill_id}，"
-                f"并从 {len(affected_names)} 个装备者身上裁剪。"
-                f"{'受影响装备者：' + affected_preview + '。' if affected_preview else ''}"
-                "历史版本和审计记录会保留。"
-            ),
-            extra_payload={
-                "affectedSkillId": detail["skill_id"],
-                "affectedEquipmentCount": len(affected_names),
-                "affectedSpecialistNames": affected_names,
-            },
+        return service.soft_delete_with_confirmation(
+            skill_id,
+            require_confirmation=_require_confirmation,
         )
-        return service.force_soft_delete(skill_id)
     except KeyError:
         raise HTTPException(status_code=404, detail={"error": "skill_not_found"})
     except PermissionError:

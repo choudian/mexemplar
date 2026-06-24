@@ -7,7 +7,7 @@ from __future__ import annotations
 import difflib
 import logging
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -41,6 +41,17 @@ class SkillSummaryDict(TypedDict):
     equipped_count: int
     last_referenced_at: datetime | None
     created_at: datetime
+
+
+class SkillConfirmationCallback(Protocol):
+    def __call__(
+        self,
+        action_type: str,
+        summary: str,
+        *,
+        extra_payload: dict[str, object] | None = None,
+    ) -> None:
+        """Raise from the caller boundary when confirmation is denied."""
 
 
 class SkillService:
@@ -248,6 +259,29 @@ class SkillService:
             change_reason=cleaned["change_reason"] or "用户编辑",
         )
 
+    def edit_with_protection_check(
+        self,
+        skill_id: str,
+        payload: dict[str, Any],
+        *,
+        require_confirmation: SkillConfirmationCallback,
+    ) -> dict[str, Any]:
+        """Edit a methodology skill, asking the caller to confirm protected edits."""
+        detail = self.get_detail(skill_id)
+        if detail.get("is_protected"):
+            require_confirmation(
+                "skill.edit_protected",
+                (
+                    f"将编辑受保护方法论 {detail.get('name') or skill_id}。"
+                    "保存会生成新版本并影响后续方法论创建指引。"
+                ),
+                extra_payload={"affectedSkillId": detail["skill_id"]},
+            )
+        result = self.user_edit_supersede(skill_id, payload)
+        return self.get_detail(
+            str(result.get("new_skill_id") or result.get("skill_id") or skill_id)
+        )
+
     def force_soft_delete(self, skill_id: str) -> dict[str, Any]:
         skill = self._skill_repo.get_current_active_for_chain(skill_id)
         if skill is None:
@@ -294,6 +328,34 @@ class SkillService:
                 exc_info=True,
             )
             raise
+
+    def soft_delete_with_confirmation(
+        self,
+        skill_id: str,
+        *,
+        require_confirmation: SkillConfirmationCallback,
+    ) -> dict[str, Any]:
+        """Soft-delete a methodology skill after confirming equipment pruning impact."""
+        detail = self.get_detail(skill_id)
+        if detail.get("is_protected"):
+            raise PermissionError("bootstrap_skill_not_softdeletable")
+        affected_names = self._active_equipment_names(detail["skill_id"])
+        affected_preview = "、".join(name for name in affected_names if name)
+        require_confirmation(
+            "skill.soft_delete",
+            (
+                f"将软删除方法论 {detail.get('name') or skill_id}，"
+                f"并从 {len(affected_names)} 个装备者身上裁剪。"
+                f"{'受影响装备者：' + affected_preview + '。' if affected_preview else ''}"
+                "历史版本和审计记录会保留。"
+            ),
+            extra_payload={
+                "affectedSkillId": detail["skill_id"],
+                "affectedEquipmentCount": len(affected_names),
+                "affectedSpecialistNames": affected_names,
+            },
+        )
+        return self.force_soft_delete(skill_id)
 
     def list_active(
         self, *, sort: str = "recently_changed", filter_key: str | None = None
@@ -476,6 +538,14 @@ class SkillService:
         specialist = SpecialistRepository(session=self._session).get_specialist(entity_id)
         return getattr(specialist, "name", entity_id)
 
+    def _active_equipment_names(self, skill_id: str) -> list[str]:
+        audit = self.get_equipment_audit(skill_id)
+        return [
+            str(row.get("equipped_entity_name") or row.get("equipped_entity_id") or "")
+            for row in audit.get("rows", [])
+            if row.get("status") == "active"
+        ]
+
     @staticmethod
     def _next_version_id(base: BrainSkill) -> str:
         if base.chain_root_id == _BOOTSTRAP_SKILL_ID:
@@ -516,5 +586,3 @@ class SkillService:
             "source_segments": payload.get("source_segments"),
             "change_reason": str(payload.get("change_reason") or "").strip(),
         }
-
-

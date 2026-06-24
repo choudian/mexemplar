@@ -10,8 +10,8 @@
 | 0 | #7a / #7b / #7c / #3a | ✅ done（976dae2） | 小 |
 | 1 | #2 projector 注册表化 | ✅ done（976dae2） | 中 |
 | 1 | #4a assistant router 下沉 | ✅ done（976dae2） | 小 |
-| 1 | **#4bc skills_methodology / brain router** | ⏳ **下一步** | 中 |
-| 1 | #11 typed blinker | ⏳ | 巨型 |
+| 1 | **#4bc skills_methodology / brain router** | ✅ done（本次） | 中 |
+| 1 | #11 typed blinker | ⏳ **下一步** | 巨型 |
 | 2 | #12 / #10 / #6 前端 | ⏳ | 中 |
 | 3 | #1 / #3c / #3b Brain | ⏳ | 巨型 |
 | 4 | #8 / #5 Orchestrator | ⏳ | 巨型 |
@@ -30,7 +30,7 @@
 
 ---
 
-## 已完成项（commit 976dae2，验证方式可参照）
+## 已完成项（commit 976dae2；#4bc 为本次工作树，验证方式可参照）
 
 ### 批次 0
 - **#3a** `workspace_hash` / `resolve_workspace_root` 下沉 `src/utils/workspace.py`，切断 `tool_output_repository` → `builtin_permissions` 的 data→business 反向 import。
@@ -44,23 +44,17 @@
 ### #4a assistant router 下沉
 `src/desktop_api/routers/assistant.py` 3 endpoint 编排下沉：`set_auto_approve` → `AssistantRuntime.set_auto_approve`；`trigger_segment_idle` → `SegmentService.handle_idle_and_cleanup`；`trigger_segment_boundary` → `SegmentService.seal_and_cleanup`。
 
+### #4bc skills_methodology + brain router 下沉
+- `src/desktop_api/routers/skills_methodology.py` 的受保护编辑确认、软删除影响审计/确认文案编排下沉到 `SkillService.edit_with_protection_check()` / `SkillService.soft_delete_with_confirmation()`；router 只传 confirmation callback 并保留 HTTP 错误映射。
+- `src/desktop_api/routers/brain.py` 的 3 个内联 Pydantic 请求模型迁移到 `src/desktop_api/schemas.py`。
+- Specialist 管理界面的创建/更新审计来源改为 router 传 `caller_type="user_management_ui"`，由 `SpecialistService` 生成 `origin` / `changed_by` 与默认中文原因。
+- 验证：`tests/desktop_api/test_skill_methodology_api.py`、`tests/desktop_api/test_brain_api.py`、`tests/desktop_api/test_skills_api.py`、`tests/business/brain/test_specialist_service.py`。
+
 ---
 
 ## 待办项（按执行顺序）
 
-### #4bc skills_methodology + brain router 下沉（下一步，中）
-
-**skills_methodology router**（`src/desktop_api/routers/skills_methodology.py`）：
-- `edit_methodology_skill`（5 步：get_detail → protected 检查 → `_require_confirmation` → `user_edit_supersede` → get_detail）下沉 `SkillService.edit_with_protection_check()`。
-- `soft_delete_methodology_skill`（5 步：get_detail → protected 抛 403 → `_active_equipment_names` 查影响 → 拼中文确认文案 → 弹确认 → `force_soft_delete`）下沉 `SkillService.soft_delete_with_confirmation()`。
-
-**brain router**（`src/desktop_api/routers/brain.py`）：
-- 6 个内联 Pydantic body 模型（`EditEntryBody` / `CreateSpecialistBody` / …）移到 `src/desktop_api/schemas.py`。
-- 2 处硬编码审计（`create_specialist` `origin="user_management_ui"` / `reason="通过管理界面创建"`；`update_specialist` `changed_by` / `change_reason`）改为 Service 接受 `caller_type` 参数。
-
-**验证**：`tests/desktop_api/test_skills_api.py` + `test_skill_methodology_api.py` + brain api 测试。
-
-### #11 typed blinker（巨型，建议独占一个 session）
+### #11 typed blinker（下一步，巨型，建议独占一个 session）
 
 `src/utils/events.py`（blinker 全局总线，50 signal，`**kwargs` 无类型）→ `TypedEventRegistry`（每事件一个 dataclass + 类型化 emit / subscribe）。
 
