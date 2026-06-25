@@ -75,7 +75,8 @@ class GraphScheduler:
     def on_adjudication_decided(self, graph_id: str, task_id: str, decision: str) -> None:
         """主助理裁定落定后调。
 
-        accepted(需确认放行)→dispatch；returned→重派/改图后续；abandoned→取消下游。
+        accepted(需确认放行)→dispatch；returned/abandoned→重扫(_advance)。
+        abandoned 的下游收口由 adjudication.decide 状态机(task→failed 后下游边处理)承担,不在本层。
         """
         logger.info(
             "GraphScheduler.on_adjudication_decided: graph_id=%s task_id=%s decision=%s",
@@ -188,11 +189,11 @@ class GraphScheduler:
             if task is None:
                 logger.warning("GraphScheduler: task %s not found, skip dispatch", task_id)
                 return
-            if task.status != "pending_dispatch":
+            if task.status != TaskStatus.PENDING_DISPATCH:
                 logger.debug("GraphScheduler: task %s is %s, skip dispatch", task_id, task.status)
                 return
 
-            # 就绪硬校验（双层校验的第二层；第一层在 dispatcher 派发临界点）
+            # 就绪硬校验（双层校验的第一层；第二层兜底在 dispatcher.start_attempt_async 派发临界点）
             svc.assert_dependencies_satisfied(graph_id, task_id)
 
             if task.requires_confirmation and not svc.has_accepted_confirmation(task_id):
@@ -228,7 +229,12 @@ class GraphScheduler:
             # 就绪硬校验拒绝或派发失败
             logger.warning("GraphScheduler: dispatch failed for task %s: %s", task_id, e)
         except Exception as e:
-            logger.error("GraphScheduler: unexpected error dispatching task %s: %s", task_id, e)
+            logger.error(
+                "GraphScheduler: unexpected error dispatching task %s: %s",
+                task_id,
+                e,
+                exc_info=True,
+            )
 
     def _ensure_needs_confirmation_adjudication(
         self,

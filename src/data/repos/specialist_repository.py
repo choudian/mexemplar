@@ -32,8 +32,13 @@ class SpecialistRepository(BaseRepository):
         reason: str,
         *,
         commit: bool = True,
+        role_kind: str = "executor",
     ) -> str:
         """创建一个新专员，同时创建第一条版本记录。返回 specialist_id。"""
+        if role_kind not in ("executor", "planner"):
+            raise ValueError(
+                f"invalid role_kind {role_kind!r}: must be 'executor' or 'planner'"
+            )
         specialist_id = new_id()
         whitelist_json = json.dumps(tool_whitelist, ensure_ascii=False)
         specialist = BrainSpecialist(
@@ -46,6 +51,7 @@ class SpecialistRepository(BaseRepository):
             reason=reason,
             current_version=1,
             is_active=True,
+            role_kind=role_kind,
         )
         try:
             self.session.add(specialist)

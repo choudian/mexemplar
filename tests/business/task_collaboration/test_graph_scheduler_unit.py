@@ -265,6 +265,19 @@ class TestNeedsConfirmationPause:
 
         assert n1 not in [d["task_id"] for d in dispatcher.dispatched]
 
+    def test_abandoned_adjudication_does_not_dispatch(self):
+        """abandoned（放弃）不直接派发该节点（与 returned 同走 _advance 重扫路径）。
+
+        abandoned 的下游收口由 adjudication.decide 状态机负责，scheduler 本层只重扫；
+        不断言下游取消（那不是 scheduler 职责，避免误解注释承诺）。
+        """
+        graph_id, n1, session_id, dispatcher, scheduler = self._setup()
+        adjudication_id = _pending_adjudication_id(n1)
+
+        _decide(adjudication_id, "abandoned", session_id=session_id, scheduler=scheduler)
+
+        assert n1 not in [d["task_id"] for d in dispatcher.dispatched]
+
     def test_dispatcher_refuses_unaccepted_confirmation_node(self, mock_config):
         """派发层本身必须拒绝未 accepted 的 requires_confirmation 节点。"""
         from src.business.task_collaboration.dispatcher import TaskDispatcher

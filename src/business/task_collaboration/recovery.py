@@ -7,10 +7,8 @@ from datetime import datetime
 from typing import Callable
 
 from src.business.task_collaboration.models import (
-    SuspendReason,
     TERMINAL_TASK_STATUSES,
     TaskStatus,
-    validate_task_transition,
 )
 from src.business.task_collaboration.service import (
     emit_task_updated,
@@ -23,7 +21,6 @@ from src.data.repos import (
     AssistantTaskRepository,
 )
 from src.utils.timezone import utc_now_naive
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +44,11 @@ class TaskRecoveryService(AtomicTaskService):
         current = now or utc_now_naive()
         count = 0
         updated_tasks: list = []
-        resumable: list[tuple[str, str]] = []
+        scheduler_tasks: list = []
+        resume_requests: list[tuple[str, str]] = []
         for attempt in self._attempts.scan_expired_active(current):
-            # 单个 attempt 的恢复（fence + 任务挂起 + 建裁定）必须同一事务：fence 成功但
-            # 挂起失败会让 attempt=fenced 而任务仍 running，下一轮恢复扫描也抓不到它。
+            # 单个 attempt 的恢复（fence + 任务回到可派发）必须同一事务：fence 成功但
+            # 任务仍 running 会让下一轮恢复扫描抓不到它。
             # 单点失败（如终态 task 的 transition 校验、竞态下 attempt 已终态）用
             # try/except 隔离，不得中止整个循环让后续 attempt 永久漏处理。
             try:
@@ -62,38 +60,20 @@ class TaskRecoveryService(AtomicTaskService):
                         continue
                     increment_task_collaboration_counter("attempt_fenced")
                     current_task = self._tasks.get_task(attempt.task_id)
-                    if (
-                        current_task is not None
-                        and current_task.status in TERMINAL_TASK_STATUSES
-                    ):
+                    if current_task is not None and current_task.status in TERMINAL_TASK_STATUSES:
                         # task 已达终态（被 cancel/stop 等）：只 fence attempt 清 lease，
-                        # 不转 suspended 也不建裁定——终态 task 不应被恢复翻成 suspended。
+                        # 不转 pending 也不建裁定——终态 task 不应被恢复翻回可派发。
                         continue
-                    if current_task is not None:
-                        validate_task_transition(
-                            current_task.status,
-                            TaskStatus.SUSPENDED,
-                            suspend_reason=SuspendReason.WAITING_SYSTEM,
-                        )
                     task = self._tasks.update_status(
                         attempt.task_id,
-                        status=TaskStatus.SUSPENDED,
-                        suspend_reason=SuspendReason.WAITING_SYSTEM,
+                        status=TaskStatus.PENDING_DISPATCH,
                     )
                     if task is not None:
                         updated_tasks.append(task)
-                        if attempt.checkpoint_ref:
-                            resumable.append((task.task_id, attempt.checkpoint_ref))
+                        if attempt.checkpoint_ref and self._resume_callback is not None:
+                            resume_requests.append((task.task_id, attempt.checkpoint_ref))
                         else:
-                            existing = self._adjudications.get_pending_for_task(task.task_id)
-                            if existing is None:
-                                self._adjudications.create_pending(
-                                    task_id=task.task_id,
-                                    graph_id=task.graph_id,
-                                    parent_session_id=task.owner_session_id or task.session_id,
-                                    delivered_status="stuck",
-                                    safe_summary="任务在恢复时需要上级检查后继续。",
-                                )
+                            scheduler_tasks.append(task)
                 count += 1
             except Exception:
                 logger.exception(
@@ -103,33 +83,44 @@ class TaskRecoveryService(AtomicTaskService):
                 continue
         for task in updated_tasks:
             emit_task_updated(self, task)
-        for task_id, checkpoint_ref in resumable:
-            if self._resume_callback is None:
-                self._create_resume_failed_adjudication(task_id)
-                continue
+        for task_id, checkpoint_ref in resume_requests:
             try:
-                if not self._resume_callback(task_id, checkpoint_ref):
-                    self._create_resume_failed_adjudication(task_id)
+                if self._resume_callback is not None and self._resume_callback(
+                    task_id, checkpoint_ref
+                ):
+                    continue
             except Exception:
                 logger.exception("[recovery] checkpoint resume callback failed for %s", task_id)
-                self._create_resume_failed_adjudication(task_id)
+            task = self._tasks.get_task(task_id)
+            if task is not None and task.status not in TERMINAL_TASK_STATUSES:
+                scheduler_tasks.append(task)
+        # 024: 通知 scheduler executor 已恢复，重扫受影响 graph（FR-008 装配）。
+        self._notify_scheduler_recovered(scheduler_tasks)
         return count
 
-    def _create_resume_failed_adjudication(self, task_id: str) -> None:
+    def _notify_scheduler_recovered(self, tasks: list) -> None:
+        """024: fence 恢复后通知 GraphScheduler 重扫（FR-008）。
+
+        已回到 pending_dispatch 的 task 由 scheduler 重扫后重派；带 checkpoint 且已被
+        resume_callback 接管的 task 不再通知 scheduler，避免被无 checkpoint 的路径抢先派发。
+        scheduler 未装配时跳过（优雅降级）。
+        """
         try:
-            task = self._tasks.get_task(task_id)
-            if task is None:
+            from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
+
+            scheduler = get_graph_scheduler()
+            if scheduler is None:
                 return
-            existing = self._adjudications.get_pending_for_task(task.task_id)
-            if existing is not None:
-                return
-            with self._atomic():
-                self._adjudications.create_pending(
-                    task_id=task.task_id,
-                    graph_id=task.graph_id,
-                    parent_session_id=task.owner_session_id or task.session_id,
-                    delivered_status="stuck",
-                    safe_summary="任务有检查点但未能自动恢复，等待上级检查后继续。",
-                )
+            seen: set[tuple[str, str]] = set()
+            for task in tasks:
+                key = (getattr(task, "graph_id", None), getattr(task, "task_id", None))
+                if key in seen:
+                    continue
+                seen.add(key)
+                if getattr(task, "graph_id", None):
+                    scheduler.on_executor_recovered(task.graph_id, task.task_id)
         except Exception:
-            logger.exception("[recovery] failed to create resume-failed adjudication for %s", task_id)
+            logger.warning(
+                "[recovery] scheduler on_executor_recovered notify failed", exc_info=True
+            )
+
