@@ -85,9 +85,38 @@ class AssistantRuntime:
         with self._orchestrator_lock:
             if self._orchestrator is None:
                 self._orchestrator = self._orchestrator_factory()
+                self._ensure_planner_specialist()
                 self._orchestrator.task_worker.start()
                 self._install_reentry_sink()
+                self._ensure_task_scheduler_for_orchestrator(self._orchestrator)
             return self._orchestrator
+
+    def ensure_task_scheduler(self) -> None:
+        """Ensure the process-level task graph scheduler is wired."""
+        self._ensure_task_scheduler_for_orchestrator(self._get_orchestrator())
+
+    def _ensure_task_scheduler_for_orchestrator(self, orchestrator: AgentOrchestrator) -> None:
+        try:
+            orchestrator._get_task_dispatcher()
+        except Exception:
+            # 装配失败 = 任务图调度整体不可用：图建好后节点不推进、主助理收不到回流，
+            # 前端无提示的静默卡死。必须 ERROR 级暴露后果，不得降级为 warning（硬规则⑥）。
+            logger.error(
+                "Task graph scheduler 初始化失败：复杂任务图将无法自动推进"
+                "（建图后节点停滞、主助理不收回流），请检查 dispatcher/task 装配。",
+                exc_info=True,
+            )
+
+    def _ensure_planner_specialist(self) -> None:
+        """Register the default planner specialist once per runtime startup."""
+        try:
+            from src.business.brain.specialist_service import SpecialistService
+            from src.data.repos.specialist_repository import SpecialistRepository
+
+            with SpecialistRepository() as repo:
+                SpecialistService(repo=repo).ensure_planner_specialist()
+        except Exception:
+            logger.warning("Failed to ensure planner specialist", exc_info=True)
 
     def _install_reentry_sink(self) -> None:
         """创建父侧回流 sink 并注入 orchestrator 的 dispatcher。
@@ -102,7 +131,16 @@ class AssistantRuntime:
             kick_reentry_run=self.kick_reentry_run,
         )
         self._reentry_sink = sink
-        self._orchestrator.set_parent_reentry_callback(sink.dispatch)
+        set_parent_reentry_callback = getattr(
+            self._orchestrator,
+            "set_parent_reentry_callback",
+            None,
+        )
+        if callable(set_parent_reentry_callback):
+            set_parent_reentry_callback(sink.dispatch)
+        set_reentry_sink = getattr(self._orchestrator, "set_reentry_sink", None)
+        if callable(set_reentry_sink):
+            set_reentry_sink(sink)
 
     def has_active_worker(self, session_id: str) -> bool:
         with self._workers_lock:
@@ -201,8 +239,19 @@ class AssistantRuntime:
         re_enqueued = False
         try:
             entries = self._reentry_sink.drain(session_id) if self._reentry_sink else []
-            entries = self._drop_decided_entries(graph_id, entries)
-            summary = build_reentry_briefing(entries)
+            # 024: drain 后查一次 graph snapshot 传入 briefing（DEC-H）
+            # 复用同一个 Service 实例做 pending_ids 过滤和 snapshot 查询
+            snapshot = None
+            from src.business.task_collaboration.service import TaskCollaborationService
+
+            with TaskCollaborationService() as service:
+                entries = self._drop_decided_entries(graph_id, entries, service)
+                if graph_id is not None:
+                    try:
+                        snapshot = service.get_graph_snapshot(session_id=session_id, graph_id=graph_id)
+                    except Exception:
+                        logger.debug("graph snapshot query failed for briefing, degrading gracefully")
+            summary = build_reentry_briefing(entries, snapshot=snapshot)
             result = self._get_orchestrator().run_agent(
                 AgentType.ASSISTANT,
                 {"role": "program", "content": summary},
@@ -258,18 +307,17 @@ class AssistantRuntime:
             ):
                 self.kick_reentry_run(session_id, graph_id)
 
-    def _drop_decided_entries(self, graph_id: str, entries: list[dict]) -> list[dict]:
+    def _drop_decided_entries(
+        self, graph_id: str, entries: list[dict], service
+    ) -> list[dict]:
         """剔除已决定的回流条目，避免 briefing 重提已 decide 的裁定。
 
         run_agent 异常回填后，上一轮已 decide 的裁定可能残留队列；不过滤会让 LLM 重复
-        裁定撞 LookupError。查询走 business service（adapter 不直接碰 repo）。
+        裁定撞 LookupError。查询走传入的 business service（adapter 不直接碰 repo）。
         """
         if not entries:
             return entries
-        from src.business.task_collaboration.service import TaskCollaborationService
-
-        with TaskCollaborationService() as service:
-            pending_ids = service.pending_adjudication_ids(graph_id)
+        pending_ids = service.pending_adjudication_ids(graph_id)
         return filter_pending_entries(entries, pending_ids)
 
     def _publish_reentry_failure(self, session_id: str) -> None:

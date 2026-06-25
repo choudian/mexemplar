@@ -1,0 +1,61 @@
+"""ParentReentrySink graph_completed 去重测试（C1 配套）。
+
+含失败图 root 不收口时，重复 ``_advance`` 触发 ``notify_graph_complete`` 不能堆积
+``graph_completed`` 条目（否则反复唤醒主助理、污染 briefing、re_enqueue 永不清除）。
+graph 级去重：未消费的同图完成通知只入队一次；drain 清空后允许再次通知。
+"""
+
+from __future__ import annotations
+
+from src.business.task_collaboration.parent_reentry_sink import ParentReentrySink
+
+
+def _make_sink(*, active=False, kick_result=True) -> ParentReentrySink:
+    return ParentReentrySink(
+        has_active_worker=lambda _session_id: active,
+        kick_reentry_run=lambda _session_id, _graph_id: kick_result,
+    )
+
+
+def _graph_completed(entries: list[dict]) -> list[dict]:
+    return [e for e in entries if e.get("event") == "graph_completed"]
+
+
+def test_notify_graph_complete_dedupes_while_undrained():
+    """同图未 drain 的重复完成通知不堆积。"""
+    sink = _make_sink()
+    sink.notify_graph_complete("g1", "s1")
+    sink.notify_graph_complete("g1", "s1")
+    sink.notify_graph_complete("g1", "s1")
+
+    assert len(_graph_completed(sink.drain("s1"))) == 1
+
+
+def test_notify_graph_complete_allowed_again_after_drain():
+    """drain 清空后允许再次通知（主助理裁定 returned 图重跑后再次全终态）。"""
+    sink = _make_sink()
+    sink.notify_graph_complete("g1", "s1")
+    sink.drain("s1")
+
+    sink.notify_graph_complete("g1", "s1")
+    assert len(_graph_completed(sink.drain("s1"))) == 1
+
+
+def test_notify_graph_complete_independent_per_graph():
+    """不同图的完成通知互不去重。"""
+    sink = _make_sink()
+    sink.notify_graph_complete("g1", "s1")
+    sink.notify_graph_complete("g2", "s1")
+
+    completed = _graph_completed(sink.drain("s1"))
+    assert {e["graphId"] for e in completed} == {"g1", "g2"}
+
+
+def test_notify_graph_complete_skips_missing_ids():
+    """缺 session/graph 的完成通知被丢弃，不入队（与 dispatch 一致语义）。"""
+    sink = _make_sink()
+    sink.notify_graph_complete("", "s1")
+    sink.notify_graph_complete("g1", "")
+
+    assert sink.drain("s1") == []
+    assert sink.has_pending("s1") is False

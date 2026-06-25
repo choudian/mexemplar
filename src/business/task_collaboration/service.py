@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from collections.abc import Callable
 from threading import Lock
@@ -47,6 +48,33 @@ _KNOWN_COUNTERS = frozenset(
         "fallback_executor_started",
     }
 )
+
+
+def _encode_capability_scope(raw: object) -> str | None:
+    """Persist capability scope in the JSON format consumed by TaskExecutorAdapter."""
+    if not raw:
+        return None
+    if not isinstance(raw, list):
+        raise ValueError("capabilityScope must be an array of tool identifiers")
+    values = [str(item).strip() for item in raw if str(item).strip()]
+    return json.dumps(values, ensure_ascii=False) if values else None
+
+
+def _resolve_node_assignment(node: dict) -> tuple[str | None, str | None]:
+    """Resolve model-facing assignee hints into executable assignment fields.
+
+    ``assigneeHint="specialist"`` is advisory unless a concrete assigneeId is
+    provided; persisting specialist without an id makes the executor adapter fail
+    with "specialist unavailable". Unresolved hints fall back to normal ephemeral
+    dispatch in GraphScheduler.
+    """
+    hint = node.get("assigneeHint")
+    assignee_id = str(node.get("assigneeId") or "").strip()
+    if hint == "specialist":
+        return ("specialist", assignee_id) if assignee_id else (None, None)
+    if hint == "ephemeral_subagent":
+        return "ephemeral_subagent", None
+    return None, None
 
 
 def increment_task_collaboration_counter(name: str, value: int = 1) -> None:
@@ -388,6 +416,274 @@ class TaskCollaborationService(AtomicTaskService):
             current = self._tasks.get_task(current.parent_task_id)
         return depth
 
+    def build_task_graph(
+        self,
+        *,
+        session_id: str,
+        nodes: list[dict],
+        dependencies: list[dict] | None = None,
+        user_message_sequence: int | None = None,
+    ) -> dict:
+        """原子建图：创建根任务 + N 个节点任务 + M 条 dependency 边。
+
+        024 task-graph-scheduling 核心：把复杂任务分解成带依赖的 DAG 并原子落库。
+        复用 _atomic UoW 保证全原子；add_edge 自动过 _assert_no_cycle。
+        graph_version 按 DEC-F 接受 per-edge 递增。
+
+        Args:
+            session_id: 会话 ID
+            nodes: 节点列表，每项含 nodeId/title/description，可选
+                   assigneeHint/capabilityScope/needsConfirmation
+            dependencies: 依赖列表，每项含 from/to（引用 nodeId）
+            user_message_sequence: 用户消息序号
+
+        Returns:
+            dict 含 graphId, nodeTaskIds, confirmationRequired, readyNodeCount
+        """
+        from src.data.unified_config import get_unified_config
+
+        dependencies = dependencies or []
+
+        # 预算校验
+        max_tasks = get_unified_config().get_assistant_tasks_graph_max_tasks()
+        if len(nodes) > max_tasks:
+            raise ValueError(
+                f"task graph exceeds configured task budget ({len(nodes)} > {max_tasks})"
+            )
+
+        resolved_graph_id = generate_id("tg")
+        root_task_id = generate_id("tsk")
+
+        # nodeId → 真实 task_id 映射
+        node_task_ids: dict[str, str] = {}
+        confirmation_required = False
+
+        with self._atomic():
+            # 1. 创建根任务（图的容器）
+            self._tasks.create_task(
+                graph_id=resolved_graph_id,
+                session_id=session_id,
+                task_id=root_task_id,
+                root_task_id=root_task_id,
+                title="任务图根节点",
+                description="DAG 任务图容器节点，不直接执行",
+                user_message_sequence=user_message_sequence,
+                owner_session_id=session_id,
+            )
+
+            # 2. 逐节点创建任务
+            for node in nodes:
+                node_id = node["nodeId"]
+                task_id = generate_id("tsk")
+                node_task_ids[node_id] = task_id
+
+                needs_confirm = bool(node.get("needsConfirmation", False))
+                if needs_confirm:
+                    confirmation_required = True
+                assignee_type, assignee_id = _resolve_node_assignment(node)
+
+                self._tasks.create_task(
+                    graph_id=resolved_graph_id,
+                    session_id=session_id,
+                    task_id=task_id,
+                    root_task_id=root_task_id,
+                    parent_task_id=root_task_id,
+                    title=node["title"],
+                    description=node["description"],
+                    owner_session_id=session_id,
+                    user_message_sequence=user_message_sequence,
+                    assignee_type=assignee_type,
+                    assignee_id=assignee_id,
+                    capability_scope=_encode_capability_scope(node.get("capabilityScope")),
+                    requires_confirmation=1 if needs_confirm else 0,
+                )
+
+            # 3. 逐依赖添加边（自动过 _assert_no_cycle）
+            for dep in dependencies:
+                from_node_id = dep["from"]
+                to_node_id = dep["to"]
+                from_task_id = node_task_ids.get(from_node_id)
+                to_task_id = node_task_ids.get(to_node_id)
+                if from_task_id is None or to_task_id is None:
+                    raise ValueError(
+                        f"dependency references unknown nodeId: {from_node_id} -> {to_node_id}"
+                    )
+                self._tasks.add_edge(
+                    graph_id=resolved_graph_id,
+                    source_task_id=from_task_id,
+                    target_task_id=to_task_id,
+                    edge_type="dependency",
+                    propagation="blocking",
+                )
+
+        # 事务外发事件
+        emit_graph_changed(
+            self,
+            session_id=session_id,
+            graph_id=resolved_graph_id,
+            change_type="graph_created",
+            task_id=root_task_id,
+            status="pending_dispatch",
+            display_phase=derive_display_phase("pending_dispatch"),
+        )
+
+        # 计算就绪节点数（无前置依赖的节点）
+        has_predecessor: set[str] = set()
+        for dep in dependencies:
+            has_predecessor.add(dep["to"])
+        ready_node_count = sum(1 for n in nodes if n["nodeId"] not in has_predecessor)
+
+        return {
+            "graphId": resolved_graph_id,
+            "nodeTaskIds": node_task_ids,
+            "confirmationRequired": confirmation_required,
+            "readyNodeCount": ready_node_count,
+        }
+
+    def mutate_task_graph(
+        self,
+        *,
+        graph_id: str,
+        session_id: str,
+        changes: list[dict],
+        reason: str = "",
+    ) -> dict:
+        """自愈改图：add_node / skip_node / add_dependency / remove_dependency。
+
+        每次变更 bump graph_version 并重新过无环校验。
+        skip_node 的下游处理规则见 data-model.md §3。
+        """
+        applied: list[dict] = []
+        rejected: list[dict] = []
+
+        root = self._tasks.get_graph_root(graph_id)
+        if root is None:
+            return {"applied": [], "rejected": changes, "graphVersion": 0, "rescanned": False}
+
+        root_task_id = root.task_id
+
+        with self._atomic():
+            for change in changes:
+                op = change.get("op")
+                try:
+                    if op == "add_node":
+                        node_id = change.get("nodeId", generate_id("n"))
+                        task_id = generate_id("tsk")
+                        assignee_type, assignee_id = _resolve_node_assignment(change)
+                        self._tasks.create_task(
+                            graph_id=graph_id,
+                            session_id=session_id,
+                            task_id=task_id,
+                            root_task_id=root_task_id,
+                            parent_task_id=root_task_id,
+                            title=change.get("title", ""),
+                            description=change.get("description", ""),
+                            owner_session_id=session_id,
+                            user_message_sequence=root.user_message_sequence,
+                            assignee_type=assignee_type,
+                            assignee_id=assignee_id,
+                            capability_scope=_encode_capability_scope(
+                                change.get("capabilityScope")
+                            ),
+                            requires_confirmation=1 if change.get("needsConfirmation") else 0,
+                        )
+                        applied.append({"op": op, "nodeId": node_id, "taskId": task_id})
+
+                    elif op == "skip_node":
+                        task_id = change.get("taskId", "")
+                        task = self._tasks.get_task(task_id)
+                        if task is None or task.graph_id != graph_id:
+                            rejected.append({"op": op, "reason": "task not found or wrong graph"})
+                            continue
+                        # 跳过一个 blocking predecessor 时，下游子图已无法满足完成依赖；
+                        # 级联取消防止后续节点永久停在 pending_dispatch。
+                        candidate_ids = {
+                            task_id,
+                            *self._blocking_dependency_descendants(graph_id, task_id),
+                        }
+                        cancelled_ids: list[str] = []
+                        for candidate_id in sorted(candidate_ids):
+                            candidate = self._tasks.get_task(candidate_id)
+                            if candidate is None or candidate.graph_id != graph_id:
+                                continue
+                            if candidate.status in TERMINAL_TASK_STATUSES:
+                                continue
+                            self._tasks.update_status(candidate_id, status="cancelled")
+                            cancelled_ids.append(candidate_id)
+                        applied.append(
+                            {
+                                "op": op,
+                                "taskId": task_id,
+                                "cancelledTaskIds": cancelled_ids,
+                            }
+                        )
+
+                    elif op == "add_dependency":
+                        from_id = change.get("from", "")
+                        to_id = change.get("to", "")
+                        if not from_id or not to_id:
+                            rejected.append({"op": op, "reason": "missing from/to"})
+                            continue
+                        # from/to 可能是 nodeId 或 taskId
+                        from_task_id = from_id
+                        to_task_id = to_id
+                        self._tasks.add_edge(
+                            graph_id=graph_id,
+                            source_task_id=from_task_id,
+                            target_task_id=to_task_id,
+                            edge_type="dependency",
+                            propagation="blocking",
+                        )
+                        applied.append({"op": op, "from": from_id, "to": to_id})
+
+                    elif op == "remove_dependency":
+                        from_id = change.get("from", "")
+                        to_id = change.get("to", "")
+                        if not from_id or not to_id:
+                            rejected.append({"op": op, "reason": "missing from/to"})
+                            continue
+                        # 精确删边 + bump graph_version 由 repo 负责（消除 session 直操作与全图边扫描）
+                        self._tasks.remove_edge(
+                            graph_id=graph_id,
+                            source_task_id=from_id,
+                            target_task_id=to_id,
+                            edge_type="dependency",
+                        )
+                        applied.append({"op": op, "from": from_id, "to": to_id})
+
+                    else:
+                        rejected.append({"op": op, "reason": "unknown op"})
+                except ValueError as e:
+                    rejected.append({"op": op, "reason": str(e)})
+
+        # 获取当前 graph_version
+        root_refreshed = self._tasks.get_task(root_task_id)
+        current_version = root_refreshed.graph_version if root_refreshed else 0
+
+        return {
+            "applied": applied,
+            "rejected": rejected,
+            "graphVersion": current_version,
+            "rescanned": len(applied) > 0,
+        }
+
+    def _blocking_dependency_descendants(self, graph_id: str, task_id: str) -> set[str]:
+        edges = self._tasks.list_graph_edges(graph_id)
+        adjacency: dict[str, set[str]] = {}
+        for edge in edges:
+            if edge.edge_type == "dependency" and edge.propagation == "blocking":
+                adjacency.setdefault(edge.source_task_id, set()).add(edge.target_task_id)
+
+        descendants: set[str] = set()
+        stack = list(adjacency.get(task_id, ()))
+        while stack:
+            current = stack.pop()
+            if current in descendants:
+                continue
+            descendants.add(current)
+            stack.extend(adjacency.get(current, ()))
+        return descendants
+
     def update_task_status(
         self,
         *,
@@ -458,6 +754,67 @@ class TaskCollaborationService(AtomicTaskService):
             safe_explanation=_PENDING_REVIEW_EXPLANATION,
         )
         return adjudication
+
+    def create_needs_confirmation_pause(self, *, task_id: str, title: str):
+        """为「需确认」节点原子地建 pending adjudication 并挂起（FR-009，SC-002）。
+
+        在单个 ``_atomic`` 内完成 ``create_pending`` + ``update_status(suspended/waiting_user)``，
+        避免两步非原子导致「adjudication 已建但节点未挂起」——那会让高风险节点停在
+        ``pending_dispatch`` 既不执行也不暂停，违反「高风险节点执行前必须暂停」。
+        幂等：已有 pending adjudication 则跳过。title 由 scheduler 从 snapshot 传入。
+        """
+        task = self._tasks.get_task(task_id)
+        if task is None:
+            return None
+        existing = self._adjudications.get_pending_for_task(task_id)
+        if existing is not None:
+            return existing
+        task_session_id = task.session_id
+        task_graph_id = task.graph_id
+        safe_summary = safe_public_preview(
+            f"节点「{title}」标记为需确认，请裁定是否执行。（高风险/不可逆操作）",
+            key="safeSummary",
+        )
+        with self._atomic():
+            adjudication = self._adjudications.create_pending(
+                task_id=task.task_id,
+                graph_id=task.graph_id,
+                parent_session_id=task.owner_session_id or task.session_id,
+                delivered_status="done",  # 占位：不是真正的执行结果
+                safe_summary=safe_summary,
+                raw_result_ref=None,
+            )
+            updated = self._tasks.update_status(
+                task_id,
+                status="suspended",
+                suspend_reason="waiting_user",
+            )
+        emit_graph_changed(
+            self,
+            session_id=task_session_id,
+            graph_id=task_graph_id,
+            change_type="adjudication_created",
+            task_id=task_id,
+            status="suspended",
+            display_phase=derive_display_phase("suspended", has_pending_adjudication=True),
+            requires_review=True,
+            safe_explanation=_PENDING_REVIEW_EXPLANATION,
+        )
+        if updated is not None:
+            emit_task_updated(self, updated)
+        return adjudication
+
+    def assert_dependencies_satisfied(self, graph_id: str, task_id: str) -> None:
+        """就绪硬校验公共入口：所有 blocking dependency 前置必须 completed，否则 raise ValueError。
+
+        scheduler 与 dispatcher 复用同一份数据层判定，避免调度器直接访问仓库私有方法
+        （分层硬边界：scheduler 经 service 公共表面进入）。
+        """
+        self._tasks._assert_dependencies_satisfied(graph_id, task_id)
+
+    def has_accepted_confirmation(self, task_id: str) -> bool:
+        """该 task 是否已有 accepted 裁定（requires_confirmation 节点的派发闸门）。"""
+        return self._adjudications.has_decided_for_task(task_id, decision="accepted")
 
     def get_current_graph_snapshot(self, session_id: str) -> TaskGraphSnapshot | None:
         graph_id = self._tasks.get_current_graph_id(session_id)
@@ -541,6 +898,7 @@ class TaskCollaborationService(AtomicTaskService):
                         has_pending_adjudication=pending is not None,
                     ),
                     requires_review=pending is not None,
+                    requires_confirmation=bool(task.requires_confirmation),
                     safe_explanation=_PENDING_REVIEW_EXPLANATION if pending is not None else "",
                     suspend_reason=task.suspend_reason,
                     assignee=(
@@ -609,9 +967,7 @@ class TaskCollaborationService(AtomicTaskService):
             for task in tasks:
                 if not predicate(task):
                     continue
-                validate_task_transition(
-                    task.status, target_status, suspend_reason=suspend_reason
-                )
+                validate_task_transition(task.status, target_status, suspend_reason=suspend_reason)
                 updated = self._tasks.update_status(
                     task.task_id,
                     status=target_status,
@@ -635,8 +991,7 @@ class TaskCollaborationService(AtomicTaskService):
         return self._bulk_transition(
             session_id=session_id,
             graph_id=graph_id,
-            predicate=lambda task: task.status
-            in {TaskStatus.PENDING_DISPATCH, TaskStatus.RUNNING},
+            predicate=lambda task: task.status in {TaskStatus.PENDING_DISPATCH, TaskStatus.RUNNING},
             target_status=TaskStatus.SUSPENDED,
             suspend_reason=SuspendReason.USER_STOP,
             change_type="graph_stopped",
@@ -686,6 +1041,7 @@ class TaskCollaborationService(AtomicTaskService):
                     "status": t.status,
                     "displayPhase": t.display_phase,
                     "requiresReview": t.requires_review,
+                    "requiresConfirmation": t.requires_confirmation,
                     "safeExplanation": t.safe_explanation,
                     "suspendReason": t.suspend_reason,
                     "assignee": t.assignee,

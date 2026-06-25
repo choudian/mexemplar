@@ -68,6 +68,43 @@ class ParentReentrySink:
         with self._lock:
             return bool(self._pending.get(session_id))
 
+    def notify_graph_complete(self, graph_id: str, session_id: str) -> None:
+        """024: 全图终态 → 经 dispatch 通道 kick 续跑，让主助理 drain briefing 裁定/汇报。
+
+        复用既有回流队列与唤醒协调（不新增通道）。graph 级去重：若该图已有未消费的
+        ``graph_completed`` 条目（drain 前），不再重复入队——避免含失败图 root 不收口时，
+        重复 ``_advance`` 触发堆积永不消化的完成条目、反复唤醒主助理并污染 briefing。
+        ``drain`` 清空后允许再次通知（如主助理裁定 returned 后图重跑再次全终态）。
+        """
+        if not session_id or not graph_id:
+            logger.debug(
+                "[reentry] notify_graph_complete skipped: missing session/graph"
+            )
+            return
+        with self._lock:
+            pending = self._pending.setdefault(session_id, [])
+            if any(
+                e.get("event") == "graph_completed" and e.get("graphId") == graph_id
+                for e in pending
+            ):
+                # 该图已有未消费的完成通知，不重复入队（drain 后清除，允许下次再通知）
+                return
+            pending.append(
+                {
+                    "sessionId": session_id,
+                    "graphId": graph_id,
+                    "event": "graph_completed",
+                    # 中性文案：全成功/含失败均适用；权威状态以 briefing 的
+                    # _render_graph_progress 据 snapshot 实时渲染为准。
+                    "safeSummary": "任务图已进入终态，请根据图进度向用户汇报或裁定后续。",
+                }
+            )
+            needs_kick = not self._has_active_worker(session_id)
+        if needs_kick:
+            kicked = self._kick_reentry_run(session_id, graph_id)
+            if not kicked:
+                logger.debug("[reentry] kick skipped (active worker) session=%s", session_id)
+
     def re_enqueue(self, session_id: str, entries: list[dict]) -> None:
         """把 drain 取走的回流重新入队（run_agent 异常时调用，防条目永久丢失）。
 

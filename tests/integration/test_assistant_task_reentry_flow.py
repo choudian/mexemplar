@@ -42,13 +42,21 @@ class _AllowGuard:
 
 
 class _FakeOrchestrator:
-    """替身 Orchestrator：记录调用并返回预设委派结果，避免真实 LLM/AgentLoop。"""
+    """替身 Orchestrator：记录调用并返回预设委派结果，避免真实 LLM/AgentLoop。
+
+    adapter 经 ``orchestrator.delegation_orchestrator.run_*_via_delegated_executor`` 调委派
+    执行内核，故 fake 暴露同名无下划线方法并把 ``delegation_orchestrator`` 指向自己。
+    """
 
     def __init__(self, result: dict) -> None:
         self._result = result
         self.calls: list[dict] = []
 
-    def _run_ephemeral_via_delegated_executor(
+    @property
+    def delegation_orchestrator(self) -> "_FakeOrchestrator":
+        return self
+
+    def run_ephemeral_via_delegated_executor(
         self,
         *,
         parent_session_id,
@@ -66,7 +74,7 @@ class _FakeOrchestrator:
         )
         return self._result
 
-    def _run_specialist_via_delegated_executor(self, **kwargs) -> dict:
+    def run_specialist_via_delegated_executor(self, **kwargs) -> dict:
         return self._result
 
 
@@ -321,7 +329,7 @@ def test_adapter_uses_isolated_orchestrators_for_parallel_attempts(
             def __init__(self) -> None:
                 super().__init__({"success": True, "result_text": "done"})
 
-            def _run_ephemeral_via_delegated_executor(
+            def run_ephemeral_via_delegated_executor(
                 self,
                 *,
                 parent_session_id,
