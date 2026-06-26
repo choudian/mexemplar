@@ -149,7 +149,7 @@ class TaskExecutorAdapter:
         if not resume_id:
             return None
         try:
-            return orchestrator._continue_subagent(
+            return orchestrator.delegation_orchestrator.continue_subagent(
                 parent_session_id=parent_session_id,
                 subagent_id=resume_id,
             )
