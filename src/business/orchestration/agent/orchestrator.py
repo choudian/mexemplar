@@ -24,14 +24,6 @@ from src.business.agents.prompts.desktop_prompts import build_pm_prompt, build_p
 from src.business.ai.llm_client import LangChainLLMClient, ToolCallInfo
 from src.business.memory.compression_handler import CompressionHandler
 from src.business.services import SkillCompositionService
-from src.data.repositories import (
-    AssistantProfileRepository,
-    MessageRepository,
-    SessionRepository,
-    TeachingFailureRepository,
-    ToolRepository,
-    WorkflowTransitionRepository,
-)
 from src.data.models_sqlite import Message
 from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import UnifiedConfigManager
@@ -40,6 +32,7 @@ from src.utils.events import emit
 
 from ..llm_reviewer import LLMReviewer
 from .agent_session_store import AgentSessionStore
+from .orchestrator_repos import OrchestratorRepos, default_orchestrator_repos
 from .assistant_prompt_builder import AssistantPromptBuilder
 from .assistant_task_worker import AssistantTaskWorker
 from .delegation_orchestrator import DelegationOrchestrator
@@ -100,15 +93,21 @@ class AgentOrchestrator:
         llm_client: LangChainLLMClient,
         config: UnifiedConfigManager,
         llm_reviewer: Optional[LLMReviewer] = None,
+        repos: Optional[OrchestratorRepos] = None,
+        recording_repo: Optional[RecordingRepository] = None,
     ):
         self._llm = llm_client
         self._config = config
         self._llm_reviewer = llm_reviewer or LLMReviewer(llm_client)
-        self._session_repo = SessionRepository()
-        self._message_repo = MessageRepository()
-        self._transition_repo = WorkflowTransitionRepository()
-        self._failure_repo = TeachingFailureRepository()
-        self._tool_repo = ToolRepository()
+        self._repos = repos or default_orchestrator_repos()
+        self._session_repo = self._repos.session_repo
+        self._message_repo = self._repos.message_repo
+        self._transition_repo = self._repos.transition_repo
+        self._failure_repo = self._repos.failure_repo
+        self._tool_repo = self._repos.tool_repo
+        self._task_repo = self._repos.task_repo
+        self._brain_repo = self._repos.brain_repo
+        self._recording_repo = recording_repo
 
         self._loops: Dict[str, AgentLoop] = {}
         self._review_counts: Dict[str, int] = {}
@@ -148,7 +147,7 @@ class AgentOrchestrator:
             self._session_store,
             self._tool_repo,
             self._composition_service,
-            profile_repo=AssistantProfileRepository(),
+            profile_repo=self._repos.profile_repo,
             logger=logger,
         )
         self._teaching_orchestrator = TeachingOrchestrator(self)
@@ -584,10 +583,7 @@ class AgentOrchestrator:
         )
 
     def resume_recovered_task(self, *, task_id: str, checkpoint_ref: str) -> bool:
-        from src.data.repos import AssistantTaskRepository
-
-        with AssistantTaskRepository() as tasks:
-            task = tasks.get_task(task_id)
+        task = self._task_repo.get_task(task_id)
         if task is None or not task.assignee_type:
             return False
         try:
@@ -604,10 +600,7 @@ class AgentOrchestrator:
         return True
 
     def _redispatch_answered_task(self, task_id: str) -> bool:
-        from src.data.repos import AssistantTaskRepository
-
-        with AssistantTaskRepository() as tasks:
-            task = tasks.get_task(task_id)
+        task = self._task_repo.get_task(task_id)
         if task is None or task.status != "pending_dispatch" or not task.assignee_type:
             return False
         try:
@@ -1466,25 +1459,22 @@ class AgentOrchestrator:
     def _extract_latest_assistant_text(self, session_id: str) -> str:
         return self._message_repo.get_latest_assistant_text(session_id)
 
-    @staticmethod
     def _record_delegation_signal(
+        self,
         *,
         parent_session_id: str,
         task_pattern: str,
         result_text: str,
     ) -> None:
         try:
-            from src.data.repos.brain_repository import BrainRepository
-
             summary_parts = [task_pattern.strip()[:180]]
             if result_text.strip():
                 summary_parts.append(result_text.strip()[:220])
-            with BrainRepository() as repo:
-                repo.record_recruitment_signal(
-                    task_pattern=task_pattern,
-                    session_id=parent_session_id,
-                    delegation_summary=" -> ".join(part for part in summary_parts if part),
-                )
+            self._brain_repo.record_recruitment_signal(
+                task_pattern=task_pattern,
+                session_id=parent_session_id,
+                delegation_summary=" -> ".join(part for part in summary_parts if part),
+            )
         except Exception as exc:
             logger.warning("Failed to record delegation recruitment signal: %s", exc)
 
@@ -1765,7 +1755,7 @@ class AgentOrchestrator:
         if cached is not None:
             return cached
         try:
-            mode = RecordingRepository().get_recording_mode(workflow_id)
+            mode = (self._recording_repo or RecordingRepository()).get_recording_mode(workflow_id)
         except ValueError as exc:
             logger.error(
                 "[Orchestrator] 录制不存在或模式不可用: workflow_id=%s, error=%s",

@@ -232,15 +232,25 @@ def _execution_context_with_checkpoint(text: str, checkpoint_ref: str | None) ->
 
 
 def _close_orchestrator_resources(orchestrator) -> None:
-    """Best-effort close for per-attempt orchestrators created only for thread isolation."""
+    """Best-effort close for per-attempt orchestrators created only for thread isolation.
+
+    统一遍历 OrchestratorRepos 的全部 8 个字段（含 task/brain，原为方法内局部 with，
+    升为长生命周期后必须随 per-attempt orchestrator 关闭，否则泄漏 SQLite session）。
+    profile_repo 与 _prompt_builder._profile_repo 是同一对象，BaseRepository.close 幂等，
+    重复关闭无害。RecordingRepository 不在 bundle 内（DuckDB 句柄、无 close()），不参与关闭。
+    """
+    repos = getattr(orchestrator, "_repos", None)
     for attr in (
-        "_session_repo",
-        "_message_repo",
-        "_transition_repo",
-        "_failure_repo",
-        "_tool_repo",
+        "session_repo",
+        "message_repo",
+        "transition_repo",
+        "failure_repo",
+        "tool_repo",
+        "profile_repo",
+        "task_repo",
+        "brain_repo",
     ):
-        close = getattr(getattr(orchestrator, attr, None), "close", None)
+        close = getattr(getattr(repos, attr, None), "close", None)
         if callable(close):
             close()
     prompt_builder = getattr(orchestrator, "_prompt_builder", None)
