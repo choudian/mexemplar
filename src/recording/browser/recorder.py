@@ -2,17 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
-
-class RecordingMode:
-    BROWSER = "browser"
-    DESKTOP = "desktop"
-    EXTENSION_TRIGGERED = "extension_triggered"
-
-    @classmethod
-    def display_defaults(cls, mode: str) -> dict:
-        if mode == cls.EXTENSION_TRIGGERED:
-            return {"browser_type": "chrome", "app_name": "Chrome", "process_name": "chrome"}
-        return {"browser_type": "chromium", "app_name": "Browser", "process_name": "browser"}
+from src.utils.recording_mode import RecordingMode
 
 
 @dataclass

@@ -13,7 +13,7 @@ from typing import List, Dict, Any, Optional
 from .duckdb_manager import DuckDBManager
 from .recording_repository import RecordingRepository
 from src.recording.browser.duckdb_recording_persister import DuckDBRecordingPersister
-from src.recording.browser.recorder import RecordingMode
+from src.utils.recording_mode import RecordingMode
 from src.recording.filtering.ingest_hook import persist_filtered_network_requests
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class RecordingRecovery:
             db_manager: DuckDB 管理器，默认为全局单例
         """
         if queues_dir is None:
-            from src.recording.queue_paths import get_recording_queue_dir
+            from src.data.queue_paths import get_recording_queue_dir
 
             queues_dir = get_recording_queue_dir()
 
