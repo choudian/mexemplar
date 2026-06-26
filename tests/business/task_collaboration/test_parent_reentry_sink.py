@@ -59,3 +59,61 @@ def test_notify_graph_complete_skips_missing_ids():
 
     assert sink.drain("s1") == []
     assert sink.has_pending("s1") is False
+
+
+# === I18-7: dispatch payload validation ===
+
+
+class TestDispatchPayloadValidation:
+    """I18-7: dispatch with missing required fields → payload dropped, no kick."""
+
+    def test_dispatch_missing_session_id_drops_payload(self):
+        """dispatch with missing sessionId → payload dropped, no kick, nothing queued."""
+        kick_calls: list[tuple[str, str]] = []
+
+        def track_kick(session_id: str, graph_id: str) -> bool:
+            kick_calls.append((session_id, graph_id))
+            return True
+
+        sink = ParentReentrySink(
+            has_active_worker=lambda _sid: False,
+            kick_reentry_run=track_kick,
+        )
+        sink.dispatch({"graphId": "g1", "taskId": "t1"})
+
+        assert kick_calls == []
+        assert sink.drain("s1") == []
+
+    def test_dispatch_missing_graph_id_drops_payload(self):
+        """dispatch with missing graphId → payload dropped, no kick, nothing queued."""
+        kick_calls: list[tuple[str, str]] = []
+
+        def track_kick(session_id: str, graph_id: str) -> bool:
+            kick_calls.append((session_id, graph_id))
+            return True
+
+        sink = ParentReentrySink(
+            has_active_worker=lambda _sid: False,
+            kick_reentry_run=track_kick,
+        )
+        sink.dispatch({"sessionId": "s1", "taskId": "t1"})
+
+        assert kick_calls == []
+        assert sink.drain("s1") == []
+
+    def test_dispatch_empty_dict_drops_payload(self):
+        """dispatch with empty dict → payload dropped, no kick, nothing queued."""
+        kick_calls: list[tuple[str, str]] = []
+
+        def track_kick(session_id: str, graph_id: str) -> bool:
+            kick_calls.append((session_id, graph_id))
+            return True
+
+        sink = ParentReentrySink(
+            has_active_worker=lambda _sid: False,
+            kick_reentry_run=track_kick,
+        )
+        sink.dispatch({})
+
+        assert kick_calls == []
+        assert sink.drain("s1") == []

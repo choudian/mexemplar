@@ -1370,6 +1370,37 @@ def migrate_to_v16(engine):
             raise
 
 
+def migrate_to_v17(engine):
+    """迁移到版本 17：024 task-graph-scheduling 数据脚手架。
+
+    - assistant_tasks.requires_confirmation：高风险/不可逆节点标记，scheduler
+      派发前判定是否走裁定暂停路径。DEFAULT 0 兼容现有数据。
+    - brain_specialists.role_kind：专员角色分类（executor/planner），
+      tool_registry 按角色分支装配工具。DEFAULT 'executor' 兼容现有专员。
+    """
+    with engine.connect() as conn:
+        try:
+            _add_column_if_missing(
+                conn,
+                "assistant_tasks",
+                "requires_confirmation",
+                "INTEGER NOT NULL DEFAULT 0",
+            )
+            _add_column_if_missing(
+                conn,
+                "brain_specialists",
+                "role_kind",
+                "TEXT NOT NULL DEFAULT 'executor'",
+            )
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 17})
+            conn.commit()
+            logger.info("数据库迁移到版本 17 完成：requires_confirmation + role_kind")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 17 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1386,6 +1417,7 @@ _MIGRATIONS = [
     (14, migrate_to_v14),
     (15, migrate_to_v15),
     (16, migrate_to_v16),
+    (17, migrate_to_v17),
 ]
 
 

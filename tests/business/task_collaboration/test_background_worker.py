@@ -5,6 +5,10 @@ from datetime import datetime, timezone
 import pytest
 
 from src.business.task_collaboration.background_worker import TaskCollaborationBackgroundWorker
+from src.business.task_collaboration.graph_scheduler import set_graph_scheduler
+from src.business.task_collaboration.service import TaskCollaborationService
+from src.data.repos import AssistantTaskAttemptRepository, AssistantTaskRepository
+from src.utils.timezone import utc_now_naive
 
 
 def test_recovery_cycle_returns_all_four_counts(in_memory_db):
@@ -37,7 +41,7 @@ def test_recovery_cycle_isolates_each_failing_job(in_memory_db, monkeypatch, fai
     call_log: list[str] = []
 
     def make_wrapper(job_key: str, original, should_fail: bool):
-        def wrapper(now):
+        def wrapper(now, *args, **kwargs):
             call_log.append(job_key)
             if should_fail:
                 raise RuntimeError(f"simulated failure in {job_key}")
@@ -62,3 +66,45 @@ def test_recovery_cycle_isolates_each_failing_job(in_memory_db, monkeypatch, fai
     assert counts[failing_job] == 0
     for job_key in _JOB_FUNCS:
         assert job_key in counts
+
+
+def test_expired_attempt_requeues_graph_task_and_notifies_scheduler(in_memory_db):
+    """FR-008: lease 过期的未完成图节点必须退回可重派状态并触发 scheduler 重扫。"""
+
+    session_id = "sess_requeue_expired_attempt"
+    with TaskCollaborationService() as svc:
+        result = svc.build_task_graph(
+            session_id=session_id,
+            nodes=[{"nodeId": "n1", "title": "会过期的节点", "description": "需要自动重派"}],
+        )
+        graph_id = result["graphId"]
+        task_id = result["nodeTaskIds"]["n1"]
+        svc.update_task_status(task_id=task_id, status="running")
+
+    with AssistantTaskAttemptRepository() as attempts:
+        attempts.start_attempt(
+            task_id=task_id,
+            executor_type="ephemeral_subagent",
+            executor_id=task_id,
+            lease_owner="test",
+            lease_expires_at=utc_now_naive(),
+        )
+
+    recovered: list[tuple[str, str]] = []
+
+    class _Scheduler:
+        def on_executor_recovered(self, graph_id_arg: str, task_id_arg: str) -> None:
+            recovered.append((graph_id_arg, task_id_arg))
+
+    set_graph_scheduler(_Scheduler())
+    try:
+        counts = TaskCollaborationBackgroundWorker().run_recovery_cycle(now=utc_now_naive())
+    finally:
+        set_graph_scheduler(None)
+
+    assert counts["fenced_attempts"] == 1
+    with AssistantTaskRepository() as tasks:
+        task = tasks.get_task(task_id)
+        assert task.status == "pending_dispatch"
+        assert task.suspend_reason is None
+    assert recovered == [(graph_id, task_id)]

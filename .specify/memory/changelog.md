@@ -1,7 +1,54 @@
 # Merged Features Log
 
-**Last Updated:** 2026-06-24
-**Revision:** 2026-06-24 — Archived 023 unified task collaboration (统一任务模型 + 多范式协作)
+**Last Updated:** 2026-06-26
+**Revision:** 2026-06-26 — Archived 024 task graph scheduling (复杂任务"先分解，再按图执行"纠偏)
+
+## Task Graph Scheduling — 2026-06-26
+
+**Branch:** `024-task-graph-scheduling`
+**Spec:** `specs/024-task-graph-scheduling`
+
+**What was added:**
+- US-082 (P1): 复杂任务被分解成有序任务图并按序执行——多步跨领域复杂任务在执行前产出多个由依赖关系连接的任务节点，无依赖并行、有依赖按序，全图完成后汇报
+- US-083 (P1): 简单任务继续走快速通道、不建图
+- US-084 (P2): 高风险步骤执行前暂停等待确认——`requires_confirmation=1` 节点依赖前置完成后 scheduler 暂停、建 pending adjudication 回流主助理裁定
+- US-085 (P2): 节点失败先自愈，兜不住再升级——回流 briefing 附自愈动作清单（重试/换执行器/调输入/跳过/改图/放弃），兜不住才 `ask_user_question` 升级
+- US-086 (P3): 中途可见进度、能取消/改主意——TaskGraphPanel 节点展开看 todo 进度；取消顺图传播、改主意走 cancel+重新分解
+
+**New Components:**
+- `src/business/task_collaboration/graph_scheduler.py` — DAG 调度器（确定性推进、就绪硬校验、暂停/恢复/取消复用）
+- `src/business/task_collaboration/service.py` — `build_task_graph` 原子入口（复用 `_atomic`）
+- `src/business/task_collaboration/reentry_briefing.py` — 扩展 snapshot 参数 + 下一步建议/自愈清单/todo 概览文本段
+- `src/business/agents/tools/assistant_tools.py` — `build_task_graph` / `mutate_task_graph` 工具
+- `src/business/orchestration/agent/tool_registry.py` — 工具装配 + planner role_kind 分支
+- `src/business/brain/specialist_service.py` — planner 角色招募/注册路径
+- `src/data/migrations.py` — v17: `requires_confirmation` + `role_kind`
+- `src/data/repos/assistant_task_repository.py` — `_assert_dependencies_satisfied`（就绪硬校验）
+- `src/desktop_api/schemas.py` — `requiresConfirmation` 投影
+- `frontend/src/screens/assistant/TaskGraphPanel.tsx` — 节点展开看 todo
+
+**Modified Components:**
+- `src/business/agents/prompts/assistant_prompt.py` — 复杂度判定与分解决策段 + 自愈决策引导段
+- `src/business/orchestration/agent/orchestrator.py` — 弱化 _SUBAGENT_WORK_RULES 第 2/3 条
+- `src/business/task_collaboration/dispatcher.py` — 失败 entry + healingActions/safeRecoveryHint；paused payload + needs_review reentry_type
+- `src/business/task_collaboration/adjudication.py` — needs_confirmation 触发路径接线
+- `src/desktop_api/assistant_runtime.py` — drain 后查 graph snapshot 传入 briefing
+- `frontend/src/api/assistantTasks.ts` — DTO +requiresConfirmation 类型
+
+**Key Decisions:**
+- DEC-A: 新增 `requires_confirmation` 列（不复用 suspend_reason / capability_scope，避免语义混淆与 CHECK 冲突）
+- DEC-B: 完整规划专员（`role_kind='planner'` + tool_registry 角色分支 + 招募/注册路径）
+- DEC-C: 自愈在 pending adjudication 阶段介入，裁定动作复用现有三态
+- DEC-D: 需确认节点走 adjudication 暂停路径 + `needs_review` reentry_type
+- DEC-E: todo 按需可见走 TaskGraphPanel 节点展开（非 014 SubagentDrawer）
+- DEC-F: `build_task_graph` 接受 per-edge graph_version 递增
+- DEC-G: suspendReason 首版纯复用 `waiting_user`（0 事件改动）
+- DEC-H: 回流结构化引导作为 briefing 文本段注入
+
+**Known Infrastructure Note:**
+- task collaboration 测试套件多文件同 process 跑时，`in_memory_db` fixture teardown 可能撞 `Cannot operate on a closed database`——单文件/分批跑稳定，非被测代码 bug。
+
+**Tasks Completed:** 42/42 tasks
 
 ## 统一任务模型 + 多范式协作 — 2026-06-24
 

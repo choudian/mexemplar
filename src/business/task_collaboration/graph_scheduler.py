@@ -72,7 +72,9 @@ class GraphScheduler:
         )
         self._run(graph_id, lambda svc: self._advance(svc, graph_id))
 
-    def on_adjudication_decided(self, graph_id: str, task_id: str, decision: str) -> None:
+    def on_adjudication_decided(
+        self, graph_id: str, task_id: str, decision: str | "AdjudicationDecision"
+    ) -> None:
         """主助理裁定落定后调。
 
         accepted(需确认放行)→dispatch；returned/abandoned→重扫(_advance)。
@@ -109,11 +111,19 @@ class GraphScheduler:
     def _run(self, graph_id: str, fn: Callable[["TaskCollaborationService"], None]) -> None:
         """每次推进用临时 service（fresh session）。异常不外泄（调度静默失败只记日志）。"""
         try:
-            from src.business.task_collaboration.service import TaskCollaborationService
+            from src.business.task_collaboration.service import (
+                TaskCollaborationService,
+                increment_task_collaboration_counter,
+            )
 
             with TaskCollaborationService() as svc:
                 fn(svc)
         except Exception as e:
+            from src.business.task_collaboration.service import (
+                increment_task_collaboration_counter,
+            )
+
+            increment_task_collaboration_counter("scheduler_advance_failed")
             logger.error("GraphScheduler._run failed for graph=%s: %s", graph_id, e, exc_info=True)
 
     def _advance(self, svc: "TaskCollaborationService", graph_id: str) -> None:
@@ -130,16 +140,31 @@ class GraphScheduler:
             logger.warning("GraphScheduler._advance: snapshot not found for %s", graph_id)
             return
 
-        # 区分 root 容器与执行节点
-        root = next((t for t in snapshot.tasks if t.parent_task_id is None), None)
-        real_nodes = [t for t in snapshot.tasks if t.parent_task_id is not None]
+        # 单次遍历：区分 root / 执行节点 + 收集 completed_ids + 终态统计
+        root = None
+        real_nodes: list = []
+        completed_ids: set[str] = set()
+        all_terminal = True
+        all_completed = True
+        for t in snapshot.tasks:
+            if t.parent_task_id is None:
+                root = t
+            else:
+                real_nodes.append(t)
+            if t.status == TaskStatus.COMPLETED:
+                completed_ids.add(t.task_id)
+            if t.parent_task_id is not None:
+                # 只统计执行节点的终态（root 容器不参与）
+                if t.status not in TERMINAL_TASK_STATUSES:
+                    all_terminal = False
+                if t.status != TaskStatus.COMPLETED:
+                    all_completed = False
 
         # 全图完成判定：所有执行节点已终态（全成功 或 含失败/取消）。
         # 契约 §2 规定 all_nodes_terminal → notify：含失败/取消也必须通知主助理裁定后续，
         # 否则自愈跳过/失败收口后整图静默停滞（FR-015/SC-003, constitution IV）。
         # real_nodes 为空（仅 root 容器的退化图）时 all([])=True，也走完成收口，避免空图停滞
-        if all(t.status in TERMINAL_TASK_STATUSES for t in real_nodes):
-            all_completed = all(t.status == TaskStatus.COMPLETED for t in real_nodes)
+        if all_terminal:
             # root 已终态 = 图已收口通知过 → 不重复唤醒主助理
             already_closed = root is not None and root.status in TERMINAL_TASK_STATUSES
             if not already_closed:
@@ -157,8 +182,7 @@ class GraphScheduler:
                 self._notify_graph_complete(svc, graph_id, snapshot.session_id)
             return
 
-        # 扫就绪执行节点：completed 集合 + dependency 前置映射单次构造（O(T+E)，非 O(T×E)）
-        completed_ids = {t.task_id for t in snapshot.tasks if t.status == TaskStatus.COMPLETED}
+        # 依赖前置映射（O(E)，非 O(T×E)）
         predecessors: dict[str, list[str]] = {}
         for edge in snapshot.edges:
             if edge.type == TaskEdgeType.DEPENDENCY:
@@ -255,8 +279,13 @@ class GraphScheduler:
                 "GraphScheduler: created needs_confirmation pause for task %s", task_id
             )
         except Exception as e:
-            logger.error(
-                "GraphScheduler: failed to create needs_confirmation pause for %s: %s",
+            from src.business.task_collaboration.service import (
+                increment_task_collaboration_counter,
+            )
+
+            increment_task_collaboration_counter("needs_confirmation_pause_failed")
+            logger.warning(
+                "GraphScheduler: failed to create needs_confirmation pause for %s (will retry on next advance): %s",
                 task_id,
                 e,
                 exc_info=True,
@@ -285,11 +314,8 @@ class GraphScheduler:
         logger.info("GraphScheduler: graph %s complete notification sent", graph_id)
 
     def _resolve_session_id(self, svc: "TaskCollaborationService", graph_id: str) -> str:
-        """从 graph_id 解析 session_id。"""
-        root = svc._tasks.get_graph_root(graph_id)
-        if root is not None:
-            return root.session_id
-        return ""
+        """从 graph_id 解析 session_id（经 service 公共表面，不访问私有属性）。"""
+        return svc.get_graph_session_id(graph_id)
 
 
 # === 进程级单例（orchestrator 装配；tool handler / background_worker 经此触发）===

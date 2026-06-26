@@ -32,6 +32,7 @@ export interface AssistantTaskSnapshot {
   status: TaskStatus;
   displayPhase: TaskDisplayPhase;
   requiresReview: boolean;
+  requiresConfirmation: boolean;
   safeExplanation: string;
   suspendReason?: SuspendReason | null;
   assignee?: AssistantActorRef | null;

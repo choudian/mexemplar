@@ -16,7 +16,7 @@ from src.data.repos import (
 )
 
 
-def test_recovery_fences_expired_attempt_and_creates_adjudication() -> None:
+def test_recovery_fences_expired_attempt_and_requeues_task() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -52,14 +52,9 @@ def test_recovery_fences_expired_attempt_and_creates_adjudication() -> None:
         assert service.fence_expired_attempts(datetime.now()) == 1
         assert attempt_repo.get_by_id("att_1").status == "fenced"
         recovered_task = task_repo.get_task("tsk_1")
-        assert recovered_task.status == "suspended"
-        assert recovered_task.suspend_reason == "waiting_system"
-        assert adjudication_repo.get_pending_for_task("tsk_1") is not None
-        # 补断言：adjudication 的 delivered_status 和 safe_summary 必须匹配恢复语义
-        adjudication = adjudication_repo.get_pending_for_task("tsk_1")
-        assert adjudication is not None
-        assert adjudication.delivered_status == "stuck"
-        assert "上级检查" in adjudication.safe_summary or "需要上级检查" in adjudication.safe_summary
+        assert recovered_task.status == "pending_dispatch"
+        assert recovered_task.suspend_reason is None
+        assert adjudication_repo.get_pending_for_task("tsk_1") is None
     finally:
         session.close()
         engine.dispose()
@@ -108,15 +103,15 @@ def test_recovery_resumes_checkpoint_attempt_without_parent_adjudication() -> No
         assert resume_calls == [(task.task_id, checkpoint_ref)]
         assert attempt_repo.get_by_id("att_resume").status == "fenced"
         recovered_task = task_repo.get_task(task.task_id)
-        assert recovered_task.status == "suspended"
-        assert recovered_task.suspend_reason == "waiting_system"
+        assert recovered_task.status == "pending_dispatch"
+        assert recovered_task.suspend_reason is None
         assert adjudication_repo.get_pending_for_task(task.task_id) is None
     finally:
         session.close()
         engine.dispose()
 
 
-def test_recovery_creates_adjudication_when_checkpoint_resume_fails() -> None:
+def test_recovery_requeues_when_checkpoint_resume_fails() -> None:
     engine = create_engine("sqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)
     Session = sessionmaker(bind=engine)
@@ -154,21 +149,21 @@ def test_recovery_creates_adjudication_when_checkpoint_resume_fails() -> None:
 
         assert service.fence_expired_attempts(datetime.now()) == 1
 
-        adjudication = adjudication_repo.get_pending_for_task(task.task_id)
-        assert adjudication is not None
-        assert adjudication.delivered_status == "stuck"
-        assert "检查点" in adjudication.safe_summary
+        recovered_task = task_repo.get_task(task.task_id)
+        assert recovered_task.status == "pending_dispatch"
+        assert recovered_task.suspend_reason is None
+        assert adjudication_repo.get_pending_for_task(task.task_id) is None
     finally:
         session.close()
         engine.dispose()
 
 
 def test_recovery_skips_terminal_task_and_continues_loop() -> None:
-    """单个 attempt 对应终态 task 时不得中止整个恢复循环，且终态 task 不被翻 suspended。
+    """单个 attempt 对应终态 task 时不得中止整个恢复循环，且终态 task 不被翻回可派发。
 
     修复前：终态 task 的 validate_task_transition 抛 ValueError，recovery for 循环无
     per-iteration try/except → 异常传播中止循环，后续 attempt 永远不被处理；且即使不抛，
-    update_status 也会把已 cancelled 的 task 错翻成 suspended。cancel_graph 只 transition
+    update_status 也会把已 cancelled 的 task 错翻成 pending_dispatch。cancel_graph 只 transition
     task 不 fence 子 attempt，worker 仍在跑 → lease 过期 → recovery 扫到终态 task 是真实路径。
     """
     engine = create_engine("sqlite:///:memory:", future=True)
@@ -222,14 +217,15 @@ def test_recovery_skips_terminal_task_and_continues_loop() -> None:
 
         count = service.fence_expired_attempts(datetime.now())
 
-        # task A 终态被跳过（不翻 suspended、不建裁定），task B 正常恢复；循环未中断
+        # task A 终态被跳过（不翻回可派发、不建裁定），task B 正常恢复；循环未中断
         assert count == 1
         assert attempt_repo.get_by_id("att_a").status == "fenced"
         assert attempt_repo.get_by_id("att_b").status == "fenced"
         assert task_repo.get_task("tsk_a").status == "cancelled"
         assert adjudication_repo.get_pending_for_task("tsk_a") is None
-        assert task_repo.get_task("tsk_b").status == "suspended"
-        assert task_repo.get_task("tsk_b").suspend_reason == "waiting_system"
+        assert task_repo.get_task("tsk_b").status == "pending_dispatch"
+        assert task_repo.get_task("tsk_b").suspend_reason is None
+        assert adjudication_repo.get_pending_for_task("tsk_b") is None
     finally:
         session.close()
         engine.dispose()

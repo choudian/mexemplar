@@ -749,6 +749,30 @@ class UnifiedConfigManager:
             maximum=200,
         )
 
+    # ===== 便捷方法：024 Task Graph Scheduling 配置 =====
+
+    def get_assistant_tasks_complexity_step_threshold(self) -> int:
+        """复杂度分类：步数阈值，≥此值视为中等或超阈值。默认 3。"""
+        return self._get_bounded_positive_int(
+            "assistant_tasks.complexity.step_threshold",
+            3,
+            minimum=2,
+            maximum=20,
+        )
+
+    def get_assistant_tasks_complexity_domain_threshold(self) -> int:
+        """复杂度分类：跨领域阈值，≥此值视为超阈值需规划专员。默认 2。"""
+        return self._get_bounded_positive_int(
+            "assistant_tasks.complexity.domain_threshold",
+            2,
+            minimum=2,
+            maximum=10,
+        )
+
+    def get_assistant_tasks_planner_specialist_name(self) -> str:
+        """规划专员名称，用于 delegate_to_specialist 超阈值委派。默认 'planner'。"""
+        return self.get("assistant_tasks.planner.specialist_name", default="planner")
+
     # ===== 便捷方法：录制配置 =====
 
     def get_websocket_host(self) -> str:

@@ -46,6 +46,22 @@ class AssistantTaskAdjudicationRepository(BaseRepository):
             .first()
         )
 
+    def has_decided_for_task(self, task_id: str, *, decision: str | None = None) -> bool:
+        """Return whether a task already has a decided adjudication.
+
+        Used as the dispatch-layer confirmation gate for ``requires_confirmation`` nodes:
+        the scheduler/tooling may flip the task back to pending_dispatch, but the
+        dispatcher must independently verify an accepted decision exists before
+        creating an attempt.
+        """
+        query = self.session.query(AssistantTaskAdjudication.adjudication_id).filter(
+            AssistantTaskAdjudication.task_id == task_id,
+            AssistantTaskAdjudication.status == "decided",
+        )
+        if decision is not None:
+            query = query.filter(AssistantTaskAdjudication.decision == decision)
+        return query.limit(1).first() is not None
+
     def list_pending_for_graph(self, graph_id: str) -> list[AssistantTaskAdjudication]:
         """该图所有 pending 裁定，供快照批量解析，避免逐 task 的 N+1。"""
         return (

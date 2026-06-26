@@ -27,6 +27,7 @@ class AssistantTaskRepository(BaseRepository):
         assignee_type: str | None = None,
         assignee_id: str | None = None,
         capability_scope: str | None = None,
+        requires_confirmation: bool = False,
         status: str = "pending_dispatch",
     ) -> AssistantTask:
         self.ensure_immediate_transaction()
@@ -43,6 +44,7 @@ class AssistantTaskRepository(BaseRepository):
             assignee_type=assignee_type,
             assignee_id=assignee_id,
             capability_scope=capability_scope,
+            requires_confirmation=requires_confirmation,
             status=status,
         )
         if row.root_task_id is None and row.parent_task_id is not None:
@@ -131,6 +133,42 @@ class AssistantTaskRepository(BaseRepository):
             .order_by(AssistantTaskEdge.created_at, AssistantTaskEdge.edge_id)
             .all()
         )
+
+    def remove_edge(
+        self,
+        *,
+        graph_id: str,
+        source_task_id: str,
+        target_task_id: str,
+        edge_type: str,
+    ) -> bool:
+        """删除一条边并 bump graph_version（与 ``add_edge`` 对称的 cancel 并发围栏）。
+
+        返回是否实际删除了一条边。按 (graph, source, target, type) 精确定位，避免
+        「列全图边 + 循环匹配」的 O(E) 扫描，也把 ORM 删除收敛在 Repository 层。
+        """
+        self.ensure_immediate_transaction()
+        edge = (
+            self.session.query(AssistantTaskEdge)
+            .filter(
+                AssistantTaskEdge.graph_id == graph_id,
+                AssistantTaskEdge.source_task_id == source_task_id,
+                AssistantTaskEdge.target_task_id == target_task_id,
+                AssistantTaskEdge.edge_type == edge_type,
+            )
+            .first()
+        )
+        if edge is None:
+            return False
+        self.session.delete(edge)
+        self.session.flush()
+        # 删边同样改变图拓扑，bump root graph_version 维持 cancel fence（与 add_edge 对称）
+        source = self.get_task(source_task_id)
+        root_id = (source.root_task_id if source is not None else None) or source_task_id
+        root = self.get_task(root_id) if root_id else None
+        if root is not None:
+            root.graph_version += 1
+        return True
 
     def update_status(
         self,
@@ -280,6 +318,41 @@ class AssistantTaskRepository(BaseRepository):
         if session_id is not None:
             query = query.filter(AssistantTask.session_id == session_id)
         return query.order_by(AssistantTask.updated_at, AssistantTask.task_id).limit(limit).all()
+
+    def assert_dependencies_satisfied(self, graph_id: str, task_id: str) -> None:
+        """就绪硬校验：所有 edge_type='dependency' 且 propagation='blocking' 的前置节点必须 status='completed'。
+
+        派发/认领前在数据层强制校验，前置未完成则 raise ValueError。
+        这是 scheduler 就绪扫描的底层兜底：即便 scheduler 扫描有遗漏，claim 层也挡住乱序。
+        """
+        edges = self.list_graph_edges(graph_id)
+        blocking_predecessor_ids = [
+            e.source_task_id
+            for e in edges
+            if e.target_task_id == task_id
+            and e.edge_type == "dependency"
+            and e.propagation == "blocking"
+        ]
+        if not blocking_predecessor_ids:
+            return
+        # 批量查询所有前置节点（避免 N+1）
+        rows = (
+            self.session.query(AssistantTask.task_id, AssistantTask.status)
+            .filter(AssistantTask.task_id.in_(blocking_predecessor_ids))
+            .all()
+        )
+        found_ids = {r.task_id for r in rows}
+        for pred_id in blocking_predecessor_ids:
+            if pred_id not in found_ids:
+                raise ValueError(
+                    f"dependency predecessor {pred_id} not found for task {task_id}"
+                )
+        for r in rows:
+            if r.status != "completed":
+                raise ValueError(
+                    f"dependency not satisfied: predecessor {r.task_id} "
+                    f"is {r.status}, expected completed (task {task_id})"
+                )
 
     def _assert_no_cycle(self, graph_id: str, source_task_id: str, target_task_id: str) -> None:
         if source_task_id == target_task_id:

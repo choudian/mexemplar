@@ -190,6 +190,7 @@ async def decide_task_adjudication(
     adjudication_id: str,
     body: AssistantTaskAdjudicationDecisionRequest,
 ) -> AssistantTaskAdjudicationDecisionResponse:
+    # scheduler 装配已由 AssistantRuntime init 保证，无需 per-request 重复确认
     with _task_service(get_task_adjudication_service) as service:
         try:
             result = service.decide(

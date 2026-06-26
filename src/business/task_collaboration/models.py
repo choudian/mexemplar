@@ -83,6 +83,11 @@ class DeliveredStatus(StrEnum):
     FAILED_INPUT = "failed_input"
 
 
+# Re-export RoleKind from the data layer (canonical definition lives there to
+# avoid circular imports). Business code imports from this module for consistency.
+from src.data.repos.specialist_repository import RoleKind  # noqa: F401
+
+
 class ClaimStatus(StrEnum):
     CLAIMED = "claimed"
     RELEASED = "released"
@@ -131,11 +136,12 @@ class TaskSnapshot:
     status: TaskStatus
     display_phase: Literal["running", "reviewing", "needs_attention", "paused", "done"]
     requires_review: bool
-    safe_explanation: str
-    suspend_reason: SuspendReason | None
-    assignee: TaskAssignee | None
-    adjudication_id: str | None
-    updated_at: datetime | None
+    requires_confirmation: bool = False
+    safe_explanation: str = ""
+    suspend_reason: SuspendReason | None = None
+    assignee: TaskAssignee | None = None
+    adjudication_id: str | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True)

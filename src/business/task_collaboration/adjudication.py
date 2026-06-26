@@ -69,7 +69,15 @@ class TaskAdjudicationService(AtomicTaskService):
         claim_repo: AssistantTaskClaimRepository | None = None,
         graph_service: TaskCollaborationService | None = None,
         failure_bridge: TaskFailureBridge | None = None,
+        scheduler_callback=None,
     ) -> None:
+        # 024: GraphScheduler.on_adjudication_decided 回调
+        # 未显式传入时自动从进程级单例解析，避免各调用方独立注入遗忘导致静默退化
+        if scheduler_callback is None:
+            from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
+            scheduler = get_graph_scheduler()
+            scheduler_callback = scheduler.on_adjudication_decided if scheduler else None
+        self._scheduler_callback = scheduler_callback
         if claim_repo is None and task_repo is not None:
             claim_repo = AssistantTaskClaimRepository(task_repo.session)
         self._init_repos(
@@ -112,11 +120,22 @@ class TaskAdjudicationService(AtomicTaskService):
         if session_id is not None and task.session_id != session_id:
             raise LookupError("pending adjudication not found")
 
-        target_status = {
-            AdjudicationDecision.ACCEPTED: TaskStatus.COMPLETED,
-            AdjudicationDecision.RETURNED: TaskStatus.PENDING_DISPATCH,
-            AdjudicationDecision.ABANDONED: TaskStatus.FAILED,
-        }[resolved_decision]
+        # 024 needs_confirmation 节点执行前暂停的放行：ACCEPTED 翻 pending_dispatch 让
+        # scheduler 派发执行，而非 completed（节点尚未执行，不能算完成）。与普通结果裁定
+        # （执行后回流，ACCEPTED=采纳结果→completed）按 task.requires_confirmation +
+        # 当前 suspended 态区分，无需 schema 改（data-model §2.1 kind 字段的等效落地）。
+        if (
+            resolved_decision == AdjudicationDecision.ACCEPTED
+            and task.requires_confirmation
+            and task.status == TaskStatus.SUSPENDED
+        ):
+            target_status = TaskStatus.PENDING_DISPATCH
+        else:
+            target_status = {
+                AdjudicationDecision.ACCEPTED: TaskStatus.COMPLETED,
+                AdjudicationDecision.RETURNED: TaskStatus.PENDING_DISPATCH,
+                AdjudicationDecision.ABANDONED: TaskStatus.FAILED,
+            }[resolved_decision]
         task_session_id = task.session_id
         task_graph_id = task.graph_id
         task_id_value = task.task_id
@@ -152,9 +171,16 @@ class TaskAdjudicationService(AtomicTaskService):
                 bridge_needed = True
                 bridge_task_id = task.task_id
                 bridge_safe_summary = pending.safe_summary
-            elif resolved_decision == AdjudicationDecision.ACCEPTED:
+            elif (
+                resolved_decision == AdjudicationDecision.ACCEPTED
+                and target_status == TaskStatus.COMPLETED
+            ):
+                # 仅普通结果采纳（→completed）收尾 claim；needs_confirmation 放行
+                # （→pending_dispatch）节点尚未执行、无 claim 可收。
                 complete_claim = True
-            final_status = updated_task.status if updated_task is not None else target_status
+            # I14: update_task_status 返回 None 表示状态翻转失败，final_status 应反映 DB 实际状态
+            # 而非期望的目标状态，否则事件发出的 status 与 DB 不一致。
+            final_status = updated_task.status if updated_task is not None else task.status
 
         # I1：失败桥接 / 看板收尾在事务外用独立 session 执行，是裁定提交后的旁路副作用。
         # 各自 try/except 隔离：副作用失败不得回滚已提交的裁定、不得把成功的决策冒泡成
@@ -192,6 +218,14 @@ class TaskAdjudicationService(AtomicTaskService):
             task_id=task_id_value,
             status=final_status,
         )
+
+        # 024: 通知 GraphScheduler 裁定落定
+        self._notify_scheduler_adjudication_decided(
+            graph_id=task_graph_id,
+            task_id=task_id_value,
+            decision=resolved_decision.value,
+        )
+
         return {
             "accepted": True,
             "adjudicationId": adjudication_id,
@@ -200,6 +234,23 @@ class TaskAdjudicationService(AtomicTaskService):
             "decision": resolved_decision.value,
             "taskStatus": final_status,
         }
+
+    def _notify_scheduler_adjudication_decided(
+        self, *, graph_id: str, task_id: str, decision: str
+    ) -> None:
+        """024: 通知 GraphScheduler 裁定落定。"""
+        if self._scheduler_callback is None:
+            return
+        try:
+            self._scheduler_callback(graph_id, task_id, decision)
+        except Exception as e:
+            logger.warning(
+                "scheduler_callback failed for adjudication decide graph=%s task=%s: %s",
+                graph_id,
+                task_id,
+                e,
+                exc_info=True,
+            )
 
     def fail_root_graph(
         self,
@@ -235,9 +286,7 @@ class TaskAdjudicationService(AtomicTaskService):
                 parent_task_id=root_task_id,
                 graph_id=graph_id_value,
             )
-            final_status = (
-                updated_root.status if updated_root is not None else TaskStatus.FAILED
-            )
+            final_status = updated_root.status if updated_root is not None else root.status
         # bridge 用独立 session 在 _atomic() 外执行（与 decide() 同模式）；失败只告警不回滚
         # 已提交的 root FAILED。root.user_message_sequence 为 None 时 bridge 不桥接（无消息
         # 回合可挂失败卡），root 仍 FAILED，由 task_updated 让前端感知。
@@ -277,8 +326,16 @@ class TaskAdjudicationService(AtomicTaskService):
         # 避免每层重读全图、每个子任务单独 get_task（N+1）。
         tasks_by_id = {task.task_id: task for task in self._tasks.list_graph_tasks(graph_id)}
         children_by_parent: dict[str, list[str]] = {}
+        for task in tasks_by_id.values():
+            if task.parent_task_id:
+                children_by_parent.setdefault(task.parent_task_id, []).append(task.task_id)
         for edge in self._tasks.list_graph_edges(graph_id):
-            children_by_parent.setdefault(edge.source_task_id, []).append(edge.target_task_id)
+            # I2: 仅 dependency 和 delegation 边参与级联取消；
+            # question/meeting_channel/resource_request 边的目标节点不应被取消。
+            if edge.edge_type in ("dependency", "delegation"):
+                children = children_by_parent.setdefault(edge.source_task_id, [])
+                if edge.target_task_id not in children:
+                    children.append(edge.target_task_id)
         return self._cancel_subtree(parent_task_id, children_by_parent, tasks_by_id)
 
     def _cancel_subtree(

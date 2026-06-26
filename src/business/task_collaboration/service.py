@@ -8,9 +8,11 @@ from collections.abc import Callable
 from threading import Lock
 
 from src.business.task_collaboration.models import (
+    DeliveredStatus,
     TaskAdjudicationSnapshot,
     TaskAssignee,
     TaskEdgeSnapshot,
+    TaskEdgeType,
     TaskGraphSnapshot,
     TaskSnapshot,
     TaskStatus,
@@ -46,6 +48,8 @@ _KNOWN_COUNTERS = frozenset(
         "root_graph_failed",
         "root_failure_bridge_failed",
         "fallback_executor_started",
+        "scheduler_advance_failed",
+        "needs_confirmation_pause_failed",
     }
 )
 
@@ -475,6 +479,8 @@ class TaskCollaborationService(AtomicTaskService):
             for node in nodes:
                 node_id = node["nodeId"]
                 task_id = generate_id("tsk")
+                if node_id in node_task_ids:
+                    raise ValueError(f"duplicate nodeId: {node_id}")
                 node_task_ids[node_id] = task_id
 
                 needs_confirm = bool(node.get("needsConfirmation", False))
@@ -495,7 +501,7 @@ class TaskCollaborationService(AtomicTaskService):
                     assignee_type=assignee_type,
                     assignee_id=assignee_id,
                     capability_scope=_encode_capability_scope(node.get("capabilityScope")),
-                    requires_confirmation=1 if needs_confirm else 0,
+                    requires_confirmation=needs_confirm,
                 )
 
             # 3. 逐依赖添加边（自动过 _assert_no_cycle）
@@ -512,7 +518,7 @@ class TaskCollaborationService(AtomicTaskService):
                     graph_id=resolved_graph_id,
                     source_task_id=from_task_id,
                     target_task_id=to_task_id,
-                    edge_type="dependency",
+                    edge_type=TaskEdgeType.DEPENDENCY,
                     propagation="blocking",
                 )
 
@@ -523,7 +529,7 @@ class TaskCollaborationService(AtomicTaskService):
             graph_id=resolved_graph_id,
             change_type="graph_created",
             task_id=root_task_id,
-            status="pending_dispatch",
+            status=TaskStatus.PENDING_DISPATCH,
             display_phase=derive_display_phase("pending_dispatch"),
         )
 
@@ -555,6 +561,7 @@ class TaskCollaborationService(AtomicTaskService):
         """
         applied: list[dict] = []
         rejected: list[dict] = []
+        cancelled_ids_for_emit: list[str] = []
 
         root = self._tasks.get_graph_root(graph_id)
         if root is None:
@@ -563,6 +570,7 @@ class TaskCollaborationService(AtomicTaskService):
         root_task_id = root.task_id
 
         with self._atomic():
+            topology_changed = False
             for change in changes:
                 op = change.get("op")
                 try:
@@ -585,9 +593,10 @@ class TaskCollaborationService(AtomicTaskService):
                             capability_scope=_encode_capability_scope(
                                 change.get("capabilityScope")
                             ),
-                            requires_confirmation=1 if change.get("needsConfirmation") else 0,
+                            requires_confirmation=bool(change.get("needsConfirmation")),
                         )
                         applied.append({"op": op, "nodeId": node_id, "taskId": task_id})
+                        topology_changed = True
 
                     elif op == "skip_node":
                         task_id = change.get("taskId", "")
@@ -608,8 +617,9 @@ class TaskCollaborationService(AtomicTaskService):
                                 continue
                             if candidate.status in TERMINAL_TASK_STATUSES:
                                 continue
-                            self._tasks.update_status(candidate_id, status="cancelled")
+                            self._tasks.update_status(candidate_id, status=TaskStatus.CANCELLED)
                             cancelled_ids.append(candidate_id)
+                            cancelled_ids_for_emit.append(candidate_id)
                         applied.append(
                             {
                                 "op": op,
@@ -617,6 +627,7 @@ class TaskCollaborationService(AtomicTaskService):
                                 "cancelledTaskIds": cancelled_ids,
                             }
                         )
+                        topology_changed = True
 
                     elif op == "add_dependency":
                         from_id = change.get("from", "")
@@ -631,7 +642,7 @@ class TaskCollaborationService(AtomicTaskService):
                             graph_id=graph_id,
                             source_task_id=from_task_id,
                             target_task_id=to_task_id,
-                            edge_type="dependency",
+                            edge_type=TaskEdgeType.DEPENDENCY,
                             propagation="blocking",
                         )
                         applied.append({"op": op, "from": from_id, "to": to_id})
@@ -643,18 +654,33 @@ class TaskCollaborationService(AtomicTaskService):
                             rejected.append({"op": op, "reason": "missing from/to"})
                             continue
                         # 精确删边 + bump graph_version 由 repo 负责（消除 session 直操作与全图边扫描）
-                        self._tasks.remove_edge(
+                        removed = self._tasks.remove_edge(
                             graph_id=graph_id,
                             source_task_id=from_id,
                             target_task_id=to_id,
-                            edge_type="dependency",
+                            edge_type=TaskEdgeType.DEPENDENCY,
                         )
-                        applied.append({"op": op, "from": from_id, "to": to_id})
+                        if removed:
+                            applied.append({"op": op, "from": from_id, "to": to_id})
+                        else:
+                            rejected.append({"op": op, "reason": "edge not found"})
 
                     else:
                         rejected.append({"op": op, "reason": "unknown op"})
                 except ValueError as e:
                     rejected.append({"op": op, "reason": str(e)})
+            # I1: add_node/skip_node 改变图拓扑，需递增 graph_version 维持 cancel 的 CAS fence，
+            # 与 add_edge/remove_edge 在 repo 层的 bump 对称。
+            if topology_changed:
+                root_obj = self._tasks.get_task(root_task_id)
+                if root_obj is not None:
+                    root_obj.graph_version += 1
+
+        # I4: skip_node 取消任务后发事件，让前端即时感知（与 _bulk_transition 同模式）。
+        for task_id_to_emit in cancelled_ids_for_emit:
+            task_obj = self._tasks.get_task(task_id_to_emit)
+            if task_obj is not None:
+                emit_task_updated(self, task_obj)
 
         # 获取当前 graph_version
         root_refreshed = self._tasks.get_task(root_task_id)
@@ -668,10 +694,15 @@ class TaskCollaborationService(AtomicTaskService):
         }
 
     def _blocking_dependency_descendants(self, graph_id: str, task_id: str) -> set[str]:
+        """沿 blocking dependency 边做 BFS，返回 task_id 的所有传递下游 task_id 集合。
+
+        skip_node 用此确定级联取消范围：跳过一个 blocking predecessor 后，
+        其依赖下游再也无法就绪，必须级联取消避免永久停在 pending_dispatch。
+        """
         edges = self._tasks.list_graph_edges(graph_id)
         adjacency: dict[str, set[str]] = {}
         for edge in edges:
-            if edge.edge_type == "dependency" and edge.propagation == "blocking":
+            if edge.edge_type == TaskEdgeType.DEPENDENCY and edge.propagation == "blocking":
                 adjacency.setdefault(edge.source_task_id, set()).add(edge.target_task_id)
 
         descendants: set[str] = set()
@@ -780,14 +811,14 @@ class TaskCollaborationService(AtomicTaskService):
                 task_id=task.task_id,
                 graph_id=task.graph_id,
                 parent_session_id=task.owner_session_id or task.session_id,
-                delivered_status="done",  # 占位：不是真正的执行结果
+                delivered_status=DeliveredStatus.DONE,  # 占位：不是真正的执行结果
                 safe_summary=safe_summary,
                 raw_result_ref=None,
             )
             updated = self._tasks.update_status(
                 task_id,
-                status="suspended",
-                suspend_reason="waiting_user",
+                status=TaskStatus.SUSPENDED,
+                suspend_reason=SuspendReason.WAITING_USER,
             )
         emit_graph_changed(
             self,
@@ -795,8 +826,8 @@ class TaskCollaborationService(AtomicTaskService):
             graph_id=task_graph_id,
             change_type="adjudication_created",
             task_id=task_id,
-            status="suspended",
-            display_phase=derive_display_phase("suspended", has_pending_adjudication=True),
+            status=TaskStatus.SUSPENDED,
+            display_phase=derive_display_phase(TaskStatus.SUSPENDED, has_pending_adjudication=True),
             requires_review=True,
             safe_explanation=_PENDING_REVIEW_EXPLANATION,
         )
@@ -810,7 +841,12 @@ class TaskCollaborationService(AtomicTaskService):
         scheduler 与 dispatcher 复用同一份数据层判定，避免调度器直接访问仓库私有方法
         （分层硬边界：scheduler 经 service 公共表面进入）。
         """
-        self._tasks._assert_dependencies_satisfied(graph_id, task_id)
+        self._tasks.assert_dependencies_satisfied(graph_id, task_id)
+
+    def get_graph_session_id(self, graph_id: str) -> str:
+        """获取图所属的 session_id。公共入口，避免调用方访问 _tasks 私有方法。"""
+        root = self._tasks.get_graph_root(graph_id)
+        return root.session_id if root is not None else ""
 
     def has_accepted_confirmation(self, task_id: str) -> bool:
         """该 task 是否已有 accepted 裁定（requires_confirmation 节点的派发闸门）。"""
@@ -898,7 +934,7 @@ class TaskCollaborationService(AtomicTaskService):
                         has_pending_adjudication=pending is not None,
                     ),
                     requires_review=pending is not None,
-                    requires_confirmation=bool(task.requires_confirmation),
+                    requires_confirmation=task.requires_confirmation,  # DB Boolean → snapshot bool（统一类型）
                     safe_explanation=_PENDING_REVIEW_EXPLANATION if pending is not None else "",
                     suspend_reason=task.suspend_reason,
                     assignee=(
@@ -1044,7 +1080,11 @@ class TaskCollaborationService(AtomicTaskService):
                     "requiresConfirmation": t.requires_confirmation,
                     "safeExplanation": t.safe_explanation,
                     "suspendReason": t.suspend_reason,
-                    "assignee": t.assignee,
+                    "assignee": (
+                        {"type": t.assignee.type, "id": t.assignee.id, "label": t.assignee.label}
+                        if t.assignee is not None
+                        else None
+                    ),
                     "adjudicationId": t.adjudication_id,
                     "updatedAt": t.updated_at,
                 }

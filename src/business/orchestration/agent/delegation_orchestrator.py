@@ -251,7 +251,9 @@ class DelegationOrchestrator:
             logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
             return {"success": False, "message": "专员方法论提示词构建失败，已取消委派。"}
         workflow_id = self._owner._new_delegation_workflow_id(parent_session_id)
-        child_session_id = self._owner._session_store.create_session(workflow_id, AgentType.SPECIALIST)
+        child_session_id = self._owner._session_store.create_session(
+            workflow_id, AgentType.SPECIALIST
+        )
         allowed_methodology_skill_ids = {
             str(item.get("skill_id") or "")
             for item in equipped_skills_snapshot
@@ -270,5 +272,7 @@ class DelegationOrchestrator:
             allowed_methodology_skill_ids=allowed_methodology_skill_ids,
             methodology_equipment_snapshot=methodology_snapshot,
             current_task_id=current_task_id,
+            # 024 C4: 透传 specialist.role_kind，planner 拿 build_task_graph 不拿执行器工具
+            role_kind=getattr(specialist, "role_kind", "executor") or "executor",
         )
         return result

@@ -1255,3 +1255,93 @@ manual quickstart smoke checklist remains open.
 
 - task collaboration 测试套件多文件同 process 跑时,`in_memory_db` fixture teardown 可能撞 `Cannot operate on a closed database`(多线程/dispatch 残留 session)——单文件/分批跑稳定;跨 service 读状态用新 repo 实例避免 identity map 缓存 stale;非被测代码 bug。
 - Feature tasks: 119/119 completed。
+
+---
+
+## Task Graph Scheduling（复杂任务"先分解，再按图执行"纠偏） [Source: specs/024-task-graph-scheduling]
+
+**Revision note (2026-06-26)**: Archived 024 after merge. 在 023 基础上加两层：确定性 DAG 调度器+复杂度路由+规划专员+回流结构化引导。0 新公开 UI 事件 / 0 新 desktop API。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）、React 18 + TypeScript/Vite、Rust stable、FastAPI sidecar
+- **Primary Dependencies**: 复用 023 task_collaboration 基础设施（dispatcher / parent_reentry_sink / adjudication / todos / atomic UoW）、brain specialist 招募、LangChain、blinker、自研 AgentLoop
+- **Storage**: SQLite（`assistant_tasks` +`requires_confirmation`、`brain_specialists` +`role_kind`，Alembic migration v17）；不涉及 DuckDB
+- **Testing**: pytest（`tests/guardrails`、`tests/integration`、`tests/business`）+ Vitest（`frontend/tests/unit`）；多文件同 process 规避 023 teardown flaky，单文件/分批跑
+- **Target Platform**: Windows desktop（Tauri shell）
+- **Performance Goals**: scheduler 推进为确定性本地计算，延迟相对 LLM 调用可忽略；capacity=1 保证一执行器一节点
+- **Constraints**: 助理 100% 调度不执行；capacity=1；0 新公开 UI 事件；复用 023 持久化/恢复/并发安全
+
+### Source Code Structure
+
+```text
+src/
+├── business/
+│   ├── agents/
+│   │   ├── prompts/assistant_prompt.py        # +「复杂度判定与任务分解」段
+│   │   └── tools/assistant_tools.py           # +build_task_graph / +mutate_task_graph；扩 todo_update description
+│   ├── orchestration/agent/
+│   │   ├── tool_registry.py                   # +build_task_graph 装配；+planner role_kind 分支
+│   │   └── orchestrator.py                    # 弱化 _SUBAGENT_WORK_RULES 第2/3条
+│   ├── task_collaboration/
+│   │   ├── graph_scheduler.py                 # 【新增】DAG 调度器（确定性推进、就绪硬校验、暂停/恢复/取消复用）
+│   │   ├── service.py                         # +build_task_graph 原子入口
+│   │   ├── reentry_briefing.py                # +snapshot 参数；+下一步建议/自愈清单/todo 概览 文本段
+│   │   ├── dispatcher.py                      # 失败 entry +healingActions/safeRecoveryHint；paused payload +needs_review reentry_type
+│   │   └── adjudication.py                    # 复用 decide（三态）；needs_confirmation 触发路径
+│   └── brain/specialist_service.py            # +planner role_kind 招募/注册路径
+├── data/
+│   ├── migrations.py                          # +v17：assistant_tasks.requires_confirmation；brain_specialists.role_kind
+│   ├── models_sqlite.py                       # +两列 ORM
+│   └── repos/assistant_task_repository.py     # +_assert_dependencies_satisfied（就绪硬校验）
+├── desktop_api/
+│   ├── assistant_runtime.py                   # _run_assistant_reentry drain 后查 snapshot 传入 build_reentry_briefing
+│   ├── routers/assistant_tasks.py             # 复用 12 endpoint（0 新 API）；snapshot DTO +requiresConfirmation
+│   └── schemas.py                             # +requiresConfirmation 投影
+└── frontend/
+    └── src/
+        ├── screens/assistant/TaskGraphPanel.tsx  # 节点展开看 todo
+        ├── state/assistantTaskStore.ts           # 节点 requiresConfirmation 投影
+        └── api/assistantTasks.ts                 # DTO +requiresConfirmation 类型
+
+tests/
+├── guardrails/                                 # 架构门卫：复杂必落库为 DAG、planner 不拿执行器工具
+├── business/task_collaboration/                # graph_scheduler 单测
+├── integration/                                # 端到端：分解→调度→裁定→自愈→取消
+└── frontend/tests/unit/                        # todo 可见性单测
+```
+
+### Configuration
+
+`agent_tasks.complexity.*`（复杂度阈值等运行时可调项）和 planner 专员注册配置统一走 `UnifiedConfigManager`（默认值在 config.json，app_settings 可覆盖）。具体键：
+
+- `agent_tasks.complexity.steps_threshold` — 预期步数超阈值（≥3 触发超阈值路由）
+- `agent_tasks.complexity.domains_threshold` — 跨领域/工具族数超阈值（≥2 触发超阈值路由）
+- 复杂度分类为 LLM 软判定，门卫测试守落库形态不守分类正确性
+
+无新密钥。
+
+### Key Design Decisions (from research.md)
+
+- **DEC-A**: 新增 `requires_confirmation` 列（不复用 suspend_reason / capability_scope）
+- **DEC-B**: 完整规划专员（`role_kind` + tool_registry 角色分支 + 招募/注册路径）
+- **DEC-C**: 自愈在 pending adjudication 阶段介入，裁定动作复用现有三态（accepted/returned/abandoned）
+- **DEC-D**: 需确认节点暂停走 adjudication 暂停路径 + `needs_review` reentry_type
+- **DEC-E**: todo 可见性走 TaskGraphPanel 节点展开（非 014 SubagentDrawer——023 dispatcher 路径下 task executor 不发 `assistant.subagent` 事件）
+- **DEC-F**: `build_task_graph` 接受 per-edge graph_version 递增（建图期不可并发取消）
+- **DEC-G**: `suspendReason` 首版纯复用 `waiting_user`（0 事件改动，守住 CC-139）
+- **DEC-H**: 回流结构化引导作为 briefing 文本段注入（briefing 保持纯函数可单测）
+
+### Testing Strategy
+
+- **架构门卫**：命中超阈值规则的任务必须落库为带 dependency 边 DAG 且由 scheduler 驱动；planner specialist 不拿执行器工具
+- **DAG scheduler 单测**：就绪激活、串/并行混合、无环校验、就绪硬校验拒乱序、暂停/恢复
+- **裁定链路**：需确认节点正确暂停回流、主助理裁定后续跑；失败自愈（returned 重试/换执行器、abandoned 放弃、改图）
+- **executor 异常 unassign**：lease 过期后节点退回 pending_dispatch、图不卡死
+- **回流引导**：完成/失败回流 briefing 正确附下一步建议/自愈动作/todo 概览
+- **todo 引导**：多步节点执行器主动用 todo_update 建清单并实时更新
+- **todo 可见性**：TaskGraphPanel 节点展开可见、默认界面不展示
+- **取消/改主意**：顺图停止、改主意走 cancel+重分解
+- **回归**：简单任务仍走快速委派快捷通道；023 durable accepted/恢复/并发安全路径不退化
+
+Feature tasks: 42/42 completed。

@@ -181,6 +181,30 @@ TaskDisplayPhase = Literal["running", "reviewing", "needs_attention", "paused", 
 TaskSuspendReason = Literal["waiting_user", "waiting_system", "user_stop"]
 
 
+# I8: 运行时同步断言——business StrEnum 与 schema Literal 必须保持一致。
+# 新增/删除状态值时，如果只改了一边，import 时会立刻报错。
+def _assert_enum_literal_sync() -> None:
+    from src.business.task_collaboration.models import (
+        TaskStatus as _TaskStatusEnum,
+        SuspendReason as _SuspendReasonEnum,
+    )
+    _status_values = {s.value for s in _TaskStatusEnum}
+    _literal_values = set(TaskStatus.__args__)  # type: ignore[attr-defined]
+    assert _status_values == _literal_values, (
+        f"TaskStatus enum/label mismatch: enum={_status_values - _literal_values} "
+        f"literal={_literal_values - _status_values}"
+    )
+    _suspend_values = {s.value for s in _SuspendReasonEnum}
+    _suspend_literal_values = set(TaskSuspendReason.__args__)  # type: ignore[attr-defined]
+    assert _suspend_values == _suspend_literal_values, (
+        f"SuspendReason enum/label mismatch: enum={_suspend_values - _suspend_literal_values} "
+        f"literal={_suspend_literal_values - _suspend_values}"
+    )
+
+
+_assert_enum_literal_sync()
+
+
 class AssistantTaskAssignee(BaseModel):
     type: AssistantExecutorType
     id: str
@@ -196,6 +220,7 @@ class AssistantTaskSnapshot(BaseModel):
     status: TaskStatus
     displayPhase: TaskDisplayPhase
     requiresReview: bool = False
+    requiresConfirmation: bool = False
     safeExplanation: str = ""
     suspendReason: TaskSuspendReason | None = None
     assignee: AssistantTaskAssignee | None = None

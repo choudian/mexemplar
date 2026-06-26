@@ -131,16 +131,8 @@ class AssistantRuntime:
             kick_reentry_run=self.kick_reentry_run,
         )
         self._reentry_sink = sink
-        set_parent_reentry_callback = getattr(
-            self._orchestrator,
-            "set_parent_reentry_callback",
-            None,
-        )
-        if callable(set_parent_reentry_callback):
-            set_parent_reentry_callback(sink.dispatch)
-        set_reentry_sink = getattr(self._orchestrator, "set_reentry_sink", None)
-        if callable(set_reentry_sink):
-            set_reentry_sink(sink)
+        self._orchestrator.set_parent_reentry_callback(sink.dispatch)
+        self._orchestrator.set_reentry_sink(sink)
 
     def has_active_worker(self, session_id: str) -> bool:
         with self._workers_lock:
@@ -240,17 +232,25 @@ class AssistantRuntime:
         try:
             entries = self._reentry_sink.drain(session_id) if self._reentry_sink else []
             # 024: drain 后查一次 graph snapshot 传入 briefing（DEC-H）
-            # 复用同一个 Service 实例做 pending_ids 过滤和 snapshot 查询
             snapshot = None
-            from src.business.task_collaboration.service import TaskCollaborationService
+            if graph_id is not None:
+                from src.business.task_collaboration.service import TaskCollaborationService
 
-            with TaskCollaborationService() as service:
-                entries = self._drop_decided_entries(graph_id, entries, service)
-                if graph_id is not None:
-                    try:
+                try:
+                    with TaskCollaborationService() as service:
                         snapshot = service.get_graph_snapshot(session_id=session_id, graph_id=graph_id)
-                    except Exception:
-                        logger.debug("graph snapshot query failed for briefing, degrading gracefully")
+                except Exception:
+                    logger.debug("graph snapshot query failed for briefing, degrading gracefully")
+            # 024: 从 snapshot 的 pending adjudications 派生 pending_ids，省一次独立 DB 查询；
+            # 无 snapshot 时退回旧路径（service 查询）
+            if snapshot is not None:
+                pending_ids = {a.adjudication_id for a in snapshot.adjudications}
+                entries = filter_pending_entries(entries, pending_ids)
+            elif entries and graph_id:
+                from src.business.task_collaboration.service import TaskCollaborationService
+
+                with TaskCollaborationService() as service:
+                    entries = self._drop_decided_entries(graph_id, entries, service)
             summary = build_reentry_briefing(entries, snapshot=snapshot)
             result = self._get_orchestrator().run_agent(
                 AgentType.ASSISTANT,

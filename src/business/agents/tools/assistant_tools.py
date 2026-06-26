@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from src.utils.timezone import utc_now
 
 from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
@@ -554,6 +555,10 @@ __all__ = [
     "create_meeting_send_message_handler",
     "TODO_UPDATE_SCHEMA",
     "create_todo_update_handler",
+    "BUILD_TASK_GRAPH_SCHEMA",
+    "create_build_task_graph_handler",
+    "MUTATE_TASK_GRAPH_SCHEMA",
+    "create_mutate_task_graph_handler",
 ]
 
 
@@ -1043,7 +1048,15 @@ def create_meeting_send_message_handler(
 
 TODO_UPDATE_SCHEMA = make_tool_schema(
     name="todo_update",
-    description="更新当前被派任务的私人 checklist。Todo 不委派、不裁定、不进入任务图。",
+    description=(
+        "更新当前被派任务的私人 checklist。"
+        "何时用：当前任务内部 ≥3 个子步骤、或非平凡的多步执行时，开工前先用本工具列出 todo。"
+        "何时不用：1-2 步的简单任务直接做；纯信息查询不必列 todo。"
+        "三态流转：todo（待办）→ doing（进行中，同一时刻尽量一件）→ done（真正完成）/ skipped（有意跳过）。"
+        "实时更新：每完成一个子步骤立即标 done 再推进下一个，不要全做完一次性更新。"
+        "完成判定红线：未真正完成的子步骤绝不标 done；拿不准就先列 todo 再动手。"
+        "范围：todo 是你当前任务的私人 checklist，不委派、不裁定、不进入任务图依赖。"
+    ),
     properties={
         "taskId": {"type": "string", "description": "当前统一任务 ID"},
         "items": {
@@ -1093,6 +1106,224 @@ def create_todo_update_handler(
         )
 
     return todo_update_handler
+
+
+# ===== 024 Task Graph Scheduling 工具 =====
+
+
+BUILD_TASK_GRAPH_SCHEMA = make_tool_schema(
+    name="build_task_graph",
+    description=(
+        "把一个复杂任务分解成一张带依赖关系的任务图并原子落库，交由 DAG 调度器按依赖自动推进。"
+        "仅用于多步、有先后依赖或跨领域的复杂任务；1-2 步的简单任务直接用 "
+        "delegate_to_subagent/specialist，不要建图。"
+        "节点粒度=一个执行器（专员/子agent）的一次连贯执行；"
+        "节点内部若≥3步，执行器会用 todo_update 自行分解子步骤。"
+        "高风险/不可逆节点（发邮件、删数据、对外发送）必须标 needsConfirmation=true，"
+        "调度器会在执行前暂停等主助理裁定。"
+    ),
+    properties={
+        "nodes": {
+            "type": "array",
+            "minItems": 1,
+            "description": "任务节点列表",
+            "items": {
+                "type": "object",
+                "required": ["nodeId", "title", "description"],
+                "properties": {
+                    "nodeId": {
+                        "type": "string",
+                        "description": "节点稳定标识，用于 dependencies 引用",
+                    },
+                    "title": {"type": "string", "description": "节点标题"},
+                    "description": {"type": "string", "description": "自包含的执行指令"},
+                    "assigneeHint": {
+                        "type": "string",
+                        "enum": ["specialist", "ephemeral_subagent"],
+                        "description": "建议执行器类型",
+                    },
+                    "assigneeId": {
+                        "type": "string",
+                        "description": "可选：具体 specialist id；没有具体 id 时 specialist hint 只作建议",
+                    },
+                    "capabilityScope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "该节点允许的工具白名单",
+                    },
+                    "needsConfirmation": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "高风险/不可逆节点标 true",
+                    },
+                },
+            },
+        },
+        "dependencies": {
+            "type": "array",
+            "description": "先后依赖；from 必须先于 to 完成。无依赖的节点可并行。",
+            "items": {
+                "type": "object",
+                "required": ["from", "to"],
+                "properties": {
+                    "from": {"type": "string", "description": "前置节点 nodeId"},
+                    "to": {"type": "string", "description": "后继节点 nodeId"},
+                },
+            },
+        },
+    },
+    required=["nodes"],
+)
+
+
+def _latest_user_message_sequence(session_id: str) -> int | None:
+    try:
+        from src.data.repos import MessageRepository
+
+        with MessageRepository() as repo:
+            return repo.get_latest_user_message_sequence(session_id)
+    except Exception:
+        logger.warning(
+            "build_task_graph: failed to resolve latest user message sequence for %s",
+            session_id,
+            exc_info=True,
+        )
+        return None
+
+
+def _trigger_graph_scheduler_start(graph_id: str, *, source: str) -> bool:
+    try:
+        from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
+
+        scheduler = get_graph_scheduler()
+        if scheduler is None:
+            return False
+        scheduler.start_graph(graph_id)
+        return True
+    except Exception:
+        logger.warning(
+            "%s: scheduler start_graph failed for %s",
+            source,
+            graph_id,
+            exc_info=True,
+        )
+        return False
+
+
+def create_build_task_graph_handler(
+    session_id: str,
+    user_message_sequence_provider: Callable[[], int | None] | None = None,
+):
+    """工厂函数：创建 build_task_graph handler。"""
+
+    def build_task_graph_handler(
+        nodes: list[dict] | None = None,
+        dependencies: list[dict] | None = None,
+    ) -> str:
+        """将复杂任务分解成带依赖的 DAG 并原子落库。"""
+
+        def _action() -> str:
+            from src.business.task_collaboration.service import TaskCollaborationService
+
+            with TaskCollaborationService() as service:
+                result = service.build_task_graph(
+                    session_id=session_id,
+                    nodes=nodes or [],
+                    dependencies=dependencies,
+                    user_message_sequence=(
+                        user_message_sequence_provider()
+                        if user_message_sequence_provider is not None
+                        else _latest_user_message_sequence(session_id)
+                    ),
+                )
+            # 024: 建图后触发 scheduler 推进就绪节点（FR-006 自动推进）。scheduler 未装配
+            # 时优雅降级（图已持久化，后续 dispatch/recovery 兜底）。
+            graph_id = result.get("graphId")
+            if graph_id:
+                _trigger_graph_scheduler_start(graph_id, source="build_task_graph")
+            return to_json(result)
+
+        return _run_task_service("build_task_graph", "建图时发生内部错误，请稍后重试。", _action)
+
+    return build_task_graph_handler
+
+
+MUTATE_TASK_GRAPH_SCHEMA = make_tool_schema(
+    name="mutate_task_graph",
+    description=(
+        "在任务图自愈时修改图结构：新增节点、跳过节点、增删依赖边。"
+        "仅当回流建议「改图」且确有必要时使用；"
+        "每次变更会 bump graph_version 并重新过无环校验。"
+    ),
+    properties={
+        "graphId": {"type": "string", "description": "任务图 ID"},
+        "changes": {
+            "type": "array",
+            "description": "变更列表",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "op": {
+                        "type": "string",
+                        "enum": [
+                            "add_node",
+                            "skip_node",
+                            "add_dependency",
+                            "remove_dependency",
+                        ],
+                    },
+                    "nodeId": {"type": "string"},
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "assigneeHint": {
+                        "type": "string",
+                        "enum": ["specialist", "ephemeral_subagent"],
+                    },
+                    "assigneeId": {"type": "string"},
+                    "capabilityScope": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                    },
+                    "needsConfirmation": {"type": "boolean", "default": False},
+                    "taskId": {"type": "string"},
+                    "from": {"type": "string"},
+                    "to": {"type": "string"},
+                },
+            },
+        },
+        "reason": {"type": "string", "description": "自愈理由（可追溯）"},
+    },
+    required=["graphId", "changes"],
+)
+
+
+def create_mutate_task_graph_handler(session_id: str):
+    """工厂函数：创建 mutate_task_graph handler。"""
+
+    def mutate_task_graph_handler(
+        graphId: str = "",
+        changes: list[dict] | None = None,
+        reason: str = "",
+    ) -> str:
+        """自愈改图。"""
+
+        def _action() -> str:
+            from src.business.task_collaboration.service import TaskCollaborationService
+
+            with TaskCollaborationService() as service:
+                result = service.mutate_task_graph(
+                    graph_id=graphId,
+                    session_id=session_id,
+                    changes=changes or [],
+                    reason=reason,
+                )
+            if result.get("rescanned") and graphId:
+                _trigger_graph_scheduler_start(graphId, source="mutate_task_graph")
+            return to_json(result)
+
+        return _run_task_service("mutate_task_graph", "改图时发生内部错误，请稍后重试。", _action)
+
+    return mutate_task_graph_handler
 
 
 # ===== 调度工具 =====
@@ -1266,6 +1497,7 @@ def create_decide_task_adjudication_handler(session_id: str):
         instruction: str = "",
     ) -> str:
         """对子任务结果做裁定（认可/打回/放弃）"""
+
         def _action():
             from src.business.task_collaboration.adjudication import TaskAdjudicationService
 
@@ -1309,6 +1541,7 @@ def create_abandon_request_graph_handler(session_id: str):
 
     def abandon_request_graph_handler(safeSummary: str) -> str:
         """放弃整个用户请求任务图（根任务失败，触发安全失败卡）"""
+
         def _action():
             from src.business.task_collaboration.adjudication import TaskAdjudicationService
 
@@ -1319,9 +1552,7 @@ def create_abandon_request_graph_handler(session_id: str):
                 )
             return to_json(result)
 
-        return _run_task_service(
-            "abandon_request_graph", "放弃请求时发生内部错误。", _action
-        )
+        return _run_task_service("abandon_request_graph", "放弃请求时发生内部错误。", _action)
 
     return abandon_request_graph_handler
 

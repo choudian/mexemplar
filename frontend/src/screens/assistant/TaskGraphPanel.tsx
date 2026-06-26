@@ -2,6 +2,7 @@ import { useState } from "react";
 
 import type {
   AssistantTaskGraphSnapshot,
+  AssistantTodoItem,
   TaskAdjudicationDecision,
 } from "../../api/assistantTasks";
 
@@ -11,6 +12,13 @@ const DISPLAY_PHASE_LABELS: Record<string, string> = {
   needs_attention: "需要关注",
   paused: "已暂停",
   done: "已完成",
+};
+
+const TODO_STATUS_LABELS: Record<string, string> = {
+  todo: "待办",
+  doing: "进行中",
+  done: "已完成",
+  skipped: "已跳过",
 };
 
 interface TaskGraphPanelProps {
@@ -23,6 +31,10 @@ interface TaskGraphPanelProps {
     decision: TaskAdjudicationDecision,
     instruction?: string,
   ) => void;
+  /** 024: 按 taskId 索引的 todo 列表，从 assistantTaskStore.todosByTaskId 传入 */
+  todosByTaskId?: Record<string, AssistantTodoItem[]>;
+  /** 024: 点击节点展开时触发加载该节点 todo 的回调 */
+  onLoadTodos?: (taskId: string) => void;
 }
 
 export function TaskGraphPanel({
@@ -31,8 +43,14 @@ export function TaskGraphPanel({
   onStop,
   onContinue,
   onDecide,
+  todosByTaskId,
+  onLoadTodos,
 }: TaskGraphPanelProps) {
   const [expanded, setExpanded] = useState(false);
+  /** 024: 按节点 taskId 记录哪些节点展开了 todo */
+  const [expandedTodoTaskIds, setExpandedTodoTaskIds] = useState<Set<string>>(
+    new Set(),
+  );
 
   if (loading) {
     return (
@@ -56,6 +74,20 @@ export function TaskGraphPanel({
     (task) => task.displayPhase === "paused" && task.suspendReason === "user_stop",
   );
 
+  const toggleTodoExpand = (taskId: string) => {
+    setExpandedTodoTaskIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(taskId)) {
+        next.delete(taskId);
+      } else {
+        next.add(taskId);
+        // 首次展开时触发加载 todo（懒加载）
+        onLoadTodos?.(taskId);
+      }
+      return next;
+    });
+  };
+
   return (
     <section className="assistant-collab-panel assistant-task-graph" aria-label="任务进度">
       <div className="assistant-task-graph-actions">
@@ -78,42 +110,77 @@ export function TaskGraphPanel({
         ) : null}
       </div>
       <ul>
-        {graph.tasks.map((task) => (
-          <li key={task.taskId}>
-            <span>{task.title}</span>
-            <span>{DISPLAY_PHASE_LABELS[task.displayPhase] ?? "进行中"}</span>
-            {expanded ? (
-              <div>
-                <p>{task.descriptionPreview}</p>
-                {task.safeExplanation ? <p>{task.safeExplanation}</p> : null}
-                {task.requiresReview && task.adjudicationId ? (
-                  <div aria-label={`${task.title} 审核`}>
-                    <button
-                      type="button"
-                      onClick={() => onDecide?.(task.adjudicationId!, "accepted")}
-                    >
-                      认可
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        onDecide?.(task.adjudicationId!, "returned", "请根据反馈返工。")
-                      }
-                    >
-                      打回
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onDecide?.(task.adjudicationId!, "abandoned")}
-                    >
-                      放弃
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
-          </li>
-        ))}
+        {graph.tasks.map((task) => {
+          const isTodoExpanded = expandedTodoTaskIds.has(task.taskId);
+          const todos = todosByTaskId?.[task.taskId];
+          const hasTodos = todos && todos.length > 0;
+          // 只为非根节点展示 todo 入口（根节点是 DAG 容器，不执行）
+          const canShowTodoToggle = task.parentTaskId !== null;
+
+          return (
+            <li key={task.taskId}>
+              <span>{task.title}</span>
+              <span>{DISPLAY_PHASE_LABELS[task.displayPhase] ?? "进行中"}</span>
+              {task.requiresConfirmation && (
+                <span title="高风险/不可逆节点，执行前需确认" aria-label="需确认">⚠️</span>
+              )}
+              {/* 024: 按节点展开 todo（DEC-E：默认不展示，展开可见） */}
+              {canShowTodoToggle && (
+                <button
+                  type="button"
+                  className="task-node-todo-toggle"
+                  aria-expanded={isTodoExpanded}
+                  aria-label={isTodoExpanded ? `收起 ${task.title} 的子步骤` : `展开 ${task.title} 的子步骤`}
+                  onClick={() => toggleTodoExpand(task.taskId)}
+                >
+                  {isTodoExpanded ? "收起子步骤" : "查看子步骤"}
+                </button>
+              )}
+              {isTodoExpanded && hasTodos ? (
+                <ul className="task-node-todo-list" aria-label={`${task.title} 的子步骤`}>
+                  {todos.map((todo) => (
+                    <li key={todo.todoId} className={`task-node-todo-item task-node-todo-${todo.status}`}>
+                      <span className="todo-status">{TODO_STATUS_LABELS[todo.status] ?? todo.status}</span>
+                      <span className="todo-text">{todo.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              ) : isTodoExpanded && !hasTodos ? (
+                <p className="task-node-todo-empty">暂无子步骤信息</p>
+              ) : null}
+              {expanded ? (
+                <div>
+                  <p>{task.descriptionPreview}</p>
+                  {task.safeExplanation ? <p>{task.safeExplanation}</p> : null}
+                  {task.requiresReview && task.adjudicationId ? (
+                    <div aria-label={`${task.title} 审核`}>
+                      <button
+                        type="button"
+                        onClick={() => onDecide?.(task.adjudicationId!, "accepted")}
+                      >
+                        认可
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          onDecide?.(task.adjudicationId!, "returned", "请根据反馈返工。")
+                        }
+                      >
+                        打回
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onDecide?.(task.adjudicationId!, "abandoned")}
+                      >
+                        放弃
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </section>
   );

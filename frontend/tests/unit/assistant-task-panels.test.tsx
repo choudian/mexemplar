@@ -27,6 +27,7 @@ const GRAPH: AssistantTaskGraphSnapshot = {
       status: "running",
       displayPhase: "running",
       requiresReview: false,
+      requiresConfirmation: false,
       safeExplanation: "",
       suspendReason: null,
       assignee: null,

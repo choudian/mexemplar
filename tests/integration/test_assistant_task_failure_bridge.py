@@ -122,6 +122,31 @@ def test_fail_root_graph_cascades_cancel_to_children() -> None:
     assert fresh_repo.get_task(child_id).status == "cancelled"
 
 
+def test_fail_root_graph_cascades_cancel_to_build_task_graph_nodes() -> None:
+    """build_task_graph 的 DAG 节点只挂 parent_task_id 时也必须随 root 取消。"""
+    from src.business.task_collaboration.adjudication import TaskAdjudicationService
+
+    service = TaskCollaborationService()
+    result = service.build_task_graph(
+        session_id="ast_fail_dag_cascade",
+        user_message_sequence=23,
+        nodes=[
+            {"nodeId": "n1", "title": "A", "description": "先做"},
+            {"nodeId": "n2", "title": "B", "description": "后做"},
+        ],
+        dependencies=[{"from": "n1", "to": "n2"}],
+    )
+
+    TaskAdjudicationService().fail_root_graph(
+        session_id="ast_fail_dag_cascade",
+        safe_summary="整张请求无法完成",
+    )
+
+    fresh_repo = AssistantTaskRepository()
+    assert fresh_repo.get_task(result["nodeTaskIds"]["n1"]).status == "cancelled"
+    assert fresh_repo.get_task(result["nodeTaskIds"]["n2"]).status == "cancelled"
+
+
 def test_fail_root_graph_without_user_message_sequence_fails_without_card() -> None:
     """root 无 user_message_sequence（无消息上下文）时，fail_root_graph 仍翻 root FAILED，
     但 bridge 不桥接（无消息回合可挂失败卡），不产生 run 失败卡。"""

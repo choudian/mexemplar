@@ -170,6 +170,7 @@ Assistant tool handler / Orchestrator
 - 协作范式建立在同一 assignment 模型上：定向委派、开放看板原子认领、agent-to-agent question/resource route、受监督 message-only 会议通道。会议不代理工具、不扩授权，有轮次/时长预算，超限回父侧裁定。
 - Todo 是执行者私人 checklist，按 Task + executor 持久化，状态词为 `todo / doing / done / skipped`，不创建 Task 节点、不进裁定、不进入 brain memory。
 - 前端只读 task snapshot 和公开 UI events：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。缺口或事件会话不匹配时走 `backend.resync_required` 拉 graph/board/meeting/todo 权威快照。
+- 024 DAG 调度：复杂任务（中等主助理自拆 / 超阈值委派 `role_kind='planner'` 规划专员）经 `build_task_graph` 原子落库为带 `dependency` 边的 DAG，由确定性 `GraphScheduler`（`task_collaboration/graph_scheduler.py`，orchestrator 装配的进程级单例）按依赖就绪自动推进——建图 handler 触发 `start_graph`，节点 attempt 完成经 `scheduler_callback` 回调 `on_attempt_outcome` 推进下游，全图完成经 `ParentReentrySink.notify_graph_complete` kick 续跑汇报。`requires_confirmation=1` 高风险节点派发前建 needs_confirmation adjudication 暂停（`waiting_user`），`decide(accepted)` 放行翻 `pending_dispatch` 派发（普通结果裁定 `decide(accepted)` 仍翻 `completed`，023 语义不回归）；节点失败回流附确定性 `healingActions` 候选集（advisory）+ `safeRecoveryHint` 安全文案。就绪硬校验 `_assert_dependencies_satisfied` 在 scheduler 与 dispatcher 派发层双层兜底。节点 todo 概览在回流 briefing 中按进行中节点标题渲染，详细 todo 经 TaskGraphPanel 节点展开按需可见、默认任务界面不展示（DEC-E）。
 
 ### PM → 程序员的交接
 

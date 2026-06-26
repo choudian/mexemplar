@@ -194,7 +194,8 @@ def _parse_capability_scope(raw: str | None) -> list[str] | None:
     try:
         parsed = json.loads(raw)
     except (TypeError, ValueError):
-        return None
+        legacy = [item.strip() for item in str(raw).split(",") if item.strip()]
+        return legacy or None
     if isinstance(parsed, list) and parsed:
         return parsed
     return None

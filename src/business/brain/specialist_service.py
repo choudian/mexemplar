@@ -58,6 +58,7 @@ class SpecialistService:
         origin: str = "user_conversation",
         reason: str = "",
         caller_type: Optional[str] = None,
+        role_kind: str = "executor",
     ) -> dict:
         """
         创建新专员。
@@ -70,6 +71,7 @@ class SpecialistService:
             origin: 创建来源（auto_recruitment / user_conversation / user_management_ui）
             reason: 创建原因
             caller_type: UI/API 调用者类型；提供时由 Service 生成审计来源和默认原因
+            role_kind: 角色类型（executor / planner）。024 新增。
 
         Returns:
             创建的专员信息 dict
@@ -89,6 +91,7 @@ class SpecialistService:
             reason=reason,
             commit=True,
             emit_events=True,
+            role_kind=role_kind,
         )
 
     def _create_specialist_record(
@@ -102,6 +105,7 @@ class SpecialistService:
         reason: str,
         commit: bool,
         emit_events: bool,
+        role_kind: str = "executor",
     ) -> dict:
         """Create a specialist using this service repository and optional outer transaction."""
         # 检查名称唯一性
@@ -121,6 +125,7 @@ class SpecialistService:
                 origin=origin,
                 reason=reason,
                 commit=False,
+                role_kind=role_kind,
             )
             specialist = self._repo.get_specialist(specialist_id)
             from src.business.brain.skill_equipment_service import SkillEquipmentService
@@ -317,6 +322,41 @@ class SpecialistService:
             return created
         finally:
             brain_repo.close()
+
+    def ensure_planner_specialist(self) -> dict:
+        """024: 确保规划专员存在（幂等）。若不存在则自动注册一个默认规划专员。
+
+        首版用配置/手动注册一个 planner 专员（避免依赖信号阈值冷启动），
+        后续接 brain 累计信号自动招募。
+        """
+        from src.data.unified_config import get_unified_config
+
+        config = get_unified_config()
+        planner_name = config.get_assistant_tasks_planner_specialist_name()
+
+        existing = self._repo.get_specialist_by_name(planner_name)
+        if existing is not None:
+            return {
+                "specialist_id": existing.specialist_id,
+                "name": existing.name,
+                "role_kind": existing.role_kind,
+            }
+
+        return self.create_specialist(
+            name=planner_name,
+            description="复杂任务分解专员：将超阈值复杂任务分解为带依赖的 DAG 任务图，交由调度器按序执行。只规划不执行。",
+            role_definition=(
+                "你是规划专员。你的唯一职责是将复杂任务分解为一张带依赖关系的任务图（DAG）。"
+                "你只输出任务图，不执行任何具体操作。"
+                "节点粒度 = 一个执行器的一次连贯执行。"
+                "高风险/不可逆节点必须标 needsConfirmation=true。"
+                "不要使用 todo_update、ask_parent 等执行器工具。"
+            ),
+            tool_whitelist=["build_task_graph"],
+            origin="auto_planner_registration",
+            reason="024: 自动注册默认规划专员（避免信号阈值冷启动）",
+            role_kind="planner",
+        )
 
     def _recruit_from_signal(self, signal, brain_repo) -> Optional[dict]:
         """

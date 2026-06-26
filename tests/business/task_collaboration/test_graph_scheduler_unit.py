@@ -460,6 +460,165 @@ class TestExecutorRecovered:
         assert sum(1 for d in dispatcher.dispatched if d["task_id"] == n1) == 2
 
 
+class TestSpecialistVsEphemeralExecutor:
+    """I18-1: _dispatch_node resolves specialist vs ephemeral_subagent executor."""
+
+    def test_specialist_assignee_dispatched_with_specialist_executor(self):
+        """assigneeHint=specialist + assigneeId → executor_type=specialist, executor_id=assigneeId."""
+        graph_id, node_ids, _, _ = _build_graph(
+            [
+                {
+                    "nodeId": "n1",
+                    "title": "Specialist task",
+                    "description": "Routed to specialist",
+                    "assigneeHint": "specialist",
+                    "assigneeId": "spec_1",
+                }
+            ]
+        )
+        dispatcher = FakeDispatcher()
+        scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
+        scheduler.start_graph(graph_id)
+
+        assert len(dispatcher.dispatched) == 1
+        d = dispatcher.dispatched[0]
+        assert d["task_id"] == node_ids["n1"]
+        assert d["executor_type"] == "specialist"
+        assert d["executor_id"] == "spec_1"
+
+    def test_no_assignee_dispatched_with_ephemeral_executor(self):
+        """No assigneeHint → executor_type=ephemeral_subagent, executor_id=task_id."""
+        graph_id, node_ids, _, _ = _build_graph(
+            [{"nodeId": "n1", "title": "Normal task", "description": "Default executor"}]
+        )
+        dispatcher = FakeDispatcher()
+        scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
+        scheduler.start_graph(graph_id)
+
+        assert len(dispatcher.dispatched) == 1
+        d = dispatcher.dispatched[0]
+        assert d["task_id"] == node_ids["n1"]
+        assert d["executor_type"] == "ephemeral_subagent"
+        assert d["executor_id"] == node_ids["n1"]
+
+
+class TestRunExceptionIsolation:
+    """I18-2: _run() exception isolation — scheduler catches internally, increments counter."""
+
+    def test_service_enter_failure_does_not_propagate(self, monkeypatch):
+        """TaskCollaborationService.__enter__ raises → scheduler catches, no exception propagates."""
+        from src.business.task_collaboration import service as svc_module
+
+        original_enter = svc_module.TaskCollaborationService.__enter__
+        monkeypatch.setattr(
+            svc_module.TaskCollaborationService,
+            "__enter__",
+            lambda self: (_ for _ in ()).throw(RuntimeError("db connection failed")),
+        )
+        try:
+            dispatcher = FakeDispatcher()
+            scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
+            # Must not raise — scheduler catches internally
+            scheduler.start_graph("any_graph_id")
+        finally:
+            monkeypatch.setattr(svc_module.TaskCollaborationService, "__enter__", original_enter)
+
+    def test_service_enter_failure_increments_counter(self, monkeypatch):
+        """TaskCollaborationService.__enter__ raises → scheduler_advance_failed counter incremented."""
+        from src.business.task_collaboration import service as svc_module
+
+        svc_module.reset_task_collaboration_counters()
+        original_enter = svc_module.TaskCollaborationService.__enter__
+        monkeypatch.setattr(
+            svc_module.TaskCollaborationService,
+            "__enter__",
+            lambda self: (_ for _ in ()).throw(RuntimeError("db connection failed")),
+        )
+        try:
+            dispatcher = FakeDispatcher()
+            scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
+            scheduler.start_graph("any_graph_id")
+        finally:
+            monkeypatch.setattr(svc_module.TaskCollaborationService, "__enter__", original_enter)
+
+        counters = svc_module.get_task_collaboration_counters()
+        assert counters.get("scheduler_advance_failed", 0) >= 1
+
+
+class TestNeedsConfirmationAdjudicationAcceptedPaths:
+    """I18-8: requires_confirmation + accepted → pending_dispatch (not completed);
+    normal running task + accepted → completed (result adjudication, not confirmation release)."""
+
+    def test_confirmed_suspended_accepted_goes_to_pending_dispatch(self):
+        """requires_confirmation=True, status=suspended → ACCEPTED → pending_dispatch."""
+        graph_id, node_ids, _, session_id = _build_graph(
+            [
+                {
+                    "nodeId": "n1",
+                    "title": "High risk",
+                    "description": "Needs confirmation",
+                    "needsConfirmation": True,
+                }
+            ]
+        )
+        n1 = node_ids["n1"]
+        dispatcher = FakeDispatcher()
+        scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
+        scheduler.start_graph(graph_id)
+
+        # Node should be suspended with pending adjudication
+        assert _status(n1) == "suspended"
+        adjudication_id = _pending_adjudication_id(n1)
+        assert adjudication_id is not None
+
+        _decide(adjudication_id, "accepted", session_id=session_id, scheduler=scheduler)
+
+        # ACCEPTED on confirmation-suspended node → pending_dispatch (not completed)
+        assert _status(n1) == "pending_dispatch"
+
+    def test_normal_running_accepted_goes_to_completed(self):
+        """requires_confirmation=True but status=running → ACCEPTED → completed (normal result adjudication)."""
+        graph_id, node_ids, _, session_id = _build_graph(
+            [
+                {
+                    "nodeId": "n1",
+                    "title": "Was confirmed, now running",
+                    "description": "Already executing",
+                    "needsConfirmation": True,
+                }
+            ]
+        )
+        n1 = node_ids["n1"]
+        dispatcher = FakeDispatcher()
+        scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
+        scheduler.start_graph(graph_id)
+
+        # Node is suspended with pending adjudication (confirmation pause)
+        assert _status(n1) == "suspended"
+        adjudication_id = _pending_adjudication_id(n1)
+        assert adjudication_id is not None
+
+        # Simulate: accept confirmation → dispatch → running
+        _decide(adjudication_id, "accepted", session_id=session_id, scheduler=scheduler)
+        assert _status(n1) == "pending_dispatch"
+        # Manually advance to running (simulating dispatcher execution)
+        with TaskCollaborationService() as svc:
+            svc.update_task_status(task_id=n1, status="running")
+
+        # Now create a normal result adjudication (dispatcher outcome)
+        with TaskCollaborationService() as svc:
+            adjudication = svc.create_parent_adjudication(
+                task_id=n1,
+                delivered_status="done",
+                safe_summary="Result OK",
+            )
+            result_adj_id = adjudication.adjudication_id
+
+        # ACCEPTED on running task → completed (normal result adjudication, not confirmation release)
+        _decide(result_adj_id, "accepted", session_id=session_id, scheduler=scheduler)
+        assert _status(n1) == "completed"
+
+
 class TestSchedulerSingleton:
     def test_get_set_graph_scheduler_roundtrip(self):
         scheduler = GraphScheduler(dispatcher=FakeDispatcher(), reentry_sink=FakeReentrySink())

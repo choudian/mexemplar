@@ -16,6 +16,7 @@ from collections import Counter
 
 from src.business.task_collaboration.models import (
     TERMINAL_TASK_STATUSES,
+    TaskEdgeType,
     TaskGraphSnapshot,
     TaskStatus,
 )
@@ -133,7 +134,7 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
     # 收集 dependency 边的 target → source 映射（用于就绪判定）
     dep_sources: dict[str, list[str]] = {}
     for edge in snapshot.edges:
-        if edge.type == "dependency":
+        if edge.type == TaskEdgeType.DEPENDENCY:
             dep_sources.setdefault(edge.target_task_id, []).append(edge.source_task_id)
 
     for t in tasks:
@@ -160,11 +161,11 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
 
     # 状态统计
     parts = [
-        f"completed={status_counts.get('completed', 0)}",
-        f"running={status_counts.get('running', 0)}",
-        f"pending={status_counts.get('pending_dispatch', 0)}",
+        f"completed={status_counts.get(TaskStatus.COMPLETED, 0)}",
+        f"running={status_counts.get(TaskStatus.RUNNING, 0)}",
+        f"pending={status_counts.get(TaskStatus.PENDING_DISPATCH, 0)}",
         f"需裁定={len(needs_review_tasks)}",
-        f"failed={status_counts.get('failed', 0)}",
+        f"failed={status_counts.get(TaskStatus.FAILED, 0)}",
     ]
     lines.append(f"- 图 {snapshot.graph_id} 共 {len(tasks)} 节点：{', '.join(parts)}")
 
@@ -188,18 +189,16 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
 
 
 def _render_healing_actions(task_id: str, actions: list[str]) -> str:
-    """渲染自愈动作清单段（advisory，CC-008）。"""
-    action_map = {
-        "retry": "重试该节点 → decide(decision=\"returned\")",
-        "swap_executor": "换执行器重试 → 改 assignee 后 decide(decision=\"returned\")",
-        "adjust_input": "调整输入后重做 → decide(decision=\"returned\", instruction=\"…\")",
-        "skip": "跳过该节点 → mutate_task_graph(skip_node)（若可容忍，下游继续）",
-        "replan": "改图绕过 → mutate_task_graph(add_node/remove_dependency)",
-        "abandon": "放弃该分支 → decide(decision=\"abandoned\")",
-    }
+    """渲染自愈动作清单段（advisory，CC-008）。
+
+    显示文案从 dispatcher._HEALING_ACTION_HINTS 统一读取，与 dispatcher 的动作候选集
+    保持单一来源；新增动作只需在 dispatcher 常量中同时添加 action_name + display_hint。
+    """
+    from src.business.task_collaboration.dispatcher import _HEALING_ACTION_HINTS
+
     lines = [f"  【节点 {task_id} 失败自愈选项】（选一个，用 decide_task_adjudication 落定）"]
     for action in actions:
-        hint = action_map.get(action, action)
+        hint = _HEALING_ACTION_HINTS.get(action, action)
         lines.append(f"  - {hint}")
     lines.append("  - 兜不住/需用户定方向 → ask_user_question 升级用户")
     return "\n".join(lines)
@@ -213,7 +212,7 @@ def _render_todo_overview(snapshot: TaskGraphSnapshot) -> str:
     """
     active_tasks = [
         t for t in snapshot.tasks
-        if t.status in ("running", "suspended") or t.requires_review
+        if t.status in (TaskStatus.RUNNING, TaskStatus.SUSPENDED) or t.requires_review
     ]
     if not active_tasks:
         return ""

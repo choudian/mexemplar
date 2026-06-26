@@ -43,6 +43,40 @@ ParentReentryCallback = Callable[[dict[str, Any]], None]
 
 _TASK_OUTCOME_SUSPENDED = "suspended"
 
+# 024: 失败自愈动作候选集（确定性，按失败类；FR-010）。advisory——主助理仍可自由裁定，
+# 这里只提供"下一步建议"避免开放自由发挥（FR-015）。display_hint 供 briefing 渲染。
+# action_name 与 decide/mutate 工具调用语义对齐，是唯一的自愈动作来源。
+_HEALING_ACTION_HINTS: dict[str, str] = {
+    "retry": "重试该节点 → decide(decision=\"returned\")",
+    "swap_executor": "换执行器重试 → 改 assignee 后 decide(decision=\"returned\")",
+    "adjust_input": "调整输入后重做 → decide(decision=\"returned\", instruction=\"…\")",
+    "skip": "跳过该节点 → mutate_task_graph(skip_node)（若可容忍，下游继续）",
+    "replan": "改图绕过 → mutate_task_graph(add_node/remove_dependency)",
+    "abandon": "放弃该分支 → decide(decision=\"abandoned\")",
+}
+
+_HEALING_ACTIONS_BY_STATUS: dict[str, list[str]] = {
+    "stuck": ["retry", "adjust_input", "swap_executor", "skip", "replan"],
+    "failed_input": ["adjust_input", "retry", "swap_executor", "skip", "replan"],
+}
+_DEFAULT_HEALING_ACTIONS: list[str] = [
+    "retry",
+    "swap_executor",
+    "adjust_input",
+    "replan",
+    "skip",
+]
+_SAFE_RECOVERY_HINT = (
+    "节点执行失败。可先尝试重试、调整输入或更换执行器；若反复失败可改图（增删节点/依赖）"
+    "或跳过该节点；确实无法推进时再升级用户。"
+)
+
+
+def _healing_actions_for(delivered_status: str) -> list[str]:
+    """024: 按失败类返回确定性自愈动作候选集（advisory，FR-010）。"""
+    return list(_HEALING_ACTIONS_BY_STATUS.get(delivered_status, _DEFAULT_HEALING_ACTIONS))
+
+
 LEGACY_ACTIVE_DELEGATION_EVENTS = frozenset(
     {
         "assistant_delegation_started",
@@ -82,9 +116,7 @@ class TaskCollaborationCutoverGuard:
 
     def _has_legacy_active_delegation(self) -> bool:
         try:
-            return self._transition_repo.has_recent_event_types(
-                LEGACY_ACTIVE_DELEGATION_EVENTS
-            )
+            return self._transition_repo.has_recent_event_types(LEGACY_ACTIVE_DELEGATION_EVENTS)
         except Exception:
             logger.warning(
                 "cutover guard could not read legacy transitions; assuming legacy active",
@@ -112,11 +144,14 @@ class TaskDispatcher:
         cutover_guard: TaskCollaborationCutoverGuard | None = None,
         executor_callback: ExecutorCallback | None = None,
         parent_reentry_callback: ParentReentryCallback | None = None,
+        scheduler_callback: Callable | None = None,
     ) -> None:
         self._config = get_unified_config()
         self._cutover_guard = cutover_guard or TaskCollaborationCutoverGuard()
         self._executor_callback = executor_callback
         self._parent_reentry_callback = parent_reentry_callback
+        # 024: GraphScheduler.on_attempt_outcome 回调（松耦合，避免循环依赖）
+        self._scheduler_callback = scheduler_callback
         # 写串行锁：start_attempt（建 attempt）与 _record_attempt_outcome（complete/裁定）
         # 在锁内串行，规避 SQLAlchemy Session 多线程并发写竞态；executor_callback（跑
         # LLM/子代理）在锁外并行——即"LLM 并行、写串行"（FR-003）。
@@ -167,6 +202,31 @@ class TaskDispatcher:
         # pending_dispatch，恢复扫描与看板状态会不一致。写锁串行化建 attempt 写。
         with self._write_lock:
             with _worker_scope() as (attempts, service):
+                # 024 C5: 派发层就绪硬校验兜底（FR-003），独立于 GraphScheduler 装配状态。
+                # 无 dependency 的 task（simple delegation / root 容器）直接通过；有
+                # dependency 的 task 前置必须全 completed，否则跳过派发——防止任何路径绕过
+                # scheduler 乱序派发未就绪节点。未就绪时 return None（不抛错），保护
+                # fallback / continue 等批量调用方。
+                task_row = service.get_task(task_id)
+                if task_row is not None and task_row.graph_id:
+                    try:
+                        service.assert_dependencies_satisfied(task_row.graph_id, task_id)
+                    except ValueError:
+                        logger.warning(
+                            "[dispatch] task %s dependencies not satisfied; skip attempt",
+                            task_id,
+                        )
+                        return None
+                    if (
+                        task_row.requires_confirmation
+                        and task_row.status == TaskStatus.PENDING_DISPATCH
+                        and not service.has_accepted_confirmation(task_id)
+                    ):
+                        logger.warning(
+                            "[dispatch] task %s requires confirmation but has no accepted adjudication; skip attempt",
+                            task_id,
+                        )
+                        return None
                 attempt = attempts.start_attempt(
                     task_id=task_id,
                     executor_type=executor_type,
@@ -350,13 +410,22 @@ class TaskDispatcher:
                 "accepted": True,
                 "attemptId": attempt_id,
                 "taskId": task_id,
-                "adjudicationId": getattr(adjudication, "adjudication_id", None),
+                "adjudicationId": adjudication.adjudication_id if adjudication else None,
                 "deliveredStatus": delivered_status,
                 "safeSummary": safe_summary,
                 "sessionId": task_row.session_id if task_row else None,
                 "graphId": task_row.graph_id if task_row else None,
             }
+            # 024: 失败附自愈动作清单 + 安全恢复提示（FR-010/FR-015），供 briefing 渲染。
+            # safeRecoveryHint 是固定安全文案，不携带 provider 原始错误（constitution III）。
+            if delivered_status != DeliveredStatus.DONE:
+                payload["healingActions"] = _healing_actions_for(delivered_status)
+                payload["safeRecoveryHint"] = _SAFE_RECOVERY_HINT
         self._notify_parent_reentry(payload)
+
+        # 024: 通知 GraphScheduler 节点 attempt 完成
+        self._notify_scheduler_attempt_outcome(payload)
+
         return payload
 
     def _record_attempt_paused(
@@ -416,6 +485,33 @@ class TaskDispatcher:
         if self._parent_reentry_callback is None:
             return
         self._parent_reentry_callback(payload)
+
+    def set_scheduler_callback(self, callback) -> None:
+        """024: 注入 GraphScheduler.on_attempt_outcome 回调（装配期注入）。
+
+        与构造参数 ``scheduler_callback`` 等效；orchestrator 先构造 dispatcher，再建
+        GraphScheduler（它依赖 dispatcher），最后经此 setter 回填回调，解决 scheduler
+        依赖 dispatcher、dispatcher 又要 scheduler 回调的构造循环。
+        """
+        self._scheduler_callback = callback
+
+    def _notify_scheduler_attempt_outcome(self, payload: dict[str, Any]) -> None:
+        """024: 通知 GraphScheduler 节点 attempt 完成。"""
+        if self._scheduler_callback is None:
+            return
+        graph_id = payload.get("graphId")
+        task_id = payload.get("taskId")
+        if graph_id and task_id:
+            try:
+                self._scheduler_callback(graph_id, task_id)
+            except Exception as e:
+                logger.warning(
+                    "scheduler_callback failed for graph=%s task=%s: %s",
+                    graph_id,
+                    task_id,
+                    e,
+                    exc_info=True,
+                )
 
     def run_side_effect(
         self,
@@ -516,13 +612,23 @@ def _suspend_reason_from_result(result: str | dict[str, Any] | None) -> str:
 
 
 def _paused_reentry_payload(result: str | dict[str, Any] | None) -> dict[str, Any] | None:
-    if not isinstance(result, dict) or result.get("reentry_type") != "task_question":
+    if not isinstance(result, dict):
         return None
-    return {
-        "eventType": "task_question",
-        "questionId": result.get("question_id"),
-        "questionKind": result.get("question_kind"),
-    }
+    reentry_type = result.get("reentry_type")
+    if reentry_type == "task_question":
+        return {
+            "eventType": "task_question",
+            "questionId": result.get("question_id"),
+            "questionKind": result.get("question_kind"),
+        }
+    # 024: needs_review reentry_type（DEC-D，需确认节点暂停回流）
+    if reentry_type == "needs_review":
+        return {
+            "eventType": "needs_review",
+            "taskId": result.get("task_id"),
+            "safeSummary": result.get("safe_summary", "节点标记为需确认，请裁定是否执行。"),
+        }
+    return None
 
 
 def _begin_attempt_run_context(attempt_id: str) -> bool:
@@ -545,7 +651,9 @@ def _begin_attempt_run_context(attempt_id: str) -> bool:
         )
         return True
     except Exception:
-        logger.warning("[task attempt] failed to register run context: %s", attempt_id, exc_info=True)
+        logger.warning(
+            "[task attempt] failed to register run context: %s", attempt_id, exc_info=True
+        )
         return False
 
 

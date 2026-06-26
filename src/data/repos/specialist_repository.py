@@ -6,6 +6,7 @@ SpecialistRepository -- 专员 + 版本历史数据仓库
 
 import json
 import logging
+from enum import StrEnum
 from typing import Optional
 from src.utils.ids import new_id
 
@@ -13,6 +14,17 @@ from ..models_sqlite import BrainSpecialist, BrainSpecialistVersion
 from .base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
+
+
+class RoleKind(StrEnum):
+    """Specialist role classification (024): executor performs tasks, planner only builds graphs.
+
+    Defined in the data layer to avoid circular imports (task_collaboration.models →
+    ui_event_safety_service → chat_service → data.repos → specialist_repository).
+    Business code should import from here or from task_collaboration.models (re-exported).
+    """
+    EXECUTOR = "executor"
+    PLANNER = "planner"
 
 
 class SpecialistRepository(BaseRepository):
@@ -35,9 +47,9 @@ class SpecialistRepository(BaseRepository):
         role_kind: str = "executor",
     ) -> str:
         """创建一个新专员，同时创建第一条版本记录。返回 specialist_id。"""
-        if role_kind not in ("executor", "planner"):
+        if role_kind not in (RoleKind.EXECUTOR, RoleKind.PLANNER):
             raise ValueError(
-                f"invalid role_kind {role_kind!r}: must be 'executor' or 'planner'"
+                f"invalid role_kind {role_kind!r}: must be '{RoleKind.EXECUTOR}' or '{RoleKind.PLANNER}'"
             )
         specialist_id = new_id()
         whitelist_json = json.dumps(tool_whitelist, ensure_ascii=False)

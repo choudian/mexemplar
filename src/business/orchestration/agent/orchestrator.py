@@ -3,7 +3,6 @@ import logging
 import hashlib
 import threading
 import uuid
-import copy
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
@@ -19,16 +18,10 @@ from src.business.agents.config import (
     ToolDefinition,
     subagent_label,
 )
-from src.business.agents.tools.pm_output_tools import report_code_issue, submit_requirements
 from src.business.agents.prompts.desktop_prompts import build_pm_prompt, build_programmer_prompt
-from src.business.agents.tools.desktop_tools import create_desktop_specific_tools
-from src.business.agents.tools.programmer_tools import submit_code, syntax_check
-from src.business.agents.tools.recording_data_tools import create_recording_tools
-from src.business.agents.tools.trial_tools import create_desktop_trial_tools, create_trial_tools
 from src.business.ai.llm_client import LangChainLLMClient, ToolCallInfo
 from src.business.memory.compression_handler import CompressionHandler
 from src.business.services import SkillCompositionService
-from src.data.repos.skill_equipment_repository import ASSISTANT_ENTITY_ID
 from src.data.repositories import (
     AssistantProfileRepository,
     MessageRepository,
@@ -41,13 +34,13 @@ from src.data.models_sqlite import Message
 from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.recording.browser.recorder import RecordingMode
+from src.utils.events import emit
 
-from ..llm_reviewer import LLMReviewer, ReviewResult
+from ..llm_reviewer import LLMReviewer
 from .agent_session_store import AgentSessionStore
 from .assistant_prompt_builder import AssistantPromptBuilder
 from .assistant_task_worker import AssistantTaskWorker
 from .delegation_orchestrator import DelegationOrchestrator
-from .desktop_syntax_gate import check_code, log_terminal_failure, should_retry
 from .teaching_orchestrator import TeachingOrchestrator
 from .teaching_failure_tracker import TeachingFailureTracker
 from .tool_registry import ToolRegistry
@@ -62,8 +55,10 @@ _SUBAGENT_WORK_RULES = (
     "工作规则（必须遵守）：\n"
     "1. 严格限定在任务范围内，不要做任务描述以外的事情。\n"
     "2. 每次工具返回结果后，先评估当前已有信息是否足以完成任务。"
-    "如果足够，直接输出最终结果，不要为了更全面而继续调用工具。\n"
-    "3. 工具调用之间不要输出中间文字，静默使用工具，最后一次性报告结果。\n"
+    "如果足够，直接输出最终结果，不要为了更全面而继续调用工具。"
+    "如果任务需要先规划再执行（多步复杂任务），可以先用 todo_update 列出计划再逐步执行。\n"
+    "3. 多步任务中可以适度输出关键进度信息，帮助上级理解执行状态；"
+    "简单任务仍静默使用工具，最后一次性报告结果。\n"
     "4. 不要闲聊、不要发表意见、不要建议下一步，只报告结构化的事实。\n"
     "5. 最终回复控制在 500 字以内，除非任务本身需要更长的输出。"
 )
@@ -440,7 +435,10 @@ class AgentOrchestrator:
         so callers fall back to the stable sync delegation path.
         """
         config = getattr(self, "_config", None)
-        if config is None or not config.get_assistant_tasks_unified_dispatch_enabled():
+        if (
+            config is None
+            or config.get_assistant_tasks_unified_dispatch_enabled() is not True
+        ):
             return None
 
         try:
@@ -579,7 +577,9 @@ class AgentOrchestrator:
                 assignee_id=task.assignee_id,
             )
         except Exception:
-            logger.error("[Orchestrator] answered task redispatch failed: %s", task_id, exc_info=True)
+            logger.error(
+                "[Orchestrator] answered task redispatch failed: %s", task_id, exc_info=True
+            )
             return False
         return True
 
@@ -608,7 +608,27 @@ class AgentOrchestrator:
                 parent_reentry_callback=getattr(self, "_parent_reentry_callback", None),
             )
             self._task_dispatcher = dispatcher
+            self._wire_graph_scheduler(dispatcher)
         return dispatcher
+
+    def _wire_graph_scheduler(self, dispatcher) -> None:
+        """024: 装配 GraphScheduler 单例并注入 dispatcher 回调（FR-006 运行时推进）。
+
+        scheduler 推进用临时 TaskCollaborationService（per-operation fresh session），
+        dispatcher 长生命周期复用；reentry_sink 由 AssistantRuntime 经 ``set_reentry_sink``
+        在 sink 安装后注入（runtime 装配早于首次 dispatch）。
+        """
+        from src.business.task_collaboration.graph_scheduler import (
+            GraphScheduler,
+            set_graph_scheduler,
+        )
+
+        scheduler = GraphScheduler(
+            dispatcher=dispatcher,
+            reentry_sink=getattr(self, "_reentry_sink", None),
+        )
+        dispatcher.set_scheduler_callback(scheduler.on_attempt_outcome)
+        set_graph_scheduler(scheduler)
 
     def _new_task_executor_orchestrator(self) -> "AgentOrchestrator":
         """Create a per-attempt orchestrator so dispatcher workers do not share repo sessions."""
@@ -629,6 +649,19 @@ class AgentOrchestrator:
         此值并缓存，故必须在任何 unified dispatch 之前设置。
         """
         self._parent_reentry_callback = callback
+
+    def set_reentry_sink(self, sink) -> None:
+        """024: 注入 ParentReentrySink 对象（供 GraphScheduler 全图完成通知）。
+
+        由 AssistantRuntime._install_reentry_sink 在建 sink 后调用；GraphScheduler 在
+        首次 dispatcher 构造时读取此值。scheduler 已装配时同步注入。
+        """
+        self._reentry_sink = sink
+        from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
+
+        scheduler = get_graph_scheduler()
+        if scheduler is not None:
+            scheduler.set_reentry_sink(sink)
 
     def _delegate_to_subagent(
         self,
@@ -706,6 +739,7 @@ class AgentOrchestrator:
             tool_whitelist=tool_whitelist,
             current_task_id=current_task_id,
         )
+
     def _run_delegated_executor(
         self,
         *,
@@ -720,6 +754,7 @@ class AgentOrchestrator:
         allowed_methodology_skill_ids: set[str] | None = None,
         methodology_equipment_snapshot: str = "",
         current_task_id: str | None = None,
+        role_kind: str = "executor",
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -756,6 +791,8 @@ class AgentOrchestrator:
                 specialist_id=specialist_id,
                 allowed_methodology_skill_ids=allowed_methodology_skill_ids,
                 current_task_id=current_task_id,
+                parent_session_id=parent_session_id,
+                role_kind=role_kind,
             )
             result = loop.run(
                 session_id,
@@ -1307,21 +1344,6 @@ class AgentOrchestrator:
             caller_id=caller_id,
             allowed_skill_ids=allowed_skill_ids,
         )
-        from src.business.agents.tools.skill_methodology_tools import (
-            LOAD_SKILL_METHODOLOGY_SCHEMA,
-            create_load_skill_methodology_handler,
-        )
-
-        return ToolDefinition(
-            name="load_skill_methodology",
-            schema=LOAD_SKILL_METHODOLOGY_SCHEMA,
-            handler=create_load_skill_methodology_handler(
-                caller_type=caller_type,
-                caller_id=caller_id,
-                allowed_skill_ids=allowed_skill_ids,
-            ),
-            has_side_effects=False,
-        )
 
     def _build_delegated_executor_tools(
         self,
@@ -1332,6 +1354,8 @@ class AgentOrchestrator:
         specialist_id: str | None = None,
         allowed_methodology_skill_ids: set[str] | None = None,
         current_task_id: str | None = None,
+        parent_session_id: str | None = None,
+        role_kind: str = "executor",
     ) -> Callable[[], List[ToolDefinition]]:
         return self.tool_registry.build_delegated_executor_tools(
             allowed_tool_ids,
@@ -1340,160 +1364,13 @@ class AgentOrchestrator:
             specialist_id=specialist_id,
             allowed_methodology_skill_ids=allowed_methodology_skill_ids,
             current_task_id=current_task_id,
+            parent_session_id=parent_session_id,
+            role_kind=role_kind,
         )
-        from src.business.agents.tools.assistant_tools import (
-            ASK_PARENT_SCHEMA,
-            MEETING_SEND_MESSAGE_SCHEMA,
-            TODO_UPDATE_SCHEMA,
-            create_ask_parent_handler,
-            create_meeting_send_message_handler,
-            create_todo_update_handler,
-        )
-        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
-        from src.business.agents.tools.dynamic_tool_manager import (
-            DynamicToolManager,
-            create_assistant_search_tools,
-        )
-
-        dynamic_manager = DynamicToolManager(allowed_tool_ids=allowed_tool_ids)
-        search_tools = create_assistant_search_tools(dynamic_manager)
-        load_skill_tool = self._make_load_skill_tool(
-            caller_type="specialist" if agent_type == AgentType.SPECIALIST else "assistant",
-            caller_id=specialist_id or ASSISTANT_ENTITY_ID,
-            allowed_skill_ids=allowed_methodology_skill_ids,
-        )
-        executor_type = (
-            AgentType.SPECIALIST.value
-            if agent_type == AgentType.SPECIALIST
-            else AgentType.EPHEMERAL_SUBAGENT.value
-        )
-        resolved_executor_id = specialist_id or executor_id or executor_type
-        # ask_parent / meeting_send_message 共享 resolved（保留 session 维度的提问者/
-        # 会议发送者身份）；todo_update 单独绑定——其 executor_id 必须对齐
-        # task.assignee_id 才能通过 todos.py 归属校验。specialist 用 specialist_id；
-        # ephemeral 的 assignee_id 是 dispatch 设的类型占位 'ephemeral_subagent'
-        # （=executor_type），而非 child session，故不能用 resolved 里的 session_id。
-        ask_parent_schema = (
-            self._schema_with_bound_task_id(ASK_PARENT_SCHEMA)
-            if current_task_id
-            else ASK_PARENT_SCHEMA
-        )
-        todo_schema = (
-            self._schema_with_bound_task_id(TODO_UPDATE_SCHEMA)
-            if current_task_id
-            else TODO_UPDATE_SCHEMA
-        )
-        ask_parent_meeting_tools: List[ToolDefinition] = [
-            ToolDefinition(
-                name=ask_parent_schema["function"]["name"],
-                schema=ask_parent_schema,
-                handler=create_ask_parent_handler(
-                    executor_type=executor_type,
-                    executor_id=resolved_executor_id,
-                    bound_task_id=current_task_id,
-                    interrupt=bool(current_task_id),
-                ),
-                is_interrupting=bool(current_task_id),
-            ),
-            ToolDefinition(
-                name=MEETING_SEND_MESSAGE_SCHEMA["function"]["name"],
-                schema=MEETING_SEND_MESSAGE_SCHEMA,
-                handler=create_meeting_send_message_handler(
-                    executor_type=executor_type,
-                    executor_id=resolved_executor_id,
-                ),
-            ),
-        ]
-        todo_executor_id = specialist_id or executor_type
-        executor_collaboration_tools: List[ToolDefinition] = [
-            *ask_parent_meeting_tools,
-            ToolDefinition(
-                name=todo_schema["function"]["name"],
-                schema=todo_schema,
-                handler=create_todo_update_handler(
-                    executor_type=executor_type,
-                    executor_id=todo_executor_id,
-                    bound_task_id=current_task_id,
-                ),
-            ),
-        ]
-
-        # FR-019：仅专员可起"至多一个"临时子代理（隔离上下文）。该子代理走同步路径，且其
-        # 工具集（ephemeral 分支）不含 delegate_to_subagent，结构上不能再向下委派或找平级。
-        specialist_subagent_tools: List[ToolDefinition] = []
-        if agent_type == AgentType.SPECIALIST:
-            from src.business.agents.tools.assistant_tools import (
-                DELEGATE_TO_SUBAGENT_SCHEMA,
-                create_delegate_to_subagent_handler,
-            )
-
-            spawned_state = {"used": False}
-
-            def _specialist_subagent_callback(
-                *,
-                parent_session_id: str,
-                task_description: str,
-                execution_context: str = "",
-                tool_whitelist: list[str] | None = None,
-            ) -> dict:
-                task = (task_description or "").strip()
-                if not task:
-                    return {
-                        "success": False,
-                        "message": "task_description must not be empty",
-                        "delegation_type": "ephemeral_subagent",
-                    }
-                if spawned_state["used"]:
-                    return {
-                        "success": False,
-                        "message": "专员至多只能起一个临时子代理用于隔离上下文，本次已用尽。",
-                        "delegation_type": "ephemeral_subagent",
-                    }
-                spawned_state["used"] = True
-                return self._run_sync_ephemeral_subagent(
-                    parent_session_id=parent_session_id,
-                    task=task,
-                    execution_context=execution_context,
-                    tool_whitelist=tool_whitelist,
-                )
-
-            specialist_subagent_tools = [
-                ToolDefinition(
-                    name="delegate_to_subagent",
-                    schema=DELEGATE_TO_SUBAGENT_SCHEMA,
-                    handler=create_delegate_to_subagent_handler(
-                        executor_id or "",
-                        dispatch_callback=_specialist_subagent_callback,
-                    ),
-                )
-            ]
-
-        def tool_factory() -> List[ToolDefinition]:
-            return (
-                search_tools
-                + [*executor_collaboration_tools, load_skill_tool]
-                + specialist_subagent_tools
-                + BUILTIN_GENERAL_TOOLS
-                + dynamic_manager.get_activated_tools()
-            )
-
-        return tool_factory
 
     @staticmethod
     def _schema_with_bound_task_id(schema: dict) -> dict:
         return ToolRegistry.schema_with_bound_task_id(schema)
-        """Make taskId optional when a tool is bound to the current Task row."""
-        cloned = copy.deepcopy(schema)
-        parameters = cloned.get("function", {}).get("parameters", {})
-        required = parameters.get("required")
-        if isinstance(required, list):
-            parameters["required"] = [item for item in required if item != "taskId"]
-        properties = parameters.get("properties")
-        if isinstance(properties, dict) and isinstance(properties.get("taskId"), dict):
-            properties["taskId"]["description"] = (
-                "可省略；统一任务执行器会自动使用当前任务 ID"
-            )
-        return cloned
 
     def _resolve_user_tool_ids(
         self,
@@ -1646,15 +1523,9 @@ class AgentOrchestrator:
 
     def start_analysis(self, recording_id: str, workflow_id: str) -> None:
         return self.teaching_orchestrator.start_analysis(recording_id, workflow_id)
-        initial_input = (
-            f"请分析录制 {recording_id} 的操作流程，理解用户想要自动化的任务，并与用户确认需求。"
-        )
-        self.run_agent(AgentType.PM, initial_input, workflow_id)
 
     def start_trial(self, tool_id: str, user_input: str, workflow_id: str) -> None:
         return self.teaching_orchestrator.start_trial(tool_id, user_input, workflow_id)
-        del tool_id
-        self.run_agent(AgentType.TRIAL, user_input, workflow_id)
 
     def handle_trial_result(
         self,
@@ -1671,76 +1542,6 @@ class AgentOrchestrator:
             session_id,
             user_feedback,
         )
-        if success:
-            tool = self._tool_repo.get_by_id(tool_id)
-            if not tool:
-                logger.error(f"[Orchestrator] handle_trial_result: tool {tool_id} 不存在")
-                return
-
-            new_count = (tool.trial_success_count or 0) + 1
-            self._tool_repo.update_trial_success_count(tool_id, new_count)
-
-            published = new_count >= 3
-            if published:
-                self._tool_repo.update_status(tool_id, "published")
-
-            self._emit_and_log(
-                event_name="trial_success",
-                workflow_id=workflow_id,
-                transition_data={
-                    "event_type": "trial_success",
-                    "from_session_id": session_id,
-                    "to_session_id": None,
-                    "payload": json.dumps({"success_count": new_count, "published": published}),
-                },
-                session_id=session_id,
-                tool_id=tool_id,
-                success_count=new_count,
-                published=published,
-            )
-
-            if published:
-                logger.info(f"[Orchestrator] 工具已发布: tool_id={tool_id}")
-                emit(
-                    "tool_published",
-                    sender=self,
-                    workflow_id=workflow_id,
-                    session_id=session_id,
-                    tool_id=tool_id,
-                )
-            else:
-                remaining = 3 - new_count
-                logger.info(
-                    f"[Orchestrator] 试用成功 {new_count}/3，继续试用: workflow={workflow_id}"
-                )
-                self.run_agent(
-                    AgentType.TRIAL,
-                    {
-                        "role": "program",
-                        "content": (
-                            f"第 {new_count} 次试用成功（共需 3 次），还需再成功 {remaining} 次。"
-                            "请引导用户用不同的参数再试一次。"
-                        ),
-                    },
-                    workflow_id,
-                )
-            return
-
-        pm_session_id = self._session_store.get_or_create_session(workflow_id, AgentType.PM)
-        self._emit_and_log(
-            event_name="trial_failed",
-            workflow_id=workflow_id,
-            transition_data={
-                "event_type": "trial_failed",
-                "from_session_id": session_id,
-                "to_session_id": pm_session_id,
-                "payload": json.dumps({"tool_id": tool_id, "user_feedback": user_feedback}),
-            },
-            session_id=session_id,
-            tool_id=tool_id,
-            user_feedback=user_feedback,
-        )
-        self._start_triage(tool_id, user_feedback, workflow_id)
 
     def _emit_subagent_started(
         self,
@@ -1853,78 +1654,9 @@ class AgentOrchestrator:
             session_id,
             workflow_id,
         )
-        try:
-            if agent_type == AgentType.PM:
-                self._on_pm_completed(result, session_id, workflow_id)
-            elif agent_type == AgentType.PROGRAMMER:
-                self._on_programmer_completed(result, session_id, workflow_id)
-            elif agent_type == AgentType.TRIAL:
-                self._on_trial_completed(result, session_id, workflow_id)
-        except Exception as exc:
-            logger.error(f"[Orchestrator] 调度失败: {exc}", exc_info=True)
-            self._emit_agent_error(
-                workflow_id,
-                session_id,
-                agent_type,
-                f"调度失败: {str(exc)}",
-                "dispatch_error",
-            )
 
     def _on_pm_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
         return self.teaching_orchestrator.on_pm_completed(result, session_id, workflow_id)
-        if result.signal_tool and result.signal_tool.name == "submit_requirements":
-            requirements = result.signal_tool.args
-            programmer_session_id = self._session_store.get_or_create_session(
-                workflow_id, AgentType.PROGRAMMER
-            )
-            self._emit_and_log(
-                event_name="requirement_confirmed",
-                workflow_id=workflow_id,
-                transition_data={
-                    "event_type": "requirement_confirmed",
-                    "from_session_id": session_id,
-                    "to_session_id": programmer_session_id,
-                    "payload": json.dumps({"requirements": requirements}),
-                },
-                session_id=session_id,
-                requirements_json=requirements,
-            )
-            self.run_agent(
-                AgentType.PROGRAMMER, json.dumps(requirements, ensure_ascii=False), workflow_id
-            )
-            return
-
-        if result.signal_tool and result.signal_tool.name == "report_code_issue":
-            feedback = result.signal_tool.args.get("feedback", "")
-            programmer_session_id = self._session_store.get_or_create_session(
-                workflow_id, AgentType.PROGRAMMER
-            )
-            self._emit_and_log(
-                event_name="triage_completed",
-                workflow_id=workflow_id,
-                transition_data={
-                    "event_type": "triage_completed",
-                    "from_session_id": session_id,
-                    "to_session_id": programmer_session_id,
-                    "payload": json.dumps({"triage_result": "code_issue", "feedback": feedback}),
-                },
-                session_id=session_id,
-                triage_result="code_issue",
-                feedback=feedback,
-            )
-            self.run_agent(AgentType.PROGRAMMER, feedback, workflow_id)
-            return
-
-        logger.warning(
-            f"[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session={session_id}"
-        )
-        self._emit_agent_error(
-            workflow_id,
-            session_id,
-            AgentType.PM,
-            "PM Agent 未调用 submit_requirements 或 report_code_issue 即结束",
-            "missing_signal_tool",
-        )
 
     def _on_programmer_completed(
         self,
@@ -1937,210 +1669,15 @@ class AgentOrchestrator:
             session_id,
             workflow_id,
         )
-        if not (result.signal_tool and result.signal_tool.name == "submit_code"):
-            logger.warning(
-                f"[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session={session_id}"
-            )
-            self._emit_agent_error(
-                workflow_id,
-                session_id,
-                AgentType.PROGRAMMER,
-                "程序员未通过 submit_code 提交代码",
-                "missing_signal_tool",
-            )
-            return
-
-        code_data = result.signal_tool.args
-        code = code_data["code"]
-        if self._recording_mode(workflow_id) == RecordingMode.DESKTOP:
-            syntax_result = check_code(code)
-            if not syntax_result.ok:
-                state = self._desktop_syntax_state.setdefault(workflow_id, _DesktopSyntaxState())
-                state.retry_count += 1
-                state.attempts.append(code)
-                if syntax_result.feedback:
-                    state.feedbacks.append(syntax_result.feedback)
-                if should_retry(state.retry_count):
-                    self.run_agent(
-                        AgentType.PROGRAMMER,
-                        (
-                            f"[桌面语法门卫第 {state.retry_count} 次反馈]\n\n"
-                            f"{syntax_result.feedback}"
-                        ),
-                        workflow_id,
-                    )
-                    return
-                log_terminal_failure(
-                    workflow_id,
-                    state.attempts,
-                    state.feedbacks,
-                )
-                emit(
-                    "desktop_syntax_gate_retry_failed",
-                    sender=self,
-                    workflow_id=workflow_id,
-                    session_id=session_id,
-                    feedback=syntax_result.feedback,
-                    lineno=syntax_result.lineno,
-                    message=syntax_result.message,
-                )
-                self._desktop_syntax_state.pop(workflow_id, None)
-                self._emit_agent_error(
-                    workflow_id,
-                    session_id,
-                    AgentType.PROGRAMMER,
-                    "Programmer 输出代码持续语法错误",
-                    "desktop_syntax_error",
-                )
-                return
-            self._desktop_syntax_state.pop(workflow_id, None)
-        self._emit_and_log(
-            event_name="code_completed",
-            workflow_id=workflow_id,
-            transition_data={
-                "event_type": "code_completed",
-                "from_session_id": session_id,
-                "to_session_id": None,
-                "payload": json.dumps({"code_length": len(code)}),
-            },
-            session_id=session_id,
-            code=code,
-        )
-        self._run_review(code_data, session_id, workflow_id)
 
     def _on_trial_completed(self, result: AgentResult, session_id: str, workflow_id: str) -> None:
         return self.teaching_orchestrator.on_trial_completed(result, session_id, workflow_id)
-        signal_tool = result.signal_tool
-        if signal_tool and signal_tool.name == "submit_trial_result":
-            success = signal_tool.args["success"]
-            feedback = signal_tool.args.get("feedback", "")
-        else:
-            logger.warning(
-                f"[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session={session_id}"
-            )
-            self._emit_agent_error(
-                workflow_id,
-                session_id,
-                AgentType.TRIAL,
-                "试用 Agent 未通过 submit_trial_result 结束",
-                "unexpected_completion",
-            )
-            return
-
-        tool = self._tool_repo.get_by_workflow_id(workflow_id)
-        if not tool:
-            self._emit_agent_error(
-                workflow_id,
-                session_id,
-                AgentType.TRIAL,
-                "未找到工具",
-                "tool_not_found",
-            )
-            return
-
-        self.handle_trial_result(tool.tool_id, success, workflow_id, session_id, feedback)
 
     def _run_review(self, code_data: dict, from_session_id: str, workflow_id: str) -> None:
         return self.teaching_orchestrator.run_review(code_data, from_session_id, workflow_id)
-        code = code_data["code"]
-        requirement = {
-            "description": code_data.get("description", ""),
-            "parameters": code_data.get("parameters", []),
-        }
-        retry_count = self._review_counts.get(workflow_id, 0)
-        try:
-            review_result: ReviewResult = self._llm_reviewer.review(code, requirement)
-        except Exception as exc:
-            logger.error("LLM review failed for workflow %s: %s", workflow_id, exc, exc_info=True)
-            self._emit_agent_error(
-                workflow_id,
-                from_session_id,
-                AgentType.PROGRAMMER,
-                "LLM Review 调用失败",
-                "review_error",
-            )
-            return
-
-        if review_result.passed:
-            self._emit_and_log(
-                event_name="review_passed",
-                workflow_id=workflow_id,
-                transition_data={
-                    "event_type": "review_passed",
-                    "from_session_id": from_session_id,
-                    "to_session_id": None,
-                    "payload": None,
-                },
-                session_id=from_session_id,
-                code=code,
-            )
-            self._review_counts.pop(workflow_id, None)
-            self._save_tool(code_data, workflow_id, from_session_id)
-            return
-
-        retry_count = self._review_counts.get(workflow_id, 0) + 1
-        self._review_counts[workflow_id] = retry_count
-        if retry_count < 4:
-            programmer_session_id = self._session_store.get_or_create_session(
-                workflow_id, AgentType.PROGRAMMER
-            )
-            self._emit_and_log(
-                event_name="review_failed",
-                workflow_id=workflow_id,
-                transition_data={
-                    "event_type": "review_failed",
-                    "from_session_id": from_session_id,
-                    "to_session_id": programmer_session_id,
-                    "payload": json.dumps(
-                        {"retry_count": retry_count, "feedback": review_result.feedback}
-                    ),
-                },
-                session_id=from_session_id,
-                code=code,
-                feedback=review_result.feedback,
-                retry_count=retry_count,
-                forced_save=False,
-            )
-            self.run_agent(
-                AgentType.PROGRAMMER,
-                f"[LLM Review 第 {retry_count} 次，共最多 3 次]\n\n审查意见：{review_result.feedback}",
-                workflow_id,
-            )
-            return
-
-        self._emit_and_log(
-            event_name="review_failed",
-            workflow_id=workflow_id,
-            transition_data={
-                "event_type": "review_failed",
-                "from_session_id": from_session_id,
-                "to_session_id": None,
-                "payload": json.dumps(
-                    {"retry_count": retry_count, "forced_save": (retry_count >= 4)}
-                ),
-            },
-            session_id=from_session_id,
-            code=code,
-            feedback=review_result.feedback,
-            retry_count=retry_count,
-            forced_save=True,
-        )
-        self._review_counts.pop(workflow_id, None)
-        self._save_tool(code_data, workflow_id, from_session_id)
 
     def _start_triage(self, tool_id: str, user_feedback: str, workflow_id: str) -> None:
         return self.teaching_orchestrator.start_triage(tool_id, user_feedback, workflow_id)
-        failure_context = (
-            f"用户反馈：{user_feedback}"
-            if user_feedback
-            else "工具执行报错（错误详情见试用会话历史）"
-        )
-        initial_input = (
-            f"工具 {tool_id} 试用失败，{failure_context}。"
-            "请分析问题原因：如果是需求问题，请与用户重新确认需求；"
-            "如果是代码问题，请直接输出用户反馈供程序员排查。"
-        )
-        self.run_agent(AgentType.PM, initial_input, workflow_id)
 
     def _build_tools(
         self,
@@ -2153,21 +1690,6 @@ class AgentOrchestrator:
             workflow_id=workflow_id,
             session_id=session_id,
         )
-        if agent_type == AgentType.ASSISTANT:
-            return self._build_assistant_tools(session_id)
-        mode = self._recording_mode(workflow_id)
-        recording_tools = create_recording_tools(workflow_id, mode)
-        if mode == RecordingMode.DESKTOP:
-            recording_tools = recording_tools + create_desktop_specific_tools(workflow_id)
-        if agent_type == AgentType.PM:
-            return recording_tools + [submit_requirements, report_code_issue]
-        if agent_type == AgentType.PROGRAMMER:
-            return recording_tools + [syntax_check, submit_code]
-        if agent_type == AgentType.TRIAL:
-            if mode == RecordingMode.DESKTOP:
-                return recording_tools + create_desktop_trial_tools(workflow_id)
-            return create_trial_tools(workflow_id)
-        return []
 
     def _recording_mode(self, workflow_id: str | None) -> str:
         if not workflow_id:
@@ -2201,213 +1723,6 @@ class AgentOrchestrator:
 
     def _build_assistant_tools(self, session_id: str) -> Callable[[], List[ToolDefinition]]:
         return self.tool_registry.build_assistant_tools(session_id)
-        from src.business.agents.tools.assistant_tools import (
-            CODIFY_AS_TOOL_SCHEMA,
-            CREATE_SPECIALIST_SCHEMA,
-            DELEGATE_TO_SPECIALIST_SCHEMA,
-            DELEGATE_TO_SUBAGENT_SCHEMA,
-            DECIDE_ADJUDICATION_SCHEMA,
-            ABANDON_REQUEST_GRAPH_SCHEMA,
-            CONTINUE_SUBAGENT_SCHEMA,
-            INSPECT_SUBAGENT_SCHEMA,
-            DISMISS_SUGGESTION,
-            INVALIDATE_MEMORY_ENTRY_SCHEMA,
-            REPORT_TOOL_BUG,
-            REPLY_TO_USER_SCHEMA,
-            RETRIEVE_ARCHIVE_SCHEMA,
-            RETRIEVE_FAILURE_ZONE_SCHEMA,
-            SAVE_PROFILE_SCHEMA,
-            ASK_USER_QUESTION_SCHEMA,
-            ANSWER_TASK_QUESTION_SCHEMA,
-            OPEN_MEETING_CHANNEL_SCHEMA,
-            create_ask_user_question_handler,
-            create_answer_task_question_handler,
-            create_codify_as_tool_handler,
-            create_create_specialist_handler,
-            create_delegate_to_specialist_handler,
-            create_delegate_to_subagent_handler,
-            create_decide_task_adjudication_handler,
-            create_abandon_request_graph_handler,
-            create_continue_subagent_handler,
-            create_inspect_subagent_handler,
-            create_invalidate_memory_entry_handler,
-            create_open_meeting_channel_handler,
-            create_reply_to_user_handler,
-            create_retrieve_archive_handler,
-            create_retrieve_failure_zone_handler,
-            create_save_profile_handler,
-        )
-        from src.business.agents.tools.skill_methodology_tools import (
-            CREATE_SKILL_METHODOLOGY_SCHEMA,
-            create_create_skill_methodology_handler,
-        )
-        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
-        from src.business.agents.tools.dynamic_tool_manager import (
-            DynamicToolManager,
-            create_assistant_search_tools,
-        )
-        from src.business.memory.assistant_memory import (
-            MEMORY_SEARCH_SCHEMA,
-            memory_search_handler,
-        )
-
-        session = self._session_store.get_session(session_id)
-        allowed_ids = session.get_tool_id_set() if session else None
-
-        with self._dynamic_managers_lock:
-            if session_id in self._dynamic_managers:
-                self._dynamic_managers.move_to_end(session_id)
-            else:
-                self._dynamic_managers[session_id] = DynamicToolManager(allowed_ids)
-                while len(self._dynamic_managers) > self._MAX_DYNAMIC_MANAGERS:
-                    self._dynamic_managers.popitem(last=False)
-            dynamic_manager = self._dynamic_managers[session_id]
-
-        codify_tool = ToolDefinition(
-            name="codify_as_tool",
-            schema=CODIFY_AS_TOOL_SCHEMA,
-            handler=create_codify_as_tool_handler(session_id),
-        )
-        save_profile_tool = ToolDefinition(
-            name="save_profile",
-            schema=SAVE_PROFILE_SCHEMA,
-            handler=create_save_profile_handler(session_id),
-        )
-        memory_search_tool = ToolDefinition(
-            name="memory_search",
-            schema=MEMORY_SEARCH_SCHEMA,
-            handler=memory_search_handler,
-        )
-        retrieve_archive_tool = ToolDefinition(
-            name="retrieve_archive",
-            schema=RETRIEVE_ARCHIVE_SCHEMA,
-            handler=create_retrieve_archive_handler(session_id),
-        )
-        retrieve_failure_zone_tool = ToolDefinition(
-            name="retrieve_failure_zone",
-            schema=RETRIEVE_FAILURE_ZONE_SCHEMA,
-            handler=create_retrieve_failure_zone_handler(session_id),
-        )
-        reply_to_user_tool = ToolDefinition(
-            name="reply_to_user",
-            schema=REPLY_TO_USER_SCHEMA,
-            handler=create_reply_to_user_handler(session_id),
-            is_interrupting=True,
-        )
-        delegate_to_subagent_tool = ToolDefinition(
-            name="delegate_to_subagent",
-            schema=DELEGATE_TO_SUBAGENT_SCHEMA,
-            handler=create_delegate_to_subagent_handler(
-                session_id,
-                dispatch_callback=self._delegate_to_subagent,
-            ),
-        )
-        decide_task_adjudication_tool = ToolDefinition(
-            name="decide_task_adjudication",
-            schema=DECIDE_ADJUDICATION_SCHEMA,
-            handler=create_decide_task_adjudication_handler(session_id),
-        )
-        abandon_request_graph_tool = ToolDefinition(
-            name="abandon_request_graph",
-            schema=ABANDON_REQUEST_GRAPH_SCHEMA,
-            handler=create_abandon_request_graph_handler(session_id),
-        )
-        continue_subagent_tool = ToolDefinition(
-            name="continue_subagent",
-            schema=CONTINUE_SUBAGENT_SCHEMA,
-            handler=create_continue_subagent_handler(
-                session_id,
-                continue_callback=self._continue_subagent,
-            ),
-        )
-        inspect_subagent_tool = ToolDefinition(
-            name="inspect_subagent",
-            schema=INSPECT_SUBAGENT_SCHEMA,
-            handler=create_inspect_subagent_handler(
-                session_id,
-                inspect_callback=self._inspect_subagent,
-            ),
-        )
-        delegate_to_specialist_tool = ToolDefinition(
-            name="delegate_to_specialist",
-            schema=DELEGATE_TO_SPECIALIST_SCHEMA,
-            handler=create_delegate_to_specialist_handler(
-                session_id,
-                dispatch_callback=self._delegate_to_specialist,
-            ),
-        )
-        create_specialist_tool = ToolDefinition(
-            name="create_specialist",
-            schema=CREATE_SPECIALIST_SCHEMA,
-            handler=create_create_specialist_handler(session_id),
-        )
-        invalidate_memory_entry_tool = ToolDefinition(
-            name="invalidate_memory_entry",
-            schema=INVALIDATE_MEMORY_ENTRY_SCHEMA,
-            handler=create_invalidate_memory_entry_handler(session_id),
-        )
-        ask_user_question_tool = ToolDefinition(
-            name="ask_user_question",
-            schema=ASK_USER_QUESTION_SCHEMA,
-            handler=create_ask_user_question_handler(session_id),
-            # 需独占调用：与其他工具同批 → 全批 invalid_model_output；非中断，拿到答案同回合续跑。
-            requires_exclusive_call=True,
-            has_side_effects=False,
-        )
-        answer_task_question_tool = ToolDefinition(
-            name="answer_task_question",
-            schema=ANSWER_TASK_QUESTION_SCHEMA,
-            handler=create_answer_task_question_handler(
-                redispatch_callback=self._redispatch_answered_task
-            ),
-        )
-        open_meeting_channel_tool = ToolDefinition(
-            name="open_meeting_channel",
-            schema=OPEN_MEETING_CHANNEL_SCHEMA,
-            handler=create_open_meeting_channel_handler(),
-        )
-        create_skill_methodology_tool = ToolDefinition(
-            name="create_skill_methodology",
-            schema=CREATE_SKILL_METHODOLOGY_SCHEMA,
-            handler=create_create_skill_methodology_handler(
-                caller_type="assistant",
-                caller_id=ASSISTANT_ENTITY_ID,
-            ),
-        )
-        load_skill_methodology_tool = self._make_load_skill_tool(
-            caller_type="assistant",
-            caller_id=ASSISTANT_ENTITY_ID,
-        )
-
-        search_tools = create_assistant_search_tools(dynamic_manager)
-        static_tools = [
-            REPORT_TOOL_BUG,
-            save_profile_tool,
-            codify_tool,
-            DISMISS_SUGGESTION,
-            memory_search_tool,
-            retrieve_archive_tool,
-            retrieve_failure_zone_tool,
-            invalidate_memory_entry_tool,
-            ask_user_question_tool,
-            reply_to_user_tool,
-            delegate_to_subagent_tool,
-            decide_task_adjudication_tool,
-            abandon_request_graph_tool,
-            answer_task_question_tool,
-            continue_subagent_tool,
-            inspect_subagent_tool,
-            delegate_to_specialist_tool,
-            open_meeting_channel_tool,
-            create_specialist_tool,
-            create_skill_methodology_tool,
-            load_skill_methodology_tool,
-        ] + BUILTIN_GENERAL_TOOLS
-
-        def tool_factory() -> List[ToolDefinition]:
-            return search_tools + static_tools + dynamic_manager.get_activated_tools()
-
-        return tool_factory
 
     def _get_loop(self, agent_type: str, workflow_id: str = None) -> AgentLoop:
         if agent_type == AgentType.TRIAL:

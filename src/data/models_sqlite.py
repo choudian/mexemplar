@@ -263,6 +263,7 @@ class AssistantTask(Base):
     assignee_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     owner_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     capability_scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     graph_version: Mapped[int] = mapped_column(Integer, default=1)
     task_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
@@ -746,6 +747,13 @@ class BrainSpecialist(Base):
 
     __tablename__ = "brain_specialists"
 
+    __table_args__ = (
+        CheckConstraint(
+            "role_kind IN ('executor', 'planner')",
+            name="ck_brain_specialists_role_kind",
+        ),
+    )
+
     specialist_id: Mapped[str] = mapped_column(String(50), primary_key=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
@@ -755,6 +763,7 @@ class BrainSpecialist(Base):
     reason: Mapped[str] = mapped_column(Text, nullable=False)
     current_version: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    role_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="executor")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 

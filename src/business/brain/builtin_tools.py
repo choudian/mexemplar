@@ -19,6 +19,11 @@ BUILTIN_TOOL_CATALOG: list[dict] = [
         "description": "按需加载已装备方法论的完整正文",
     },
     {
+        "tool_id": "build_task_graph",
+        "name": "build_task_graph",
+        "description": "将复杂任务分解为带依赖的 DAG 任务图",
+    },
+    {
         "tool_id": "retrieve_archive",
         "name": "retrieve_archive",
         "description": "检索 archive 分区的长期记忆",

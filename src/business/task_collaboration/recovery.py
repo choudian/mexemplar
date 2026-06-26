@@ -104,23 +104,29 @@ class TaskRecoveryService(AtomicTaskService):
         已回到 pending_dispatch 的 task 由 scheduler 重扫后重派；带 checkpoint 且已被
         resume_callback 接管的 task 不再通知 scheduler，避免被无 checkpoint 的路径抢先派发。
         scheduler 未装配时跳过（优雅降级）。
-        """
-        try:
-            from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
 
-            scheduler = get_graph_scheduler()
-            if scheduler is None:
-                return
-            seen: set[tuple[str, str]] = set()
-            for task in tasks:
-                key = (getattr(task, "graph_id", None), getattr(task, "task_id", None))
-                if key in seen:
-                    continue
-                seen.add(key)
-                if getattr(task, "graph_id", None):
-                    scheduler.on_executor_recovered(task.graph_id, task.task_id)
-        except Exception:
-            logger.warning(
-                "[recovery] scheduler on_executor_recovered notify failed", exc_info=True
-            )
+        按 graph_id 去重：同图多 task 恢复只触发一次 on_executor_recovered（scheduler 的
+        _advance 会扫全图就绪节点），避免冗余 service 创建和 snapshot 查询。
+
+        I13: 逐图独立 try/except，单图通知失败不阻断其余图。
+        """
+        from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
+
+        scheduler = get_graph_scheduler()
+        if scheduler is None:
+            return
+        seen_graphs: set[str] = set()
+        for task in tasks:
+            graph_id = getattr(task, "graph_id", None)
+            if not graph_id or graph_id in seen_graphs:
+                continue
+            seen_graphs.add(graph_id)
+            try:
+                scheduler.on_executor_recovered(graph_id, getattr(task, "task_id", ""))
+            except Exception:
+                logger.warning(
+                    "[recovery] scheduler on_executor_recovered failed for graph=%s",
+                    graph_id,
+                    exc_info=True,
+                )
 

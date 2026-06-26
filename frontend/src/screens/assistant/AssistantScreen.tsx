@@ -313,6 +313,10 @@ export function AssistantScreen(): JSX.Element {
         <TaskGraphPanel
           graph={currentTaskGraph}
           loading={taskGraphLoading}
+          todosByTaskId={taskTodosByTaskId}
+          onLoadTodos={(taskId: string) => {
+            if (activeSessionId) void loadTaskTodos(activeSessionId, taskId);
+          }}
           onContinue={(graphId) => {
             if (activeSessionId) void continueTaskGraph(activeSessionId, graphId);
           }}

@@ -75,13 +75,23 @@ class ToolRegistry:
         specialist_id: str | None = None,
         allowed_methodology_skill_ids: set[str] | None = None,
         current_task_id: str | None = None,
+        parent_session_id: str | None = None,
+        role_kind: str = "executor",
     ) -> Callable[[], list[ToolDefinition]]:
+        """Build tools for delegated executors (specialists / ephemeral subagents).
+
+        024 扩展：role_kind 参数控制工具分支。
+        - 'executor'（默认）：拿 todo_update / ask_parent / meeting 等执行器工具
+        - 'planner'：只拿 build_task_graph（规划变体），不拿执行器工具
+        """
         from src.business.agents.tools.assistant_tools import (
             ASK_PARENT_SCHEMA,
+            BUILD_TASK_GRAPH_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
             TODO_UPDATE_SCHEMA,
             create_ask_parent_handler,
+            create_build_task_graph_handler,
             create_delegate_to_subagent_handler,
             create_meeting_send_message_handler,
             create_todo_update_handler,
@@ -193,7 +203,30 @@ class ToolRegistry:
                 )
             ]
 
+        # 024: planner 角色分支——规划专员只拿 build_task_graph，不拿执行器工具
+        planner_tools: list[ToolDefinition] = []
+        if role_kind == "planner":
+            graph_owner_session_id = parent_session_id or executor_id or ""
+            planner_tools = [
+                ToolDefinition(
+                    name="build_task_graph",
+                    schema=BUILD_TASK_GRAPH_SCHEMA,
+                    handler=create_build_task_graph_handler(
+                        graph_owner_session_id,
+                    ),
+                ),
+            ]
+
         def tool_factory() -> list[ToolDefinition]:
+            if role_kind == "planner":
+                # 规划专员：search + build_task_graph + load_skill + 通用工具
+                return (
+                    search_tools
+                    + planner_tools
+                    + [load_skill_tool]
+                    + BUILTIN_GENERAL_TOOLS
+                    + dynamic_manager.get_activated_tools()
+                )
             return (
                 search_tools
                 + [*executor_collaboration_tools, load_skill_tool]
@@ -224,6 +257,7 @@ class ToolRegistry:
             ABANDON_REQUEST_GRAPH_SCHEMA,
             ANSWER_TASK_QUESTION_SCHEMA,
             ASK_USER_QUESTION_SCHEMA,
+            BUILD_TASK_GRAPH_SCHEMA,
             CODIFY_AS_TOOL_SCHEMA,
             CONTINUE_SUBAGENT_SCHEMA,
             CREATE_SPECIALIST_SCHEMA,
@@ -233,6 +267,7 @@ class ToolRegistry:
             DISMISS_SUGGESTION,
             INSPECT_SUBAGENT_SCHEMA,
             INVALIDATE_MEMORY_ENTRY_SCHEMA,
+            MUTATE_TASK_GRAPH_SCHEMA,
             OPEN_MEETING_CHANNEL_SCHEMA,
             REPLY_TO_USER_SCHEMA,
             REPORT_TOOL_BUG,
@@ -242,6 +277,7 @@ class ToolRegistry:
             create_abandon_request_graph_handler,
             create_answer_task_question_handler,
             create_ask_user_question_handler,
+            create_build_task_graph_handler,
             create_codify_as_tool_handler,
             create_continue_subagent_handler,
             create_create_specialist_handler,
@@ -250,6 +286,7 @@ class ToolRegistry:
             create_delegate_to_subagent_handler,
             create_inspect_subagent_handler,
             create_invalidate_memory_entry_handler,
+            create_mutate_task_graph_handler,
             create_open_meeting_channel_handler,
             create_reply_to_user_handler,
             create_retrieve_archive_handler,
@@ -397,6 +434,20 @@ class ToolRegistry:
             caller_id=ASSISTANT_ENTITY_ID,
         )
 
+        # 024: build_task_graph + mutate_task_graph 工具
+        # scheduler 已在 orchestrator init 时装配（runtime -> _get_task_dispatcher -> _wire_graph_scheduler），
+        # 无需 per-call 重新确认。
+        build_task_graph_tool = ToolDefinition(
+            name="build_task_graph",
+            schema=BUILD_TASK_GRAPH_SCHEMA,
+            handler=create_build_task_graph_handler(session_id),
+        )
+        mutate_task_graph_tool = ToolDefinition(
+            name="mutate_task_graph",
+            schema=MUTATE_TASK_GRAPH_SCHEMA,
+            handler=create_mutate_task_graph_handler(session_id),
+        )
+
         search_tools = create_assistant_search_tools(dynamic_manager)
         static_tools = [
             REPORT_TOOL_BUG,
@@ -420,6 +471,8 @@ class ToolRegistry:
             create_specialist_tool,
             create_skill_methodology_tool,
             load_skill_methodology_tool,
+            build_task_graph_tool,
+            mutate_task_graph_tool,
         ] + BUILTIN_GENERAL_TOOLS
 
         def tool_factory() -> list[ToolDefinition]:
