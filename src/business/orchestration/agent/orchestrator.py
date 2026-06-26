@@ -7,6 +7,8 @@ from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
+from src.utils.events import emit
+
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
     ASSISTANT_CONFIG,
@@ -149,9 +151,9 @@ class AgentOrchestrator:
             profile_repo=AssistantProfileRepository(),
             logger=logger,
         )
-        self._tool_registry = ToolRegistry(self)
         self._teaching_orchestrator = TeachingOrchestrator(self)
         self._delegation_orchestrator = DelegationOrchestrator(self)
+        self._tool_registry = self._build_tool_registry()
         self._failure_tracker.connect_signals()
 
     # --- Public sub-component accessors ---
@@ -191,10 +193,38 @@ class AgentOrchestrator:
             self._teaching_orchestrator = teaching
         return teaching
 
+    def get_or_create_dynamic_manager(
+        self, session_id: str, allowed_ids: set[str] | None
+    ) -> "DynamicToolManager":
+        """返回 session 级 DynamicToolManager(命中复用,LRU 容量淘汰)。
+
+        命中时忽略本次 allowed_ids(不重建,保留已激活工具);仅 miss 时用本次
+        allowed_ids 新建。threading.Lock 保护 OrderedDict,锁不可重入。
+        """
+        from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
+
+        with self._dynamic_managers_lock:
+            if session_id in self._dynamic_managers:
+                self._dynamic_managers.move_to_end(session_id)
+            else:
+                self._dynamic_managers[session_id] = DynamicToolManager(allowed_ids)
+                while len(self._dynamic_managers) > self._MAX_DYNAMIC_MANAGERS:
+                    self._dynamic_managers.popitem(last=False)
+            return self._dynamic_managers[session_id]
+
+    def _build_tool_registry(self) -> ToolRegistry:
+        return ToolRegistry(
+            session_store=self._session_store,
+            dynamic_manager_cache=self,
+            delegation_orchestrator=self._get_delegation_orchestrator(),
+            resolve_recording_mode=self._recording_mode,
+            redispatch_answered_task=self._redispatch_answered_task,
+        )
+
     def _get_tool_registry(self) -> ToolRegistry:
         registry = getattr(self, "_tool_registry", None)
         if registry is None:
-            registry = ToolRegistry(self)
+            registry = self._build_tool_registry()
             self._tool_registry = registry
         return registry
 
@@ -251,12 +281,19 @@ class AgentOrchestrator:
         if agent_type == AgentType.ASSISTANT:
             assert session_id, "assistant 类型必须传 session_id"
             if user_input is not None and not assistant_reuse_user_message:
-                if not isinstance(user_input, str) or not user_input:
+                if isinstance(user_input, dict):
+                    if not user_input.get("role") or not user_input.get("content"):
+                        return AgentResult(
+                            result_type=ResultType.ERROR,
+                            error="assistant dict input must have 'role' and 'content'",
+                        )
+                elif not isinstance(user_input, str) or not user_input:
                     return AgentResult(
                         result_type=ResultType.ERROR,
                         error="assistant input must be non-empty text",
                     )
-                assistant_should_persist = True
+                else:
+                    assistant_should_persist = True
         elif not session_id:
             session_id = self._session_store.get_or_create_session(workflow_id, agent_type)
 
@@ -508,7 +545,11 @@ class AgentOrchestrator:
         return {
             **result,
             "success": True,
-            "message": "任务已进入统一任务图，等待异步执行。",
+            "message": (
+                "任务已受理并异步执行。请用 reply_to_user 向用户说明正在处理并结束本轮；"
+                "子代理结果完成后会自动回流，届时用 decide_task_adjudication 裁定。"
+                "在结果回流前不要调用 continue_subagent/inspect_subagent。"
+            ),
         }
 
     def _start_unified_attempt(
@@ -996,6 +1037,26 @@ class AgentOrchestrator:
             response["error"] = result.error
         return response
 
+    @staticmethod
+    def _reject_async_task_id(subagent_id: str) -> dict | None:
+        """异步委派返回的是 taskId/graphId（tsk_/tg_ 前缀），不是可唤回子代理的 session id。
+
+        主助理若误把异步委派的 taskId 传给 continue/inspect，只会得到无意义的"未找到"，
+        甚至误判子代理挂掉而自行重做。这里在归属校验之前直接拦截，给出明确指引：
+        异步任务应等结果回流 + decide_task_adjudication，不要用这两个工具。
+        """
+        sid = (subagent_id or "").strip()
+        if sid.startswith(("tsk_", "tg_")):
+            return {
+                "success": False,
+                "error": (
+                    "传入的是任务ID（taskId/graphId），不是可唤回的子代理ID。"
+                    "异步委派的子代理请等待结果回流提示，到达后用 decide_task_adjudication 裁定，"
+                    "不要用本工具。"
+                ),
+            }
+        return None
+
     def _resolve_subagent_session(self, parent_session_id: str, subagent_id: str):
         """归属校验：确认 subagent_id 是当前主代理派出的临时子代理 session。
 
@@ -1088,6 +1149,9 @@ class AgentOrchestrator:
         extra_iterations: int = 20,
     ) -> dict:
         """唤回一个属于当前主代理的子代理续跑（从 DB 持久化历史恢复，跨进程重启亦可）。"""
+        rejection = self._reject_async_task_id(subagent_id)
+        if rejection is not None:
+            return rejection
         session = self._resolve_subagent_session(parent_session_id, subagent_id)
         if session is None:
             return {"success": False, "error": "未找到可唤回的子代理，请确认 subagent_id 正确"}
@@ -1249,6 +1313,9 @@ class AgentOrchestrator:
 
     def _inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict:
         """返回子代理工作概览（机械统计，不触发任何模型调用）。"""
+        rejection = self._reject_async_task_id(subagent_id)
+        if rejection is not None:
+            return rejection
         session = self._resolve_subagent_session(parent_session_id, subagent_id)
         if session is None:
             return {"success": False, "error": "未找到可查看的子代理，请确认 subagent_id 正确"}

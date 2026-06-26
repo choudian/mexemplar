@@ -416,6 +416,53 @@ def test_unified_dispatch_helper_uses_task_dispatcher(monkeypatch):
     assert AssistantTaskRepository().get_task(result["taskId"]) is not None
 
 
+def test_unified_dispatch_returns_async_reentry_guidance(monkeypatch):
+    """统一路径返回体必须明确告知主助理：异步执行、等回流、用 decide_task_adjudication。
+
+    Regression: 主助理曾因返回体只有含糊的"等待异步执行"而无下一步指引，误用
+    continue_subagent/inspect_subagent 去查异步 task，导致重复抓取。返回 message 现在必须
+    携带明确的回流 + 裁定指引，并点名禁止 continue/inspect。
+    """
+
+    class _TaskConfig:
+        def get_assistant_tasks_unified_dispatch_enabled(self) -> bool:
+            return True
+
+        def get_assistant_tasks_clean_start_guard_enabled(self) -> bool:
+            return True
+
+        def get_assistant_tasks_dispatch_max_workers(self) -> int:
+            return 2
+
+        def get_assistant_tasks_attempt_lease_seconds(self) -> int:
+            return 60
+
+    monkeypatch.setattr(
+        "src.business.task_collaboration.dispatcher.get_unified_config",
+        lambda: _TaskConfig(),
+    )
+    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    orchestrator._config = _TaskConfig()
+    # 裸 orchestrator 无法跑真实 executor；no-op 掉 start，避免异步 worker 污染断言。
+    monkeypatch.setattr(orchestrator, "_start_unified_attempt", lambda *a, **kw: None)
+
+    result = orchestrator._dispatch_task_via_unified_model(
+        parent_session_id="parent-async-guidance",
+        task="完成任务",
+        context="上下文",
+        assignee_type="ephemeral_subagent",
+        assignee_id="ephemeral_subagent",
+        capability_scope=["tool-a"],
+    )
+
+    assert result is not None
+    message = result["message"]
+    assert "异步" in message
+    assert "回流" in message
+    assert "decide_task_adjudication" in message
+    assert "continue_subagent" in message  # 明确禁止误用
+
+
 def test_unified_dispatch_repeated_calls_do_not_invalidate_cached_dispatcher(monkeypatch):
     """Regression: 缓存的 dispatcher 不能持有首次注入、随后被 close 的 service。
 
@@ -564,9 +611,20 @@ def test_specialist_delegation_uses_unified_dispatch_without_sync_child_executio
 
 
 def test_delegated_executor_tools_include_question_and_message_only_meeting_tools():
-    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
+    from src.business.orchestration.agent.tool_registry import ToolRegistry
 
-    tools = orchestrator._build_delegated_executor_tools(
+    # 依赖注入改造后直接构造 ToolRegistry + fake 依赖,无需 bare orchestrator。
+    # specialist 分支把 delegation.run_sync_ephemeral_subagent 绑进委派闭包,
+    # 但 tool_factory() 只组装工具列表不执行委派,故 MagicMock 即可。
+    registry = ToolRegistry(
+        session_store=MagicMock(),
+        dynamic_manager_cache=MagicMock(),
+        delegation_orchestrator=MagicMock(),
+        resolve_recording_mode=MagicMock(),
+        redispatch_answered_task=MagicMock(),
+    )
+
+    tools = registry.build_delegated_executor_tools(
         {"tool-a"},
         agent_type="specialist",
         executor_id="specialist-session",

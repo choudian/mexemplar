@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 
 from src.business.agents.config import AgentType, ToolDefinition
 from src.business.agents.tools.desktop_tools import create_desktop_specific_tools
@@ -16,11 +19,73 @@ from src.data.repos.skill_equipment_repository import ASSISTANT_ENTITY_ID
 from src.recording.browser.recorder import RecordingMode
 
 
-class ToolRegistry:
-    """Builds per-agent tool lists while Orchestrator owns runtime state."""
+class _SessionToolQuery(Protocol):
+    def get_session(self, session_id: str) -> Any: ...
 
-    def __init__(self, owner: Any) -> None:
-        self._owner = owner
+
+class _DynamicManagerCache(Protocol):
+    def get_or_create_dynamic_manager(
+        self, session_id: str, allowed_ids: set[str] | None
+    ) -> DynamicToolManager: ...
+
+
+class _DelegationFacade(Protocol):
+    def delegate_to_subagent(
+        self,
+        *,
+        parent_session_id: str,
+        task_description: str,
+        execution_context: str = "",
+        tool_whitelist: list[str] | None = None,
+    ) -> dict: ...
+
+    def continue_subagent(
+        self,
+        *,
+        parent_session_id: str,
+        subagent_id: str,
+        instruction: str = "",
+        extra_iterations: int = 20,
+    ) -> dict: ...
+
+    def inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict: ...
+
+    def delegate_to_specialist(
+        self, *, parent_session_id: str, specialist_name: str, task: str
+    ) -> dict: ...
+
+    def run_sync_ephemeral_subagent(
+        self,
+        *,
+        parent_session_id: str,
+        task: str,
+        execution_context: str = "",
+        tool_whitelist: list[str] | None = None,
+    ) -> dict: ...
+
+
+class ToolRegistry:
+    """Builds per-agent tool lists from injected collaborators.
+
+    依赖注入:不再持有 Orchestrator 引用,只依赖 5 个窄依赖(session 查询、动态
+    管理器缓存、委派 facade、录制模式解析、任务重派)。生产由 AgentOrchestrator
+    注入自身组件;测试可注入 fake 摆脱真 Orchestrator/SQLite。
+    """
+
+    def __init__(
+        self,
+        *,
+        session_store: _SessionToolQuery,
+        dynamic_manager_cache: _DynamicManagerCache,
+        delegation_orchestrator: _DelegationFacade,
+        resolve_recording_mode: Callable[[str | None], str],
+        redispatch_answered_task: Callable[[str], bool],
+    ) -> None:
+        self._session_store = session_store
+        self._dynamic_manager_cache = dynamic_manager_cache
+        self._delegation = delegation_orchestrator
+        self._resolve_recording_mode = resolve_recording_mode
+        self._redispatch_answered_task = redispatch_answered_task
 
     def build_tools(
         self,
@@ -30,7 +95,7 @@ class ToolRegistry:
     ) -> list[ToolDefinition] | Callable[[], list[ToolDefinition]]:
         if agent_type == AgentType.ASSISTANT:
             return self.build_assistant_tools(session_id or "")
-        mode = self._owner._recording_mode(workflow_id)
+        mode = self._resolve_recording_mode(workflow_id)
         recording_tools = create_recording_tools(workflow_id, mode)
         if mode == RecordingMode.DESKTOP:
             recording_tools = recording_tools + create_desktop_specific_tools(workflow_id)
@@ -185,7 +250,7 @@ class ToolRegistry:
                         "delegation_type": "ephemeral_subagent",
                     }
                 spawned_state["used"] = True
-                return self._owner._run_sync_ephemeral_subagent(
+                return self._delegation.run_sync_ephemeral_subagent(
                     parent_session_id=parent_session_id,
                     task=task,
                     execution_context=execution_context,
@@ -295,7 +360,6 @@ class ToolRegistry:
         )
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
-            DynamicToolManager,
             create_assistant_search_tools,
         )
         from src.business.agents.tools.skill_methodology_tools import (
@@ -307,17 +371,12 @@ class ToolRegistry:
             memory_search_handler,
         )
 
-        session = self._owner._session_store.get_session(session_id)
+        session = self._session_store.get_session(session_id)
         allowed_ids = session.get_tool_id_set() if session else None
 
-        with self._owner._dynamic_managers_lock:
-            if session_id in self._owner._dynamic_managers:
-                self._owner._dynamic_managers.move_to_end(session_id)
-            else:
-                self._owner._dynamic_managers[session_id] = DynamicToolManager(allowed_ids)
-                while len(self._owner._dynamic_managers) > self._owner._MAX_DYNAMIC_MANAGERS:
-                    self._owner._dynamic_managers.popitem(last=False)
-            dynamic_manager = self._owner._dynamic_managers[session_id]
+        dynamic_manager = self._dynamic_manager_cache.get_or_create_dynamic_manager(
+            session_id, allowed_ids
+        )
 
         codify_tool = ToolDefinition(
             name="codify_as_tool",
@@ -355,7 +414,7 @@ class ToolRegistry:
             schema=DELEGATE_TO_SUBAGENT_SCHEMA,
             handler=create_delegate_to_subagent_handler(
                 session_id,
-                dispatch_callback=self._owner.delegation_orchestrator.delegate_to_subagent,
+                dispatch_callback=self._delegation.delegate_to_subagent,
             ),
         )
         decide_task_adjudication_tool = ToolDefinition(
@@ -373,7 +432,7 @@ class ToolRegistry:
             schema=CONTINUE_SUBAGENT_SCHEMA,
             handler=create_continue_subagent_handler(
                 session_id,
-                continue_callback=self._owner.delegation_orchestrator.continue_subagent,
+                continue_callback=self._delegation.continue_subagent,
             ),
         )
         inspect_subagent_tool = ToolDefinition(
@@ -381,7 +440,7 @@ class ToolRegistry:
             schema=INSPECT_SUBAGENT_SCHEMA,
             handler=create_inspect_subagent_handler(
                 session_id,
-                inspect_callback=self._owner.delegation_orchestrator.inspect_subagent,
+                inspect_callback=self._delegation.inspect_subagent,
             ),
         )
         delegate_to_specialist_tool = ToolDefinition(
@@ -389,7 +448,7 @@ class ToolRegistry:
             schema=DELEGATE_TO_SPECIALIST_SCHEMA,
             handler=create_delegate_to_specialist_handler(
                 session_id,
-                dispatch_callback=self._owner.delegation_orchestrator.delegate_to_specialist,
+                dispatch_callback=self._delegation.delegate_to_specialist,
             ),
         )
         create_specialist_tool = ToolDefinition(
@@ -413,7 +472,7 @@ class ToolRegistry:
             name="answer_task_question",
             schema=ANSWER_TASK_QUESTION_SCHEMA,
             handler=create_answer_task_question_handler(
-                redispatch_callback=self._owner._redispatch_answered_task
+                redispatch_callback=self._redispatch_answered_task
             ),
         )
         open_meeting_channel_tool = ToolDefinition(

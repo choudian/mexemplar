@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 from src.business.agents.config import AgentType
 from src.business.brain.skill_equipment_service import SkillEquipmentService
 from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+from src.business.orchestration.agent.tool_registry import ToolRegistry
 from src.data.models_sqlite import BrainSpecialist
 from src.data.repos.skill_repository import SkillRepository
 
@@ -40,6 +42,24 @@ def _skill(in_memory_db, skill_id: str = "skill-1"):
         )
 
 
+def _build_delegated_tools(*, specialist_id, allowed_methodology_skill_ids=None):
+    """构造 ToolRegistry + fake 依赖(依赖注入改造后无需 bare orchestrator)。"""
+    registry = ToolRegistry(
+        session_store=MagicMock(),
+        dynamic_manager_cache=MagicMock(),
+        delegation_orchestrator=MagicMock(),
+        resolve_recording_mode=MagicMock(),
+        redispatch_answered_task=MagicMock(),
+    )
+    kwargs: dict = {
+        "agent_type": AgentType.SPECIALIST,
+        "specialist_id": specialist_id,
+    }
+    if allowed_methodology_skill_ids is not None:
+        kwargs["allowed_methodology_skill_ids"] = allowed_methodology_skill_ids
+    return registry.build_delegated_executor_tools(None, **kwargs)()
+
+
 def test_methodology_equipment_reaches_specialist_prompt_and_load_tool(in_memory_db) -> None:
     specialist = _specialist(in_memory_db)
     skill = _skill(in_memory_db)
@@ -55,13 +75,10 @@ def test_methodology_equipment_reaches_specialist_prompt_and_load_tool(in_memory
     assert "派活方法论" in snapshot
     assert "SECRET_BODY_NOT_IN_PROMPT" not in prompt
 
-    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
-    tools = orchestrator._build_delegated_executor_tools(
-        None,
-        agent_type=AgentType.SPECIALIST,
+    tools = _build_delegated_tools(
         specialist_id=specialist.specialist_id,
         allowed_methodology_skill_ids={skill.skill_id},
-    )()
+    )
     load_tool = next(tool for tool in tools if tool.name == "load_skill_methodology")
     result = load_tool.handler(skill.skill_id)
 
@@ -79,13 +96,10 @@ def test_equip_change_during_dispatch_does_not_interrupt_frozen_round(in_memory_
         service.equip(entity_id=specialist.specialist_id, skill_id=skill.skill_id)
 
     prompt_before_change = AgentOrchestrator._build_specialist_prompt(specialist, [])
-    orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
-    frozen_tools = orchestrator._build_delegated_executor_tools(
-        None,
-        agent_type=AgentType.SPECIALIST,
+    frozen_tools = _build_delegated_tools(
         specialist_id=specialist.specialist_id,
         allowed_methodology_skill_ids={skill.skill_id},
-    )()
+    )
     frozen_load = next(tool for tool in frozen_tools if tool.name == "load_skill_methodology")
 
     with in_memory_db.get_session() as session:
@@ -94,11 +108,7 @@ def test_equip_change_during_dispatch_does_not_interrupt_frozen_round(in_memory_
         )
 
     frozen_result = frozen_load.handler(skill.skill_id)
-    live_tools_next_round = orchestrator._build_delegated_executor_tools(
-        None,
-        agent_type=AgentType.SPECIALIST,
-        specialist_id=specialist.specialist_id,
-    )()
+    live_tools_next_round = _build_delegated_tools(specialist_id=specialist.specialist_id)
     live_load = next(
         tool for tool in live_tools_next_round if tool.name == "load_skill_methodology"
     )
