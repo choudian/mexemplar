@@ -11,8 +11,7 @@ from unittest.mock import MagicMock
 
 import src.data.duckdb_manager as duckdb_module
 from src.data.duckdb_manager import DuckDBManager
-from src.data.recording_repository import RecordingRepository
-from src.data.recording_recovery import RecordingRecovery
+from src.recording.recovery import RecordingRecovery
 
 
 class TestScreenshotsQueueLifecycle:
@@ -119,14 +118,12 @@ class TestScreenshotsQueueLifecycle:
         screenshots_file.write_text('{"moment": "before"}\n', encoding="utf-8")
 
         old_instance = duckdb_module._duckdb_instance
-        old_auto_recover = RecordingRepository._auto_recover_done
         if old_instance is not None:
             try:
                 old_instance.close()
             except Exception:
                 pass
         duckdb_module._duckdb_instance = None
-        RecordingRepository._auto_recover_done = True
 
         try:
             db = DuckDBManager(str(tmp_path / "recovery_test.duckdb"))
@@ -151,4 +148,3 @@ class TestScreenshotsQueueLifecycle:
             except Exception:
                 pass
             duckdb_module._duckdb_instance = old_instance
-            RecordingRepository._auto_recover_done = old_auto_recover

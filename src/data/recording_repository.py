@@ -6,10 +6,7 @@
 
 import json
 import logging
-import shutil
 import threading
-from datetime import timedelta
-from pathlib import Path
 from typing import Optional, List, Dict, Any
 from src.utils.timezone import coerce_timestamp, from_timestamp_utc_naive, utc_now_naive
 from src.data.recording_models import FilterDecision
@@ -22,9 +19,6 @@ logger = logging.getLogger(__name__)
 class RecordingRepository:
     """录制数据仓库"""
 
-    # 标记是否已执行自动恢复（避免重复）
-    _auto_recover_done = False
-    _auto_recover_lock = threading.RLock()
     _desktop_tables_ensured = False
     _desktop_tables_lock = threading.Lock()
 
@@ -48,87 +42,9 @@ class RecordingRepository:
 
         Args:
             db_manager: DuckDB 管理器，如果为None则使用全局单例
-            auto_recover: 是否在初始化时执行一次启动恢复
+            auto_recover: deprecated, recovery 已搬到 src/recording/recovery/，保留为 noop 以兼容既有调用与测试
         """
         self.db = self._resolve_db_manager(db_manager)
-
-        if auto_recover:
-            self.ensure_startup_recovery(self.db)
-
-    @classmethod
-    def ensure_startup_recovery(cls, db_manager: Optional[DuckDBManager] = None) -> None:
-        """
-        显式执行一次启动恢复。
-
-        只应在应用启动阶段调用，避免在正常落库路径中扫描 queues。
-        """
-        db_manager = cls._resolve_db_manager(db_manager)
-
-        with cls._auto_recover_lock:
-            if cls._auto_recover_done:
-                return
-
-            cls._auto_recover_done = True
-            try:
-                cls(db_manager=db_manager, auto_recover=False)._auto_recover_from_queues()
-            except Exception as e:
-                logger.warning(f"自动恢复失败: {e}")
-            try:
-                cls._cleanup_old_trial_dirs(db_manager)
-            except Exception as e:
-                logger.warning(f"清理过期 Trial 目录失败: {e}")
-
-    @classmethod
-    def _cleanup_old_trial_dirs(cls, db_manager: DuckDBManager, max_age_days: int = 7) -> None:
-        db_path = getattr(db_manager, "db_path", None)
-        if not isinstance(db_path, (str, Path)):
-            return
-        data_dir = Path(db_path).resolve().parent
-        trials_dir = data_dir / "trials"
-        if not trials_dir.exists():
-            return
-        cutoff = utc_now_naive() - timedelta(days=max_age_days)
-        for path in trials_dir.iterdir():
-            if not path.is_dir():
-                continue
-            mtime = from_timestamp_utc_naive(path.stat().st_mtime)
-            if mtime < cutoff:
-                shutil.rmtree(path)
-
-    def _auto_recover_from_queues(self):
-        """
-        自动从队列文件恢复未保存的录制
-
-        恢复优先级：
-        1. DuckDB WAL 机制（已在 connect() 中自动处理）
-        2. 如果 WAL 损坏或录制不存在，从 queues 恢复
-        """
-        try:
-            from .recording_recovery import RecordingRecovery
-
-            # 检查是否需要恢复
-            needs_recovery = self.db.needs_queue_recovery()
-
-            if needs_recovery:
-                logger.info("🔧 检测到 WAL 损坏，从 queues 恢复数据...")
-            else:
-                # 即使 WAL 正常，也要检查是否有未处理的队列文件
-                # （正常关闭但数据未成功保存到 DuckDB 的情况）
-                logger.debug("WAL 正常，检查是否有未处理的队列文件...")
-
-            recovery = RecordingRecovery(db_manager=self.db)
-            recovered = recovery.auto_recover_on_startup()
-
-            if recovered:
-                logger.info("✅ 已从队列文件自动恢复录制数据")
-
-            # 清除恢复标志
-            self.db.clear_queue_recovery_flag()
-
-        except ImportError:
-            logger.debug("恢复模块不可用，跳过自动恢复")
-        except Exception as e:
-            logger.warning(f"自动恢复检查失败: {e}")
 
     def save_recording_session(self, session: Dict[str, Any]) -> str:
         """

@@ -9,7 +9,7 @@ import src.data.duckdb_manager as duckdb_module
 from src.data.config_models import RecordingNoiseFilterConfig
 from src.business.agents.tools import recording_data_tools
 from src.data.duckdb_manager import DuckDBManager
-from src.data.recording_recovery import RecordingRecovery
+from src.recording.recovery import RecordingRecovery
 from src.data.recording_repository import RecordingRepository
 from src.recording.browser.duckdb_recording_persister import DuckDBRecordingPersister
 
@@ -22,7 +22,6 @@ def _config_stub(*, enabled: bool = True):
 
 def _temporary_repository(tmp_path, db_name: str):
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
 
     if old_instance is not None:
         try:
@@ -31,22 +30,20 @@ def _temporary_repository(tmp_path, db_name: str):
             pass
 
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db = DuckDBManager(str(tmp_path / db_name))
     db.initialize()
     repo = RecordingRepository(db_manager=db)
-    return repo, db, old_instance, old_auto_recover
+    return repo, db, old_instance
 
 
-def _restore_repository(db, old_instance, old_auto_recover):
+def _restore_repository(db, old_instance):
     try:
         db.close()
     except Exception:
         pass
 
     duckdb_module._duckdb_instance = old_instance
-    RecordingRepository._auto_recover_done = old_auto_recover
 
 
 def _request(
@@ -203,7 +200,7 @@ def _counts(db: DuckDBManager, recording_id: str) -> dict[str, int]:
 
 
 def test_persister_writes_filtered_requests_and_decisions(tmp_path):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
+    repo, db, old_instance = _temporary_repository(
         tmp_path, "persister_noise.duckdb"
     )
     queue_path = tmp_path / "rec_noise_actions.jsonl"
@@ -276,7 +273,7 @@ def test_persister_writes_filtered_requests_and_decisions(tmp_path):
             == 0
         )
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)
 
 
 def test_recovery_matches_persister_output_for_same_queue(tmp_path):
@@ -290,10 +287,10 @@ def test_recovery_matches_persister_output_for_same_queue(tmp_path):
     _write_noise_queue(queue_path_left, "rec_parity")
     _write_noise_queue(queue_path_right, "rec_parity")
 
-    repo_a, db_a, old_instance_a, old_auto_a = _temporary_repository(
+    repo_a, db_a, old_instance_a = _temporary_repository(
         left_path, "persister_parity.duckdb"
     )
-    repo_b, db_b, old_instance_b, old_auto_b = _temporary_repository(
+    repo_b, db_b, old_instance_b = _temporary_repository(
         right_path, "recovery_parity.duckdb"
     )
 
@@ -322,12 +319,12 @@ def test_recovery_matches_persister_output_for_same_queue(tmp_path):
         assert _network_rows(db_a, "rec_parity") == _network_rows(db_b, "rec_parity")
         assert _decision_rows(db_a, "rec_parity") == _decision_rows(db_b, "rec_parity")
     finally:
-        _restore_repository(db_a, old_instance_a, old_auto_a)
-        _restore_repository(db_b, old_instance_b, old_auto_b)
+        _restore_repository(db_a, old_instance_a)
+        _restore_repository(db_b, old_instance_b)
 
 
 def test_enabled_false_short_circuits_filtering(tmp_path):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
+    repo, db, old_instance = _temporary_repository(
         tmp_path, "persister_disabled.duckdb"
     )
     queue_path = tmp_path / "rec_disabled_actions.jsonl"
@@ -372,11 +369,11 @@ def test_enabled_false_short_circuits_filtering(tmp_path):
             == 0
         )
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)
 
 
 def test_enabled_false_still_keeps_query_side_contracts(tmp_path):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
+    repo, db, old_instance = _temporary_repository(
         tmp_path, "persister_disabled_query.duckdb"
     )
     queue_path = tmp_path / "rec_disabled_query_actions.jsonl"
@@ -437,11 +434,11 @@ def test_enabled_false_still_keeps_query_side_contracts(tmp_path):
             )
             assert restricted["output"].strip() == "SQL 解析失败，请简化查询后重试"
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)
 
 
 def test_new_ingest_does_not_backfill_historical_rows(tmp_path):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
+    repo, db, old_instance = _temporary_repository(
         tmp_path, "history_guard.duckdb"
     )
     queue_path = tmp_path / "rec_new_actions.jsonl"
@@ -492,11 +489,11 @@ def test_new_ingest_does_not_backfill_historical_rows(tmp_path):
             == 0
         )
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)
 
 
 def test_smoke_persister_then_agent_query_only_sees_visible_requests(tmp_path):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(tmp_path, "smoke_query.duckdb")
+    repo, db, old_instance = _temporary_repository(tmp_path, "smoke_query.duckdb")
     queue_path = tmp_path / "rec_smoke_actions.jsonl"
     _write_noise_queue(queue_path, "rec_smoke")
 
@@ -528,12 +525,12 @@ def test_smoke_persister_then_agent_query_only_sees_visible_requests(tmp_path):
         assert "https://www.googletagmanager.com/gtm.js" not in urls
         assert "https://analytics.other.net/pixel" not in urls
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)
 
 
 @pytest.mark.parametrize("method_name", ["save_network_requests", "save_filter_decisions"])
 def test_persister_rolls_back_on_filter_write_failures_and_can_retry(tmp_path, method_name):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
+    repo, db, old_instance = _temporary_repository(
         tmp_path, f"persister_rollback_{method_name}.duckdb"
     )
     queue_path = tmp_path / f"rec_{method_name}_actions.jsonl"
@@ -579,12 +576,12 @@ def test_persister_rolls_back_on_filter_write_failures_and_can_retry(tmp_path, m
         assert _counts(db, "rec_retry")["network_requests"] == 7
         assert _counts(db, "rec_retry")["filter_decisions"] == 5
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)
 
 
 @pytest.mark.parametrize("method_name", ["save_network_requests", "save_filter_decisions"])
 def test_recovery_rolls_back_on_filter_write_failures_and_can_retry(tmp_path, method_name):
-    repo, db, old_instance, old_auto_recover = _temporary_repository(
+    repo, db, old_instance = _temporary_repository(
         tmp_path, f"recovery_rollback_{method_name}.duckdb"
     )
     queue_path = tmp_path / f"rec_recovery_{method_name}_actions.jsonl"
@@ -616,4 +613,4 @@ def test_recovery_rolls_back_on_filter_write_failures_and_can_retry(tmp_path, me
         assert _counts(db, "rec_recovery_retry")["network_requests"] == 7
         assert _counts(db, "rec_recovery_retry")["filter_decisions"] == 5
     finally:
-        _restore_repository(db, old_instance, old_auto_recover)
+        _restore_repository(db, old_instance)

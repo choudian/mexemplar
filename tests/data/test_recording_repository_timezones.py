@@ -29,8 +29,7 @@ def _parse_db_datetime(value):
     return datetime.fromisoformat(value)
 
 
-def test_recording_repository_persists_naive_utc_for_duckdb_timestamps(monkeypatch):
-    monkeypatch.setattr(RecordingRepository, "_auto_recover_done", True)
+def test_recording_repository_persists_naive_utc_for_duckdb_timestamps():
     db = _FakeDuckDBManager()
     repo = RecordingRepository(db_manager=db)
 
@@ -92,7 +91,6 @@ def test_recording_repository_persists_naive_utc_for_duckdb_timestamps(monkeypat
 
 
 def test_recording_repository_uses_naive_utc_now_when_timestamp_missing(monkeypatch):
-    monkeypatch.setattr(RecordingRepository, "_auto_recover_done", True)
     fixed_now = datetime(2026, 4, 18, 8, 0, 0, 123456)
     monkeypatch.setattr("src.data.recording_repository.utc_now_naive", lambda: fixed_now)
 

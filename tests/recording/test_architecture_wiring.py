@@ -209,8 +209,8 @@ class TestScreenshotFeatureGatekeeper:
         )
 
     def test_recovery_no_screenshot_replay(self):
-        """recording_recovery.py should not contain screenshot replay/restore logic."""
-        source = Path("src/data/recording_recovery.py").read_text(encoding="utf-8")
+        """recovery coordinator should not contain screenshot replay/restore logic."""
+        source = Path("src/recording/recovery/coordinator.py").read_text(encoding="utf-8")
         # "replay" or "restore" combined with "screenshot" is forbidden
         lines = source.lower().split("\n")
         for line in lines:

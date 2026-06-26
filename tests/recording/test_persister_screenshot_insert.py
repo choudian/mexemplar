@@ -50,7 +50,6 @@ def _action_event(timestamp: float = 1734508923.0) -> dict:
 @contextmanager
 def _temporary_repository(tmp_path):
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
 
     if old_instance is not None:
         try:
@@ -59,7 +58,6 @@ def _temporary_repository(tmp_path):
             pass
 
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db = DuckDBManager(str(tmp_path / "persister_test.duckdb"))
     db.initialize()
@@ -72,7 +70,6 @@ def _temporary_repository(tmp_path):
         except Exception:
             pass
         duckdb_module._duckdb_instance = old_instance
-        RecordingRepository._auto_recover_done = old_auto_recover
 
 
 class TestSaveScreenshots:

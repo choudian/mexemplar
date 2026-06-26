@@ -16,7 +16,6 @@ from src.recording.filtering.filtered_conn import (
 
 def _create_tool_db(tmp_path):
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
 
     if old_instance is not None:
         try:
@@ -25,7 +24,6 @@ def _create_tool_db(tmp_path):
             pass
 
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db = DuckDBManager(str(tmp_path / "tooling.duckdb"))
     db.initialize()
@@ -82,20 +80,19 @@ def _create_tool_db(tmp_path):
             )
         ]
     )
-    return db, old_instance, old_auto_recover
+    return db, old_instance
 
 
-def _restore_tool_db(db, old_instance, old_auto_recover):
+def _restore_tool_db(db, old_instance):
     try:
         db.close()
     except Exception:
         pass
     duckdb_module._duckdb_instance = old_instance
-    RecordingRepository._auto_recover_done = old_auto_recover
 
 
 def test_query_data_rewrites_network_requests_and_masks_errors(tmp_path):
-    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    db, old_instance = _create_tool_db(tmp_path)
     try:
         with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
             data = json.loads(
@@ -126,11 +123,11 @@ def test_query_data_rewrites_network_requests_and_masks_errors(tmp_path):
             )
             assert denied["error"] == SQL_PARSE_FAILED_MESSAGE
     finally:
-        _restore_tool_db(db, old_instance, old_auto_recover)
+        _restore_tool_db(db, old_instance)
 
 
 def test_describe_data_hides_filtering_infrastructure(tmp_path):
-    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    db, old_instance = _create_tool_db(tmp_path)
     try:
         with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
             overview = json.loads(recording_data_tools._describe_data("rec"))
@@ -154,11 +151,11 @@ def test_describe_data_hides_filtering_infrastructure(tmp_path):
                 "importance_level",
             } & field_names == set()
     finally:
-        _restore_tool_db(db, old_instance, old_auto_recover)
+        _restore_tool_db(db, old_instance)
 
 
 def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
-    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    db, old_instance = _create_tool_db(tmp_path)
     try:
         with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
             visible = json.loads(
@@ -273,7 +270,7 @@ def test_execute_code_uses_filtered_proxy_and_keeps_import_guard(tmp_path):
             assert "ImportError" in import_error["error"]
             assert "pandas" in import_error["error"]
     finally:
-        _restore_tool_db(db, old_instance, old_auto_recover)
+        _restore_tool_db(db, old_instance)
 
 
 def test_gatekeepers_keep_business_layer_free_of_hidden_tables_and_sqlglot():
@@ -309,7 +306,7 @@ def test_describe_data_masks_duckdb_errors_without_leaking_details(tmp_path):
 
 def test_read_field_chunk_cannot_reveal_filtered_network_request(tmp_path):
     """read_field_chunk 对 network_requests 走 filtered path，无法读取被过滤记录。"""
-    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    db, old_instance = _create_tool_db(tmp_path)
     try:
         with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
             # 获取被过滤记录的 request_id（直接查 raw 表获取）
@@ -338,12 +335,12 @@ def test_read_field_chunk_cannot_reveal_filtered_network_request(tmp_path):
             assert result["error"]["code"] == "record_unavailable"
             assert result["content"] == ""
     finally:
-        _restore_tool_db(db, old_instance, old_auto_recover)
+        _restore_tool_db(db, old_instance)
 
 
 def test_read_field_chunk_reads_visible_network_request(tmp_path):
     """read_field_chunk 可以读取未被过滤的 network_request。"""
-    db, old_instance, old_auto_recover = _create_tool_db(tmp_path)
+    db, old_instance = _create_tool_db(tmp_path)
     try:
         with patch("src.business.agents.tools.recording_data_tools.DuckDBManager", return_value=db):
             visible_row = db.fetchone(
@@ -369,4 +366,4 @@ def test_read_field_chunk_reads_visible_network_request(tmp_path):
             assert result["error"] is None
             assert result["content"] == "visible"
     finally:
-        _restore_tool_db(db, old_instance, old_auto_recover)
+        _restore_tool_db(db, old_instance)

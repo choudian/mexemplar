@@ -2,8 +2,7 @@ import json
 
 import src.data.duckdb_manager as duckdb_module
 from src.data.duckdb_manager import DuckDBManager
-from src.data.recording_recovery import RecordingRecovery
-from src.data.recording_repository import RecordingRepository
+from src.recording.recovery import RecordingRecovery
 
 
 def _build_queue_line(recording_id: str, action: dict) -> str:
@@ -19,7 +18,6 @@ def _build_queue_line(recording_id: str, action: dict) -> str:
 
 def _create_fresh_db(tmp_path, db_name: str):
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
 
     if old_instance is not None:
         try:
@@ -28,21 +26,19 @@ def _create_fresh_db(tmp_path, db_name: str):
             pass
 
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db = DuckDBManager(str(tmp_path / db_name))
     db.initialize()
-    return db, old_instance, old_auto_recover
+    return db, old_instance
 
 
-def _restore_db(db, old_instance, old_auto_recover):
+def _restore_db(db, old_instance):
     try:
         db.close()
     except Exception:
         pass
 
     duckdb_module._duckdb_instance = old_instance
-    RecordingRepository._auto_recover_done = old_auto_recover
 
 
 def test_recovery_saves_standalone_network_request_only_to_network_requests(tmp_path):
@@ -72,7 +68,7 @@ def test_recovery_saves_standalone_network_request_only_to_network_requests(tmp_
         encoding="utf-8",
     )
 
-    db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "recovery_network_only.duckdb")
+    db, old_instance = _create_fresh_db(tmp_path, "recovery_network_only.duckdb")
 
     try:
         recovery = RecordingRecovery(queues_dir=queues_dir, db_manager=db)
@@ -104,7 +100,7 @@ def test_recovery_saves_standalone_network_request_only_to_network_requests(tmp_
         assert action_id is None
         assert response_body == '{"ok": true}'
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)
 
 
 def test_recovery_restores_associated_requests_and_sibling_snapshots(tmp_path):
@@ -167,7 +163,7 @@ def test_recovery_restores_associated_requests_and_sibling_snapshots(tmp_path):
         encoding="utf-8",
     )
 
-    db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "recovery_mixed.duckdb")
+    db, old_instance = _create_fresh_db(tmp_path, "recovery_mixed.duckdb")
 
     try:
         recovery = RecordingRecovery(queues_dir=queues_dir, db_manager=db)
@@ -228,4 +224,4 @@ def test_recovery_restores_associated_requests_and_sibling_snapshots(tmp_path):
             == 1
         )
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)

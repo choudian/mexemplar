@@ -7,19 +7,17 @@ from src.data.recording_repository import RecordingRepository
 
 def _fresh_repo(tmp_path):
     old_instance = duckdb_module._duckdb_instance
-    old_recover = RecordingRepository._auto_recover_done
     old_desktop_ensured = RecordingRepository._desktop_tables_ensured
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
     RecordingRepository._desktop_tables_ensured = False
     db = DuckDBManager(str(tmp_path / "desktop.duckdb"))
     db.initialize()
     repo = RecordingRepository(db_manager=db)
-    return repo, db, old_instance, old_recover, old_desktop_ensured
+    return repo, db, old_instance, old_desktop_ensured
 
 
 def test_desktop_schema_insert_query_and_mode_lookup(tmp_path):
-    repo, db, old_instance, old_recover, old_desktop_ensured = _fresh_repo(tmp_path)
+    repo, db, old_instance, old_desktop_ensured = _fresh_repo(tmp_path)
     try:
         repo.ensure_desktop_tables()
         columns = {row[0] for row in db.fetchall("DESCRIBE desktop_actions")}
@@ -71,12 +69,11 @@ def test_desktop_schema_insert_query_and_mode_lookup(tmp_path):
     finally:
         db.close()
         duckdb_module._duckdb_instance = old_instance
-        RecordingRepository._auto_recover_done = old_recover
         RecordingRepository._desktop_tables_ensured = old_desktop_ensured
 
 
 def test_browser_default_mode_is_not_desktop(tmp_path):
-    repo, db, old_instance, old_recover, old_desktop_ensured = _fresh_repo(tmp_path)
+    repo, db, old_instance, old_desktop_ensured = _fresh_repo(tmp_path)
     try:
         repo.save_recording_session({"recording_id": "browser-rec", "start_time": 1})
         assert repo.get_recording_mode("browser-rec") == "browser"
@@ -87,12 +84,11 @@ def test_browser_default_mode_is_not_desktop(tmp_path):
     finally:
         db.close()
         duckdb_module._duckdb_instance = old_instance
-        RecordingRepository._auto_recover_done = old_recover
         RecordingRepository._desktop_tables_ensured = old_desktop_ensured
 
 
 def test_extension_triggered_mode_uses_browser_data_path(tmp_path):
-    repo, db, old_instance, old_recover, old_desktop_ensured = _fresh_repo(tmp_path)
+    repo, db, old_instance, old_desktop_ensured = _fresh_repo(tmp_path)
     try:
         repo.save_recording_session(
             {
@@ -106,5 +102,4 @@ def test_extension_triggered_mode_uses_browser_data_path(tmp_path):
     finally:
         db.close()
         duckdb_module._duckdb_instance = old_instance
-        RecordingRepository._auto_recover_done = old_recover
         RecordingRepository._desktop_tables_ensured = old_desktop_ensured

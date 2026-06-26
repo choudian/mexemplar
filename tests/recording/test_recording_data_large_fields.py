@@ -37,9 +37,7 @@ def tool_db(tmp_path):
     from src.data import duckdb_manager as duckdb_module
 
     old_instance = getattr(duckdb_module, "_duckdb_instance", None)
-    old_auto_recover = getattr(RecordingRepository, "_auto_recover_done", None)
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db_path = str(tmp_path / "large_fields_test.duckdb")
     db = DuckDBManager(db_path)
@@ -155,7 +153,6 @@ def tool_db(tmp_path):
         except Exception:
             pass
         duckdb_module._duckdb_instance = old_instance
-        RecordingRepository._auto_recover_done = old_auto_recover
 
 
 @pytest.fixture()

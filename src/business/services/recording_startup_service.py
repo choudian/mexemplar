@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from src.data.recording_repository import RecordingRepository
+from src.recording.recovery import RecordingRecoveryCoordinator
 
 
 class RecordingStartupService:
     """Runs recording startup maintenance through a business-layer facade."""
 
     def ensure_recovered(self) -> None:
-        RecordingRepository.ensure_startup_recovery()
+        RecordingRecoveryCoordinator.ensure_startup_recovery()

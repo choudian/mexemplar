@@ -1,20 +1,30 @@
-"""
-录制数据恢复模块
+"""录制数据恢复模块(recording 层)。
 
-负责从 queues 队列文件恢复录制数据到 DuckDB
-当 DuckDB 数据丢失或损坏时，可以从保底的 queues 文件恢复
+负责从 queues 队列文件恢复录制数据到 DuckDB,以及在应用启动阶段做一次性的
+recovery 编排(run-once 门 → WAL/队列恢复 → 过期 trial 目录清理)。
+
+历史:本模块原位于 ``src/data/recording_recovery.py``(``RecordingRecovery``)
+和 ``src/data/recording_repository.py`` 上的若干 recovery 方法。为消除
+data→recording 的反向依赖,整体迁移到 recording 层;``RecordingRepository``
+不再编排 recovery,仅保留 deprecated 的 ``auto_recover`` noop 参数以兼容
+既有调用与测试。
 """
 
 import json
 import logging
+import shutil
+import threading
+from datetime import timedelta
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
-from .duckdb_manager import DuckDBManager
-from .recording_repository import RecordingRepository
+from src.data.duckdb_manager import DuckDBManager
+from src.data.queue_paths import get_recording_queue_dir
+from src.data.recording_repository import RecordingRepository
 from src.recording.browser.duckdb_recording_persister import DuckDBRecordingPersister
 from src.utils.recording_mode import RecordingMode
 from src.recording.filtering.ingest_hook import persist_filtered_network_requests
+from src.utils.timezone import from_timestamp_utc_naive, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +43,6 @@ class RecordingRecovery:
             db_manager: DuckDB 管理器，默认为全局单例
         """
         if queues_dir is None:
-            from src.data.queue_paths import get_recording_queue_dir
-
             queues_dir = get_recording_queue_dir()
 
         self.queues_dir = Path(queues_dir)
@@ -384,3 +392,96 @@ class RecordingRecovery:
                 sq_file.unlink()
             except Exception as exc:
                 logger.warning(f"删除孤儿截图队列失败: {exc}")
+
+
+class RecordingRecoveryCoordinator:
+    """启动期 recovery 编排器。
+
+    串联 run-once 门 → 队列恢复(``RecordingRecovery``)→ 过期 trial 目录清理。
+    只应在应用启动阶段经由 ``RecordingStartupService`` 调用一次。
+    """
+
+    # 标记是否已执行自动恢复（避免重复）
+    _auto_recover_done = False
+    _auto_recover_lock = threading.RLock()
+
+    @staticmethod
+    def _resolve_db_manager(db_manager: Optional[DuckDBManager] = None) -> DuckDBManager:
+        """标准化 DuckDB 管理器，必要时初始化连接。"""
+        if db_manager is None:
+            db_manager = DuckDBManager()
+            if db_manager.conn is None:
+                db_manager.initialize()
+        return db_manager
+
+    @classmethod
+    def ensure_startup_recovery(cls, db_manager: Optional[DuckDBManager] = None) -> None:
+        """
+        显式执行一次启动恢复。
+
+        只应在应用启动阶段调用，避免在正常落库路径中扫描 queues。
+        """
+        db_manager = cls._resolve_db_manager(db_manager)
+
+        with cls._auto_recover_lock:
+            if cls._auto_recover_done:
+                return
+
+            cls._auto_recover_done = True
+            try:
+                cls._recover_from_queues(db_manager)
+            except Exception as e:
+                logger.warning(f"自动恢复失败: {e}")
+            try:
+                cls._cleanup_old_trial_dirs(db_manager)
+            except Exception as e:
+                logger.warning(f"清理过期 Trial 目录失败: {e}")
+
+    @classmethod
+    def _recover_from_queues(cls, db_manager: DuckDBManager) -> None:
+        """
+        自动从队列文件恢复未保存的录制。
+
+        恢复优先级：
+        1. DuckDB WAL 机制（已在 connect() 中自动处理）
+        2. 如果 WAL 损坏或录制不存在，从 queues 恢复
+        """
+        try:
+            # 检查是否需要恢复
+            needs_recovery = db_manager.needs_queue_recovery()
+
+            if needs_recovery:
+                logger.info("🔧 检测到 WAL 损坏，从 queues 恢复数据...")
+            else:
+                # 即使 WAL 正常，也要检查是否有未处理的队列文件
+                # （正常关闭但数据未成功保存到 DuckDB 的情况）
+                logger.debug("WAL 正常，检查是否有未处理的队列文件...")
+
+            recovery = RecordingRecovery(db_manager=db_manager)
+            recovered = recovery.auto_recover_on_startup()
+
+            if recovered:
+                logger.info("✅ 已从队列文件自动恢复录制数据")
+
+            # 清除恢复标志
+            db_manager.clear_queue_recovery_flag()
+
+        except Exception as e:
+            logger.warning(f"自动恢复检查失败: {e}")
+
+    @classmethod
+    def _cleanup_old_trial_dirs(cls, db_manager: DuckDBManager, max_age_days: int = 7) -> None:
+        db_path = getattr(db_manager, "db_path", None)
+        if not isinstance(db_path, (str, Path)):
+            return
+        data_dir = Path(db_path).resolve().parent
+        trials_dir = data_dir / "trials"
+        if not trials_dir.exists():
+            return
+        cutoff = utc_now_naive() - timedelta(days=max_age_days)
+        for path in trials_dir.iterdir():
+            if not path.is_dir():
+                continue
+            mtime = from_timestamp_utc_naive(path.stat().st_mtime)
+            if mtime < cutoff:
+                shutil.rmtree(path)

@@ -28,10 +28,8 @@ def isolated_recording_db(tmp_path):
     import src.data.duckdb_manager as duckdb_module
 
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
     old_desktop_ensured = RecordingRepository._desktop_tables_ensured
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
     RecordingRepository._desktop_tables_ensured = False
     db = DuckDBManager(str(tmp_path / "v2_full_flow.duckdb"))
     db.initialize()
@@ -40,7 +38,6 @@ def isolated_recording_db(tmp_path):
     finally:
         db.close()
         duckdb_module._duckdb_instance = old_instance
-        RecordingRepository._auto_recover_done = old_auto_recover
         RecordingRepository._desktop_tables_ensured = old_desktop_ensured
 
 

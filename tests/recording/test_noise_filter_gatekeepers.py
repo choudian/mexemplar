@@ -52,7 +52,7 @@ def test_persister_and_recovery_both_wire_shared_filter_hook():
     persister_source = Path("src/recording/browser/duckdb_recording_persister.py").read_text(
         encoding="utf-8"
     )
-    recovery_source = Path("src/data/recording_recovery.py").read_text(encoding="utf-8")
+    recovery_source = Path("src/recording/recovery/coordinator.py").read_text(encoding="utf-8")
 
     assert "persist_filtered_network_requests" in persister_source
     assert "persist_filtered_network_requests" in recovery_source

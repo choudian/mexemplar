@@ -8,7 +8,6 @@ from src.recording.filtering.decision import FilterDecision
 
 def _create_fresh_db(tmp_path, db_name: str):
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
 
     if old_instance is not None:
         try:
@@ -17,26 +16,24 @@ def _create_fresh_db(tmp_path, db_name: str):
             pass
 
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db = DuckDBManager(str(tmp_path / db_name))
     db.initialize()
     repo = RecordingRepository(db_manager=db)
-    return repo, db, old_instance, old_auto_recover
+    return repo, db, old_instance
 
 
-def _restore_db(db, old_instance, old_auto_recover):
+def _restore_db(db, old_instance):
     try:
         db.close()
     except Exception:
         pass
 
     duckdb_module._duckdb_instance = old_instance
-    RecordingRepository._auto_recover_done = old_auto_recover
 
 
 def test_save_network_requests_returns_batch_index_map_and_uses_schema_defaults(tmp_path):
-    repo, db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "repo_filtering.duckdb")
+    repo, db, old_instance = _create_fresh_db(tmp_path, "repo_filtering.duckdb")
 
     try:
         request_id_map = repo.save_network_requests(
@@ -97,11 +94,11 @@ def test_save_network_requests_returns_batch_index_map_and_uses_schema_defaults(
         assert rows[1][4] is False
         assert rows[1][5] == "unknown"
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)
 
 
 def test_save_filter_decisions_persists_serialized_rows(tmp_path):
-    repo, db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "repo_decisions.duckdb")
+    repo, db, old_instance = _create_fresh_db(tmp_path, "repo_decisions.duckdb")
 
     try:
         decision_ids = repo.save_filter_decisions(
@@ -132,11 +129,11 @@ def test_save_filter_decisions_persists_serialized_rows(tmp_path):
         assert row[:7] == ("1", 7, "rec-filter", "filter", "rule", "static_asset", ".png")
         assert json.loads(row[7]) == {"rule": 1.0}
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)
 
 
 def test_filtering_repository_methods_participate_in_outer_transaction(tmp_path):
-    repo, db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "repo_tx.duckdb")
+    repo, db, old_instance = _create_fresh_db(tmp_path, "repo_tx.duckdb")
 
     try:
         try:
@@ -188,11 +185,11 @@ def test_filtering_repository_methods_participate_in_outer_transaction(tmp_path)
             == 0
         )
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)
 
 
 def test_save_network_requests_does_not_commit_outer_transaction_early(tmp_path):
-    repo, db, old_instance, old_auto_recover = _create_fresh_db(tmp_path, "repo_depth.duckdb")
+    repo, db, old_instance = _create_fresh_db(tmp_path, "repo_depth.duckdb")
 
     try:
         with db.transaction():
@@ -226,12 +223,11 @@ def test_save_network_requests_does_not_commit_outer_transaction_early(tmp_path)
             == 1
         )
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)
 
 
 def test_network_requests_migration_path_keeps_importance_level_default(tmp_path):
     old_instance = duckdb_module._duckdb_instance
-    old_auto_recover = RecordingRepository._auto_recover_done
 
     if old_instance is not None:
         try:
@@ -240,7 +236,6 @@ def test_network_requests_migration_path_keeps_importance_level_default(tmp_path
             pass
 
     duckdb_module._duckdb_instance = None
-    RecordingRepository._auto_recover_done = True
 
     db = DuckDBManager(str(tmp_path / "repo_migration.duckdb"))
     conn = db.connect()
@@ -294,4 +289,4 @@ def test_network_requests_migration_path_keeps_importance_level_default(tmp_path
         )
         assert row == (False, "unknown")
     finally:
-        _restore_db(db, old_instance, old_auto_recover)
+        _restore_db(db, old_instance)
