@@ -51,19 +51,6 @@ class TeachingFailureRepository(BaseRepository):
             logger.error(f"更新失败记录失败: {e}")
             raise
 
-    def delete(self, record_id: str) -> bool:
-        try:
-            record = self.get_by_id(record_id)
-            if record:
-                self.session.delete(record)
-                self.session.commit()
-                return True
-            return False
-        except Exception as e:
-            self.session.rollback()
-            logger.error(f"删除失败记录失败: {e}")
-            raise
-
     def get_active_failures(self) -> List[TeachingFailureRecord]:
         """返回所有 active / retrying 状态的记录，按 updated_at DESC 排序"""
         return (

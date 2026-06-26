@@ -160,9 +160,6 @@ class SkillCompositionService:
         members = self._composition_repo.get_members(composition.composition_id)
         return self._to_composition_model(composition, members)
 
-    def search_published_compositions(self, query: str) -> List[SkillComposition]:
-        return self._hydrate_compositions(self._composition_repo.search_published(query))
-
     def get_assistant_published_summaries(self) -> List[dict]:
         compositions = self._composition_repo.get_published_assistant_enabled()
         members_by_comp = self._composition_repo.get_members_for_compositions(
@@ -384,23 +381,5 @@ class SkillCompositionService:
         return to_composition_model(composition, members_orm, self._tool_repo)
 
     @staticmethod
-    def _to_tool_model(tool) -> Tool:
-        return to_tool_model(tool)
-
-    @staticmethod
     def _member_to_payload(member) -> dict:
         return member_to_payload(member)
-
-    @classmethod
-    def _build_trial_system_prompt(cls, composition: SkillComposition) -> str:
-        return build_trial_system_prompt(composition)
-
-    @staticmethod
-    def _build_trial_session_snapshot_payload(composition: SkillComposition) -> dict:
-        return build_trial_session_snapshot_payload(composition)
-
-    def _get_trial_session_composition(
-        self,
-        session: Any,
-    ) -> Optional[SkillComposition]:
-        return self._trial_sessions.get_trial_session_composition(session)

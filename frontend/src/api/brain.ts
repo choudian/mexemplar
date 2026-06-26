@@ -191,17 +191,6 @@ export function retryBrainSegment(segmentId: string): Promise<{ segment_id: stri
   );
 }
 
-export function isBrainZone(value: unknown): value is BrainZone {
-  return (
-    value === 'hot' ||
-    value === 'persistent' ||
-    value === 'archive' ||
-    value === 'subconscious' ||
-    value === 'failure' ||
-    value === 'prediction'
-  );
-}
-
 // ═══════════════════════════════════════════════
 // Specialist APIs
 // ═══════════════════════════════════════════════
@@ -215,12 +204,6 @@ export function listSpecialists(
     active_only: String(options.activeOnly ?? true),
   });
   return requestJson<SpecialistsResponse>(`/api/brain/specialists?${params}`);
-}
-
-export function getSpecialist(specialistId: string): Promise<BrainSpecialist> {
-  return requestJson<BrainSpecialist>(
-    `/api/brain/specialists/${encodeURIComponent(specialistId)}`,
-  );
 }
 
 export function createSpecialist(body: {

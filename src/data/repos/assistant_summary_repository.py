@@ -36,16 +36,6 @@ class AssistantSummaryRepository(BaseRepository):
             .first()
         )
 
-    def get_by_level(self, level: int, limit: int = 100) -> List[AssistantSummary]:
-        """获取指定层级的摘要"""
-        return (
-            self.session.query(AssistantSummary)
-            .filter(AssistantSummary.level == level)
-            .order_by(AssistantSummary.created_at.desc())
-            .limit(limit)
-            .all()
-        )
-
     def get_latest_global(self, level: int = 3) -> Optional[AssistantSummary]:
         """获取最新的指定层级摘要（默认 level=3 即全局摘要）"""
         return (
@@ -54,19 +44,6 @@ class AssistantSummaryRepository(BaseRepository):
             .order_by(AssistantSummary.created_at.desc())
             .first()
         )
-
-    def get_summarized_source_ids(self, level: int) -> set:
-        """获取已有摘要的来源 ID 集合（只查 source_ids 列，避免加载 content/embedding）"""
-        rows = (
-            self.session.query(AssistantSummary.source_ids)
-            .filter(AssistantSummary.level == level)
-            .all()
-        )
-        ids = set()
-        for (source_ids,) in rows:
-            if source_ids:
-                ids.update(source_ids.split(","))
-        return ids
 
     def search_fts(self, query: str, levels: List[int], limit: int = 10) -> list:
         """
