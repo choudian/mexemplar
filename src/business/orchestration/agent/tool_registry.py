@@ -284,12 +284,11 @@ class ToolRegistry:
 
         def tool_factory() -> list[ToolDefinition]:
             if role_kind == "planner":
-                # 规划专员：search + build_task_graph + load_skill + 通用工具
+                # 规划专员：search + build_task_graph + load_skill（不含 BUILTIN_GENERAL_TOOLS 执行工具）
                 return (
                     search_tools
                     + planner_tools
                     + [load_skill_tool]
-                    + BUILTIN_GENERAL_TOOLS
                     + dynamic_manager.get_activated_tools()
                 )
             return (

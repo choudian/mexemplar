@@ -34,6 +34,29 @@ _EXECUTOR_ONLY_TOOLS = {
     "delegate_to_subagent",
 }
 
+# planner MUST NOT 拿 BUILTIN_GENERAL_TOOLS 执行工具（FR-005/DEC-B：只规划不执行）
+_BUILTIN_EXECUTION_TOOL_NAMES = {
+    "web_search",
+    "web_fetch",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "apply_patch",
+    "search_files",
+    "search_content",
+    "list_dir",
+    "exec",
+    "process_list",
+    "process_poll",
+    "process_logs",
+    "process_wait",
+    "wait_for_process_event",
+    "process_stop",
+    "process_send_input",
+    "process_close",
+    "load_tool_output",
+}
+
 
 def _planner_tools(orch):
     return _tool_names(
@@ -65,6 +88,18 @@ class TestPlannerToolScope:
         names = _planner_tools(_orchestrator(mock_config))
         leaked = _EXECUTOR_ONLY_TOOLS & names
         assert not leaked, f"planner 不该拿执行器工具，却包含：{leaked}"
+
+    def test_planner_excludes_builtin_execution_tools(self, in_memory_db, mock_config):
+        """planner 工具集不含 BUILTIN_GENERAL_TOOLS 执行工具（DEC-B：只规划不执行）。"""
+        names = _planner_tools(_orchestrator(mock_config))
+        leaked = _BUILTIN_EXECUTION_TOOL_NAMES & names
+        assert not leaked, f"planner 不该拿 BUILTIN 执行工具，却包含：{leaked}"
+
+    def test_executor_still_includes_builtin_tools(self, in_memory_db, mock_config):
+        """executor（默认）仍含 BUILTIN 执行工具——防 planner 分支误伤 executor 路径。"""
+        names = _executor_tools(_orchestrator(mock_config))
+        assert "read_file" in names
+        assert "exec" in names
 
     def test_planner_includes_build_task_graph(self, in_memory_db, mock_config):
         """planner 拿 build_task_graph（规划变体）。"""
