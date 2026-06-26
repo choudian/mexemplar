@@ -12,7 +12,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from src.utils.timezone import coerce_timestamp, from_timestamp_utc_naive, utc_now_naive
-from src.recording.filtering.decision import FilterDecision
+from src.data.recording_models import FilterDecision
 
 from .duckdb_manager import DuckDBManager
 

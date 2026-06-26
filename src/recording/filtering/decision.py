@@ -1,43 +1,19 @@
-from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Literal
+"""FilterDecision / MODE_TABLES 已下沉到 ``src.data.recording_models``(分层修复)。
 
-from src.utils.timezone import utc_now_naive
+本模块 re-export 以兼容现有 recording 层调用方;新代码请直接从
+``src.data.recording_models`` import。
+"""
 
-BROWSER_MODE_TABLES = frozenset(
-    {
-        "recording_sessions",
-        "actions",
-        "network_requests",
-        "sibling_snapshots",
-        "recording_screenshots",
-    }
+from src.data.recording_models import (
+    BROWSER_MODE_TABLES,
+    DESKTOP_MODE_TABLES,
+    MODE_TABLES,
+    FilterDecision,
 )
-DESKTOP_MODE_TABLES = frozenset({"desktop_recordings", "desktop_actions"})
-MODE_TABLES = {"browser": BROWSER_MODE_TABLES, "desktop": DESKTOP_MODE_TABLES}
 
-
-@dataclass(frozen=True)
-class FilterDecision:
-    decision: Literal["filter", "keep"]
-    source: str
-    reason: str
-    confidence: float = 1.0
-    pattern_matched: str | None = None
-    scores: dict[str, Any] | None = None
-    request_id: str | None = None
-    action_id: int | None = None
-    recording_id: str | None = None
-    request_timestamp: datetime | None = None
-    action_timestamp: datetime | None = None
-    timestamp: datetime = field(default_factory=utc_now_naive)
-
-    def to_summary(self) -> dict[str, Any]:
-        summary: dict[str, Any] = {
-            "decision": self.decision,
-            "source": self.source,
-            "reason": self.reason,
-        }
-        if self.pattern_matched:
-            summary["pattern_matched"] = self.pattern_matched
-        return summary
+__all__ = [
+    "FilterDecision",
+    "BROWSER_MODE_TABLES",
+    "DESKTOP_MODE_TABLES",
+    "MODE_TABLES",
+]
