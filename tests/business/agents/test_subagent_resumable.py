@@ -311,6 +311,20 @@ class TestInspectSubagent:
         res = orch._inspect_subagent(parent_session_id="parent-A", subagent_id=foreign)
         assert res["success"] is False
 
+    def test_inspect_rejects_async_task_id_with_guidance(self, orch):
+        """主助理误把异步委派的 taskId 传给 inspect_subagent 时返回明确指引，而非含糊'未找到'。
+
+        见 test_continue_subagent_014.py 的 continue 对应用例：tsk_/tg_ 前缀的 id 属于任务图
+        命名空间，不是可唤回子代理 session，inspect 同样不应让主助理误判子代理状态。
+        """
+        res = orch._inspect_subagent(
+            parent_session_id="parent-A", subagent_id="tsk_ceb1618f709e4244"
+        )
+        assert res["success"] is False
+        assert "任务ID" in res["error"]
+        assert "回流" in res["error"]
+        assert "decide_task_adjudication" in res["error"]
+
     def test_inspect_rejects_old_prefix_collision_without_transition(self, orch):
         from src.data.models_sqlite import Session
         from src.data.repositories import SessionRepository

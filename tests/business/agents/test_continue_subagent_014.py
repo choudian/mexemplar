@@ -159,3 +159,37 @@ def test_continue_subagent_binds_subagent_id_as_executor_id(orch, mock_config):
         )
 
     assert captured.get("executor_id") == child
+
+
+def test_continue_rejects_async_task_id_with_guidance(orch):
+    """主助理误把异步委派的 taskId 传给 continue_subagent 时，返回明确指引而非含糊'未找到'。
+
+    Regression: 统一路径 delegate 返回的是 taskId（tsk_ 前缀），主助理曾拿它当 subagent_id
+    调 continue/inspect，得到"未找到可唤回"后误判子代理挂掉、自行重抓。现在 task/graph id
+    在归属校验前被前置拦截，给出"等回流 + decide_task_adjudication"指引。
+    """
+    res = orch._continue_subagent(
+        parent_session_id="parent-mine", subagent_id="tsk_ceb1618f709e4244"
+    )
+    assert res["success"] is False
+    assert "任务ID" in res["error"]
+    assert "回流" in res["error"]
+    assert "decide_task_adjudication" in res["error"]
+
+
+def test_continue_rejects_async_graph_id_with_guidance(orch):
+    """graphId（tg_ 前缀）同样被前置拦截。"""
+    res = orch._continue_subagent(
+        parent_session_id="parent-mine", subagent_id="tg_fb4ce30eef6444f9"
+    )
+    assert res["success"] is False
+    assert "任务ID" in res["error"]
+
+
+def test_continue_unknown_id_still_returns_not_found(orch):
+    """不带 tsk_/tg_ 前缀但找不到的 id 仍走原'未找到'路径，兜底不误伤合法查找。"""
+    res = orch._continue_subagent(
+        parent_session_id="parent-mine", subagent_id="ast_unknown_session_id"
+    )
+    assert res["success"] is False
+    assert "未找到可唤回" in res["error"]
