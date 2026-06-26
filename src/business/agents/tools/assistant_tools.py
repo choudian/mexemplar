@@ -10,7 +10,15 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 from src.utils.timezone import utc_now
+
+if TYPE_CHECKING:
+    from src.business.task_collaboration.adjudication import TaskAdjudicationService
+    from src.business.task_collaboration.meetings import TaskMeetingService
+    from src.business.task_collaboration.questions import TaskQuestionService
+    from src.business.task_collaboration.service import TaskCollaborationService
+    from src.business.task_collaboration.todos import TaskTodoService
 
 from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
@@ -559,6 +567,10 @@ __all__ = [
     "create_build_task_graph_handler",
     "MUTATE_TASK_GRAPH_SCHEMA",
     "create_mutate_task_graph_handler",
+    "DECIDE_ADJUDICATION_SCHEMA",
+    "create_decide_task_adjudication_handler",
+    "ABANDON_REQUEST_GRAPH_SCHEMA",
+    "create_abandon_request_graph_handler",
 ]
 
 
@@ -817,7 +829,13 @@ def create_ask_parent_handler(
     *,
     bound_task_id: str | None = None,
     interrupt: bool = False,
+    service_factory: Callable[[], "TaskQuestionService"] | None = None,
 ):
+    def _question_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.questions import TaskQuestionService
+        return TaskQuestionService()
     def ask_parent_handler(
         taskId: str = "",
         question: str = "",
@@ -825,10 +843,8 @@ def create_ask_parent_handler(
         capabilityDelta: list[str] | None = None,
     ) -> str | ToolSignal:
         def _action():
-            from src.business.task_collaboration.questions import TaskQuestionService
-
             effective_task_id = _resolve_bound_task_id(taskId, bound_task_id)
-            with TaskQuestionService() as service:
+            with _question_service() as service:
                 row = service.ask_parent(
                     task_id=effective_task_id,
                     asker_type=executor_type,
@@ -894,16 +910,22 @@ ANSWER_TASK_QUESTION_SCHEMA = make_tool_schema(
 )
 
 
-def create_answer_task_question_handler(redispatch_callback=None):
+def create_answer_task_question_handler(
+    redispatch_callback=None,
+    service_factory: Callable[[], "TaskQuestionService"] | None = None,
+):
+    def _question_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.questions import TaskQuestionService
+        return TaskQuestionService()
     def answer_task_question_handler(
         questionId: str,
         safeAnswerSummary: str,
         capabilityDelta: list[str] | None = None,
     ) -> str:
         def _action():
-            from src.business.task_collaboration.questions import TaskQuestionService
-
-            with TaskQuestionService() as service:
+            with _question_service() as service:
                 answered = service.answer_question(
                     questionId,
                     safe_answer_summary=safeAnswerSummary,
@@ -957,16 +979,21 @@ OPEN_MEETING_CHANNEL_SCHEMA = make_tool_schema(
 )
 
 
-def create_open_meeting_channel_handler():
+def create_open_meeting_channel_handler(
+    service_factory: Callable[[], "TaskMeetingService"] | None = None,
+):
+    def _meeting_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.meetings import TaskMeetingService
+        return TaskMeetingService()
     def open_meeting_channel_handler(
         taskId: str,
         participantA: dict,
         participantB: dict,
     ) -> str:
         def _action():
-            from src.business.task_collaboration.meetings import TaskMeetingService
-
-            with TaskMeetingService() as service:
+            with _meeting_service() as service:
                 channel = service.open_channel(
                     parent_task_id=taskId,
                     participant_a=participantA,
@@ -1006,6 +1033,7 @@ MEETING_SEND_MESSAGE_SCHEMA = make_tool_schema(
 def create_meeting_send_message_handler(
     executor_type: str = "specialist",
     executor_id: str = "",
+    service_factory: Callable[[], "TaskMeetingService"] | None = None,
 ):
     """Create a meeting_send_message handler with bound executor identity.
 
@@ -1013,15 +1041,19 @@ def create_meeting_send_message_handler(
     todo_update handlers) so the LLM cannot impersonate other participants.
     """
 
+    def _meeting_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.meetings import TaskMeetingService
+        return TaskMeetingService()
+
     def meeting_send_message_handler(
         channelId: str,
         content: str,
         conclusion: str = "",
     ) -> str:
         def _action():
-            from src.business.task_collaboration.meetings import TaskMeetingService
-
-            with TaskMeetingService() as service:
+            with _meeting_service() as service:
                 channel = service.send_message(
                     channel_id=channelId,
                     sender_type=executor_type,
@@ -1086,13 +1118,18 @@ def create_todo_update_handler(
     executor_id: str = "",
     *,
     bound_task_id: str | None = None,
+    service_factory: Callable[[], "TaskTodoService"] | None = None,
 ):
+    def _todo_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.todos import TaskTodoService
+        return TaskTodoService()
+
     def todo_update_handler(taskId: str = "", items: list[dict] | None = None) -> str:
         def _action():
-            from src.business.task_collaboration.todos import TaskTodoService
-
             effective_task_id = _resolve_bound_task_id(taskId, bound_task_id)
-            with TaskTodoService() as service:
+            with _todo_service() as service:
                 projected = service.update_todos(
                     task_id=effective_task_id,
                     executor_type=executor_type,
@@ -1213,8 +1250,15 @@ def _trigger_graph_scheduler_start(graph_id: str, *, source: str) -> bool:
 def create_build_task_graph_handler(
     session_id: str,
     user_message_sequence_provider: Callable[[], int | None] | None = None,
+    service_factory: Callable[[], "TaskCollaborationService"] | None = None,
 ):
     """工厂函数：创建 build_task_graph handler。"""
+
+    def _task_graph_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.service import TaskCollaborationService
+        return TaskCollaborationService()
 
     def build_task_graph_handler(
         nodes: list[dict] | None = None,
@@ -1223,9 +1267,7 @@ def create_build_task_graph_handler(
         """将复杂任务分解成带依赖的 DAG 并原子落库。"""
 
         def _action() -> str:
-            from src.business.task_collaboration.service import TaskCollaborationService
-
-            with TaskCollaborationService() as service:
+            with _task_graph_service() as service:
                 result = service.build_task_graph(
                     session_id=session_id,
                     nodes=nodes or [],
@@ -1297,8 +1339,17 @@ MUTATE_TASK_GRAPH_SCHEMA = make_tool_schema(
 )
 
 
-def create_mutate_task_graph_handler(session_id: str):
+def create_mutate_task_graph_handler(
+    session_id: str,
+    service_factory: Callable[[], "TaskCollaborationService"] | None = None,
+):
     """工厂函数：创建 mutate_task_graph handler。"""
+
+    def _task_graph_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.service import TaskCollaborationService
+        return TaskCollaborationService()
 
     def mutate_task_graph_handler(
         graphId: str = "",
@@ -1308,9 +1359,7 @@ def create_mutate_task_graph_handler(session_id: str):
         """自愈改图。"""
 
         def _action() -> str:
-            from src.business.task_collaboration.service import TaskCollaborationService
-
-            with TaskCollaborationService() as service:
+            with _task_graph_service() as service:
                 result = service.mutate_task_graph(
                     graph_id=graphId,
                     session_id=session_id,
@@ -1401,7 +1450,10 @@ def create_reply_to_user_handler(session_id: str):
 
 DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
     name="delegate_to_subagent",
-    description="将任务委托给一个临时子代理执行。子代理会独立完成任务并返回结果。",
+    description=(
+        "将任务委托给一个临时子代理执行。统一任务图下异步执行，返回受理回执（accepted+taskId）；"
+        "结果完成后经「任务结果回流提示」送达，由你用 decide_task_adjudication 裁定。"
+    ),
     properties={
         "task_description": {
             "type": "string",
@@ -1488,8 +1540,17 @@ DECIDE_ADJUDICATION_SCHEMA = make_tool_schema(
 )
 
 
-def create_decide_task_adjudication_handler(session_id: str):
+def create_decide_task_adjudication_handler(
+    session_id: str,
+    service_factory: Callable[[], "TaskAdjudicationService"] | None = None,
+):
     """工厂函数：创建 decide_task_adjudication handler（主助理对子任务结果裁定）。"""
+
+    def _adjudication_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.adjudication import TaskAdjudicationService
+        return TaskAdjudicationService()
 
     def decide_task_adjudication_handler(
         adjudication_id: str,
@@ -1499,9 +1560,7 @@ def create_decide_task_adjudication_handler(session_id: str):
         """对子任务结果做裁定（认可/打回/放弃）"""
 
         def _action():
-            from src.business.task_collaboration.adjudication import TaskAdjudicationService
-
-            with TaskAdjudicationService() as service:
+            with _adjudication_service() as service:
                 result = service.decide(
                     adjudication_id=adjudication_id,
                     decision=decision,
@@ -1536,16 +1595,23 @@ ABANDON_REQUEST_GRAPH_SCHEMA = make_tool_schema(
 )
 
 
-def create_abandon_request_graph_handler(session_id: str):
+def create_abandon_request_graph_handler(
+    session_id: str,
+    service_factory: Callable[[], "TaskAdjudicationService"] | None = None,
+):
     """工厂函数：创建 abandon_request_graph handler（主助理放弃整个用户请求）。"""
+
+    def _adjudication_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.adjudication import TaskAdjudicationService
+        return TaskAdjudicationService()
 
     def abandon_request_graph_handler(safeSummary: str) -> str:
         """放弃整个用户请求任务图（根任务失败，触发安全失败卡）"""
 
         def _action():
-            from src.business.task_collaboration.adjudication import TaskAdjudicationService
-
-            with TaskAdjudicationService() as service:
+            with _adjudication_service() as service:
                 result = service.fail_root_graph(
                     session_id=session_id,
                     safe_summary=safeSummary,
@@ -1560,13 +1626,14 @@ def create_abandon_request_graph_handler(session_id: str):
 CONTINUE_SUBAGENT_SCHEMA = make_tool_schema(
     name="continue_subagent",
     description=(
-        "继续执行一个已暂停或已结束的子代理。子代理达到迭代上限或调用失败时会暂停，"
-        "用此工具给它续跑配额、从断点接着跑；也可对已完成但未达标的子代理带追加指令返工。"
+        "继续执行一个已暂停（suspended）的可唤回子代理。仅当 delegate_to_subagent 直接同步返回 "
+        "paused=true 时使用——子代理达到迭代上限或可恢复失败会暂停，用此工具续跑配额、从断点接着跑；"
+        "也可对已完成但未达标的子代理带追加指令返工。异步委派（返回 taskId）的子代理不要用本工具。"
     ),
     properties={
         "subagent_id": {
             "type": "string",
-            "description": "delegate_to_subagent 返回的 subagent_id",
+            "description": "仅当 delegate_to_subagent 直接返回 paused=true（同步路径）时获得的 subagent_id；异步委派返回的 taskId 不可用于本工具",
         },
         "instruction": {
             "type": "string",
@@ -1618,13 +1685,14 @@ def create_continue_subagent_handler(session_id: str, continue_callback=None):
 INSPECT_SUBAGENT_SCHEMA = make_tool_schema(
     name="inspect_subagent",
     description=(
-        "查看一个子代理的工作概览（迭代轮数、调用过的工具及次数、最后产出、状态），"
+        "查看一个已暂停（suspended）的可唤回子代理的工作概览（迭代轮数、调用过的工具及次数、最后产出、状态），"
         "用于判断它是任务复杂该续跑、还是走弯路该新开。只读，不消耗额外模型调用。"
+        "仅当 delegate_to_subagent 直接同步返回 paused=true 时使用；异步委派（返回 taskId）的子代理不要用本工具。"
     ),
     properties={
         "subagent_id": {
             "type": "string",
-            "description": "delegate_to_subagent 返回的 subagent_id",
+            "description": "仅当 delegate_to_subagent 直接返回 paused=true（同步路径）时获得的 subagent_id；异步委派返回的 taskId 不可用于本工具",
         },
     },
     required=["subagent_id"],
