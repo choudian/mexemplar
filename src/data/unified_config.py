@@ -942,6 +942,44 @@ class UnifiedConfigManager:
         except (ValueError, TypeError):
             return 1048576
 
+    # ===== 便捷方法：自我改进配置 =====
+
+    def get_self_improvement_max_prompt_supplements_per_day(self) -> int:
+        """每日 Prompt 补丁生成上限"""
+        return self.get("self_improvement.max_prompt_supplements_per_day", default=3)
+
+    def get_self_improvement_max_tool_creations_per_day(self) -> int:
+        """每日自动工具创建上限"""
+        return self.get("self_improvement.max_tool_creations_per_day", default=1)
+
+    def get_self_improvement_max_reflections_per_session(self) -> int:
+        """每会话反思生成上限"""
+        return self.get("self_improvement.max_reflections_per_session", default=5)
+
+    def get_self_improvement_convergence_threshold(self) -> float:
+        """收敛检测阈值：连续 3 轮改善增量绝对值低于此值视为收敛"""
+        return self.get("self_improvement.convergence_threshold", default=0.01)
+
+    def get_self_improvement_degradation_threshold(self) -> float:
+        """回退检测阈值：指标退化超过此比例触发自动回退"""
+        return self.get("self_improvement.degradation_threshold", default=0.10)
+
+    def get_self_improvement_sandbox_window(self) -> int:
+        """沙箱评估窗口：candidate supplement 需要多少会话数据才可晋升"""
+        return self.get("self_improvement.sandbox_window", default=20)
+
+    def get_self_improvement_rollback_monitor_window(self) -> int:
+        """回退监控窗口：晋升后监控多少会话以检测退化"""
+        return self.get("self_improvement.rollback_monitor_window", default=10)
+
+    def get_self_improvement_avoidance_top_n(self) -> int:
+        """避坑规则注入 top-N 条目数"""
+        return self.get("self_improvement.avoidance_top_n", default=5)
+
+    def get_self_improvement_tool_gap_threshold(self) -> int:
+        """工具缺口检测置信阈值：同模式出现次数"""
+        return self.get("self_improvement.tool_gap_threshold", default=3)
+
     # ===== 内部方法 =====
 
     def _get_secret(self, key: str) -> Optional[str]:

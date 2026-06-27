@@ -42,6 +42,7 @@ class BrainContext:
     subconscious_entries: list[dict] = field(default_factory=list)
     specialists: list[dict] = field(default_factory=list)
     equipped_skills: list[dict] = field(default_factory=list)
+    avoidance_rules: list[dict] = field(default_factory=list)
     context_warnings: list[str] = field(default_factory=list)
     is_cold_start: bool = True
     injected_entry_ids: list[str] = field(default_factory=list)
@@ -81,12 +82,15 @@ class BrainContextBuilder:
         session_id: Optional[str] = None,
         is_revived_session: bool = False,
         track_loaded: bool = True,
+        current_context: Optional[str] = None,
     ) -> BrainContext:
         """构建大脑上下文（同步，用于 assistant 首轮回复前）。
 
         Args:
             session_id: 当前会话 ID
             is_revived_session: 是否为复用会话（之前已有上下文注入过）
+            track_loaded: 是否更新 loaded_count
+            current_context: 当前用户消息或会话上下文，用于避坑规则相关性过滤
 
         Returns:
             BrainContext 包含所有要注入的分区条目
@@ -190,6 +194,9 @@ class BrainContextBuilder:
             selected_entries.append(entry)
             injected_ids.append(self._entry_attr(entry, "entry_id", ""))
 
+        # 避坑规则：从 failure zone 加载与当前上下文相关的 avoidance rules
+        avoidance_rules = self._load_avoidance_rules(config, current_context or "")
+
         # 批量更新 loaded_count
         if track_loaded and injected_ids:
             try:
@@ -209,6 +216,7 @@ class BrainContextBuilder:
             subconscious_entries=subconscious_entries,
             specialists=specialist_list,
             equipped_skills=equipped_skills,
+            avoidance_rules=avoidance_rules,
             context_warnings=context_warnings,
             is_cold_start=is_cold_start,
             injected_entry_ids=injected_ids,
@@ -242,6 +250,42 @@ class BrainContextBuilder:
         if isinstance(result, tuple):
             return list(result[0])
         return list(result)
+
+    def _load_avoidance_rules(self, config, current_context: str) -> list[dict]:
+        """从 failure zone 加载与当前上下文相关的避坑规则。
+
+        如果 ExecutionReflectionService 不可用或加载失败，静默返回空列表。
+        """
+        try:
+            from src.business.self_improvement.execution_reflection_service import (
+                ExecutionReflectionService,
+            )
+            from src.business.self_improvement.audit_service import SelfImprovementAuditService
+            from src.business.self_improvement.safety_governor import SafetyGovernor
+            from src.data.repos.self_improvement_repository import SelfImprovementRepository
+
+            si_repo = SelfImprovementRepository()
+            audit_service = SelfImprovementAuditService(si_repo)
+            safety_governor = SafetyGovernor(si_repo)
+            service = ExecutionReflectionService(
+                si_repo=si_repo,
+                audit_service=audit_service,
+                safety_governor=safety_governor,
+                brain_repo=self._get_repo(),
+            )
+            top_n = self._config_int(
+                config, "get_self_improvement_avoidance_top_n", 5,
+            )
+            rules = service.get_avoidance_rules_for_context(
+                current_context=current_context,
+                top_n=top_n,
+            )
+            return rules
+        except Exception as exc:
+            logger.debug(
+                "Avoidance rule loading skipped (service unavailable or failed): %s", exc,
+            )
+            return []
 
     def equipped_skills_for_entity(self, entity_id: str) -> list[dict]:
         from src.business.brain.skill_equipment_service import SkillEquipmentService
@@ -430,6 +474,11 @@ class BrainContextBuilder:
                 scope_note = f" [{entry['scope']}]" if entry.get("scope") else ""
                 id_note = self._format_entry_id_note(entry)
                 sections.append(f"- {id_note}{entry['content']}{scope_note}")
+
+        if context.avoidance_rules:
+            sections.append("## 已知避坑规则")
+            for rule in context.avoidance_rules:
+                sections.append(f"- {rule.get('avoidance', '')}")
 
         if context.specialists:
             sections.append("## 可用专员")

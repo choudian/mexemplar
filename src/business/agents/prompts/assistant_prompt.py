@@ -50,6 +50,7 @@ ASSISTANT_SYSTEM_PROMPT = """\
 - 能找到合适的工具就直接调度，不要反复确认
 - 缺参数时一次问齐，不要一个一个问
 - 用户的表述可能不精确，尽量从上下文推断意图
+- 用户让你记录、查看、完成、删除或调整个人待办时，属于任务型消息；委派给临时子代理，并在 execution_context 中说明使用用户待办工具完成
 - 如果反复向同一个专员委派相似任务，可以调用 `create_specialist` 创建新的固定专员
 
 ### 关键决策的结构化澄清（ask_user_question）
@@ -118,6 +119,7 @@ delegate_to_subagent 返回 paused=true 时，说明子代理被迫中断、但�
 - 当你调用 create_skill_methodology 成功产出新 active 方法论或新版本方法论后，随后用 reply_to_user 向用户回复"已新增方法论 X"或"已更新方法论 X"作为可见反馈。
 - 当你确实按某条方法论步骤完成了本轮回复时，在 reply_to_user 的 skills_referenced 参数中传入相关 skill_id。
 - 当你主动发现当前对话与某条记忆存在明确事实冲突，并调用 invalidate_memory_entry 将该条记忆标记为失效时，必须在同一轮随后调用 reply_to_user 告知用户你已更新这条记忆；如果是用户明确纠正后才失效，正常确认即可。
+{supplements_section}
 """
 
 
@@ -127,6 +129,7 @@ def format_assistant_prompt(
     memory_summary: str | None = None,
     brain_context: str | None = None,
     capability_catalog_section: str | None = None,
+    prompt_supplements: list[dict] | None = None,
 ) -> str:
     """
     格式化助理 Agent 的 system prompt，替换所有占位符。
@@ -136,6 +139,7 @@ def format_assistant_prompt(
         tools: 已发布工具列表，每项含 name/description。None 或空表示无用户工具。
         memory_summary: 全局摘要文本（第三层）。None 表示无记忆。
         brain_context: 大脑多分区上下文文本。优先于 memory_summary。
+        prompt_supplements: 自优化 prompt 补丁列表。每项含 target_section/content。
 
     Returns:
         格式化后的完整 system prompt
@@ -196,9 +200,27 @@ def format_assistant_prompt(
     else:
         tools_section = "当前没有用户自定义工具。"
 
+    # Prompt supplements (self-improvement optimization patches)
+    if prompt_supplements:
+        supplement_lines = []
+        for s in prompt_supplements:
+            section = s.get("target_section", "")
+            content = s.get("content", "")
+            if content:
+                label = f"（{section} 优化）" if section else ""
+                supplement_lines.append(f"- {content}{label}")
+        supplements_section = (
+            "\n\n## 自优化补充规则\n\n"
+            "以下是系统根据历史执行效果自动生成的补充指导，优先级低于上方核心规则：\n\n"
+            + "\n".join(supplement_lines)
+        ) if supplement_lines else ""
+    else:
+        supplements_section = ""
+
     return ASSISTANT_SYSTEM_PROMPT.format(
         profile_section=profile_section,
         memory_section=memory_section,
         brain_section=brain_section,
         tools_section=tools_section,
+        supplements_section=supplements_section,
     )

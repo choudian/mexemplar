@@ -589,6 +589,34 @@ class AssistantTodoItem(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
 
+class UserTodo(Base):
+    """用户个人待办事项。"""
+
+    __tablename__ = "user_todos"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'done')",
+            name="ck_user_todos_status",
+        ),
+        CheckConstraint(
+            "priority IN ('low', 'medium', 'high', 'urgent')",
+            name="ck_user_todos_priority",
+        ),
+        Index("idx_user_todos_status_created", "status", "created_at"),
+        Index("idx_user_todos_priority_created", "priority", "created_at"),
+    )
+
+    todo_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
 class TeachingFailureRecord(Base):
     """技能教学失败记录表"""
 
@@ -709,7 +737,7 @@ class BrainMemoryEntry(Base):
     __tablename__ = "brain_memory_entries"
     __table_args__ = (
         CheckConstraint(
-            "zone IN ('hot', 'persistent', 'archive', 'subconscious', 'failure', 'prediction')",
+            "zone IN ('hot', 'persistent', 'archive', 'subconscious', 'failure', 'prediction', 'reflection')",
             name="ck_brain_memory_entries_zone",
         ),
         CheckConstraint(
@@ -1062,3 +1090,143 @@ class FeedbackSignal(Base):
     target_id: Mapped[str] = mapped_column(String(50), nullable=False)
     context_summary: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+
+# ===== 自我改进相关模型 =====
+
+
+class PromptSupplement(Base):
+    """prompt section 级补丁，用于自优化。"""
+
+    __tablename__ = "prompt_supplements"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('candidate', 'active', 'superseded', 'retracted')",
+            name="ck_prompt_supplements_status",
+        ),
+    )
+
+    supplement_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    target_section: Mapped[str] = mapped_column(String(100), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metric_evidence: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="candidate")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    prompt_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    before_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    after_snapshot: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    retracted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PromptSupplement(supplement_id={self.supplement_id!r}, "
+            f"target_section={self.target_section!r}, status={self.status!r})>"
+        )
+
+
+class ToolGapReport(Base):
+    """检测到的工具能力缺口。"""
+
+    __tablename__ = "tool_gap_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "gap_type IN ('missing_tool', 'repeated_pattern', 'high_iteration', 'bug_pattern')",
+            name="ck_tool_gap_reports_gap_type",
+        ),
+        CheckConstraint(
+            "status IN ('detected', 'trial_pending', 'resolved', 'trial_failed')",
+            name="ck_tool_gap_reports_status",
+        ),
+    )
+
+    report_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    gap_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    tool_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    pattern_signature: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    occurrence_count: Mapped[int] = mapped_column(Integer, default=1)
+    confidence: Mapped[float] = mapped_column(default=0.0)
+    status: Mapped[str] = mapped_column(String(20), default="detected")
+    evidence: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<ToolGapReport(report_id={self.report_id!r}, "
+            f"gap_type={self.gap_type!r}, status={self.status!r})>"
+        )
+
+
+class ToolFixProposal(Base):
+    """工具 bug 修复提案。"""
+
+    __tablename__ = "tool_fix_proposals"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('proposed', 'trial_pending', 'applied', 'rejected')",
+            name="ck_tool_fix_proposals_status",
+        ),
+    )
+
+    proposal_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tool_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    gap_report_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    proposed_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="proposed")
+    before_code: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    trial_result: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    applied_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<ToolFixProposal(proposal_id={self.proposal_id!r}, "
+            f"tool_id={self.tool_id!r}, status={self.status!r})>"
+        )
+
+
+class SelfImprovementMetric(Base):
+    """时序性能指标。"""
+
+    __tablename__ = "self_improvement_metrics"
+
+    metric_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    metric_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    metric_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    metric_value: Mapped[float] = mapped_column(nullable=False)
+    sample_size: Mapped[int] = mapped_column(Integer, default=1)
+    measured_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=func.now())
+    metadata_: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<SelfImprovementMetric(metric_id={self.metric_id!r}, "
+            f"metric_type={self.metric_type!r})>"
+        )
+
+
+class SelfImprovementAuditLogEntry(Base):
+    """自我改进追加审计日志。"""
+
+    __tablename__ = "self_improvement_audit_log"
+
+    audit_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    action_type: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    target_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    before_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    after_snapshot: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metric_evidence: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    triggered_by: Mapped[str] = mapped_column(String(20), default="auto")
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<SelfImprovementAuditLogEntry(audit_id={self.audit_id!r}, "
+            f"action_type={self.action_type!r})>"
+        )

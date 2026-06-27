@@ -63,6 +63,10 @@ EventName: TypeAlias = Literal[
     "assistant_todo_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
+    "self_improvement_action",
+    "prompt_supplement_changed",
+    "tool_gap_detected",
+    "avoidance_rule_injected",
 ]
 
 _EVENT_NAMES: tuple[EventName, ...] = get_args(EventName)
@@ -254,6 +258,29 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "display_phase",
         "safe_explanation",
     ),
+    "self_improvement_action": (
+        "action_type",
+        "target_type",
+        "target_id",
+        "rationale",
+    ),
+    "prompt_supplement_changed": (
+        "supplement_id",
+        "target_section",
+        "status",
+        "version",
+    ),
+    "tool_gap_detected": (
+        "report_id",
+        "gap_type",
+        "pattern_signature",
+        "occurrence_count",
+    ),
+    "avoidance_rule_injected": (
+        "entry_id",
+        "pattern",
+        "session_id",
+    ),
 }
 
 
@@ -372,6 +399,12 @@ assistant_meeting_changed = _registry.signal("assistant_meeting_changed")
 assistant_todo_changed = _registry.signal("assistant_todo_changed")
 assistant_task_adjudication_changed = _registry.signal("assistant_task_adjudication_changed")
 assistant_task_root_failed = _registry.signal("assistant_task_root_failed")
+
+# 自我改进事件
+self_improvement_action = _registry.signal("self_improvement_action")
+prompt_supplement_changed = _registry.signal("prompt_supplement_changed")
+tool_gap_detected = _registry.signal("tool_gap_detected")
+avoidance_rule_injected = _registry.signal("avoidance_rule_injected")
 
 
 # =============================================================================
@@ -535,6 +568,11 @@ __all__ = [
     "assistant_todo_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
+    # 自我改进
+    "self_improvement_action",
+    "prompt_supplement_changed",
+    "tool_gap_detected",
+    "avoidance_rule_injected",
     # 数据类
     "EventName",
     "EventValidationError",

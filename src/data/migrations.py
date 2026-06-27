@@ -1401,6 +1401,214 @@ def migrate_to_v17(engine):
             raise
 
 
+def migrate_to_v18(engine):
+    """迁移到版本 18：用户个人待办列表。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS user_todos (
+                    todo_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending'
+                        CHECK (status IN ('pending', 'in_progress', 'done')),
+                    priority TEXT NOT NULL DEFAULT 'medium'
+                        CHECK (priority IN ('low', 'medium', 'high', 'urgent')),
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_user_todos_status_created "
+                "ON user_todos(status, created_at)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS idx_user_todos_priority_created "
+                "ON user_todos(priority, created_at)"
+            ))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 18})
+            conn.commit()
+            logger.info("数据库迁移到版本 18 完成：user_todos")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 18 失败: {e}")
+            raise
+
+
+def migrate_to_v19(engine):
+    """迁移到版本 19：Agent 自我改进基础设施。
+
+    - brain_memory_entries zone CHECK 扩展：新增 'reflection' 区
+    - prompt_supplements：Prompt section 级补丁（candidate/active/superseded/retracted）
+    - tool_gap_reports：工具能力缺口检测
+    - tool_fix_proposals：工具 bug 自动修复提案
+    - self_improvement_metrics：度量时序存储
+    - self_improvement_audit_log：append-only 审计日志
+    """
+    with engine.connect() as conn:
+        try:
+            # 1. 扩展 brain_memory_entries zone CHECK 约束（需重建表）
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS brain_memory_entries_new (
+                    entry_id TEXT PRIMARY KEY,
+                    zone TEXT NOT NULL
+                        CHECK (zone IN ('hot', 'persistent', 'archive', 'subconscious',
+                                        'failure', 'prediction', 'reflection')),
+                    entry_type TEXT,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'fading', 'invalidated', 'soft-deleted')),
+                    origin TEXT NOT NULL,
+                    scope TEXT,
+                    reason TEXT NOT NULL,
+                    source_segment_id TEXT,
+                    source_session_id TEXT,
+                    superseded_by TEXT,
+                    loaded_count INTEGER DEFAULT 0,
+                    referenced_count INTEGER DEFAULT 0,
+                    relevance_score REAL DEFAULT 1.0,
+                    verification_checkpoint TEXT,
+                    verification_status TEXT,
+                    verification_rationale TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text("""
+                INSERT OR IGNORE INTO brain_memory_entries_new
+                SELECT entry_id, zone, entry_type, content, status, origin, scope, reason,
+                       source_segment_id, source_session_id, superseded_by,
+                       loaded_count, referenced_count, relevance_score,
+                       verification_checkpoint, verification_status, verification_rationale,
+                       created_at, updated_at
+                FROM brain_memory_entries
+            """))
+            conn.execute(text("DROP TABLE IF EXISTS brain_memory_entries"))
+            conn.execute(text("ALTER TABLE brain_memory_entries_new RENAME TO brain_memory_entries"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
+
+            # 重建旧索引
+            for index_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_zone_status ON brain_memory_entries(zone, status)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_source_segment ON brain_memory_entries(source_segment_id)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_superseded_by ON brain_memory_entries(superseded_by)",
+                "CREATE INDEX IF NOT EXISTS idx_brain_entries_zone_relevance ON brain_memory_entries(zone, relevance_score DESC)",
+            ]:
+                conn.execute(text(index_sql))
+
+            # 2. prompt_supplements
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS prompt_supplements (
+                    supplement_id TEXT PRIMARY KEY,
+                    target_section TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    rationale TEXT,
+                    metric_evidence TEXT,
+                    status TEXT NOT NULL DEFAULT 'candidate'
+                        CHECK (status IN ('candidate', 'active', 'superseded', 'retracted')),
+                    version INTEGER DEFAULT 1,
+                    prompt_hash TEXT,
+                    before_snapshot TEXT,
+                    after_snapshot TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    applied_at DATETIME,
+                    retracted_at DATETIME
+                )
+            """))
+
+            # 3. tool_gap_reports
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tool_gap_reports (
+                    report_id TEXT PRIMARY KEY,
+                    gap_type TEXT NOT NULL
+                        CHECK (gap_type IN ('missing_tool', 'repeated_pattern',
+                                            'high_iteration', 'bug_pattern')),
+                    tool_name TEXT,
+                    pattern_signature TEXT,
+                    occurrence_count INTEGER DEFAULT 1,
+                    confidence REAL DEFAULT 0.0,
+                    status TEXT NOT NULL DEFAULT 'detected'
+                        CHECK (status IN ('detected', 'trial_pending', 'resolved', 'trial_failed')),
+                    evidence TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 4. tool_fix_proposals
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS tool_fix_proposals (
+                    proposal_id TEXT PRIMARY KEY,
+                    tool_id TEXT NOT NULL,
+                    gap_report_id TEXT,
+                    proposed_code TEXT,
+                    rationale TEXT,
+                    status TEXT NOT NULL DEFAULT 'proposed'
+                        CHECK (status IN ('proposed', 'trial_pending', 'applied', 'rejected')),
+                    before_code TEXT,
+                    trial_result TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    applied_at DATETIME
+                )
+            """))
+
+            # 5. self_improvement_metrics
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS self_improvement_metrics (
+                    metric_id TEXT PRIMARY KEY,
+                    metric_type TEXT NOT NULL,
+                    metric_key TEXT,
+                    metric_value REAL NOT NULL,
+                    sample_size INTEGER DEFAULT 1,
+                    measured_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    metadata TEXT
+                )
+            """))
+
+            # 6. self_improvement_audit_log
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS self_improvement_audit_log (
+                    audit_id TEXT PRIMARY KEY,
+                    action_type TEXT NOT NULL,
+                    target_type TEXT,
+                    target_id TEXT,
+                    before_snapshot TEXT,
+                    after_snapshot TEXT,
+                    rationale TEXT,
+                    metric_evidence TEXT,
+                    triggered_by TEXT NOT NULL DEFAULT 'auto',
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            # 索引
+            for index_sql in [
+                "CREATE INDEX IF NOT EXISTS idx_prompt_supplements_status ON prompt_supplements(status)",
+                "CREATE INDEX IF NOT EXISTS idx_prompt_supplements_section_version ON prompt_supplements(target_section, version)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_gap_reports_status ON tool_gap_reports(status)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_gap_reports_pattern ON tool_gap_reports(pattern_signature)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_fix_proposals_status ON tool_fix_proposals(status)",
+                "CREATE INDEX IF NOT EXISTS idx_tool_fix_proposals_tool ON tool_fix_proposals(tool_id)",
+                "CREATE INDEX IF NOT EXISTS idx_si_metrics_type_key ON self_improvement_metrics(metric_type, metric_key)",
+                "CREATE INDEX IF NOT EXISTS idx_si_metrics_measured ON self_improvement_metrics(measured_at)",
+                "CREATE INDEX IF NOT EXISTS idx_si_audit_action ON self_improvement_audit_log(action_type)",
+                "CREATE INDEX IF NOT EXISTS idx_si_audit_target ON self_improvement_audit_log(target_type, target_id)",
+                "CREATE INDEX IF NOT EXISTS idx_si_audit_created ON self_improvement_audit_log(created_at)",
+            ]:
+                conn.execute(text(index_sql))
+
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 19})
+            conn.commit()
+            logger.info("数据库迁移到版本 19 完成：Agent 自我改进基础设施（5 表 + reflection zone）")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 19 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1418,6 +1626,8 @@ _MIGRATIONS = [
     (15, migrate_to_v15),
     (16, migrate_to_v16),
     (17, migrate_to_v17),
+    (18, migrate_to_v18),
+    (19, migrate_to_v19),
 ]
 
 

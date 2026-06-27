@@ -14,6 +14,7 @@ class Zone(str, Enum):
     SUBCONSCIOUS = "subconscious"
     FAILURE = "failure"
     PREDICTION = "prediction"
+    REFLECTION = "reflection"
 
 
 class SegmentStatus(str, Enum):
@@ -33,6 +34,7 @@ class EntryStatus(str, Enum):
 class EntryType(str, Enum):
     EVENT = "event"
     INSIGHT = "insight"
+    AVOIDANCE_RULE = "avoidance_rule"
 
 
 class EntryOrigin(str, Enum):
@@ -62,6 +64,7 @@ ZONE_LABELS = {
     Zone.SUBCONSCIOUS: "潜意识区",
     Zone.FAILURE: "失败区",
     Zone.PREDICTION: "猜测区",
+    Zone.REFLECTION: "反思区",
 }
 
 VALID_TRANSITIONS: dict[SegmentStatus, set[SegmentStatus]] = {
@@ -133,3 +136,4 @@ class DistillationOutput:
     archive_zone: list[DistillationZoneOutput] = field(default_factory=list)
     subconscious_zone: list[DistillationZoneOutput] = field(default_factory=list)
     failure_zone: list[DistillationZoneOutput] = field(default_factory=list)
+    reflection_zone: list[DistillationZoneOutput] = field(default_factory=list)

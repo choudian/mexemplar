@@ -67,11 +67,34 @@ class AssistantPromptBuilder:
             except Exception as exc:
                 self._logger.warning(f"[Orchestrator] 获取全局摘要失败: {exc}")
 
+        # Load active prompt supplements (lightweight direct-repo access)
+        supplements = None
+        try:
+            from src.data.repos.self_improvement_repository import SelfImprovementRepository
+
+            repo = SelfImprovementRepository()
+            active = repo.get_active_supplements()
+            if active:
+                supplements = [
+                    {
+                        "supplement_id": s.supplement_id,
+                        "target_section": s.target_section,
+                        "content": s.content,
+                        "rationale": s.rationale,
+                        "version": s.version,
+                        "status": s.status,
+                    }
+                    for s in active
+                ]
+        except Exception as exc:
+            self._logger.debug("[Orchestrator] 加载活跃 Prompt 补充失败，继续无补充: %s", exc)
+
         return format_assistant_prompt(
             profile=profile,
             memory_summary=memory_summary,
             brain_context=brain_context_text if brain_context_text else None,
             capability_catalog_section=capability_catalog_section,
+            prompt_supplements=supplements,
         )
 
     def format_capability_catalog(
