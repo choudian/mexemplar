@@ -6933,3 +6933,608 @@ select:focus-visible,
   color: var(--text-2);
   font-size: 12.5px;
 }
+
+/* 025 User Todo List — 推进感驾驶舱
+   签名元素：顶部进度环（一眼看见今天推进了多少）。
+   优先级用左侧色条编码（紧急红 / 高橙 / 中青 / 低灰），完成态安静下沉。 */
+.user-todo-screen {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  gap: 16px;
+  padding: 28px 32px 20px;
+  overflow: hidden;
+  background: var(--surface-1);
+}
+
+/* ── Hero：标题 + 进度环签名 ─────────────────────────────────────────── */
+.user-todo-hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.user-todo-hero-text {
+  min-width: 0;
+}
+
+.user-todo-hero h2 {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.user-todo-hero p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.user-todo-hero-right {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-todo-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 18px 6px 6px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.user-todo-ring {
+  display: block;
+  flex: 0 0 auto;
+}
+
+.user-todo-ring-track {
+  stroke: var(--surface-3);
+}
+
+.user-todo-ring-fill {
+  stroke: var(--accent);
+  transition: stroke-dashoffset 600ms cubic-bezier(0.3, 0.7, 0.4, 1);
+}
+
+.user-todo-ring-label {
+  fill: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+  font-family: var(--font-ui);
+}
+
+.user-todo-progress-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.1;
+}
+
+.user-todo-progress-text strong {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.user-todo-progress-text span {
+  margin-top: 3px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+/* ── Capture：单行快速添加（描述默认收起）────────────────────────────── */
+.user-todo-create {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-lg);
+  background: var(--surface-2);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.user-todo-create:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 12%, transparent);
+}
+
+.user-todo-create-icon {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.user-todo-create input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 14px;
+  outline: 0;
+}
+
+.user-todo-create input::placeholder {
+  color: var(--text-muted);
+}
+
+.user-todo-create select,
+.user-todo-toolbar select,
+.user-todo-edit select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.user-todo-desc-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.user-todo-desc-toggle:hover {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+.user-todo-desc-toggle svg {
+  transition: transform 150ms ease;
+}
+
+.user-todo-desc-toggle[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+
+.user-todo-desc-input {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-height: 56px;
+  margin: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+  outline: 0;
+}
+
+.user-todo-desc-input:focus {
+  border-color: var(--accent);
+}
+
+/* ── Toolbar：筛选(带计数) + 搜索 + 排序 ─────────────────────────────── */
+.user-todo-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.user-todo-filter {
+  display: inline-flex;
+  padding: 3px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--surface-2);
+}
+
+.user-todo-filter-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.user-todo-filter-button:hover {
+  color: var(--text);
+}
+
+.user-todo-filter-button[data-active="true"] {
+  background: var(--surface-1);
+  color: var(--accent);
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 6%);
+}
+
+.user-todo-filter-count {
+  display: inline-flex;
+  min-width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.user-todo-filter-button[data-active="true"] .user-todo-filter-count {
+  background: color-mix(in oklch, var(--accent) 16%, transparent);
+  color: var(--accent);
+}
+
+.user-todo-search {
+  display: flex;
+  flex: 1;
+  min-width: 140px;
+  max-width: 320px;
+  margin-left: auto;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-1);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+
+.user-todo-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  outline: 0;
+}
+
+/* ── 状态 / 错误 / 空 ───────────────────────────────────────────────── */
+.user-todo-status {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.user-todo-error {
+  padding: 10px 14px;
+  border: 1px solid color-mix(in oklch, var(--danger) 34%, var(--border-1));
+  border-radius: var(--radius-md);
+  background: color-mix(in oklch, var(--danger) 7%, var(--surface-2));
+  color: var(--danger);
+  font-size: 13px;
+}
+
+.user-todo-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 56px 24px;
+  text-align: center;
+}
+
+.user-todo-empty svg {
+  margin-bottom: 6px;
+  color: var(--border-2);
+  opacity: 0.8;
+}
+
+.user-todo-empty p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.user-todo-empty span {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
+/* ── 列表：优先级色条 + 三态勾选 + 完成态下沉 ────────────────────────── */
+.user-todo-list {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 2px 6px 20px 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.user-todo-row {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 12px 12px 18px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.user-todo-row:hover {
+  border-color: var(--border-2);
+  background: var(--surface-2);
+}
+
+/* 左侧优先级色条——扫一眼就能分清轻重 */
+.user-todo-row::before {
+  content: "";
+  position: absolute;
+  top: 12px;
+  bottom: 12px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--border-2);
+}
+
+.user-todo-row[data-priority="urgent"]::before {
+  background: var(--danger);
+}
+
+.user-todo-row[data-priority="high"]::before {
+  background: var(--warn);
+}
+
+.user-todo-row[data-priority="medium"]::before {
+  background: var(--accent);
+}
+
+.user-todo-row[data-priority="low"]::before {
+  background: var(--border-2);
+}
+
+/* 完成态：降透明、去背，安静下沉到清单底部 */
+.user-todo-row[data-status="done"] {
+  background: transparent;
+  opacity: 0.68;
+}
+
+.user-todo-row[data-status="done"]:hover {
+  background: var(--surface-2);
+  opacity: 1;
+}
+
+.user-todo-check {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  place-items: center;
+  margin-top: 1px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 120ms ease, transform 120ms ease;
+}
+
+.user-todo-check:hover:not(:disabled) {
+  color: var(--accent);
+  transform: scale(1.1);
+}
+
+.user-todo-row[data-status="in_progress"] .user-todo-check {
+  color: var(--accent);
+}
+
+.user-todo-row[data-status="done"] .user-todo-check {
+  color: var(--ok);
+}
+
+.user-todo-check:disabled {
+  cursor: not-allowed;
+}
+
+.user-todo-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.user-todo-titleline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.user-todo-titleline strong {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+
+.user-todo-row[data-status="done"] .user-todo-titleline strong {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--text-muted) 70%, transparent);
+}
+
+.user-todo-main p {
+  margin: 5px 0 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.user-todo-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.user-todo-row-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.user-todo-row:hover .user-todo-row-actions,
+.user-todo-row:focus-within .user-todo-row-actions {
+  opacity: 1;
+}
+
+/* 触屏没有 hover，操作常驻可见 */
+@media (hover: none) {
+  .user-todo-row-actions {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .user-todo-ring-fill,
+  .user-todo-check,
+  .user-todo-desc-toggle svg {
+    transition: none;
+  }
+}
+
+/* 未完成 / 已完成 之间的虚线分隔 */
+.user-todo-divider {
+  display: block;
+  height: 1px;
+  margin: 8px 0 4px;
+  border: 0;
+  background-image: linear-gradient(90deg, var(--border-1) 50%, transparent 50%);
+  background-size: 8px 1px;
+  background-repeat: repeat-x;
+}
+
+/* ── 编辑态：紧凑双列 ───────────────────────────────────────────────── */
+.user-todo-edit {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-areas:
+    "title title"
+    "desc desc"
+    "status priority"
+    "actions actions";
+  gap: 8px;
+}
+
+.user-todo-edit-title {
+  grid-area: title;
+}
+
+.user-todo-edit-desc {
+  grid-area: desc;
+}
+
+.user-todo-edit-status,
+.user-todo-edit-priority {
+  grid-area: status;
+  width: 100%;
+}
+
+.user-todo-edit-priority {
+  grid-area: priority;
+}
+
+.user-todo-edit-actions {
+  grid-area: actions;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.user-todo-edit input,
+.user-todo-edit textarea {
+  width: 100%;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 13px;
+  outline: 0;
+}
+
+.user-todo-edit input {
+  height: 34px;
+  padding: 0 10px;
+}
+
+.user-todo-edit textarea {
+  min-height: 56px;
+  padding: 9px 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.user-todo-edit input:focus,
+.user-todo-edit textarea:focus,
+.user-todo-edit select:focus {
+  border-color: var(--accent);
+}
+
+/* ── 响应式 ─────────────────────────────────────────────────────────── */
+@media (max-width: 720px) {
+  .user-todo-screen {
+    padding: 22px 18px 16px;
+  }
+
+  .user-todo-hero {
+    flex-wrap: wrap;
+  }
+
+  .user-todo-create {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .user-todo-create > input {
+    flex: 1 1 160px;
+  }
+
+  .user-todo-search {
+    max-width: none;
+  }
+}
