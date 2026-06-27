@@ -1,7 +1,8 @@
-import { PanelLeftClose, PanelLeftOpen, Search, SlidersHorizontal } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, SlidersHorizontal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { SkillFilterKey, SkillSortKey, SkillMethodologySummary } from "../../api/skillsMethodology";
+import SearchInput from "../../components/SearchInput";
 import { IconButton } from "../../components/primitives";
 import SkillCard from "../../components/SkillCard";
 
@@ -171,10 +172,9 @@ export function SkillActiveList({
         </IconButton>
       </div>
       <label className="methodology-search">
-        <Search size={14} />
-        <input
-          aria-label="搜索方法论"
-          onChange={(event) => setQuery(event.currentTarget.value)}
+        <SearchInput
+          ariaLabel="搜索方法论"
+          onChange={setQuery}
           placeholder="搜索方法论"
           value={query}
         />

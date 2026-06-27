@@ -1,7 +1,8 @@
-import { Search, ShieldAlert, Trash2, X } from "lucide-react";
+import { ShieldAlert, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
 import type { AffectedSpecialist, SkillPoolItem } from "../../api/brain";
+import SearchInput from "../../components/SearchInput";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useFiltered } from "../../hooks/useFiltered";
 
@@ -33,10 +34,9 @@ export function SkillPoolPanel({
         <small>{skills.length} 个可授予能力</small>
       </div>
       <label className="brain-search">
-        <Search size={14} />
-        <input
-          aria-label="搜索工具池"
-          onChange={(event) => setQuery(event.currentTarget.value)}
+        <SearchInput
+          ariaLabel="搜索工具池"
+          onChange={setQuery}
           placeholder="搜索工具"
           value={query}
         />

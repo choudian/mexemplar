@@ -367,6 +367,60 @@ class AssistantTodoUpdateRequest(BaseModel):
     items: list[AssistantTodoItem] = Field(default_factory=list)
 
 
+UserTodoStatus = Literal["pending", "in_progress", "done"]
+UserTodoPriority = Literal["low", "medium", "high", "urgent"]
+
+
+class UserTodoItem(BaseModel):
+    todoId: str
+    title: str
+    description: str = ""
+    status: UserTodoStatus
+    priority: UserTodoPriority
+    sortOrder: int = 0
+    createdAt: datetime | None = None
+    updatedAt: datetime | None = None
+    completedAt: datetime | None = None
+
+
+class UserTodoListResponse(BaseModel):
+    items: list[UserTodoItem] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+
+
+class UserTodoCreateRequest(BaseModel):
+    title: str = Field(min_length=1)
+    description: str = ""
+    priority: UserTodoPriority = "medium"
+
+    @field_validator("title")
+    @classmethod
+    def title_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("title is required")
+        return value
+
+
+class UserTodoUpdateRequest(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    status: UserTodoStatus | None = None
+    priority: UserTodoPriority | None = None
+
+    @field_validator("title")
+    @classmethod
+    def optional_title_must_not_be_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("title is required")
+        return value
+
+
+class UserTodoCompleteRequest(BaseModel):
+    done: bool = True
+
+
 class AssistantActivityStep(BaseModel):
     kind: Literal["reasoning", "tool_call", "tool_result"]
     toolName: str | None = None

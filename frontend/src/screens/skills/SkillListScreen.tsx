@@ -1,8 +1,9 @@
 import { useEffect } from "react";
-import { Plus, Search } from "lucide-react";
+import { Plus } from "lucide-react";
 
 import { SKILL_CATEGORIES } from "../../api/skills";
 import type { SkillCategory } from "../../api/skills";
+import SearchInput from "../../components/SearchInput";
 import { Button } from "../../components/primitives";
 import { useFiltered } from "../../hooks/useFiltered";
 import { useSkillsStore } from "../../state/skillsStore";
@@ -54,12 +55,11 @@ export function SkillListScreen(): JSX.Element {
         </div>
         <div className="skills-header-actions">
           <label className="skills-search">
-            <Search size={14} />
-            <input
-              aria-label="搜索工具"
+            <SearchInput
+              ariaLabel="搜索工具"
+              onChange={setQuery}
               placeholder="搜索工具"
               value={query}
-              onChange={(event) => setQuery(event.currentTarget.value)}
             />
           </label>
           <Button kind="primary" onClick={() => setRoute("teaching")}>

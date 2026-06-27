@@ -6828,6 +6828,227 @@ select:focus-visible,
   font-size: 12px;
 }
 
+/* === 025: TaskNodeCard — DAG 调度节点卡片，复用 assistant-subcard 基础样式 === */
+
+/* 审核状态色调 */
+.assistant-subcard[data-status="reviewing"] {
+  border-color: color-mix(in oklch, var(--ok) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--ok) 7%, var(--surface-1));
+}
+
+.assistant-subcard[data-status="reviewing"] .assistant-subcard-icon {
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.assistant-subcard-status-reviewing {
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+/* 需要关注状态色调 */
+.assistant-subcard[data-status="needs_attention"] {
+  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--warn) 7%, var(--surface-1));
+}
+
+.assistant-subcard[data-status="needs_attention"] .assistant-subcard-icon {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.assistant-subcard-status-needs_attention {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+/* 暂停状态色调（复用 suspended 的视觉效果） */
+.assistant-subcard[data-status="paused"] {
+  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--warn) 7%, var(--surface-1));
+}
+
+.assistant-subcard[data-status="paused"] .assistant-subcard-icon {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.assistant-subcard-status-paused {
+  background: color-mix(in oklch, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+/* 节点展开详情区 */
+.assistant-task-node-detail {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-1);
+  animation: me-fade-in 180ms ease both;
+}
+
+.assistant-task-node-desc {
+  margin: 0 0 4px;
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.assistant-task-node-explanation {
+  margin: 0 0 6px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--warn) 8%, var(--surface-2));
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.assistant-task-node-todo-toggle {
+  display: block;
+  margin-top: 4px;
+}
+
+/* todo 子步骤列表（复用 TaskGraphPanel 已有样式） */
+.task-node-todo-list {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-node-todo-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 0;
+  font-size: 12px;
+}
+
+.task-node-todo-item .todo-status {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
+.task-node-todo-item .todo-text {
+  color: var(--text-2);
+}
+
+.task-node-todo-todo .todo-status {
+  background: color-mix(in oklch, var(--text-muted) 12%, transparent);
+  color: var(--text-muted);
+}
+
+.task-node-todo-doing .todo-status {
+  background: color-mix(in oklch, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.task-node-todo-done .todo-status {
+  background: color-mix(in oklch, var(--ok) 14%, transparent);
+  color: var(--ok);
+}
+
+.task-node-todo-skipped .todo-status {
+  background: color-mix(in oklch, var(--text-muted) 10%, transparent);
+  color: var(--text-muted);
+}
+
+.task-node-todo-empty {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* 裁定操作按钮 */
+.assistant-task-node-adjudication {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-1);
+}
+
+.assistant-task-node-decide-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.assistant-task-node-decide-accept {
+  border-color: color-mix(in oklch, var(--ok) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--ok) 10%, var(--surface-1));
+  color: var(--ok);
+}
+
+.assistant-task-node-decide-accept:hover {
+  background: color-mix(in oklch, var(--ok) 18%, var(--surface-1));
+}
+
+.assistant-task-node-decide-return {
+  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--warn) 10%, var(--surface-1));
+  color: var(--warn);
+}
+
+.assistant-task-node-decide-return:hover {
+  background: color-mix(in oklch, var(--warn) 18%, var(--surface-1));
+}
+
+.assistant-task-node-decide-abandon {
+  border-color: var(--border-2);
+  background: var(--surface-1);
+  color: var(--text-muted);
+}
+
+.assistant-task-node-decide-abandon:hover {
+  background: var(--surface-2);
+}
+
+/* 时间线 summary 区任务图全局操作按钮 */
+.assistant-activity-graph-actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 8px;
+}
+
+.assistant-activity-graph-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.assistant-activity-graph-stop {
+  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--warn) 10%, transparent);
+  color: var(--warn);
+}
+
+.assistant-activity-graph-stop:hover {
+  background: color-mix(in oklch, var(--warn) 18%, transparent);
+}
+
+.assistant-activity-graph-continue {
+  border-color: color-mix(in oklch, var(--ok) 42%, var(--border-1));
+  background: color-mix(in oklch, var(--ok) 10%, transparent);
+  color: var(--ok);
+}
+
+.assistant-activity-graph-continue:hover {
+  background: color-mix(in oklch, var(--ok) 18%, transparent);
+}
+
 /* 详情抽屉 */
 .assistant-drawer-scrim {
   position: absolute;

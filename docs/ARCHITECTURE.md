@@ -18,7 +18,7 @@ React UI (frontend/)
 ```
 
 - Tauri 负责窗口、custom chrome、sidecar 生命周期、端口/token handoff 和打包。
-- React 负责普通主界面：AI Assistant、Skill Teaching、Skill List、Skill Composition、Skill Methodology、Settings、Brain Management、Specialist Management；`/debug` 是隐藏的 Debug Inspector 直达路由，不进入普通导航。
+- React 负责普通主界面：AI Assistant、User Todo List、Skill Teaching、Skill List、Skill Composition、Skill Methodology、Settings、Brain Management、Specialist Management；`/debug` 是隐藏的 Debug Inspector 直达路由，不进入普通导航。
 - `src/desktop_api/` 是 UI adapter，router 不直接访问 Repository；默认只调用 business services，并把 `src/utils/events.py` 的 blinker 事件投影成受注册表约束的前端 UI event stream。`orchestrator_runtime.py` 里为复用既有 `AgentSessionStore` 组装的 Repository 触点是当前收敛例外，不得扩散到 router 或新 API。
 - UI event stream 由后端 `UI Event Registry` 拥有公开契约；前端只消费注册 UI event type，不使用内部 blinker 事件名或 `sourceEvent` 推断展示行为。事件 envelope 包含 `eventId`、当前桌面事件会话内单调递增的 `sequence`、`sessionId`、`causationId`、`type`、`scope`、安全校验后的 `payload` 和 `createdAt`。
 - sidecar event stream 为每个订阅者维护独立队列，并保留当前进程内的有界 replay buffer。前端重连时携带同一事件会话的 last-seen sequence；buffer 能覆盖缺口时按序回放，不能覆盖或事件会话不匹配时发送 `backend.resync_required`，由前端刷新权威快照恢复状态。
@@ -171,6 +171,24 @@ Assistant tool handler / Orchestrator
 - Todo 是执行者私人 checklist，按 Task + executor 持久化，状态词为 `todo / doing / done / skipped`，不创建 Task 节点、不进裁定、不进入 brain memory。
 - 前端只读 task snapshot 和公开 UI events：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。缺口或事件会话不匹配时走 `backend.resync_required` 拉 graph/board/meeting/todo 权威快照。
 - 024 DAG 调度：复杂任务（中等主助理自拆 / 超阈值委派 `role_kind='planner'` 规划专员）经 `build_task_graph` 原子落库为带 `dependency` 边的 DAG，由确定性 `GraphScheduler`（`task_collaboration/graph_scheduler.py`，orchestrator 装配的进程级单例）按依赖就绪自动推进——建图 handler 触发 `start_graph`，节点 attempt 完成经 `scheduler_callback` 回调 `on_attempt_outcome` 推进下游，全图完成经 `ParentReentrySink.notify_graph_complete` kick 续跑汇报。`requires_confirmation=1` 高风险节点派发前建 needs_confirmation adjudication 暂停（`waiting_user`），`decide(accepted)` 放行翻 `pending_dispatch` 派发（普通结果裁定 `decide(accepted)` 仍翻 `completed`，023 语义不回归）；节点失败回流附确定性 `healingActions` 候选集（advisory）+ `safeRecoveryHint` 安全文案。就绪硬校验 `_assert_dependencies_satisfied` 在 scheduler 与 dispatcher 派发层双层兜底。节点 todo 概览在回流 briefing 中按进行中节点标题渲染，详细 todo 经 TaskGraphPanel 节点展开按需可见、默认任务界面不展示（DEC-E）。
+
+### User Todo List（025）
+
+用户个人待办是独立的轻量业务能力，不属于 task graph。数据存储在 SQLite v18 `user_todos` 表，经 `UserTodoRepository` 和 `UserTodoService` 管理；桌面 API 只暴露 `/api/user-todos` typed CRUD，前端 `/todos` 页面通过 `frontend/src/api/userTodos.ts` 与 `userTodoStore` 访问。
+
+```text
+React UserTodoScreen
+  → frontend/src/api/userTodos.ts
+  → /api/user-todos router
+  → UserTodoService
+  → UserTodoRepository
+  → user_todos
+```
+
+- 用户个人待办状态词为 `pending / in_progress / done`，优先级为 `low / medium / high / urgent`。
+- `assistant_todo_items` 仍只表示 Task + executor scoped 的私人 checklist，状态词为 `todo / doing / done / skipped`；两者不能互相投影或复用。
+- AI 对话管理个人待办时，主助理按任务型消息委派临时执行体；`create_user_todo`、`list_user_todos`、`update_user_todo`、`complete_user_todo`、`delete_user_todo` 只进入 delegated executor 工具集，不进入主助理工具集。
+- V1 不新增公开 UI event；UI 操作后直接刷新 `/api/user-todos` 权威列表，AI 操作由助手回复确认。
 
 ### PM → 程序员的交接
 

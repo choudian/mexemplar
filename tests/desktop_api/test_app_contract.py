@@ -39,6 +39,7 @@ def test_desktop_api_registers_core_routes(desktop_api_client: TestClient) -> No
         "/api/teaching/trial-preview/{request_id}/decision",
         "/api/skills",
         "/api/compositions",
+        "/api/user-todos",
         "/api/settings",
     ]:
         assert path in paths

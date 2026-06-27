@@ -1,4 +1,4 @@
-import { BookOpenCheck, Brain, MessageSquare, Network, Settings, Sparkles, UserCog, Workflow } from "lucide-react";
+import { BookOpenCheck, Brain, ListTodo, MessageSquare, Network, Settings, Sparkles, UserCog, Workflow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import AssistantScreen from "../screens/assistant/AssistantScreen";
@@ -10,6 +10,7 @@ import SkillMethodologyScreen from "../screens/SkillMethodologyScreen";
 import SkillListScreen from "../screens/skills/SkillListScreen";
 import SpecialistScreen from "../screens/SpecialistScreen";
 import TeachingScreen from "../screens/teaching/TeachingScreen";
+import UserTodoScreen from "../screens/UserTodoScreen/UserTodoScreen";
 import type { RouteId } from "../state/shellStore";
 
 export interface RouteDefinition {
@@ -50,6 +51,13 @@ export const routes: RouteDefinition[] = [
     render: () => <CompositionListScreen />,
   },
   {
+    id: "user-todos",
+    label: "待办列表",
+    shortLabel: "待办",
+    icon: ListTodo,
+    render: () => <UserTodoScreen />,
+  },
+  {
     id: "brain",
     label: "大脑管理",
     shortLabel: "大脑",
@@ -88,6 +96,7 @@ export const routePaths: Record<RouteId, string> = {
   teaching: "/tools/teaching",
   skills: "/tools/list",
   compositions: "/tools/compositions",
+  "user-todos": "/todos",
   brain: "/brain",
   "brain-specialists": "/brain/specialists",
   "skill-methodology": "/skills/methodology",

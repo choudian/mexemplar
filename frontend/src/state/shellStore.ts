@@ -7,6 +7,7 @@ export type RouteId =
   | "teaching"
   | "skills"
   | "compositions"
+  | "user-todos"
   | "brain"
   | "brain-specialists"
   | "skill-methodology"

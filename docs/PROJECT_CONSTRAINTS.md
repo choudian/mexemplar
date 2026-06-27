@@ -76,6 +76,15 @@
 - Todo 是 Task + executor scoped 的私人 checklist；不得创建 Task edge、adjudication、board claim 或 brain memory entry，前端展示必须使用独立状态词，不与 Task status 混用。
 - 新 task collaboration 前端事件只能通过 `src/desktop_api/ui_events.py` Registry 和 `ui_event_projector.py` 投影：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。事件只作通知；缺口必须用 graph/board/meeting/todo typed API 拉权威快照。
 
+## User Todo Boundaries
+
+- 用户个人待办的业务事实源是 `user_todos` SQLite 表和 `src/business/user_todos/UserTodoService`；desktop API router 只调用 service，不直接访问 `UserTodoRepository` 或手写 SQL。
+- 用户个人待办与 assistant task collaboration 的 executor 私人 Todo 严格隔离：`user_todos.status` 使用 `pending / in_progress / done`，`assistant_todo_items.status` 使用 `todo / doing / done / skipped`；不得复用表、DTO、UI store、事件或状态词。
+- `/api/user-todos` 是唯一用户界面入口；前端只通过 `frontend/src/api/userTodos.ts` 和 `userTodoStore` 访问，不从 task graph、Debug transition 或本地缓存推断用户待办事实。
+- AI 对话管理用户个人待办必须通过主助理委派临时执行体完成；user_todo 写工具只进入 delegated executor 工具集，不进入主助理、planner、PM、Programmer 或 Trial 工具集。
+- 用户待办 V1 不新增公开 UI event；如果后续需要跨窗口或实时推送，必须先在 `src/desktop_api/ui_events.py` 注册 typed event 并补 payload allowlist。
+- 删除用户个人待办是物理删除；不要套用 Brain 的 soft-delete/invalidation 规则，也不要把删除动作写入 brain memory。
+
 ## Tauri / Frontend / Sidecar Boundaries
 
 - `frontend/` 只能通过 typed API client、Tauri window command 或前端本地状态访问产品能力；不得 import Python 业务代码、读取 SQLite/DuckDB/config，或持久化 secret。

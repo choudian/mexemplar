@@ -18,7 +18,6 @@ import SessionSidebar from "./SessionSidebar";
 import SubagentDetailDrawer from "./SubagentDetailDrawer";
 import { MeetingChannelDrawer } from "./MeetingChannelDrawer";
 import { TaskBoardPanel } from "./TaskBoardPanel";
-import { TaskGraphPanel } from "./TaskGraphPanel";
 import { TodoChecklistPanel } from "./TodoChecklistPanel";
 
 type AssistantDisplayMessage = AssistantMessage | PendingAssistantMessage;
@@ -310,25 +309,7 @@ export function AssistantScreen(): JSX.Element {
             </IconButton>
           </div>
         </div>
-        <TaskGraphPanel
-          graph={currentTaskGraph}
-          loading={taskGraphLoading}
-          todosByTaskId={taskTodosByTaskId}
-          onLoadTodos={(taskId: string) => {
-            if (activeSessionId) void loadTaskTodos(activeSessionId, taskId);
-          }}
-          onContinue={(graphId) => {
-            if (activeSessionId) void continueTaskGraph(activeSessionId, graphId);
-          }}
-          onDecide={(adjudicationId, decision, instruction) => {
-            if (activeSessionId) {
-              void decideTaskAdjudication(activeSessionId, adjudicationId, decision, instruction);
-            }
-          }}
-          onStop={(graphId) => {
-            if (activeSessionId) void stopTaskGraph(activeSessionId, graphId, progress.runId);
-          }}
-        />
+        {/* 025: TaskGraphPanel 已移除，任务图节点现在嵌入 ActivityTimeline */}
         <TaskBoardPanel
           items={taskBoardItems}
           loading={taskBoardLoading}
@@ -380,6 +361,22 @@ export function AssistantScreen(): JSX.Element {
                     subagents={block.turn.subagents}
                     onOpenSubagent={(id) => setOpenSubagentId(id)}
                     onContinueSubagent={(id, note) => void continueSubagent(activeSessionId, id, note)}
+                    taskGraph={currentTaskGraph}
+                    todosByTaskId={taskTodosByTaskId}
+                    onLoadTodos={(taskId: string) => {
+                      if (activeSessionId) void loadTaskTodos(activeSessionId, taskId);
+                    }}
+                    onDecide={(adjudicationId, decision, instruction) => {
+                      if (activeSessionId) {
+                        void decideTaskAdjudication(activeSessionId, adjudicationId, decision, instruction);
+                      }
+                    }}
+                    onStopGraph={(graphId) => {
+                      if (activeSessionId) void stopTaskGraph(activeSessionId, graphId, progress.runId);
+                    }}
+                    onContinueGraph={(graphId) => {
+                      if (activeSessionId) void continueTaskGraph(activeSessionId, graphId);
+                    }}
                   />
                 ) : null;
               }

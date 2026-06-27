@@ -1,7 +1,8 @@
-import { RefreshCcw, RotateCcw, Save, Search, Trash2 } from "lucide-react";
+import { RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
+import SearchInput from "../../components/SearchInput";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { statusToTone } from "../../components/statusTone";
 import { useFiltered } from "../../hooks/useFiltered";
@@ -163,10 +164,9 @@ export function BrainScreen(): JSX.Element {
         <main className="brain-entry-pane">
           <div className="brain-toolbar">
             <label className="brain-search">
-              <Search size={14} />
-              <input
-                aria-label="搜索大脑条目"
-                onChange={(event) => setQuery(event.currentTarget.value)}
+              <SearchInput
+                ariaLabel="搜索大脑条目"
+                onChange={setQuery}
                 placeholder="搜索内容、理由或范围"
                 value={query}
               />

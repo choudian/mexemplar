@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from src.business.task_collaboration.questions import TaskQuestionService
     from src.business.task_collaboration.service import TaskCollaborationService
     from src.business.task_collaboration.todos import TaskTodoService
+    from src.business.user_todos import UserTodoService
 
 from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
@@ -563,6 +564,16 @@ __all__ = [
     "create_meeting_send_message_handler",
     "TODO_UPDATE_SCHEMA",
     "create_todo_update_handler",
+    "CREATE_USER_TODO_SCHEMA",
+    "create_user_todo_handler",
+    "LIST_USER_TODOS_SCHEMA",
+    "create_list_user_todos_handler",
+    "UPDATE_USER_TODO_SCHEMA",
+    "create_update_user_todo_handler",
+    "COMPLETE_USER_TODO_SCHEMA",
+    "create_complete_user_todo_handler",
+    "DELETE_USER_TODO_SCHEMA",
+    "create_delete_user_todo_handler",
     "BUILD_TASK_GRAPH_SCHEMA",
     "create_build_task_graph_handler",
     "MUTATE_TASK_GRAPH_SCHEMA",
@@ -1143,6 +1154,257 @@ def create_todo_update_handler(
         )
 
     return todo_update_handler
+
+
+# ===== 用户个人 Todo 工具 =====
+
+
+CREATE_USER_TODO_SCHEMA = make_tool_schema(
+    name="create_user_todo",
+    description=(
+        "创建用户个人待办事项。只用于用户自己的待办列表，不用于当前任务执行者的私人 checklist；"
+        "当前任务内部拆步骤仍使用 todo_update。"
+    ),
+    properties={
+        "title": {"type": "string", "description": "待办标题，必填"},
+        "description": {"type": "string", "description": "可选描述"},
+        "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "urgent"],
+            "description": "优先级，默认 medium",
+        },
+    },
+    required=["title"],
+)
+
+
+LIST_USER_TODOS_SCHEMA = make_tool_schema(
+    name="list_user_todos",
+    description=(
+        "查询用户个人待办列表，可按状态、关键词和排序返回候选。"
+        "用户问还有什么没做、找某个待办、或准备修改/完成待办前先用本工具。"
+    ),
+    properties={
+        "statusFilter": {
+            "type": "string",
+            "enum": ["all", "open", "done"],
+            "description": "筛选范围；open 包含 pending 与 in_progress，默认 open",
+        },
+        "sort": {
+            "type": "string",
+            "enum": ["created_desc", "created_asc", "priority_desc", "priority_asc"],
+            "description": "排序方式，默认 created_desc",
+        },
+        "query": {"type": "string", "description": "可选关键词，用于标题/描述匹配"},
+        "limit": {"type": "integer", "description": "最多返回数量，默认 20"},
+    },
+    required=[],
+)
+
+
+UPDATE_USER_TODO_SCHEMA = make_tool_schema(
+    name="update_user_todo",
+    description=(
+        "更新用户个人待办的标题、描述、状态或优先级。"
+        "如果用户自然语言只描述了待办内容而没有 todoId，先用 list_user_todos 查候选。"
+    ),
+    properties={
+        "todoId": {"type": "string", "description": "用户待办 ID"},
+        "title": {"type": "string", "description": "可选新标题"},
+        "description": {"type": "string", "description": "可选新描述"},
+        "status": {
+            "type": "string",
+            "enum": ["pending", "in_progress", "done"],
+            "description": "可选新状态",
+        },
+        "priority": {
+            "type": "string",
+            "enum": ["low", "medium", "high", "urgent"],
+            "description": "可选新优先级",
+        },
+    },
+    required=["todoId"],
+)
+
+
+COMPLETE_USER_TODO_SCHEMA = make_tool_schema(
+    name="complete_user_todo",
+    description=(
+        "把用户个人待办标记为完成，或撤销完成。"
+        "如果没有明确 todoId，先用 list_user_todos 查候选，不要猜。"
+    ),
+    properties={
+        "todoId": {"type": "string", "description": "用户待办 ID"},
+        "done": {"type": "boolean", "description": "true=完成，false=撤销完成；默认 true"},
+    },
+    required=["todoId"],
+)
+
+
+DELETE_USER_TODO_SCHEMA = make_tool_schema(
+    name="delete_user_todo",
+    description=(
+        "删除用户个人待办。仅当用户明确要求删除时调用；"
+        "如果没有明确 todoId，先用 list_user_todos 查候选。"
+    ),
+    properties={
+        "todoId": {"type": "string", "description": "用户待办 ID"},
+    },
+    required=["todoId"],
+)
+
+
+def _make_user_todo_service(service_factory: Callable[[], "UserTodoService"] | None):
+    if service_factory is not None:
+        return service_factory()
+    from src.business.user_todos import UserTodoService
+
+    return UserTodoService()
+
+
+def create_user_todo_handler(
+    service_factory: Callable[[], "UserTodoService"] | None = None,
+):
+    def create_user_todo(
+        title: str,
+        description: str = "",
+        priority: str = "medium",
+    ) -> str:
+        def _action():
+            with _make_user_todo_service(service_factory) as service:
+                todo = service.create(
+                    title=title,
+                    description=description,
+                    priority=priority,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已创建用户待办。",
+                        "todo": todo,
+                    }
+                )
+
+        return _run_task_service(
+            "create_user_todo", "创建用户待办时发生内部错误，请稍后重试。", _action
+        )
+
+    return create_user_todo
+
+
+def create_list_user_todos_handler(
+    service_factory: Callable[[], "UserTodoService"] | None = None,
+):
+    def list_user_todos(
+        statusFilter: str = "open",
+        sort: str = "created_desc",
+        query: str = "",
+        limit: int = 20,
+    ) -> str:
+        def _action():
+            with _make_user_todo_service(service_factory) as service:
+                items, total = service.list_todos(
+                    status_filter=statusFilter,
+                    sort=sort,
+                    query=query,
+                    limit=limit,
+                    offset=0,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "items": items,
+                        "total": total,
+                        "message": "未找到匹配的用户待办。" if not items else "",
+                    }
+                )
+
+        return _run_task_service(
+            "list_user_todos", "查询用户待办时发生内部错误，请稍后重试。", _action
+        )
+
+    return list_user_todos
+
+
+def create_update_user_todo_handler(
+    service_factory: Callable[[], "UserTodoService"] | None = None,
+):
+    def update_user_todo(
+        todoId: str,
+        title: str | None = None,
+        description: str | None = None,
+        status: str | None = None,
+        priority: str | None = None,
+    ) -> str:
+        def _action():
+            updates = {}
+            if title is not None:
+                updates["title"] = title
+            if description is not None:
+                updates["description"] = description
+            if status is not None:
+                updates["status"] = status
+            if priority is not None:
+                updates["priority"] = priority
+            with _make_user_todo_service(service_factory) as service:
+                todo = service.update(todoId, updates)
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已更新用户待办。",
+                        "todo": todo,
+                    }
+                )
+
+        return _run_task_service(
+            "update_user_todo", "更新用户待办时发生内部错误，请稍后重试。", _action
+        )
+
+    return update_user_todo
+
+
+def create_complete_user_todo_handler(
+    service_factory: Callable[[], "UserTodoService"] | None = None,
+):
+    def complete_user_todo(todoId: str, done: bool = True) -> str:
+        def _action():
+            with _make_user_todo_service(service_factory) as service:
+                todo = service.complete(todoId, done=done)
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已完成用户待办。" if done else "已撤销完成。",
+                        "todo": todo,
+                    }
+                )
+
+        return _run_task_service(
+            "complete_user_todo", "完成用户待办时发生内部错误，请稍后重试。", _action
+        )
+
+    return complete_user_todo
+
+
+def create_delete_user_todo_handler(
+    service_factory: Callable[[], "UserTodoService"] | None = None,
+):
+    def delete_user_todo(todoId: str) -> str:
+        def _action():
+            with _make_user_todo_service(service_factory) as service:
+                service.delete(todoId)
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已删除用户待办。",
+                        "todoId": todoId,
+                    }
+                )
+
+        return _run_task_service(
+            "delete_user_todo", "删除用户待办时发生内部错误，请稍后重试。", _action
+        )
+
+    return delete_user_todo
 
 
 # ===== 024 Task Graph Scheduling 工具 =====

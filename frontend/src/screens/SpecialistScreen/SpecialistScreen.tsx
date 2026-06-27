@@ -1,7 +1,8 @@
-import { Plus, Save, Search, Trash2 } from "lucide-react";
+import { Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { BrainSpecialist } from "../../api/brain";
+import SearchInput from "../../components/SearchInput";
 import SkillCheckboxGrid from "../../components/SkillCheckboxGrid";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useFiltered } from "../../hooks/useFiltered";
@@ -67,10 +68,9 @@ export function SpecialistScreen(): JSX.Element {
       <div className="specialist-workspace">
         <aside className="specialist-list-pane">
           <label className="brain-search">
-            <Search size={14} />
-            <input
-              aria-label="搜索专员"
-              onChange={(event) => setQuery(event.currentTarget.value)}
+            <SearchInput
+              ariaLabel="搜索专员"
+              onChange={setQuery}
               placeholder="搜索专员"
               value={query}
             />

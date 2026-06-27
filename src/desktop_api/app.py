@@ -26,6 +26,7 @@ from src.desktop_api.routers import (
     skills,
     skills_methodology,
     teaching,
+    user_todos,
 )
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
 from src.execution.tool_executor import ensure_builtin_deps
@@ -160,6 +161,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(compositions.router)
     app.include_router(settings.router)
     app.include_router(brain.router)
+    app.include_router(user_todos.router)
     app.include_router(debug.router)
 
     @app.get("/api/events", tags=["events"])

@@ -152,14 +152,24 @@ class ToolRegistry:
         from src.business.agents.tools.assistant_tools import (
             ASK_PARENT_SCHEMA,
             BUILD_TASK_GRAPH_SCHEMA,
+            COMPLETE_USER_TODO_SCHEMA,
+            CREATE_USER_TODO_SCHEMA,
+            DELETE_USER_TODO_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
+            LIST_USER_TODOS_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
             TODO_UPDATE_SCHEMA,
+            UPDATE_USER_TODO_SCHEMA,
             create_ask_parent_handler,
             create_build_task_graph_handler,
+            create_complete_user_todo_handler,
+            create_delete_user_todo_handler,
             create_delegate_to_subagent_handler,
+            create_list_user_todos_handler,
             create_meeting_send_message_handler,
             create_todo_update_handler,
+            create_update_user_todo_handler,
+            create_user_todo_handler,
         )
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
@@ -222,6 +232,32 @@ class ToolRegistry:
                     executor_id=todo_executor_id,
                     bound_task_id=current_task_id,
                 ),
+            ),
+            ToolDefinition(
+                name="create_user_todo",
+                schema=CREATE_USER_TODO_SCHEMA,
+                handler=create_user_todo_handler(),
+            ),
+            ToolDefinition(
+                name="list_user_todos",
+                schema=LIST_USER_TODOS_SCHEMA,
+                handler=create_list_user_todos_handler(),
+                has_side_effects=False,
+            ),
+            ToolDefinition(
+                name="update_user_todo",
+                schema=UPDATE_USER_TODO_SCHEMA,
+                handler=create_update_user_todo_handler(),
+            ),
+            ToolDefinition(
+                name="complete_user_todo",
+                schema=COMPLETE_USER_TODO_SCHEMA,
+                handler=create_complete_user_todo_handler(),
+            ),
+            ToolDefinition(
+                name="delete_user_todo",
+                schema=DELETE_USER_TODO_SCHEMA,
+                handler=create_delete_user_todo_handler(),
             ),
         ]
 
