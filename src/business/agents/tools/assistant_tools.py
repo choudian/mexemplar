@@ -1188,7 +1188,7 @@ LIST_USER_TODOS_SCHEMA = make_tool_schema(
         "statusFilter": {
             "type": "string",
             "enum": ["all", "open", "done"],
-            "description": "筛选范围；open 包含 pending 与 in_progress，默认 open",
+            "description": "筛选范围；all 返回全部，open 仅 pending 与 in_progress，done 仅已完成；默认 all",
         },
         "sort": {
             "type": "string",
@@ -1296,7 +1296,7 @@ def create_list_user_todos_handler(
     service_factory: Callable[[], "UserTodoService"] | None = None,
 ):
     def list_user_todos(
-        statusFilter: str = "open",
+        statusFilter: str = "all",
         sort: str = "created_desc",
         query: str = "",
         limit: int = 20,
@@ -1370,10 +1370,18 @@ def create_complete_user_todo_handler(
         def _action():
             with _make_user_todo_service(service_factory) as service:
                 todo = service.complete(todoId, done=done)
+                # done=False 时按撤销后的状态给消息：pending 说明本就未完成（no-op），
+                # 否则是从 done 撤销回 in_progress（或本来 in_progress，结果成立）。
+                if done:
+                    message = "已完成用户待办。"
+                elif todo["status"] == "pending":
+                    message = "该待办原本就未完成，无需撤销。"
+                else:
+                    message = "已撤销完成，回到进行中。"
                 return to_json(
                     {
                         "success": True,
-                        "message": "已完成用户待办。" if done else "已撤销完成。",
+                        "message": message,
                         "todo": todo,
                     }
                 )

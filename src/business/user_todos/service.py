@@ -75,16 +75,24 @@ class UserTodoService:
             normalized["priority"] = _normalize_priority(updates["priority"])
         if "status" in updates:
             normalized["status"] = _normalize_status(updates["status"])
-        if not normalized:
-            row = self._repo.get(_normalize_id(todo_id))
-        else:
-            row = self._repo.update(_normalize_id(todo_id), normalized)
+        # 即使无有效字段变更，PUT 语义也要求刷新 updated_at：repo.update({}) 内部
+        # 会 get → row.updated_at=now → flush，行为与原 touch 等价，无需单独方法。
+        row = self._repo.update(_normalize_id(todo_id), normalized)
         if row is None:
             raise LookupError("todo not found")
         return project_user_todo(row)
 
     def complete(self, todo_id: str, *, done: bool = True) -> dict[str, Any]:
-        return self.update(todo_id, {"status": "done" if done else "pending"})
+        if done:
+            return self.update(todo_id, {"status": "done"})
+        # 撤销完成：仅当当前是 done 时回到 in_progress；否则 no-op 返回当前快照，
+        # 不产生写入、不刷 updated_at（避免对本就未完成的 todo 无意义 bump）。
+        current = self._repo.get(_normalize_id(todo_id))
+        if current is None:
+            raise LookupError("todo not found")
+        if current.status == "done":
+            return self.update(todo_id, {"status": "in_progress"})
+        return project_user_todo(current)
 
     def delete(self, todo_id: str) -> None:
         if not self._repo.delete(_normalize_id(todo_id)):

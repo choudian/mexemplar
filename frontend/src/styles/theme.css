@@ -6683,11 +6683,6 @@ select:focus-visible,
   background: color-mix(in oklch, var(--accent) 5%, var(--surface-1));
 }
 
-.assistant-subcard[data-status="suspended"] {
-  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
-  background: color-mix(in oklch, var(--warn) 7%, var(--surface-1));
-}
-
 .assistant-subcard-icon {
   display: inline-flex;
   width: 28px;
@@ -6698,11 +6693,6 @@ select:focus-visible,
   border-radius: 8px;
   background: color-mix(in oklch, var(--accent) 14%, transparent);
   color: var(--accent);
-}
-
-.assistant-subcard[data-status="suspended"] .assistant-subcard-icon {
-  background: color-mix(in oklch, var(--warn) 16%, transparent);
-  color: var(--warn);
 }
 
 .assistant-subcard[data-status="done"] .assistant-subcard-icon {
@@ -6741,11 +6731,6 @@ select:focus-visible,
 .assistant-subcard-status-done {
   background: color-mix(in oklch, var(--ok) 14%, transparent);
   color: var(--ok);
-}
-
-.assistant-subcard-status-suspended {
-  background: color-mix(in oklch, var(--warn) 16%, transparent);
-  color: var(--warn);
 }
 
 .assistant-subcard-task {
@@ -6830,7 +6815,7 @@ select:focus-visible,
 
 /* === 025: TaskNodeCard — DAG 调度节点卡片，复用 assistant-subcard 基础样式 === */
 
-/* 审核状态色调 */
+/* 审核 (reviewing) 状态色调 — 唯一独立色调 */
 .assistant-subcard[data-status="reviewing"] {
   border-color: color-mix(in oklch, var(--ok) 42%, var(--border-1));
   background: color-mix(in oklch, var(--ok) 7%, var(--surface-1));
@@ -6846,35 +6831,32 @@ select:focus-visible,
   color: var(--ok);
 }
 
-/* 需要关注状态色调 */
-.assistant-subcard[data-status="needs_attention"] {
+/* 需要关注 / 暂停 / suspended — 共享 warn 色调 */
+.assistant-subcard[data-status="needs_attention"],
+.assistant-subcard[data-status="paused"],
+.assistant-subcard[data-status="suspended"] {
   border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
   background: color-mix(in oklch, var(--warn) 7%, var(--surface-1));
 }
 
-.assistant-subcard[data-status="needs_attention"] .assistant-subcard-icon {
+.assistant-subcard[data-status="needs_attention"] .assistant-subcard-icon,
+.assistant-subcard[data-status="paused"] .assistant-subcard-icon,
+.assistant-subcard[data-status="suspended"] .assistant-subcard-icon {
   background: color-mix(in oklch, var(--warn) 16%, transparent);
   color: var(--warn);
 }
 
-.assistant-subcard-status-needs_attention {
+.assistant-subcard-status-needs_attention,
+.assistant-subcard-status-paused,
+.assistant-subcard-status-suspended {
   background: color-mix(in oklch, var(--warn) 16%, transparent);
   color: var(--warn);
 }
 
-/* 暂停状态色调（复用 suspended 的视觉效果） */
-.assistant-subcard[data-status="paused"] {
-  border-color: color-mix(in oklch, var(--warn) 42%, var(--border-1));
-  background: color-mix(in oklch, var(--warn) 7%, var(--surface-1));
-}
-
-.assistant-subcard[data-status="paused"] .assistant-subcard-icon {
-  background: color-mix(in oklch, var(--warn) 16%, transparent);
-  color: var(--warn);
-}
-
-.assistant-subcard-status-paused {
-  background: color-mix(in oklch, var(--warn) 16%, transparent);
+/* requiresConfirmation 内联警告标记（高风险/不可逆节点），替换原 ⚠️ emoji */
+.assistant-subcard-confirm-flag {
+  display: inline-flex;
+  align-items: center;
   color: var(--warn);
 }
 

@@ -5,7 +5,7 @@ import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
 import { useAssistantStore } from "../../state/assistantStore";
 import type { AssistantTurnActivity, PendingAssistantMessage } from "../../state/assistantStore";
-import { emptyTurn, turnIdFromMessage } from "../../state/assistantStore";
+import { emptyTurn, turnIdFromMessage, turnIdFromSequence } from "../../state/assistantStore";
 import { useAssistantTaskStore } from "../../state/assistantTaskStore";
 import { useShellStore } from "../../state/shellStore";
 import ActivityTimeline from "./ActivityTimeline";
@@ -112,7 +112,6 @@ export function AssistantScreen(): JSX.Element {
   const activeMeetingChannelId = useAssistantTaskStore((state) => state.activeMeeting?.channelId ?? null);
   const taskTodosByTaskId = useAssistantTaskStore((state) => state.todosByTaskId);
   const todoLoadingTaskIds = useAssistantTaskStore((state) => state.todoLoadingTaskIds);
-  const taskGraphLoading = useAssistantTaskStore((state) => state.graphLoading);
   const taskBoardLoading = useAssistantTaskStore((state) => state.boardLoading);
   const taskMeetingLoading = useAssistantTaskStore((state) => state.meetingLoading);
   const taskNeedsResync = useAssistantTaskStore((state) => state.needsResync);
@@ -238,6 +237,24 @@ export function AssistantScreen(): JSX.Element {
     () => buildThreadBlocks(visibleMessages, activeTurns, activeTurnId, isRunning),
     [activeTurnId, activeTurns, isRunning, visibleMessages],
   );
+  // 任务图锚点：优先锚到 userMessageSequence 对应的 turn；当该 sequence 为 null，
+  // 或其 origin turn 已分页出当前渲染窗口时，回退到最近一个可见 transparency turn，
+  // 保证运行中的图（含停止/继续按钮）不会静默消失。复用 turnIdFromSequence 单一来源。
+  const graphAnchorTurnId = useMemo(() => {
+    if (!currentTaskGraph) return undefined;
+    const seq = currentTaskGraph.userMessageSequence;
+    if (seq != null) {
+      const exact = turnIdFromSequence(seq);
+      if (threadBlocks.some((block) => block.kind === "transparency" && block.turnId === exact)) {
+        return exact;
+      }
+    }
+    for (let i = threadBlocks.length - 1; i >= 0; i -= 1) {
+      const block = threadBlocks[i];
+      if (block.kind === "transparency") return block.turnId;
+    }
+    return undefined;
+  }, [currentTaskGraph, threadBlocks]);
   const conversationTitle = activeSession?.title ?? (visibleMessages.length > 0 ? "当前对话" : "新对话");
 
   const startEditFailure = (sequence: number, content: string) => {
@@ -361,7 +378,11 @@ export function AssistantScreen(): JSX.Element {
                     subagents={block.turn.subagents}
                     onOpenSubagent={(id) => setOpenSubagentId(id)}
                     onContinueSubagent={(id, note) => void continueSubagent(activeSessionId, id, note)}
-                    taskGraph={currentTaskGraph}
+                    taskGraph={
+                      currentTaskGraph && block.turnId === graphAnchorTurnId
+                        ? currentTaskGraph
+                        : undefined
+                    }
                     todosByTaskId={taskTodosByTaskId}
                     onLoadTodos={(taskId: string) => {
                       if (activeSessionId) void loadTaskTodos(activeSessionId, taskId);

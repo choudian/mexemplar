@@ -1,11 +1,10 @@
 import {
-  Bot,
+  AlertTriangle,
   CheckCircle2,
   Loader2,
   PauseCircle,
   Play,
   Shield,
-  AlertTriangle,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useState } from "react";
@@ -115,8 +114,13 @@ function TaskNodeCard({
         <div className="assistant-subcard-head">
           <strong>{task.title}</strong>
           {task.requiresConfirmation ? (
-            <span title="高风险/不可逆节点，执行前需确认" aria-label="需确认">
-              ⚠️
+            <span
+              className="assistant-subcard-confirm-flag"
+              role="img"
+              title="高风险/不可逆节点，执行前需确认"
+              aria-label="需确认"
+            >
+              <AlertTriangle size={14} />
             </span>
           ) : null}
           <span className={`assistant-subcard-status assistant-subcard-status-${meta.tone}`}>

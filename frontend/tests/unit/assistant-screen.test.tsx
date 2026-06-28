@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { configureDesktopApi } from "../../src/api/client";
 import { AssistantScreen } from "../../src/screens/assistant/AssistantScreen";
 import { useAssistantStore } from "../../src/state/assistantStore";
+import { useAssistantTaskStore } from "../../src/state/assistantTaskStore";
+import type { AssistantTaskGraphSnapshot } from "../../src/api/assistantTasks";
 
 const sessionsPayload = {
   items: [
@@ -359,5 +361,151 @@ describe("AssistantScreen", () => {
         expect.objectContaining({ method: "POST" }),
       ),
     );
+  });
+});
+
+function makeGraphForAnchor(
+  userMessageSequence: number | null,
+): AssistantTaskGraphSnapshot {
+  return {
+    graphId: "graph-001",
+    sessionId: "ast_1",
+    userMessageSequence,
+    version: 1,
+    tasks: [
+      {
+        taskId: "tsk-root",
+        graphId: "graph-001",
+        parentTaskId: null,
+        title: "根任务",
+        descriptionPreview: "",
+        status: "running",
+        displayPhase: "running",
+        requiresReview: false,
+        requiresConfirmation: false,
+        safeExplanation: "",
+      },
+      {
+        taskId: "tsk-001",
+        graphId: "graph-001",
+        parentTaskId: "tsk-root",
+        title: "DAG步骤",
+        descriptionPreview: "",
+        status: "running",
+        displayPhase: "running",
+        requiresReview: false,
+        requiresConfirmation: false,
+        safeExplanation: "",
+      },
+    ],
+    edges: [],
+    adjudications: [],
+  };
+}
+
+describe("AssistantScreen taskGraph 锚定", () => {
+  beforeEach(() => {
+    configureDesktopApi({ baseUrl: "http://desktop.test", sessionToken: "token" });
+    useAssistantStore.setState({
+      hydrated: true,
+      sessions: [],
+      activeSessionId: "ast_1",
+      messages: [
+        { sequence: 1, role: "user", content: "第一轮", createdAt: null, rendering: "plain_text" },
+        { sequence: 2, role: "assistant", content: "回复一", createdAt: null, rendering: "safe_markdown" },
+        { sequence: 3, role: "user", content: "第二轮", createdAt: null, rendering: "plain_text" },
+        { sequence: 4, role: "assistant", content: "回复二", createdAt: null, rendering: "safe_markdown" },
+      ],
+      turnActivityBySession: {
+        ast_1: {
+          seq_1: {
+            turnId: "seq_1",
+            fromSequence: 1,
+            steps: [{ seq: 1, kind: "reasoning", text: "思考", subagentId: null }],
+            subagents: [],
+          },
+          seq_3: {
+            turnId: "seq_3",
+            fromSequence: 3,
+            steps: [{ seq: 3, kind: "reasoning", text: "思考", subagentId: null }],
+            subagents: [],
+          },
+        },
+      },
+      activeTurnIdBySession: { ast_1: "seq_3" },
+      query: "",
+      draft: "",
+      loadingSessions: false,
+      loadingMessages: false,
+      sending: false,
+      hasMoreBefore: false,
+      nextBeforeSequence: null,
+      progress: { status: "idle", headline: "" },
+      confirmations: [],
+      lastError: null,
+      pendingOptimisticMessages: [],
+    });
+    useAssistantTaskStore.setState({
+      currentGraph: null,
+      boardItems: [],
+      activeMeeting: null,
+      todosByTaskId: {},
+      todoLoadingTaskIds: [],
+      graphLoading: false,
+      boardLoading: false,
+      meetingLoading: false,
+      graphError: null,
+      boardError: null,
+      meetingError: null,
+      needsResync: false,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  function stubGraph(graph: AssistantTaskGraphSnapshot) {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/assistant/sessions/ast_1/task-graphs/current")) {
+        return jsonResponse({ graph });
+      }
+      return jsonResponse({ items: [] });
+    }));
+  }
+
+  test("userMessageSequence 精确匹配 turn → DAG 节点只在该 turn 渲染", async () => {
+    stubGraph(makeGraphForAnchor(3));
+    const { container } = render(<AssistantScreen />);
+    await waitFor(() => {
+      expect(container.querySelector(".assistant-task-node")).not.toBeNull();
+    });
+    const activity1 = container.querySelector('.assistant-activity[data-turn-id="seq_1"]');
+    const activity3 = container.querySelector('.assistant-activity[data-turn-id="seq_3"]');
+    expect(activity3?.querySelector(".assistant-task-node")).not.toBeNull();
+    expect(activity1?.querySelector(".assistant-task-node")).toBeNull();
+  });
+
+  test("userMessageSequence 为 null → 回退到最近 turn，DAG 节点不消失", async () => {
+    stubGraph(makeGraphForAnchor(null));
+    const { container } = render(<AssistantScreen />);
+    await waitFor(() => {
+      expect(container.querySelector(".assistant-task-node")).not.toBeNull();
+    });
+    const activity1 = container.querySelector('.assistant-activity[data-turn-id="seq_1"]');
+    const activity3 = container.querySelector('.assistant-activity[data-turn-id="seq_3"]');
+    expect(activity3?.querySelector(".assistant-task-node")).not.toBeNull();
+    expect(activity1?.querySelector(".assistant-task-node")).toBeNull();
+  });
+
+  test("origin turn 不在当前窗口 → 回退到最近 turn，DAG 节点不消失", async () => {
+    stubGraph(makeGraphForAnchor(99));
+    const { container } = render(<AssistantScreen />);
+    await waitFor(() => {
+      expect(container.querySelector(".assistant-task-node")).not.toBeNull();
+    });
+    const activity3 = container.querySelector('.assistant-activity[data-turn-id="seq_3"]');
+    expect(activity3?.querySelector(".assistant-task-node")).not.toBeNull();
   });
 });

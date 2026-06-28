@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import case, or_
 
+from src.data.helpers import build_like_pattern
 from src.data.models_sqlite import UserTodo
 from src.utils.timezone import utc_now_naive
 
@@ -53,9 +54,12 @@ class UserTodoRepository(BaseRepository):
             query = query.filter(UserTodo.status == status_filter)
         search = query_text.strip()
         if search:
-            pattern = f"%{search}%"
+            pattern = build_like_pattern(search)
             query = query.filter(
-                or_(UserTodo.title.ilike(pattern), UserTodo.description.ilike(pattern))
+                or_(
+                    UserTodo.title.ilike(pattern, escape="\\"),
+                    UserTodo.description.ilike(pattern, escape="\\"),
+                )
             )
         total = query.count()
         query = self._apply_sort(query, sort)

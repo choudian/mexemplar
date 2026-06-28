@@ -55,7 +55,7 @@ import {
 
 // Re-export types and helpers for consumers that import from assistantStore
 export type { ActivityStepKind, ActivityStep, AssistantTurnActivity, PendingAssistantMessage, QueuedMessage, QueuedMessageState, Subagent } from "./assistantTypes";
-export { emptyTurn, turnIdFromMessage } from "./assistantHelpers";
+export { emptyTurn, turnIdFromMessage, turnIdFromSequence } from "./assistantHelpers";
 
 // 单题未提交草稿（019 结构化多选澄清）
 export type ClarificationQuestionDraft = {
