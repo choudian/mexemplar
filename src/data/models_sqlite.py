@@ -1230,3 +1230,27 @@ class SelfImprovementAuditLogEntry(Base):
             f"<SelfImprovementAuditLogEntry(audit_id={self.audit_id!r}, "
             f"action_type={self.action_type!r})>"
         )
+
+
+class ExecutionReview(Base):
+    """执行复盘报告与后台处理队列。"""
+
+    __tablename__ = "execution_reviews"
+    __table_args__ = (
+        Index("ix_execution_reviews_status_priority", "status", "priority"),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    turn_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    verdict: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    findings_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    advisory: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    model_used: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    reviewed_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ExecutionReview(id={self.id!r}, status={self.status!r})>"

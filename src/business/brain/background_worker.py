@@ -44,12 +44,16 @@ class BrainBackgroundWorker:
         distillation_service=None,
         prediction_service=None,
         llm_client=None,
+        execution_review_service=None,
+        execution_review_llm_client=None,
         distillation_phase: str = "p4",
     ):
         self._config = config
         self._distillation_service = distillation_service
         self._prediction_service = prediction_service
         self._llm_client = llm_client
+        self._execution_review_service = execution_review_service
+        self._execution_review_llm_client = execution_review_llm_client
         self._distillation_phase = distillation_phase
         self._tick_event = threading.Event()
         self._stop_event = threading.Event()
@@ -165,6 +169,7 @@ class BrainBackgroundWorker:
             "subconscious_distillation",
             "invalidation_review",
             "recruitment_scan",
+            "execution_review",
         )
         _JOB_FNS = (
             self._process_pending_segments,
@@ -175,6 +180,7 @@ class BrainBackgroundWorker:
             self._run_subconscious_distillation,
             self._run_invalidation_review,
             self._run_recruitment_scan,
+            self._run_execution_review,
         )
         n_jobs = len(_JOBS)
         try:
@@ -428,3 +434,88 @@ class BrainBackgroundWorker:
                 reason=reason,
             )
             logger.info("Auto-recruited specialist: %s (%s)", name, specialist_id)
+
+    def _get_execution_review_service(self):
+        if self._execution_review_service is None:
+            from src.business.self_improvement.execution_review_service import (
+                ExecutionReviewService,
+            )
+
+            self._execution_review_service = ExecutionReviewService()
+        return self._execution_review_service
+
+    def _get_execution_review_llm_client(self):
+        if self._execution_review_llm_client is not None:
+            return self._execution_review_llm_client
+        try:
+            from src.business.ai.llm_client import LangChainLLMClient
+            from src.data.real_tour_audit import is_real_tour_runtime
+
+            if (
+                is_real_tour_runtime()
+                and os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_ENABLE_BACKGROUND") != "1"
+            ):
+                logger.info("Execution review LLM disabled during real-tour runtime")
+                return None
+
+            config = self._get_config()
+            model_config = config.get_self_improvement_execution_review_model()
+            provider = model_config.get("provider") or config.get_ai_provider()
+            model = model_config.get("model") or config.get_ai_model()
+            api_key = model_config.get("api_key") or config.get_ai_api_key()
+            base_url = model_config.get("base_url", config.get_ai_base_url())
+            temperature = float(model_config.get("temperature", 0.2))
+            max_tokens = int(model_config.get("max_tokens", min(config.get_ai_max_tokens(), 4000)))
+            thinking_level = model_config.get("thinking_level") or config.get_ai_thinking_level()
+            timeout = model_config.get("timeout", config.get_ai_request_timeout())
+            self._execution_review_llm_client = LangChainLLMClient(
+                provider=provider,
+                model=model,
+                api_key=api_key,
+                base_url=base_url,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                thinking_level=thinking_level,
+                timeout=timeout,
+                audit_source="execution_review",
+            )
+            return self._execution_review_llm_client
+        except Exception as exc:
+            logger.warning("Execution review LLM client is unavailable: %s", exc)
+            return None
+
+    def _run_execution_review(self):
+        """处理待复盘执行队列；单条失败不影响其它报告。"""
+        config = self._get_config()
+        if not config.get_self_improvement_execution_review_enabled():
+            return
+
+        from src.business.self_improvement.execution_trace_builder import build_skeleton
+        from src.data.repos.execution_review_repository import ExecutionReviewRepository
+        from src.data.repos.message_repository import MessageRepository
+
+        llm_client = self._get_execution_review_llm_client()
+        if llm_client is None:
+            self._log_llm_skip_once("execution review")
+            return
+        self._llm_unavailable_logged_jobs.discard("execution review")
+
+        with ExecutionReviewRepository() as repo, MessageRepository() as message_repo:
+            for review in repo.claim_pending(limit=3):
+                try:
+                    skeleton = build_skeleton(review.turn_session_id, message_repo)
+                    report = self._get_execution_review_service().review(
+                        skeleton,
+                        llm_client=llm_client,
+                    )
+                    repo.save_result(
+                        review.id,
+                        verdict=str(report.get("verdict") or ""),
+                        findings=list(report.get("findings") or []),
+                        model_used=getattr(llm_client, "model", "")
+                        or getattr(llm_client, "model_name", "")
+                        or "",
+                    )
+                except Exception as exc:
+                    logger.warning("Execution review failed for %s: %s", review.id, exc)
+                    repo.mark_failed(review.id, str(exc))

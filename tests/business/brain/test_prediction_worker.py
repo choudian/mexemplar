@@ -594,6 +594,7 @@ def test_background_worker_does_not_restart_before_stopping_thread_exits():
         "_run_subconscious_distillation",
         "_run_invalidation_review",
         "_run_recruitment_scan",
+        "_run_execution_review",
     ):
         setattr(first, method_name, MagicMock())
 

@@ -169,7 +169,9 @@ def test_run_migrations_v9_normalizes_legacy_skill_composition_updated_at(monkey
                         """)).fetchall()
 
             updated_at_by_id = {row[0]: _parse_db_datetime(row[1]) for row in rows}
-            assert version == 16
+            from src.data import migrations
+
+            assert version == migrations._MIGRATIONS[-1][0]
             assert updated_at_by_id["already-utc"] == datetime(2026, 4, 18, 2, 0, 0)
             assert updated_at_by_id["legacy-local"] == datetime(2026, 4, 18, 2, 0, 0, 123456)
         finally:

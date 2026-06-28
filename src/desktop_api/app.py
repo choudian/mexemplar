@@ -21,6 +21,7 @@ from src.desktop_api.routers import (
     brain,
     compositions,
     debug,
+    execution_reviews,
     health,
     settings,
     skills,
@@ -78,9 +79,14 @@ def create_app(session_token: str | None = None) -> FastAPI:
         try:
             from src.business.brain.background_worker import BrainBackgroundWorker
             from src.business.brain.skill_bootstrap_service import SkillBootstrapService
+            from src.business.self_improvement.execution_review_trigger import register
         except Exception as e:
             logger.warning("Brain startup imports failed: %s", e)
         else:
+            try:
+                register()
+            except Exception:
+                logger.warning("Execution review trigger registration failed", exc_info=True)
             try:
                 SkillBootstrapService().ensure_bootstrap_skill()
             except Exception as e:
@@ -161,6 +167,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(compositions.router)
     app.include_router(settings.router)
     app.include_router(brain.router)
+    app.include_router(execution_reviews.router)
     app.include_router(user_todos.router)
     app.include_router(debug.router)
 

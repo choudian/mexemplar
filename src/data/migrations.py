@@ -1609,6 +1609,38 @@ def migrate_to_v19(engine):
             raise
 
 
+def migrate_to_v20(engine):
+    """迁移到版本 20：执行复盘报告队列。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS execution_reviews (
+                    id TEXT PRIMARY KEY,
+                    turn_session_id TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    priority INTEGER NOT NULL DEFAULT 0,
+                    verdict TEXT,
+                    findings_json TEXT,
+                    advisory INTEGER NOT NULL DEFAULT 1,
+                    model_used TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    reviewed_at TEXT
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_execution_reviews_status_priority "
+                "ON execution_reviews(status, priority DESC)"
+            ))
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 20})
+            conn.commit()
+            logger.info("数据库迁移到版本 20 完成：execution_reviews")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 20 失败: {e}")
+            raise
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1628,6 +1660,7 @@ _MIGRATIONS = [
     (17, migrate_to_v17),
     (18, migrate_to_v18),
     (19, migrate_to_v19),
+    (20, migrate_to_v20),
 ]
 
 

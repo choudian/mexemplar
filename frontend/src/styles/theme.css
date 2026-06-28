@@ -4860,6 +4860,7 @@ select:focus-visible,
 .brain-evolution,
 .brain-segments,
 .brain-skill-pool,
+.brain-execution-review,
 .specialist-whitelist,
 .specialist-version-panel {
   display: grid;
@@ -4956,6 +4957,38 @@ select:focus-visible,
   margin: 0;
   font-size: 12.5px;
   line-height: 1.5;
+}
+
+.brain-review-findings {
+  display: grid;
+  gap: 10px;
+}
+
+.brain-review-finding {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+
+.brain-review-finding strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.brain-review-finding p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.brain-review-finding small {
+  color: var(--text-3);
+  font-size: 12px;
 }
 
 .brain-skill-list,

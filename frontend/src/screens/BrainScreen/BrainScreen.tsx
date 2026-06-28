@@ -7,6 +7,7 @@ import { Badge, Button, IconButton } from "../../components/primitives";
 import { statusToTone } from "../../components/statusTone";
 import { useFiltered } from "../../hooks/useFiltered";
 import { useBrainStore } from "../../state/brainStore";
+import { useSettingsStore } from "../../state/settingsStore";
 import EntryEvolution from "./EntryEvolution";
 
 const ZONES = [
@@ -42,20 +43,27 @@ export function BrainScreen(): JSX.Element {
   const entries = useBrainStore((state) => state.entries);
   const activeZone = useBrainStore((state) => state.activeZone) ?? "hot";
   const segments = useBrainStore((state) => state.segments);
+  const executionReviews = useBrainStore((state) => state.executionReviews);
   const evolutionChain = useBrainStore((state) => state.evolutionChain);
   const loadingZones = useBrainStore((state) => state.loadingZones);
   const loadingEntries = useBrainStore((state) => state.loadingEntries);
   const loadingSegments = useBrainStore((state) => state.loadingSegments);
+  const loadingExecutionReviews = useBrainStore((state) => state.loadingExecutionReviews);
   const loadingEvolution = useBrainStore((state) => state.loadingEvolution);
   const loadZones = useBrainStore((state) => state.loadZones);
   const loadEntries = useBrainStore((state) => state.loadEntries);
   const loadSegments = useBrainStore((state) => state.loadSegments);
+  const loadExecutionReviews = useBrainStore((state) => state.loadExecutionReviews);
   const deleteEntry = useBrainStore((state) => state.deleteEntry);
   const editEntry = useBrainStore((state) => state.editEntry);
   const retrySegment = useBrainStore((state) => state.retrySegment);
   const loadEvolution = useBrainStore((state) => state.loadEvolution);
+  const executionReviewEnabled =
+    useSettingsStore((state) => state.values["self_improvement.execution_review.enabled"]) !== false;
 
+  const [activeView, setActiveView] = useState<BrainZone | "execution_review">("hot");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<BrainEntryStatus | "">("");
   const [contentDraft, setContentDraft] = useState("");
@@ -65,7 +73,16 @@ export function BrainScreen(): JSX.Element {
     void loadZones();
     void loadSegments();
     void loadEntries("hot");
-  }, [loadEntries, loadSegments, loadZones]);
+    if (executionReviewEnabled) {
+      void loadExecutionReviews();
+    }
+  }, [executionReviewEnabled, loadEntries, loadExecutionReviews, loadSegments, loadZones]);
+
+  useEffect(() => {
+    if (!executionReviewEnabled && activeView === "execution_review") {
+      setActiveView(activeZone);
+    }
+  }, [activeView, activeZone, executionReviewEnabled]);
 
   const lastEvolutionIdRef = useRef<string | null>(null);
 
@@ -97,7 +114,10 @@ export function BrainScreen(): JSX.Element {
     lastEvolutionIdRef.current = null;
   }, [entries, loadEvolution, selectedId]);
 
-  const selectedEntry = entries.find((entry) => entry.entry_id === selectedId) ?? null;
+  const reviewingExecutions = activeView === "execution_review";
+  const selectedEntry = reviewingExecutions ? null : entries.find((entry) => entry.entry_id === selectedId) ?? null;
+  const selectedReview =
+    executionReviews.find((review) => review.id === selectedReviewId) ?? executionReviews[0] ?? null;
   const filteredEntries = useFiltered(entries, query, (entry) => [
     entry.content,
     entry.reason,
@@ -106,8 +126,16 @@ export function BrainScreen(): JSX.Element {
   ]);
 
   const chooseZone = (zone: BrainZone) => {
+    setActiveView(zone);
     setSelectedId(null);
+    setSelectedReviewId(null);
     void loadEntries(zone, { status: status || undefined });
+  };
+
+  const chooseExecutionReviews = () => {
+    setActiveView("execution_review");
+    setSelectedId(null);
+    void loadExecutionReviews();
   };
 
   const chooseStatus = (nextStatus: BrainEntryStatus | "") => {
@@ -129,7 +157,11 @@ export function BrainScreen(): JSX.Element {
         </div>
         <Button kind="secondary" onClick={() => {
           void loadZones();
-          void loadEntries(activeZone, { status: status || undefined });
+          if (reviewingExecutions) {
+            void loadExecutionReviews();
+          } else {
+            void loadEntries(activeZone, { status: status || undefined });
+          }
           void loadSegments();
         }}>
           <RefreshCcw size={14} />
@@ -140,7 +172,7 @@ export function BrainScreen(): JSX.Element {
       <div className="brain-workspace">
         <aside className="brain-zone-rail" aria-label="大脑分区">
           {ZONES.map((zone) => {
-            const active = zone.id === activeZone;
+            const active = zone.id === activeView;
             return (
               <button
                 aria-pressed={active}
@@ -158,55 +190,83 @@ export function BrainScreen(): JSX.Element {
               </button>
             );
           })}
+          {executionReviewEnabled ? (
+            <button
+              aria-pressed={reviewingExecutions}
+              className="brain-zone-button"
+              data-active={reviewingExecutions}
+              onClick={chooseExecutionReviews}
+              type="button"
+            >
+              <span>
+                <strong>执行复盘</strong>
+                <small>效率和健壮性报告</small>
+              </span>
+              <span className="me-badge">{executionReviews.length}</span>
+            </button>
+          ) : null}
           {loadingZones ? <div className="brain-empty">正在刷新分区</div> : null}
         </aside>
 
         <main className="brain-entry-pane">
-          <div className="brain-toolbar">
-            <label className="brain-search">
-              <SearchInput
-                ariaLabel="搜索大脑条目"
-                onChange={setQuery}
-                placeholder="搜索内容、理由或范围"
-                value={query}
-              />
-            </label>
-            <select
-              aria-label="筛选条目状态"
-              onChange={(event) => chooseStatus(event.currentTarget.value as BrainEntryStatus | "")}
-              value={status}
-            >
-              {STATUS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </div>
+          {reviewingExecutions ? (
+            <ExecutionReviewList
+              loading={loadingExecutionReviews}
+              onSelect={setSelectedReviewId}
+              reviews={executionReviews}
+              selectedId={selectedReview?.id ?? null}
+            />
+          ) : (
+            <>
+              <div className="brain-toolbar">
+                <label className="brain-search">
+                  <SearchInput
+                    ariaLabel="搜索大脑条目"
+                    onChange={setQuery}
+                    placeholder="搜索内容、理由或范围"
+                    value={query}
+                  />
+                </label>
+                <select
+                  aria-label="筛选条目状态"
+                  onChange={(event) => chooseStatus(event.currentTarget.value as BrainEntryStatus | "")}
+                  value={status}
+                >
+                  {STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
 
-          <div className="brain-entry-list me-scroll" aria-label="分区条目">
-            {loadingEntries ? <div className="brain-empty">正在加载条目</div> : null}
-            {filteredEntries.map((entry) => (
-              <EntryRow
-                entry={entry}
-                key={entry.entry_id}
-                onDelete={() => {
-                  void deleteEntry(entry.entry_id);
-                }}
-                onSelect={() => {
-                  setSelectedId(entry.entry_id);
-                  setContentDraft(entry.content);
-                  setScopeDraft(entry.scope ?? "");
-                  lastEvolutionIdRef.current = entry.entry_id;
-                  void loadEvolution(entry.entry_id);
-                }}
-                selected={entry.entry_id === selectedId}
-              />
-            ))}
-            {!loadingEntries && filteredEntries.length === 0 ? <div className="brain-empty">暂无条目</div> : null}
-          </div>
+              <div className="brain-entry-list me-scroll" aria-label="分区条目">
+                {loadingEntries ? <div className="brain-empty">正在加载条目</div> : null}
+                {filteredEntries.map((entry) => (
+                  <EntryRow
+                    entry={entry}
+                    key={entry.entry_id}
+                    onDelete={() => {
+                      void deleteEntry(entry.entry_id);
+                    }}
+                    onSelect={() => {
+                      setSelectedId(entry.entry_id);
+                      setContentDraft(entry.content);
+                      setScopeDraft(entry.scope ?? "");
+                      lastEvolutionIdRef.current = entry.entry_id;
+                      void loadEvolution(entry.entry_id);
+                    }}
+                    selected={entry.entry_id === selectedId}
+                  />
+                ))}
+                {!loadingEntries && filteredEntries.length === 0 ? <div className="brain-empty">暂无条目</div> : null}
+              </div>
+            </>
+          )}
         </main>
 
         <aside className="brain-detail-pane me-scroll" aria-label="条目详情">
-          {selectedEntry ? (
+          {reviewingExecutions ? (
+            <ExecutionReviewDetail review={selectedReview} />
+          ) : selectedEntry ? (
             <section className="brain-editor">
               <div className="brain-section-title">
                 <span>条目详情</span>
@@ -254,11 +314,95 @@ export function BrainScreen(): JSX.Element {
           ) : (
             <div className="brain-empty">选择一个条目查看详情</div>
           )}
-          <EntryEvolution chain={evolutionChain} loading={loadingEvolution} />
-          <SegmentPanel loading={loadingSegments} segments={segments} onRetry={(segmentId) => {
-            void retrySegment(segmentId);
-          }} />
+          {reviewingExecutions ? null : (
+            <>
+              <EntryEvolution chain={evolutionChain} loading={loadingEvolution} />
+              <SegmentPanel loading={loadingSegments} segments={segments} onRetry={(segmentId) => {
+                void retrySegment(segmentId);
+              }} />
+            </>
+          )}
         </aside>
+      </div>
+    </section>
+  );
+}
+
+function severityTone(severity: string): "neutral" | "ok" | "warn" | "danger" {
+  if (severity === "high") return "danger";
+  if (severity === "med") return "warn";
+  if (severity === "low") return "ok";
+  return "neutral";
+}
+
+function ExecutionReviewList({
+  reviews,
+  selectedId,
+  loading,
+  onSelect,
+}: {
+  reviews: ReturnType<typeof useBrainStore.getState>["executionReviews"];
+  selectedId: string | null;
+  loading: boolean;
+  onSelect: (reviewId: string) => void;
+}) {
+  return (
+    <div className="brain-entry-list me-scroll" aria-label="执行复盘列表">
+      {loading ? <div className="brain-empty">正在加载执行复盘</div> : null}
+      {reviews.map((review) => {
+        const firstFinding = review.findings[0];
+        return (
+          <article className="brain-entry-row" data-selected={review.id === selectedId} key={review.id}>
+            <button onClick={() => onSelect(review.id)} type="button">
+              <span className="brain-entry-title">{review.verdict || "未发现明显问题"}</span>
+              <span className="brain-entry-meta">
+                <Badge tone={review.advisory ? "neutral" : "warn"}>只读建议</Badge>
+                {firstFinding ? (
+                  <Badge tone={severityTone(firstFinding.severity)}>{firstFinding.severity}</Badge>
+                ) : null}
+                <small>{review.reviewedAt || review.createdAt}</small>
+              </span>
+              <small>{firstFinding?.what || "没有可操作发现"}</small>
+            </button>
+          </article>
+        );
+      })}
+      {!loading && reviews.length === 0 ? <div className="brain-empty">暂无执行复盘</div> : null}
+    </div>
+  );
+}
+
+function ExecutionReviewDetail({
+  review,
+}: {
+  review: ReturnType<typeof useBrainStore.getState>["executionReviews"][number] | null;
+}) {
+  if (!review) {
+    return <div className="brain-empty">选择一条复盘查看详情</div>;
+  }
+  return (
+    <section className="brain-execution-review">
+      <div className="brain-section-title">
+        <span>执行复盘</span>
+        <Badge tone="neutral">只读建议</Badge>
+      </div>
+      <div className="brain-reason">
+        <strong>结论</strong>
+        <p>{review.verdict || "未发现明显问题"}</p>
+      </div>
+      <div className="brain-review-findings">
+        {review.findings.map((finding, index) => (
+          <article className="brain-review-finding" key={`${review.id}-${index}`}>
+            <div className="brain-entry-meta">
+              <Badge tone={severityTone(finding.severity)}>{finding.severity}</Badge>
+              <small>{finding.type}</small>
+            </div>
+            <strong>{finding.what}</strong>
+            <p>{finding.suggestion}</p>
+            {finding.evidence ? <small>{finding.evidence}</small> : null}
+          </article>
+        ))}
+        {review.findings.length === 0 ? <div className="brain-empty">没有可操作发现</div> : null}
       </div>
     </section>
   );

@@ -139,6 +139,14 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
         default=_SUMMARY_DEFAULTS.enabled,
     ),
     SettingSpec(
+        "self_improvement.execution_review.enabled",
+        "执行复盘",
+        "tool_output",
+        "boolean",
+        description="任务结束后生成只读复盘报告，帮助发现执行效率和健壮性问题。",
+        default=True,
+    ),
+    SettingSpec(
         "agent_tools.output.semantic_summary.provider",
         "提供商",
         "tool_output",

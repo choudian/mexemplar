@@ -38,6 +38,7 @@ def _replace_jobs(worker: BrainBackgroundWorker, calls: list[str]) -> None:
         "_run_subconscious_distillation",
         "_run_invalidation_review",
         "_run_recruitment_scan",
+        "_run_execution_review",
     ):
         setattr(worker, name, lambda name=name: calls.append(name))
 
@@ -59,6 +60,7 @@ def test_worker_loop_runs_maintenance_jobs_in_order() -> None:
         "_run_subconscious_distillation",
         "_run_invalidation_review",
         "_run_recruitment_scan",
+        "_run_execution_review",
     ]
 
 
@@ -94,6 +96,7 @@ def test_worker_loop_retries_after_tick_failure() -> None:
         "_run_subconscious_distillation",
         "_run_invalidation_review",
         "_run_recruitment_scan",
+        "_run_execution_review",
     ]
     # tick 1: 所有 job 均运行（process_pending 失败但不中断其余 job）
     # tick 2: 所有 job 均成功

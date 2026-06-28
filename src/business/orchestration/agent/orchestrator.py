@@ -376,6 +376,7 @@ class AgentOrchestrator:
             return AgentResult(result_type=ResultType.ERROR, error=message)
 
         if result.result_type == ResultType.COMPLETED:
+            self._maybe_enqueue_execution_review(agent_type, session_id, failed=False)
             if agent_type != AgentType.ASSISTANT:
                 self._failure_tracker.try_resolve_failure(workflow_id)
                 self.teaching_orchestrator.dispatch_next(
@@ -400,9 +401,11 @@ class AgentOrchestrator:
         if result.result_type == ResultType.CANCELLED:
             # 用户主动停止（014）：可恢复暂停，不是错误。已产内容已落库，直接正常返回，不发 agent_error。
             logger.info("[Orchestrator] %s Agent 被用户停止: session=%s", agent_type, session_id)
+            self._maybe_enqueue_execution_review(agent_type, session_id, failed=False)
             return result
 
         if result.result_type in (ResultType.ERROR, ResultType.MAX_ITERATIONS_REACHED):
+            self._maybe_enqueue_execution_review(agent_type, session_id, failed=True)
             self._emit_agent_error(
                 workflow_id or "",
                 session_id,
@@ -411,6 +414,24 @@ class AgentOrchestrator:
                 result.result_type.value,
             )
         return result
+
+    def _maybe_enqueue_execution_review(
+        self,
+        agent_type: AgentType,
+        session_id: str,
+        *,
+        failed: bool,
+    ) -> None:
+        if agent_type != AgentType.ASSISTANT:
+            return
+        try:
+            from src.business.self_improvement.execution_review_trigger import (
+                enqueue_from_session,
+            )
+
+            enqueue_from_session(session_id, failed=failed)
+        except Exception:
+            logger.warning("Execution review enqueue failed", exc_info=True)
 
     def _build_continue_subagent_tool_call(self, intent: dict) -> ToolCallInfo:
         subagent_id = str(intent.get("subagent_id") or "").strip()

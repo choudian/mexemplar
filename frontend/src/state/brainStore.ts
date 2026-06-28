@@ -12,6 +12,7 @@ import {
   removeSkillFromPool,
   SkillPoolRemovalConflict,
 } from "../api/brain";
+import { fetchExecutionReviews } from "../api/executionReview";
 import type {
   AffectedSpecialist,
   BrainZoneSummary,
@@ -22,6 +23,7 @@ import type {
   BrainSegment,
   SkillPoolItem,
 } from "../api/brain";
+import type { ExecutionReviewDto } from "../api/executionReview";
 import type { UiEvent } from "../api/client";
 import { createDebouncedRefresh, toErrorMessage } from "./helpers";
 
@@ -35,11 +37,13 @@ export interface BrainState {
   activeZone: BrainZone | null;
   segments: BrainSegment[];
   segmentsTotal: number;
+  executionReviews: ExecutionReviewDto[];
   skillPool: SkillPoolItem[];
   evolutionChain: BrainMemoryEntry[];
   loadingZones: boolean;
   loadingEntries: boolean;
   loadingSegments: boolean;
+  loadingExecutionReviews: boolean;
   loadingSkillPool: boolean;
   loadingEvolution: boolean;
   lastError: string | null;
@@ -51,6 +55,7 @@ export interface BrainState {
   loadZones: () => Promise<void>;
   loadEntries: (zone: BrainZone, options?: { limit?: number; offset?: number; status?: BrainEntryStatus }) => Promise<void>;
   loadSegments: (options?: { limit?: number; offset?: number; status?: BrainSegmentStatus | "all" }) => Promise<void>;
+  loadExecutionReviews: () => Promise<void>;
   loadSkillPool: () => Promise<void>;
   setActiveZone: (zone: BrainZone) => void;
   deleteEntry: (entryId: string) => Promise<void>;
@@ -69,11 +74,13 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   activeZone: null,
   segments: [],
   segmentsTotal: 0,
+  executionReviews: [],
   skillPool: [],
   evolutionChain: [],
   loadingZones: false,
   loadingEntries: false,
   loadingSegments: false,
+  loadingExecutionReviews: false,
   loadingSkillPool: false,
   loadingEvolution: false,
   lastError: null,
@@ -117,6 +124,18 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       set({ lastError: toErrorMessage(error, "无法加载 Segment 列表。") });
     } finally {
       set({ loadingSegments: false });
+    }
+  },
+
+  loadExecutionReviews: async () => {
+    set({ loadingExecutionReviews: true, lastError: null });
+    try {
+      const reviews = await fetchExecutionReviews(50);
+      set({ executionReviews: reviews });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法加载执行复盘。") });
+    } finally {
+      set({ loadingExecutionReviews: false });
     }
   },
 

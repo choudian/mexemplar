@@ -980,6 +980,27 @@ class UnifiedConfigManager:
         """工具缺口检测置信阈值：同模式出现次数"""
         return self.get("self_improvement.tool_gap_threshold", default=3)
 
+    def get_self_improvement_execution_review_enabled(self) -> bool:
+        """是否生成执行复盘报告。"""
+        value = self.get("self_improvement.execution_review.enabled", default=True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def get_self_improvement_execution_review_model(self) -> dict:
+        """执行复盘审查员模型配置；空 dict 表示回退主模型配置。"""
+        value = self.get("self_improvement.execution_review.model", default={}) or {}
+        return value if isinstance(value, dict) else {}
+
+    def get_self_improvement_execution_review_max_per_session(self) -> int:
+        """单会话每日最多生成多少条执行复盘。"""
+        raw = self.get("self_improvement.execution_review.max_per_session", default=3)
+        try:
+            value = int(raw)
+        except (TypeError, ValueError):
+            return 3
+        return value if value > 0 else 3
+
     # ===== 内部方法 =====
 
     def _get_secret(self, key: str) -> Optional[str]:
