@@ -263,6 +263,7 @@ class AssistantTask(Base):
     assignee_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     owner_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     capability_scope: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    workspace_root: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     requires_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     graph_version: Mapped[int] = mapped_column(Integer, default=1)
     task_version: Mapped[int] = mapped_column(Integer, default=1)
@@ -1236,9 +1237,7 @@ class ExecutionReview(Base):
     """执行复盘报告与后台处理队列。"""
 
     __tablename__ = "execution_reviews"
-    __table_args__ = (
-        Index("ix_execution_reviews_status_priority", "status", "priority"),
-    )
+    __table_args__ = (Index("ix_execution_reviews_status_priority", "status", "priority"),)
 
     id: Mapped[str] = mapped_column(String(50), primary_key=True)
     turn_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -1254,3 +1253,46 @@ class ExecutionReview(Base):
 
     def __repr__(self) -> str:
         return f"<ExecutionReview(id={self.id!r}, status={self.status!r})>"
+
+
+class ImprovementProposal(Base):
+    """改进提案——从执行复盘 worth_changing finding 生成的可审批改进项。"""
+
+    __tablename__ = "improvement_proposals"
+    __table_args__ = (
+        UniqueConstraint("source_review_id", "finding_index", name="uq_proposal_review_finding"),
+        CheckConstraint(
+            "status IN ('pending_review', 'approved', 'in_progress', 'done', 'failed', 'rejected')",
+            name="ck_improvement_proposals_status",
+        ),
+        CheckConstraint(
+            "result_tests_passed IN (0, 1) OR result_tests_passed IS NULL",
+            name="ck_improvement_proposals_result_tests_passed",
+        ),
+        Index("ix_improvement_proposals_status", "status"),
+        Index("ix_improvement_proposals_dedup_key", "dedup_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    source_review_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    finding_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending_review")
+    severity: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
+    finding_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    dedup_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    what: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    suggestion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    user_supplement: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    graph_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    worktree_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    branch_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    result_tests_passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    result_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    decided_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    completed_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<ImprovementProposal(id={self.id!r}, status={self.status!r})>"

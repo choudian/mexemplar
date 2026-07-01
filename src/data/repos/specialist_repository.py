@@ -23,6 +23,7 @@ class RoleKind(StrEnum):
     ui_event_safety_service → chat_service → data.repos → specialist_repository).
     Business code should import from here or from task_collaboration.models (re-exported).
     """
+
     EXECUTOR = "executor"
     PLANNER = "planner"
 
@@ -229,4 +230,3 @@ class SpecialistRepository(BaseRepository):
             .limit(limit)
             .all()
         )
-

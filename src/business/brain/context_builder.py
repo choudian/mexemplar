@@ -274,7 +274,9 @@ class BrainContextBuilder:
                 brain_repo=self._get_repo(),
             )
             top_n = self._config_int(
-                config, "get_self_improvement_avoidance_top_n", 5,
+                config,
+                "get_self_improvement_avoidance_top_n",
+                5,
             )
             rules = service.get_avoidance_rules_for_context(
                 current_context=current_context,
@@ -283,7 +285,8 @@ class BrainContextBuilder:
             return rules
         except Exception as exc:
             logger.debug(
-                "Avoidance rule loading skipped (service unavailable or failed): %s", exc,
+                "Avoidance rule loading skipped (service unavailable or failed): %s",
+                exc,
             )
             return []
 

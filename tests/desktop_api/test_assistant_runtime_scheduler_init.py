@@ -26,6 +26,5 @@ def test_ensure_task_scheduler_logs_error_when_dispatcher_fails(caplog):
         runtime._ensure_task_scheduler_for_orchestrator(_BadDispatcherOrchestrator())
 
     assert any(
-        r.levelno == logging.ERROR and "scheduler" in r.message.lower()
-        for r in caplog.records
+        r.levelno == logging.ERROR and "scheduler" in r.message.lower() for r in caplog.records
     ), "scheduler 装配失败必须记 ERROR 并说明后果，而非静默 warning"

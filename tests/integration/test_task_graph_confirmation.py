@@ -17,7 +17,6 @@ from src.business.task_collaboration.graph_scheduler import (
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.repos.base_repository import generate_id
 
-
 # ---------------------------------------------------------------------------
 # 测试辅助（inline，与 test_graph_scheduler_unit.py 同构但不跨层 import）
 # ---------------------------------------------------------------------------
@@ -135,18 +134,19 @@ class TestConfirmationPause:
                 session_id=session_id,
                 nodes=[
                     {"nodeId": "n1", "title": "准备数据", "description": "整理"},
-                    {"nodeId": "n2", "title": "发送邮件", "description": "对外发送",
-                     "needsConfirmation": True},
+                    {
+                        "nodeId": "n2",
+                        "title": "发送邮件",
+                        "description": "对外发送",
+                        "needsConfirmation": True,
+                    },
                 ],
                 dependencies=[{"from": "n1", "to": "n2"}],
             )
-            n1_id = result["nodeTaskIds"]["n1"]
             n2_id = result["nodeTaskIds"]["n2"]
 
             # n2 标记了 requires_confirmation
-            snapshot = svc.get_graph_snapshot(
-                session_id=session_id, graph_id=result["graphId"]
-            )
+            snapshot = svc.get_graph_snapshot(session_id=session_id, graph_id=result["graphId"])
             n2_task = next(t for t in snapshot.tasks if t.task_id == n2_id)
             assert n2_task.requires_confirmation is True
 
@@ -158,21 +158,17 @@ class TestConfirmationPause:
                 session_id=session_id,
                 nodes=[
                     {"nodeId": "n1", "title": "普通", "description": "普通"},
-                    {"nodeId": "n2", "title": "高风险", "description": "发送邮件",
-                     "needsConfirmation": True},
+                    {
+                        "nodeId": "n2",
+                        "title": "高风险",
+                        "description": "发送邮件",
+                        "needsConfirmation": True,
+                    },
                 ],
             )
-            snapshot = svc.get_graph_snapshot(
-                session_id=session_id, graph_id=result["graphId"]
-            )
-            n1_task = next(
-                t for t in snapshot.tasks
-                if t.task_id == result["nodeTaskIds"]["n1"]
-            )
-            n2_task = next(
-                t for t in snapshot.tasks
-                if t.task_id == result["nodeTaskIds"]["n2"]
-            )
+            snapshot = svc.get_graph_snapshot(session_id=session_id, graph_id=result["graphId"])
+            n1_task = next(t for t in snapshot.tasks if t.task_id == result["nodeTaskIds"]["n1"])
+            n2_task = next(t for t in snapshot.tasks if t.task_id == result["nodeTaskIds"]["n2"])
             assert n1_task.requires_confirmation is False
             assert n2_task.requires_confirmation is True
 
@@ -263,9 +259,7 @@ class TestConfirmationPause:
         # 且无 accepted adjudication → dispatcher 必须拒绝
         from src.business.task_collaboration.dispatcher import TaskDispatcher
 
-        real_dispatcher = TaskDispatcher(
-            executor_callback=lambda _attempt_id: {"success": True}
-        )
+        real_dispatcher = TaskDispatcher(executor_callback=lambda _attempt_id: {"success": True})
         try:
             future = real_dispatcher.start_attempt_async(
                 task_id=n1,

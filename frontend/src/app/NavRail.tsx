@@ -2,6 +2,7 @@ import { ChevronRight } from "lucide-react";
 
 import { routes } from "./routes";
 import type { RouteId } from "../state/shellStore";
+import { useBrainStore } from "../state/brainStore";
 import { useSkillMethodologyStore } from "../state/skillMethodologyStore";
 
 interface NavRailProps {
@@ -17,12 +18,21 @@ interface NavRailProps {
   onRouteChange: (route: RouteId) => void;
 }
 
-function badgeForRoute(route: RouteId, counts: NavRailProps["counts"], methodologyUnread: number): number | null {
+function badgeForRoute(
+  route: RouteId,
+  counts: NavRailProps["counts"],
+  methodologyUnread: number,
+  pendingProposalCount: number,
+): number | null {
   if (route === "skills") {
     return counts.pendingSkillCount || null;
   }
   if (route === "skill-methodology") {
     return methodologyUnread || null;
+  }
+  // FR-020：pending_review 提案在全局大脑导航项上可见，避免静悄悄躺在管理屏无人知。
+  if (route === "brain") {
+    return pendingProposalCount || null;
   }
   return null;
 }
@@ -35,6 +45,9 @@ export function NavRail({
   onRouteChange,
 }: NavRailProps): JSX.Element {
   const methodologyUnread = useSkillMethodologyStore((state) => state.unreadBadgeCount);
+  const pendingProposalCount = useBrainStore(
+    (state) => state.improvementProposals.filter((p) => p.status === "pending_review").length,
+  );
   return (
     <nav
       aria-label="主导航"
@@ -55,7 +68,7 @@ export function NavRail({
         {routes.map((route) => {
           const Icon = route.icon;
           const active = route.id === activeRoute;
-          const badge = badgeForRoute(route.id, counts, methodologyUnread);
+          const badge = badgeForRoute(route.id, counts, methodologyUnread, pendingProposalCount);
           return (
             <button
               className="me-nav-item"

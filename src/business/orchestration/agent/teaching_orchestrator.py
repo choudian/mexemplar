@@ -104,9 +104,7 @@ class TeachingOrchestrator:
                 )
             return
 
-        pm_session_id = self._owner._session_store.get_or_create_session(
-            workflow_id, AgentType.PM
-        )
+        pm_session_id = self._owner._session_store.get_or_create_session(workflow_id, AgentType.PM)
         self._owner._emit_and_log(
             event_name="trial_failed",
             workflow_id=workflow_id,
@@ -192,7 +190,9 @@ class TeachingOrchestrator:
             self._owner.run_agent(AgentType.PROGRAMMER, feedback, workflow_id)
             return
 
-        logger.warning("[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session=%s", session_id)
+        logger.warning(
+            "[Orchestrator] PM Agent 自然结束但未调用 signal 工具: session=%s", session_id
+        )
         self._owner._emit_agent_error(
             workflow_id,
             session_id,
@@ -208,7 +208,9 @@ class TeachingOrchestrator:
         workflow_id: str,
     ) -> None:
         if not (result.signal_tool and result.signal_tool.name == "submit_code"):
-            logger.warning("[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session=%s", session_id)
+            logger.warning(
+                "[Orchestrator] 程序员 Agent 未调用 submit_code 即结束: session=%s", session_id
+            )
             self._owner._emit_agent_error(
                 workflow_id,
                 session_id,
@@ -285,7 +287,10 @@ class TeachingOrchestrator:
             success = signal_tool.args["success"]
             feedback = signal_tool.args.get("feedback", "")
         else:
-            logger.warning("[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session=%s", session_id)
+            logger.warning(
+                "[Orchestrator] 试用 Agent 未调用 submit_trial_result 即结束: session=%s",
+                session_id,
+            )
             self._owner._emit_agent_error(
                 workflow_id,
                 session_id,

@@ -12,7 +12,7 @@ import threading
 from unittest.mock import MagicMock, patch
 
 from src.business.agents import run_context
-from src.business.agents.config import AgentResult, AgentType, ResultType
+from src.business.agents.config import AgentResult, ResultType
 from src.business.orchestration.agent.orchestrator import AgentOrchestrator
 
 

@@ -13,12 +13,35 @@ import logging
 from collections import Counter
 from typing import Optional
 
+from src.business.debug.service import get_debug_service
 from src.business.self_improvement.audit_service import SelfImprovementAuditService
 from src.business.self_improvement.safety_governor import SafetyGovernor
 from src.data.repos.self_improvement_repository import SelfImprovementRepository
 from src.data.unified_config import get_unified_config
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_redact_error(text: str) -> str:
+    """Redact tool error text for evidence with a fail-safe fallback (026 M8).
+
+    Prefer the registered-secret redactor; if it is unavailable, fall back to the
+    proposal denylist sanitizer; only if both fail use a fixed placeholder so
+    untrusted error text never reaches evidence/LLM unredacted.
+    """
+    try:
+        return get_debug_service().redactor.redact(text)[:200]
+    except Exception:
+        logger.warning("debug redactor unavailable for tool-gap evidence", exc_info=True)
+    try:
+        from src.business.self_improvement.proposal_service import (
+            sanitize_proposal_public_text,
+        )
+
+        return (sanitize_proposal_public_text(text) or "")[:200]
+    except Exception:
+        logger.warning("denylist sanitizer also unavailable; using placeholder", exc_info=True)
+        return "redaction-unavailable"
 
 
 class ToolGapDetector:
@@ -108,15 +131,17 @@ class ToolGapDetector:
                         evidence = json.loads(evidence)
                     except (json.JSONDecodeError, TypeError):
                         pass
-                results.append({
-                    "report_id": report.report_id,
-                    "gap_type": report.gap_type,
-                    "tool_name": getattr(report, "tool_name", None),
-                    "pattern_signature": getattr(report, "pattern_signature", None),
-                    "occurrence_count": report.occurrence_count,
-                    "confidence": report.confidence,
-                    "evidence": evidence,
-                })
+                results.append(
+                    {
+                        "report_id": report.report_id,
+                        "gap_type": report.gap_type,
+                        "tool_name": getattr(report, "tool_name", None),
+                        "pattern_signature": getattr(report, "pattern_signature", None),
+                        "occurrence_count": report.occurrence_count,
+                        "confidence": report.confidence,
+                        "evidence": evidence,
+                    }
+                )
         return results
 
     def propose_auto_tool_creation(
@@ -336,7 +361,11 @@ class ToolGapDetector:
             if not tool:
                 continue
 
-            error_msg = (t.get("error_message") or t.get("error") or "unknown")[:200]
+            # 先脱敏再截断/算指纹：error_message 可能含已注册 secret（API key 等），
+            # 不得原样入库 evidence 或喂 LLM（026 C3）。相同 secret 产生相同指纹，
+            # 不影响去重。
+            raw_error = t.get("error_message") or t.get("error") or "unknown"
+            error_msg = _safe_redact_error(str(raw_error))
             fingerprint = f"{tool}:{hashlib.sha256(error_msg.encode('utf-8')).hexdigest()[:8]}"
             sid = t.get("session_id", "unknown")
 
@@ -380,12 +409,25 @@ class ToolGapDetector:
         evidence = report.get("evidence", {})
         occurrence_count = report.get("occurrence_count", 0)
 
+        # evidence 可能来自存量库（历史泄漏），喂 LLM 前再 redact 一道（026 C3）。
+        # redactor 不可用时回退空 evidence,绝不把未脱敏历史 evidence 喂 LLM（026 M8）。
+        if evidence:
+            try:
+                redacted_evidence = get_debug_service().redactor.redact_json(evidence)
+            except Exception:
+                logger.warning(
+                    "debug redactor unavailable for LLM tool-proposal evidence; sending empty",
+                    exc_info=True,
+                )
+                redacted_evidence = {}
+        else:
+            redacted_evidence = {}
         prompt = (
             "You are analyzing tool capability gaps in an AI assistant system.\n"
             "\n"
             f"## Gap Type\n{gap_type}\n\n"
             f"## Occurrence Count\n{occurrence_count}\n\n"
-            f"## Evidence\n{json.dumps(evidence, ensure_ascii=False, indent=2)[:2000]}\n\n"
+            f"## Evidence\n{json.dumps(redacted_evidence, ensure_ascii=False, indent=2)[:2000]}\n\n"
             "## Task\n"
             "Propose a new tool that would address this gap. The tool should:\n"
             "- Have a clear, specific purpose\n"
@@ -421,8 +463,16 @@ class ToolGapDetector:
             result.setdefault("rationale", "Auto-generated from gap detection")
             return result
 
-        except (json.JSONDecodeError, Exception) as e:
-            logger.warning("LLM tool proposal generation failed: %s", e)
+        except Exception as e:
+            # ``(json.JSONDecodeError, Exception)`` 等价于 ``Exception`` 且会误导读者
+            # 以为在精确捕获 JSON 错误；此处 LLM 调用 + JSON 解析均属 best-effort，
+            # 任何异常都回退到 None。补 report 上下文便于关联具体 gap（026 errors I2）。
+            logger.warning(
+                "LLM tool proposal generation failed (gap=%s, report=%s): %s",
+                report.get("gap_type"),
+                report.get("report_id"),
+                e,
+            )
             return None
 
 
@@ -432,7 +482,8 @@ class ToolFixProposalService:
     Status transitions::
 
         proposed -> trial_pending -> applied
-                                \\-> rejected
+            |                    \\-> rejected
+            \\-> rejected (manual review without trial)
     """
 
     def __init__(

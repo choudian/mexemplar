@@ -76,6 +76,17 @@
 - Todo 是 Task + executor scoped 的私人 checklist；不得创建 Task edge、adjudication、board claim 或 brain memory entry，前端展示必须使用独立状态词，不与 Task status 混用。
 - 新 task collaboration 前端事件只能通过 `src/desktop_api/ui_events.py` Registry 和 `ui_event_projector.py` 投影：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。事件只作通知；缺口必须用 graph/board/meeting/todo typed API 拉权威快照。
 
+## Self-Improvement Proposal Boundaries
+
+- 改进提案的业务事实源是 `improvement_proposals` SQLite 表和 `ProposalService` / `ImprovementProposalRepository`；desktop API 只做 typed DTO、CAS approve/reject 和异步触发，不直接建 worktree、写 task graph 或改 proposal 结果。
+- 执行复盘只生成 pending proposal；审批前不得建 worktree、分支、task graph 或执行代码。`approve` 成功后才允许 `proposal_bridge` 创建 `.worktrees/improvement/<proposal_id>` 和 `improvement/<proposal_id>` 分支。
+- proposal 自动实施必须通过 `TaskCollaborationService.build_task_graph` 创建 planner → implementer → test DAG；不得绕过 task collaboration 直接启动 AgentLoop 或同步嵌套子代理。bridge 只使用 synthetic `self_improvement:<proposal_id>` session。
+- self-improvement 图没有真实父助理裁定者；`TaskCollaborationBackgroundWorker` 的 proposal recovery job 必须负责 scheduler 补踢、pending adjudication 自动决策和 `done/failed` 写回，避免 proposal 永久卡在 `approved` 或 `in_progress`。
+- proposal executor 的 mutation 权限必须由内建工具共享权限层硬挡：只允许隔离 worktree 内源码、测试或文档文件；拒绝 `src/business/self_improvement/`、`src/business/orchestration/agent/`、`src/business/task_collaboration/`、`src/desktop_api/`、`src-tauri/`、guardrail tests、legacy/startup 入口、本地 config/env、数据库、依赖目录、缓存和生成产物。
+- proposal executor 的 `exec` 只能用于测试、lint、format check 或 typecheck；网络访问、依赖安装、破坏性 git、merge/rebase/reset/clean/push 等命令必须 fail-closed。软 prompt 说明不能替代这个硬门卫。
+- failed proposal 被用户 reject 时必须清理 worktree/分支并清空 stale worktree metadata；done/failed/rejected worktree 保留数量只能经 `get_unified_config().get_self_improvement_proposals_worktree_retention_max()` 控制。
+- 前端只能通过 `frontend/src/api/improvementProposal.ts` 和 `brainStore` 管理提案；不得根据 task graph、内部 blinker 事件名或本地乐观状态推断 proposal 终态。`backend.resync_required` 的 brain domain 刷新必须重拉 execution reviews 与 improvement proposals。
+
 ## User Todo Boundaries
 
 - 用户个人待办的业务事实源是 `user_todos` SQLite 表和 `src/business/user_todos/UserTodoService`；desktop API router 只调用 service，不直接访问 `UserTodoRepository` 或手写 SQL。
@@ -166,4 +177,6 @@ Reviewer 必须拒绝下列改动：
 - 在桌面 mode 中注入 `analyze_image`，或允许桌面工具读取浏览器录制表。
 - 让桌面 Trial 继承完整父进程环境、在任意 cwd 执行，或缺少超时清理。
 - 让前端、Tauri 命令或 desktop API 直接读取/写入 SQLite、DuckDB 或 config 文件。
+- 让改进提案审批前创建 worktree/task graph/代码副作用，或让 approve router 直接实施而不是异步调用 `proposal_bridge`。
+- 让 self-improvement proposal executor 绕过隔离 worktree、修改 `self_improvement` / `orchestration/agent` / `task_collaboration` / `desktop_api` / `src-tauri` / guardrail tests / startup 核心路径，或执行网络、安装、merge/rebase/reset/clean/push 等非测试型命令。
 - 重新引入 PyQt runtime 依赖、`src.ui` 生产代码、旧 Python GUI E2E，或任何正常用户可触达的 PyQt 启动路径。

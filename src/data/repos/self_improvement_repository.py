@@ -4,7 +4,7 @@ import logging
 from datetime import date, datetime
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import case, func
 
 from ..models_sqlite import (
     PromptSupplement,
@@ -17,6 +17,39 @@ from .base_repository import BaseRepository
 from src.utils.ids import new_id
 
 logger = logging.getLogger(__name__)
+
+# Allowed ToolFixProposal transitions {(from, to)}: proposed -> trial_pending
+# -> applied|rejected, or proposed -> rejected directly (manual review without
+# trial).  Matches ToolFixProposalService docstring; enforced via CAS UPDATE so
+# illegal jumps (skip trial_pending, leave a terminal status) match no row and
+# return None — consistent with ImprovementProposalRepository._cas_transition
+# (026 类型审查 I1).
+_FIX_PROPOSAL_TRANSITIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("proposed", "trial_pending"),
+        ("proposed", "rejected"),
+        ("trial_pending", "applied"),
+        ("trial_pending", "rejected"),
+    }
+)
+
+# Allowed ToolGapReport transitions: detected/trial_pending -> resolved|trial_failed.
+# ``trial_pending`` is a legal intermediate status (dedup/query accept it) even
+# though no current code path enters it proactively (026 类型审查 I1).
+_GAP_REPORT_TRANSITIONS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("detected", "trial_pending"),
+        ("detected", "resolved"),
+        ("detected", "trial_failed"),
+        ("trial_pending", "resolved"),
+        ("trial_pending", "trial_failed"),
+    }
+)
+
+
+def _transition_sources(transitions: frozenset[tuple[str, str]], to_status: str) -> frozenset[str]:
+    """Source statuses allowed to transition to ``to_status``."""
+    return frozenset(src for src, tgt in transitions if tgt == to_status)
 
 
 class SelfImprovementRepository(BaseRepository):
@@ -233,31 +266,41 @@ class SelfImprovementRepository(BaseRepository):
             )
             return None
         try:
-            # Supersede current active supplements for the same section
-            current_active = (
-                self.session.query(PromptSupplement)
-                .filter(
-                    PromptSupplement.target_section == supplement.target_section,
-                    PromptSupplement.status == "active",
-                    PromptSupplement.supplement_id != supplement_id,
-                )
-                .all()
-            )
             now = datetime.now()
-            for active in current_active:
-                active.status = "superseded"
-                active.retracted_at = now
-
-            # Compute version: max version for this section + 1
-            max_version = (
+            # 原子 supersede 当前 active（批量 UPDATE，避免逐行 read-modify-write）
+            self.session.query(PromptSupplement).filter(
+                PromptSupplement.target_section == supplement.target_section,
+                PromptSupplement.status == "active",
+                PromptSupplement.supplement_id != supplement_id,
+            ).update(
+                {"status": "superseded", "retracted_at": now},
+                synchronize_session=False,
+            )
+            # 原子 promote：version = (max version + 1) 进 SQL 子查询，CAS status=candidate，
+            # 避免并发两 promote 读到同 max 落同 version（026 I7）。
+            max_version_subq = (
                 self.session.query(func.max(PromptSupplement.version))
                 .filter(PromptSupplement.target_section == supplement.target_section)
-                .scalar()
+                .scalar_subquery()
             )
-            supplement.version = (max_version or 0) + 1
-            supplement.status = "active"
-            supplement.applied_at = now
+            updated = (
+                self.session.query(PromptSupplement)
+                .filter(
+                    PromptSupplement.supplement_id == supplement_id,
+                    PromptSupplement.status == "candidate",
+                )
+                .update(
+                    {
+                        "version": func.coalesce(max_version_subq, 0) + 1,
+                        "status": "active",
+                        "applied_at": now,
+                    },
+                    synchronize_session=False,
+                )
+            )
             self._commit()
+            if updated == 0:
+                return None
             self.session.refresh(supplement)
             logger.info(
                 "Supplement promoted: %s (section=%s, version=%d)",
@@ -352,11 +395,39 @@ class SelfImprovementRepository(BaseRepository):
                     .first()
                 )
                 if existing is not None:
-                    existing.occurrence_count = (existing.occurrence_count or 0) + 1
-                    existing.confidence = min(1.0, (existing.confidence or 0.0) + 0.1)
+                    # 原子条件 UPDATE：occurrence_count/confidence 自增进 SQL，避免
+                    # read-modify-write 在并发自增下丢计数（026 I7）。
+                    updates = {
+                        "occurrence_count": ToolGapReport.occurrence_count + 1,
+                        "confidence": case(
+                            (
+                                ToolGapReport.confidence + 0.1 < 1.0,
+                                ToolGapReport.confidence + 0.1,
+                            ),
+                            else_=1.0,
+                        ),
+                    }
                     if evidence:
-                        existing.evidence = evidence
+                        updates["evidence"] = evidence
+                    updated = (
+                        self.session.query(ToolGapReport)
+                        .filter(
+                            ToolGapReport.report_id == existing.report_id,
+                            ToolGapReport.status.in_(("detected", "trial_pending")),
+                        )
+                        .update(updates, synchronize_session=False)
+                    )
                     self._commit()
+                    if updated == 0:
+                        # CAS 失败（report 在 dedup 读后被 resolve/fail 移出
+                        # detected/trial_pending）：返回当前行（不再自增，report 已终态），
+                        # 避免 4 个调用方 report.report_id 崩溃（026 I7 follow-up）。
+                        self.session.expire_all()
+                        return (
+                            self.session.query(ToolGapReport)
+                            .filter(ToolGapReport.report_id == existing.report_id)
+                            .first()
+                        )
                     self.session.refresh(existing)
                     logger.info(
                         "Gap report occurrence incremented: %s (signature=%s, count=%d)",
@@ -407,45 +478,60 @@ class SelfImprovementRepository(BaseRepository):
         )
 
     def resolve_gap_report(self, report_id: str) -> Optional[ToolGapReport]:
-        """Mark a gap report as resolved."""
-        report = (
-            self.session.query(ToolGapReport)
-            .filter(ToolGapReport.report_id == report_id)
-            .first()
-        )
-        if report is None:
-            return None
-        try:
-            report.status = "resolved"
-            report.updated_at = datetime.now()
-            self._commit()
-            self.session.refresh(report)
-            logger.info("Gap report resolved: %s", report_id)
-            return report
-        except Exception as e:
-            self.session.rollback()
-            logger.error("Failed to resolve gap report %s: %s", report_id, e)
-            raise
+        """Mark a gap report as resolved (CAS detected|trial_pending -> resolved).
+
+        Returns the updated row, or None if the report does not exist or is not
+        in a resolvable status (already resolved/trial_failed).
+        """
+        return self._cas_gap_report_transition(report_id, "resolved")
 
     def fail_gap_report(self, report_id: str) -> Optional[ToolGapReport]:
-        """Mark a gap report as trial_failed."""
-        report = (
-            self.session.query(ToolGapReport)
-            .filter(ToolGapReport.report_id == report_id)
-            .first()
-        )
-        if report is None:
+        """Mark a gap report as trial_failed (CAS detected|trial_pending -> trial_failed).
+
+        Returns the updated row, or None if the report does not exist or is not
+        in a failable status (already resolved/trial_failed).
+        """
+        return self._cas_gap_report_transition(report_id, "trial_failed")
+
+    def _cas_gap_report_transition(
+        self,
+        report_id: str,
+        to_status: str,
+    ) -> Optional[ToolGapReport]:
+        """Atomic conditional UPDATE with rowcount CAS guard for gap reports."""
+        sources = _transition_sources(_GAP_REPORT_TRANSITIONS, to_status)
+        if not sources:
+            logger.warning(
+                "Cannot transition gap report %s: %r is not a legal target",
+                report_id,
+                to_status,
+            )
             return None
         try:
-            report.status = "trial_failed"
-            report.updated_at = datetime.now()
+            updated = (
+                self.session.query(ToolGapReport)
+                .filter(
+                    ToolGapReport.report_id == report_id,
+                    ToolGapReport.status.in_(sources),
+                )
+                .update(
+                    {"status": to_status, "updated_at": datetime.now()},
+                    synchronize_session=False,
+                )
+            )
             self._commit()
-            self.session.refresh(report)
-            logger.info("Gap report marked as trial_failed: %s", report_id)
-            return report
+            if updated == 0:
+                return None
+            logger.info("Gap report transitioned: %s -> %s", report_id, to_status)
+            return self.session.get(ToolGapReport, report_id)
         except Exception as e:
             self.session.rollback()
-            logger.error("Failed to mark gap report %s as trial_failed: %s", report_id, e)
+            logger.error(
+                "Failed to transition gap report %s -> %s: %s",
+                report_id,
+                to_status,
+                e,
+            )
             raise
 
     # ------------------------------------------------------------------
@@ -474,9 +560,7 @@ class SelfImprovementRepository(BaseRepository):
             self.session.add(proposal)
             self._commit()
             self.session.refresh(proposal)
-            logger.info(
-                "Fix proposal created: %s (tool=%s)", proposal.proposal_id, tool_id
-            )
+            logger.info("Fix proposal created: %s (tool=%s)", proposal.proposal_id, tool_id)
             return proposal
         except Exception as e:
             self.session.rollback()
@@ -498,26 +582,40 @@ class SelfImprovementRepository(BaseRepository):
         new_status: str,
         trial_result: Optional[dict] = None,
     ) -> Optional[ToolFixProposal]:
-        """Update the status of a fix proposal, optionally attaching trial results."""
-        proposal = (
-            self.session.query(ToolFixProposal)
-            .filter(ToolFixProposal.proposal_id == proposal_id)
-            .first()
-        )
-        if proposal is None:
-            return None
-        try:
-            proposal.status = new_status
-            if trial_result is not None:
-                proposal.trial_result = trial_result
-            if new_status == "applied":
-                proposal.applied_at = datetime.now()
-            self._commit()
-            self.session.refresh(proposal)
-            logger.info(
-                "Fix proposal transitioned: %s -> %s", proposal_id, new_status
+        """CAS transition a fix proposal along the legal state machine.
+
+        Illegal transitions (skip ``trial_pending``, leave a terminal status,
+        unknown target) match no row -> return None without writing.  Optional
+        ``trial_result`` is attached and ``applied_at`` set when entering
+        ``applied`` (026 类型审查 I1).
+        """
+        sources = _transition_sources(_FIX_PROPOSAL_TRANSITIONS, new_status)
+        if not sources:
+            logger.warning(
+                "Cannot transition fix proposal %s: %r is not a legal target",
+                proposal_id,
+                new_status,
             )
-            return proposal
+            return None
+        values: dict = {"status": new_status}
+        if trial_result is not None:
+            values["trial_result"] = trial_result
+        if new_status == "applied":
+            values["applied_at"] = datetime.now()
+        try:
+            updated = (
+                self.session.query(ToolFixProposal)
+                .filter(
+                    ToolFixProposal.proposal_id == proposal_id,
+                    ToolFixProposal.status.in_(sources),
+                )
+                .update(values, synchronize_session=False)
+            )
+            self._commit()
+            if updated == 0:
+                return None
+            logger.info("Fix proposal transitioned: %s -> %s", proposal_id, new_status)
+            return self.session.get(ToolFixProposal, proposal_id)
         except Exception as e:
             self.session.rollback()
             logger.error("Failed to transition fix proposal %s: %s", proposal_id, e)

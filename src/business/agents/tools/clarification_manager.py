@@ -118,9 +118,7 @@ def validate_and_normalize_questions(questions_input: Any) -> list[NormalizedQue
     if not isinstance(questions_input, list) or not (
         _MIN_QUESTIONS <= len(questions_input) <= _MAX_QUESTIONS
     ):
-        raise ClarificationValidationError(
-            f"问题数量必须为 {_MIN_QUESTIONS}-{_MAX_QUESTIONS} 个"
-        )
+        raise ClarificationValidationError(f"问题数量必须为 {_MIN_QUESTIONS}-{_MAX_QUESTIONS} 个")
 
     normalized: list[NormalizedQuestion] = []
     seen_questions: set[str] = set()
@@ -141,9 +139,7 @@ def validate_and_normalize_questions(questions_input: Any) -> list[NormalizedQue
         if not isinstance(raw_options, list) or not (
             _MIN_OPTIONS <= len(raw_options) <= _MAX_OPTIONS
         ):
-            raise ClarificationValidationError(
-                f"每题选项必须为 {_MIN_OPTIONS}-{_MAX_OPTIONS} 个"
-            )
+            raise ClarificationValidationError(f"每题选项必须为 {_MIN_OPTIONS}-{_MAX_OPTIONS} 个")
 
         options: list[NormalizedOption] = []
         seen_labels: set[str] = set()
@@ -273,7 +269,9 @@ def _emit_resolved_safe(request_id: str) -> None:
     try:
         signal.emit_resolved(request_id)
     except Exception:
-        logger.warning("[clarification] resolved 事件发送失败: request=%s", request_id, exc_info=True)
+        logger.warning(
+            "[clarification] resolved 事件发送失败: request=%s", request_id, exc_info=True
+        )
 
 
 def submit_decision(
@@ -343,9 +341,7 @@ def _validate_and_build_answers(
             raise ClarificationValidationError(f"问题 {q.question_id} 缺少答案")
 
         selected_ids = ans.get("selectedOptionIds") or []
-        if not isinstance(selected_ids, list) or not all(
-            isinstance(x, str) for x in selected_ids
-        ):
+        if not isinstance(selected_ids, list) or not all(isinstance(x, str) for x in selected_ids):
             raise ClarificationValidationError("selectedOptionIds 必须是字符串数组")
 
         valid_ids = {o.option_id: o.label for o in q.options}
@@ -359,9 +355,7 @@ def _validate_and_build_answers(
         other_text_raw = ans.get("otherText")
         other_text = other_text_raw.strip() if isinstance(other_text_raw, str) else ""
         if len(other_text) > OTHER_TEXT_MAX_CHARS:
-            raise ClarificationValidationError(
-                f"其他文本不得超过 {OTHER_TEXT_MAX_CHARS} 字符"
-            )
+            raise ClarificationValidationError(f"其他文本不得超过 {OTHER_TEXT_MAX_CHARS} 字符")
 
         has_other = bool(other_text)
         if not q.multi_select:

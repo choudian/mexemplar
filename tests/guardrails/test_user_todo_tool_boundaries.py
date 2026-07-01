@@ -12,7 +12,6 @@ from src.business.agents.tools.assistant_tools import (
 from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 from src.business.orchestration.agent.tool_registry import ToolRegistry
 
-
 USER_TODO_TOOL_NAMES = {
     "create_user_todo",
     "list_user_todos",

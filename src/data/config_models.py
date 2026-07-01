@@ -299,6 +299,45 @@ class BrainConfig:
 
 
 @dataclass
+class SelfImprovementExecutionReviewConfig:
+    """自我改进执行复盘配置。"""
+
+    enabled: bool = True
+    model: dict[str, Any] = field(default_factory=dict)
+    max_per_session: int = 3
+
+
+@dataclass
+class SelfImprovementProposalsConfig:
+    """自我改进提案配置。"""
+
+    enabled: bool = True
+    worktree_retention_max: int = 10
+    dedup_cooldown_hours: int = 24
+
+
+@dataclass
+class SelfImprovementConfig:
+    """自我改进配置。"""
+
+    max_prompt_supplements_per_day: int = 3
+    max_tool_creations_per_day: int = 1
+    max_reflections_per_session: int = 5
+    convergence_threshold: float = 0.01
+    degradation_threshold: float = 0.10
+    sandbox_window: int = 20
+    rollback_monitor_window: int = 10
+    avoidance_top_n: int = 5
+    tool_gap_threshold: int = 3
+    execution_review: SelfImprovementExecutionReviewConfig = field(
+        default_factory=SelfImprovementExecutionReviewConfig
+    )
+    proposals: SelfImprovementProposalsConfig = field(
+        default_factory=SelfImprovementProposalsConfig
+    )
+
+
+@dataclass
 class AgentToolsFileConfig:
     """Agent built-in file tool limits."""
 
@@ -398,6 +437,7 @@ class AppConfig:
     ui: UIConfig = field(default_factory=UIConfig)
     web: WebConfig = field(default_factory=WebConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
+    self_improvement: SelfImprovementConfig = field(default_factory=SelfImprovementConfig)
     agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -468,6 +508,23 @@ class AppConfig:
                     **_filter_dataclass_fields(skill_data, BrainSkillConfig)
                 )
             config.brain = BrainConfig(**brain_data)
+
+        if "self_improvement" in data:
+            si_data = _filter_dataclass_fields(data["self_improvement"], SelfImprovementConfig)
+            execution_review = si_data.get("execution_review")
+            if isinstance(execution_review, dict):
+                si_data["execution_review"] = SelfImprovementExecutionReviewConfig(
+                    **_filter_dataclass_fields(
+                        execution_review,
+                        SelfImprovementExecutionReviewConfig,
+                    )
+                )
+            proposals = si_data.get("proposals")
+            if isinstance(proposals, dict):
+                si_data["proposals"] = SelfImprovementProposalsConfig(
+                    **_filter_dataclass_fields(proposals, SelfImprovementProposalsConfig)
+                )
+            config.self_improvement = SelfImprovementConfig(**si_data)
 
         if "agent_tools" in data:
             agent_tools_data = _filter_dataclass_fields(data["agent_tools"], AgentToolsConfig)

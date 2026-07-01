@@ -108,3 +108,127 @@ def test_expired_attempt_requeues_graph_task_and_notifies_scheduler(in_memory_db
         assert task.status == "pending_dispatch"
         assert task.suspend_reason is None
     assert recovered == [(graph_id, task_id)]
+
+
+# ---------------------------------------------------------------------------
+# unified_dispatch / proposal recovery 解耦（026 review HIGH-2）
+# ---------------------------------------------------------------------------
+
+
+class _ProposalDispatchFakeConfig:
+    """Only the two toggles that drive the worker dispatch decision."""
+
+    def __init__(self, *, unified_dispatch: bool, proposals: bool) -> None:
+        self._unified_dispatch = unified_dispatch
+        self._proposals = proposals
+
+    def get_assistant_tasks_unified_dispatch_enabled(self) -> bool:
+        return self._unified_dispatch
+
+    def get_self_improvement_proposals_enabled(self) -> bool:
+        return self._proposals
+
+
+def test_worker_logs_error_when_proposals_enabled_but_dispatch_disabled(caplog):
+    """启动自检:proposals 开 + unified_dispatch 关 → error 级警告。
+
+    proposal 实施依赖 GraphScheduler,而调度器装配门控于 unified_dispatch
+    (orchestrator.py:493)。误配时批准的提案无法推进至终态(kick 始终 unavailable),
+    会在 in_progress 挂死——必须留下醒目可观测痕迹,否则用户无从知晓为何提案不动。
+    """
+    import logging
+
+    worker = TaskCollaborationBackgroundWorker(
+        config=_ProposalDispatchFakeConfig(unified_dispatch=False, proposals=True)
+    )
+    with caplog.at_level(
+        logging.ERROR,
+        logger="src.business.task_collaboration.background_worker",
+    ):
+        worker._warn_on_proposal_dispatch_misconfig()
+    assert any(
+        "unified_dispatch" in r.getMessage() and r.levelno >= logging.ERROR
+        for r in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "unified_dispatch,proposals",
+    [(True, False), (False, False), (True, True)],
+)
+def test_worker_no_misconfig_warning_when_dispatch_and_proposals_aligned(
+    caplog, unified_dispatch, proposals
+):
+    """非「proposals 开 + unified_dispatch 关」组合不自检告警。"""
+    import logging
+
+    worker = TaskCollaborationBackgroundWorker(
+        config=_ProposalDispatchFakeConfig(
+            unified_dispatch=unified_dispatch, proposals=proposals
+        )
+    )
+    with caplog.at_level(
+        logging.ERROR,
+        logger="src.business.task_collaboration.background_worker",
+    ):
+        worker._warn_on_proposal_dispatch_misconfig()
+    assert not any(
+        "unified_dispatch" in r.getMessage()
+        for r in caplog.records
+        if r.levelno >= logging.ERROR
+    )
+
+
+def test_recovery_tick_runs_proposal_recovery_when_dispatch_disabled_but_proposals_enabled(
+    in_memory_db, monkeypatch
+):
+    """unified_dispatch 关 + proposals 开:proposal recovery 仍须跑,不得静默跳过。
+
+    proposal recovery 是确定性的、不依赖 dispatcher;task collaboration recovery 才随
+    unified_dispatch 开关。否则已批准提案会因调度器未装配而永久挂在 in_progress,
+    无终态回报（FR-011「不静默丢任务」恢复语义）。
+    """
+    from src.business.task_collaboration import background_worker as bw_module
+
+    worker = TaskCollaborationBackgroundWorker(
+        config=_ProposalDispatchFakeConfig(unified_dispatch=False, proposals=True)
+    )
+    cycle_calls: list[dict] = []
+    monkeypatch.setattr(
+        worker, "run_recovery_cycle", lambda **kw: cycle_calls.append(kw) or {}
+    )
+    proposal_calls: list = []
+    monkeypatch.setattr(
+        bw_module,
+        "_run_self_improvement_proposal_cycle",
+        lambda now: proposal_calls.append(now) or 0,
+    )
+
+    worker._run_recovery_tick()
+
+    assert cycle_calls == [], "task collaboration recovery must not run when dispatch is off"
+    assert len(proposal_calls) == 1, "proposal recovery must still run"
+
+
+def test_recovery_tick_runs_full_cycle_when_dispatch_enabled(in_memory_db, monkeypatch):
+    """unified_dispatch 开:跑完整 run_recovery_cycle(内含 proposal job),不额外单跑。"""
+    from src.business.task_collaboration import background_worker as bw_module
+
+    worker = TaskCollaborationBackgroundWorker(
+        config=_ProposalDispatchFakeConfig(unified_dispatch=True, proposals=True)
+    )
+    cycle_calls: list[dict] = []
+    monkeypatch.setattr(
+        worker, "run_recovery_cycle", lambda **kw: cycle_calls.append(kw) or {}
+    )
+    proposal_calls: list = []
+    monkeypatch.setattr(
+        bw_module,
+        "_run_self_improvement_proposal_cycle",
+        lambda now: proposal_calls.append(now) or 0,
+    )
+
+    worker._run_recovery_tick()
+
+    assert len(cycle_calls) == 1
+    assert proposal_calls == []

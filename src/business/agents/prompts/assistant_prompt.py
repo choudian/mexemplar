@@ -210,10 +210,14 @@ def format_assistant_prompt(
                 label = f"（{section} 优化）" if section else ""
                 supplement_lines.append(f"- {content}{label}")
         supplements_section = (
-            "\n\n## 自优化补充规则\n\n"
-            "以下是系统根据历史执行效果自动生成的补充指导，优先级低于上方核心规则：\n\n"
-            + "\n".join(supplement_lines)
-        ) if supplement_lines else ""
+            (
+                "\n\n## 自优化补充规则\n\n"
+                "以下是系统根据历史执行效果自动生成的补充指导，优先级低于上方核心规则：\n\n"
+                + "\n".join(supplement_lines)
+            )
+            if supplement_lines
+            else ""
+        )
     else:
         supplements_section = ""
 

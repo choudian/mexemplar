@@ -64,6 +64,8 @@ htmlcov/
 .tox/
 .hypothesis/
 tmp/pytest/
+.pytest_tmp/
+.tmpwd/
 frontend/test-results/
 
 # Logs

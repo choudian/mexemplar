@@ -28,14 +28,13 @@ def main() -> None:
 
     # 激活文件日志（data/logs/mexemplar.log），verbose 时用 DEBUG 级别
     import logging
+
     setup_logger(log_level=logging.DEBUG if args.verbose else logging.INFO)
 
     if args.verbose:
         handler = logging.StreamHandler(sys.stderr)
         handler.setLevel(logging.DEBUG)
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s"))
         for name in (
             "src.business.agents",
             "src.business.ai",

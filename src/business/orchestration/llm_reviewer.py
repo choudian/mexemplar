@@ -92,7 +92,9 @@ class LLMReviewer:
             with TraceContext(
                 source="llm_review",
                 agent_type="reviewer",
-                workflow_id=str(requirement.get("workflow_id") or requirement.get("recording_id") or ""),
+                workflow_id=str(
+                    requirement.get("workflow_id") or requirement.get("recording_id") or ""
+                ),
             ):
                 response = self._llm.chat(prompt)
             return self._parse_result(response)

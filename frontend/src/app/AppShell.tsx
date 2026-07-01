@@ -107,6 +107,8 @@ export function AppShell(): JSX.Element {
   const refreshBrainZones = useBrainStore((state) => state.loadZones);
   const refreshBrainEntries = useBrainStore((state) => state.loadEntries);
   const refreshBrainSegments = useBrainStore((state) => state.loadSegments);
+  const refreshExecutionReviews = useBrainStore((state) => state.loadExecutionReviews);
+  const refreshImprovementProposals = useBrainStore((state) => state.loadImprovementProposals);
   const refreshBrainSkillPool = useBrainStore((state) => state.loadSkillPool);
   const applySpecialistEvent = useSpecialistStore((state) => state.applyEvent);
   const refreshSpecialists = useSpecialistStore((state) => state.load);
@@ -207,6 +209,8 @@ export function AppShell(): JSX.Element {
         refreshes.push(refreshBrainZones());
         refreshes.push(refreshBrainEntries(activeBrainZone));
         refreshes.push(refreshBrainSegments());
+        refreshes.push(refreshExecutionReviews());
+        refreshes.push(refreshImprovementProposals());
         refreshes.push(refreshBrainSkillPool());
         refreshes.push(refreshSpecialists());
       }
@@ -297,6 +301,9 @@ export function AppShell(): JSX.Element {
           hydrate(bootstrap);
           setAssistantIdleThresholdSeconds(bootstrap.brain.segmentIdleThresholdSeconds);
           void loadSkillBootstrapStatus();
+          // FR-020：启动即加载改进提案，使全局大脑导航的 pending_review 徽标在用户
+          // 进入 Brain 屏之前就可见，避免提案静悄悄躺在管理屏无人知。
+          void useBrainStore.getState().loadImprovementProposals();
           void (async () => {
             while (!cancelled && !controller.signal.aborted) {
               try {
@@ -364,6 +371,8 @@ export function AppShell(): JSX.Element {
     hydrate,
     refreshBrainEntries,
     refreshBrainSegments,
+    refreshExecutionReviews,
+    refreshImprovementProposals,
     refreshBrainSkillPool,
     refreshBrainZones,
     refreshCompositions,

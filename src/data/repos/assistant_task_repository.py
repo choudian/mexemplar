@@ -27,6 +27,7 @@ class AssistantTaskRepository(BaseRepository):
         assignee_type: str | None = None,
         assignee_id: str | None = None,
         capability_scope: str | None = None,
+        workspace_root: str | None = None,
         requires_confirmation: bool = False,
         status: str = "pending_dispatch",
     ) -> AssistantTask:
@@ -44,6 +45,7 @@ class AssistantTaskRepository(BaseRepository):
             assignee_type=assignee_type,
             assignee_id=assignee_id,
             capability_scope=capability_scope,
+            workspace_root=workspace_root,
             requires_confirmation=requires_confirmation,
             status=status,
         )
@@ -55,11 +57,7 @@ class AssistantTaskRepository(BaseRepository):
         return self.session.get(AssistantTask, task_id)
 
     def list_graph_tasks(self, graph_id: str) -> list[AssistantTask]:
-        rows = (
-            self.session.query(AssistantTask)
-            .filter(AssistantTask.graph_id == graph_id)
-            .all()
-        )
+        rows = self.session.query(AssistantTask).filter(AssistantTask.graph_id == graph_id).all()
         return sorted(
             rows,
             key=lambda task: (
@@ -344,9 +342,7 @@ class AssistantTaskRepository(BaseRepository):
         found_ids = {r.task_id for r in rows}
         for pred_id in blocking_predecessor_ids:
             if pred_id not in found_ids:
-                raise ValueError(
-                    f"dependency predecessor {pred_id} not found for task {task_id}"
-                )
+                raise ValueError(f"dependency predecessor {pred_id} not found for task {task_id}")
         for r in rows:
             if r.status != "completed":
                 raise ValueError(

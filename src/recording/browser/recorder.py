@@ -2,7 +2,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol
 
-from src.utils.recording_mode import RecordingMode
+from src.utils.recording_mode import RecordingMode  # noqa: F401
 
 
 @dataclass

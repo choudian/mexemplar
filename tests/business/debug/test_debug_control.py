@@ -13,7 +13,9 @@ class FakeConfig:
         self.values: dict[str, Any] = {}
         self.set_calls: list[tuple[str, Any, str]] = []
 
-    def set(self, key: str, value: Any, persist: str = "database", value_type: str = "string") -> None:
+    def set(
+        self, key: str, value: Any, persist: str = "database", value_type: str = "string"
+    ) -> None:
         self.values[key] = value
         self.set_calls.append((key, value, persist))
 

@@ -42,6 +42,8 @@ def test_ask_user_question_not_in_specialist_tools(in_memory_db, mock_config):
     from src.business.agents.config import AgentType
 
     names = _tool_names(
-        orch._build_delegated_executor_tools(None, agent_type=AgentType.SPECIALIST, specialist_id="spec-1")
+        orch._build_delegated_executor_tools(
+            None, agent_type=AgentType.SPECIALIST, specialist_id="spec-1"
+        )
     )
     assert "ask_user_question" not in names

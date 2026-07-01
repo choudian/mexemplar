@@ -78,9 +78,7 @@ def test_side_effect_failure_marks_operation_failed_and_unblocks_retry(monkeypat
         )
 
     # 失败的 operation 标 failed，被 get_by_key/唯一索引排除，不再永久卡在 in_progress
-    assert (
-        AssistantTaskOperationRepository().get_by_key("tsk_se_fail", "charge:card") is None
-    )
+    assert AssistantTaskOperationRepository().get_by_key("tsk_se_fail", "charge:card") is None
 
     # 同 operation_key 可重新登记并完成（修复前会撞唯一约束 IntegrityError、无法重试）
     retry = dispatcher.run_side_effect(

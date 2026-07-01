@@ -11,7 +11,7 @@ from src.desktop_api.ui_events import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-FRONTEND_UI_EVENTS = REPO_ROOT / "frontend" / "src" / "api" / "uiEvents.ts"
+FRONTEND_UI_EVENTS = REPO_ROOT / "frontend" / "src" / "api" / "uiEventTypes.ts"
 
 
 def _extract_json_object_export(source: str, name: str) -> dict:

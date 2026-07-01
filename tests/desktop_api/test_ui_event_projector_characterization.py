@@ -103,9 +103,7 @@ def test_agent_needs_user_input_trial_routes_to_trial():
 
 
 def test_agent_needs_user_input_session_routes_to_assistant():
-    drafts = project_internal_event(
-        "agent_needs_user_input", {"session_id": "s1", "question": "Q"}
-    )
+    drafts = project_internal_event("agent_needs_user_input", {"session_id": "s1", "question": "Q"})
     assert drafts[0].event_type == "assistant.progress"
     assert drafts[0].payload == {
         "status": "waiting_for_user",
@@ -159,7 +157,10 @@ def test_requirement_confirmed_fans_out():
 def test_code_completed_fans_out():
     drafts = project_internal_event("code_completed", {"session_id": "s1"})
     assert len(drafts) == 2
-    assert drafts[0].payload == {"stage": "trial_validation", "message": "Skill learning completed."}
+    assert drafts[0].payload == {
+        "stage": "trial_validation",
+        "message": "Skill learning completed.",
+    }
     assert drafts[1].payload == {"status": "succeeded", "headline": "Skill learning completed"}
 
 
@@ -212,9 +213,7 @@ def test_trial_requested_single():
 
 
 def test_trial_success_without_published_single_envelope():
-    drafts = project_internal_event(
-        "trial_success", {"session_id": "s1", "success_count": 3}
-    )
+    drafts = project_internal_event("trial_success", {"session_id": "s1", "success_count": 3})
     assert len(drafts) == 1
     assert drafts[0].payload == {"status": "succeeded", "published": False, "successCount": 3}
 
@@ -249,7 +248,11 @@ def test_desktop_trial_finished_single():
 def test_tool_saved_sets_status_saved():
     drafts = project_internal_event("tool_saved", {"session_id": "s1", "tool_id": "tl1"})
     assert drafts[0].event_type == "tools.changed"
-    assert drafts[0].payload == {"reason": "catalog_invalidated", "toolId": "tl1", "status": "saved"}
+    assert drafts[0].payload == {
+        "reason": "catalog_invalidated",
+        "toolId": "tl1",
+        "status": "saved",
+    }
 
 
 def test_tool_published_sets_status_published():
@@ -337,9 +340,7 @@ def test_composition_review_needed():
 
 
 def test_settings_changed():
-    drafts = project_internal_event(
-        "settings_changed", {"session_id": "s1", "keys": ["a", "b"]}
-    )
+    drafts = project_internal_event("settings_changed", {"session_id": "s1", "keys": ["a", "b"]})
     assert drafts[0].event_type == "settings.changed"
     assert drafts[0].payload == {"reason": "settings_invalidated", "keys": ["a", "b"]}
 
@@ -377,9 +378,7 @@ def test_brain_specialist_changed():
 
 
 def test_brain_context_ready():
-    drafts = project_internal_event(
-        "brain_context_ready", {"session_id": "s1"}
-    )
+    drafts = project_internal_event("brain_context_ready", {"session_id": "s1"})
     assert drafts[0].event_type == "brain_context_ready"
     assert drafts[0].payload == {"sessionId": "s1"}
 
@@ -395,6 +394,33 @@ def test_assistant_subagent_finished_projects_lifecycle():
     assert drafts[0].event_type == "assistant.subagent"
     assert drafts[0].payload["subagentId"] == "c1"
     assert drafts[0].payload["status"] == "finished"
+
+
+# ===== improvement proposal（026）=====
+
+
+def test_improvement_proposal_changed_projects_public_event():
+    drafts = project_internal_event(
+        "improvement_proposal_changed",
+        {
+            "session_id": "s1",
+            "proposal_id": "prop_1",
+            "source_review_id": "rev_1",
+            "status": "approved",
+            "severity": "med",
+            "change_type": "approved",
+        },
+    )
+    assert len(drafts) == 1
+    assert drafts[0].event_type == "improvement_proposal.changed"
+    assert drafts[0].payload == {
+        "proposalId": "prop_1",
+        "sourceReviewId": "rev_1",
+        "status": "approved",
+        "severity": "med",
+        "changeType": "approved",
+    }
+    assert drafts[0].scope == _S and drafts[0].causation_id == _C
 
 
 # ===== 未注册事件静默丢弃（重构后改为告警）=====

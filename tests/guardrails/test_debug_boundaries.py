@@ -16,7 +16,9 @@ class FakeConfig:
     def __init__(self) -> None:
         self.values: dict[str, Any] = {}
 
-    def set(self, key: str, value: Any, persist: str = "database", value_type: str = "string") -> None:
+    def set(
+        self, key: str, value: Any, persist: str = "database", value_type: str = "string"
+    ) -> None:
         self.values[key] = value
 
     def get_debug_trace_enabled(self) -> bool:
@@ -119,7 +121,7 @@ def test_assistant_delegation_logs_use_safe_summaries() -> None:
         "user_input[:50]",
         "-> {result}",
         "str(result)[:100]",
-        "-> %s\", tool_call.name, exc",
+        '-> %s", tool_call.name, exc',
     ):
         assert raw_log_fragment not in loop_source
     assert "result_chars=%s" in loop_source

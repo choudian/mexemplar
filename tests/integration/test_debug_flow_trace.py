@@ -15,7 +15,9 @@ class FakeConfig:
     def __init__(self) -> None:
         self.values: dict[str, Any] = {}
 
-    def set(self, key: str, value: Any, persist: str = "database", value_type: str = "string") -> None:
+    def set(
+        self, key: str, value: Any, persist: str = "database", value_type: str = "string"
+    ) -> None:
         self.values[key] = value
 
     def get_debug_trace_enabled(self) -> bool:

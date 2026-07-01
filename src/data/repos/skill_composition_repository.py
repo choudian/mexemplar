@@ -155,9 +155,7 @@ class SkillCompositionRepository(BaseRepository):
                 SkillComposition.assistant_enabled.is_(True),
                 SkillComposition.needs_review.is_(False),
             )
-            .order_by(
-                SkillComposition.updated_at.desc(), SkillComposition.created_at.desc()
-            )
+            .order_by(SkillComposition.updated_at.desc(), SkillComposition.created_at.desc())
         )
         if not query_text:
             return base_query.all()

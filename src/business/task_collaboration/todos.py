@@ -81,13 +81,9 @@ class TaskTodoService(AtomicTaskService):
                         continue
                     previous = before.get(row.todo_id)
                     if previous is None:
-                        emitted_changes.append(
-                            (row.todo_id, "created", row.status, row.sort_order)
-                        )
+                        emitted_changes.append((row.todo_id, "created", row.status, row.sort_order))
                     elif previous["text"] != row.text or previous["status"] != row.status:
-                        emitted_changes.append(
-                            (row.todo_id, "updated", row.status, row.sort_order)
-                        )
+                        emitted_changes.append((row.todo_id, "updated", row.status, row.sort_order))
                     elif previous["sort_order"] != row.sort_order:
                         emitted_changes.append(
                             (row.todo_id, "reordered", row.status, row.sort_order)

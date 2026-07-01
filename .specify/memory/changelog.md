@@ -1,7 +1,49 @@
 # Merged Features Log
 
-**Last Updated:** 2026-06-26
-**Revision:** 2026-06-26 — Archived 024 task graph scheduling (复杂任务"先分解，再按图执行"纠偏)
+**Last Updated:** 2026-07-02
+**Revision:** 2026-07-02 — Archived 026 self-improvement proposals (自我改进提案 B 阶段)
+
+## 自我改进提案（B 阶段） — 2026-07-02
+
+**Branch:** `026-self-improvement-proposals`
+**Spec:** `specs/026-self-improvement-proposals`
+
+**What was added:**
+- US-087 (P1): 看见可执行的改进提案并人工把关——执行复盘 `worth_changing` 发现自动落成 `pending_review` 提案，BrainScreen 复盘视图内逐条批准（带补料）/拒绝，跨复盘同类去重不刷屏，存在待审提案时有可发现提示。
+- US-088 (P2): 批准后机器自动改源码并回报——批准即触发桥接建独立 git worktree + 程序化任务图（复用 task collaboration 内核），规划专员拆解、执行体在隔离 worktree 内改源码并跑测试，结果（分支名 + 测试通过与否 + 安全摘要）回写提案；除"批准"外零人工介入。
+- US-089 (P3): 隔离与可回滚的安全保证——执行体爆炸半径焊死在"只改源码"（文件 source-only / exec 仅测试型 / 禁改自我改进核心 三门卫 fail-closed），合并保持用户手动、随时可凭 git 删分支/弃 worktree 干净回滚。
+
+**New Components:**
+- `src/business/self_improvement/proposal_service.py` — 提案生成（幂等 + 跨复盘 dedup）+ approve/reject 业务
+- `src/business/self_improvement/proposal_bridge.py` — 批准 → 建 worktree → `build_task_graph` → `start_graph` → 轮询回报
+- `src/business/self_improvement/proposal_workspace.py` — git worktree 生命周期（建/弃）+ source-only 边界辅助
+- `src/data/repos/improvement_proposal_repository.py` — 状态机 CAS Repository（条件 UPDATE + rowcount）
+- `src/data/migrations.py` — v21 建表 `improvement_proposals` / v22 `assistant_tasks.workspace_root` / v23 `result_tests_passed` 三态 CHECK
+- `src/desktop_api/routers/proposals.py` — `GET /api/improvement-proposals` + `approve`/`reject` typed API（只回安全投影）
+- `improvement_proposal.changed` 公开 UI 事件（UI Event Registry + payload allowlist）
+- `frontend/` BrainScreen 复盘视图提案列表 + brainStore 提案分片 + executionReview API client 扩展
+
+**Key Decisions (from research.md):**
+- D1: 提案生成旁路挂在 brain worker `_run_execution_review` 写回后（复用 A 触发线，不新增 worker）
+- D2: 实施任务图用合成 session `self_improvement:<proposalId>`，不污染真实对话
+- D3: 轮询式回报挂 task_collaboration 后台 worker，跨重启可恢复（解耦于 scheduler 完成通知）
+- D4: git worktree 隔离（`.worktrees/improvement/<id>`），执行体 workspace 指向该 worktree（承重假设，T018 spike 验证）
+- D5: 双层 source-only 强制（015 workspace fail-closed + 门卫测试可证伪）
+- D6: 调度器单例未装配时兜底（留 approved 待补踢，不静默丢任务）
+- D7: 审批前零副作用（advisory 直到人点头）
+- D8: 失败保留 worktree 供检视，拒绝才清理
+
+**Modified Components:**
+- `src/business/brain/background_worker.py` — `_run_execution_review` 写回后旁路调用 `ProposalService.generate_from_review`
+- `src/business/task_collaboration/background_worker.py` — 宿主钉死提案轮询回报 job
+- `src/desktop_api/ui_events.py` — 注册 `improvement_proposal.changed` type + allowlist
+- `src/data/unified_config.py` + `config.example.json` — `self_improvement.proposals.*`（enabled / worktree_retention_max / dedup_cooldown_hours）
+- `src/business/agents/tools/builtin_general_tools.py` — 执行体 workspace 重定向到提案 worktree（per-task workspace 注入）
+
+**Known Infrastructure Note:**
+- 提案跨复盘去重（FR-400a）是 advisory 软保证：`create()` 内 read-then-write，两个并发同 `dedup_key` 提案（不同 review）理论上可双双落库（`UNIQUE(source_review_id, finding_index)` 不挡不同 review）；复盘串行生成下实际触发概率低，最坏只是 UI 多一条待审，由用户用"拒绝"过滤。需要硬保证时另行加应用级锁。
+
+**Tasks Completed:** 33/33 tasks
 
 ## Task Graph Scheduling — 2026-06-26
 

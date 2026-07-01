@@ -60,11 +60,7 @@ def test_idempotent_on_repeat(monkeypatch):
     assert second["created"] is False
     assert second["repaired"] is False
     with ToolRepository() as repo:
-        count = (
-            repo.session.query(ToolOrm)
-            .filter(ToolOrm.tool_id == FIXTURE_TOOL_ID)
-            .count()
-        )
+        count = repo.session.query(ToolOrm).filter(ToolOrm.tool_id == FIXTURE_TOOL_ID).count()
     assert count == 1
 
 
@@ -134,15 +130,13 @@ def test_fixture_execution_code_satisfies_run_tool_code_contract():
     """
     tree = ast.parse(FIXTURE_EXECUTION_CODE)
     func_defs = [
-        node
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        node for node in tree.body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
     ]
     execute_defs = [node for node in func_defs if node.name == "execute"]
     assert execute_defs, "execution_code 必须定义 execute 函数"
-    assert any(isinstance(node, ast.AsyncFunctionDef) for node in execute_defs), (
-        "execute 必须是 async def（run_tool_code 跑 asyncio.run(mod.execute))"
-    )
+    assert any(
+        isinstance(node, ast.AsyncFunctionDef) for node in execute_defs
+    ), "execute 必须是 async def（run_tool_code 跑 asyncio.run(mod.execute))"
     # 参数契约：**kwargs 收任意入参，组合 dispatch 不会因参数不匹配报错
     execute_node = execute_defs[0]
     assert execute_node.args.kwarg is not None, "execute 必须声明 **kwargs"

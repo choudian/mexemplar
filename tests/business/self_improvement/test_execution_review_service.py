@@ -1,4 +1,7 @@
-from src.business.self_improvement.execution_review_service import ExecutionReviewService, REVIEWER_TOOLS
+from src.business.self_improvement.execution_review_service import (
+    ExecutionReviewService,
+    REVIEWER_TOOLS,
+)
 
 
 def test_reviewer_toolset_is_read_only():
@@ -32,3 +35,30 @@ def test_review_returns_advisory_report():
 
     assert report["advisory"] is True
     assert report["findings"][0]["type"] == "效率"
+
+
+def test_normalize_findings_clamps_unknown_severity_to_low() -> None:
+    """LLM 输出非 high/med/low 的 severity 归一化为 low（026 I6）。
+
+    prompt 声明 severity 只能 high/med/low，但 LLM 可能输出 ``critical`` / 大小写
+    混用 / 空。``_normalize_findings`` 必须把非法值收敛到 low，避免脏值透传到
+    proposal 与 UI event。
+    """
+    service = ExecutionReviewService()
+    findings = service._normalize_findings(
+        [
+            {"severity": "critical"},
+            {"severity": "HIGH"},
+            {"severity": ""},
+            {"severity": None},
+        ]
+    )
+    assert [f["severity"] for f in findings] == ["low", "high", "low", "low"]
+
+
+def test_normalize_findings_preserves_valid_severities() -> None:
+    service = ExecutionReviewService()
+    findings = service._normalize_findings(
+        [{"severity": "high"}, {"severity": "med"}, {"severity": "low"}]
+    )
+    assert [f["severity"] for f in findings] == ["high", "med", "low"]

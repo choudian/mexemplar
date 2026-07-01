@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 class BrainSegmentRepository(BaseRepository):
     """Repository for BrainSegment rows and segment completion transactions."""
+
     # ------------------------------------------------------------------
     # Segment CRUD
     # ------------------------------------------------------------------

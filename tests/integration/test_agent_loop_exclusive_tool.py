@@ -47,10 +47,17 @@ def test_solo_exclusive_tool_executes_and_continues(loop_config, mock_config, in
 
     def _handler(**kwargs):
         calls["n"] += 1
-        return json.dumps({"status": "answered", "answers": [{"question": "X", "selectedLabels": ["A"], "otherText": None}]})
+        return json.dumps(
+            {
+                "status": "answered",
+                "answers": [{"question": "X", "selectedLabels": ["A"], "otherText": None}],
+            }
+        )
 
     responses = [
-        LLMResponse(content=None, tool_calls=[ToolCallInfo(id="c1", name="ask_user_question", args={})]),
+        LLMResponse(
+            content=None, tool_calls=[ToolCallInfo(id="c1", name="ask_user_question", args={})]
+        ),
         LLMResponse(content="done", tool_calls=[]),
     ]
     loop = AgentLoop(loop_config, MockLLMClient(responses), mock_config)

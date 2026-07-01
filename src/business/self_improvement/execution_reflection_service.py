@@ -8,7 +8,7 @@ injected into the assistant prompt.
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from src.business.brain.models import EntryType, Zone
 from src.business.self_improvement.audit_service import SelfImprovementAuditService
@@ -149,6 +149,10 @@ class ExecutionReflectionService:
                 rule_data = json.loads(entry.content)
             except (json.JSONDecodeError, TypeError):
                 continue
+            if not isinstance(rule_data, dict):
+                # 合法 JSON 但非对象（list/str/int）——无 .get()，跳过避免 AttributeError
+                # （026 C5，486528f 同型 json.loads 类型坑）。
+                continue
 
             pattern = rule_data.get("pattern", "").lower()
             # Simple keyword overlap scoring
@@ -157,14 +161,16 @@ class ExecutionReflectionService:
             overlap = len(context_words & pattern_words)
             if overlap > 0 or not pattern:  # include rules with no pattern (universal)
                 score = entry.relevance_score * (1 + overlap)
-                scored_rules.append({
-                    "entry_id": entry.entry_id,
-                    "pattern": rule_data.get("pattern", ""),
-                    "avoidance": rule_data.get("avoidance", ""),
-                    "evidence_count": rule_data.get("evidence_count", 0),
-                    "score": score,
-                    "content": entry.content,
-                })
+                scored_rules.append(
+                    {
+                        "entry_id": entry.entry_id,
+                        "pattern": rule_data.get("pattern", ""),
+                        "avoidance": rule_data.get("avoidance", ""),
+                        "evidence_count": rule_data.get("evidence_count", 0),
+                        "score": score,
+                        "content": entry.content,
+                    }
+                )
 
         # Sort by score descending, take top-N
         scored_rules.sort(key=lambda r: r["score"], reverse=True)
@@ -288,9 +294,7 @@ class ExecutionReflectionService:
         try:
             entry_id = new_id()
             entry_type = (
-                str(EntryType.AVOIDANCE_RULE)
-                if zone == Zone.FAILURE
-                else str(EntryType.INSIGHT)
+                str(EntryType.AVOIDANCE_RULE) if zone == Zone.FAILURE else str(EntryType.INSIGHT)
             )
             self._brain_repo.create_entry(
                 zone=str(zone),
@@ -329,7 +333,7 @@ class ExecutionReflectionService:
             f"{reflection_text}\n"
             "\n"
             "## Required Output\n"
-            'Return a JSON object with:\n'
+            "Return a JSON object with:\n"
             '- "pattern": A brief description of the situation/pattern that leads to failure\n'
             '- "avoidance": A specific action to take instead\n'
             '- "evidence_count": 1\n'
@@ -341,28 +345,23 @@ class ExecutionReflectionService:
             "Return ONLY the JSON object, no other text."
         )
 
+        # Phase 1: LLM call + JSON parse — best-effort; malformed output just
+        # skips the rule.  ``_call_llm_for_reflection`` already swallows LLM
+        # errors and returns None, so no broad except is needed here.
+        response = self._call_llm_for_reflection(llm_client, prompt)
+        if not response:
+            return
+        rule_data = self._parse_avoidance_rule_json(response)
+        if rule_data is None:
+            logger.warning("Invalid avoidance rule format from LLM")
+            return
+
+        # Phase 2: persist + audit.  DB failures must NOT be swallowed into the
+        # JSON/LLM failure path — they are logged at ERROR so persistence loss
+        # is traceable.  Avoidance rules are best-effort (the reflection itself
+        # is already stored), so the error is contained rather than re-raised
+        # (026 errors 审查 I2).
         try:
-            response = self._call_llm_for_reflection(llm_client, prompt)
-            if not response:
-                return
-
-            # Parse JSON from response
-            json_str = response.strip()
-            if json_str.startswith("```"):
-                # Strip markdown code fences
-                lines = json_str.split("\n")
-                json_str = "\n".join(lines[1:-1])
-
-            rule_data = json.loads(json_str)
-            if (
-                not isinstance(rule_data, dict)
-                or "pattern" not in rule_data
-                or "avoidance" not in rule_data
-            ):
-                logger.warning("Invalid avoidance rule format from LLM")
-                return
-
-            # Store as avoidance rule entry
             entry_id = new_id()
             self._brain_repo.create_entry(
                 zone=str(Zone.FAILURE),
@@ -383,6 +382,34 @@ class ExecutionReflectionService:
                 rationale="Auto-generated from failure reflection",
                 metric_evidence={"pattern": rule_data.get("pattern", "")},
             )
+        except Exception:
+            logger.error(
+                "Failed to persist avoidance rule to brain " "(session=%s, task=%s)",
+                session_id,
+                task_description[:80],
+                exc_info=True,
+            )
 
-        except (json.JSONDecodeError, Exception) as e:
-            logger.warning("Avoidance rule generation failed: %s", e)
+    @staticmethod
+    def _parse_avoidance_rule_json(response: str) -> Optional[dict]:
+        """Parse and validate an avoidance rule JSON object from LLM output.
+
+        Returns the dict (with ``pattern`` and ``avoidance`` keys), or None if
+        the output is not valid JSON, not an object, or missing required keys.
+        """
+        json_str = response.strip()
+        if json_str.startswith("```"):
+            # Strip markdown code fences
+            lines = json_str.split("\n")
+            json_str = "\n".join(lines[1:-1])
+        try:
+            rule_data = json.loads(json_str)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        if (
+            not isinstance(rule_data, dict)
+            or "pattern" not in rule_data
+            or "avoidance" not in rule_data
+        ):
+            return None
+        return rule_data

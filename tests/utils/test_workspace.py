@@ -7,9 +7,7 @@ from src.utils.workspace import resolve_workspace_root, workspace_hash
 
 
 def test_workspace_hash_is_sha256_of_resolved_root(tmp_path):
-    expected = hashlib.sha256(
-        str(tmp_path.resolve()).encode("utf-8", errors="replace")
-    ).hexdigest()
+    expected = hashlib.sha256(str(tmp_path.resolve()).encode("utf-8", errors="replace")).hexdigest()
     assert workspace_hash(tmp_path) == expected
 
 

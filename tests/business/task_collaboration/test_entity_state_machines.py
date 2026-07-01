@@ -58,7 +58,9 @@ def test_attempt_terminal_transition_frees_capacity(terminal: str) -> None:
         )
     else:
         done = repo.fail_if_current(
-            attempt_id=attempt.attempt_id, fence_token=attempt.fence_token, error_category="internal"
+            attempt_id=attempt.attempt_id,
+            fence_token=attempt.fence_token,
+            error_category="internal",
         )
     assert done.status == terminal
     # 终态后容量释放：可再起新 attempt

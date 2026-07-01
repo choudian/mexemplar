@@ -273,9 +273,7 @@ class TestCompressPersistence:
 
         context = repo.get_context(session_id)
         summaries = [
-            msg
-            for msg in context
-            if msg.role == "summary" and msg.message_type == "compressed"
+            msg for msg in context if msg.role == "summary" and msg.message_type == "compressed"
         ]
         assert len(summaries) == 1
         assert summaries[0].sequence == 2

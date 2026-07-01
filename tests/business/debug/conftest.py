@@ -10,10 +10,9 @@ tests/business/debug/ 共享 fixture。
 import uuid
 from collections import deque
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Callable
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Fake clock
@@ -66,6 +65,7 @@ def sentinel_value() -> str:
 # ---------------------------------------------------------------------------
 # Fake trace buffer
 # ---------------------------------------------------------------------------
+
 
 class _FakeRecord:
     """最小化的 trace record 对象，仅保留 id / payload / epoch_id。"""

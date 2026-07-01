@@ -64,12 +64,14 @@ class _FakeOrchestrator:
         execution_context="",
         tool_whitelist=None,
         current_task_id=None,
+        workspace_root=None,
     ) -> dict:
         self.calls.append(
             {
                 "parent_session_id": parent_session_id,
                 "task": task,
                 "current_task_id": current_task_id,
+                "workspace_root": workspace_root,
             }
         )
         return self._result
@@ -337,17 +339,18 @@ def test_adapter_uses_isolated_orchestrators_for_parallel_attempts(
                 execution_context="",
                 tool_whitelist=None,
                 current_task_id=None,
-                ) -> dict:
-                    with calls_lock:
-                        calls.append(task)
-                    try:
-                        executor_barrier.wait(timeout=2)
-                    except BrokenBarrierError as exc:
-                        raise AssertionError("attempt executors did not overlap") from exc
-                    with calls_lock:
-                        barrier_passed.append(task)
-                    sleep(0.05)
-                    return {"success": True, "result_text": task}
+                workspace_root=None,
+            ) -> dict:
+                with calls_lock:
+                    calls.append(task)
+                try:
+                    executor_barrier.wait(timeout=2)
+                except BrokenBarrierError as exc:
+                    raise AssertionError("attempt executors did not overlap") from exc
+                with calls_lock:
+                    barrier_passed.append(task)
+                sleep(0.05)
+                return {"success": True, "result_text": task}
 
         base = _SlowFakeOrchestrator()
         adapter = TaskExecutorAdapter(base, orchestrator_factory=_SlowFakeOrchestrator)

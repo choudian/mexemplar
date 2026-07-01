@@ -57,7 +57,9 @@ class TestRetrieveArchiveHandler:
         """handler 应调用 RetrievalService.retrieve_archive。"""
         from src.business.agents.tools.assistant_tools import RETRIEVE_ARCHIVE
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.retrieve_archive.return_value = [
                 {
@@ -85,7 +87,9 @@ class TestRetrieveArchiveHandler:
         """空查询应返回友好提示而非调用服务。"""
         from src.business.agents.tools.assistant_tools import RETRIEVE_ARCHIVE
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             result = RETRIEVE_ARCHIVE.handler(query="")
             result_data = json.loads(result)
 
@@ -99,7 +103,9 @@ class TestFailureRetrievalAndInvalidationTools:
     def test_retrieve_failure_zone_calls_service(self):
         from src.business.agents.tools.assistant_tools import RETRIEVE_FAILURE_ZONE
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.retrieve_failure_zone.return_value = [
                 {
@@ -122,7 +128,9 @@ class TestFailureRetrievalAndInvalidationTools:
     def test_invalidate_memory_entry_uses_current_context_window(self):
         from src.business.agents.tools.assistant_tools import create_invalidate_memory_entry_handler
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.context_entry_ids_for_session.return_value = ["entry-1"]
             facade.invalidate_memory_entry.return_value = {
@@ -145,7 +153,9 @@ class TestFailureRetrievalAndInvalidationTools:
     def test_proactive_invalidation_result_requires_disclosure(self):
         from src.business.agents.tools.assistant_tools import create_invalidate_memory_entry_handler
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.context_entry_ids_for_session.return_value = ["entry-1"]
             facade.invalidate_memory_entry.return_value = {
@@ -174,7 +184,9 @@ class TestFailureRetrievalAndInvalidationTools:
         )
 
         session_id = "session-retrieved-entry"
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.retrieve_archive.return_value = [
                 {
@@ -188,7 +200,9 @@ class TestFailureRetrievalAndInvalidationTools:
             retrieve = create_retrieve_archive_handler(session_id)
             json.loads(retrieve(query="预算"))
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.context_entry_ids_for_session.return_value = ["archive-1"]
             facade.invalidate_memory_entry.return_value = {
@@ -213,7 +227,9 @@ class TestFailureRetrievalAndInvalidationTools:
         """无匹配结果时返回提示。"""
         from src.business.agents.tools.assistant_tools import RETRIEVE_ARCHIVE
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             facade.retrieve_archive.return_value = []
             MockFacade.return_value = facade
@@ -229,7 +245,9 @@ class TestFailureRetrievalAndInvalidationTools:
         """服务异常时应返回错误信息。"""
         from src.business.agents.tools.assistant_tools import RETRIEVE_ARCHIVE
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             MockFacade.side_effect = RuntimeError("DB error")
 
             result = RETRIEVE_ARCHIVE.handler(query="test")

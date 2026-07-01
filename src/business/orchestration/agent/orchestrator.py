@@ -28,7 +28,6 @@ from src.data.models_sqlite import Message
 from src.data.recording_repository import RecordingRepository
 from src.data.unified_config import UnifiedConfigManager
 from src.recording.browser.recorder import RecordingMode
-from src.utils.events import emit
 
 from ..llm_reviewer import LLMReviewer
 from .agent_session_store import AgentSessionStore
@@ -492,10 +491,7 @@ class AgentOrchestrator:
         so callers fall back to the stable sync delegation path.
         """
         config = getattr(self, "_config", None)
-        if (
-            config is None
-            or config.get_assistant_tasks_unified_dispatch_enabled() is not True
-        ):
+        if config is None or config.get_assistant_tasks_unified_dispatch_enabled() is not True:
             return None
 
         try:
@@ -748,23 +744,6 @@ class AgentOrchestrator:
             tool_whitelist=tool_whitelist,
         )
 
-    def _run_ephemeral_via_delegated_executor(
-        self,
-        *,
-        parent_session_id: str,
-        task: str,
-        execution_context: str = "",
-        tool_whitelist: list[str] | None = None,
-        current_task_id: str | None = None,
-    ) -> dict:
-        return self._get_delegation_orchestrator().run_ephemeral_via_delegated_executor(
-            parent_session_id=parent_session_id,
-            task=task,
-            execution_context=execution_context,
-            tool_whitelist=tool_whitelist,
-            current_task_id=current_task_id,
-        )
-
     def _delegate_to_specialist(
         self,
         *,
@@ -778,23 +757,6 @@ class AgentOrchestrator:
             task=task,
         )
 
-    def _run_specialist_via_delegated_executor(
-        self,
-        *,
-        parent_session_id: str,
-        specialist,
-        task: str,
-        tool_whitelist: list[str] | None = None,
-        current_task_id: str | None = None,
-    ) -> dict:
-        return self._get_delegation_orchestrator().run_specialist_via_delegated_executor(
-            parent_session_id=parent_session_id,
-            specialist=specialist,
-            task=task,
-            tool_whitelist=tool_whitelist,
-            current_task_id=current_task_id,
-        )
-
     def _run_delegated_executor(
         self,
         *,
@@ -805,11 +767,13 @@ class AgentOrchestrator:
         user_input: str,
         system_prompt: str,
         allowed_tool_ids: set[str] | None,
+        tool_whitelist: list[str] | None = None,
         specialist_id: str | None = None,
         allowed_methodology_skill_ids: set[str] | None = None,
         methodology_equipment_snapshot: str = "",
         current_task_id: str | None = None,
         role_kind: str = "executor",
+        workspace_root: str | None = None,
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -838,9 +802,12 @@ class AgentOrchestrator:
         )
 
         try:
-            loop = self._get_loop(agent_type, workflow_id=workflow_id)
+            loop = self._get_loop(
+                agent_type, workflow_id=workflow_id, workspace_root=workspace_root
+            )
             tools = self._build_delegated_executor_tools(
                 allowed_tool_ids,
+                tool_whitelist=tool_whitelist,
                 agent_type=agent_type,
                 executor_id=session_id,
                 specialist_id=specialist_id,
@@ -1161,8 +1128,13 @@ class AgentOrchestrator:
         subagent_id: str,
         instruction: str = "",
         extra_iterations: int = 20,
+        workspace_root: str | None = None,
     ) -> dict:
-        """唤回一个属于当前主代理的子代理续跑（从 DB 持久化历史恢复，跨进程重启亦可）。"""
+        """唤回一个属于当前主代理的子代理续跑（从 DB 持久化历史恢复，跨进程重启亦可）。
+
+        workspace_root 透传到续跑 AgentConfig：proposal executor 节点 suspended 后经
+        checkpoint 续跑时必须沿用隔离 worktree，否则 agent_loop 回退 cwd 击穿沙箱。
+        """
         rejection = self._reject_async_task_id(subagent_id)
         if rejection is not None:
             return rejection
@@ -1175,6 +1147,8 @@ class AgentOrchestrator:
                 "error": "该子代理仍在运行中，暂不可唤回",
                 "subagent_id": subagent_id,
             }
+
+        from pathlib import Path
 
         from src.business.agents.config import AgentConfig
 
@@ -1189,6 +1163,7 @@ class AgentOrchestrator:
             system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
             max_iterations=max(1, extra),
             resumable_on_failure=True,
+            workspace_root=Path(workspace_root) if workspace_root else None,
         )
         loop = AgentLoop(config, self._llm, self._config)
         # 用主代理当前可用工具池重建（不强制还原原始白名单——当前可用范围对续跑同样合理）
@@ -1430,6 +1405,7 @@ class AgentOrchestrator:
         self,
         allowed_tool_ids: set[str] | None,
         *,
+        tool_whitelist: list[str] | None = None,
         agent_type: str | None = None,
         executor_id: str | None = None,
         specialist_id: str | None = None,
@@ -1440,6 +1416,7 @@ class AgentOrchestrator:
     ) -> Callable[[], List[ToolDefinition]]:
         return self.tool_registry.build_delegated_executor_tools(
             allowed_tool_ids,
+            tool_whitelist=tool_whitelist,
             agent_type=agent_type,
             executor_id=executor_id,
             specialist_id=specialist_id,
@@ -1802,7 +1779,9 @@ class AgentOrchestrator:
     def _build_assistant_tools(self, session_id: str) -> Callable[[], List[ToolDefinition]]:
         return self.tool_registry.build_assistant_tools(session_id)
 
-    def _get_loop(self, agent_type: str, workflow_id: str = None) -> AgentLoop:
+    def _get_loop(
+        self, agent_type: str, workflow_id: str = None, workspace_root: str | None = None
+    ) -> AgentLoop:
         if agent_type == AgentType.TRIAL:
             config = self._prompt_builder.build_trial_config(workflow_id)
             return AgentLoop(config, self._llm, self._config)
@@ -1811,6 +1790,8 @@ class AgentOrchestrator:
             return AgentLoop(ASSISTANT_CONFIG, self._llm, self._config)
 
         if agent_type == AgentType.EPHEMERAL_SUBAGENT:
+            from pathlib import Path
+
             from src.business.agents.config import AgentConfig
 
             ephemeral_config = AgentConfig(
@@ -1818,16 +1799,20 @@ class AgentOrchestrator:
                 system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
                 max_iterations=50,
                 resumable_on_failure=True,
+                workspace_root=Path(workspace_root) if workspace_root else None,
             )
             return AgentLoop(ephemeral_config, self._llm, self._config)
 
         if agent_type == AgentType.SPECIALIST:
+            from pathlib import Path
+
             from src.business.agents.config import AgentConfig
 
             specialist_config = AgentConfig(
                 agent_type=AgentType.SPECIALIST,
                 system_prompt="你是一个固定专员。根据你的角色定义完成指定工作。",
                 max_iterations=30,
+                workspace_root=Path(workspace_root) if workspace_root else None,
             )
             return AgentLoop(specialist_config, self._llm, self._config)
 

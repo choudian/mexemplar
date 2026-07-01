@@ -11,7 +11,11 @@ import pytest
 
 import src.business.agents.tools.clarification_manager as cm
 from src.desktop_api.clarifications import _requested_payload, install_clarification_signal
-from src.desktop_api.ui_events import UI_EVENT_REGISTRY, UiEventValidationError, validate_ui_event_payload
+from src.desktop_api.ui_events import (
+    UI_EVENT_REGISTRY,
+    UiEventValidationError,
+    validate_ui_event_payload,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -75,7 +79,10 @@ def test_decision_submit_answered(desktop_api_client):
     _seed_pending(session_id="sess-api")
     resp = desktop_api_client.post(
         "/api/assistant/sessions/sess-api/clarifications/clr_api1/decision",
-        json={"decision": "submit", "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o1"], "otherText": None}]},
+        json={
+            "decision": "submit",
+            "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o1"], "otherText": None}],
+        },
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -105,12 +112,18 @@ def test_decision_idempotent_repeat(desktop_api_client):
     _seed_pending(session_id="sess-api")
     first = desktop_api_client.post(
         "/api/assistant/sessions/sess-api/clarifications/clr_api1/decision",
-        json={"decision": "submit", "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o1"], "otherText": None}]},
+        json={
+            "decision": "submit",
+            "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o1"], "otherText": None}],
+        },
     )
     assert first.json()["accepted"] is True
     second = desktop_api_client.post(
         "/api/assistant/sessions/sess-api/clarifications/clr_api1/decision",
-        json={"decision": "submit", "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o2"], "otherText": None}]},
+        json={
+            "decision": "submit",
+            "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o2"], "otherText": None}],
+        },
     )
     assert second.status_code == 200
     assert second.json()["accepted"] is False
@@ -121,7 +134,12 @@ def test_decision_validation_422(desktop_api_client):
     # 单选题提交两个选项 -> 422，不结算
     resp = desktop_api_client.post(
         "/api/assistant/sessions/sess-api/clarifications/clr_api1/decision",
-        json={"decision": "submit", "answers": [{"questionId": "q1", "selectedOptionIds": ["q1o1", "q1o2"], "otherText": None}]},
+        json={
+            "decision": "submit",
+            "answers": [
+                {"questionId": "q1", "selectedOptionIds": ["q1o1", "q1o2"], "otherText": None}
+            ],
+        },
     )
     assert resp.status_code == 422
     # 仍 pending（未结算）

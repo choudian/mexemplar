@@ -1001,6 +1001,27 @@ class UnifiedConfigManager:
             return 3
         return value if value > 0 else 3
 
+    # ===== 便捷方法：自我改进提案配置 =====
+
+    def get_self_improvement_proposals_enabled(self) -> bool:
+        """是否启用从执行复盘自动生成改进提案。"""
+        value = self.get("self_improvement.proposals.enabled", default=True)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
+
+    def get_self_improvement_proposals_worktree_retention_max(self) -> int:
+        """改进提案 worktree 保留上限；超过时最旧的可被清理。"""
+        return self._get_bounded_positive_int(
+            "self_improvement.proposals.worktree_retention_max", 10, minimum=1
+        )
+
+    def get_self_improvement_proposals_dedup_cooldown_hours(self) -> int:
+        """跨复盘同类提案去重冷却窗口（小时）。"""
+        return self._get_bounded_positive_int(
+            "self_improvement.proposals.dedup_cooldown_hours", 24, minimum=0
+        )
+
     # ===== 内部方法 =====
 
     def _get_secret(self, key: str) -> Optional[str]:

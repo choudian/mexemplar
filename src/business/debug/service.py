@@ -11,11 +11,15 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timezone
 import json
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.data.unified_config import get_unified_config
 from src.data.repos.workflow_transition_repository import WorkflowTransitionRepository
-from src.business.debug.flow import EphemeralFlowDetail, FlowCorrelationService, classify_event_status
+from src.business.debug.flow import (
+    EphemeralFlowDetail,
+    FlowCorrelationService,
+    classify_event_status,
+)
 from src.business.debug.models import LLMTraceRecord
 from src.business.debug.references import DebugReferenceService
 from src.business.debug.trace_buffer import SharedRetentionBudget, TraceBuffer
@@ -69,9 +73,7 @@ class DebugInspectorService:
             "enabled": enabled,
             "armedAt": armed_at.isoformat() if armed_at else None,
             "retentionEpoch": retention_epoch,
-            "warning": (
-                "调试记录可能包含原始用户文本，请勿在 traced 对话中输入自行管理的秘密。"
-            ),
+            "warning": ("调试记录可能包含原始用户文本，请勿在 traced 对话中输入自行管理的秘密。"),
             "limits": {
                 "maxRecords": config.get_debug_trace_max_records(),
                 "maxRecordBytes": config.get_debug_trace_max_record_bytes(),
@@ -93,9 +95,7 @@ class DebugInspectorService:
             if config.get_debug_trace_enabled() and self._buffer and self._current_epoch:
                 return self.get_status()
             config.set("debug.trace.enabled", True, persist="runtime")
-            self._retention_budget = SharedRetentionBudget(
-                config.get_debug_trace_max_total_bytes()
-            )
+            self._retention_budget = SharedRetentionBudget(config.get_debug_trace_max_total_bytes())
             self._buffer = TraceBuffer(
                 max_records=config.get_debug_trace_max_records(),
                 max_record_bytes=config.get_debug_trace_max_record_bytes(),
@@ -317,15 +317,11 @@ class DebugInspectorService:
             "inputMedia": self._decode_safe_json_or_text(record.input_media, default=[]),
             "inputTools": self._decode_safe_json_or_text(record.input_tools),
             "outputContent": (
-                self._redactor.redact(record.output_content)
-                if record.output_content
-                else None
+                self._redactor.redact(record.output_content) if record.output_content else None
             ),
             "outputToolCalls": self._decode_safe_json_or_text(record.output_tool_calls, default=[]),
             "errorSummary": (
-                self._redactor.redact(record.error_summary)
-                if record.error_summary
-                else None
+                self._redactor.redact(record.error_summary) if record.error_summary else None
             ),
         }
 

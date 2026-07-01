@@ -20,7 +20,6 @@ import pytest
 
 from src.data.unified_config import UnifiedConfigManager
 
-
 # ---------------------------------------------------------------------------
 # Helpers：构建无外部依赖的 UnifiedConfigManager 实例
 # ---------------------------------------------------------------------------

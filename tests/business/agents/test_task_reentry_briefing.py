@@ -67,9 +67,7 @@ def test_question_reentry_points_parent_to_answer_tool() -> None:
 
 
 def test_missing_safe_summary_is_treated_as_empty() -> None:
-    text = build_reentry_briefing(
-        [{"taskId": "tsk_3", "deliveredStatus": "done"}]
-    )
+    text = build_reentry_briefing([{"taskId": "tsk_3", "deliveredStatus": "done"}])
     assert "- 任务 tsk_3：done" in text
 
 

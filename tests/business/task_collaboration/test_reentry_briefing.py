@@ -12,7 +12,6 @@ from __future__ import annotations
 
 from src.business.task_collaboration.models import (
     TaskEdgeSnapshot,
-    TaskEdgeType,
     TaskGraphSnapshot,
     TaskSnapshot,
     TaskStatus,

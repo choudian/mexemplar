@@ -77,9 +77,7 @@ class ParentReentrySink:
         ``drain`` 清空后允许再次通知（如主助理裁定 returned 后图重跑再次全终态）。
         """
         if not session_id or not graph_id:
-            logger.debug(
-                "[reentry] notify_graph_complete skipped: missing session/graph"
-            )
+            logger.debug("[reentry] notify_graph_complete skipped: missing session/graph")
             return
         with self._lock:
             pending = self._pending.setdefault(session_id, [])

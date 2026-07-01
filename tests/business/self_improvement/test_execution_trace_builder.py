@@ -24,12 +24,18 @@ def test_skeleton_detects_two_fetches_same_url():
             "assistant",
             tool_calls=[{"function": {"name": "web_fetch", "arguments": '{"url":"https://x"}'}}],
         ),
-        _Msg("tool", content='{"limits":{"visibleChars":68347},"references":[{"referenceId":"out_a"}]}'),
+        _Msg(
+            "tool",
+            content='{"limits":{"visibleChars":68347},"references":[{"referenceId":"out_a"}]}',
+        ),
         _Msg(
             "assistant",
             tool_calls='[{"function":{"name":"web_fetch","arguments":"{\\"url\\":\\"https://x\\"}"}}]',
         ),
-        _Msg("tool", content='{"limits":{"visibleChars":68000},"references":[{"referenceId":"out_b"}]}'),
+        _Msg(
+            "tool",
+            content='{"limits":{"visibleChars":68000},"references":[{"referenceId":"out_b"}]}',
+        ),
     ]
 
     skeleton = build_skeleton("ast_x", _Repo(messages))

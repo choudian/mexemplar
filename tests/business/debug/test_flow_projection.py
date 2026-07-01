@@ -14,7 +14,9 @@ class FakeConfig:
     def __init__(self) -> None:
         self.values: dict[str, Any] = {}
 
-    def set(self, key: str, value: Any, persist: str = "database", value_type: str = "string") -> None:
+    def set(
+        self, key: str, value: Any, persist: str = "database", value_type: str = "string"
+    ) -> None:
         self.values[key] = value
 
     def get_debug_trace_enabled(self) -> bool:
@@ -51,13 +53,15 @@ class FakeWorkflowTransitionRepository:
         return None
 
     def list_flow_summaries(self, **_kwargs):
-        return [{
-            "workflowId": "wf_1",
-            "transitionCount": 1,
-            "lastEventType": "requirement_confirmed",
-            "lastCreatedAt": self.transition.created_at,
-            "linkedTraceCount": 0,
-        }]
+        return [
+            {
+                "workflowId": "wf_1",
+                "transitionCount": 1,
+                "lastEventType": "requirement_confirmed",
+                "lastCreatedAt": self.transition.created_at,
+                "linkedTraceCount": 0,
+            }
+        ]
 
     def get_by_workflow(self, workflow_id: str):
         return [self.transition] if workflow_id == "wf_1" else []
@@ -76,7 +80,9 @@ def service_with_flow_repo(monkeypatch: pytest.MonkeyPatch) -> DebugInspectorSer
     return service
 
 
-def test_flow_projection_requires_enabled_trace(service_with_flow_repo: DebugInspectorService) -> None:
+def test_flow_projection_requires_enabled_trace(
+    service_with_flow_repo: DebugInspectorService,
+) -> None:
     with pytest.raises(LookupError, match="debug_disabled"):
         service_with_flow_repo.list_flows()
 

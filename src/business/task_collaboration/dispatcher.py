@@ -47,12 +47,12 @@ _TASK_OUTCOME_SUSPENDED = "suspended"
 # 这里只提供"下一步建议"避免开放自由发挥（FR-015）。display_hint 供 briefing 渲染。
 # action_name 与 decide/mutate 工具调用语义对齐，是唯一的自愈动作来源。
 _HEALING_ACTION_HINTS: dict[str, str] = {
-    "retry": "重试该节点 → decide(decision=\"returned\")",
-    "swap_executor": "换执行器重试 → 改 assignee 后 decide(decision=\"returned\")",
-    "adjust_input": "调整输入后重做 → decide(decision=\"returned\", instruction=\"…\")",
+    "retry": '重试该节点 → decide(decision="returned")',
+    "swap_executor": '换执行器重试 → 改 assignee 后 decide(decision="returned")',
+    "adjust_input": '调整输入后重做 → decide(decision="returned", instruction="…")',
     "skip": "跳过该节点 → mutate_task_graph(skip_node)（若可容忍，下游继续）",
     "replan": "改图绕过 → mutate_task_graph(add_node/remove_dependency)",
-    "abandon": "放弃该分支 → decide(decision=\"abandoned\")",
+    "abandon": '放弃该分支 → decide(decision="abandoned")',
 }
 
 _HEALING_ACTIONS_BY_STATUS: dict[str, list[str]] = {

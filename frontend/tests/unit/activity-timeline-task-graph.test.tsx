@@ -8,10 +8,9 @@
  * - 无 task graph 时行为不变
  */
 
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { AssistantActivityStep } from "../../src/api/assistant";
 import type { AssistantTaskGraphSnapshot } from "../../src/api/assistantTasks";
 import type { Subagent } from "../../src/state/assistantTypes";
 import ActivityTimeline from "../../src/screens/assistant/ActivityTimeline";
@@ -116,7 +115,6 @@ describe("ActivityTimeline + task graph", () => {
 
     // 根节点 "整理报销" 不应作为独立卡片出现
     // （根节点是 DAG 容器，不渲染为卡片）
-    const rootCards = screen.queryAllByText("整理报销");
     // 可能不在时间线内出现，或在其他上下文中出现
     // 关键是验证非根节点出现
     expect(screen.getByText("步骤A")).toBeDefined();

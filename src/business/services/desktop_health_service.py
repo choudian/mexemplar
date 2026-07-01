@@ -51,7 +51,9 @@ class DesktopHealthService:
 
         critical_failed = any(check.status == "failed" and check.critical for check in checks)
         any_problem = any(check.status != "ok" for check in checks)
-        status: BackendStatus = "failed" if critical_failed else "degraded" if any_problem else "ready"
+        status: BackendStatus = (
+            "failed" if critical_failed else "degraded" if any_problem else "ready"
+        )
         message = {
             "ready": "Desktop backend is ready.",
             "degraded": "Desktop backend is running with recoverable issues.",

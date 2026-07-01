@@ -6,6 +6,7 @@ import { AppShell } from "../../src/app/AppShell";
 import { useAssistantStore } from "../../src/state/assistantStore";
 import { useSkillsStore } from "../../src/state/skillsStore";
 import { useShellStore } from "../../src/state/shellStore";
+import { useBrainStore } from "../../src/state/brainStore";
 import { useTeachingStore } from "../../src/state/teachingStore";
 
 const bootstrapPayload = {
@@ -226,6 +227,53 @@ describe("AppShell", () => {
       expect(screen.getByRole("heading", { name: route.label })).toBeInTheDocument();
     }
     await waitFor(() => expect(screen.getByRole("tab", { name: "AI" })).toBeInTheDocument());
+  });
+
+  test("surfaces pending improvement proposals as a badge on the brain nav (FR-020)", async () => {
+    // FR-020：pending_review 提案必须在全局大脑导航项可见，不能静悄悄躺在管理屏无人知。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/api/events")) return eventStreamResponse();
+        if (url.includes("/api/improvement-proposals")) {
+          return jsonResponse({
+            proposals: [
+              {
+                id: "prop_1",
+                sourceReviewId: "rev_1",
+                findingIndex: 0,
+                status: "pending_review",
+                severity: "med",
+                findingType: "效率",
+                what: "助理重复抓取同一数据",
+                evidence: "step 3/9",
+                suggestion: "加缓存",
+                userSupplement: null,
+                graphId: null,
+                worktreeAvailable: false,
+                branchName: null,
+                resultTestsPassed: null,
+                resultSummary: null,
+                error: null,
+                createdAt: "2026-06-28T00:00:00Z",
+                decidedAt: null,
+                completedAt: null,
+              },
+            ],
+          });
+        }
+        return jsonResponse(bootstrapPayload);
+      }),
+    );
+
+    render(<AppShell />);
+
+    await waitFor(() => expect(screen.getByText("已就绪")).toBeInTheDocument());
+    const navigation = screen.getByRole("navigation", { name: "主导航" });
+    const brainButton = within(navigation).getByRole("button", { name: /大脑管理/ });
+    // 全局导航项上的 pending_review 计数徽标（屏外可发现）。
+    await waitFor(() => expect(within(brainButton).getByText("1")).toBeInTheDocument());
   });
 
   test("retries bootstrap while the sidecar is still starting", async () => {
@@ -607,6 +655,71 @@ describe("AppShell", () => {
       expect(useAssistantStore.getState().turnActivityBySession.ast_1.seq_1.subagents).toHaveLength(1),
     );
     expect(useAssistantStore.getState().turnActivityBySession.ast_1.seq_1.steps[0].toolName).toBe("snapshot");
+  });
+
+  test("refreshes improvement proposals on brain resync", async () => {
+    // 026 review CG-2:backend.resync_required 且 domains 含 brain 时必须重拉 improvement-proposals
+    // 权威快照;否则 BrainScreen 复盘视图在 SSE 缺口后会停在陈旧状态(删掉 AppShell.tsx:213
+    // refreshImprovementProposals 那行,此测试应红)。
+    useBrainStore.setState({ improvementProposals: [] });
+    const streamFrames = [
+      eventFrame({
+        eventId: "evt_brain_resync",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: null,
+        type: "backend.resync_required",
+        scope: {},
+        payload: { reason: "replay_gap", domains: ["brain"], eventSessionId: "ui_sess_test" },
+        createdAt: "2026-05-10T00:00:00Z",
+      }),
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/events")) return eventStreamResponse(streamFrames, { close: true });
+      if (url.includes("/api/improvement-proposals")) {
+        return jsonResponse({
+          proposals: [
+            {
+              id: "prop_resync_1",
+              sourceReviewId: "rev_1",
+              findingIndex: 0,
+              status: "pending_review",
+              severity: "med",
+              findingType: "efficiency",
+              what: "重复抓取",
+              evidence: null,
+              suggestion: null,
+              userSupplement: null,
+              graphId: null,
+              worktreeAvailable: false,
+              branchName: null,
+              resultTestsPassed: null,
+              resultSummary: null,
+              error: null,
+              createdAt: "2026-05-10T00:00:00Z",
+              decidedAt: null,
+              completedAt: null,
+            },
+          ],
+        });
+      }
+      return jsonResponse(bootstrapPayload);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AppShell />);
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).includes("/api/improvement-proposals"),
+        ),
+      ).toBe(true),
+    );
+    await waitFor(() =>
+      expect(useBrainStore.getState().improvementProposals[0]?.id).toBe("prop_resync_1"),
+    );
   });
 
   test("refreshes task collaboration snapshot on assistant resync", async () => {

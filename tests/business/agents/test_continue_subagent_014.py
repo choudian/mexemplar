@@ -154,9 +154,7 @@ def test_continue_subagent_binds_subagent_id_as_executor_id(orch, mock_config):
         patch.object(orch, "_build_delegated_executor_tools", side_effect=_capture),
         patch.object(orch, "_resolve_user_tool_ids", return_value=set()),
     ):
-        orch._continue_subagent(
-            parent_session_id=parent, subagent_id=child, instruction="接着做"
-        )
+        orch._continue_subagent(parent_session_id=parent, subagent_id=child, instruction="接着做")
 
     assert captured.get("executor_id") == child
 
@@ -193,3 +191,42 @@ def test_continue_unknown_id_still_returns_not_found(orch):
     )
     assert res["success"] is False
     assert "未找到可唤回" in res["error"]
+
+
+def test_continue_subagent_propagates_workspace_root(orch, mock_config, tmp_path):
+    """续跑路径必须把 workspace_root 透传到 AgentConfig。
+
+    Regression (026 C1): proposal executor 节点 suspended 后经 checkpoint 续跑时，
+    continue_subagent 是唯一不经 _get_loop、内联构造 AgentConfig 的路径，曾漏传
+    workspace_root → 续跑子代理 workspace_root=None → agent_loop 的
+    `workspace_root or Path.cwd()` 回退主仓库 cwd → proposal 沙箱门卫失效，
+    可在主仓库任意改源码。
+    """
+    from src.business.agents import config as agent_config_mod
+
+    parent = "parent-cont-ws-026"
+    child = _make_child_subagent(orch, parent, status="suspended")
+    orch._llm = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
+    workspace_root = tmp_path / "proposal-worktree"
+    workspace_root.mkdir()
+
+    captured: dict = {}
+    real_agent_config = agent_config_mod.AgentConfig
+
+    def _capture(*args, **kwargs):
+        captured.update(kwargs)
+        return real_agent_config(*args, **kwargs)
+
+    with (
+        patch.object(agent_config_mod, "AgentConfig", side_effect=_capture),
+        patch.object(orch, "_build_delegated_executor_tools", return_value=[]),
+        patch.object(orch, "_resolve_user_tool_ids", return_value=set()),
+    ):
+        orch._continue_subagent(
+            parent_session_id=parent,
+            subagent_id=child,
+            instruction="接着做",
+            workspace_root=str(workspace_root),
+        )
+
+    assert captured.get("workspace_root") is not None

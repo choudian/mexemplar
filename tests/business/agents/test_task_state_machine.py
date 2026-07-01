@@ -9,7 +9,6 @@ from src.business.task_collaboration.models import (
     validate_task_transition,
 )
 
-
 # ── 正向转换：合法路径 ──
 
 
@@ -89,9 +88,7 @@ class TestSuspendReasonRequired:
 
     @pytest.mark.parametrize("reason", ["waiting_user", "waiting_system", "user_stop"])
     def test_suspended_with_valid_reason_passes(self, reason: str) -> None:
-        validate_task_transition(
-            TaskStatus.RUNNING, TaskStatus.SUSPENDED, suspend_reason=reason
-        )
+        validate_task_transition(TaskStatus.RUNNING, TaskStatus.SUSPENDED, suspend_reason=reason)
 
     def test_suspend_reason_only_valid_for_suspended(self) -> None:
         with pytest.raises(ValueError, match="only valid for suspended"):

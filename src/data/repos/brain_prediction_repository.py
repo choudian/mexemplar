@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 class BrainPredictionRepository(BrainMemoryEntryRepository):
     """Repository for prediction generation and verification state."""
+
     def create_prediction_entry(
         self,
         content: str,

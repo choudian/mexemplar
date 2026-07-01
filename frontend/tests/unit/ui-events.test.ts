@@ -208,6 +208,42 @@ describe("uiEvents", () => {
     expect(event?.type).toBe("brain_specialist_changed");
   });
 
+  test("parses improvement proposal events and rejects invalid enum values", () => {
+    const event = parseUiEvent(enveloped("improvement_proposal.changed", {
+      proposalId: "prop_1",
+      sourceReviewId: "rev_1",
+      status: "in_progress",
+      severity: "med",
+      changeType: "in_progress",
+    }));
+
+    expect(event?.type).toBe("improvement_proposal.changed");
+    expect(parseUiEvent(enveloped("improvement_proposal.changed", {
+      proposalId: "prop_1",
+      sourceReviewId: "rev_1",
+      status: "running",
+      changeType: "in_progress",
+    }))).toBeNull();
+    expect(parseUiEvent(enveloped("improvement_proposal.changed", {
+      proposalId: "prop_1",
+      sourceReviewId: "rev_1",
+      status: "in_progress",
+      changeType: "updated",
+    }))).toBeNull();
+    expect(parseUiEvent(enveloped("improvement_proposal.changed", {
+      proposalId: "prop_1",
+      sourceReviewId: "rev_1",
+      status: "failed",
+      changeType: "approved",
+    }))).toBeNull();
+    expect(parseUiEvent(enveloped("improvement_proposal.changed", {
+      proposalId: "prop_1",
+      sourceReviewId: "rev_1",
+      status: "pending_review",
+      changeType: "created",
+    }))?.type).toBe("improvement_proposal.changed");
+  });
+
   test("parses skill.changed and rejects malformed methodology payloads", () => {
     const event = parseUiEvent(enveloped(
       "skill.changed",

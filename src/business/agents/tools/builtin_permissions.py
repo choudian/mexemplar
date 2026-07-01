@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from src.business.agents.tools.builtin_contracts import PermissionDecision
+from src.business.agents.tools.builtin_contracts import (
+    PermissionDecision,
+    runtime_workspace_root,
+)
 from src.execution.command_runner import CommandParseError, parse_command_argv
 from src.utils.workspace import resolve_workspace_root, workspace_hash
 
@@ -166,7 +169,15 @@ def classify_path(
     *,
     workspace_root: Path | str | None = None,
 ) -> PathClassification:
-    root = resolve_workspace_root(workspace_root)
+    # workspace_root 未显式传入时，用当前 tool runtime context 的 root（注入值）；
+    # ContextVar 未设时 runtime_workspace_root() 回退 cwd，与历史行为一致。这让
+    # pre_hook（不传 root）与 handler（显式传 root）用同一个 workspace，否则注入的
+    # workspace 重定向在 pre_hook 层失效（FR-014a 承重假设）。
+    root = (
+        runtime_workspace_root()
+        if workspace_root is None
+        else resolve_workspace_root(workspace_root)
+    )
     lexical, resolved = _resolve_candidate(path, root)
     lexical_inside = lexical.resolve(strict=False).is_relative_to(root)
     resolved_inside = resolved.is_relative_to(root)
@@ -236,11 +247,11 @@ def permission_for_path(
 ) -> PermissionCheck:
     cls = classify_path(path, workspace_root=workspace_root)
     op = operation.lower()
-    if cls.system or (cls.hidden and not allow_hidden):
+    if cls.system:
         return PermissionCheck(
             cls,
             PermissionDecision(
-                scope="system" if cls.system else "hidden",
+                scope="system",
                 risk="denied",
                 decision="denied",
                 summary=f"Denied {op}: {cls.display_path}",
@@ -254,11 +265,43 @@ def permission_for_path(
     mutation_ops = {"write", "edit", "delete", "patch"}
 
     if cls.inside_workspace:
+        if cls.hidden and not allow_hidden:
+            return PermissionCheck(
+                cls,
+                PermissionDecision(
+                    scope="hidden",
+                    risk="denied",
+                    decision="denied",
+                    summary=f"Denied {op}: {cls.display_path}",
+                    reason="path_hidden_or_system",
+                ),
+                "path_hidden_or_system",
+                "Path is hidden or system-protected.",
+            )
         risk = (
             "read_only"
             if op in read_only_ops
             else "workspace_mutation" if op in mutation_ops else "elevated"
         )
+        if op in mutation_ops:
+            denial = _self_improvement_mutation_denial(
+                cls.resolved,
+                workspace_root=cls.workspace_root,
+                operation=op,
+            )
+            if denial:
+                return PermissionCheck(
+                    cls,
+                    PermissionDecision(
+                        scope="workspace",
+                        risk="denied",
+                        decision="denied",
+                        summary=f"Denied {op}: {cls.display_path}",
+                        reason="self_improvement_workspace_guard",
+                    ),
+                    "path_denied_by_self_improvement_guard",
+                    denial,
+                )
         return PermissionCheck(
             cls,
             PermissionDecision(
@@ -430,6 +473,94 @@ def _command_policy_rejection(
     )
 
 
+def _looks_like_improvement_workspace_root(workspace_root: Path | str) -> bool:
+    """Inline replica of ``proposal_workspace.is_improvement_workspace_root``.
+
+    Kept local on purpose: the fail-closed fallback below must not depend on
+    the ``self_improvement`` module that may itself be the source of the guard
+    failure (import error, partial reload, circular import, ...). Matching the
+    ``.worktrees/improvement/<proposal_id>`` layout is enough to decide
+    fail-closed for proposal worktrees while leaving normal workspaces alone.
+    """
+    try:
+        root = Path(workspace_root).expanduser().resolve(strict=False)
+    except Exception:
+        return False
+    return (
+        root.parent.name.lower() == "improvement"
+        and root.parent.parent.name.lower() == ".worktrees"
+    )
+
+
+# Returned when the proposal guard itself is unavailable inside a proposal
+# worktree. FR-014/SC-003 require fail-closed: a proposal executor must not
+# slip outside the blast radius just because the guard raised.
+_SELF_IMPROVEMENT_GUARD_UNAVAILABLE_REASON = (
+    "self-improvement workspace guard is unavailable; proposal worktree "
+    "mutations are denied until the guard can be evaluated."
+)
+
+# Mutation operations covered by check_improvement_workspace_mutation. The
+# fail-closed fallback only applies to these so reads keep working when the
+# guard raises.
+_SELF_IMPROVEMENT_MUTATION_OPS = frozenset({"write", "edit", "delete", "patch"})
+
+
+def _self_improvement_mutation_denial(
+    path: Path,
+    *,
+    workspace_root: Path,
+    operation: str,
+) -> str | None:
+    try:
+        from src.business.self_improvement.proposal_workspace import (
+            check_improvement_workspace_mutation,
+        )
+
+        return check_improvement_workspace_mutation(
+            path,
+            workspace_root=workspace_root,
+            operation=operation,
+        )
+    except Exception:
+        # Fail closed for proposal worktrees: if the guard itself is
+        # unavailable (import failure, partial reload, ...), a proposal
+        # executor must not escape the FR-014 blast radius. Normal workspaces
+        # are unaffected — the inline check is False for them, and non-mutation
+        # operations are never gated by this guard.
+        if (
+            _looks_like_improvement_workspace_root(workspace_root)
+            and operation.lower() in _SELF_IMPROVEMENT_MUTATION_OPS
+        ):
+            return _SELF_IMPROVEMENT_GUARD_UNAVAILABLE_REASON
+        return None
+
+
+def _self_improvement_exec_denial(
+    command: str,
+    *,
+    workspace_root: Path,
+    base_dir: Path,
+) -> str | None:
+    try:
+        from src.business.self_improvement.proposal_workspace import (
+            check_improvement_exec_command,
+        )
+
+        return check_improvement_exec_command(
+            command,
+            workspace_root=workspace_root,
+            base_dir=base_dir,
+        )
+    except Exception:
+        # Fail closed for proposal worktrees (see mutation denial above). Exec
+        # is always potentially dangerous, so any failure inside a proposal
+        # worktree is denied; normal workspaces are unaffected.
+        if _looks_like_improvement_workspace_root(workspace_root):
+            return _SELF_IMPROVEMENT_GUARD_UNAVAILABLE_REASON
+        return None
+
+
 def command_path_policy_violation(
     command: str,
     *,
@@ -486,6 +617,17 @@ def command_path_policy_violation(
                 "command_rejected",
                 "Command path arguments outside the workspace are denied.",
             )
+    improvement_denial = _self_improvement_exec_denial(
+        command,
+        workspace_root=root,
+        base_dir=base,
+    )
+    if improvement_denial:
+        return _command_policy_rejection(
+            root=root,
+            message=improvement_denial,
+            reason="self_improvement_exec_guard",
+        )
     return None
 
 

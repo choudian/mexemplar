@@ -60,4 +60,3 @@ class PendingTool:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     promoted_at: Optional[datetime] = None  # 提升为正式工具的时间
-

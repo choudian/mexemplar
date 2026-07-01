@@ -33,6 +33,28 @@ def test_registered_event_examples_pass_payload_validation() -> None:
         validate_ui_event_payload(event_type, example)
 
 
+def test_improvement_proposal_changed_rejects_status_change_type_mismatch() -> None:
+    payload = {
+        "proposalId": "prop_1",
+        "sourceReviewId": "rev_1",
+        "status": "failed",
+        "changeType": "approved",
+    }
+
+    with pytest.raises(UiEventValidationError):
+        validate_ui_event_payload("improvement_proposal.changed", payload)
+
+    validate_ui_event_payload(
+        "improvement_proposal.changed",
+        {
+            "proposalId": "prop_1",
+            "sourceReviewId": "rev_1",
+            "status": "pending_review",
+            "changeType": "created",
+        },
+    )
+
+
 def test_unregistered_direct_publication_is_rejected() -> None:
     with pytest.raises(UiEventValidationError):
         event_queue.publish_nowait("backend.event", {"message": "raw"})

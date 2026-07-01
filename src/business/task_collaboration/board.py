@@ -7,7 +7,12 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.exc import IntegrityError
 
-from src.business.task_collaboration.models import ClaimStatus, TaskStatus, safe_preview, safe_public_preview
+from src.business.task_collaboration.models import (
+    ClaimStatus,
+    TaskStatus,
+    safe_preview,
+    safe_public_preview,
+)
 from src.business.task_collaboration.service import (
     emit_board_changed,
     increment_task_collaboration_counter,
@@ -35,9 +40,7 @@ class TaskBoardService(AtomicTaskService):
 
     def list_board(self, session_id: str) -> list[dict]:
         tasks = self._tasks.list_board_tasks(session_id)
-        active_claims = self._claims.list_active_claims_for_tasks(
-            [task.task_id for task in tasks]
-        )
+        active_claims = self._claims.list_active_claims_for_tasks([task.task_id for task in tasks])
         items: list[dict] = []
         for task in tasks:
             active_claim = active_claims.get(task.task_id)

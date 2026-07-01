@@ -132,9 +132,7 @@ class SafetyGovernor:
             return False
 
         try:
-            degradation_threshold = float(
-                self._config.get_self_improvement_degradation_threshold()
-            )
+            degradation_threshold = float(self._config.get_self_improvement_degradation_threshold())
         except (TypeError, ValueError) as exc:
             logger.warning(
                 "Invalid degradation threshold config, using default 0.10: %s",
@@ -142,7 +140,10 @@ class SafetyGovernor:
             )
             degradation_threshold = 0.10
 
-        if before_metric > 0 and (after_metric - before_metric) / before_metric < -degradation_threshold:
+        if (
+            before_metric > 0
+            and (after_metric - before_metric) / before_metric < -degradation_threshold
+        ):
             logger.warning(
                 "Regressive change detected: %.3f -> %.3f (threshold %.1f%%)",
                 before_metric,
@@ -173,9 +174,8 @@ class SafetyGovernor:
         except (TypeError, ValueError):
             threshold = 0.01
 
-        is_converged = (
-            len(self._convergence_history) >= 3
-            and all(abs(d) < threshold for d in self._convergence_history[-3:])
+        is_converged = len(self._convergence_history) >= 3 and all(
+            abs(d) < threshold for d in self._convergence_history[-3:]
         )
         return {
             "deltas": list(self._convergence_history),
@@ -203,9 +203,8 @@ class SafetyGovernor:
         except (TypeError, ValueError):
             threshold = 0.01
 
-        if (
-            len(self._convergence_history) >= 3
-            and all(abs(d) < threshold for d in self._convergence_history[-3:])
+        if len(self._convergence_history) >= 3 and all(
+            abs(d) < threshold for d in self._convergence_history[-3:]
         ):
             return False, "Convergence detected: optimization plateaued"
 

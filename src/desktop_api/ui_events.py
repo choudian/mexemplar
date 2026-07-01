@@ -647,6 +647,35 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"sessionId"}),
         required_scope_keys=frozenset({"sessionId"}),
     ),
+    # status / changeType 交叉关系契约（026 I6）：changeType 恒等于 status，唯一例外
+    # 是 proposal 首次创建时 changeType="created" 且 status="pending_review"。通用
+    # enum 校验在 registry 中声明，交叉关系由 validate_ui_event_payload 的专用分支校验。
+    "improvement_proposal.changed": UiEventDefinition(
+        "improvement_proposal.changed",
+        "notification",
+        frozenset({"proposalId", "sourceReviewId", "status", "severity", "changeType"}),
+        frozenset(),
+        {
+            "proposalId": "prop_abc",
+            "sourceReviewId": "rev_1",
+            "status": "pending_review",
+            "severity": "med",
+            "changeType": "created",
+        },
+        required_payload_keys=frozenset({"proposalId", "sourceReviewId", "status", "changeType"}),
+        payload_enum_values=(
+            (
+                "status",
+                frozenset(
+                    {"pending_review", "approved", "in_progress", "done", "failed", "rejected"}
+                ),
+            ),
+            (
+                "changeType",
+                frozenset({"created", "approved", "rejected", "in_progress", "done", "failed"}),
+            ),
+        ),
+    ),
 }
 
 
@@ -691,12 +720,25 @@ def validate_ui_event_payload(event_type: str, payload: dict[str, Any]) -> None:
             raise UiEventValidationError(
                 f"UI event {event_type} contains invalid enum value for {key}: {payload[key]}"
             )
+    if event_type == "improvement_proposal.changed":
+        _validate_improvement_proposal_changed_payload(payload)
     if event_type == "assistant.message" and payload.get("failure") is not None:
         _validate_assistant_failure_payload(payload)
     for key, value in payload.items():
         if key in definition.unredacted_payload_keys:
             continue  # 有意保留原文（UI 默认隐藏 + 双击查看），不做 forbidden value 脱敏校验
         _validate_payload_value(key, value)
+
+
+def _validate_improvement_proposal_changed_payload(payload: dict[str, Any]) -> None:
+    status = str(payload.get("status") or "")
+    change_type = str(payload.get("changeType") or "")
+    if change_type == "created" and status == "pending_review":
+        return
+    if change_type != status:
+        raise UiEventValidationError(
+            "improvement_proposal.changed status and changeType do not match"
+        )
 
 
 def _validate_assistant_failure_payload(payload: dict[str, Any]) -> None:

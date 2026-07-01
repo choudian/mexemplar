@@ -15,7 +15,6 @@ from typing import Optional
 from src.business.self_improvement.audit_service import SelfImprovementAuditService
 from src.business.self_improvement.safety_governor import SafetyGovernor
 from src.data.repos.self_improvement_repository import SelfImprovementRepository
-from src.data.unified_config import get_unified_config
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +22,9 @@ logger = logging.getLogger(__name__)
 class PromptEffectivenessTracker:
     """Collects and aggregates prompt effectiveness metrics at session end."""
 
-    def __init__(self, si_repo: SelfImprovementRepository, audit_service: SelfImprovementAuditService):
+    def __init__(
+        self, si_repo: SelfImprovementRepository, audit_service: SelfImprovementAuditService
+    ):
         self._si_repo = si_repo
         self._audit = audit_service
 
@@ -44,7 +45,8 @@ class PromptEffectivenessTracker:
         # Composite score: weighted average
         composite = (
             0.35 * task_completion_rate
-            + 0.25 * (1.0 - min(avg_iteration_count / 20.0, 1.0))  # normalize: lower iterations = better
+            + 0.25
+            * (1.0 - min(avg_iteration_count / 20.0, 1.0))  # normalize: lower iterations = better
             + 0.25 * first_tool_accuracy
             + 0.15 * user_implicit_feedback  # 1.0 = no rephrasing, 0.0 = user rephrased
         )
@@ -63,7 +65,9 @@ class PromptEffectivenessTracker:
         )
         return entry.metric_id
 
-    def get_effectiveness_for_prompt(self, prompt_hash: str, since_days: int = 7) -> Optional[float]:
+    def get_effectiveness_for_prompt(
+        self, prompt_hash: str, since_days: int = 7
+    ) -> Optional[float]:
         """Get average effectiveness score for a prompt version over the last N days."""
         metrics = self._si_repo.get_metrics(
             metric_type="prompt_effectiveness",
@@ -211,8 +215,9 @@ class PromptOptimizationService:
                             )
                             continue
 
-            # Promote the candidate
-            self._si_repo.promote_supplement(candidate.supplement_id)
+            # Promote the candidate（CAS 失败返回 None 时不报成功，026 I7 follow-up）
+            if self._si_repo.promote_supplement(candidate.supplement_id) is None:
+                continue
             promoted.append(candidate.supplement_id)
 
             self._audit.log_action(
@@ -235,15 +240,15 @@ class PromptOptimizationService:
         retracted = []
         # Get recently promoted supplements (last 10 sessions worth)
         active = self._si_repo.get_active_supplements()
-        config = get_unified_config()
-        monitor_window = config.get_self_improvement_rollback_monitor_window()
 
         for supplement in active:
             supplement_hash = getattr(supplement, "prompt_hash", None)
             if supplement_hash is None:
                 continue
 
-            current_score = self._tracker.get_effectiveness_for_prompt(supplement_hash, since_days=1)
+            current_score = self._tracker.get_effectiveness_for_prompt(
+                supplement_hash, since_days=1
+            )
             if current_score is None:
                 continue
 

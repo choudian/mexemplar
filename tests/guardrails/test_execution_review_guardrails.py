@@ -1,4 +1,7 @@
-from src.business.self_improvement.execution_review_service import ExecutionReviewService, REVIEWER_TOOLS
+from src.business.self_improvement.execution_review_service import (
+    ExecutionReviewService,
+    REVIEWER_TOOLS,
+)
 from src.business.self_improvement.execution_review_trigger import should_review
 
 
@@ -8,13 +11,16 @@ def test_reviewer_has_no_side_effect_tools():
 
 
 def test_switch_off_short_circuits_enqueue():
-    assert should_review(
-        enabled=False,
-        delegated=True,
-        tool_executed=True,
-        session_count_today=0,
-        max_per_session=99,
-    ) is False
+    assert (
+        should_review(
+            enabled=False,
+            delegated=True,
+            tool_executed=True,
+            session_count_today=0,
+            max_per_session=99,
+        )
+        is False
+    )
 
 
 def test_advisory_is_always_true():

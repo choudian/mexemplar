@@ -59,6 +59,7 @@ def ensure_builtin_deps() -> None:
     else:
         logger.warning(f"[ToolExecutor] 内置依赖预装失败: {err}")
 
+
 # Runner 脚本：以模块方式加载工具代码，调用 execute()，结果写入 JSON 文件
 # 工具代码的 if __name__ == "__main__" 不会被触发（模块名不是 __main__）
 _RUNNER_CODE = """\

@@ -501,6 +501,7 @@ class TaskCollaborationService(AtomicTaskService):
                     assignee_type=assignee_type,
                     assignee_id=assignee_id,
                     capability_scope=_encode_capability_scope(node.get("capabilityScope")),
+                    workspace_root=node.get("workspaceRoot"),
                     requires_confirmation=needs_confirm,
                 )
 
@@ -568,6 +569,7 @@ class TaskCollaborationService(AtomicTaskService):
             return {"applied": [], "rejected": changes, "graphVersion": 0, "rescanned": False}
 
         root_task_id = root.task_id
+        inherited_workspace_root = self._workspace_root_for_graph_mutation(graph_id)
 
         with self._atomic():
             topology_changed = False
@@ -593,6 +595,7 @@ class TaskCollaborationService(AtomicTaskService):
                             capability_scope=_encode_capability_scope(
                                 change.get("capabilityScope")
                             ),
+                            workspace_root=inherited_workspace_root,
                             requires_confirmation=bool(change.get("needsConfirmation")),
                         )
                         applied.append({"op": op, "nodeId": node_id, "taskId": task_id})
@@ -692,6 +695,17 @@ class TaskCollaborationService(AtomicTaskService):
             "graphVersion": current_version,
             "rescanned": len(applied) > 0,
         }
+
+    def _workspace_root_for_graph_mutation(self, graph_id: str) -> str | None:
+        """Return the graph's single workspace root when all scoped nodes agree."""
+        roots = {
+            task.workspace_root
+            for task in self._tasks.list_graph_tasks(graph_id)
+            if task.workspace_root
+        }
+        if len(roots) == 1:
+            return next(iter(roots))
+        return None
 
     def _blocking_dependency_descendants(self, graph_id: str, task_id: str) -> set[str]:
         """沿 blocking dependency 边做 BFS，返回 task_id 的所有传递下游 task_id 集合。

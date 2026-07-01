@@ -3,8 +3,6 @@
 本测试验证 024 task-graph-scheduling 的核心端到端流程。
 """
 
-import pytest
-
 from src.business.task_collaboration.reentry_briefing import build_reentry_briefing
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.repos.base_repository import generate_id
@@ -63,17 +61,19 @@ class TestFullE2E:
                 session_id=session_id,
                 nodes=[
                     {"nodeId": "n1", "title": "准备", "description": "准备数据"},
-                    {"nodeId": "n2", "title": "发送", "description": "对外发送",
-                     "needsConfirmation": True},
+                    {
+                        "nodeId": "n2",
+                        "title": "发送",
+                        "description": "对外发送",
+                        "needsConfirmation": True,
+                    },
                 ],
                 dependencies=[{"from": "n1", "to": "n2"}],
             )
             assert result["confirmationRequired"] is True
 
             # n2 的 requires_confirmation 落库
-            snapshot = svc.get_graph_snapshot(
-                session_id=session_id, graph_id=result["graphId"]
-            )
+            snapshot = svc.get_graph_snapshot(session_id=session_id, graph_id=result["graphId"])
             n2_id = result["nodeTaskIds"]["n2"]
             n2_task = next(t for t in snapshot.tasks if t.task_id == n2_id)
             assert n2_task.requires_confirmation is True

@@ -64,6 +64,31 @@ class _DelegationFacade(Protocol):
     ) -> dict: ...
 
 
+def _filter_builtin_tools(
+    builtin_tools: list[ToolDefinition],
+    tool_whitelist: list[str] | None,
+) -> list[ToolDefinition]:
+    """Restrict built-ins only when the whitelist explicitly names built-ins.
+
+    Historical delegated tasks used ``tool_whitelist`` for user-published tools
+    while still receiving the normal built-in workspace tools.  Proposal task
+    graphs, however, pass built-in names in ``capabilityScope`` as the hard
+    role boundary.  Filtering only in that explicit case preserves the legacy
+    behavior while making proposal planner/test nodes genuinely least-privilege.
+    """
+    if not tool_whitelist:
+        return builtin_tools
+    builtin_names = {tool.name for tool in builtin_tools}
+    allowed_builtin_names = {
+        item.strip()
+        for item in tool_whitelist
+        if isinstance(item, str) and item.strip() in builtin_names
+    }
+    if not allowed_builtin_names:
+        return builtin_tools
+    return [tool for tool in builtin_tools if tool.name in allowed_builtin_names]
+
+
 class ToolRegistry:
     """Builds per-agent tool lists from injected collaborators.
 
@@ -135,6 +160,7 @@ class ToolRegistry:
         self,
         allowed_tool_ids: set[str] | None,
         *,
+        tool_whitelist: list[str] | None = None,
         agent_type: str | None = None,
         executor_id: str | None = None,
         specialist_id: str | None = None,
@@ -178,6 +204,7 @@ class ToolRegistry:
         )
 
         dynamic_manager = DynamicToolManager(allowed_tool_ids=allowed_tool_ids)
+        builtin_tools = _filter_builtin_tools(BUILTIN_GENERAL_TOOLS, tool_whitelist)
         search_tools = create_assistant_search_tools(dynamic_manager)
         load_skill_tool = self.make_load_skill_tool(
             caller_type="specialist" if agent_type == AgentType.SPECIALIST else "assistant",
@@ -331,7 +358,7 @@ class ToolRegistry:
                 search_tools
                 + [*executor_collaboration_tools, load_skill_tool]
                 + specialist_subagent_tools
-                + BUILTIN_GENERAL_TOOLS
+                + builtin_tools
                 + dynamic_manager.get_activated_tools()
             )
 
@@ -347,9 +374,7 @@ class ToolRegistry:
             parameters["required"] = [item for item in required if item != "taskId"]
         properties = parameters.get("properties")
         if isinstance(properties, dict) and isinstance(properties.get("taskId"), dict):
-            properties["taskId"]["description"] = (
-                "可省略；统一任务执行器会自动使用当前任务 ID"
-            )
+            properties["taskId"]["description"] = "可省略；统一任务执行器会自动使用当前任务 ID"
         return cloned
 
     def build_assistant_tools(self, session_id: str) -> Callable[[], list[ToolDefinition]]:

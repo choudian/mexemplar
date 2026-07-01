@@ -14,7 +14,9 @@ def test_new_task_router_does_not_derive_truth_from_workflow_transitions() -> No
 
 def test_assistant_task_graph_is_only_accessible_via_dedicated_router() -> None:
     runtime_source = (ROOT / "src/desktop_api/assistant_runtime.py").read_text(encoding="utf-8")
-    router_source = (ROOT / "src/desktop_api/routers/assistant_tasks.py").read_text(encoding="utf-8")
+    router_source = (ROOT / "src/desktop_api/routers/assistant_tasks.py").read_text(
+        encoding="utf-8"
+    )
 
     # Task graph facade lives in the dedicated router, not in AssistantRuntime.
     assert "get_current_task_graph" not in runtime_source

@@ -1,5 +1,7 @@
 import { create } from "zustand";
 
+import { useToastStore } from "./toastStore";
+
 import {
   getBrainZones,
   getZoneEntries,
@@ -13,6 +15,12 @@ import {
   SkillPoolRemovalConflict,
 } from "../api/brain";
 import { fetchExecutionReviews } from "../api/executionReview";
+import {
+  fetchImprovementProposals,
+  approveProposal,
+  rejectProposal,
+} from "../api/improvementProposal";
+import type { ImprovementProposalDto } from "../api/improvementProposal";
 import type {
   AffectedSpecialist,
   BrainZoneSummary,
@@ -51,6 +59,8 @@ export interface BrainState {
     toolId: string;
     affectedSpecialists: AffectedSpecialist[];
   } | null;
+  improvementProposals: ImprovementProposalDto[];
+  loadingImprovementProposals: boolean;
 
   loadZones: () => Promise<void>;
   loadEntries: (zone: BrainZone, options?: { limit?: number; offset?: number; status?: BrainEntryStatus }) => Promise<void>;
@@ -64,6 +74,9 @@ export interface BrainState {
   loadEvolution: (entryId: string) => Promise<void>;
   removeSkill: (toolId: string, force?: boolean) => Promise<void>;
   clearPendingSkillRemoval: () => void;
+  loadImprovementProposals: (status?: string) => Promise<void>;
+  approveImprovementProposal: (id: string, supplement?: string) => Promise<boolean>;
+  rejectImprovementProposal: (id: string) => Promise<boolean>;
   applyEvent: (event: UiEvent) => void;
 }
 
@@ -85,6 +98,8 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   loadingEvolution: false,
   lastError: null,
   pendingSkillRemoval: null,
+  improvementProposals: [],
+  loadingImprovementProposals: false,
 
   loadZones: async () => {
     set({ loadingZones: true, lastError: null });
@@ -225,6 +240,53 @@ export const useBrainStore = create<BrainState>((set, get) => ({
 
   clearPendingSkillRemoval: () => set({ pendingSkillRemoval: null }),
 
+  loadImprovementProposals: async (status?: string) => {
+    set({ loadingImprovementProposals: true, lastError: null });
+    try {
+      const proposals = await fetchImprovementProposals(status);
+      set({ improvementProposals: proposals });
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法加载改进提案。") });
+    } finally {
+      set({ loadingImprovementProposals: false });
+    }
+  },
+
+  approveImprovementProposal: async (id: string, supplement = "") => {
+    set({ lastError: null });
+    try {
+      const result = await approveProposal(id, supplement);
+      if (!result.accepted) {
+        // CAS miss：提案已被并发改动（如已批准），本次点击是 no-op，必须告知用户。
+        useToastStore.getState().notifyError("该提案已被处理，无法重复批准。");
+      }
+      await get().loadImprovementProposals();
+      return result.accepted;
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法批准提案。") });
+      return false;
+    }
+  },
+
+  rejectImprovementProposal: async (id: string) => {
+    set({ lastError: null });
+    try {
+      const result = await rejectProposal(id);
+      if (!result.accepted) {
+        const message =
+          result.reason === "cleanup_failed"
+            ? "清理改进工作区失败，提案暂未弃用。稍后可重试。"
+            : "该提案当前状态不允许拒绝。";
+        useToastStore.getState().notifyError(message);
+      }
+      await get().loadImprovementProposals();
+      return result.accepted;
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法拒绝提案。") });
+      return false;
+    }
+  },
+
   applyEvent: (event) => {
     if (event.type === "brain_zone_changed") {
       scheduleBrainRefresh(async () => {
@@ -240,6 +302,9 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     }
     if (event.type === "tools.changed") {
       void get().loadSkillPool();
+    }
+    if (event.type === "improvement_proposal.changed") {
+      void get().loadImprovementProposals();
     }
   },
 }));

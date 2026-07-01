@@ -1346,21 +1346,27 @@ def migrate_to_v16(engine):
     """
     with engine.connect() as conn:
         try:
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_attempts_active_task "
-                "ON assistant_task_attempts (task_id) "
-                "WHERE status IN ('starting', 'running')"
-            ))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_attempts_active_executor "
-                "ON assistant_task_attempts (executor_type, executor_id) "
-                "WHERE status IN ('starting', 'running')"
-            ))
-            conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_claims_active_claimer "
-                "ON assistant_task_claims (claimer_type, claimer_id) "
-                "WHERE status = 'claimed'"
-            ))
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_attempts_active_task "
+                    "ON assistant_task_attempts (task_id) "
+                    "WHERE status IN ('starting', 'running')"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_attempts_active_executor "
+                    "ON assistant_task_attempts (executor_type, executor_id) "
+                    "WHERE status IN ('starting', 'running')"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_task_claims_active_claimer "
+                    "ON assistant_task_claims (claimer_type, claimer_id) "
+                    "WHERE status = 'claimed'"
+                )
+            )
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 16})
             conn.commit()
             logger.info("数据库迁移到版本 16 完成：assistant task partial unique indexes")
@@ -1420,14 +1426,18 @@ def migrate_to_v18(engine):
                     completed_at DATETIME
                 )
             """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_user_todos_status_created "
-                "ON user_todos(status, created_at)"
-            ))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS idx_user_todos_priority_created "
-                "ON user_todos(priority, created_at)"
-            ))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_user_todos_status_created "
+                    "ON user_todos(status, created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_user_todos_priority_created "
+                    "ON user_todos(priority, created_at)"
+                )
+            )
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 18})
             conn.commit()
             logger.info("数据库迁移到版本 18 完成：user_todos")
@@ -1487,7 +1497,9 @@ def migrate_to_v19(engine):
                 FROM brain_memory_entries
             """))
             conn.execute(text("DROP TABLE IF EXISTS brain_memory_entries"))
-            conn.execute(text("ALTER TABLE brain_memory_entries_new RENAME TO brain_memory_entries"))
+            conn.execute(
+                text("ALTER TABLE brain_memory_entries_new RENAME TO brain_memory_entries")
+            )
             conn.execute(text("PRAGMA foreign_keys=ON"))
 
             # 重建旧索引
@@ -1602,7 +1614,9 @@ def migrate_to_v19(engine):
 
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 19})
             conn.commit()
-            logger.info("数据库迁移到版本 19 完成：Agent 自我改进基础设施（5 表 + reflection zone）")
+            logger.info(
+                "数据库迁移到版本 19 完成：Agent 自我改进基础设施（5 表 + reflection zone）"
+            )
         except Exception as e:
             conn.rollback()
             logger.error(f"迁移到版本 19 失败: {e}")
@@ -1628,10 +1642,12 @@ def migrate_to_v20(engine):
                     reviewed_at TEXT
                 )
             """))
-            conn.execute(text(
-                "CREATE INDEX IF NOT EXISTS ix_execution_reviews_status_priority "
-                "ON execution_reviews(status, priority DESC)"
-            ))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_execution_reviews_status_priority "
+                    "ON execution_reviews(status, priority DESC)"
+                )
+            )
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 20})
             conn.commit()
             logger.info("数据库迁移到版本 20 完成：execution_reviews")
@@ -1639,6 +1655,203 @@ def migrate_to_v20(engine):
             conn.rollback()
             logger.error(f"迁移到版本 20 失败: {e}")
             raise
+
+
+def migrate_to_v21(engine):
+    """迁移到版本 21：改进提案表（improvement_proposals）。"""
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS improvement_proposals (
+                    id TEXT PRIMARY KEY,
+                    source_review_id TEXT NOT NULL,
+                    finding_index INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending_review',
+                    severity TEXT,
+                    finding_type TEXT,
+                    dedup_key TEXT,
+                    what TEXT,
+                    evidence TEXT,
+                    suggestion TEXT,
+                    user_supplement TEXT,
+                    graph_id TEXT,
+                    worktree_path TEXT,
+                    branch_name TEXT,
+                    result_tests_passed INTEGER,
+                    result_summary TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    decided_at TEXT,
+                    completed_at TEXT,
+                    UNIQUE(source_review_id, finding_index),
+                    CHECK(status IN ('pending_review','approved','in_progress','done','failed','rejected')),
+                    CHECK(result_tests_passed IN (0, 1) OR result_tests_passed IS NULL)
+                )
+            """))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_improvement_proposals_status "
+                    "ON improvement_proposals(status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_improvement_proposals_dedup_key "
+                    "ON improvement_proposals(dedup_key)"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 21})
+            conn.commit()
+            logger.info("数据库迁移到版本 21 完成：improvement_proposals")
+        except Exception as e:
+            conn.rollback()
+            logger.error(f"迁移到版本 21 失败: {e}")
+            raise
+
+
+def migrate_to_v22(engine):
+    """迁移到版本 22：assistant_tasks 新增 workspace_root 列（per-task 隔离工作区路径）。"""
+    try:
+        # 用 with engine.begin() 管理连接（自动 commit/rollback + 归还池），避免
+        # raw_connection 无 finally 导致的 DBAPI 连接泄漏（026 I10）。
+        with engine.begin() as conn:
+            # 幂等：列已存在则跳过
+            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(assistant_tasks)"))}
+            if "workspace_root" not in columns:
+                conn.execute(text("ALTER TABLE assistant_tasks ADD COLUMN workspace_root TEXT"))
+            conn.execute(text("UPDATE schema_version SET version = 22"))
+    except Exception as e:
+        logger.error(f"迁移到版本 22 失败: {e}")
+        raise
+    logger.info("迁移到版本 22 完成：assistant_tasks.workspace_root")
+
+
+def migrate_to_v23(engine):
+    """迁移到版本 23：收紧 improvement_proposals.result_tests_passed 三态布尔约束。"""
+    try:
+        with engine.begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='improvement_proposals'"
+                )
+            ).fetchone()
+            if exists is None:
+                conn.execute(text("UPDATE schema_version SET version = 23"))
+                return
+
+            create_sql = (
+                conn.execute(
+                    text(
+                        "SELECT sql FROM sqlite_master "
+                        "WHERE type='table' AND name='improvement_proposals'"
+                    )
+                ).scalar_one()
+                or ""
+            )
+            if "result_tests_passed IN (0, 1)" in create_sql:
+                conn.execute(text("UPDATE schema_version SET version = 23"))
+                return
+
+            conn.execute(text("DROP INDEX IF EXISTS ix_improvement_proposals_status"))
+            conn.execute(text("DROP INDEX IF EXISTS ix_improvement_proposals_dedup_key"))
+            conn.execute(
+                text("ALTER TABLE improvement_proposals " "RENAME TO improvement_proposals_v22")
+            )
+            conn.execute(text("""
+                CREATE TABLE improvement_proposals (
+                    id TEXT PRIMARY KEY,
+                    source_review_id TEXT NOT NULL,
+                    finding_index INTEGER NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending_review',
+                    severity TEXT,
+                    finding_type TEXT,
+                    dedup_key TEXT,
+                    what TEXT,
+                    evidence TEXT,
+                    suggestion TEXT,
+                    user_supplement TEXT,
+                    graph_id TEXT,
+                    worktree_path TEXT,
+                    branch_name TEXT,
+                    result_tests_passed INTEGER,
+                    result_summary TEXT,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    decided_at TEXT,
+                    completed_at TEXT,
+                    CONSTRAINT uq_proposal_review_finding UNIQUE(source_review_id, finding_index),
+                    CHECK(status IN ('pending_review','approved','in_progress','done','failed','rejected')),
+                    CHECK(result_tests_passed IN (0, 1) OR result_tests_passed IS NULL)
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO improvement_proposals (
+                    id,
+                    source_review_id,
+                    finding_index,
+                    status,
+                    severity,
+                    finding_type,
+                    dedup_key,
+                    what,
+                    evidence,
+                    suggestion,
+                    user_supplement,
+                    graph_id,
+                    worktree_path,
+                    branch_name,
+                    result_tests_passed,
+                    result_summary,
+                    error,
+                    created_at,
+                    decided_at,
+                    completed_at
+                )
+                SELECT
+                    id,
+                    source_review_id,
+                    finding_index,
+                    status,
+                    severity,
+                    finding_type,
+                    dedup_key,
+                    what,
+                    evidence,
+                    suggestion,
+                    user_supplement,
+                    graph_id,
+                    worktree_path,
+                    branch_name,
+                    CASE
+                        WHEN result_tests_passed IN (0, 1) THEN result_tests_passed
+                        ELSE NULL
+                    END,
+                    result_summary,
+                    error,
+                    created_at,
+                    decided_at,
+                    completed_at
+                FROM improvement_proposals_v22
+            """))
+            conn.execute(text("DROP TABLE improvement_proposals_v22"))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_improvement_proposals_status "
+                    "ON improvement_proposals(status)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_improvement_proposals_dedup_key "
+                    "ON improvement_proposals(dedup_key)"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 23"))
+    except Exception as e:
+        logger.error(f"迁移到版本 23 失败: {e}")
+        raise
+    logger.info("迁移到版本 23 完成：improvement_proposals.result_tests_passed CHECK")
 
 
 _MIGRATIONS = [
@@ -1661,6 +1874,9 @@ _MIGRATIONS = [
     (18, migrate_to_v18),
     (19, migrate_to_v19),
     (20, migrate_to_v20),
+    (21, migrate_to_v21),
+    (22, migrate_to_v22),
+    (23, migrate_to_v23),
 ]
 
 

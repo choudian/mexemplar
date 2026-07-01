@@ -79,9 +79,7 @@ def begin(root_session_id: str, cancel_keys: Iterable[str] | None = None) -> Run
     global _generation_counter
     sid = _require_session_id(root_session_id)
     event = threading.Event()
-    keys = tuple(
-        dict.fromkeys(str(key).strip() for key in (cancel_keys or ()) if str(key).strip())
-    )
+    keys = tuple(dict.fromkeys(str(key).strip() for key in (cancel_keys or ()) if str(key).strip()))
     with _lock:
         _generation_counter += 1
         generation = _generation_counter

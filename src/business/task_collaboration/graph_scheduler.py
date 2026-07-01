@@ -275,9 +275,7 @@ class GraphScheduler:
         """
         try:
             svc.create_needs_confirmation_pause(task_id=task_id, title=title)
-            logger.info(
-                "GraphScheduler: created needs_confirmation pause for task %s", task_id
-            )
+            logger.info("GraphScheduler: created needs_confirmation pause for task %s", task_id)
         except Exception as e:
             from src.business.task_collaboration.service import (
                 increment_task_collaboration_counter,

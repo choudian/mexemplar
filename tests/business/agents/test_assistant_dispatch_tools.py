@@ -39,7 +39,9 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             MockFacade.return_value = facade
 
@@ -57,7 +59,9 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             result = handler(text="简单回复")
 
             assert isinstance(result, ToolSignal)
@@ -69,7 +73,9 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             result = handler(text="简单回复", memory_entries_referenced=[])
 
             assert isinstance(result, ToolSignal)
@@ -81,7 +87,9 @@ class TestReplyToUser:
 
         handler = create_reply_to_user_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             result = handler(
                 text="简单回复",
                 memory_entries_referenced="entry-1",  # type: ignore[arg-type]
@@ -90,7 +98,9 @@ class TestReplyToUser:
             assert isinstance(result, ToolSignal)
             MockFacade.assert_not_called()
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantMemoryToolFacade"
+        ) as MockFacade:
             result = handler(
                 text="简单回复",
                 memory_entries_referenced=["entry-1", 42],  # type: ignore[list-item]
@@ -230,7 +240,9 @@ class TestCreateSpecialist:
 
         handler = create_create_specialist_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantSpecialistToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantSpecialistToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             MockFacade.return_value = facade
             facade.create_from_conversation.return_value = {
@@ -255,7 +267,9 @@ class TestCreateSpecialist:
 
         handler = create_create_specialist_handler(SESSION_ID)
 
-        with patch("src.business.agents.tools.assistant_tools.AssistantSpecialistToolFacade") as MockFacade:
+        with patch(
+            "src.business.agents.tools.assistant_tools.AssistantSpecialistToolFacade"
+        ) as MockFacade:
             facade = MagicMock()
             MockFacade.return_value = facade
             facade.create_from_conversation.side_effect = ValueError("专员名称已存在: 天气专家")

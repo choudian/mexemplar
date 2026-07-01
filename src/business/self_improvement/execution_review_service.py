@@ -20,6 +20,16 @@ _REVIEW_PROMPT = (
     "type 只能是 效率 或 健壮性；severity 只能是 high、med 或 low。无问题时 findings 为空。"
 )
 
+# prompt 声明 severity 只能 high/med/low，但 LLM 可能幻觉出 critical 等值；
+# _normalize_severity 据此把非法值收敛为 low（026 I6）。
+_SEVERITY_VALUES = frozenset({"high", "med", "low"})
+
+
+def _normalize_severity(value: Any) -> str:
+    """归一化 severity 到 high/med/low；非法值（critical/大小写混用/空）收敛为 low。"""
+    text = str(value or "").strip().lower()
+    return text if text in _SEVERITY_VALUES else "low"
+
 
 class ExecutionReviewService:
     def review(self, skeleton: dict[str, Any], llm_client) -> dict[str, Any]:
@@ -120,7 +130,7 @@ class ExecutionReviewService:
                     "type": str(item.get("type") or ""),
                     "what": str(item.get("what") or ""),
                     "evidence": str(item.get("evidence") or ""),
-                    "severity": str(item.get("severity") or "low"),
+                    "severity": _normalize_severity(item.get("severity")),
                     "suggestion": str(item.get("suggestion") or ""),
                     "worth_changing": bool(item.get("worth_changing")),
                 }

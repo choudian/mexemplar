@@ -24,16 +24,18 @@ router = APIRouter(prefix="/api/teaching", tags=["teaching"])
 _service: TeachingService | None = None
 _service_runtime: DesktopAgentRuntime | None = None
 _TEACHING_CONFLICT_DETAIL = "Teaching request cannot be completed in the current state."
-_SAFE_CONFLICT_MESSAGES = frozenset({
-    "desktop recording requires a completed window minimize callback",
-    "recording mode does not match the teaching run",
-    "requirements must be confirmed before starting a skill trial",
-    "skill trial runner is unavailable",
-    "no learned skill is available for this teaching run",
-    "skill trial is already running",
-    "desktop health decisions apply only to desktop recordings",
-    "unsupported desktop health decision",
-})
+_SAFE_CONFLICT_MESSAGES = frozenset(
+    {
+        "desktop recording requires a completed window minimize callback",
+        "recording mode does not match the teaching run",
+        "requirements must be confirmed before starting a skill trial",
+        "skill trial runner is unavailable",
+        "no learned skill is available for this teaching run",
+        "skill trial is already running",
+        "desktop health decisions apply only to desktop recordings",
+        "unsupported desktop health decision",
+    }
+)
 
 
 def get_teaching_service(

@@ -76,8 +76,12 @@ def test_events_endpoint_replays_query_cursor(monkeypatch) -> None:
     event_queue.reset_for_tests()
     token = "expected-token"
     client = TestClient(create_app(token), headers={SESSION_HEADER: token})
-    first = event_queue.publish_nowait("settings.changed", {"reason": "settings_invalidated", "keys": ["first"]})
-    second = event_queue.publish_nowait("settings.changed", {"reason": "settings_invalidated", "keys": ["second"]})
+    first = event_queue.publish_nowait(
+        "settings.changed", {"reason": "settings_invalidated", "keys": ["first"]}
+    )
+    second = event_queue.publish_nowait(
+        "settings.changed", {"reason": "settings_invalidated", "keys": ["second"]}
+    )
     captured: dict[str, object] = {}
 
     async def finite_stream(*, last_seen_sequence, event_session_id, force_resync_reason):
@@ -109,8 +113,12 @@ def test_events_endpoint_replays_last_event_id_cursor(monkeypatch) -> None:
     event_queue.reset_for_tests()
     token = "expected-token"
     client = TestClient(create_app(token), headers={SESSION_HEADER: token})
-    first = event_queue.publish_nowait("settings.changed", {"reason": "settings_invalidated", "keys": ["first"]})
-    second = event_queue.publish_nowait("settings.changed", {"reason": "settings_invalidated", "keys": ["second"]})
+    first = event_queue.publish_nowait(
+        "settings.changed", {"reason": "settings_invalidated", "keys": ["first"]}
+    )
+    second = event_queue.publish_nowait(
+        "settings.changed", {"reason": "settings_invalidated", "keys": ["second"]}
+    )
     captured: dict[str, object] = {}
 
     async def finite_stream(*, last_seen_sequence, event_session_id, force_resync_reason):

@@ -35,27 +35,21 @@ class TestGetRecordingQueueDir:
 
 class TestQueueFilePaths:
     def test_actions_queue_path_format(self, tmp_path):
-        with patch(
-            "src.data.queue_paths.get_default_data_dir", return_value=tmp_path / "data"
-        ):
+        with patch("src.data.queue_paths.get_default_data_dir", return_value=tmp_path / "data"):
             path = get_recording_actions_queue_path("rec_001")
 
         assert path.name == "rec_001_actions.jsonl"
         assert path.parent.name == "queues"
 
     def test_screenshots_queue_path_format(self, tmp_path):
-        with patch(
-            "src.data.queue_paths.get_default_data_dir", return_value=tmp_path / "data"
-        ):
+        with patch("src.data.queue_paths.get_default_data_dir", return_value=tmp_path / "data"):
             path = get_recording_screenshots_queue_path("rec_001")
 
         assert path.name == "rec_001_screenshots.jsonl"
         assert path.parent.name == "queues"
 
     def test_both_paths_share_same_directory(self, tmp_path):
-        with patch(
-            "src.data.queue_paths.get_default_data_dir", return_value=tmp_path / "data"
-        ):
+        with patch("src.data.queue_paths.get_default_data_dir", return_value=tmp_path / "data"):
             actions = get_recording_actions_queue_path("rec_abc")
             screenshots = get_recording_screenshots_queue_path("rec_abc")
 

@@ -171,10 +171,7 @@ class TraceBuffer:
                 self._evict_oldest_unlocked()
 
             # Handle oversized single record.
-            if (
-                record_bytes > self._max_record_bytes
-                or record_bytes > self._budget.max_total_bytes
-            ):
+            if record_bytes > self._max_record_bytes or record_bytes > self._budget.max_total_bytes:
                 record = _make_oversized(record)
                 record_bytes = 0
 

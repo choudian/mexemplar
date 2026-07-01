@@ -6,6 +6,7 @@ Agent 配置系统
 
 from enum import Enum
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, List, Optional, Dict, Any, Union
 
 from src.business.agents.hook_models import (
@@ -132,6 +133,10 @@ class AgentConfig:
     # 保留工作历史供主代理唤回续跑。用于临时子代理。
     global_pre_hooks: List[PreHook] = field(default_factory=list)
     global_post_hooks: List[PostHook] = field(default_factory=list)
+    # 注入的执行体工作区根目录；None 时回退 Path.cwd()（主助理/普通执行体默认行为）。
+    # 自我改进实施桥接（T020）在此填入 proposal 的隔离 git worktree 路径，使执行体的
+    # 文件/exec 爆炸半径被 workspace policy 焊死在 worktree 内（FR-014a 承重假设）。
+    workspace_root: Optional[Path] = None
 
 
 @dataclass

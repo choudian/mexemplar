@@ -85,6 +85,7 @@ class DelegationOrchestrator:
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
+        workspace_root: str | None = None,
     ) -> dict:
         """临时子代理的纯执行核心：resolve tools → build prompt → create session →
         ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``（统一任务派发的
@@ -117,7 +118,9 @@ class DelegationOrchestrator:
             user_input=user_input,
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
+            tool_whitelist=tool_whitelist,
             current_task_id=current_task_id,
+            workspace_root=workspace_root,
         )
         if result.get("success"):
             self._owner._record_delegation_signal(
@@ -198,12 +201,14 @@ class DelegationOrchestrator:
         subagent_id: str,
         instruction: str = "",
         extra_iterations: int = 20,
+        workspace_root: str | None = None,
     ) -> dict:
         return self._owner._continue_subagent(
             parent_session_id=parent_session_id,
             subagent_id=subagent_id,
             instruction=instruction,
             extra_iterations=extra_iterations,
+            workspace_root=workspace_root,
         )
 
     def inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict:
@@ -220,6 +225,7 @@ class DelegationOrchestrator:
         task: str,
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
+        workspace_root: str | None = None,
     ) -> dict:
         """专员委派的纯执行核心：resolve tools → equipped skills → build prompt →
         create session → ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``
@@ -268,11 +274,13 @@ class DelegationOrchestrator:
             user_input=self._owner._format_delegated_task_input(task),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
+            tool_whitelist=tool_whitelist,
             specialist_id=specialist.specialist_id,
             allowed_methodology_skill_ids=allowed_methodology_skill_ids,
             methodology_equipment_snapshot=methodology_snapshot,
             current_task_id=current_task_id,
             # 024 C4: 透传 specialist.role_kind，planner 拿 build_task_graph 不拿执行器工具
             role_kind=getattr(specialist, "role_kind", "executor") or "executor",
+            workspace_root=workspace_root,
         )
         return result

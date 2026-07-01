@@ -104,9 +104,7 @@ class AssistantTaskClaimRepository(BaseRepository):
             .all()
         )
 
-    def list_active_claims_for_tasks(
-        self, task_ids: list[str]
-    ) -> dict[str, AssistantTaskClaim]:
+    def list_active_claims_for_tasks(self, task_ids: list[str]) -> dict[str, AssistantTaskClaim]:
         """task_id → 该 task 最新一条 ``claimed`` 认领（按 created_at 升序遍历，末位覆盖）。
 
         供看板列表批量解析认领态，避免逐 task 调 ``list_for_task`` 的 N+1。无认领的 task

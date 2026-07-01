@@ -33,6 +33,7 @@ from .assistant_task_repository import AssistantTaskRepository
 from .assistant_meeting_repository import AssistantMeetingRepository
 from .assistant_todo_repository import AssistantTodoRepository
 from .user_todo_repository import UserTodoRepository
+from .improvement_proposal_repository import ImprovementProposalRepository
 
 __all__ = [
     "BaseRepository",
@@ -63,4 +64,5 @@ __all__ = [
     "AssistantMeetingRepository",
     "AssistantTodoRepository",
     "UserTodoRepository",
+    "ImprovementProposalRepository",
 ]

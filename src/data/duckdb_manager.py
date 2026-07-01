@@ -669,7 +669,6 @@ class DuckDBManager:
                 if not in_outer_transaction:
                     self._safe_execute(conn, "COMMIT")
 
-
         return row_ids
 
     def needs_queue_recovery(self) -> bool:

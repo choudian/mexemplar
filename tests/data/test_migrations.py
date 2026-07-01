@@ -89,26 +89,30 @@ def test_v16_migration_creates_attempt_partial_unique_indexes() -> None:
         conn.execute(text("CREATE TABLE schema_version (version INTEGER NOT NULL)"))
         conn.execute(text("INSERT INTO schema_version (version) VALUES (15)"))
         # 预建 v15 状态的 attempts 表（无 partial unique index），供 v16 升级
-        conn.execute(text(
-            "CREATE TABLE assistant_task_attempts ("
-            "attempt_id TEXT PRIMARY KEY, "
-            "task_id TEXT NOT NULL, "
-            "executor_type TEXT NOT NULL, "
-            "executor_id TEXT NOT NULL, "
-            "status TEXT NOT NULL, "
-            "lease_owner TEXT NOT NULL, "
-            "lease_expires_at DATETIME NOT NULL)"
-        ))
-        conn.execute(text(
-            "CREATE TABLE assistant_task_claims ("
-            "claim_id TEXT PRIMARY KEY, "
-            "task_id TEXT NOT NULL, "
-            "claimer_type TEXT NOT NULL, "
-            "claimer_id TEXT NOT NULL, "
-            "status TEXT NOT NULL, "
-            "lease_expires_at DATETIME, "
-            "task_version INTEGER NOT NULL)"
-        ))
+        conn.execute(
+            text(
+                "CREATE TABLE assistant_task_attempts ("
+                "attempt_id TEXT PRIMARY KEY, "
+                "task_id TEXT NOT NULL, "
+                "executor_type TEXT NOT NULL, "
+                "executor_id TEXT NOT NULL, "
+                "status TEXT NOT NULL, "
+                "lease_owner TEXT NOT NULL, "
+                "lease_expires_at DATETIME NOT NULL)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE assistant_task_claims ("
+                "claim_id TEXT PRIMARY KEY, "
+                "task_id TEXT NOT NULL, "
+                "claimer_type TEXT NOT NULL, "
+                "claimer_id TEXT NOT NULL, "
+                "status TEXT NOT NULL, "
+                "lease_expires_at DATETIME, "
+                "task_version INTEGER NOT NULL)"
+            )
+        )
 
     migrations.migrate_to_v16(engine)
 
