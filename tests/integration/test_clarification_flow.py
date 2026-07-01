@@ -71,14 +71,19 @@ def _ask_args():
 
 def _run_loop_async(session_id, mock_config):
     responses = [
-        LLMResponse(content=None, tool_calls=[ToolCallInfo(id="c1", name="ask_user_question", args=_ask_args())]),
+        LLMResponse(
+            content=None,
+            tool_calls=[ToolCallInfo(id="c1", name="ask_user_question", args=_ask_args())],
+        ),
         LLMResponse(content="已按你的选择继续", tool_calls=[]),
     ]
     loop = AgentLoop(_config(), MockLLMClient(responses), mock_config)
     holder = {}
 
     def worker():
-        holder["result"] = loop.run(session_id=session_id, user_input="帮我处理", tools=[_ask_tool(session_id)])
+        holder["result"] = loop.run(
+            session_id=session_id, user_input="帮我处理", tools=[_ask_tool(session_id)]
+        )
 
     t = threading.Thread(target=worker)
     t.start()
@@ -102,7 +107,9 @@ def test_clarification_answered_flow_continues(mock_config, in_memory_db):
 
     # 经 API 层函数提交（模拟 POST decision）
     out = record_clarification_decision(
-        sid, pending.request_id, "submit",
+        sid,
+        pending.request_id,
+        "submit",
         [{"questionId": "q1", "selectedOptionIds": ["q1o2"], "otherText": None}],
     )
     assert out["status"] == "answered"

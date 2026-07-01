@@ -8,7 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
 from src.business.ai.llm_client import LangChainLLMClient
-from src.data.models import SkillComposition, Tool
+from src.data.models import SkillComposition
 from src.data.repositories import (
     MessageRepository,
     SessionRepository,
@@ -27,16 +27,9 @@ from .composition_normalizer import (
     member_to_payload,
     normalize_members,
     to_composition_model,
-    to_tool_model,
 )
-from .trial_prompt_builder import (
-    build_trial_bootstrap_input,
-    build_trial_system_prompt,
-)
+from .trial_prompt_builder import build_trial_bootstrap_input
 from .trial_runner import TrialRunner
-from .trial_snapshot_codec import (
-    build_trial_session_snapshot_payload,
-)
 from .types import (
     SkillCompositionError,
     SkillCompositionTrialResult,

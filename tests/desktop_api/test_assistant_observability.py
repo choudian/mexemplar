@@ -165,9 +165,7 @@ def test_transcript_endpoint_returns_404_for_foreign_subagent(desktop_api_client
         lambda: FakeRuntime()
     )
     try:
-        resp = desktop_api_client.get(
-            "/api/assistant/sessions/ast_1/transcript?subagentId=foreign"
-        )
+        resp = desktop_api_client.get("/api/assistant/sessions/ast_1/transcript?subagentId=foreign")
     finally:
         desktop_api_client.app.dependency_overrides.clear()
     assert resp.status_code == 404

@@ -23,6 +23,7 @@ from src.desktop_api.routers import (
     debug,
     execution_reviews,
     health,
+    proposals,
     settings,
     skills,
     skills_methodology,
@@ -168,6 +169,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(settings.router)
     app.include_router(brain.router)
     app.include_router(execution_reviews.router)
+    app.include_router(proposals.router)
     app.include_router(user_todos.router)
     app.include_router(debug.router)
 

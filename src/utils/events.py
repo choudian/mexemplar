@@ -67,6 +67,7 @@ EventName: TypeAlias = Literal[
     "prompt_supplement_changed",
     "tool_gap_detected",
     "avoidance_rule_injected",
+    "improvement_proposal_changed",
 ]
 
 _EVENT_NAMES: tuple[EventName, ...] = get_args(EventName)
@@ -281,6 +282,13 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "pattern",
         "session_id",
     ),
+    "improvement_proposal_changed": (
+        "proposal_id",
+        "source_review_id",
+        "status",
+        "severity",
+        "change_type",
+    ),
 }
 
 
@@ -405,6 +413,7 @@ self_improvement_action = _registry.signal("self_improvement_action")
 prompt_supplement_changed = _registry.signal("prompt_supplement_changed")
 tool_gap_detected = _registry.signal("tool_gap_detected")
 avoidance_rule_injected = _registry.signal("avoidance_rule_injected")
+improvement_proposal_changed = _registry.signal("improvement_proposal_changed")
 
 
 # =============================================================================
@@ -573,6 +582,7 @@ __all__ = [
     "prompt_supplement_changed",
     "tool_gap_detected",
     "avoidance_rule_injected",
+    "improvement_proposal_changed",
     # 数据类
     "EventName",
     "EventValidationError",

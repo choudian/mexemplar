@@ -4,6 +4,7 @@ hot-zone decay, archive layering, prediction jobs, subconscious distillation, in
 review, and specialist recruitment.
 """
 
+import json
 import logging
 import os
 import threading
@@ -444,6 +445,57 @@ class BrainBackgroundWorker:
             self._execution_review_service = ExecutionReviewService()
         return self._execution_review_service
 
+    def _maybe_generate_proposals(self, review_id: str, findings: list) -> None:
+        """旁路调用 ProposalService 从 worth_changing findings 生成提案。
+
+        不改 A 的只读语义；生成失败不阻塞复盘写回。
+        """
+        try:
+            config = self._get_config()
+            if not config.get_self_improvement_proposals_enabled():
+                return
+            from src.business.self_improvement.proposal_service import ProposalService
+
+            # findings 已是解析后的 list[dict]（来自 review report），原样传入；
+            # 切勿 json.dumps 成 str——generate_from_review 会 enumerate 每个 finding
+            # 调 .get，收到 str 会抛 AttributeError 被本 except 吞掉，提案永不生成。
+            ProposalService().generate_from_review(review_id, findings)
+        except Exception as exc:
+            # 复盘已写回，提案生成失败不应阻塞它；但必须留 ERROR 级痕迹（带 review_id
+            # 与 findings 数量），避免一次偶发异常静默吞掉一批提案却无任何可观测信号。
+            logger.error(
+                "Proposal generation failed for review %s (%d findings): %s",
+                review_id,
+                len(findings),
+                exc,
+                exc_info=True,
+            )
+
+    def _retry_missing_proposals_for_recent_reviews(self, *, limit: int = 20) -> None:
+        """幂等重扫最近完成的复盘，补偿提案生成旁路的短暂失败。"""
+        try:
+            config = self._get_config()
+            if not config.get_self_improvement_proposals_enabled():
+                return
+            from src.data.repos.execution_review_repository import ExecutionReviewRepository
+
+            with ExecutionReviewRepository() as repo:
+                reviews = repo.list_recent(limit)
+            for review in reviews:
+                try:
+                    findings = json.loads(review.findings_json or "[]")
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Cannot retry proposal generation for review %s: invalid findings JSON",
+                        review.id,
+                        exc_info=True,
+                    )
+                    continue
+                if isinstance(findings, list):
+                    self._maybe_generate_proposals(review.id, findings)
+        except Exception:
+            logger.error("Proposal generation retry scan failed", exc_info=True)
+
     def _get_execution_review_llm_client(self):
         if self._execution_review_llm_client is not None:
             return self._execution_review_llm_client
@@ -490,6 +542,8 @@ class BrainBackgroundWorker:
         if not config.get_self_improvement_execution_review_enabled():
             return
 
+        self._retry_missing_proposals_for_recent_reviews()
+
         from src.business.self_improvement.execution_trace_builder import build_skeleton
         from src.data.repos.execution_review_repository import ExecutionReviewRepository
         from src.data.repos.message_repository import MessageRepository
@@ -516,6 +570,19 @@ class BrainBackgroundWorker:
                         or getattr(llm_client, "model_name", "")
                         or "",
                     )
+                    # 旁路：从 worth_changing findings 生成改进提案。proposal 生成自带
+                    # try/except,这里再防御一层确保零外抛——CC-004 要求 proposal 异常
+                    # 不得进入 review except 把复盘标 failed 或把 str(exc) 写入 reviews。
+                    try:
+                        self._maybe_generate_proposals(
+                            review.id, list(report.get("findings") or [])
+                        )
+                    except Exception:
+                        logger.error(
+                            "Proposal generation raised unexpectedly for review %s (swallowed)",
+                            review.id,
+                            exc_info=True,
+                        )
                 except Exception as exc:
                     logger.warning("Execution review failed for %s: %s", review.id, exc)
                     repo.mark_failed(review.id, str(exc))

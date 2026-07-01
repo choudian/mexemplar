@@ -9,8 +9,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
-
 from sqlalchemy import or_
 
 from src.utils.workspace import workspace_hash

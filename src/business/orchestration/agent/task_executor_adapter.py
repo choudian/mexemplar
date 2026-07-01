@@ -53,6 +53,11 @@ class TaskExecutorAdapter:
 
         parent_session_id = task.owner_session_id or task.session_id
         capability_scope = _parse_capability_scope(task.capability_scope)
+        workspace_root = task.workspace_root
+
+        # FR-014/SC-003 fail-closed: proposal executor 必须在有效 improvement worktree
+        # 内执行;workspace 丢失/漂移时拒绝派发,不得回退主仓库击穿 blast radius。
+        _assert_proposal_executor_workspace_or_raise(parent_session_id, workspace_root)
 
         executor_orchestrator = self._new_executor_orchestrator()
         try:
@@ -71,6 +76,7 @@ class TaskExecutorAdapter:
                     parent_session_id,
                     capability_scope,
                     checkpoint_ref=attempt.checkpoint_ref,
+                    workspace_root=workspace_root,
                 )
             else:
                 result = self._run_ephemeral(
@@ -79,6 +85,7 @@ class TaskExecutorAdapter:
                     parent_session_id,
                     capability_scope,
                     checkpoint_ref=attempt.checkpoint_ref,
+                    workspace_root=workspace_root,
                 )
         finally:
             if executor_orchestrator is not self._orchestrator:
@@ -99,6 +106,7 @@ class TaskExecutorAdapter:
         tool_whitelist,
         *,
         checkpoint_ref: str | None = None,
+        workspace_root: str | None = None,
     ) -> dict:
         return orchestrator.delegation_orchestrator.run_ephemeral_via_delegated_executor(
             parent_session_id=parent_session_id,
@@ -109,6 +117,7 @@ class TaskExecutorAdapter:
             ),
             tool_whitelist=tool_whitelist,
             current_task_id=task.task_id,
+            workspace_root=workspace_root,
         )
 
     def _run_specialist(
@@ -119,6 +128,7 @@ class TaskExecutorAdapter:
         tool_whitelist,
         *,
         checkpoint_ref: str | None = None,
+        workspace_root: str | None = None,
     ) -> dict:
         from src.data.repos.specialist_repository import SpecialistRepository
 
@@ -136,6 +146,7 @@ class TaskExecutorAdapter:
             task=_execution_context_with_checkpoint(task.title, checkpoint_ref),
             tool_whitelist=tool_whitelist,
             current_task_id=task.task_id,
+            workspace_root=workspace_root,
         )
 
     @staticmethod
@@ -152,6 +163,7 @@ class TaskExecutorAdapter:
             return orchestrator.delegation_orchestrator.continue_subagent(
                 parent_session_id=parent_session_id,
                 subagent_id=resume_id,
+                workspace_root=task.workspace_root,
             )
         except Exception:
             logger.warning(
@@ -167,7 +179,15 @@ class TaskExecutorAdapter:
         # paused/cancelled 是可续暂停，不是交付结果：交给 dispatcher 落为 Task.suspended。
         # 只有"没干完且非暂停"（委派内部错误 / 未完成）才抛异常 → dispatcher 记 stuck。
         if result.get("success"):
-            return {"safe_summary": _summary(result.get("result_text") or result.get("message"))}
+            outcome = {"safe_summary": _summary(result.get("result_text") or result.get("message"))}
+            # Private bookkeeping for proposal recovery: the public task snapshot
+            # stays safe_summary-only, but proposal_bridge can use this session id
+            # to inspect deterministic exec tool envelopes from test nodes.
+            if result.get("executor_session_id"):
+                outcome["executor_session_id"] = result.get("executor_session_id")
+            if result.get("result_text"):
+                outcome["result_text"] = result.get("result_text")
+            return outcome
         if result.get("paused"):
             suspend_reason = (
                 SuspendReason.USER_STOP.value
@@ -186,6 +206,42 @@ class TaskExecutorAdapter:
                     outcome[key] = result[key]
             return outcome
         raise RuntimeError(result.get("message") or "委派执行未返回可用结果")
+
+
+# Proposal executor synthetic session 前缀(与 proposal_bridge.SELF_IMPROVEMENT_SESSION_PREFIX
+# 一致)。本地副本:orchestration 是执行层,不得反向 import self_improvement 业务层。
+_SELF_IMPROVEMENT_SESSION_PREFIX = "self_improvement:"
+
+
+def _assert_proposal_executor_workspace_or_raise(
+    parent_session_id: str | None,
+    workspace_root: str | None,
+) -> None:
+    """Fail-closed: proposal executor 必须在有效 improvement worktree 内执行。
+
+    proposal executor 由 ``self_improvement:<proposal_id>`` synthetic session 标识
+    (build_task_graph 注入该 session 到 task graph)。若其 ``task.workspace_root``
+    缺失或不像隔离 worktree,说明 workspace 注入链路断裂(数据丢失/漂移)—— 不得
+    回退主仓库继续执行,否则路径白名单失效、executor 可改写 self_improvement /
+    task_collaboration / src-tauri 等核心路径,击穿 FR-014 blast radius 与 SC-003
+    「100% fail-closed」承诺。
+
+    字符串级判定,避免向上 import ``self_improvement`` 违反分层;保守匹配,宁可误拒。
+    """
+    if not parent_session_id or not parent_session_id.startswith(
+        _SELF_IMPROVEMENT_SESSION_PREFIX
+    ):
+        return  # 非 proposal executor,workspace 不受 FR-014 约束
+    raw = str(workspace_root or "").replace("\\", "/").lower()
+    is_improvement_worktree = (
+        "/.worktrees/improvement/" in raw
+        and not raw.endswith("/.worktrees/improvement/")
+    )
+    if not is_improvement_worktree:
+        raise RuntimeError(
+            "proposal executor workspace missing or drifted outside improvement "
+            "worktree; fail-closed to preserve FR-014 blast radius"
+        )
 
 
 def _parse_capability_scope(raw: str | None) -> list[str] | None:

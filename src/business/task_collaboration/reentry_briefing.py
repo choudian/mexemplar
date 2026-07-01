@@ -48,7 +48,11 @@ def build_reentry_briefing(
     if not entries and snapshot is None:
         return "你之前派发的子任务暂无新结果。"
 
-    result_entries = [entry for entry in entries if entry.get("eventType") not in ("task_question", "needs_review")]
+    result_entries = [
+        entry
+        for entry in entries
+        if entry.get("eventType") not in ("task_question", "needs_review")
+    ]
     question_entries = [entry for entry in entries if entry.get("eventType") == "task_question"]
     needs_review_entries = [entry for entry in entries if entry.get("eventType") == "needs_review"]
     lines: list[str] = []
@@ -63,9 +67,7 @@ def build_reentry_briefing(
         lines.append(line)
         adjudication_id = entry.get("adjudicationId")
         if adjudication_id:
-            lines.append(
-                f"  裁定ID {adjudication_id}：可调用 decide_task_adjudication 工具决策。"
-            )
+            lines.append(f"  裁定ID {adjudication_id}：可调用 decide_task_adjudication 工具决策。")
         # 024: 失败 entry 附自愈动作清单
         healing_actions = entry.get("healingActions")
         if healing_actions:
@@ -99,7 +101,9 @@ def build_reentry_briefing(
         task_id = entry.get("taskId", "unknown")
         summary = entry.get("safeSummary", "节点标记为需确认，请裁定是否执行。")
         lines.append(f"- 任务 {task_id}：{summary}")
-        lines.append("  可调用 decide_task_adjudication 工具裁定：accepted=放行执行，abandoned=放弃该节点。")
+        lines.append(
+            "  可调用 decide_task_adjudication 工具裁定：accepted=放行执行，abandoned=放弃该节点。"
+        )
 
     # === 024: 任务图进度段（确定性，由 snapshot 计算）===
     if snapshot is not None:
@@ -211,7 +215,8 @@ def _render_todo_overview(snapshot: TaskGraphSnapshot) -> str:
     避免「（执行中，暂无子步骤信息）」这类占位噪声；接入 todo_summary 后再补每节点进度。
     """
     active_tasks = [
-        t for t in snapshot.tasks
+        t
+        for t in snapshot.tasks
         if t.status in (TaskStatus.RUNNING, TaskStatus.SUSPENDED) or t.requires_review
     ]
     if not active_tasks:
@@ -236,6 +241,5 @@ def filter_pending_entries(entries: list[dict], pending_ids: set[str]) -> list[d
     return [
         entry
         for entry in entries
-        if not entry.get("adjudicationId")
-        or entry["adjudicationId"] in pending_ids
+        if not entry.get("adjudicationId") or entry["adjudicationId"] in pending_ids
     ]

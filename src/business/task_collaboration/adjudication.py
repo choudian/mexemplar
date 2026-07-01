@@ -75,6 +75,7 @@ class TaskAdjudicationService(AtomicTaskService):
         # 未显式传入时自动从进程级单例解析，避免各调用方独立注入遗忘导致静默退化
         if scheduler_callback is None:
             from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
+
             scheduler = get_graph_scheduler()
             scheduler_callback = scheduler.on_adjudication_decided if scheduler else None
         self._scheduler_callback = scheduler_callback

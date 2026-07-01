@@ -111,10 +111,8 @@ class AssistantRuntime:
         """Register the default planner specialist once per runtime startup."""
         try:
             from src.business.brain.specialist_service import SpecialistService
-            from src.data.repos.specialist_repository import SpecialistRepository
 
-            with SpecialistRepository() as repo:
-                SpecialistService(repo=repo).ensure_planner_specialist()
+            SpecialistService().ensure_planner_specialist()
         except Exception:
             logger.warning("Failed to ensure planner specialist", exc_info=True)
 
@@ -132,7 +130,9 @@ class AssistantRuntime:
         )
         self._reentry_sink = sink
         self._orchestrator.set_parent_reentry_callback(sink.dispatch)
-        self._orchestrator.set_reentry_sink(sink)
+        set_reentry_sink = getattr(self._orchestrator, "set_reentry_sink", None)
+        if callable(set_reentry_sink):
+            set_reentry_sink(sink)
 
     def has_active_worker(self, session_id: str) -> bool:
         with self._workers_lock:
@@ -238,7 +238,9 @@ class AssistantRuntime:
 
                 try:
                     with TaskCollaborationService() as service:
-                        snapshot = service.get_graph_snapshot(session_id=session_id, graph_id=graph_id)
+                        snapshot = service.get_graph_snapshot(
+                            session_id=session_id, graph_id=graph_id
+                        )
                 except Exception:
                     logger.debug("graph snapshot query failed for briefing, degrading gracefully")
             # 024: 从 snapshot 的 pending adjudications 派生 pending_ids，省一次独立 DB 查询；
@@ -307,9 +309,7 @@ class AssistantRuntime:
             ):
                 self.kick_reentry_run(session_id, graph_id)
 
-    def _drop_decided_entries(
-        self, graph_id: str, entries: list[dict], service
-    ) -> list[dict]:
+    def _drop_decided_entries(self, graph_id: str, entries: list[dict], service) -> list[dict]:
         """剔除已决定的回流条目，避免 briefing 重提已 decide 的裁定。
 
         run_agent 异常回填后，上一轮已 decide 的裁定可能残留队列；不过滤会让 LLM 重复

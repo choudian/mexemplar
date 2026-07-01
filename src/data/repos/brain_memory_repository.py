@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 class BrainMemoryEntryRepository(BrainFeedbackSignalRepository):
     """Repository for brain memory entries and their evolution chain."""
+
     # ------------------------------------------------------------------
     # Memory Entry CRUD
     # ------------------------------------------------------------------

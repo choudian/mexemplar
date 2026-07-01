@@ -380,7 +380,10 @@ def test_subconscious_distillation_skips_when_segment_already_processed():
     _completed_segment_with_hot(repo, "seg-1", "用户多次要求先给结论再展开。")
     service = DistillationService(repo=repo)
 
-    assert service.run_subconscious_distillation(_MockLLM([_subconscious_response("先结论后细节")])) == 1
+    assert (
+        service.run_subconscious_distillation(_MockLLM([_subconscious_response("先结论后细节")]))
+        == 1
+    )
     produced = repo.get_entries_by_zone(Zone.SUBCONSCIOUS.value, status="active")
     assert produced[0].source_segment_id == "seg-1"
 
@@ -397,11 +400,16 @@ def test_subconscious_distillation_runs_again_after_new_segment():
     _completed_segment_with_hot(repo, "seg-1", "用户多次要求先给结论再展开。")
     service = DistillationService(repo=repo)
 
-    assert service.run_subconscious_distillation(_MockLLM([_subconscious_response("先结论后细节")])) == 1
+    assert (
+        service.run_subconscious_distillation(_MockLLM([_subconscious_response("先结论后细节")]))
+        == 1
+    )
 
     _completed_segment_with_hot(repo, "seg-2", "用户开始强调可执行步骤。")
 
-    assert service.run_subconscious_distillation(_MockLLM([_subconscious_response("强调步骤")])) == 1
+    assert (
+        service.run_subconscious_distillation(_MockLLM([_subconscious_response("强调步骤")])) == 1
+    )
 
 
 def test_subconscious_distillation_rolls_back_partial_batch(monkeypatch):

@@ -75,9 +75,7 @@ class TaskMeetingService(AtomicTaskService):
                 task,
                 participants=((a_type, a_id), (b_type, b_id)),
             )
-        emit_meeting_changed(
-            self, task, channel, change_type="opened", status=channel.status
-        )
+        emit_meeting_changed(self, task, channel, change_type="opened", status=channel.status)
         return channel
 
     def send_message(
@@ -105,8 +103,12 @@ class TaskMeetingService(AtomicTaskService):
             )
         task = self._tasks.get_task(channel.parent_task_id)
         emit_meeting_changed(
-            self, task, channel, change_type="message_added",
-            status=MeetingChannelStatus.OPEN, sequence=message.sequence,
+            self,
+            task,
+            channel,
+            change_type="message_added",
+            status=MeetingChannelStatus.OPEN,
+            sequence=message.sequence,
         )
         if conclusion:
             with self._atomic():
@@ -193,7 +195,9 @@ class TaskMeetingService(AtomicTaskService):
         # close + adjudication 必须同一事务：否则 close 成功但 adjudication 失败时，
         # 会议停在 closed_timeout 却无裁定，任务不会进入 reviewing 状态。
         with self._atomic():
-            closed = self._meetings.close_channel(channel.channel_id, status=MeetingChannelStatus.CLOSED_TIMEOUT)
+            closed = self._meetings.close_channel(
+                channel.channel_id, status=MeetingChannelStatus.CLOSED_TIMEOUT
+            )
             if closed is None:
                 return None
             task = self._tasks.get_task(channel.parent_task_id)
@@ -207,7 +211,11 @@ class TaskMeetingService(AtomicTaskService):
         # task 复用事务内已读取的行（commit 后属性访问会 reload，但省一次独立 get_task）。
         if task is not None:
             emit_meeting_changed(
-                self, task, channel, change_type="closed_timeout", status=MeetingChannelStatus.CLOSED_TIMEOUT
+                self,
+                task,
+                channel,
+                change_type="closed_timeout",
+                status=MeetingChannelStatus.CLOSED_TIMEOUT,
             )
         return closed
 
@@ -218,9 +226,7 @@ class TaskMeetingService(AtomicTaskService):
         N 由配置 ``assistant_tasks.meeting.mutual_wait_window`` 控制，默认 4。
         """
         window = self._config.get_assistant_tasks_meeting_mutual_wait_window()
-        recent = self._meetings.list_messages(
-            channel.channel_id, limit=window
-        )
+        recent = self._meetings.list_messages(channel.channel_id, limit=window)
         if len(recent) < window:
             return False
         # 每条消息必须来自不同发送者（交替发言）且包含等待语义

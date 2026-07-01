@@ -14,6 +14,7 @@ import type {
   BrainSpecialistChangedEvent,
   BrainSpecialistRecruitedEvent,
   BrainZoneChangedEvent,
+  ImprovementProposalChangedEvent,
   ClarificationOptionPayload,
   ClarificationQuestionPayload,
   ClarificationRequestedEvent,
@@ -88,6 +89,10 @@ const TASK_BOARD_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assis
 const MEETING_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.meeting.changed"].changeType);
 const TODO_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.todo.changed"].changeType);
 const TODO_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.todo.changed"].status);
+const IMPROVEMENT_PROPOSAL_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["improvement_proposal.changed"].status);
+const IMPROVEMENT_PROPOSAL_CHANGE_TYPE_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["improvement_proposal.changed"].changeType,
+);
 
 function isUiEventType(value: string): value is UiEventType {
   return UI_EVENT_TYPE_SET.has(value);
@@ -578,6 +583,25 @@ function parseBrainContextReadyEvent(event: ParsedUiEventCandidate): BrainContex
   return event as BrainContextReadyEvent;
 }
 
+function parseImprovementProposalChangedEvent(
+  event: ParsedUiEventCandidate,
+): ImprovementProposalChangedEvent | null {
+  if (
+    !hasStringPayloadFields(event.payload, ["proposalId", "sourceReviewId", "status", "changeType"]) ||
+    !IMPROVEMENT_PROPOSAL_STATUS_SET.has(String(event.payload.status)) ||
+    !IMPROVEMENT_PROPOSAL_CHANGE_TYPE_SET.has(String(event.payload.changeType)) ||
+    !isOptionalNullableString(event.payload.severity)
+  ) {
+    return null;
+  }
+  const status = String(event.payload.status);
+  const changeType = String(event.payload.changeType);
+  if (!(changeType === "created" && status === "pending_review") && changeType !== status) {
+    return null;
+  }
+  return event as ImprovementProposalChangedEvent;
+}
+
 function requireSessionScopedEvent<TEvent extends UiEvent>(
   event: ParsedUiEventCandidate,
   parsePayload: (payload: Record<string, unknown>) => TEvent["payload"] | null,
@@ -604,6 +628,7 @@ const UI_EVENT_MAPPERS: Partial<Record<UiEventType, UiEventMapper>> = {
   "brain_specialist_recruited": parseBrainSpecialistRecruitedEvent,
   "brain_specialist_changed": parseBrainSpecialistChangedEvent,
   "brain_context_ready": parseBrainContextReadyEvent,
+  "improvement_proposal.changed": parseImprovementProposalChangedEvent,
   "skill.changed": (event) => withParsedPayload<SkillChangedEvent>(event, parseSkillChangedPayload),
   "skill.equipment.changed": (event) =>
     withParsedPayload<SkillEquipmentChangedEvent>(event, parseSkillEquipmentChangedPayload),

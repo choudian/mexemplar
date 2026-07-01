@@ -55,7 +55,9 @@ class TeachingFailureTracker:
             self._logger.info(f"[FailureTracker] 更新 retrying 记录: workflow={workflow_id}")
             return
 
-        self._logger.info(f"[FailureTracker] 新建失败记录: workflow={workflow_id}, stage={agent_type}")
+        self._logger.info(
+            f"[FailureTracker] 新建失败记录: workflow={workflow_id}, stage={agent_type}"
+        )
         self.record_teaching_failure(
             workflow_id=workflow_id,
             failed_stage=agent_type,

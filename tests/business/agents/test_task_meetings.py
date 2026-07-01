@@ -141,7 +141,9 @@ def test_open_meeting_channel_records_message_only_task_edges(monkeypatch) -> No
         for edge in AssistantTaskRepository().list_graph_edges(parent.graph_id)
         if edge.edge_type == "meeting_channel"
     ]
-    assert {(edge.source_task_id, edge.target_task_id, edge.propagation) for edge in meeting_edges} == {
+    assert {
+        (edge.source_task_id, edge.target_task_id, edge.propagation) for edge in meeting_edges
+    } == {
         (parent.task_id, child_a.task_id, "message_only"),
         (parent.task_id, child_b.task_id, "message_only"),
     }
@@ -308,7 +310,7 @@ def test_meeting_mutual_wait_detection_closes_channel(monkeypatch) -> None:
         content="我在等你的决定，你怎么看？",
     )
     # 第 4 条触发互等检测
-    result = service.send_message(
+    _ = service.send_message(
         channel_id=channel.channel_id,
         sender_type="specialist",
         sender_id="sp_b",
@@ -354,7 +356,7 @@ def test_meeting_mutual_wait_not_triggered_by_substantive_messages(monkeypatch) 
         sender_id="sp_a",
         content="日期排序更直观。",
     )
-    result = service.send_message(
+    _ = service.send_message(
         channel_id=channel.channel_id,
         sender_type="specialist",
         sender_id="sp_b",

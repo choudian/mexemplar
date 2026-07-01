@@ -846,7 +846,9 @@ def create_ask_parent_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.questions import TaskQuestionService
+
         return TaskQuestionService()
+
     def ask_parent_handler(
         taskId: str = "",
         question: str = "",
@@ -929,7 +931,9 @@ def create_answer_task_question_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.questions import TaskQuestionService
+
         return TaskQuestionService()
+
     def answer_task_question_handler(
         questionId: str,
         safeAnswerSummary: str,
@@ -997,7 +1001,9 @@ def create_open_meeting_channel_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.meetings import TaskMeetingService
+
         return TaskMeetingService()
+
     def open_meeting_channel_handler(
         taskId: str,
         participantA: dict,
@@ -1056,6 +1062,7 @@ def create_meeting_send_message_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.meetings import TaskMeetingService
+
         return TaskMeetingService()
 
     def meeting_send_message_handler(
@@ -1135,6 +1142,7 @@ def create_todo_update_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.todos import TaskTodoService
+
         return TaskTodoService()
 
     def todo_update_handler(taskId: str = "", items: list[dict] | None = None) -> str:
@@ -1528,6 +1536,7 @@ def create_build_task_graph_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.service import TaskCollaborationService
+
         return TaskCollaborationService()
 
     def build_task_graph_handler(
@@ -1537,10 +1546,21 @@ def create_build_task_graph_handler(
         """将复杂任务分解成带依赖的 DAG 并原子落库。"""
 
         def _action() -> str:
+            # workspaceRoot 是特权字段，只允许受信的 proposal_bridge 直连 service
+            # 设置；LLM 工具入口（主助理 + 规划专员共享此 handler）必须剥离，避免
+            # 执行体 blast radius 被重定向、proposal 沙箱守卫被绕过（026 C2）。
+            sanitized_nodes = [
+                {
+                    k: v
+                    for k, v in (node or {}).items()
+                    if k not in ("workspaceRoot", "workspace_root")
+                }
+                for node in (nodes or [])
+            ]
             with _task_graph_service() as service:
                 result = service.build_task_graph(
                     session_id=session_id,
-                    nodes=nodes or [],
+                    nodes=sanitized_nodes,
                     dependencies=dependencies,
                     user_message_sequence=(
                         user_message_sequence_provider()
@@ -1619,6 +1639,7 @@ def create_mutate_task_graph_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.service import TaskCollaborationService
+
         return TaskCollaborationService()
 
     def mutate_task_graph_handler(
@@ -1820,6 +1841,7 @@ def create_decide_task_adjudication_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.adjudication import TaskAdjudicationService
+
         return TaskAdjudicationService()
 
     def decide_task_adjudication_handler(
@@ -1875,6 +1897,7 @@ def create_abandon_request_graph_handler(
         if service_factory is not None:
             return service_factory()
         from src.business.task_collaboration.adjudication import TaskAdjudicationService
+
         return TaskAdjudicationService()
 
     def abandon_request_graph_handler(safeSummary: str) -> str:

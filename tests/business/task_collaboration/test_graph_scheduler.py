@@ -175,8 +175,12 @@ class TestBuildTaskGraphContract:
                 session_id=session_id,
                 nodes=[
                     {"nodeId": "n1", "title": "A", "description": "先做"},
-                    {"nodeId": "n2", "title": "B", "description": "后做",
-                     "needsConfirmation": True},
+                    {
+                        "nodeId": "n2",
+                        "title": "B",
+                        "description": "后做",
+                        "needsConfirmation": True,
+                    },
                 ],
                 dependencies=[{"from": "n1", "to": "n2"}],
             )

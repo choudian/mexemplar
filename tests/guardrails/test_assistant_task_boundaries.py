@@ -32,7 +32,7 @@ def test_main_assistant_is_not_a_task_attempt_executor_type() -> None:
 
 
 def test_task_cutover_reads_config_through_unified_config() -> None:
-    source = _read("src/business/task_collaboration/cutover.py")
+    source = _read("src/business/task_collaboration/dispatcher.py")
 
     assert "get_unified_config" in source
     assert "config.json" not in source

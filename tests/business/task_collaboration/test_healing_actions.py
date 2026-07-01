@@ -29,13 +29,13 @@ class TestHealingActionsFor:
         """Every action name in all returned lists must have a hint entry."""
         for actions in _HEALING_ACTIONS_BY_STATUS.values():
             for action in actions:
-                assert action in _HEALING_ACTION_HINTS, (
-                    f"action '{action}' missing from _HEALING_ACTION_HINTS"
-                )
+                assert (
+                    action in _HEALING_ACTION_HINTS
+                ), f"action '{action}' missing from _HEALING_ACTION_HINTS"
         for action in _DEFAULT_HEALING_ACTIONS:
-            assert action in _HEALING_ACTION_HINTS, (
-                f"default action '{action}' missing from _HEALING_ACTION_HINTS"
-            )
+            assert (
+                action in _HEALING_ACTION_HINTS
+            ), f"default action '{action}' missing from _HEALING_ACTION_HINTS"
 
     def test_returned_list_is_a_copy(self) -> None:
         """Mutating the returned list must not affect the original constant."""

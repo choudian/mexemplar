@@ -121,7 +121,9 @@ class _MeetingService:
     def close(self) -> None:
         pass
 
-    def get_transcript(self, channel_id: str, *, session_id: str | None = None, after_sequence=None, limit=None):
+    def get_transcript(
+        self, channel_id: str, *, session_id: str | None = None, after_sequence=None, limit=None
+    ):
         if channel_id != "mtg_1":
             raise LookupError("not found")
         return {

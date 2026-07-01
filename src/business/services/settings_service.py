@@ -623,13 +623,17 @@ class SettingsService:
         else:
             summary_status = "available"
         return {
-            "ai.api_key": "available" if self._read_secret_value("ai.api_key") else "missing_secret",
+            "ai.api_key": (
+                "available" if self._read_secret_value("ai.api_key") else "missing_secret"
+            ),
             "web.brave_api_key": (
                 "available" if self._read_secret_value("web.brave_api_key") else "missing_secret"
             ),
             "recording.desktop.vision_model": vision_status,
             "agent_tools.output.semantic_summary.api_key": (
-                "available" if self._read_secret_value("agent_tools.output.semantic_summary.api_key") else "missing_secret"
+                "available"
+                if self._read_secret_value("agent_tools.output.semantic_summary.api_key")
+                else "missing_secret"
             ),
             "agent_tools.output.semantic_summary.model": summary_status,
         }

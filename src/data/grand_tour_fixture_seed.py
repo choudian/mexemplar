@@ -22,10 +22,10 @@ FIXTURE_TRIAL_SUCCESS_COUNT = 3
 
 # 符合 src/execution/tool_executor.py run_tool_code 契约：
 # venv 子进程跑 ``asyncio.run(mod.execute(**params))``；无 import → 不触发 pip install，零副作用。
-FIXTURE_EXECUTION_CODE = '''async def execute(**kwargs):
+FIXTURE_EXECUTION_CODE = """async def execute(**kwargs):
     return {
         "success": True,
         "message": "Fixture skill executed successfully. This is a safe no-op validation stub.",
         "data": {"fixture": True, "received_params": dict(kwargs)},
     }
-'''
+"""

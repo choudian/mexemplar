@@ -76,7 +76,9 @@ class TaskQuestionService(AtomicTaskService):
                 capability_delta=encoded_delta,
                 expires_at=expires_at,
             )
-            row = self._questions.update_status(row.question_id, TaskQuestionStatus.ESCALATED_TO_PARENT)
+            row = self._questions.update_status(
+                row.question_id, TaskQuestionStatus.ESCALATED_TO_PARENT
+            )
             if parent is not None:
                 self._tasks.add_edge(
                     graph_id=task.graph_id,
@@ -179,7 +181,10 @@ class TaskQuestionService(AtomicTaskService):
             if merged_task_scope is not None and task is not None:
                 self._tasks.update_capability_scope(task.task_id, merged_task_scope)
             resume_reasons = {SuspendReason.WAITING_SYSTEM}
-            if question.escalated_to_user or question.status == TaskQuestionStatus.ESCALATED_TO_USER:
+            if (
+                question.escalated_to_user
+                or question.status == TaskQuestionStatus.ESCALATED_TO_USER
+            ):
                 resume_reasons.add(SuspendReason.WAITING_USER)
             if (
                 task is not None
@@ -217,10 +222,15 @@ class TaskQuestionService(AtomicTaskService):
         for question in self._questions.scan_expired(now):
             # 每个 question 的 expire + task suspend 必须同一事务
             with self._atomic():
-                updated = self._questions.update_status(question.question_id, TaskQuestionStatus.EXPIRED)
+                updated = self._questions.update_status(
+                    question.question_id, TaskQuestionStatus.EXPIRED
+                )
                 if updated is None:
                     continue
-                if question.escalated_to_user or question.status == TaskQuestionStatus.ESCALATED_TO_USER:
+                if (
+                    question.escalated_to_user
+                    or question.status == TaskQuestionStatus.ESCALATED_TO_USER
+                ):
                     task = self._tasks.get_task(question.task_id)
                     if task is not None and task.status not in TERMINAL_TASK_STATUSES:
                         validate_task_transition(

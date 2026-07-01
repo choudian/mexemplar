@@ -30,7 +30,9 @@ class AssistantMemoryToolFacade:
             return None
         context = BrainContextBuilder().build_context(session_id, track_loaded=False)
         entry_ids = set(context.injected_entry_ids)
-        entry_ids.update(str(entry_id).strip() for entry_id in retrieved_entry_ids if str(entry_id).strip())
+        entry_ids.update(
+            str(entry_id).strip() for entry_id in retrieved_entry_ids if str(entry_id).strip()
+        )
         return list(entry_ids)
 
     def invalidate_memory_entry(

@@ -11,7 +11,7 @@ import json
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.business.debug.context import get_current_context
 from src.business.debug.models import LLMTraceRecord, TraceCaptureContext
@@ -64,8 +64,14 @@ def observe_chat(
     except Exception as provider_error:
         if trace_id and created_at:
             _record_failure(
-                buffer, redactor, trace_id, epoch,
-                created_at, method, context, str(provider_error),
+                buffer,
+                redactor,
+                trace_id,
+                epoch,
+                created_at,
+                method,
+                context,
+                str(provider_error),
                 captured_input=captured_input,
                 detail_availability=(
                     "diagnostic_unavailable" if capture_unavailable else "full_text"
@@ -76,11 +82,16 @@ def observe_chat(
     # Post-call: attempt capture (failure = skip, don't change result)
     if trace_id and created_at:
         _record_success(
-            buffer, redactor, trace_id, epoch,
-            created_at, method, context, captured_input, result,
-            detail_availability=(
-                "diagnostic_unavailable" if capture_unavailable else "full_text"
-            ),
+            buffer,
+            redactor,
+            trace_id,
+            epoch,
+            created_at,
+            method,
+            context,
+            captured_input,
+            result,
+            detail_availability=("diagnostic_unavailable" if capture_unavailable else "full_text"),
         )
     return result
 
@@ -137,8 +148,14 @@ def observe_chat_with_tools(
     except Exception as provider_error:
         if trace_id and created_at:
             _record_failure(
-                buffer, redactor, trace_id, epoch,
-                created_at, method, context, str(provider_error),
+                buffer,
+                redactor,
+                trace_id,
+                epoch,
+                created_at,
+                method,
+                context,
+                str(provider_error),
                 captured_input=captured_messages,
                 captured_tools=captured_tools,
                 detail_availability=(
@@ -152,10 +169,7 @@ def observe_chat_with_tools(
     try:
         output_content = result.content if result else None
         if result and result.tool_calls:
-            tc_list = [
-                {"name": tc.name, "args": tc.args}
-                for tc in result.tool_calls
-            ]
+            tc_list = [{"name": tc.name, "args": tc.args} for tc in result.tool_calls]
             output_tool_calls = json.dumps(tc_list, ensure_ascii=False)
     except Exception:
         output_content = None
@@ -164,14 +178,18 @@ def observe_chat_with_tools(
 
     if trace_id and created_at:
         _record_success(
-            buffer, redactor, trace_id, epoch,
-            created_at, method, context,
-            captured_messages, output_content,
+            buffer,
+            redactor,
+            trace_id,
+            epoch,
+            created_at,
+            method,
+            context,
+            captured_messages,
+            output_content,
             output_tool_calls=output_tool_calls,
             captured_tools=captured_tools,
-            detail_availability=(
-                "diagnostic_unavailable" if capture_unavailable else "full_text"
-            ),
+            detail_availability=("diagnostic_unavailable" if capture_unavailable else "full_text"),
         )
     return result
 
@@ -201,17 +219,21 @@ def observe_multimodal(
                 block_type = block.get("type", "")
                 if block_type == "text":
                     text_value = block.get("text", "")
-                    captured_text_parts.append({
-                        "type": "text",
-                        "text": redactor.redact(text_value),
-                    })
+                    captured_text_parts.append(
+                        {
+                            "type": "text",
+                            "text": redactor.redact(text_value),
+                        }
+                    )
                 elif block_type == "image_url":
                     url = block.get("image_url", {}).get("url", "")
-                    media_metadata.append({
-                        "type": "image_url",
-                        "media_type": "image",
-                        "byte_count": len(url) if url else 0,
-                    })
+                    media_metadata.append(
+                        {
+                            "type": "image_url",
+                            "media_type": "image",
+                            "byte_count": len(url) if url else 0,
+                        }
+                    )
         except Exception:
             captured_text_parts = []
             media_metadata = []
@@ -226,8 +248,14 @@ def observe_multimodal(
     except Exception as provider_error:
         if trace_id and created_at:
             _record_failure(
-                buffer, redactor, trace_id, epoch,
-                created_at, "multimodal", context, str(provider_error),
+                buffer,
+                redactor,
+                trace_id,
+                epoch,
+                created_at,
+                "multimodal",
+                context,
+                str(provider_error),
                 captured_input=captured_input,
                 media_metadata=media_metadata,
                 detail_availability=(
@@ -238,13 +266,17 @@ def observe_multimodal(
 
     if trace_id and created_at:
         _record_success(
-            buffer, redactor, trace_id, epoch,
-            created_at, "multimodal", context,
-            captured_input, result,
+            buffer,
+            redactor,
+            trace_id,
+            epoch,
+            created_at,
+            "multimodal",
+            context,
+            captured_input,
+            result,
             media_metadata=media_metadata,
-            detail_availability=(
-                "diagnostic_unavailable" if capture_unavailable else "full_text"
-            ),
+            detail_availability=("diagnostic_unavailable" if capture_unavailable else "full_text"),
         )
     return result
 
@@ -252,6 +284,7 @@ def observe_multimodal(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _capture_metadata(
     buffer: TraceBuffer | None,
@@ -270,6 +303,7 @@ def _capture_metadata(
     except Exception:
         logger.debug("debug trace metadata capture failed", exc_info=True)
         return None, None, None
+
 
 def _record_success(
     buffer: TraceBuffer | None,
@@ -299,9 +333,7 @@ def _record_success(
 
         try:
             redacted_output = (
-                redactor.redact(output_content)
-                if output_content and redactor
-                else output_content
+                redactor.redact(output_content) if output_content and redactor else output_content
             )
             redacted_tool_calls = (
                 redactor.redact(output_tool_calls)
@@ -378,11 +410,7 @@ def _record_failure(
                 safe_summary = "diagnostic_unavailable"
                 detail_availability = "diagnostic_unavailable"
 
-        input_media = (
-            json.dumps(media_metadata, ensure_ascii=False)
-            if media_metadata
-            else None
-        )
+        input_media = json.dumps(media_metadata, ensure_ascii=False) if media_metadata else None
         record = LLMTraceRecord(
             trace_id=trace_id,
             retention_epoch=epoch,

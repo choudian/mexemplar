@@ -2,7 +2,7 @@
 统一时区工具 -- 全项目统一使用 UTC 存储，显示层按需转本地时间。
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 _LOCAL_TZ = datetime.now().astimezone().tzinfo
 

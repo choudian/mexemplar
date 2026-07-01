@@ -85,7 +85,7 @@ class DeliveredStatus(StrEnum):
 
 # Re-export RoleKind from the data layer (canonical definition lives there to
 # avoid circular imports). Business code imports from this module for consistency.
-from src.data.repos.specialist_repository import RoleKind  # noqa: F401
+from src.data.repos.specialist_repository import RoleKind  # noqa: E402,F401
 
 
 class ClaimStatus(StrEnum):

@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_task_collaboration_event_contracts_exist_in_backend_and_frontend() -> None:
-    frontend_contract = (ROOT / "frontend/src/api/uiEvents.ts").read_text(encoding="utf-8")
+    frontend_contract = (ROOT / "frontend/src/api/uiEventTypes.ts").read_text(encoding="utf-8")
     examples = exported_registry_examples()
     expected = {
         "assistant.task_graph.changed",

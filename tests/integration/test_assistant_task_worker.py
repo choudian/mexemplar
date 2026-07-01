@@ -46,7 +46,7 @@ def test_report_tool_bug_enqueues_task_and_worker_starts_triage(in_memory_db, mo
     assert notified == [True]
 
     port = _TaskPort()
-    worker = AssistantTaskWorker(ToolRepository(), port)
+    worker = AssistantTaskWorker(ToolRepository(), port.run_agent, port.start_triage)
     worker.process_pending_tasks()
 
     task = PendingTaskRepository().get_by_id(payload["task_id"])
@@ -65,7 +65,7 @@ def test_bug_task_without_workflow_is_marked_failed(in_memory_db):
     )
 
     port = _TaskPort()
-    worker = AssistantTaskWorker(ToolRepository(), port)
+    worker = AssistantTaskWorker(ToolRepository(), port.run_agent, port.start_triage)
     worker.process_pending_tasks()
 
     task = PendingTaskRepository().get_by_id("task-missing-workflow")

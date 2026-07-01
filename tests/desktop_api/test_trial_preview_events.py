@@ -104,9 +104,9 @@ def test_trial_preview_late_decision_publishes_expired_resolution(
     requested = event_queue.queue.get(timeout=1)
     request_id = str(requested.payload["requestId"])
     with trial_preview_manager._lock:
-        trial_preview_manager._records[request_id].expires_at = (
-            datetime.now(timezone.utc) - timedelta(seconds=1)
-        )
+        trial_preview_manager._records[request_id].expires_at = datetime.now(
+            timezone.utc
+        ) - timedelta(seconds=1)
 
     response = desktop_api_client.post(
         f"/api/teaching/trial-preview/{request_id}/decision",

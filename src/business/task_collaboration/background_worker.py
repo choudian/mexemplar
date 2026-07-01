@@ -1,8 +1,9 @@
 """Background worker for Assistant task collaboration recovery scans.
 
-周期性回收过期 TaskAttempt（lease 围栏）、过期看板认领、超预算会议通道，让
-FR-005（无永久 running 僵任务）、FR-014（认领租约超时释放）、FR-016（会议时长预算关闭）
-的超时/恢复语义在运行态真正生效，而不只是停在"可调用但无人调度"的原语。
+周期性回收过期 TaskAttempt（lease 围栏）、过期看板认领、超预算会议通道、过期问题，
+并宿主 self-improvement proposal recovery job。让 FR-005（无永久 running 僵任务）、
+FR-014（认领租约超时释放）、FR-016（会议时长预算关闭）以及 proposal 自动实施回报的
+超时/恢复语义在运行态真正生效，而不只是停在"可调用但无人调度"的原语。
 
 随 desktop API sidecar 生命周期启动/停止；统一任务派发默认关闭时整轮 no-op。
 """
@@ -20,9 +21,11 @@ logger = logging.getLogger(__name__)
 
 
 class TaskCollaborationBackgroundWorker:
-    """周期扫描线程，跑 TaskAttempt/看板/会议三类恢复原语。"""
+    """周期扫描线程，跑 task collaboration 与 proposal recovery 原语。"""
 
-    def __init__(self, config=None, resume_callback: Callable[[str, str], bool] | None = None) -> None:
+    def __init__(
+        self, config=None, resume_callback: Callable[[str, str], bool] | None = None
+    ) -> None:
         self._config = config
         self._resume_callback = resume_callback
         self._stop_event = threading.Event()
@@ -70,8 +73,17 @@ class TaskCollaborationBackgroundWorker:
                 current,
             ),
             "expired_claims": self._run_job("expire_claims", _expire_claims, current),
-            "closed_channels": self._run_job("close_expired_channels", _close_expired_channels, current),
-            "expired_questions": self._run_job("expire_stale_questions", _expire_stale_questions, current),
+            "closed_channels": self._run_job(
+                "close_expired_channels", _close_expired_channels, current
+            ),
+            "expired_questions": self._run_job(
+                "expire_stale_questions", _expire_stale_questions, current
+            ),
+            "self_improvement_proposals": self._run_job(
+                "self_improvement_proposals",
+                _run_self_improvement_proposal_cycle,
+                current,
+            ),
         }
 
     def _run_job(self, name: str, fn, now: datetime) -> int:
@@ -85,14 +97,67 @@ class TaskCollaborationBackgroundWorker:
             return 0
 
     def _worker_loop(self) -> None:
+        self._warn_on_proposal_dispatch_misconfig()
         while not self._stop_event.is_set():
             try:
-                if self._get_config().get_assistant_tasks_unified_dispatch_enabled():
-                    self.run_recovery_cycle()
+                self._run_recovery_tick()
             except Exception:
                 logger.error("Task recovery tick failed", exc_info=True)
             interval = self._get_config().get_assistant_tasks_recovery_scan_interval_seconds()
             self._stop_event.wait(timeout=interval)
+
+    def _run_recovery_tick(self) -> None:
+        """Run one recovery tick respecting the unified_dispatch toggle.
+
+        task collaboration recovery (fence/claim/channel/question) only runs when
+        ``unified_dispatch`` is on, because it depends on the dispatcher and the
+        graph scheduler assembled under that toggle.  Proposal recovery, however,
+        is deterministic and must not be silently dropped when an operator disables
+        ``unified_dispatch`` while leaving ``self_improvement.proposals`` enabled —
+        otherwise approved proposals hang forever in ``in_progress`` (026 review
+        HIGH-2, FR-011 "do not silently drop tasks").  The misconfig itself is
+        surfaced at startup by ``_warn_on_proposal_dispatch_misconfig``.
+        """
+        config = self._get_config()
+        if config.get_assistant_tasks_unified_dispatch_enabled():
+            self.run_recovery_cycle()
+            return
+        if config.get_self_improvement_proposals_enabled():
+            self._run_job(
+                "self_improvement_proposals",
+                _run_self_improvement_proposal_cycle,
+                utc_now_naive(),
+            )
+
+    def _warn_on_proposal_dispatch_misconfig(self) -> None:
+        """Warn at startup if proposals are enabled but unified_dispatch is off.
+
+        Proposal implementation depends on the graph scheduler, whose assembly is
+        gated on ``unified_dispatch`` (orchestrator.py).  This combination leaves
+        approved proposals unable to progress — scheduler kicks return
+        ``unavailable`` so proposals hang in ``in_progress`` without a terminal
+        write-back.  We cannot auto-correct a deliberate operator choice, but the
+        hang is silent otherwise, so we must leave an unmissable error trail.
+        """
+        try:
+            config = self._get_config()
+        except Exception:
+            logger.error(
+                "Failed to read config for proposal/dispatch consistency check",
+                exc_info=True,
+            )
+            return
+        if (
+            config.get_self_improvement_proposals_enabled()
+            and not config.get_assistant_tasks_unified_dispatch_enabled()
+        ):
+            logger.error(
+                "self-improvement proposals are enabled but "
+                "assistant_tasks.unified_dispatch.enabled is off; approved proposals "
+                "cannot be implemented (graph scheduler will not be assembled) and "
+                "will hang in_progress. Enable unified_dispatch to allow proposal "
+                "implementation."
+            )
 
 
 # 每个 job 用对应 service 自持 session 的 context manager：不注入 repo 时 service 自建共享
@@ -127,3 +192,10 @@ def _close_expired_channels(now: datetime) -> int:
 
     with TaskMeetingService() as service:
         return service.close_expired_channels(now)
+
+
+def _run_self_improvement_proposal_cycle(now: datetime) -> int:
+    from src.business.self_improvement.proposal_bridge import run_proposal_recovery_cycle
+
+    _ = now
+    return run_proposal_recovery_cycle()

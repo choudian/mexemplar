@@ -70,7 +70,8 @@ class TestMutateAddDependency:
 
         assert snapshot is not None
         dep_edges = [
-            e for e in snapshot.edges
+            e
+            for e in snapshot.edges
             if e.source_task_id == n1 and e.target_task_id == n2 and e.type == "dependency"
         ]
         assert len(dep_edges) == 1
@@ -122,7 +123,8 @@ class TestMutateRemoveDependency:
 
         assert snapshot is not None
         dep_edges = [
-            e for e in snapshot.edges
+            e
+            for e in snapshot.edges
             if e.source_task_id == n1 and e.target_task_id == n2 and e.type == "dependency"
         ]
         assert len(dep_edges) == 0
@@ -158,3 +160,71 @@ class TestMutateRemoveNonexistentDependency:
             )
 
         assert len(result["applied"]) == 0
+
+
+def test_add_node_inherits_existing_graph_workspace_root(tmp_path):
+    session_id = generate_id("sess")
+    workspace_root = str(tmp_path / "proposal-worktree")
+    with TaskCollaborationService() as svc:
+        graph = svc.build_task_graph(
+            session_id=session_id,
+            nodes=[
+                {
+                    "nodeId": "n1",
+                    "title": "实施改进",
+                    "description": "Edit in proposal worktree",
+                    "workspaceRoot": workspace_root,
+                }
+            ],
+        )
+        mutation = svc.mutate_task_graph(
+            graph_id=graph["graphId"],
+            session_id=session_id,
+            changes=[
+                {
+                    "op": "add_node",
+                    "nodeId": "n2",
+                    "title": "补充验证",
+                    "description": "Run extra tests",
+                }
+            ],
+        )
+        task_id = mutation["applied"][0]["taskId"]
+        task = svc._tasks.get_task(task_id)
+
+    assert task is not None
+    assert task.workspace_root == workspace_root
+
+
+def test_add_node_ignores_injected_workspace_root_without_existing_graph_root(tmp_path):
+    session_id = generate_id("sess")
+    injected_workspace_root = str(tmp_path / "evil-worktree")
+    with TaskCollaborationService() as svc:
+        graph = svc.build_task_graph(
+            session_id=session_id,
+            nodes=[
+                {
+                    "nodeId": "n1",
+                    "title": "普通节点",
+                    "description": "No privileged workspace root",
+                }
+            ],
+        )
+        mutation = svc.mutate_task_graph(
+            graph_id=graph["graphId"],
+            session_id=session_id,
+            changes=[
+                {
+                    "op": "add_node",
+                    "nodeId": "n2",
+                    "title": "注入节点",
+                    "description": "Try to redirect workspace",
+                    "workspaceRoot": injected_workspace_root,
+                }
+            ],
+        )
+        task_id = mutation["applied"][0]["taskId"]
+        task = svc._tasks.get_task(task_id)
+
+    assert task is not None
+    assert task.workspace_root is None

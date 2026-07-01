@@ -11,7 +11,7 @@ and buffer layers.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal, Optional
 
@@ -147,9 +147,9 @@ class AgentFlowTransitionView(BaseModel):
     status: str = ""
     reason: str = ""
     detail: Optional[str] = None
-    detail_provenance: Literal[
-        "persisted_transition", "ephemeral_debug_capture", "unavailable"
-    ] = "unavailable"
+    detail_provenance: Literal["persisted_transition", "ephemeral_debug_capture", "unavailable"] = (
+        "unavailable"
+    )
     trace_ids: list[str] = Field(default_factory=list)
     link_status: Literal["linked", "unlinked", "unavailable"] = "unavailable"
 

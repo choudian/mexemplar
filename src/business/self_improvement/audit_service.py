@@ -2,7 +2,7 @@
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 from src.data.repos.self_improvement_repository import SelfImprovementRepository
 

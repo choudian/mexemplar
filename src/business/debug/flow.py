@@ -100,13 +100,10 @@ class FlowCorrelationService:
                 self._budget.release(self._budget_key(existing))
 
             content_bytes = len(content.encode("utf-8"))
-            retained = (
-                content_bytes <= self._max_bytes
-                and self._budget.reserve(
-                    self._budget_key_for_current_epoch(transition_id),
-                    content_bytes,
-                    lambda: self._evict_detail_unlocked(transition_id),
-                )
+            retained = content_bytes <= self._max_bytes and self._budget.reserve(
+                self._budget_key_for_current_epoch(transition_id),
+                content_bytes,
+                lambda: self._evict_detail_unlocked(transition_id),
             )
             detail = EphemeralFlowDetail(
                 transition_id=transition_id,

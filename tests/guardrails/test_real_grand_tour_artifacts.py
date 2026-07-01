@@ -18,9 +18,7 @@ def test_real_grand_tour_summary_reports_stay_under_ignored_test_results() -> No
 
 
 def test_real_grand_tour_playwright_artifacts_are_off_by_default() -> None:
-    config = (ROOT / "frontend/playwright.real-grand-tour.config.ts").read_text(
-        encoding="utf-8"
-    )
+    config = (ROOT / "frontend/playwright.real-grand-tour.config.ts").read_text(encoding="utf-8")
 
     assert 'trace: "off"' in config
     assert 'video: "off"' in config

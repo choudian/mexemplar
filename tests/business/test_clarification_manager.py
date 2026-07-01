@@ -74,9 +74,13 @@ def test_validation_question_count():
 
 def test_validation_option_count_and_required():
     with pytest.raises(cm.ClarificationValidationError):
-        cm.validate_and_normalize_questions([{"question": "q", "header": "h", "options": [{"label": "a"}]}])
+        cm.validate_and_normalize_questions(
+            [{"question": "q", "header": "h", "options": [{"label": "a"}]}]
+        )
     with pytest.raises(cm.ClarificationValidationError):
-        cm.validate_and_normalize_questions([{"question": "", "header": "h", "options": [{"label": "a"}, {"label": "b"}]}])
+        cm.validate_and_normalize_questions(
+            [{"question": "", "header": "h", "options": [{"label": "a"}, {"label": "b"}]}]
+        )
 
 
 def test_validation_duplicate_questions_and_labels():
@@ -91,7 +95,14 @@ def test_validation_duplicate_questions_and_labels():
 
 def test_stable_ids_generated_ignoring_model_ids():
     normalized = cm.validate_and_normalize_questions(
-        [{"question": "q", "header": "h", "questionId": "BAD", "options": [{"label": "a", "optionId": "BAD"}, {"label": "b"}]}]
+        [
+            {
+                "question": "q",
+                "header": "h",
+                "questionId": "BAD",
+                "options": [{"label": "a", "optionId": "BAD"}, {"label": "b"}],
+            }
+        ]
     )
     assert normalized[0].question_id == "q1"
     assert normalized[0].options[0].option_id == "q1o1"
@@ -106,12 +117,19 @@ def test_answered_single_select():
     cm.register_clarification_signal(sig)
     t, holder = _run_async()
     pending = cm.get_pending_for_session("s1")
-    out = cm.submit_decision("s1", pending.request_id, "submit", [{"questionId": "q1", "selectedOptionIds": ["q1o1"], "otherText": None}])
+    out = cm.submit_decision(
+        "s1",
+        pending.request_id,
+        "submit",
+        [{"questionId": "q1", "selectedOptionIds": ["q1o1"], "otherText": None}],
+    )
     t.join(timeout=2)
     assert out["status"] == "answered" and out["accepted"] is True
     assert holder["result"] == {
         "status": "answered",
-        "answers": [{"question": "选择执行方式？", "selectedLabels": ["按顺序"], "otherText": None}],
+        "answers": [
+            {"question": "选择执行方式？", "selectedLabels": ["按顺序"], "otherText": None}
+        ],
     }
     assert sig.requested and sig.resolved[0][1] == "answered"
 
@@ -122,7 +140,9 @@ def test_answered_multi_select_with_other():
     t, holder = _run_async(questions=_questions(multi=True))
     pending = cm.get_pending_for_session("s1")
     cm.submit_decision(
-        "s1", pending.request_id, "submit",
+        "s1",
+        pending.request_id,
+        "submit",
         [{"questionId": "q1", "selectedOptionIds": ["q1o1", "q1o2"], "otherText": "额外说明"}],
     )
     t.join(timeout=2)
@@ -136,7 +156,12 @@ def test_answered_only_other_text_single():
     cm.register_clarification_signal(sig)
     t, holder = _run_async()
     pending = cm.get_pending_for_session("s1")
-    cm.submit_decision("s1", pending.request_id, "submit", [{"questionId": "q1", "selectedOptionIds": [], "otherText": "自定义"}])
+    cm.submit_decision(
+        "s1",
+        pending.request_id,
+        "submit",
+        [{"questionId": "q1", "selectedOptionIds": [], "otherText": "自定义"}],
+    )
     t.join(timeout=2)
     ans = holder["result"]["answers"][0]
     assert ans["selectedLabels"] == [] and ans["otherText"] == "自定义"
@@ -150,7 +175,12 @@ def test_single_select_multiple_options_rejected():
     t, _ = _run_async()
     pending = cm.get_pending_for_session("s1")
     with pytest.raises(cm.ClarificationValidationError):
-        cm.submit_decision("s1", pending.request_id, "submit", [{"questionId": "q1", "selectedOptionIds": ["q1o1", "q1o2"], "otherText": None}])
+        cm.submit_decision(
+            "s1",
+            pending.request_id,
+            "submit",
+            [{"questionId": "q1", "selectedOptionIds": ["q1o1", "q1o2"], "otherText": None}],
+        )
     # 未结算：仍 pending
     assert cm.get_pending_for_session("s1") is not None
     cm.settle_all_clarifications("shutdown")
@@ -162,7 +192,12 @@ def test_missing_answer_rejected():
     t, _ = _run_async()
     pending = cm.get_pending_for_session("s1")
     with pytest.raises(cm.ClarificationValidationError):
-        cm.submit_decision("s1", pending.request_id, "submit", [{"questionId": "q1", "selectedOptionIds": [], "otherText": ""}])
+        cm.submit_decision(
+            "s1",
+            pending.request_id,
+            "submit",
+            [{"questionId": "q1", "selectedOptionIds": [], "otherText": ""}],
+        )
     cm.settle_all_clarifications("shutdown")
     t.join(timeout=2)
 
@@ -172,7 +207,12 @@ def test_other_text_too_long_rejected():
     t, _ = _run_async()
     pending = cm.get_pending_for_session("s1")
     with pytest.raises(cm.ClarificationValidationError):
-        cm.submit_decision("s1", pending.request_id, "submit", [{"questionId": "q1", "selectedOptionIds": [], "otherText": "x" * 1001}])
+        cm.submit_decision(
+            "s1",
+            pending.request_id,
+            "submit",
+            [{"questionId": "q1", "selectedOptionIds": [], "otherText": "x" * 1001}],
+        )
     cm.settle_all_clarifications("shutdown")
     t.join(timeout=2)
 
@@ -182,7 +222,12 @@ def test_unknown_option_id_rejected():
     t, _ = _run_async()
     pending = cm.get_pending_for_session("s1")
     with pytest.raises(cm.ClarificationValidationError):
-        cm.submit_decision("s1", pending.request_id, "submit", [{"questionId": "q1", "selectedOptionIds": ["q9o9"], "otherText": None}])
+        cm.submit_decision(
+            "s1",
+            pending.request_id,
+            "submit",
+            [{"questionId": "q1", "selectedOptionIds": ["q9o9"], "otherText": None}],
+        )
     cm.settle_all_clarifications("shutdown")
     t.join(timeout=2)
 
@@ -247,13 +292,23 @@ def test_first_decision_wins_concurrent():
     def submit(option):
         barrier.wait()
         try:
-            results.append(cm.submit_decision("s1", rid, "submit", [{"questionId": "q1", "selectedOptionIds": [option], "otherText": None}]))
+            results.append(
+                cm.submit_decision(
+                    "s1",
+                    rid,
+                    "submit",
+                    [{"questionId": "q1", "selectedOptionIds": [option], "otherText": None}],
+                )
+            )
         except LookupError:
             results.append({"lookup_error": True})
 
     a = threading.Thread(target=submit, args=("q1o1",))
     b = threading.Thread(target=submit, args=("q1o2",))
-    a.start(); b.start(); a.join(); b.join()
+    a.start()
+    b.start()
+    a.join()
+    b.join()
     t.join(timeout=2)
     # 恰好一个 accepted=True，另一个 accepted=False 或 LookupError（均不崩溃）
     accepted = [r for r in results if r.get("accepted") is True]

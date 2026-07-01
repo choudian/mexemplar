@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-06-15
-**Revision**: 2026-06-15 — Archived feature 022 process event push (子进程事件推送)
+**Last Updated**: 2026-07-02
+**Revision**: 2026-07-02 — Archived feature 026 self-improvement proposals (自我改进提案 B 阶段)
 
 ---
 
@@ -1345,3 +1345,67 @@ tests/
 - **回归**：简单任务仍走快速委派快捷通道；023 durable accepted/恢复/并发安全路径不退化
 
 Feature tasks: 42/42 completed。
+
+---
+
+## 自我改进提案（B 阶段） [Source: specs/026-self-improvement-proposals]
+
+**Revision note (2026-07-02)**: Archived 026 after merge. 在 A 阶段执行复盘之上加"人审批 + 机器实施"层：提案生成旁路、批准→桥接建 worktree+任务图→调度推进→轮询回报。完整 Technical Context、Project Structure、实施排序与门禁见 `specs/026-self-improvement-proposals/plan.md`，这里摘录落点。
+
+### Technical Context
+
+- **Language/Version**: Python 3.12（后端 sidecar/业务/数据层）+ TypeScript + React 18（frontend）
+- **Primary Dependencies**: 复用 A 阶段 `src/business/self_improvement`（执行复盘）、`src/business/task_collaboration`（GraphScheduler / TaskDispatcher / TaskCollaborationService）、自研 AgentLoop、git worktree（隔离执行）；无新外部依赖
+- **Storage**: SQLite —— 新增 `improvement_proposals` 表（`migrate_to_v21` 建表；v22 加 `assistant_tasks.workspace_root`；v23 收紧 `result_tests_passed` 三态 CHECK）；git worktrees 作为"一提案一隔离工作区"运行时隔离（路径/分支名引用存提案行，非持久数据）
+- **Testing**: pytest（`tests/{data,business/self_improvement,desktop_api,guardrails,integration}`）+ frontend Vitest/RTL；命门回归 mock executor/LLM 确定性测接线
+- **Constraints**: 执行体改动 100% 限制在 git 跟踪源码且位于隔离 worktree（fail-closed）；用户批准前零副作用；合并手动、生效需重启；A 阶段只读不动；不数据化提示词/工具；停在 B
+
+### Source Code Structure
+
+```text
+src/
+├── business/
+│   └── self_improvement/
+│       ├── proposal_service.py       # 提案生成（幂等 + dedup）+ approve/reject
+│       ├── proposal_bridge.py        # 批准 → 建 worktree → build_task_graph → start_graph → 回报
+│       └── proposal_workspace.py     # git worktree 生命周期 + source-only 边界
+├── desktop_api/
+│   ├── routers/proposals.py          # GET / approve / reject typed API
+│   └── ui_events.py                  # 注册 improvement_proposal.changed
+└── data/
+    ├── migrations.py                 # v21 建表 / v22 workspace_root / v23 三态 CHECK
+    ├── models_sqlite.py              # ImprovementProposal model
+    └── repos/improvement_proposal_repository.py  # 状态机 CAS
+
+frontend/src/
+├── api/executionReview.ts            # 扩展：提案 client
+├── state/brainStore.ts               # 扩展：提案状态分片
+└── screens/BrainScreen/BrainScreen.tsx  # 扩展：复盘视图提案列表 + 批准/补料/拒绝
+```
+
+**Structure Decision**: 提案能力收进既有 `src/business/self_improvement/`（A 阶段已在此）作为新"实施层"，与 A 的"报告层"同包但职责分离；UI 复用 BrainScreen 复盘视图不开新主屏；执行复用 task_collaboration 内核，不新建平行流水线。
+
+### Configuration
+
+`self_improvement.proposals.*` 走 `UnifiedConfigManager` + `config.json` 默认 + `app_settings` 覆盖：
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `self_improvement.proposals.enabled` | true | 自动改造总开关 |
+| `self_improvement.proposals.worktree_retention_max` | — | 保留实施 worktree 上限（FR-418 回收） |
+| `self_improvement.proposals.dedup_cooldown_hours` | 24 | 跨复盘同类提案去重冷却窗口（FR-400a） |
+
+无新 secret；实施失败原始错误不入安全摘要。
+
+### Testing Strategy
+
+- **单元**：提案生成幂等 + dedup 抑制、状态机 CAS、Repository 并发重复 approve 不双触发（`test_proposal_service.py` / `test_improvement_proposal_repository.py`）
+- **桥接**：mock scheduler/build_task_graph，断言建图→踢图→CAS→回报接线、串行闸门、scheduler-None 兜底（`test_proposal_bridge.py`）
+- **worktree/边界**：建/弃 + source-only 边界（`test_proposal_workspace.py`）
+- **数据**：v20→v21→v22→v23 升级、表/索引/唯一约束、CAS（`test_improvement_proposal_migration.py`）
+- **API/事件**：列表/批准/拒绝 typed 契约 + 事件发出 + 安全投影（`test_proposals_endpoint.py`）
+- **门卫**：FR-413 三门卫（文件 source-only / exec 仅测试型 / 禁改自我改进核心+启动路径）+ A 只读回归 + 拒绝/失败无残留 + 闭环全程不自动合并/重启（负向断言）（`test_proposal_guardrails.py`）
+- **命门回归**：端到端 复盘→提案→批准→实施→回报，mock executor/LLM 确定性测接线+状态机，不测改码质量（`test_proposal_closed_loop.py`）
+- **前端**：复盘视图提案展示/批准+补料/拒绝交互（`proposal-review.test.tsx`）
+
+Feature tasks: 33/33 completed。

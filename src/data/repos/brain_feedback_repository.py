@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 
 class BrainFeedbackSignalRepository(BaseRepository):
     """Repository for feedback, skill-pool, and recruitment signals."""
+
     # ------------------------------------------------------------------
     # Feedback Signal
     # ------------------------------------------------------------------

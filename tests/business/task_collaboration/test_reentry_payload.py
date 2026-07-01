@@ -16,9 +16,7 @@ class TestPausedReentryPayloadNeedsReview:
         assert result["eventType"] == "needs_review"
 
     def test_needs_review_payload_has_task_id(self) -> None:
-        result = _paused_reentry_payload(
-            {"reentry_type": "needs_review", "task_id": "t-42"}
-        )
+        result = _paused_reentry_payload({"reentry_type": "needs_review", "task_id": "t-42"})
         assert result is not None
         assert result["taskId"] == "t-42"
 
@@ -31,9 +29,7 @@ class TestPausedReentryPayloadNeedsReview:
 
     def test_needs_review_safe_summary_defaults(self) -> None:
         """When safe_summary is missing, the Chinese default message is used."""
-        result = _paused_reentry_payload(
-            {"reentry_type": "needs_review", "task_id": "t-1"}
-        )
+        result = _paused_reentry_payload({"reentry_type": "needs_review", "task_id": "t-1"})
         assert result is not None
         assert result["safeSummary"] == "节点标记为需确认，请裁定是否执行。"
 

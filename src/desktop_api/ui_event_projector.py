@@ -710,6 +710,24 @@ def _project_brain_context_ready(payload, scope, causation_id):
     ]
 
 
+def _project_improvement_proposal_changed(payload, scope, causation_id):
+    """Project internal improvement_proposal_changed blinker event to public UI event."""
+    return [
+        UiEventDraft(
+            "improvement_proposal.changed",
+            {
+                "proposalId": _string_or_none(payload.get("proposal_id")),
+                "sourceReviewId": _string_or_none(payload.get("source_review_id")),
+                "status": _string_or_none(payload.get("status")),
+                "severity": _string_or_none(payload.get("severity")),
+                "changeType": _string_or_none(payload.get("change_type")),
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
 def _make_task_projection(public_type: str, field_map: dict[str, tuple[str, Any]]):
     def _project(payload, scope, causation_id):
         projected = {
@@ -724,9 +742,7 @@ def _make_task_projection(public_type: str, field_map: dict[str, tuple[str, Any]
 # ===== projection registry =====
 # 新增内部事件：在上面写 handler，然后在此注册一行。project_internal_event 只做 lookup。
 
-ProjectionHandler = Callable[
-    [dict[str, Any], dict[str, str], "str | None"], list[UiEventDraft]
-]
+ProjectionHandler = Callable[[dict[str, Any], dict[str, str], "str | None"], list[UiEventDraft]]
 
 _PROJECTIONS: dict[str, ProjectionHandler] = {
     "assistant_agent_step": _project_assistant_agent_step,
@@ -767,6 +783,7 @@ _PROJECTIONS: dict[str, ProjectionHandler] = {
     "brain_specialist_recruited": _project_brain_specialist_recruited,
     "brain_specialist_changed": _project_brain_specialist_changed,
     "brain_context_ready": _project_brain_context_ready,
+    "improvement_proposal_changed": _project_improvement_proposal_changed,
 }
 
 # task collaboration 事件复用声明式 _TASK_EVENT_PROJECTIONS（A 类 field_map）

@@ -12,7 +12,9 @@ class FakeConfig:
         self.values: dict[str, Any] = {}
         self.max_response_bytes = max_response_bytes
 
-    def set(self, key: str, value: Any, persist: str = "database", value_type: str = "string") -> None:
+    def set(
+        self, key: str, value: Any, persist: str = "database", value_type: str = "string"
+    ) -> None:
         self.values[key] = value
 
     def get_debug_trace_enabled(self) -> bool:
@@ -45,7 +47,9 @@ def test_reference_expansion_requires_enabled_trace(fake_config: FakeConfig) -> 
         service.expand_reference("msg_1", loader_fn=lambda _ref: "content")
 
 
-def test_reference_expansion_redacts_and_truncates_to_response_budget(fake_config: FakeConfig) -> None:
+def test_reference_expansion_redacts_and_truncates_to_response_budget(
+    fake_config: FakeConfig,
+) -> None:
     service = DebugInspectorService()
     service.register_secret("secret")
     service.arm(warning_acknowledged=True)

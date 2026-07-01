@@ -200,9 +200,7 @@ def _counts(db: DuckDBManager, recording_id: str) -> dict[str, int]:
 
 
 def test_persister_writes_filtered_requests_and_decisions(tmp_path):
-    repo, db, old_instance = _temporary_repository(
-        tmp_path, "persister_noise.duckdb"
-    )
+    repo, db, old_instance = _temporary_repository(tmp_path, "persister_noise.duckdb")
     queue_path = tmp_path / "rec_noise_actions.jsonl"
     _write_noise_queue(queue_path, "rec_noise")
 
@@ -287,12 +285,8 @@ def test_recovery_matches_persister_output_for_same_queue(tmp_path):
     _write_noise_queue(queue_path_left, "rec_parity")
     _write_noise_queue(queue_path_right, "rec_parity")
 
-    repo_a, db_a, old_instance_a = _temporary_repository(
-        left_path, "persister_parity.duckdb"
-    )
-    repo_b, db_b, old_instance_b = _temporary_repository(
-        right_path, "recovery_parity.duckdb"
-    )
+    repo_a, db_a, old_instance_a = _temporary_repository(left_path, "persister_parity.duckdb")
+    repo_b, db_b, old_instance_b = _temporary_repository(right_path, "recovery_parity.duckdb")
 
     try:
         persister = DuckDBRecordingPersister(repo_factory=lambda: repo_a)
@@ -324,9 +318,7 @@ def test_recovery_matches_persister_output_for_same_queue(tmp_path):
 
 
 def test_enabled_false_short_circuits_filtering(tmp_path):
-    repo, db, old_instance = _temporary_repository(
-        tmp_path, "persister_disabled.duckdb"
-    )
+    repo, db, old_instance = _temporary_repository(tmp_path, "persister_disabled.duckdb")
     queue_path = tmp_path / "rec_disabled_actions.jsonl"
     _write_noise_queue(queue_path, "rec_disabled")
 
@@ -373,9 +365,7 @@ def test_enabled_false_short_circuits_filtering(tmp_path):
 
 
 def test_enabled_false_still_keeps_query_side_contracts(tmp_path):
-    repo, db, old_instance = _temporary_repository(
-        tmp_path, "persister_disabled_query.duckdb"
-    )
+    repo, db, old_instance = _temporary_repository(tmp_path, "persister_disabled_query.duckdb")
     queue_path = tmp_path / "rec_disabled_query_actions.jsonl"
     _write_noise_queue(queue_path, "rec_disabled_query")
 
@@ -438,9 +428,7 @@ def test_enabled_false_still_keeps_query_side_contracts(tmp_path):
 
 
 def test_new_ingest_does_not_backfill_historical_rows(tmp_path):
-    repo, db, old_instance = _temporary_repository(
-        tmp_path, "history_guard.duckdb"
-    )
+    repo, db, old_instance = _temporary_repository(tmp_path, "history_guard.duckdb")
     queue_path = tmp_path / "rec_new_actions.jsonl"
     _write_noise_queue(queue_path, "rec_new")
 

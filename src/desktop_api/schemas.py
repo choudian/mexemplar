@@ -188,6 +188,7 @@ def _assert_enum_literal_sync() -> None:
         TaskStatus as _TaskStatusEnum,
         SuspendReason as _SuspendReasonEnum,
     )
+
     _status_values = {s.value for s in _TaskStatusEnum}
     _literal_values = set(TaskStatus.__args__)  # type: ignore[attr-defined]
     assert _status_values == _literal_values, (

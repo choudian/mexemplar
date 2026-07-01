@@ -383,29 +383,32 @@ class AgentLoop:
         context = None
         skip_post_hooks = False
 
-        if run_hooks:
-            context = self._build_tool_context(tool_call, session_id, iteration)
-            rejected, pre_hook_exc = self._run_pre_hooks(tool_def, context)
-            if rejected is not None:
-                return rejected
-            skip_post_hooks = pre_hook_exc
+        runtime_context = (
+            use_tool_runtime(
+                session_id=session_id,
+                tool_call_id=tool_call.id,
+                tool_name=tool_call.name,
+                workspace_root=self._config.workspace_root or Path.cwd(),
+            )
+            if tool_call.name in UPGRADED_BUILTIN_TOOL_NAMES
+            else nullcontext()
+        )
 
         handler_result: Union[str, ToolSignal]
         failed = False
         failure_code: str | None = None
 
         try:
-            runtime_context = (
-                use_tool_runtime(
-                    session_id=session_id,
-                    tool_call_id=tool_call.id,
-                    tool_name=tool_call.name,
-                    workspace_root=Path.cwd(),
-                )
-                if tool_call.name in UPGRADED_BUILTIN_TOOL_NAMES
-                else nullcontext()
-            )
             with runtime_context:
+                # pre_hook 必须在 tool runtime context 内执行，使其 permission 检查与
+                # handler 用同一个 workspace_root（注入值）；否则 pre_hook 回退 cwd，
+                # 会让注入的 workspace 重定向在 pre_hook 层失效（D4 承重假设）。
+                if run_hooks:
+                    context = self._build_tool_context(tool_call, session_id, iteration)
+                    rejected, pre_hook_exc = self._run_pre_hooks(tool_def, context)
+                    if rejected is not None:
+                        return rejected
+                    skip_post_hooks = pre_hook_exc
                 handler_result = tool_def.handler(**tool_call.args)
         except Exception as exc:
             failure_code = "handler_exception"
@@ -654,7 +657,7 @@ class AgentLoop:
                     session_id=ctx.session_id,
                     content=content,
                     tool_args=tool_call.args,
-                    workspace_root=Path.cwd(),
+                    workspace_root=self._config.workspace_root or Path.cwd(),
                 )
             except Exception:
                 logger.warning(

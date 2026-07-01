@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-06-15
-**Revision**: 2026-06-15 — Archived feature 022 process event push (子进程事件推送)
+**Last Updated**: 2026-07-02
+**Revision**: 2026-07-02 — Archived feature 026 self-improvement proposals (自我改进提案 B 阶段)
 
 ---
 
@@ -1740,3 +1740,87 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - `suspendReason` 首版纯复用 `waiting_user`（DEC-G）；需更精确区分时扩 enum 加 `waiting_confirmation`。
 - 跳过节点下游处理：默认可容忍跳过→视为完成推进下游；不可容忍→取消下游子图。
 - `graph_version` 首版接受 per-edge 递增（DEC-F）；若 cancel 围栏语义受影响再优化为批量入口一次性 +1。
+
+---
+
+## 自我改进提案（B 阶段：人审批、机器实施） [Source: specs/026-self-improvement-proposals]
+
+**Revision note (2026-07-02)**: Archived 026 after merge. 在 A 阶段（执行复盘·只读报告制）上加一层「人审批 + 机器实施」：`worth_changing` 发现落成可审批提案，用户批准（带补料）后由桥接 service 建独立 git worktree + 程序化任务图，执行体在隔离 worktree 内改源码并跑测试，结果回写提案。停在 B，不引入机器自批自改（C）。完整 User Stories 验收场景、Assumptions、Architecture Impact 见 `specs/026-self-improvement-proposals/spec.md`。
+
+### User Stories
+
+- **US-087 (P1)**: 看见可执行的改进提案并人工把关——执行复盘跑完后，BrainScreen 复盘视图展示由 `worth_changing` 发现自动生成的提案列表；用户逐条阅读（问题/证据/建议/严重度）并批准（带补料文本）或拒绝；同发现幂等、跨复盘同类去重不刷屏、待审提案有可发现提示。
+- **US-088 (P2)**: 批准后机器自动改源码并回报——用户批准后系统无需进一步操作即创建独立 git worktree + 特性分支，由规划专员拆解、执行体在隔离 worktree 内改源码并跑测试，完成后把分支名 + 测试通过与否 + 安全摘要回写到提案；失败转 `failed` 并展示安全摘要，不自动合并、不污染主工作区。
+- **US-089 (P3)**: 隔离与可回滚的安全保证——每次自动改造关在独立 worktree 内、只允许改源码、合并由用户手动、随时可凭 git 删分支/弃 worktree 干净回滚；执行体对非源码/外部副作用/自我改进核心的修改尝试被 fail-closed 阻断。
+
+### Functional Requirements
+
+- **FR-400**: 系统 MUST 在某条执行复盘落库后，为其中每个 `worth_changing=true` 的发现生成一条改进提案；同一发现 MUST 幂等不重复生成（`UNIQUE(source_review_id, finding_index)`）。
+- **FR-400a**: 系统 MUST 抑制跨复盘的同类提案堆积（系统性低效在多次复盘反复报出）：同类发现按 `dedup_key` 走去重/合并或冷却窗口（默认 24h），不每条复盘各生近重复提案。advisory 软保证（见 Known Issues）。
+- **FR-401**: 每条提案 MUST 关联来源复盘记录，并保留可展示的问题描述、证据、建议、严重度。
+- **FR-402**: 提案 MUST 有明确生命周期 `pending_review → approved → in_progress → done | failed`（及 `pending_review → rejected`、`failed → rejected`）；状态流转 MUST 持久化（条件 UPDATE + rowcount CAS）。
+- **FR-403**: 提案生成 MUST NOT 改变 A 阶段执行复盘的存储、产出或只读语义。
+- **FR-404**: 用户 MUST 能在 BrainScreen 复盘视图内查看提案列表并逐条阅读详情，不新增独立主屏。
+- **FR-405**: 用户 MUST 能批准一条提案并附补料文本（改造方向/注意事项）；补料 MUST 持久化并传递给后续实施。
+- **FR-406**: 用户 MUST 能拒绝一条提案；拒绝 MUST NOT 触发任何实施动作或副作用。
+- **FR-407**: 用户批准之前，系统 MUST NOT 对任何提案发起实施或产生不可逆副作用（advisory-only 直到人点头）。
+- **FR-408**: 批准一条提案后，系统 MUST 无需用户进一步操作即把它交给任务协作系统实施。
+- **FR-409**: 实施 MUST 在独立隔离的 git worktree + 特性分支内进行（一提案一工作区）；提案 MUST 记录工作区路径与分支名。
+- **FR-410**: 系统 MUST 程序化构建实施任务图（规划专员只规划、执行体改源码并跑测试）并经进程级调度器单例踢起推进；调度器尚未装配时 MUST 优雅处理（确保装配后再踢或推迟），不静默丢任务。
+- **FR-411**: 实施任务图完成后，系统 MUST 把结果（分支名、测试通过与否、安全摘要）回写到对应提案并使其在复盘视图可见。
+- **FR-412**: 实施整体失败或测试不通过时，提案 MUST 转 `failed` 并展示安全失败摘要；MUST NOT 自动合并、MUST NOT 污染主工作区。
+- **FR-413**: 执行体的自动改造 MUST 被焊死在以下爆炸半径内（三条各由门卫测试守住）：
+  - **(a) 文件改动**：MUST 只发生在该提案隔离工作区内的 git 源码文件；对工作区之外文件、数据库文件、外部服务的修改 MUST fail-closed。
+  - **(b) exec 能力**：跑测试所需的 exec MUST 限定在工作区内的测试型用途；网络型/破坏型 exec MUST 被阻断。
+  - **(c) 禁改自我改进核心**：执行体 MUST NOT 修改自我改进子系统自身（提案生成/桥接/审查员/调度内核）与应用启动核心路径——防止递归砖化/坏提案反馈环。
+- **FR-414**: 合并到主分支 MUST 保持用户手动完成；系统第一版 MUST NOT 自动合并或自动重启使改动生效。
+- **FR-415**: 任意一次自动改造 MUST 可凭 git（删分支/弃工作区）干净回滚，不依赖数据库或外部清理；拒绝/失败后主工作区 MUST 无残留污染。
+- **FR-416**: 自动改造进行期间 MUST NOT 扰动正在运行的应用所用文件（生效显式经合并 + 重启）。
+- **FR-417**: 系统 MUST 串行化自我改造实施（同一时刻至多一条提案在实施，`has_in_progress` 闸门），避免多条改造争用执行容量；后批准的提案排队等前一条进终态。
+- **FR-418**: 系统 MUST 对保留的实施工作区设回收策略（保留上限或显式清理入口），避免失败/完成的 worktree 长期堆积占盘。
+- **FR-419**: 当存在 `pending_review` 提案时，系统 MUST 给用户一个可发现的待审提示（如非模态 toast / 计数徽标）。
+
+### Key Entities
+
+- **改进提案（Improvement Proposal）**：一行 = 一条可执行改造请求，来源于某条执行复盘的一个 `worth_changing` finding。关键字段：`id`、`source_review_id`（逻辑外键→`execution_reviews`）、`finding_index`、`status`、`severity`、`finding_type`、`dedup_key`、`what/evidence/suggestion` 快照、`user_supplement`、`graph_id`、`worktree_path`、`branch_name`、`result_tests_passed`（1/0/NULL 三态，v23 CHECK）、`result_summary`、`error`、时间戳。状态机：`pending_review → approved → in_progress → done | failed`；`pending_review → rejected`；`failed → rejected`（清理）。终态：`done`、`rejected`。
+- **执行复盘记录（Execution Review）**：A 阶段既有实体，本特性只读引用，不改其结构。
+- **提案状态机 CAS**：所有流转用条件 UPDATE + rowcount（`UPDATE ... WHERE id=? AND status=?`），避免重复批准/重复踢图丢更新；重复 approve 幂等忽略。
+
+### Key Contracts
+
+- **Typed API**（`src/desktop_api/routers/proposals.py`）：`GET /api/improvement-proposals`（status/limit 过滤，返回安全投影，公开 DTO 用 `worktreeAvailable` 而非本地 `worktreePath`）、`POST /{id}/approve`（body: supplement；CAS pending_review→approved，批准后桥接异步进行，API 立即返回 approved）、`POST /{id}/reject`（CAS pending_review|failed→rejected；对 failed 的拒绝先清理 worktree，清理失败返回 cleanup_failed 且保持 failed）。
+- **公开 UI 事件**：`improvement_proposal.changed`（scope=global；payload allowlist: `proposalId/sourceReviewId/status/severity/changeType`；changeType: created/approved/rejected/in_progress/done/failed）。前端按 type 消费，缺口走 `backend.resync_required` → `GET /api/improvement-proposals` 拉权威快照。不复用 `task.*` 事件驱动提案展示（避免跨契约耦合）。
+- **合成 session**：实施任务图使用 `self_improvement:<proposalId>` 命名空间，不复用真实对话 session，避免把自我改造完成当 briefing 注入聊天。
+
+### Constraints & Compatibility
+
+- **CC-145**: 严格分层——UI → typed API → business service → repository；UI MUST NOT 直连数据层；提案数据走新增 Repository，不在业务代码裸写 SQL。
+- **CC-146**: 面向前端的事件 MUST 先在 UI Event Registry 注册再消费；缺口/会话不匹配走 `backend.resync_required`；MUST NOT 用内部事件名做前端展示决策。
+- **CC-147**: 配置 MUST 走 `get_unified_config()`；MUST NOT 硬编码；secret MUST NOT 进入普通日志、明文 DTO 或前端持久化状态；实施失败的 provider 原始错误 MUST NOT 进入安全失败摘要。
+- **CC-148**: A 阶段 `execution_reviews` 表、审查员逻辑/模型、advisory 语义 MUST 保持不变（回归边界）。
+- **CC-149**: 任务协作系统（调度器单例、dispatcher、任务图、`requires_confirmation`、worktree 惯例）MUST 整体复用，MUST NOT 另起一套平行执行流水线。
+- **CC-150**: 系统提示词与工具 MUST 走"直接改源码 + git"路径；本特性 MUST NOT 把提示词/工具数据化进数据库。
+- **CC-151**: 本特性 MUST 停在 B（人批准、人合并）；MUST NOT 引入机器自动判定改得好不好并自批自改（C 阶段）。
+- **CC-152**: 改静默失败/编排/事件/Repository/恢复路径 MUST 补行为契约测试；FR-413 的三条爆炸半径硬边界（文件/exec/禁改自我改进核心）MUST 各由架构门卫测试守住。
+- **CC-153**: 提案对 finding 的 `what/evidence` 快照展示 MUST NOT 比 A 阶段已暴露的执行 trace 投影泄漏更多敏感内容；持久化与 UI 展示沿用 A 的脱敏边界。
+
+### Success Criteria
+
+- **SC-182**: 当一次执行复盘产出 `worth_changing` 发现，用户能在复盘视图看到对应提案，并完成"批准+补料"或"拒绝"，状态正确持久化、刷新/重连不丢。
+- **SC-183**: 用户批准一条提案后，除"批准"外无需任何人工操作，系统即自动产出一个含改动且已在隔离工作区跑过测试的分支，并把"分支名 + 测试通过与否 + 安全摘要"回写到该提案。
+- **SC-184**: 一次自动改造的全部文件改动 100% 限制在 git 跟踪源码内且位于独立工作区；执行体对非源码、网络/破坏型 exec、以及对自我改进核心与启动路径的修改尝试，均被 100% fail-closed 阻断（FR-413 三条门卫测试可证）。
+- **SC-185**: 任意一次自动改造可凭 git 删分支/弃工作区在不动数据库与外部资源的前提下干净回滚；拒绝/失败后主工作区零残留。
+- **SC-186**: A 阶段执行复盘的触发、产出 findings 结构、只读 API 与 advisory 语义在本特性前后保持一致（回归通过）。
+- **SC-187**: 全程不发生"提案能批但实施无人推进"的断链（命门回归）：批准后任务图被真实推进至终态并回报。
+
+### Edge Cases
+
+- 复盘发现 `worth_changing=true` 但 suggestion 为空/含糊：仍生成提案，把"建议不足"如实展示由用户补料。
+- A 阶段被关闭或某次任务无复盘：不产生提案，界面优雅空态，不报错。
+- 同一会话短时间产生多条提案并被分别批准：各自独立 worktree/分支；实施按 FR-417 串行（一次一条 in_progress），其余排队。
+- 桥接建工作区时目标路径已存在（上次残留）：拒绝复用脏工作区，按失败处理并提示，不静默覆盖。
+- 实施任务图卡住/执行体崩溃：复用任务协作既有恢复语义（lease 围栏/恢复扫描）；最终仍无法推进则提案标 `failed`。
+- 提案已 `approved` 但桥接建图失败：提案转 `failed`，记录安全原因，不留半截 `in_progress`。
+- 用户对同一提案重复点批准：幂等，不重复建工作区/任务图。
+- 多条提案先后批准：串行实施；某条合并后后续提案分支基线变旧 → 合并前提示用户 rebase/重建。
+- 用户主工作树有未提交改动：自我改造基线是 HEAD commit、不含这些未提交改动（worktree 从 HEAD 创建）。

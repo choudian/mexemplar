@@ -227,5 +227,12 @@
       "search_max_limit": 25,
       "result_description_max_chars": 500
     }
+  },
+  "self_improvement": {
+    "proposals": {
+      "enabled": true,
+      "worktree_retention_max": 10,
+      "dedup_cooldown_hours": 24
+    }
   }
 }

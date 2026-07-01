@@ -17,8 +17,10 @@ def _recording_imports_in(text: str) -> list[str]:
     tree = ast.parse(text)
     modules: list[str] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith(
-            RECORDING_PREFIX
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module
+            and node.module.startswith(RECORDING_PREFIX)
         ):
             modules.append(node.module)
         elif isinstance(node, ast.Import):
@@ -38,7 +40,6 @@ def test_data_layer_does_not_import_recording() -> None:
         rel = py.relative_to(DATA_DIR).name
         violations.append((rel, modules))
 
-    assert not violations, (
-        "src/data/ 反向 import src/recording,违反分层:\n"
-        + "\n".join(f"{f}: {m}" for f, m in violations)
+    assert not violations, "src/data/ 反向 import src/recording,违反分层:\n" + "\n".join(
+        f"{f}: {m}" for f, m in violations
     )

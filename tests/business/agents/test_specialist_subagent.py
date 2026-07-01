@@ -69,6 +69,37 @@ def test_ephemeral_subagent_cannot_delegate_to_subagent() -> None:
     assert "delegate_to_subagent" not in names
 
 
+def test_delegated_executor_filters_builtin_tools_when_capability_scope_names_builtins() -> None:
+    registry = _tool_registry()
+
+    planner_factory = registry.build_delegated_executor_tools(
+        set(),
+        tool_whitelist=["read_file", "search_files"],
+        agent_type=AgentType.EPHEMERAL_SUBAGENT,
+        executor_id="proposal-plan-session",
+    )
+    tester_factory = registry.build_delegated_executor_tools(
+        set(),
+        tool_whitelist=["exec", "read_file", "search_files"],
+        agent_type=AgentType.EPHEMERAL_SUBAGENT,
+        executor_id="proposal-test-session",
+    )
+
+    planner_names = {tool.name for tool in planner_factory()}
+    tester_names = {tool.name for tool in tester_factory()}
+
+    assert {"read_file", "search_files"}.issubset(planner_names)
+    assert "write_file" not in planner_names
+    assert "edit_file" not in planner_names
+    assert "apply_patch" not in planner_names
+    assert "exec" not in planner_names
+
+    assert {"exec", "read_file", "search_files"}.issubset(tester_names)
+    assert "write_file" not in tester_names
+    assert "edit_file" not in tester_names
+    assert "apply_patch" not in tester_names
+
+
 def test_ephemeral_todo_update_handler_aligns_executor_id_with_task_assignee() -> None:
     # 临时子代理 task.assignee_id 是 dispatch 时设的类型占位 'ephemeral_subagent'
     # （非 child session）。build_delegated_executor_tools 给 ephemeral 构造的

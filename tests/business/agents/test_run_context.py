@@ -6,8 +6,6 @@
 - request_cancel 语义：有运行 → set 返回 True；无运行 → False。
 """
 
-import threading
-
 import pytest
 
 from src.business.agents import run_context

@@ -172,6 +172,29 @@ Assistant tool handler / Orchestrator
 - 前端只读 task snapshot 和公开 UI events：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。缺口或事件会话不匹配时走 `backend.resync_required` 拉 graph/board/meeting/todo 权威快照。
 - 024 DAG 调度：复杂任务（中等主助理自拆 / 超阈值委派 `role_kind='planner'` 规划专员）经 `build_task_graph` 原子落库为带 `dependency` 边的 DAG，由确定性 `GraphScheduler`（`task_collaboration/graph_scheduler.py`，orchestrator 装配的进程级单例）按依赖就绪自动推进——建图 handler 触发 `start_graph`，节点 attempt 完成经 `scheduler_callback` 回调 `on_attempt_outcome` 推进下游，全图完成经 `ParentReentrySink.notify_graph_complete` kick 续跑汇报。`requires_confirmation=1` 高风险节点派发前建 needs_confirmation adjudication 暂停（`waiting_user`），`decide(accepted)` 放行翻 `pending_dispatch` 派发（普通结果裁定 `decide(accepted)` 仍翻 `completed`，023 语义不回归）；节点失败回流附确定性 `healingActions` 候选集（advisory）+ `safeRecoveryHint` 安全文案。就绪硬校验 `_assert_dependencies_satisfied` 在 scheduler 与 dispatcher 派发层双层兜底。节点 todo 概览在回流 briefing 中按进行中节点标题渲染，详细 todo 经 TaskGraphPanel 节点展开按需可见、默认任务界面不展示（DEC-E）。
 
+### Self-Improvement Proposals（026）
+
+执行复盘中的 `worth_changing=true` findings 会生成 `improvement_proposals` 待审批项，由 Brain 管理界面的“改进提案”视图展示。用户批准只通过 `/api/improvement-proposals/{id}/approve` 做 CAS 状态迁移和异步触发；实施副作用统一由 `src/business/self_improvement/proposal_bridge.py` 承担。
+
+```text
+BrainScreen proposal review
+  → /api/improvement-proposals approve/reject
+  → ProposalService + ImprovementProposalRepository
+  → proposal_bridge
+  → .worktrees/improvement/<proposal_id> + improvement/<proposal_id> branch
+  → TaskCollaborationService.build_task_graph
+  → GraphScheduler / TaskDispatcher
+  → TaskCollaborationBackgroundWorker proposal recovery job
+  → improvement_proposals done/failed write-back
+```
+
+- 提案实施使用隔离 git worktree，不在主工作区直接改代码；分支名为 `improvement/<proposal_id>`，worktree 路径记录在 proposal 行中。
+- bridge 建立固定的 planner → implementer → test DAG，并把 `workspaceRoot` 传给每个节点；用户补充说明进入 task description，不绕过任务图。
+- self-improvement 图使用 `self_improvement:<proposal_id>` synthetic session，没有真实父助理裁定者；后台 `TaskCollaborationBackgroundWorker` 调用 `run_proposal_recovery_cycle()` 自动 kick scheduler、接受成功回流、放弃失败回流，并在所有执行节点终态后把 proposal 写成 `done` 或 `failed`。
+- 自动执行的内建文件/命令工具在 `builtin_permissions.py` 额外调用 `proposal_workspace` 门卫：只允许 proposal worktree 内源码/测试/文档 mutation，拒绝 `self_improvement`、`orchestration/agent`、`task_collaboration`、`desktop_api`、`src-tauri`、guardrail tests 和 legacy/startup 核心路径；`exec` 只能用于测试、lint、format check 或 typecheck，网络、安装、破坏性 git/merge 命令 fail-closed。
+- `reject` 可拒绝 pending 或 failed 提案；failed 提案被弃用时清理 worktree 和分支，并清空 stale worktree metadata。保留数量由 `self_improvement.proposals.worktree_retention_max` 控制，配置仍经 `UnifiedConfigManager` 读取。
+- 前端 proposal 状态只通过 typed API 和 `improvement_proposal.changed` 事件刷新；事件缺口进入 `backend.resync_required` 时，Brain domain 权威刷新必须同时重拉执行复盘和改进提案列表。
+
 ### User Todo List（025）
 
 用户个人待办是独立的轻量业务能力，不属于 task graph。数据存储在 SQLite v18 `user_todos` 表，经 `UserTodoRepository` 和 `UserTodoService` 管理；桌面 API 只暴露 `/api/user-todos` typed CRUD，前端 `/todos` 页面通过 `frontend/src/api/userTodos.ts` 与 `userTodoStore` 访问。
@@ -784,3 +807,4 @@ assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入�
 *更新：2026-05-24 — 新增隐藏 Debug Inspector、runtime-only trace lifecycle、Agent Flow provenance、fail-isolated model observation 和 opt-in Real Grand Tour 边界*
 *更新：2026-06-12 — AgentLoop 对显式并发安全的连续读取工具并行执行 handler 与 output governance，结果保持主线程原序持久化*
 *更新：2026-06-17 — 新增 Assistant Task Collaboration：持久 Task 图、TaskAttempt 围栏恢复、父侧裁定、看板/会议/问题路由、私人 Todo 和 task collaboration UI event/snapshot 边界*
+*更新：2026-06-29 — 新增 Self-Improvement Proposals 自动实施闭环：审批后隔离 worktree + Task 图实施、后台 recovery 写回和 proposal executor 硬门卫*

@@ -231,8 +231,7 @@ def test_concurrent_adjudication_decide_cannot_both_win(file_db) -> None:
 
     assert not any(k.endswith("_exc") for k in results), results
     assert results.get("A", False) != results.get("B", False), (
-        f"A={results.get('A')} B={results.get('B')} —— "
-        "两笔裁定不能同时生效（守卫必须进 SQL）"
+        f"A={results.get('A')} B={results.get('B')} —— " "两笔裁定不能同时生效（守卫必须进 SQL）"
     )
     # 最终只有一个赢家落库：status=decided 且 decision 为某一方，未被覆盖错乱
     with AssistantTaskAdjudicationRepository() as fin:

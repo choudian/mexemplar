@@ -5,14 +5,10 @@
 """
 
 from src.business.task_collaboration.adjudication import TaskAdjudicationService
-from src.business.task_collaboration.graph_scheduler import (
-    GraphScheduler,
-    set_graph_scheduler,
-)
+from src.business.task_collaboration.graph_scheduler import GraphScheduler
 from src.business.task_collaboration.reentry_briefing import build_reentry_briefing
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.repos.base_repository import generate_id
-
 
 # ---------------------------------------------------------------------------
 # 测试辅助（inline，与 test_graph_scheduler_unit.py 同构）

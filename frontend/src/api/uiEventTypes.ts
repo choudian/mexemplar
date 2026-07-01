@@ -27,6 +27,7 @@ export const UI_EVENT_TYPES = [
   "brain_specialist_recruited",
   "brain_specialist_changed",
   "brain_context_ready",
+  "improvement_proposal.changed",
   "backend.resync_required",
 ] as const;
 
@@ -143,6 +144,7 @@ export const UI_EVENT_EXAMPLES = {
   },
   "brain_specialist_changed": { "specialistId": "spec_1", "changeType": "update" },
   "brain_context_ready": { "sessionId": "sess_1" },
+  "improvement_proposal.changed": { "proposalId": "prop_abc", "sourceReviewId": "rev_1", "status": "pending_review", "severity": "med", "changeType": "created" },
   "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"] },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;
 
@@ -290,6 +292,10 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
     ],
     "entityType": ["assistant", "specialist"],
   },
+  "improvement_proposal.changed": {
+    "status": ["approved", "done", "failed", "in_progress", "pending_review", "rejected"],
+    "changeType": ["approved", "created", "done", "failed", "in_progress", "rejected"],
+  },
 } as const satisfies Partial<Record<UiEventType, Record<string, readonly string[]>>>;
 
 export type UiEventHandlerDomain =
@@ -331,6 +337,7 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "brain_specialist_recruited": "brain",
   "brain_specialist_changed": "brain",
   "brain_context_ready": "brain",
+  "improvement_proposal.changed": "brain",
   "backend.resync_required": "resync",
 } as const satisfies Record<UiEventType, UiEventHandlerDomain>;
 
@@ -571,6 +578,17 @@ export type BrainContextReadyEvent = UiEventEnvelope<
   }
 >;
 
+export type ImprovementProposalChangedEvent = UiEventEnvelope<
+  "improvement_proposal.changed",
+  {
+    proposalId: string;
+    sourceReviewId: string;
+    status: "pending_review" | "approved" | "in_progress" | "done" | "failed" | "rejected";
+    severity: string | null;
+    changeType: "created" | "approved" | "rejected" | "in_progress" | "done" | "failed";
+  }
+>;
+
 export type SkillChangedReason = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["reason"][number];
 export type SkillChangedCallerType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["callerType"][number];
 export type SkillEquipmentChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.equipment.changed"]["changeType"][number];
@@ -689,6 +707,7 @@ export type UiEvent =
   | BrainSpecialistRecruitedEvent
   | BrainSpecialistChangedEvent
   | BrainContextReadyEvent
+  | ImprovementProposalChangedEvent
   | SkillChangedEvent
   | SkillEquipmentChangedEvent
   | TaskBoardChangedEvent

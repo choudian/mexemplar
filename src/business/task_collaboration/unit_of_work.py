@@ -67,9 +67,7 @@ class AtomicTaskService:
     _session: Session
     _owns_session: bool
 
-    def _init_repos(
-        self, **repos: "tuple[type[BaseRepository], BaseRepository | None]"
-    ) -> None:
+    def _init_repos(self, **repos: "tuple[type[BaseRepository], BaseRepository | None]") -> None:
         """把本 service 用到的 Repository 接到共享 session 上。
 
         每个关键字把仓库属性名（存为 ``_<name>``）映射到 ``(RepoClass, 注入实例或 None)``。

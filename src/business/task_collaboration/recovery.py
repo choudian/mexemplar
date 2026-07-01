@@ -129,4 +129,3 @@ class TaskRecoveryService(AtomicTaskService):
                     graph_id,
                     exc_info=True,
                 )
-

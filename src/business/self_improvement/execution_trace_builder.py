@@ -61,7 +61,9 @@ def _result_info(content: str) -> tuple[bool, int, str | None]:
     if output_ref is None:
         reference = parsed.get("reference")
         if isinstance(reference, dict):
-            output_ref = reference.get("referenceId") or reference.get("reference_id") or reference.get("id")
+            output_ref = (
+                reference.get("referenceId") or reference.get("reference_id") or reference.get("id")
+            )
 
     outcome = str(parsed.get("outcome") or parsed.get("status") or "success").lower()
     ok = outcome not in {"error", "failed", "failure"}

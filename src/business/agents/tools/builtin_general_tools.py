@@ -1106,7 +1106,12 @@ def _resolve_path_arg(ctx: ToolCallContext, key: str = "path", default: str | No
     raw = ctx.args.get(key, default)
     if raw is None:
         raise KeyError(key)
-    return Path(str(raw)).expanduser().resolve()
+    path = Path(str(raw)).expanduser()
+    candidate = path if path.is_absolute() else runtime_workspace_root() / path
+    try:
+        return candidate.resolve(strict=False)
+    except OSError:
+        return candidate.absolute()
 
 
 def _confirm_or_reject(tool_name: str, summary: str) -> PreHookResult | None:
@@ -1242,7 +1247,8 @@ def list_dir_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
 def exec_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     command = str(ctx.args["command"])
     cwd = ctx.args.get("cwd", ".")
-    check = permission_for_path(cwd, operation="execute")
+    workspace_root = runtime_workspace_root()
+    check = permission_for_path(cwd, operation="execute", workspace_root=workspace_root)
     if not check.allowed:
         return PreHookResult(
             error=check.message or "命令执行目录被权限策略拒绝",
@@ -1250,7 +1256,7 @@ def exec_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
         )
     path_check = command_path_policy_violation(
         command,
-        workspace_root=Path.cwd(),
+        workspace_root=workspace_root,
         base_dir=check.classification.resolved,
     )
     if path_check is not None:

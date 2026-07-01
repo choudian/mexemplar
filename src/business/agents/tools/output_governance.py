@@ -446,9 +446,7 @@ def load_tool_output_handler(
         )
     data = loaded.data
     start = max(0, int(offset or 0))
-    max_window = get_config_int(
-        "get_agent_tools_output_load_max_bytes", 131072, maximum=1_048_576
-    )
+    max_window = get_config_int("get_agent_tools_output_load_max_bytes", 131072, maximum=1_048_576)
     limit = max(1, min(int(maxBytes or 64000), max_window))
     window = data[start : start + limit]
     if renderAs != "text" or _looks_binary(Path(referenceId), window[:4096]):

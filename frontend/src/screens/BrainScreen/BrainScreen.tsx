@@ -2,6 +2,7 @@ import { RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
+import type { ImprovementProposalDto } from "../../api/improvementProposal";
 import SearchInput from "../../components/SearchInput";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { statusToTone } from "../../components/statusTone";
@@ -60,10 +61,19 @@ export function BrainScreen(): JSX.Element {
   const loadEvolution = useBrainStore((state) => state.loadEvolution);
   const executionReviewEnabled =
     useSettingsStore((state) => state.values["self_improvement.execution_review.enabled"]) !== false;
+  const improvementProposals = useBrainStore((state) => state.improvementProposals);
+  const loadingImprovementProposals = useBrainStore((state) => state.loadingImprovementProposals);
+  const loadImprovementProposals = useBrainStore((state) => state.loadImprovementProposals);
+  const approveImprovementProposal = useBrainStore((state) => state.approveImprovementProposal);
+  const rejectImprovementProposal = useBrainStore((state) => state.rejectImprovementProposal);
+  const proposalsEnabled =
+    useSettingsStore((state) => state.values["self_improvement.proposals.enabled"]) !== false;
 
-  const [activeView, setActiveView] = useState<BrainZone | "execution_review">("hot");
+  const [activeView, setActiveView] = useState<BrainZone | "execution_review" | "improvement_proposals">("hot");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedReviewId, setSelectedReviewId] = useState<string | null>(null);
+  const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
+  const [proposalSupplement, setProposalSupplement] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<BrainEntryStatus | "">("");
   const [contentDraft, setContentDraft] = useState("");
@@ -76,13 +86,19 @@ export function BrainScreen(): JSX.Element {
     if (executionReviewEnabled) {
       void loadExecutionReviews();
     }
-  }, [executionReviewEnabled, loadEntries, loadExecutionReviews, loadSegments, loadZones]);
+    if (proposalsEnabled) {
+      void loadImprovementProposals();
+    }
+  }, [executionReviewEnabled, proposalsEnabled, loadEntries, loadExecutionReviews, loadImprovementProposals, loadSegments, loadZones]);
 
   useEffect(() => {
     if (!executionReviewEnabled && activeView === "execution_review") {
       setActiveView(activeZone);
     }
-  }, [activeView, activeZone, executionReviewEnabled]);
+    if (!proposalsEnabled && activeView === "improvement_proposals") {
+      setActiveView(activeZone);
+    }
+  }, [activeView, activeZone, executionReviewEnabled, proposalsEnabled]);
 
   const lastEvolutionIdRef = useRef<string | null>(null);
 
@@ -115,7 +131,8 @@ export function BrainScreen(): JSX.Element {
   }, [entries, loadEvolution, selectedId]);
 
   const reviewingExecutions = activeView === "execution_review";
-  const selectedEntry = reviewingExecutions ? null : entries.find((entry) => entry.entry_id === selectedId) ?? null;
+  const viewingProposals = activeView === "improvement_proposals";
+  const selectedEntry = (reviewingExecutions || viewingProposals) ? null : entries.find((entry) => entry.entry_id === selectedId) ?? null;
   const selectedReview =
     executionReviews.find((review) => review.id === selectedReviewId) ?? executionReviews[0] ?? null;
   const filteredEntries = useFiltered(entries, query, (entry) => [
@@ -159,6 +176,8 @@ export function BrainScreen(): JSX.Element {
           void loadZones();
           if (reviewingExecutions) {
             void loadExecutionReviews();
+          } else if (viewingProposals) {
+            void loadImprovementProposals();
           } else {
             void loadEntries(activeZone, { status: status || undefined });
           }
@@ -205,11 +224,37 @@ export function BrainScreen(): JSX.Element {
               <span className="me-badge">{executionReviews.length}</span>
             </button>
           ) : null}
+          {proposalsEnabled ? (
+            <button
+              aria-pressed={viewingProposals}
+              className="brain-zone-button"
+              data-active={viewingProposals}
+              onClick={() => setActiveView("improvement_proposals")}
+              type="button"
+            >
+              <span>
+                <strong>改进提案</strong>
+                <small>可执行的改进项</small>
+              </span>
+              <span className="me-badge">{improvementProposals.filter((p) => p.status === "pending_review").length || improvementProposals.length}</span>
+            </button>
+          ) : null}
           {loadingZones ? <div className="brain-empty">正在刷新分区</div> : null}
         </aside>
 
         <main className="brain-entry-pane">
-          {reviewingExecutions ? (
+          {viewingProposals ? (
+            <ImprovementProposalList
+              loading={loadingImprovementProposals}
+              onSelect={(id) => {
+                setSelectedProposalId(id);
+                // 切换选中提案时清空补料草稿，避免上一条的文本串改到新选中的提案。
+                setProposalSupplement("");
+              }}
+              proposals={improvementProposals}
+              selectedId={selectedProposalId}
+            />
+          ) : reviewingExecutions ? (
             <ExecutionReviewList
               loading={loadingExecutionReviews}
               onSelect={setSelectedReviewId}
@@ -264,7 +309,24 @@ export function BrainScreen(): JSX.Element {
         </main>
 
         <aside className="brain-detail-pane me-scroll" aria-label="条目详情">
-          {reviewingExecutions ? (
+          {viewingProposals ? (
+            <ImprovementProposalDetail
+              proposal={improvementProposals.find((p) => p.id === selectedProposalId) ?? null}
+              supplement={proposalSupplement}
+              onSupplementChange={setProposalSupplement}
+              onApprove={(id) => {
+                void (async () => {
+                  const accepted = await approveImprovementProposal(id, proposalSupplement);
+                  if (accepted) {
+                    setProposalSupplement("");
+                  }
+                })();
+              }}
+              onReject={(id) => {
+                void rejectImprovementProposal(id);
+              }}
+            />
+          ) : reviewingExecutions ? (
             <ExecutionReviewDetail review={selectedReview} />
           ) : selectedEntry ? (
             <section className="brain-editor">
@@ -404,6 +466,165 @@ function ExecutionReviewDetail({
         ))}
         {review.findings.length === 0 ? <div className="brain-empty">没有可操作发现</div> : null}
       </div>
+    </section>
+  );
+}
+
+const PROPOSAL_STATUS_TONES: Record<string, "ok" | "warn" | "danger" | "neutral"> = {
+  pending_review: "warn",
+  approved: "ok",
+  in_progress: "ok",
+  done: "ok",
+  failed: "danger",
+  rejected: "neutral",
+};
+
+const PROPOSAL_STATUS_LABELS: Record<string, string> = {
+  pending_review: "待审批",
+  approved: "已批准",
+  in_progress: "正在实施",
+  done: "已完成",
+  failed: "失败",
+  rejected: "已拒绝",
+};
+
+function ImprovementProposalList({
+  proposals,
+  selectedId,
+  loading,
+  onSelect,
+}: {
+  proposals: ImprovementProposalDto[];
+  selectedId: string | null;
+  loading: boolean;
+  onSelect: (proposalId: string) => void;
+}) {
+  return (
+    <div className="brain-entry-list me-scroll" aria-label="改进提案列表">
+      {loading ? <div className="brain-empty">正在加载改进提案</div> : null}
+      {proposals.map((proposal) => (
+        <article className="brain-entry-row" data-selected={proposal.id === selectedId} key={proposal.id}>
+          <button onClick={() => onSelect(proposal.id)} type="button">
+            <span className="brain-entry-title">{proposal.what || "改进提案"}</span>
+            <span className="brain-entry-meta">
+              <Badge tone={statusToTone(proposal.status, PROPOSAL_STATUS_TONES)}>
+                {PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status}
+              </Badge>
+              {proposal.severity ? <Badge tone={severityTone(proposal.severity)}>{proposal.severity}</Badge> : null}
+              {proposal.findingType ? <small>{proposal.findingType}</small> : null}
+              <small>{proposal.createdAt}</small>
+            </span>
+            <small>{proposal.suggestion || proposal.evidence}</small>
+          </button>
+        </article>
+      ))}
+      {!loading && proposals.length === 0 ? <div className="brain-empty">暂无改进提案</div> : null}
+    </div>
+  );
+}
+
+function ImprovementProposalDetail({
+  proposal,
+  supplement,
+  onSupplementChange,
+  onApprove,
+  onReject,
+}: {
+  proposal: ImprovementProposalDto | null;
+  supplement: string;
+  onSupplementChange: (value: string) => void;
+  onApprove: (id: string) => void;
+  onReject: (id: string) => void;
+}) {
+  if (!proposal) {
+    return <div className="brain-empty">选择一条提案查看详情</div>;
+  }
+  const isPending = proposal.status === "pending_review";
+  return (
+    <section className="brain-execution-review">
+      <div className="brain-section-title">
+        <span>改进提案</span>
+        <Badge tone={statusToTone(proposal.status, PROPOSAL_STATUS_TONES)}>
+          {PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status}
+        </Badge>
+      </div>
+      {proposal.severity ? (
+        <div className="brain-reason">
+          <strong>严重程度</strong>
+          <Badge tone={severityTone(proposal.severity)}>{proposal.severity}</Badge>
+          {proposal.findingType ? <small>{proposal.findingType}</small> : null}
+        </div>
+      ) : null}
+      <div className="brain-reason">
+        <strong>问题描述</strong>
+        <p>{proposal.what}</p>
+      </div>
+      {proposal.evidence ? (
+        <div className="brain-reason">
+          <strong>证据</strong>
+          <p>{proposal.evidence}</p>
+        </div>
+      ) : null}
+      {proposal.suggestion ? (
+        <div className="brain-reason">
+          <strong>建议</strong>
+          <p>{proposal.suggestion}</p>
+        </div>
+      ) : null}
+      {proposal.userSupplement ? (
+        <div className="brain-reason">
+          <strong>补充说明</strong>
+          <p>{proposal.userSupplement}</p>
+        </div>
+      ) : null}
+      {proposal.branchName ? (
+        <div className="brain-reason">
+          <strong>实施分支</strong>
+          <p>{proposal.branchName}</p>
+        </div>
+      ) : null}
+      {proposal.resultSummary ? (
+        <div className="brain-reason">
+          <strong>实施结果</strong>
+          <p>{proposal.resultSummary}</p>
+          {proposal.resultTestsPassed != null ? (
+            <Badge tone={proposal.resultTestsPassed ? "ok" : "danger"}>
+              {proposal.resultTestsPassed ? "测试通过" : "测试失败"}
+            </Badge>
+          ) : null}
+        </div>
+      ) : null}
+      {proposal.error ? (
+        <div className="brain-reason">
+          <strong>失败原因</strong>
+          <p>{proposal.error}</p>
+        </div>
+      ) : null}
+      {isPending ? (
+        <div className="brain-proposal-actions">
+          <label>
+            <strong>补充说明（可选）</strong>
+            <textarea
+              aria-label="补充说明"
+              onChange={(e) => onSupplementChange(e.target.value)}
+              placeholder="给实施补充说明或优先方向"
+              rows={3}
+              value={supplement}
+            />
+          </label>
+          <div className="brain-action-buttons">
+            <Button kind="primary" onClick={() => onApprove(proposal.id)}>批准</Button>
+            <Button kind="danger" onClick={() => onReject(proposal.id)}>拒绝</Button>
+          </div>
+        </div>
+      ) : null}
+      {proposal.status === "failed" ? (
+        <div className="brain-proposal-actions">
+          <Button kind="ghost" onClick={() => onReject(proposal.id)}>
+            {proposal.worktreeAvailable ? "弃用并清理 worktree" : "弃用"}
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }
