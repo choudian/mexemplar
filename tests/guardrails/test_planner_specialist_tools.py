@@ -6,20 +6,10 @@
 """
 
 import json
-from types import SimpleNamespace
 
 from src.business.agents.config import AgentType
-from src.business.orchestration.agent import AgentOrchestrator
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.repos.base_repository import generate_id
-
-
-def _orchestrator(mock_config):
-    return AgentOrchestrator(
-        llm_client=SimpleNamespace(),
-        config=mock_config,
-        llm_reviewer=SimpleNamespace(),
-    )
 
 
 def _tool_names(factory):
@@ -83,40 +73,40 @@ def _executor_tools(orch):
 class TestPlannerToolScope:
     """FR-005: planner 工具集边界——真断言工具名集合。"""
 
-    def test_planner_excludes_executor_collaboration_tools(self, in_memory_db, mock_config):
+    def test_planner_excludes_executor_collaboration_tools(self, in_memory_db, orchestrator):
         """planner 工具集不含 todo_update/ask_parent/meeting_send_message/delegate_to_subagent。"""
-        names = _planner_tools(_orchestrator(mock_config))
+        names = _planner_tools(orchestrator)
         leaked = _EXECUTOR_ONLY_TOOLS & names
         assert not leaked, f"planner 不该拿执行器工具，却包含：{leaked}"
 
-    def test_planner_excludes_builtin_execution_tools(self, in_memory_db, mock_config):
+    def test_planner_excludes_builtin_execution_tools(self, in_memory_db, orchestrator):
         """planner 工具集不含 BUILTIN_GENERAL_TOOLS 执行工具（DEC-B：只规划不执行）。"""
-        names = _planner_tools(_orchestrator(mock_config))
+        names = _planner_tools(orchestrator)
         leaked = _BUILTIN_EXECUTION_TOOL_NAMES & names
         assert not leaked, f"planner 不该拿 BUILTIN 执行工具，却包含：{leaked}"
 
-    def test_executor_still_includes_builtin_tools(self, in_memory_db, mock_config):
+    def test_executor_still_includes_builtin_tools(self, in_memory_db, orchestrator):
         """executor（默认）仍含 BUILTIN 执行工具——防 planner 分支误伤 executor 路径。"""
-        names = _executor_tools(_orchestrator(mock_config))
+        names = _executor_tools(orchestrator)
         assert "read_file" in names
         assert "exec" in names
 
-    def test_planner_includes_build_task_graph(self, in_memory_db, mock_config):
+    def test_planner_includes_build_task_graph(self, in_memory_db, orchestrator):
         """planner 拿 build_task_graph（规划变体）。"""
-        names = _planner_tools(_orchestrator(mock_config))
+        names = _planner_tools(orchestrator)
         assert "build_task_graph" in names
 
-    def test_executor_still_includes_executor_tools(self, in_memory_db, mock_config):
+    def test_executor_still_includes_executor_tools(self, in_memory_db, orchestrator):
         """executor（默认）仍含执行器工具——防 planner 分支误伤 executor 路径。"""
-        names = _executor_tools(_orchestrator(mock_config))
+        names = _executor_tools(orchestrator)
         assert "todo_update" in names
         assert "ask_parent" in names
 
-    def test_planner_build_graph_binds_parent_session(self, in_memory_db, mock_config):
+    def test_planner_build_graph_binds_parent_session(self, in_memory_db, orchestrator):
         """planner 在子会话内调用 build_task_graph 时，图必须归属父助理会话。"""
         parent_session_id = generate_id("parent")
         child_session_id = generate_id("child")
-        factory = _orchestrator(mock_config)._build_delegated_executor_tools(
+        factory = orchestrator._build_delegated_executor_tools(
             None,
             agent_type=AgentType.SPECIALIST,
             executor_id=child_session_id,

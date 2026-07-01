@@ -1917,7 +1917,18 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
     ),
 ]
 
+
+# 主助理只读子集:100% 调度硬边界——主助理不直接执行工作区副作用操作
+# (写文件 / exec / 进程控制),只保留只读查找工具。协调类副作用(delegate /
+# create_specialist / build_task_graph 等 assistant_tools)不在此列,仍由主助理装配。
+# executor/specialist 仍用全量 BUILTIN_GENERAL_TOOLS。
+ASSISTANT_READ_ONLY_TOOLS: List[ToolDefinition] = [
+    tool for tool in BUILTIN_GENERAL_TOOLS if not tool.has_side_effects
+]
+
+
 __all__ = [
+    "ASSISTANT_READ_ONLY_TOOLS",
     "BUILTIN_GENERAL_TOOLS",
     "CONFIRM_DECISION_ACCEPTED",
     "CONFIRM_DECISION_TIMEOUT",

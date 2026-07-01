@@ -50,7 +50,8 @@ def test_distillation_prompt_no_feedback_is_silent_noop():
     prompt = DistillationService(repo=BrainRepository())._build_distillation_prompt(phase="p4")
 
     assert "近期用户反馈信号" not in prompt
-    assert "distillation_output" in prompt
+    # 结构性锚点:确认 prompt 正常构建(含 zone 结构),不耦合具体 advisory 文案
+    assert "hot_zone" in prompt
 
 
 def test_management_delete_entry_records_feedback_signal():

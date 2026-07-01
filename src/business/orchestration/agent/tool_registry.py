@@ -418,7 +418,7 @@ class ToolRegistry:
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
         )
-        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
+        from src.business.agents.tools.builtin_general_tools import ASSISTANT_READ_ONLY_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             create_assistant_search_tools,
         )
@@ -592,7 +592,7 @@ class ToolRegistry:
             load_skill_methodology_tool,
             build_task_graph_tool,
             mutate_task_graph_tool,
-        ] + BUILTIN_GENERAL_TOOLS
+        ] + ASSISTANT_READ_ONLY_TOOLS
 
         def tool_factory() -> list[ToolDefinition]:
             return search_tools + static_tools + dynamic_manager.get_activated_tools()
