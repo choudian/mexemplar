@@ -11,6 +11,8 @@ Pure function tests; no IO, no DB. Uses mock TaskGraphSnapshot dataclasses from 
 from __future__ import annotations
 
 from src.business.task_collaboration.models import (
+    DeliveredStatus,
+    TaskAdjudicationSnapshot,
     TaskEdgeSnapshot,
     TaskGraphSnapshot,
     TaskSnapshot,
@@ -125,6 +127,41 @@ class TestNeedsReviewEntries:
         assert "t-3" in text
         assert "需确认" in text
 
+    def test_result_deliverable_can_fall_back_to_snapshot_adjudication(self):
+        """Entry 只带 adjudicationId 时，可从 snapshot pending adjudication 恢复结果。"""
+        entries = [
+            {
+                "eventType": "result",
+                "taskId": "t-1",
+                "deliveredStatus": "done",
+                "safeSummary": "短摘要",
+                "adjudicationId": "adj-1",
+            }
+        ]
+        snapshot = _make_snapshot()
+        snapshot = TaskGraphSnapshot(
+            graph_id=snapshot.graph_id,
+            session_id=snapshot.session_id,
+            user_message_sequence=snapshot.user_message_sequence,
+            version=snapshot.version,
+            tasks=snapshot.tasks,
+            edges=snapshot.edges,
+            adjudications=[
+                TaskAdjudicationSnapshot(
+                    adjudication_id="adj-1",
+                    task_id="t-1",
+                    safe_summary="短摘要",
+                    delivered_status=DeliveredStatus.DONE,
+                    raw_result_ref="子任务整理后的最终结果",
+                )
+            ],
+        )
+
+        text = build_reentry_briefing(entries, snapshot=snapshot)
+
+        assert "子任务整理后的最终结果" in text
+        assert "短摘要" not in text
+
 
 # === I18-5: snapshot rendering ===
 
@@ -180,3 +217,61 @@ class TestSnapshotGraphProgress:
         assert "t-fail" in text
         # Check that some action hints are rendered
         assert "重试" in text or "retry" in text
+
+    def test_root_container_node_excluded_from_progress(self):
+        """根容器节点（parent_task_id=None）不计入任务图进度段。
+
+        回归 bug：回流 briefing 把永远 pending_dispatch 的根节点 "Assistant request"
+        算进统计，输出 "completed=0, running=1, pending=1, 就绪可派节点：Assistant
+        request"，误导主助理以为还有节点在跑、不敢把结果呈现给用户。
+        生产布局：1 个 root（parent_task_id=None）+ N 个真实节点。
+        """
+        snapshot = _make_snapshot(
+            tasks=[
+                _make_task(
+                    "root-1",
+                    status=TaskStatus.PENDING_DISPATCH,
+                    title="Assistant request",
+                    parent_task_id=None,
+                ),
+                _make_task(
+                    "t-real",
+                    status=TaskStatus.RUNNING,
+                    title="获取 GitHub Trending",
+                ),
+            ]
+        )
+        text = build_reentry_briefing([], snapshot=snapshot)
+
+        assert "任务图进度" in text
+        # 真实节点计数：只算 t-real，root 不算
+        assert "共 1 节点" in text
+        assert "running=1" in text
+        assert "pending=0" in text
+        # root 标题不得进入"就绪可派节点"清单
+        assert "Assistant request" not in text
+
+    def test_root_excluded_and_all_real_completed_reports_to_user(self):
+        """根节点排除后，所有真实节点 completed 时应提示向用户汇报最终结果。"""
+        snapshot = _make_snapshot(
+            tasks=[
+                _make_task(
+                    "root-1",
+                    status=TaskStatus.PENDING_DISPATCH,
+                    title="Assistant request",
+                    parent_task_id=None,
+                ),
+                _make_task(
+                    "t-real",
+                    status=TaskStatus.COMPLETED,
+                    title="获取 GitHub Trending",
+                ),
+            ]
+        )
+        text = build_reentry_briefing([], snapshot=snapshot)
+
+        assert "共 1 节点" in text
+        assert "completed=1" in text
+        # 全图完成（root 未计入）应触发汇报提示
+        assert "已全部完成" in text
+        assert "向用户汇报最终结果" in text

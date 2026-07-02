@@ -156,6 +156,14 @@ class LangChainLLMClient:
         return self.OPENAI_COMPATIBLE_ENDPOINTS.get(provider)
 
     @staticmethod
+    def _openai_http_timeout(timeout: float):
+        """LangChain/OpenAI needs a full httpx.Timeout to apply one value to all phases."""
+        import httpx
+
+        value = float(timeout)
+        return httpx.Timeout(connect=value, read=value, write=value, pool=value)
+
+    @staticmethod
     def _sanitize_for_logging(data: Dict[str, Any]) -> Dict[str, Any]:
         """
         清理敏感信息用于日志记录
@@ -242,7 +250,7 @@ class LangChainLLMClient:
                 "max_tokens": self.max_tokens,
             }
             if self.timeout is not None:
-                kwargs["timeout"] = self.timeout
+                kwargs["timeout"] = self._openai_http_timeout(self.timeout)
             if self.max_retries is not None:
                 kwargs["max_retries"] = max(0, int(self.max_retries))
 

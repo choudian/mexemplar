@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -26,6 +27,11 @@ from src.data.repositories import (
 )
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_TRANSCRIPT_LOOKUP_MARKERS = (
+    "concurrent operations are not permitted",
+    "provisioning a new connection",
+)
 
 
 @dataclass
@@ -89,6 +95,18 @@ def _is_compression_marker(msg) -> bool:
     )
 
 
+def _is_transient_transcript_lookup_error(exc: BaseException) -> bool:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        text = str(current).lower()
+        if any(marker in text for marker in _TRANSIENT_TRANSCRIPT_LOOKUP_MARKERS):
+            return True
+        current = current.__cause__ or current.__context__
+    return False
+
+
 class AssistantObservability:
     """只读读模型：transcript 与子任务权威列表。"""
 
@@ -120,8 +138,34 @@ class AssistantObservability:
         try:
             messages = self._message_repo.get_all(sid)
         except Exception as exc:
-            logger.error("assistant transcript lookup failed: session=%s error=%s", sid, exc)
-            raise
+            if not _is_transient_transcript_lookup_error(exc):
+                logger.error("assistant transcript lookup failed: session=%s error=%s", sid, exc)
+                raise
+            logger.warning(
+                "assistant transcript lookup transient failure; retrying once: session=%s "
+                "error_type=%s",
+                sid,
+                type(exc).__name__,
+            )
+            time.sleep(0.05)
+            try:
+                messages = self._message_repo.get_all(sid)
+            except Exception as retry_exc:
+                if _is_transient_transcript_lookup_error(retry_exc):
+                    logger.warning(
+                        "assistant transcript lookup transient failure after retry; "
+                        "returning empty transcript: session=%s error_type=%s",
+                        sid,
+                        type(retry_exc).__name__,
+                    )
+                    return TranscriptResult()
+                logger.error(
+                    "assistant transcript lookup failed after transient retry: "
+                    "session=%s error=%s",
+                    sid,
+                    retry_exc,
+                )
+                raise
         steps: list[ActivityStep] = []
         seq = 0
         compressed = False

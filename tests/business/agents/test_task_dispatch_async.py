@@ -109,6 +109,7 @@ def test_dispatcher_async_attempt_completion_creates_parent_adjudication(monkeyp
         cutover_guard=_Guard(),
         executor_callback=lambda attempt_id: {
             "safe_summary": f"attempt {attempt_id} finished",
+            "result_text": "子代理最终交付物",
         },
         parent_reentry_callback=reentries.append,
     )
@@ -135,10 +136,14 @@ def test_dispatcher_async_attempt_completion_creates_parent_adjudication(monkeyp
 
         assert payload["accepted"] is True
         assert payload["taskId"] == result["taskId"]
+        assert payload["deliverablePreview"] == "子代理最终交付物"
+        assert payload["deliverableTruncated"] is False
         assert reentries == [payload]
         adjudication = AssistantTaskAdjudicationRepository().get_pending_for_task(result["taskId"])
         assert adjudication is not None
         assert adjudication.delivered_status == "done"
+        assert payload["resultReferenceId"] == adjudication.adjudication_id
+        assert adjudication.raw_result_ref == "子代理最终交付物"
     finally:
         task_repo.close()
         dispatcher.shutdown(wait=True)

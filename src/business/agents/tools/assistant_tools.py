@@ -578,6 +578,8 @@ __all__ = [
     "create_build_task_graph_handler",
     "MUTATE_TASK_GRAPH_SCHEMA",
     "create_mutate_task_graph_handler",
+    "LOAD_TASK_RESULT_SCHEMA",
+    "create_load_task_result_handler",
     "DECIDE_ADJUDICATION_SCHEMA",
     "create_decide_task_adjudication_handler",
     "ABANDON_REQUEST_GRAPH_SCHEMA",
@@ -1804,6 +1806,51 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
             return error_json("委派任务时发生内部错误，请稍后重试。")
 
     return delegate_to_subagent_handler
+
+
+LOAD_TASK_RESULT_SCHEMA = make_tool_schema(
+    name="load_task_result",
+    description=(
+        "读取任务结果回流中保存的子任务最终交付物。只接受回流提示里的 adjudication_id "
+        "（adj_*），不要传 taskId，也不要用 load_reference 读取任务结果。"
+    ),
+    properties={
+        "adjudication_id": {
+            "type": "string",
+            "description": "任务结果回流提示中的裁定ID（adj_*）",
+        },
+    },
+    required=["adjudication_id"],
+)
+
+
+def create_load_task_result_handler(
+    session_id: str,
+    service_factory: Callable[[], "TaskCollaborationService"] | None = None,
+):
+    """Create handler for loading stored task collaboration results."""
+
+    def _task_service():
+        if service_factory is not None:
+            return service_factory()
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        return TaskCollaborationService()
+
+    def load_task_result_handler(adjudication_id: str) -> str:
+        def _action():
+            with _task_service() as service:
+                result = service.load_task_result(
+                    session_id=session_id,
+                    adjudication_id=adjudication_id,
+                )
+            return to_json(result)
+
+        return _run_task_service(
+            "load_task_result", "读取任务结果时发生内部错误，请稍后重试。", _action
+        )
+
+    return load_task_result_handler
 
 
 DECIDE_ADJUDICATION_SCHEMA = make_tool_schema(

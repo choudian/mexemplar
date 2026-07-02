@@ -84,6 +84,7 @@ ERROR_CODES = frozenset(
         "pre_hook_exception",
         "handler_exception",
         "handler_contract_violation",
+        "assistant_tool_forbidden",
         "invalid_model_output",
         "not_executed",
     }

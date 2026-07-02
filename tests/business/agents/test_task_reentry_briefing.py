@@ -36,6 +36,64 @@ def test_entry_with_adjudication_id_appends_decision_hint() -> None:
     assert "裁定ID adj_9：可调用 decide_task_adjudication 工具决策。" in text
 
 
+def test_result_entry_with_deliverable_renders_final_output_without_repeating_summary() -> None:
+    deliverable = "| 项目 | 说明 |\n| repo/demo | 已整理完成 |"
+    text = build_reentry_briefing(
+        [
+            {
+                "taskId": "tsk_2",
+                "deliveredStatus": "done",
+                "safeSummary": "这只是短摘要",
+                "adjudicationId": "adj_9",
+                "deliverablePreview": deliverable,
+                "deliverableTruncated": False,
+                "resultReferenceId": "adj_9",
+            }
+        ]
+    )
+
+    assert "- 任务 tsk_2：done" in text
+    assert "这只是短摘要" not in text
+    assert "【子任务最终交付物】" in text
+    assert "| repo/demo | 已整理完成 |" in text
+    assert "不要重新抓取或重做同一子任务" in text
+
+
+def test_result_entry_with_truncated_deliverable_points_to_load_task_result() -> None:
+    text = build_reentry_briefing(
+        [
+            {
+                "taskId": "tsk_2",
+                "deliveredStatus": "done",
+                "adjudicationId": "adj_9",
+                "deliverablePreview": "partial",
+                "deliverableTruncated": True,
+                "resultReferenceId": "adj_9",
+            }
+        ]
+    )
+
+    assert 'load_task_result(adjudication_id="adj_9")' in text
+    assert "load_reference" not in text
+
+
+def test_result_entry_without_deliverable_warns_not_to_load_task_id_as_reference() -> None:
+    text = build_reentry_briefing(
+        [
+            {
+                "taskId": "tsk_2",
+                "deliveredStatus": "done",
+                "safeSummary": "需要下钻",
+                "adjudicationId": "adj_9",
+            }
+        ]
+    )
+
+    assert "- 任务 tsk_2：done — 需要下钻" in text
+    assert 'load_task_result(adjudication_id="adj_9")' in text
+    assert "不要把 taskId 传给 load_reference" in text
+
+
 def test_multiple_entries_are_each_listed_once() -> None:
     text = build_reentry_briefing(
         [
