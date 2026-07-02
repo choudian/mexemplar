@@ -21,6 +21,8 @@ from src.business.task_collaboration.models import (
     TaskStatus,
 )
 
+_DELIVERABLE_BRIEFING_MAX_CHARS = 6000
+
 
 def _sep(lines: list[str]) -> None:
     """在已有内容后插入空行分隔。"""
@@ -55,19 +57,47 @@ def build_reentry_briefing(
     ]
     question_entries = [entry for entry in entries if entry.get("eventType") == "task_question"]
     needs_review_entries = [entry for entry in entries if entry.get("eventType") == "needs_review"]
+    adjudications_by_id = {
+        item.adjudication_id: item
+        for item in (snapshot.adjudications if snapshot is not None else [])
+    }
     lines: list[str] = []
 
     # === 现有 result 段 ===
     if result_entries:
         lines.append("你之前派发的子任务有结果回流，请检查并决定（认可/打回/放弃）：")
     for entry in result_entries:
-        status = entry.get("deliveredStatus")
+        task_id = entry.get("taskId") or "unknown"
+        status = entry.get("deliveredStatus") or entry.get("event") or "result"
         summary = entry.get("safeSummary") or ""
-        line = f"- 任务 {entry.get('taskId')}：{status} — {summary}".rstrip()
+        if str(status) == "done":
+            deliverable, deliverable_truncated, result_reference_id = _resolve_deliverable(
+                entry, adjudications_by_id
+            )
+        else:
+            deliverable, deliverable_truncated = "", False
+            result_reference_id = entry.get("resultReferenceId") or entry.get("adjudicationId")
+        line = f"- 任务 {task_id}：{status}"
+        if not deliverable and summary:
+            line = f"{line} — {summary}"
         lines.append(line)
         adjudication_id = entry.get("adjudicationId")
         if adjudication_id:
             lines.append(f"  裁定ID {adjudication_id}：可调用 decide_task_adjudication 工具决策。")
+        if deliverable:
+            lines.extend(
+                _render_deliverable(
+                    deliverable,
+                    truncated=deliverable_truncated,
+                    result_reference_id=result_reference_id,
+                )
+            )
+        elif adjudication_id:
+            lines.append(
+                "  如需查看已保存的任务结果，请调用 "
+                f'load_task_result(adjudication_id="{adjudication_id}")；'
+                "不要把 taskId 传给 load_reference。"
+            )
         # 024: 失败 entry 附自愈动作清单
         healing_actions = entry.get("healingActions")
         if healing_actions:
@@ -121,14 +151,63 @@ def build_reentry_briefing(
     return "\n".join(lines)
 
 
+def _resolve_deliverable(entry: dict, adjudications_by_id: dict) -> tuple[str, bool, str | None]:
+    """Return the result text that the parent assistant can use directly."""
+    result_reference_id = entry.get("resultReferenceId") or entry.get("adjudicationId")
+    raw = entry.get("deliverablePreview")
+    truncated = bool(entry.get("deliverableTruncated"))
+    if not raw and result_reference_id:
+        adjudication = adjudications_by_id.get(result_reference_id)
+        raw = getattr(adjudication, "raw_result_ref", None) if adjudication is not None else None
+    text = str(raw or "")
+    if not text:
+        return "", truncated, result_reference_id
+    if len(text) > _DELIVERABLE_BRIEFING_MAX_CHARS:
+        return text[: _DELIVERABLE_BRIEFING_MAX_CHARS - 1].rstrip() + "…", True, result_reference_id
+    return text, truncated, result_reference_id
+
+
+def _render_deliverable(
+    deliverable: str,
+    *,
+    truncated: bool,
+    result_reference_id: str | None,
+) -> list[str]:
+    lines = [
+        "  【子任务最终交付物】",
+        "  该内容已由执行体压缩整理；若足以回答用户，请裁定认可后直接汇报，"
+        "不要重新抓取或重做同一子任务。",
+    ]
+    for line in deliverable.splitlines() or [""]:
+        lines.append(f"  {line}")
+    if truncated:
+        if result_reference_id:
+            lines.append(
+                "  交付物已截断；需要更多内容时调用 "
+                f'load_task_result(adjudication_id="{result_reference_id}")。'
+            )
+        else:
+            lines.append("  交付物已截断；若信息不足，请打回返工，而不是自行重做。")
+    return lines
+
+
 def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
     """从 snapshot 计算任务图进度段（确定性，非 LLM）。"""
     tasks = snapshot.tasks
     if not tasks:
         return ""
 
+    # 根容器节点（parent_task_id is None，标题 "Assistant request"）代表整个用户请求，
+    # 在图收口前永远停在 pending_dispatch。把它算进进度会输出
+    # "completed=0, running=1, pending=1, 就绪可派节点：Assistant request"，
+    # 误导主助理以为还有节点在跑、不敢把结果呈现给用户。
+    # 与 graph_scheduler._advance 一致，统计/判定只看真实执行节点。
+    real_tasks = [t for t in tasks if t.parent_task_id is not None]
+    if not real_tasks:
+        return ""
+
     # 单次遍历：统计状态、收集各类节点
-    status_counts = Counter(t.status for t in tasks)
+    status_counts = Counter(t.status for t in real_tasks)
     needs_review_tasks: list[str] = []  # 普通结果待裁定（requires_review）
     confirmation_tasks: list[str] = []  # 高风险需确认（requires_confirmation）
     ready_tasks: list[str] = []
@@ -141,7 +220,7 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
         if edge.type == TaskEdgeType.DEPENDENCY:
             dep_sources.setdefault(edge.target_task_id, []).append(edge.source_task_id)
 
-    for t in tasks:
+    for t in real_tasks:
         if t.status == TaskStatus.COMPLETED:
             completed_ids.add(t.task_id)
         if t.requires_confirmation:
@@ -157,8 +236,8 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
             failed_tasks.append(t.title or t.task_id)
 
     # 判断全图是否完成
-    all_terminal = all(t.status in TERMINAL_TASK_STATUSES for t in tasks)
-    all_completed = all(t.status == TaskStatus.COMPLETED for t in tasks)
+    all_terminal = all(t.status in TERMINAL_TASK_STATUSES for t in real_tasks)
+    all_completed = all(t.status == TaskStatus.COMPLETED for t in real_tasks)
 
     lines: list[str] = []
     lines.append("【任务图进度】")
@@ -171,7 +250,7 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
         f"需裁定={len(needs_review_tasks)}",
         f"failed={status_counts.get(TaskStatus.FAILED, 0)}",
     ]
-    lines.append(f"- 图 {snapshot.graph_id} 共 {len(tasks)} 节点：{', '.join(parts)}")
+    lines.append(f"- 图 {snapshot.graph_id} 共 {len(real_tasks)} 节点：{', '.join(parts)}")
 
     if ready_tasks:
         lines.append(f"- 就绪可派节点：{', '.join(ready_tasks[:5])}")
@@ -217,7 +296,8 @@ def _render_todo_overview(snapshot: TaskGraphSnapshot) -> str:
     active_tasks = [
         t
         for t in snapshot.tasks
-        if t.status in (TaskStatus.RUNNING, TaskStatus.SUSPENDED) or t.requires_review
+        if t.parent_task_id is not None
+        and (t.status in (TaskStatus.RUNNING, TaskStatus.SUSPENDED) or t.requires_review)
     ]
     if not active_tasks:
         return ""

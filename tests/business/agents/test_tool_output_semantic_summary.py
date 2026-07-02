@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
+
 from src.business.agents.tools.semantic_summary import (
     build_deterministic_preview,
+    clear_semantic_summary_cache_for_tests,
     extract_deterministic_facts,
     normalize_tool_output,
     resolve_extraction_goal,
@@ -68,6 +71,13 @@ class FakeClient:
     def chat(self, prompt: str) -> str:
         self._calls.append(prompt)
         return self._responder(prompt)
+
+
+@pytest.fixture(autouse=True)
+def _clear_summary_cache():
+    clear_semantic_summary_cache_for_tests()
+    yield
+    clear_semantic_summary_cache_for_tests()
 
 
 def test_deterministic_preview_and_facts_keep_errors_from_head_middle_and_tail():
@@ -168,6 +178,61 @@ def test_single_summary_redacts_prompt_and_validates_fixed_shape():
     assert "raw-secret" not in calls[0]
     assert "goal-secret" not in calls[0]
     assert "untrusted data" in calls[0].lower()
+
+
+def test_semantic_summary_cache_reuses_same_content_goal_and_config():
+    calls: list[str] = []
+    config = FakeConfig(chunk_chars=50_000)
+
+    first = summarize_tool_output(
+        tool_name="web_fetch",
+        tool_args={"prompt": "repository stars"},
+        source_text="# Trending\n\n## acme/project\n\n3,210 stars.",
+        source_obj={},
+        config=config,
+        client_factory=lambda **_: FakeClient(lambda _prompt: _summary_payload("cached"), calls),
+    )
+    second = summarize_tool_output(
+        tool_name="web_fetch",
+        tool_args={"prompt": "repository stars"},
+        source_text="# Trending\n\n## acme/project\n\n3,210 stars.",
+        source_obj={},
+        config=config,
+        client_factory=lambda **_: FakeClient(
+            lambda _prompt: (_ for _ in ()).throw(AssertionError("cache miss")),
+            calls,
+        ),
+    )
+
+    assert first == second
+    assert first is not second
+    assert len(calls) == 1
+
+
+def test_semantic_summary_cache_is_scoped_by_extraction_goal():
+    calls: list[str] = []
+    config = FakeConfig(chunk_chars=50_000)
+
+    stars = summarize_tool_output(
+        tool_name="web_fetch",
+        tool_args={"prompt": "repository stars"},
+        source_text="# Trending\n\n## acme/project\n\n3,210 stars.",
+        source_obj={},
+        config=config,
+        client_factory=lambda **_: FakeClient(lambda _prompt: _summary_payload("stars"), calls),
+    )
+    forks = summarize_tool_output(
+        tool_name="web_fetch",
+        tool_args={"prompt": "repository forks"},
+        source_text="# Trending\n\n## acme/project\n\n3,210 stars.",
+        source_obj={},
+        config=config,
+        client_factory=lambda **_: FakeClient(lambda _prompt: _summary_payload("forks"), calls),
+    )
+
+    assert stars["overview"] == "stars"
+    assert forks["overview"] == "forks"
+    assert len(calls) == 2
 
 
 def test_opaque_registered_secret_is_removed_before_and_after_provider_call():

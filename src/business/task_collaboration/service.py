@@ -761,6 +761,31 @@ class TaskCollaborationService(AtomicTaskService):
         """Public query for a task row (used by reentry sink to resolve session/graph)."""
         return self._tasks.get_task(task_id)
 
+    def load_task_result(self, *, session_id: str, adjudication_id: str) -> dict:
+        """Load the stored result for a parent-side adjudication scoped to a session."""
+        normalized_id = (adjudication_id or "").strip()
+        if not normalized_id:
+            raise ValueError("adjudication_id is required")
+        adjudication = self._adjudications.get_by_id(normalized_id)
+        if adjudication is None:
+            raise LookupError("任务结果不存在或不属于当前会话")
+        task = self._tasks.get_task(adjudication.task_id)
+        if task is None or (
+            adjudication.parent_session_id != session_id
+            and task.session_id != session_id
+            and task.owner_session_id != session_id
+        ):
+            raise LookupError("任务结果不存在或不属于当前会话")
+        return {
+            "adjudicationId": adjudication.adjudication_id,
+            "taskId": adjudication.task_id,
+            "graphId": adjudication.graph_id,
+            "deliveredStatus": adjudication.delivered_status,
+            "safeSummary": adjudication.safe_summary,
+            "result": adjudication.raw_result_ref or "",
+            "hasResult": bool(adjudication.raw_result_ref),
+        }
+
     def create_parent_adjudication(
         self,
         *,
@@ -931,6 +956,7 @@ class TaskCollaborationService(AtomicTaskService):
                         task_id=pending.task_id,
                         safe_summary=pending.safe_summary,
                         delivered_status=pending.delivered_status,
+                        raw_result_ref=pending.raw_result_ref,
                     )
                 )
             snapshots.append(

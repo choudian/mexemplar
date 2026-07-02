@@ -7,6 +7,9 @@ import queue
 import re
 import threading
 import time
+import copy
+import hashlib
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
@@ -37,6 +40,9 @@ _SUMMARY_FIELDS = (
     "importantData",
     "nextActions",
 )
+_SUMMARY_CACHE_MAX_ENTRIES = 128
+_summary_cache: OrderedDict[tuple[str, str, str, str], dict[str, Any]] = OrderedDict()
+_summary_cache_lock = threading.RLock()
 _WEB_LOW_VALUE_PATTERN = re.compile(
     r"(?i)\b("
     r"sign[ -]?in|log[ -]?in|cookie|privacy|terms|footer|navigation|"
@@ -128,6 +134,23 @@ class SemanticSummarySettings:
         if self.provider not in _SUPPORTED_PROVIDERS:
             return False
         return self.provider != "openai-compatible" or is_valid_compatible_base_url(self.base_url)
+
+    def cache_signature(self) -> str:
+        payload = {
+            "provider": self.provider,
+            "model": self.model,
+            "base_url": self.base_url,
+            "temperature": self.temperature,
+            "max_input_chars": self.max_input_chars,
+            "chunk_chars": self.chunk_chars,
+            "max_map_chunks": self.max_map_chunks,
+            "map_concurrency": self.map_concurrency,
+            "total_timeout_seconds": self.total_timeout_seconds,
+            "map_max_tokens": self.map_max_tokens,
+            "reduce_max_tokens": self.reduce_max_tokens,
+            "summary_max_chars": self.summary_max_chars,
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -674,6 +697,39 @@ def _bounded_summary(
     return result
 
 
+def _semantic_summary_cache_key(
+    *,
+    tool_name: str,
+    normalized_text: str,
+    extraction_goal: str,
+    settings: SemanticSummarySettings,
+) -> tuple[str, str, str, str]:
+    text_hash = hashlib.sha256((normalized_text or "").encode("utf-8")).hexdigest()
+    return (tool_name, text_hash, extraction_goal, settings.cache_signature())
+
+
+def _get_cached_summary(key: tuple[str, str, str, str]) -> dict[str, Any] | None:
+    with _summary_cache_lock:
+        cached = _summary_cache.get(key)
+        if cached is None:
+            return None
+        _summary_cache.move_to_end(key)
+        return copy.deepcopy(cached)
+
+
+def _put_cached_summary(key: tuple[str, str, str, str], summary: dict[str, Any]) -> None:
+    with _summary_cache_lock:
+        _summary_cache[key] = copy.deepcopy(summary)
+        _summary_cache.move_to_end(key)
+        while len(_summary_cache) > _SUMMARY_CACHE_MAX_ENTRIES:
+            _summary_cache.popitem(last=False)
+
+
+def clear_semantic_summary_cache_for_tests() -> None:
+    with _summary_cache_lock:
+        _summary_cache.clear()
+
+
 def _invoke_with_deadline(
     *,
     prompt: str,
@@ -817,6 +873,15 @@ def summarize_tool_output(
         normalized.text,
         settings.api_key,
     )
+    cache_key = _semantic_summary_cache_key(
+        tool_name=tool_name,
+        normalized_text=extracted,
+        extraction_goal=extraction_goal,
+        settings=settings,
+    )
+    cached = _get_cached_summary(cache_key)
+    if cached is not None:
+        return cached
     input_budget = min(
         settings.max_input_chars,
         settings.chunk_chars * settings.max_map_chunks,
@@ -869,6 +934,7 @@ def summarize_tool_output(
             increment_agent_tool_health(semantic_summary_invalid=1)
             return None
         increment_agent_tool_health(semantic_summary_successes=1)
+        _put_cached_summary(cache_key, summary)
         return summary
 
     maps, failures, timed_out = _map_chunks(
@@ -927,6 +993,7 @@ def summarize_tool_output(
         )
         return None
     increment_agent_tool_health(semantic_summary_successes=1)
+    _put_cached_summary(cache_key, summary)
     return summary
 
 
@@ -962,6 +1029,7 @@ __all__ = [
     "NormalizedToolOutput",
     "SemanticSummarySettings",
     "build_deterministic_preview",
+    "clear_semantic_summary_cache_for_tests",
     "extract_deterministic_facts",
     "is_valid_compatible_base_url",
     "normalize_tool_output",

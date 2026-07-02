@@ -22,7 +22,15 @@ from src.utils.events import emit
 from src.utils.helpers import safe_format_template
 
 from . import run_context
-from .config import AgentConfig, AgentResult, ResultType, RetryConfig, ToolDefinition, ToolSignal
+from .config import (
+    AgentConfig,
+    AgentResult,
+    AgentType,
+    ResultType,
+    RetryConfig,
+    ToolDefinition,
+    ToolSignal,
+)
 from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
 from .hook_models import ToolCallContext, ToolExecutionOutcome, freeze_tool_args
 from .tool_helpers import is_standardized_error, make_error_result
@@ -32,6 +40,7 @@ from .tools.builtin_contracts import (
     use_tool_runtime,
 )
 from .tools.builtin_config import get_config_int
+from .tools.builtin_general_tools import ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES
 from .tools.output_governance import (
     govern_tool_result,
     governance_double_failure_fallback,
@@ -42,6 +51,7 @@ logger = logging.getLogger(__name__)
 
 _INJECTED_TOOL_NAMES = frozenset({"load_reference", "talk_to_user"})
 _DEFAULT_PARALLEL_WORKERS = 4
+_ASSISTANT_FORBIDDEN_DYNAMIC_TOOL_PREFIXES = ("utool_", "comp_")
 
 # 活动事件文本截断上限（projector 还会再走 009 payload allowlist 脱敏）。
 _ACTIVITY_TEXT_LIMIT = 2000
@@ -484,6 +494,47 @@ class AgentLoop:
             iteration=iteration,
         )
 
+    def _assistant_forbidden_tool_reason(self, tool_name: str) -> str | None:
+        if self._config.agent_type != AgentType.ASSISTANT:
+            return None
+        if tool_name in ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES:
+            return (
+                f"主助理不能直接调用工具 '{tool_name}'。读取、抓取、进程和执行类能力"
+                "必须先委派给临时子代理或固定专员。"
+            )
+        if tool_name.startswith(_ASSISTANT_FORBIDDEN_DYNAMIC_TOOL_PREFIXES):
+            return (
+                f"主助理不能直接调用动态执行工具 '{tool_name}'。"
+                "请使用 delegate_to_subagent 或 delegate_to_specialist 派执行体完成。"
+            )
+        return None
+
+    def _reject_assistant_forbidden_tool_calls(
+        self,
+        classified: List[tuple],
+        ctx: ContextManager,
+    ) -> bool:
+        reasons = {
+            tc.id: reason
+            for tc, _, _ in classified
+            if (reason := self._assistant_forbidden_tool_reason(tc.name)) is not None
+        }
+        if not reasons:
+            return False
+        for tc, _, _ in classified:
+            reason = reasons.get(tc.id)
+            if reason is not None:
+                self._save_error(tc, ctx, "assistant_tool_forbidden", reason)
+            else:
+                self._save_error(
+                    tc,
+                    ctx,
+                    "invalid_model_output",
+                    "同轮响应包含主助理禁止直接调用的工具，本批次不执行任何工具。"
+                    "请先委派给临时子代理或固定专员。",
+                )
+        return True
+
     def _has_hooks(self, tool_def: ToolDefinition) -> bool:
         if tool_def.name in _INJECTED_TOOL_NAMES:
             return False
@@ -831,6 +882,13 @@ class AgentLoop:
             f"(中断型={interrupting_count}, 普通={batch_size - interrupting_count})"
         )
 
+        if self._reject_assistant_forbidden_tool_calls(classified, ctx):
+            logger.warning(
+                "[Agent Loop] 主助理越权工具调用已拒绝: %s",
+                [tc.name for tc, _, _ in classified],
+            )
+            return None
+
         # Invalid-output batch check.
         if batch_size > 1 and interrupting_count > 0:
             logger.info(
@@ -994,8 +1052,12 @@ class AgentLoop:
         Returns:
             AgentResult 表示终止循环，list[ToolCallInfo] 表示需要执行的工具调用列表
         """
+        # 有工具调用时，content 是 LLM 在调工具时附带的"思考旁白"，不应作为独立
+        # 消息呈现给用户（否则和中断型工具如 reply_to_user 产生的 display message
+        # 重复，用户一秒内看到两条内容几乎相同的消息）。与下方 _initial_tool_calls
+        # 路径 content="" 的既有模式对齐；实时 reasoning 事件仍记录这段文本。
         ctx.save_assistant_message(
-            content=response.content or "",
+            content="" if response.has_tool_calls else (response.content or ""),
             tool_calls=(
                 _serialize_tool_calls(response.tool_calls) if response.has_tool_calls else None
             ),

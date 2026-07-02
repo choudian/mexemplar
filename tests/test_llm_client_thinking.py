@@ -11,6 +11,7 @@ import types
 from typing import Any
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 
@@ -119,6 +120,19 @@ def test_openai_custom_base_url_does_not_inject_reasoning(stub_langchain):
     kwargs = chat_openai.call_args.kwargs
     assert "reasoning_effort" not in kwargs
     assert kwargs["base_url"] == "https://compatible.example/v1"
+
+
+def test_openai_compatible_timeout_expands_to_httpx_timeout(stub_langchain):
+    _, chat_openai = stub_langchain
+    _make_client("off", provider="openai", model="gpt-5", timeout=600)
+
+    timeout = chat_openai.call_args.kwargs["timeout"]
+
+    assert isinstance(timeout, httpx.Timeout)
+    assert timeout.connect == 600
+    assert timeout.read == 600
+    assert timeout.write == 600
+    assert timeout.pool == 600
 
 
 # ===== 兼容 provider（DeepSeek/Qwen/Zhipu/Moonshot）应静默忽略 =====

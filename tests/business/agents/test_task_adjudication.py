@@ -43,6 +43,71 @@ def test_parent_adjudication_accepts_task() -> None:
     assert AssistantTaskAdjudicationRepository().get_by_id(adjudication_id).decision == "accepted"
 
 
+def test_load_task_result_returns_raw_result_for_current_session() -> None:
+    service = TaskCollaborationService()
+    graph_id = service.create_root_graph(
+        session_id="ast_result",
+        title="root",
+        description="root",
+    )
+    root = AssistantTaskRepository().list_graph_tasks(graph_id)[0]
+    task_id = service.create_child_task(
+        graph_id=graph_id,
+        session_id="ast_result",
+        parent_task_id=root.task_id,
+        title="child",
+        description="child",
+    )
+    adjudication = service.create_parent_adjudication(
+        task_id=task_id,
+        delivered_status="done",
+        safe_summary="short",
+        raw_result_ref="完整交付物",
+    )
+
+    result = service.load_task_result(
+        session_id="ast_result",
+        adjudication_id=adjudication.adjudication_id,
+    )
+
+    assert result["adjudicationId"] == adjudication.adjudication_id
+    assert result["result"] == "完整交付物"
+    assert result["hasResult"] is True
+
+
+def test_load_task_result_rejects_other_session() -> None:
+    service = TaskCollaborationService()
+    graph_id = service.create_root_graph(
+        session_id="ast_result_owner",
+        title="root",
+        description="root",
+    )
+    root = AssistantTaskRepository().list_graph_tasks(graph_id)[0]
+    task_id = service.create_child_task(
+        graph_id=graph_id,
+        session_id="ast_result_owner",
+        parent_task_id=root.task_id,
+        title="child",
+        description="child",
+    )
+    adjudication = service.create_parent_adjudication(
+        task_id=task_id,
+        delivered_status="done",
+        safe_summary="short",
+        raw_result_ref="完整交付物",
+    )
+
+    try:
+        service.load_task_result(
+            session_id="ast_other",
+            adjudication_id=adjudication.adjudication_id,
+        )
+    except LookupError as exc:
+        assert "不属于当前会话" in str(exc)
+    else:
+        raise AssertionError("cross-session task result read should fail")
+
+
 def test_parent_adjudication_returns_task_for_rework() -> None:
     task_id, adjudication_id = _pending_adjudication()
 

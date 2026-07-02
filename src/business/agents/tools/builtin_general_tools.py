@@ -109,6 +109,7 @@ _WEB_FETCH_TITLE_FALLBACK_CHARS = 600
 _WEB_FETCH_REDIRECT_STATUSES = {301, 302, 307, 308}
 _WEB_FETCH_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _WEB_FETCH_DOMAIN_INFO_URL = "https://api.anthropic.com/api/web/domain_info"
+_WEB_FETCH_LIST_PAGE_MIN_LENGTH = _WEB_FETCH_MAX_LENGTH
 _LIST_DIR_MAX_ITEMS = 1000
 
 
@@ -446,7 +447,10 @@ WEB_FETCH_SCHEMA = make_tool_schema(
         "url": {"type": "string", "description": "要抓取的网页 URL"},
         "max_length": {
             "type": "integer",
-            "description": f"返回内容最大字符数，默认 {_WEB_FETCH_MAX_LENGTH}",
+            "description": (
+                f"返回内容最大字符数，默认 {_WEB_FETCH_MAX_LENGTH}。抓取列表页、聚合页、"
+                "trending 页时不要主动降低该值，否则会遗漏条目。"
+            ),
         },
         "prompt": {
             "type": "string",
@@ -467,6 +471,7 @@ def web_fetch_handler(
         original_url = str(url or "").strip()
         safe_url = _validate_web_fetch_url(original_url)
         max_length = _normalize_web_fetch_max_length(max_length)
+        max_length, max_length_adjusted = _adjust_web_fetch_max_length(safe_url, max_length)
         started = time.monotonic()
         fetched = _get_url_markdown_content(original_url, safe_url)
 
@@ -487,6 +492,8 @@ def web_fetch_handler(
             "duration_ms": int((time.monotonic() - started) * 1000),
             "content_type": fetched.content_type,
         }
+        if max_length_adjusted:
+            response["max_length_adjusted"] = True
         if fetched.persisted_reference_id:
             response["binary"] = {
                 "reference_id": fetched.persisted_reference_id,
@@ -516,6 +523,19 @@ def _normalize_web_fetch_max_length(max_length: int) -> int:
     except (TypeError, ValueError):
         return _WEB_FETCH_MAX_LENGTH
     return max(1, min(parsed, _WEB_FETCH_MAX_LENGTH))
+
+
+def _adjust_web_fetch_max_length(safe_url: str, max_length: int) -> tuple[int, bool]:
+    if _is_known_web_fetch_list_page(safe_url) and max_length < _WEB_FETCH_LIST_PAGE_MIN_LENGTH:
+        return _WEB_FETCH_LIST_PAGE_MIN_LENGTH, True
+    return max_length, False
+
+
+def _is_known_web_fetch_list_page(safe_url: str) -> bool:
+    parsed = urllib.parse.urlsplit(safe_url)
+    host = (parsed.hostname or "").lower().removeprefix("www.")
+    path = (parsed.path or "/").rstrip("/") or "/"
+    return host == "github.com" and path == "/trending"
 
 
 class _DomainBlockedError(RuntimeError):
@@ -1918,17 +1938,18 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
 ]
 
 
-# 主助理只读子集:100% 调度硬边界——主助理不直接执行工作区副作用操作
-# (写文件 / exec / 进程控制),只保留只读查找工具。协调类副作用(delegate /
-# create_specialist / build_task_graph 等 assistant_tools)不在此列,仍由主助理装配。
+# 主助理 builtin general 工具子集：100% 调度硬边界。
+# main assistant 不直接读取网页/文件/目录/进程输出，也不直接执行用户动态工具；
+# 这些工作必须委派给 ephemeral executor 或 specialist。协调类工具
+# (delegate/build_task_graph/decide/load_task_result 等 assistant_tools)不在此列。
 # executor/specialist 仍用全量 BUILTIN_GENERAL_TOOLS。
-ASSISTANT_READ_ONLY_TOOLS: List[ToolDefinition] = [
-    tool for tool in BUILTIN_GENERAL_TOOLS if not tool.has_side_effects
-]
+ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES = frozenset(tool.name for tool in BUILTIN_GENERAL_TOOLS)
+ASSISTANT_READ_ONLY_TOOLS: List[ToolDefinition] = []
 
 
 __all__ = [
     "ASSISTANT_READ_ONLY_TOOLS",
+    "ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES",
     "BUILTIN_GENERAL_TOOLS",
     "CONFIRM_DECISION_ACCEPTED",
     "CONFIRM_DECISION_TIMEOUT",

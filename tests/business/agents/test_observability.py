@@ -1,6 +1,7 @@
 """014 US3/US4: 助理过程只读读模型（observability）行为契约。"""
 
 import json
+import logging
 import uuid
 
 import pytest
@@ -87,6 +88,51 @@ def test_build_transcript_flags_compressed_history(mock_config, in_memory_db):
     ctx.save_message(role="summary", content="之前的对话内容（已压缩概要）")
     result = AssistantObservability().build_transcript(sid)
     assert result.compressed is True
+
+
+def test_build_transcript_retries_sqlalchemy_transient_connection_error(monkeypatch):
+    class FlakyMessageRepo:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_all(self, session_id: str):
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError(
+                    "This session is provisioning a new connection; concurrent operations "
+                    "are not permitted"
+                )
+            return []
+
+    repo = FlakyMessageRepo()
+    monkeypatch.setattr("src.business.agents.observability.time.sleep", lambda _seconds: None)
+
+    result = AssistantObservability(message_repo=repo).build_transcript("ast_transient")
+
+    assert repo.calls == 2
+    assert result.steps == []
+    assert result.compressed is False
+
+
+def test_build_transcript_returns_empty_after_repeated_transient_error(monkeypatch, caplog):
+    class BrokenMessageRepo:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def get_all(self, session_id: str):
+            self.calls += 1
+            raise RuntimeError("concurrent operations are not permitted")
+
+    repo = BrokenMessageRepo()
+    monkeypatch.setattr("src.business.agents.observability.time.sleep", lambda _seconds: None)
+
+    with caplog.at_level(logging.WARNING):
+        result = AssistantObservability(message_repo=repo).build_transcript("ast_transient")
+
+    assert repo.calls == 2
+    assert result.steps == []
+    assert result.compressed is False
+    assert "returning empty transcript" in caplog.text
 
 
 def test_subagent_read_model_propagates_repository_failures():

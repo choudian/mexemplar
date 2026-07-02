@@ -336,12 +336,14 @@ class TaskDispatcher:
                         result_ref=_result_reference(result),
                         reentry_payload=_paused_reentry_payload(result),
                     )
+                result_ref, result_ref_truncated = _result_reference_with_truncation(result)
                 return self._record_attempt_outcome(
                     attempt_id=attempt_id,
                     fence_token=fence_token,
                     delivered_status=DeliveredStatus.DONE,
                     safe_summary=_safe_result_summary(result),
-                    result_ref=_result_reference(result),
+                    result_ref=result_ref,
+                    result_ref_truncated=result_ref_truncated,
                 )
         except Exception:
             logger.exception("[task attempt] worker crashed attempt=%s", attempt_id)
@@ -358,6 +360,7 @@ class TaskDispatcher:
         delivered_status: str,
         safe_summary: str,
         result_ref: str | None = None,
+        result_ref_truncated: bool = False,
     ) -> dict[str, Any]:
         with _worker_scope() as (attempts, service):
             if delivered_status == DeliveredStatus.DONE:
@@ -416,6 +419,11 @@ class TaskDispatcher:
                 "sessionId": task_row.session_id if task_row else None,
                 "graphId": task_row.graph_id if task_row else None,
             }
+            if delivered_status == DeliveredStatus.DONE and result_ref:
+                payload["deliverablePreview"] = result_ref
+                payload["deliverableTruncated"] = bool(result_ref_truncated)
+                if adjudication is not None:
+                    payload["resultReferenceId"] = adjudication.adjudication_id
             # 024: 失败附自愈动作清单 + 安全恢复提示（FR-010/FR-015），供 briefing 渲染。
             # safeRecoveryHint 是固定安全文案，不携带 provider 原始错误（constitution III）。
             if delivered_status != DeliveredStatus.DONE:
@@ -572,16 +580,31 @@ class TaskDispatcher:
         self._pool.shutdown(wait=wait, cancel_futures=not wait)
 
 
-_MAX_RESULT_REF_CHARS = 4000
+_MAX_RESULT_REF_CHARS = 6000
+_RESULT_REFERENCE_TEXT_KEYS = ("result_text", "message")
 
 
 def _result_reference(result: str | dict[str, Any] | None) -> str | None:
+    return _result_reference_with_truncation(result)[0]
+
+
+def _result_reference_with_truncation(
+    result: str | dict[str, Any] | None,
+) -> tuple[str | None, bool]:
     if result is None:
-        return None
+        return None, False
     if isinstance(result, str):
-        return result[:_MAX_RESULT_REF_CHARS]
-    serialized = json.dumps(result, ensure_ascii=False, sort_keys=True)
-    return serialized[:_MAX_RESULT_REF_CHARS]
+        text = result
+    else:
+        for key in _RESULT_REFERENCE_TEXT_KEYS:
+            value = result.get(key)
+            if isinstance(value, str) and value:
+                text = value
+                break
+        else:
+            text = json.dumps(result, ensure_ascii=False, sort_keys=True)
+    truncated = len(text) > _MAX_RESULT_REF_CHARS
+    return text[:_MAX_RESULT_REF_CHARS], truncated
 
 
 _RESULT_SUMMARY_KEYS = ("safe_summary", "message", "result_text")

@@ -299,6 +299,23 @@ class ContextManager:
         # load_reference 复用共享 MessageRepository session（见 __init__），
         # 并发工具调用时必须串行化访问。
         with self._reference_lock:
+            reference_id = (reference_id or "").strip()
+            if reference_id.startswith("tsk_"):
+                raise ValueError(
+                    f"{reference_id} 是任务 ID，不是 message/summary reference；"
+                    "请根据回流提示使用裁定工具处理任务结果，不要传给 load_reference。"
+                )
+            if reference_id.startswith("tg_"):
+                raise ValueError(
+                    f"{reference_id} 是任务图 ID，不是 message/summary reference；"
+                    "任务图状态应通过任务协作快照或回流提示查看，不要传给 load_reference。"
+                )
+            if reference_id.startswith("adj_"):
+                raise ValueError(
+                    f"{reference_id} 是任务结果裁定 ID，不是 message/summary reference；"
+                    f'请调用 load_task_result(adjudication_id="{reference_id}") 查看交付物。'
+                )
+
             # 摘要 ID 路由：ss_ (会话摘要), gs_ (分组摘要), global_ (全局摘要)
             if reference_id.startswith(("ss_", "gs_", "global_")):
                 from src.data.repositories import AssistantSummaryRepository

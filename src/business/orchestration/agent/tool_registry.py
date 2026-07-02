@@ -392,6 +392,7 @@ class ToolRegistry:
             DISMISS_SUGGESTION,
             INSPECT_SUBAGENT_SCHEMA,
             INVALIDATE_MEMORY_ENTRY_SCHEMA,
+            LOAD_TASK_RESULT_SCHEMA,
             MUTATE_TASK_GRAPH_SCHEMA,
             OPEN_MEETING_CHANNEL_SCHEMA,
             REPLY_TO_USER_SCHEMA,
@@ -411,6 +412,7 @@ class ToolRegistry:
             create_delegate_to_subagent_handler,
             create_inspect_subagent_handler,
             create_invalidate_memory_entry_handler,
+            create_load_task_result_handler,
             create_mutate_task_graph_handler,
             create_open_meeting_channel_handler,
             create_reply_to_user_handler,
@@ -481,6 +483,12 @@ class ToolRegistry:
             name="decide_task_adjudication",
             schema=DECIDE_ADJUDICATION_SCHEMA,
             handler=create_decide_task_adjudication_handler(session_id),
+        )
+        load_task_result_tool = ToolDefinition(
+            name="load_task_result",
+            schema=LOAD_TASK_RESULT_SCHEMA,
+            handler=create_load_task_result_handler(session_id),
+            has_side_effects=False,
         )
         abandon_request_graph_tool = ToolDefinition(
             name="abandon_request_graph",
@@ -581,6 +589,7 @@ class ToolRegistry:
             reply_to_user_tool,
             delegate_to_subagent_tool,
             decide_task_adjudication_tool,
+            load_task_result_tool,
             abandon_request_graph_tool,
             answer_task_question_tool,
             continue_subagent_tool,

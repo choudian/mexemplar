@@ -114,9 +114,19 @@ class TestCancelPropagation:
             version=1,
             tasks=[
                 TaskSnapshot(
-                    task_id="tsk-001",
+                    task_id="tsk-root",
                     graph_id="graph-001",
                     parent_task_id=None,
+                    title="Assistant request",
+                    description_preview="整个请求",
+                    status="pending_dispatch",
+                    display_phase="running",
+                    requires_review=False,
+                ),
+                TaskSnapshot(
+                    task_id="tsk-001",
+                    graph_id="graph-001",
+                    parent_task_id="tsk-root",
                     title="步骤A",
                     description_preview="先做",
                     status="completed",
@@ -126,7 +136,7 @@ class TestCancelPropagation:
                 TaskSnapshot(
                     task_id="tsk-002",
                     graph_id="graph-001",
-                    parent_task_id=None,
+                    parent_task_id="tsk-root",
                     title="步骤B",
                     description_preview="后做",
                     status="pending_dispatch",
@@ -154,4 +164,6 @@ class TestCancelPropagation:
         ]
         briefing = build_reentry_briefing(entries, snapshot=snapshot)
         assert "任务图进度" in briefing
+        # 根节点 tsk-root 不计入；真实节点 tsk-001(completed) + tsk-002(pending)
+        assert "共 2 节点" in briefing
         assert "completed=1" in briefing

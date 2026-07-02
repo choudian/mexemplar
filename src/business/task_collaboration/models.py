@@ -157,6 +157,7 @@ class TaskAdjudicationSnapshot:
     task_id: str
     safe_summary: str
     delivered_status: DeliveredStatus
+    raw_result_ref: str | None = None
 
 
 @dataclass(frozen=True)

@@ -230,6 +230,38 @@ def test_web_fetch_cache_evicts_lru_when_size_exceeded(monkeypatch) -> None:
     assert calls["https://cache.test/b"] == 1
 
 
+def test_web_fetch_github_trending_small_max_length_is_lifted(monkeypatch) -> None:
+    body = ("owner/project - 12,345 stars today\n" * 2000).encode("utf-8")
+
+    def fake_open(request, timeout):
+        return FakeWebResponse(body, url=request.full_url, content_type="text/plain")
+
+    monkeypatch.setattr(general_tools, "_open_web_fetch_url", fake_open)
+
+    result = json.loads(web_fetch_handler("https://github.com/trending", max_length=30_000))
+
+    assert result["success"] is True
+    assert result["max_length_adjusted"] is True
+    assert result["truncated"] is False
+    assert len(result["content"]) > 30_000
+
+
+def test_web_fetch_ordinary_url_keeps_explicit_short_max_length(monkeypatch) -> None:
+    body = b"abcdefghijklmnopqrstuvwxyz"
+
+    def fake_open(request, timeout):
+        return FakeWebResponse(body, url=request.full_url, content_type="text/plain")
+
+    monkeypatch.setattr(general_tools, "_open_web_fetch_url", fake_open)
+
+    result = json.loads(web_fetch_handler("https://example.test/list", max_length=8))
+
+    assert result["success"] is True
+    assert result["content"] == "abcdefgh"
+    assert result["truncated"] is True
+    assert "max_length_adjusted" not in result
+
+
 def test_web_fetch_follows_same_host_redirect(monkeypatch) -> None:
     calls: list[str] = []
 
