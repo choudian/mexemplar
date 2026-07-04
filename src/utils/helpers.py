@@ -108,3 +108,23 @@ def normalize_thinking_level(value, *, fallback: str = "off") -> str:
     if normalized not in _VALID_THINKING_LEVELS:
         return fallback
     return normalized
+
+
+def walk_exception_chain(
+    exc: BaseException,
+    *,
+    max_depth: int = 20,
+):
+    """遍历异常链（__cause__ / __context__），yield 每个节点。
+
+    防止循环引用（seen set），限制最大深度。用于在异常链中搜索
+    特定标记（类型名、消息文本等），避免各处重复 while + seen 模式。
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    depth = 0
+    while current is not None and id(current) not in seen and depth < max_depth:
+        seen.add(id(current))
+        depth += 1
+        yield current
+        current = current.__cause__ or current.__context__

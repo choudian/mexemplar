@@ -12,6 +12,22 @@ from ..sqlalchemy_manager import get_sqlalchemy_manager
 
 logger = logging.getLogger(__name__)
 
+# ID 前缀常量：与 generate_id() 配合使用，所有需要判断 ID 类型的代码
+# 应引用这些常量而非硬编码字符串。
+ID_PREFIX_TASK = "tsk_"
+ID_PREFIX_GRAPH = "tg_"
+ID_PREFIX_ADJUDICATION = "adj_"
+ID_PREFIX_QUESTION = "qst_"
+ID_PREFIX_OPERATION = "op_"
+ID_PREFIX_MEETING = "mtg_"
+ID_PREFIX_MESSAGE = "msg_"
+ID_PREFIX_CLAIM = "clm_"
+ID_PREFIX_EDGE = "edge_"
+ID_PREFIX_ATTEMPT = "att_"
+ID_PREFIX_PROPOSAL = "prop_"
+ID_PREFIX_USER_TODO = "utodo_"
+ID_PREFIX_EXECUTION_REVIEW = "exr_"
+
 
 def generate_id(prefix: str) -> str:
     """Generate a prefixed unique ID for repository rows."""
