@@ -20,6 +20,7 @@ from src.data.repos import (
     AssistantTaskAttemptRepository,
     AssistantTaskRepository,
 )
+from src.utils.events import emit
 from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -109,12 +110,10 @@ class TaskRecoveryService(AtomicTaskService):
         _advance 会扫全图就绪节点），避免冗余 service 创建和 snapshot 查询。
 
         I13: 逐图独立 try/except，单图通知失败不阻断其余图。
-        """
-        from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
 
-        scheduler = get_graph_scheduler()
-        if scheduler is None:
-            return
+        事件驱动：通过 blinker 事件 ``graph_scheduler_recovery_completed`` 解耦
+        recovery 与 scheduler 单例，调用方不再直接 import get_graph_scheduler。
+        """
         seen_graphs: set[str] = set()
         for task in tasks:
             graph_id = getattr(task, "graph_id", None)
@@ -122,10 +121,15 @@ class TaskRecoveryService(AtomicTaskService):
                 continue
             seen_graphs.add(graph_id)
             try:
-                scheduler.on_executor_recovered(graph_id, getattr(task, "task_id", ""))
+                emit(
+                    "graph_scheduler_recovery_completed",
+                    sender=self,
+                    graph_id=graph_id,
+                    task_id=getattr(task, "task_id", ""),
+                )
             except Exception:
                 logger.warning(
-                    "[recovery] scheduler on_executor_recovered failed for graph=%s",
+                    "[recovery] graph_scheduler_recovery_completed emit failed for graph=%s",
                     graph_id,
                     exc_info=True,
                 )

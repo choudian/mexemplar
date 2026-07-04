@@ -474,22 +474,28 @@ def _command_policy_rejection(
 
 
 def _looks_like_improvement_workspace_root(workspace_root: Path | str) -> bool:
-    """Inline replica of ``proposal_workspace.is_improvement_workspace_root``.
+    """Fail-closed fallback for improvement workspace detection.
 
-    Kept local on purpose: the fail-closed fallback below must not depend on
-    the ``self_improvement`` module that may itself be the source of the guard
-    failure (import error, partial reload, circular import, ...). Matching the
-    ``.worktrees/improvement/<proposal_id>`` layout is enough to decide
-    fail-closed for proposal worktrees while leaving normal workspaces alone.
+    Delegates to ``src.utils.proposal_policy.is_improvement_workspace_root``
+    (low-level, no business-layer imports).  On import failure, falls back
+    to a conservative inline check so that proposal worktree mutations are
+    still rejected even when the policy module is unavailable.
     """
     try:
-        root = Path(workspace_root).expanduser().resolve(strict=False)
+        from src.utils.proposal_policy import is_improvement_workspace_root as _check
+
+        return _check(workspace_root)
     except Exception:
-        return False
-    return (
-        root.parent.name.lower() == "improvement"
-        and root.parent.parent.name.lower() == ".worktrees"
-    )
+        # Fail-closed fallback: inline check with hardcoded stable directory
+        # names (source of truth: proposal_policy.WORKTREES_DIR / IMPROVEMENT_DIR).
+        try:
+            root = Path(workspace_root).expanduser().resolve(strict=False)
+        except Exception:
+            return False
+        return (
+            root.parent.name.lower() == "improvement"
+            and root.parent.parent.name.lower() == ".worktrees"
+        )
 
 
 # Returned when the proposal guard itself is unavailable inside a proposal
