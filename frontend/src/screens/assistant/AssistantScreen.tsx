@@ -1,5 +1,5 @@
 import { PanelLeft, Plus, Search } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
@@ -118,11 +118,13 @@ export function AssistantScreen(): JSX.Element {
   const loadCurrentTaskGraph = useAssistantTaskStore((state) => state.loadCurrentGraph);
   const loadTaskBoard = useAssistantTaskStore((state) => state.loadBoard);
   const loadMeeting = useAssistantTaskStore((state) => state.loadMeeting);
-  const loadTaskTodos = useAssistantTaskStore((state) => state.loadTodos);
   const stopTaskGraph = useAssistantTaskStore((state) => state.stopGraph);
   const continueTaskGraph = useAssistantTaskStore((state) => state.continueGraph);
   const decideTaskAdjudication = useAssistantTaskStore((state) => state.decideAdjudication);
   const resetTaskGraph = useAssistantTaskStore((state) => state.reset);
+  const executeResync = useAssistantTaskStore((state) => state.executeResync);
+  const loadNewTaskTodos = useAssistantTaskStore((state) => state.loadNewTaskTodos);
+  const clearSessionTracking = useAssistantTaskStore((state) => state.clearSessionTracking);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
   const [editingFailureSeq, setEditingFailureSeq] = useState<number | null>(null);
@@ -168,52 +170,23 @@ export function AssistantScreen(): JSX.Element {
     void loadMeeting(activeSessionId, activeMeetingChannelId);
   }, [activeMeetingChannelId, activeSessionId, loadMeeting]);
 
-  const loadedTodoTaskIds = useRef<Set<string>>(new Set());
-  const loadedTodoGraphKey = useRef<string>("");
-
+  // Todo 加载追踪已移入 store（loadNewTaskTodos / loadedTodoTaskIds / loadedTodoGraphKey）。
+  // Screen 只在 currentTaskIds 变化时触发 store 的 loadNewTaskTodos。
   useEffect(() => {
     if (!activeSessionId) {
-      loadedTodoTaskIds.current.clear();
-      loadedTodoGraphKey.current = "";
+      clearSessionTracking();
       return;
     }
-    // 任务图整体替换（currentTaskIdsKey 变）时，复用的旧 taskId 其 todo 可能已变；
-    // 清空已加载集合并重拉全部当前 taskId，避免面板残留陈旧 todo。
-    if (loadedTodoGraphKey.current !== currentTaskIdsKey) {
-      loadedTodoTaskIds.current = new Set();
-      loadedTodoGraphKey.current = currentTaskIdsKey;
-    }
-    for (const taskId of currentTaskIds) {
-      if (!loadedTodoTaskIds.current.has(taskId)) {
-        loadedTodoTaskIds.current.add(taskId);
-        void loadTaskTodos(activeSessionId, taskId);
-      }
-    }
-  }, [activeSessionId, currentTaskIds, currentTaskIdsKey, loadTaskTodos]);
+    loadNewTaskTodos(activeSessionId, currentTaskIds, currentTaskIdsKey);
+  }, [activeSessionId, currentTaskIds, currentTaskIdsKey, loadNewTaskTodos, clearSessionTracking]);
 
+  // Resync 编排已移入 store（executeResync）。Screen 只在 needsResync 变为 true 时触发。
   useEffect(() => {
     if (!activeSessionId || !taskNeedsResync) {
       return;
     }
-    void loadCurrentTaskGraph(activeSessionId);
-    void loadTaskBoard(activeSessionId);
-    if (activeMeetingChannelId) {
-      void loadMeeting(activeSessionId, activeMeetingChannelId);
-    }
-    for (const taskId of currentTaskIds) {
-      void loadTaskTodos(activeSessionId, taskId);
-    }
-  }, [
-    activeMeetingChannelId,
-    activeSessionId,
-    currentTaskIds,
-    currentTaskIdsKey,
-    loadCurrentTaskGraph,
-    loadMeeting,
-    loadTaskBoard,
-    loadTaskTodos,
-    taskNeedsResync,
-  ]);
+    void executeResync(activeSessionId, activeMeetingChannelId, currentTaskIds);
+  }, [activeSessionId, activeMeetingChannelId, currentTaskIds, executeResync, taskNeedsResync]);
 
   // 切换会话时退出失败消息编辑态，避免编辑框残留在别的会话上。
   useEffect(() => {
@@ -385,7 +358,7 @@ export function AssistantScreen(): JSX.Element {
                     }
                     todosByTaskId={taskTodosByTaskId}
                     onLoadTodos={(taskId: string) => {
-                      if (activeSessionId) void loadTaskTodos(activeSessionId, taskId);
+                      if (activeSessionId) void useAssistantTaskStore.getState().loadTodos(activeSessionId, taskId);
                     }}
                     onDecide={(adjudicationId, decision, instruction) => {
                       if (activeSessionId) {

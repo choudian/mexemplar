@@ -198,10 +198,10 @@ export function AppShell(): JSX.Element {
           refreshes.push(assistantState.refreshSubagents(sessionId));
           refreshes.push(assistantState.refreshActivityTranscript(sessionId));
           // FR-022：transport 级 resync（SSE 重连/缺口）也要刷新任务协作权威快照。
-          // graph/board/meeting/todos 由 AssistantScreen 的 needsResync effect 统一重拉
+          // graph/board/meeting/todos 由 store 的 executeResync 统一重拉
           // （它持有具体 channelId/taskId）；这里置标记触发它，避免重连后任务面板停留
-          // 在陈旧快照。store 自身的 resync 分支是补充语义，transport 级入口在此。
-          useAssistantTaskStore.setState({ needsResync: true });
+          // 在陈旧快照。通过 store 方法设置，不直接 setState。
+          useAssistantTaskStore.getState().markNeedsResync();
         }
       }
       if (!domains || domains.includes("brain")) {
