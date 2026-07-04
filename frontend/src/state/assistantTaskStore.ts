@@ -27,6 +27,8 @@ interface AssistantTaskState {
   activeMeeting: AssistantMeetingTranscript | null;
   todosByTaskId: Record<string, AssistantTodoItem[]>;
   todoLoadingTaskIds: string[];
+  loadedTodoTaskIds: Set<string>;
+  loadedTodoGraphKey: string;
   graphLoading: boolean;
   boardLoading: boolean;
   meetingLoading: boolean;
@@ -57,6 +59,14 @@ interface AssistantTaskState {
   applyEvent: (event: UiEvent) => void;
   closeMeeting: () => void;
   setCurrentGraph: (graph: AssistantTaskGraphSnapshot | null) => void;
+  markNeedsResync: () => void;
+  loadNewTaskTodos: (sessionId: string, currentTaskIds: string[], currentTaskIdsKey: string) => void;
+  executeResync: (
+    sessionId: string,
+    activeMeetingChannelId: string | null,
+    currentTaskIds: string[],
+  ) => Promise<void>;
+  clearSessionTracking: () => void;
   reset: () => void;
 }
 
@@ -127,6 +137,8 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
   activeMeeting: null,
   todosByTaskId: {},
   todoLoadingTaskIds: [],
+  loadedTodoTaskIds: new Set<string>(),
+  loadedTodoGraphKey: "",
   graphLoading: false,
   boardLoading: false,
   meetingLoading: false,
@@ -166,14 +178,19 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
     set((state) => ({ todoLoadingTaskIds: addTodoLoadingId(state.todoLoadingTaskIds, taskId) }));
     try {
       const response = await getAssistantTaskTodos(sessionId, taskId);
-      set((state) => ({
-        todosByTaskId: {
-          ...state.todosByTaskId,
-          [taskId]: orderedTodos(response.items),
-        },
-        todoLoadingTaskIds: removeTodoLoadingId(state.todoLoadingTaskIds, taskId),
-        needsResync: false,
-      }));
+      set((state) => {
+        const nextLoaded = new Set(state.loadedTodoTaskIds);
+        nextLoaded.add(taskId);
+        return {
+          todosByTaskId: {
+            ...state.todosByTaskId,
+            [taskId]: orderedTodos(response.items),
+          },
+          todoLoadingTaskIds: removeTodoLoadingId(state.todoLoadingTaskIds, taskId),
+          loadedTodoTaskIds: nextLoaded,
+          needsResync: false,
+        };
+      });
     } catch {
       set((state) => ({
         todoLoadingTaskIds: removeTodoLoadingId(state.todoLoadingTaskIds, taskId),
@@ -401,6 +418,49 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
       };
     });
   },
+  markNeedsResync: () => set({ needsResync: true }),
+  loadNewTaskTodos: (sessionId, currentTaskIds, currentTaskIdsKey) => {
+    // 先计算新 ID，再更新状态，最后触发异步加载（副作用在 set 外）
+    const state = get();
+    const base =
+      state.loadedTodoGraphKey !== currentTaskIdsKey
+        ? new Set<string>()
+        : state.loadedTodoTaskIds;
+    const newIds: string[] = [];
+    for (const taskId of currentTaskIds) {
+      if (!base.has(taskId)) {
+        newIds.push(taskId);
+      }
+    }
+    if (newIds.length === 0 && state.loadedTodoGraphKey === currentTaskIdsKey) {
+      return; // 无变化，跳过
+    }
+    const next = new Set(base);
+    for (const id of newIds) {
+      next.add(id);
+    }
+    set({ loadedTodoTaskIds: next, loadedTodoGraphKey: currentTaskIdsKey });
+    // 异步加载新 todo（fire-and-forget，在状态提交后触发）
+    for (const id of newIds) {
+      void get().loadTodos(sessionId, id);
+    }
+  },
+  executeResync: async (sessionId, activeMeetingChannelId, currentTaskIds) => {
+    const state = get();
+    if (!sessionId || !state.needsResync) return;
+    // 先清除标记，防止 effect 重入
+    set({ needsResync: false });
+    await Promise.all([
+      state.loadCurrentGraph(sessionId),
+      state.loadBoard(sessionId),
+      ...(activeMeetingChannelId
+        ? [state.loadMeeting(sessionId, activeMeetingChannelId)]
+        : []),
+      ...currentTaskIds.map((taskId) => state.loadTodos(sessionId, taskId)),
+    ]);
+  },
+  clearSessionTracking: () =>
+    set({ loadedTodoTaskIds: new Set<string>(), loadedTodoGraphKey: "" }),
   closeMeeting: () => set({ activeMeeting: null }),
   setCurrentGraph: (graph) => set({ currentGraph: graph }),
   reset: () => set({
@@ -409,6 +469,8 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
     activeMeeting: null,
     todosByTaskId: {},
     todoLoadingTaskIds: [],
+    loadedTodoTaskIds: new Set<string>(),
+    loadedTodoGraphKey: "",
     graphLoading: false,
     boardLoading: false,
     meetingLoading: false,
