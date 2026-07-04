@@ -13,9 +13,11 @@
 装配：GraphScheduler 由 orchestrator 构造为进程级单例（``set_graph_scheduler``），
 dispatcher 经 ``scheduler_callback`` 回调 ``on_attempt_outcome``；其余触发点
 （build_task_graph 建图、adjudication decide、background_worker 恢复）通过
-``get_graph_scheduler()`` 取单例显式触发。每次推进用临时 TaskCollaborationService
-（per-operation session），避免长生命周期 service 的 identity-map stale，与
-dispatcher/adjudication 的 per-operation service 模式一致。
+blinker 事件 ``graph_scheduler_start_requested`` /
+``graph_scheduler_recovery_completed`` 触发，不再由调用方直接取单例。
+每次推进用临时 TaskCollaborationService（per-operation session），避免长生命周期
+service 的 identity-map stale，与 dispatcher/adjudication 的 per-operation service
+模式一致。
 """
 
 from __future__ import annotations
@@ -323,10 +325,75 @@ _scheduler_instance: GraphScheduler | None = None
 
 def set_graph_scheduler(scheduler: GraphScheduler | None) -> None:
     """注册/清除进程级 GraphScheduler 单例（orchestrator 装配时调）。"""
-    global _scheduler_instance
+    global _scheduler_instance, _subscriptions_installed
     _scheduler_instance = scheduler
+    # 拆卸时重置订阅守卫，允许下次装配时重新安装
+    if scheduler is None:
+        _subscriptions_installed = False
 
 
 def get_graph_scheduler() -> GraphScheduler | None:
     """取进程级 GraphScheduler 单例（未装配返回 None，调用方优雅降级）。"""
     return _scheduler_instance
+
+
+def _on_graph_scheduler_start_requested(sender, *, graph_id: str, **_kwargs) -> None:
+    """订阅 graph_scheduler_start_requested 事件，触发 scheduler.start_graph。
+
+    scheduler 未装配时静默跳过（图已持久化，后续 dispatch/recovery 兜底）。
+    """
+    scheduler = get_graph_scheduler()
+    if scheduler is None:
+        logger.debug(
+            "graph_scheduler_start_requested: scheduler not installed, graph_id=%s",
+            graph_id,
+        )
+        return
+    try:
+        scheduler.start_graph(graph_id)
+    except Exception:
+        logger.warning(
+            "graph_scheduler_start_requested: start_graph failed for %s",
+            graph_id,
+            exc_info=True,
+        )
+
+
+def _on_graph_scheduler_recovery_completed(
+    sender, *, graph_id: str, task_id: str = "", **_kwargs
+) -> None:
+    """订阅 graph_scheduler_recovery_completed 事件，触发 scheduler.on_executor_recovered。
+
+    scheduler 未装配时静默跳过。
+    """
+    scheduler = get_graph_scheduler()
+    if scheduler is None:
+        return
+    try:
+        scheduler.on_executor_recovered(graph_id, task_id)
+    except Exception:
+        logger.warning(
+            "graph_scheduler_recovery_completed: on_executor_recovered failed for graph=%s",
+            graph_id,
+            exc_info=True,
+        )
+
+
+_subscriptions_installed = False
+
+
+def install_graph_scheduler_event_subscriptions() -> None:
+    """安装 scheduler 的 blinker 事件订阅。
+
+    由 orchestrator 在装配 scheduler 后调用一次。事件订阅让调用方
+    （assistant_tools / recovery）不再需要直接取 scheduler 单例。
+    幂等：重复调用不会重复注册。
+    """
+    global _subscriptions_installed
+    if _subscriptions_installed:
+        return
+    _subscriptions_installed = True
+    from src.utils.events import connect
+
+    connect("graph_scheduler_start_requested", _on_graph_scheduler_start_requested)
+    connect("graph_scheduler_recovery_completed", _on_graph_scheduler_recovery_completed)

@@ -208,9 +208,10 @@ class TaskExecutorAdapter:
         raise RuntimeError(result.get("message") or "委派执行未返回可用结果")
 
 
-# Proposal executor synthetic session 前缀(与 proposal_bridge.SELF_IMPROVEMENT_SESSION_PREFIX
-# 一致)。本地副本:orchestration 是执行层,不得反向 import self_improvement 业务层。
-_SELF_IMPROVEMENT_SESSION_PREFIX = "self_improvement:"
+# Proposal executor synthetic session 前缀 — 唯一真实来源在
+# ``src.utils.proposal_policy``。判断走 proposal_policy 的
+# ``is_proposal_session`` / ``is_improvement_workspace_root_str``，
+# 不再保留本地别名。
 
 
 def _assert_proposal_executor_workspace_or_raise(
@@ -226,18 +227,18 @@ def _assert_proposal_executor_workspace_or_raise(
     task_collaboration / src-tauri 等核心路径,击穿 FR-014 blast radius 与 SC-003
     「100% fail-closed」承诺。
 
-    字符串级判定,避免向上 import ``self_improvement`` 违反分层;保守匹配,宁可误拒。
+    使用 ``src.utils.proposal_policy`` 的低层常量和字符串级判定，
+    避免向上 import ``self_improvement`` 违反分层。
     """
-    if not parent_session_id or not parent_session_id.startswith(
-        _SELF_IMPROVEMENT_SESSION_PREFIX
-    ):
-        return  # 非 proposal executor,workspace 不受 FR-014 约束
-    raw = str(workspace_root or "").replace("\\", "/").lower()
-    is_improvement_worktree = (
-        "/.worktrees/improvement/" in raw
-        and not raw.endswith("/.worktrees/improvement/")
+    from src.utils.proposal_policy import (
+        is_improvement_workspace_root_str,
+        is_proposal_session,
     )
-    if not is_improvement_worktree:
+
+    if not is_proposal_session(parent_session_id):
+        return  # 非 proposal executor,workspace 不受 FR-014 约束
+
+    if not is_improvement_workspace_root_str(workspace_root):
         raise RuntimeError(
             "proposal executor workspace missing or drifted outside improvement "
             "worktree; fail-closed to preserve FR-014 blast radius"

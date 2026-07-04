@@ -26,6 +26,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from src.utils.proposal_policy import (
+    IMPROVEMENT_DIR,
+    WORKTREES_DIR,
+    improvement_worktree_branch_name,
+    is_improvement_workspace_root as _is_improvement_workspace_root,
+)
+
 logger = logging.getLogger(__name__)
 
 _SOURCE_EXTENSIONS = frozenset(
@@ -57,7 +64,7 @@ _NON_SOURCE_DIRS = frozenset(
         ".pytest_cache",
         ".ruff_cache",
         ".venv",
-        ".worktrees",
+        WORKTREES_DIR,
         "__pycache__",
         "build",
         "coverage",
@@ -237,22 +244,17 @@ def resolve_repo_root() -> Path:
 
 
 def _worktree_dir(repo_root: Path, proposal_id: str) -> Path:
-    """计算 worktree 目录路径。"""
-    return repo_root / ".worktrees" / "improvement" / proposal_id
+    """计算 worktree 目录路径。使用 proposal_policy 的目录常量。"""
+    return repo_root / WORKTREES_DIR / IMPROVEMENT_DIR / proposal_id
 
 
 def _branch_name(proposal_id: str) -> str:
-    """计算特性分支名。"""
-    return f"improvement/{proposal_id}"
+    """计算特性分支名。委托给 proposal_policy 的唯一真实来源。"""
+    return improvement_worktree_branch_name(proposal_id)
 
 
-def is_improvement_workspace_root(workspace_root: Path | str) -> bool:
-    """Return whether ``workspace_root`` is a proposal implementation worktree."""
-    root = Path(workspace_root).expanduser().resolve(strict=False)
-    return (
-        root.parent.name.lower() == "improvement"
-        and root.parent.parent.name.lower() == ".worktrees"
-    )
+# 向后兼容别名：外部调用方仍可从 proposal_workspace 导入。
+is_improvement_workspace_root = _is_improvement_workspace_root
 
 
 def check_improvement_workspace_mutation(
@@ -533,8 +535,8 @@ def _proposal_id_from_worktree_path(path: Path) -> str | None:
     improvement_index = len(parts) - 2
     if (
         improvement_index >= 1
-        and parts[improvement_index].lower() == "improvement"
-        and parts[improvement_index - 1].lower() == ".worktrees"
+        and parts[improvement_index].lower() == IMPROVEMENT_DIR
+        and parts[improvement_index - 1].lower() == WORKTREES_DIR
     ):
         return parts[improvement_index + 1]
     return None

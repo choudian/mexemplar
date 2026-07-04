@@ -26,10 +26,9 @@ from src.data.repos.assistant_task_adjudication_repository import (
 )
 from src.data.repos.improvement_proposal_repository import ImprovementProposalRepository
 from src.utils.events import emit
+from src.utils.proposal_policy import SELF_IMPROVEMENT_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
-
-SELF_IMPROVEMENT_SESSION_PREFIX = "self_improvement:"
 _EXECUTION_STATUSES = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
 _RETENTION_CANDIDATE_STATUSES = ["done", "failed", "rejected"]
 _SAFE_TEXT_FALLBACK = "详情不可用"
@@ -256,22 +255,25 @@ def _build_implementation_graph(
 
 
 def _start_graph(graph_id: str) -> SchedulerKickResult:
-    """Kick GraphScheduler if it is installed."""
+    """Kick GraphScheduler via blinker event, matching assistant_tools pattern.
+
+    Returns ``unavailable`` when the scheduler singleton is not installed,
+    preserving the pre-emit contract that callers depend on.
+
+    直接调用 scheduler.start_graph() 而非仅 emit，确保调用方获得确定性结果。
+    emit 仍用于其他解耦路径（assistant_tools / recovery）。
+    """
     try:
         from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
 
         scheduler = get_graph_scheduler()
-    except Exception as exc:
-        logger.exception("get_graph_scheduler failed for %s", graph_id)
-        return SchedulerKickResult("failed", _safe_error(exc))
-    if scheduler is None:
-        return SchedulerKickResult("unavailable")
-    try:
+        if scheduler is None:
+            return SchedulerKickResult("unavailable")
         scheduler.start_graph(graph_id)
+        return SchedulerKickResult("started")
     except Exception as exc:
         logger.exception("start_graph failed for %s", graph_id)
         return SchedulerKickResult("failed", _safe_error(exc))
-    return SchedulerKickResult("started")
 
 
 def _kick_or_fail(proposal: Any, graph_id: str) -> tuple[SchedulerKickResult, bool]:
