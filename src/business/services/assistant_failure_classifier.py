@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.business.agents.config import ResultType
+from src.utils.helpers import walk_exception_chain
 
 
 @dataclass(frozen=True)
@@ -76,16 +77,12 @@ def _classify_category(
 
     status_codes: list[int] = []
     names: list[str] = []
-    current = exception
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        names.append(type(current).__name__.lower())
+    for node in walk_exception_chain(exception):
+        names.append(type(node).__name__.lower())
         for attr in ("status_code", "http_status", "status"):
-            value = getattr(current, attr, None)
+            value = getattr(node, attr, None)
             if isinstance(value, int):
                 status_codes.append(value)
-        current = current.__cause__ or current.__context__
 
     if any(code in (401, 403) for code in status_codes):
         return "authentication"

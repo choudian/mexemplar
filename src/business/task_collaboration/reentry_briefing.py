@@ -19,6 +19,7 @@ from src.business.task_collaboration.models import (
     TaskEdgeType,
     TaskGraphSnapshot,
     TaskStatus,
+    safe_preview,
 )
 
 _DELIVERABLE_BRIEFING_MAX_CHARS = 6000
@@ -163,7 +164,7 @@ def _resolve_deliverable(entry: dict, adjudications_by_id: dict) -> tuple[str, b
     if not text:
         return "", truncated, result_reference_id
     if len(text) > _DELIVERABLE_BRIEFING_MAX_CHARS:
-        return text[: _DELIVERABLE_BRIEFING_MAX_CHARS - 1].rstrip() + "…", True, result_reference_id
+        return safe_preview(text, max_chars=_DELIVERABLE_BRIEFING_MAX_CHARS), True, result_reference_id
     return text, truncated, result_reference_id
 
 

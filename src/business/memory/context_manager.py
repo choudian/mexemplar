@@ -11,6 +11,7 @@ import threading
 import uuid
 from typing import List, Optional, Dict
 
+from src.data.repos.base_repository import ID_PREFIX_ADJUDICATION, ID_PREFIX_GRAPH, ID_PREFIX_TASK
 from src.data.repositories import (
     SessionRepository,
     MessageRepository,
@@ -300,17 +301,17 @@ class ContextManager:
         # 并发工具调用时必须串行化访问。
         with self._reference_lock:
             reference_id = (reference_id or "").strip()
-            if reference_id.startswith("tsk_"):
+            if reference_id.startswith(ID_PREFIX_TASK):
                 raise ValueError(
                     f"{reference_id} 是任务 ID，不是 message/summary reference；"
                     "请根据回流提示使用裁定工具处理任务结果，不要传给 load_reference。"
                 )
-            if reference_id.startswith("tg_"):
+            if reference_id.startswith(ID_PREFIX_GRAPH):
                 raise ValueError(
                     f"{reference_id} 是任务图 ID，不是 message/summary reference；"
                     "任务图状态应通过任务协作快照或回流提示查看，不要传给 load_reference。"
                 )
-            if reference_id.startswith("adj_"):
+            if reference_id.startswith(ID_PREFIX_ADJUDICATION):
                 raise ValueError(
                     f"{reference_id} 是任务结果裁定 ID，不是 message/summary reference；"
                     f'请调用 load_task_result(adjudication_id="{reference_id}") 查看交付物。'
