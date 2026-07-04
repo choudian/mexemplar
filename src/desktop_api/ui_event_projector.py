@@ -11,6 +11,31 @@ from src.business.services.ui_event_safety_service import (
     redact_public_ui_event_text,
 )
 from src.desktop_api.ui_event_types import UiEventDraft
+from src.desktop_api.ui_events import (
+    EVENT_TYPE_ASSISTANT_ACTIVITY,
+    EVENT_TYPE_ASSISTANT_ERROR,
+    EVENT_TYPE_ASSISTANT_MEETING_CHANGED,
+    EVENT_TYPE_ASSISTANT_PROGRESS,
+    EVENT_TYPE_ASSISTANT_SUBAGENT,
+    EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED,
+    EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED,
+    EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED,
+    EVENT_TYPE_ASSISTANT_TODO_CHANGED,
+    EVENT_TYPE_BRAIN_CONTEXT_READY,
+    EVENT_TYPE_BRAIN_SPECIALIST_CHANGED,
+    EVENT_TYPE_BRAIN_SPECIALIST_RECRUITED,
+    EVENT_TYPE_BRAIN_ZONE_CHANGED,
+    EVENT_TYPE_COMPOSITIONS_CHANGED,
+    EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED,
+    EVENT_TYPE_RECORDING_PROGRESS,
+    EVENT_TYPE_SETTINGS_CHANGED,
+    EVENT_TYPE_SKILL_CHANGED,
+    EVENT_TYPE_SKILL_EQUIPMENT_CHANGED,
+    EVENT_TYPE_TEACHING_PROGRESS,
+    EVENT_TYPE_TEACHING_STAGE_CHANGED,
+    EVENT_TYPE_TOOLS_CHANGED,
+    EVENT_TYPE_TRIAL_PROGRESS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,11 +170,11 @@ _TASK_GRAPH_FIELD_MAP: dict[str, tuple[str, Any]] = {
 # Each entry: internal_event_name → (public_type, field_map)
 # field_map: {public_key: (internal_key, converter)}
 _TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
-    "assistant_task_graph_changed": ("assistant.task_graph.changed", _TASK_GRAPH_FIELD_MAP),
-    "assistant_task_adjudication_changed": ("assistant.task_graph.changed", _TASK_GRAPH_FIELD_MAP),
-    "assistant_task_root_failed": ("assistant.task_graph.changed", _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_graph_changed": (EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED, _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_adjudication_changed": (EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED, _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_root_failed": (EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED, _TASK_GRAPH_FIELD_MAP),
     "assistant_task_board_changed": (
-        "assistant.task_board.changed",
+        EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED,
         {
             "taskId": ("task_id", _string_or_none),
             "graphId": ("graph_id", _string_or_none),
@@ -159,7 +184,7 @@ _TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
         },
     ),
     "assistant_task_question_changed": (
-        "assistant.task_question.changed",
+        EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED,
         {
             "questionId": ("question_id", _string_or_none),
             "taskId": ("task_id", _string_or_none),
@@ -170,7 +195,7 @@ _TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
         },
     ),
     "assistant_meeting_changed": (
-        "assistant.meeting.changed",
+        EVENT_TYPE_ASSISTANT_MEETING_CHANGED,
         {
             "channelId": ("channel_id", _string_or_none),
             "graphId": ("graph_id", _string_or_none),
@@ -181,7 +206,7 @@ _TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
         },
     ),
     "assistant_todo_changed": (
-        "assistant.todo.changed",
+        EVENT_TYPE_ASSISTANT_TODO_CHANGED,
         {
             "taskId": ("task_id", _string_or_none),
             "todoId": ("todo_id", _string_or_none),
@@ -205,7 +230,7 @@ def _project_assistant_agent_step(payload, scope, causation_id):
     activity_text, activity_redacted = _text_with_flag(payload.get("text"))
     return [
         UiEventDraft(
-            "assistant.activity",
+            EVENT_TYPE_ASSISTANT_ACTIVITY,
             {
                 "subagentId": _string_or_none(payload.get("subagent_id")),
                 "kind": _string_or_none(payload.get("kind")),
@@ -225,7 +250,7 @@ def _project_subagent_lifecycle(payload, scope, causation_id):
     # 按构造即属可观测助理链路，并以父助理 session 为 scope。
     return [
         UiEventDraft(
-            "assistant.subagent",
+            EVENT_TYPE_ASSISTANT_SUBAGENT,
             {
                 "subagentId": _string_or_none(payload.get("subagent_id")),
                 "label": _redact_text(payload.get("label")) or None,
@@ -251,7 +276,7 @@ def _project_subagent_lifecycle(payload, scope, causation_id):
 def _project_recording_started(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "recording.progress",
+            EVENT_TYPE_RECORDING_PROGRESS,
             {
                 "status": "recording",
                 "message": "Recording started.",
@@ -260,14 +285,14 @@ def _project_recording_started(payload, scope, causation_id):
             scope,
             causation_id,
         ),
-        UiEventDraft("teaching.stage_changed", {"stage": "recording"}, scope, causation_id),
+        UiEventDraft(EVENT_TYPE_TEACHING_STAGE_CHANGED, {"stage": "recording"}, scope, causation_id),
     ]
 
 
 def _project_recording_stopped(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "recording.progress",
+            EVENT_TYPE_RECORDING_PROGRESS,
             {
                 "status": "stopped",
                 "message": "Recording stopped.",
@@ -277,7 +302,7 @@ def _project_recording_stopped(payload, scope, causation_id):
             causation_id,
         ),
         UiEventDraft(
-            "teaching.stage_changed", {"stage": "intent_confirmation"}, scope, causation_id
+            EVENT_TYPE_TEACHING_STAGE_CHANGED, {"stage": "intent_confirmation"}, scope, causation_id
         ),
     ]
 
@@ -285,7 +310,7 @@ def _project_recording_stopped(payload, scope, causation_id):
 def _project_recording_completed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "recording.progress",
+            EVENT_TYPE_RECORDING_PROGRESS,
             {"status": "completed", "message": "Recording completed."},
             scope,
             causation_id,
@@ -296,7 +321,7 @@ def _project_recording_completed(payload, scope, causation_id):
 def _project_desktop_action_count_changed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "recording.progress",
+            EVENT_TYPE_RECORDING_PROGRESS,
             {"status": "recording", "actionCount": _int_or_zero(payload.get("action_count"))},
             scope,
             causation_id,
@@ -308,7 +333,7 @@ def _project_desktop_recording_problem(event_name):
     def _project(payload, scope, causation_id):
         return [
             UiEventDraft(
-                "recording.progress",
+                EVENT_TYPE_RECORDING_PROGRESS,
                 {
                     "status": (
                         "failed" if event_name == "desktop_recorder_start_failed" else "degraded"
@@ -336,16 +361,16 @@ def _project_agent_needs_user_input(payload, scope, causation_id):
     agent_type = str(getattr(raw_agent_type, "value", raw_agent_type or "")).lower()
     base_payload = {"status": "waiting_for_user", "headline": question}
     if agent_type == "pm":
-        event_type = "teaching.progress"
+        event_type = EVENT_TYPE_TEACHING_PROGRESS
         event_payload = {**base_payload, "question": question}
     elif agent_type == "trial":
-        event_type = "trial.progress"
+        event_type = EVENT_TYPE_TRIAL_PROGRESS
         event_payload = base_payload
     elif scope.get("sessionId"):
-        event_type = "assistant.progress"
+        event_type = EVENT_TYPE_ASSISTANT_PROGRESS
         event_payload = {**base_payload, "question": question}
     elif scope.get("workflowId"):
-        event_type = "teaching.progress"
+        event_type = EVENT_TYPE_TEACHING_PROGRESS
         event_payload = {**base_payload, "question": question}
     else:
         return []
@@ -364,7 +389,7 @@ def _project_agent_error(payload, scope, causation_id):
     if agent_type == "trial":
         return [
             UiEventDraft(
-                "trial.progress",
+                EVENT_TYPE_TRIAL_PROGRESS,
                 {
                     "status": "failed",
                     "error": status_payload["message"],
@@ -377,7 +402,7 @@ def _project_agent_error(payload, scope, causation_id):
     if agent_type in {"pm", "programmer"} or (scope.get("workflowId") and scope.get("sessionId")):
         return [
             UiEventDraft(
-                "teaching.progress",
+                EVENT_TYPE_TEACHING_PROGRESS,
                 {
                     "status": "failed",
                     "error": status_payload["message"],
@@ -388,21 +413,21 @@ def _project_agent_error(payload, scope, causation_id):
             )
         ]
     if scope.get("sessionId"):
-        return [UiEventDraft("assistant.error", status_payload, scope, causation_id)]
+        return [UiEventDraft(EVENT_TYPE_ASSISTANT_ERROR, status_payload, scope, causation_id)]
     fallback = {"status": "failed", "error": status_payload["message"]}
-    return [UiEventDraft("teaching.progress", fallback, scope, causation_id)]
+    return [UiEventDraft(EVENT_TYPE_TEACHING_PROGRESS, fallback, scope, causation_id)]
 
 
 def _project_requirement_confirmed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "teaching.stage_changed",
+            EVENT_TYPE_TEACHING_STAGE_CHANGED,
             {"stage": "learning", "message": "Requirements confirmed."},
             scope,
             causation_id,
         ),
         UiEventDraft(
-            "teaching.progress",
+            EVENT_TYPE_TEACHING_PROGRESS,
             {"status": "running", "headline": "Skill learning started"},
             scope,
             causation_id,
@@ -413,13 +438,13 @@ def _project_requirement_confirmed(payload, scope, causation_id):
 def _project_code_completed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "teaching.stage_changed",
+            EVENT_TYPE_TEACHING_STAGE_CHANGED,
             {"stage": "trial_validation", "message": "Skill learning completed."},
             scope,
             causation_id,
         ),
         UiEventDraft(
-            "teaching.progress",
+            EVENT_TYPE_TEACHING_PROGRESS,
             {"status": "succeeded", "headline": "Skill learning completed"},
             scope,
             causation_id,
@@ -430,13 +455,13 @@ def _project_code_completed(payload, scope, causation_id):
 def _project_review_failed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "teaching.stage_changed",
+            EVENT_TYPE_TEACHING_STAGE_CHANGED,
             {"stage": "failed", "failureStage": _string_or_none(payload.get("failed_stage"))},
             scope,
             causation_id,
         ),
         UiEventDraft(
-            "teaching.progress",
+            EVENT_TYPE_TEACHING_PROGRESS,
             {
                 "status": "failed",
                 "failureStage": _string_or_none(payload.get("failed_stage")),
@@ -453,7 +478,7 @@ def _project_review_failed(payload, scope, causation_id):
 def _project_teaching_failure_resolved(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "teaching.progress",
+            EVENT_TYPE_TEACHING_PROGRESS,
             {"status": "succeeded", "headline": "Teaching failure resolved"},
             scope,
             causation_id,
@@ -464,7 +489,7 @@ def _project_teaching_failure_resolved(payload, scope, causation_id):
 def _project_teaching_failure_retrying(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "teaching.progress",
+            EVENT_TYPE_TEACHING_PROGRESS,
             {"status": "running", "headline": "Skill teaching retry started"},
             scope,
             causation_id,
@@ -475,7 +500,7 @@ def _project_teaching_failure_retrying(payload, scope, causation_id):
 def _project_trial_requested(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "trial.progress",
+            EVENT_TYPE_TRIAL_PROGRESS,
             {"status": "running", "headline": "Skill trial requested"},
             scope,
             causation_id,
@@ -487,7 +512,7 @@ def _project_trial_success(payload, scope, causation_id):
     published = bool(payload.get("published", False))
     drafts = [
         UiEventDraft(
-            "trial.progress",
+            EVENT_TYPE_TRIAL_PROGRESS,
             {
                 "status": "succeeded",
                 "published": published,
@@ -502,7 +527,7 @@ def _project_trial_success(payload, scope, causation_id):
     if published:
         drafts.append(
             UiEventDraft(
-                "teaching.stage_changed",
+                EVENT_TYPE_TEACHING_STAGE_CHANGED,
                 {"stage": "published", "published": True},
                 scope,
                 causation_id,
@@ -514,7 +539,7 @@ def _project_trial_success(payload, scope, causation_id):
 def _project_trial_failed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "teaching.stage_changed",
+            EVENT_TYPE_TEACHING_STAGE_CHANGED,
             {"stage": "failed", "failureStage": "trial"},
             scope,
             causation_id,
@@ -525,7 +550,7 @@ def _project_trial_failed(payload, scope, causation_id):
 def _project_desktop_trial_finished(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "trial.progress",
+            EVENT_TYPE_TRIAL_PROGRESS,
             {
                 "status": "succeeded",
                 "trialId": _string_or_none(payload.get("trial_id")),
@@ -547,7 +572,7 @@ def _project_tool_changed(event_name):
             skill_payload["status"] = "saved"
         elif event_name == "tool_published":
             skill_payload["status"] = "published"
-        return [UiEventDraft("tools.changed", skill_payload, scope, causation_id)]
+        return [UiEventDraft(EVENT_TYPE_TOOLS_CHANGED, skill_payload, scope, causation_id)]
 
     return _project
 
@@ -557,7 +582,7 @@ def _project_brain_skill_changed(payload, scope, causation_id):
     chain_root_id = _string_or_none(payload.get("chain_root_id") or skill_id)
     return [
         UiEventDraft(
-            "skill.changed",
+            EVENT_TYPE_SKILL_CHANGED,
             {
                 "reason": _string_or_none(payload.get("operation") or payload.get("reason")),
                 "skillId": skill_id,
@@ -576,7 +601,7 @@ def _project_brain_skill_bootstrap_fallback_used(payload, scope, causation_id):
     skill_id = _string_or_none(payload.get("skill_id") or payload.get("sender"))
     return [
         UiEventDraft(
-            "skill.changed",
+            EVENT_TYPE_SKILL_CHANGED,
             {
                 "reason": "bootstrap_fallback_used",
                 "skillId": skill_id,
@@ -601,7 +626,7 @@ def _project_brain_skill_equipment_changed(payload, scope, causation_id):
     entity_id = _string_or_none(payload.get("entity_id"))
     return [
         UiEventDraft(
-            "skill.equipment.changed",
+            EVENT_TYPE_SKILL_EQUIPMENT_CHANGED,
             {
                 "changeType": _string_or_none(payload.get("change_type")),
                 "entityType": _string_or_none(payload.get("entity_type")),
@@ -628,7 +653,7 @@ def _project_brain_skill_supersede_completed(payload, scope, causation_id):
 def _project_composition_review_needed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "compositions.changed",
+            EVENT_TYPE_COMPOSITIONS_CHANGED,
             {
                 "reason": "catalog_invalidated",
                 "compositionId": _string_or_none(payload.get("composition_id")),
@@ -642,7 +667,7 @@ def _project_composition_review_needed(payload, scope, causation_id):
 def _project_settings_changed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "settings.changed",
+            EVENT_TYPE_SETTINGS_CHANGED,
             {"reason": "settings_invalidated", "keys": _string_list(payload.get("keys"))},
             scope,
             causation_id,
@@ -653,7 +678,7 @@ def _project_settings_changed(payload, scope, causation_id):
 def _project_brain_zone_changed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "brain_zone_changed",
+            EVENT_TYPE_BRAIN_ZONE_CHANGED,
             {
                 "zone": _string_or_none(payload.get("zone")),
                 "entryId": _string_or_none(payload.get("entry_id")),
@@ -670,7 +695,7 @@ def _project_brain_zone_changed(payload, scope, causation_id):
 def _project_brain_specialist_recruited(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "brain_specialist_recruited",
+            EVENT_TYPE_BRAIN_SPECIALIST_RECRUITED,
             {
                 "specialistId": _string_or_none(payload.get("specialist_id")),
                 "name": _string_or_none(payload.get("name")),
@@ -686,7 +711,7 @@ def _project_brain_specialist_recruited(payload, scope, causation_id):
 def _project_brain_specialist_changed(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "brain_specialist_changed",
+            EVENT_TYPE_BRAIN_SPECIALIST_CHANGED,
             {
                 "specialistId": _string_or_none(payload.get("specialist_id")),
                 "changeType": _string_or_none(
@@ -702,7 +727,7 @@ def _project_brain_specialist_changed(payload, scope, causation_id):
 def _project_brain_context_ready(payload, scope, causation_id):
     return [
         UiEventDraft(
-            "brain_context_ready",
+            EVENT_TYPE_BRAIN_CONTEXT_READY,
             {"sessionId": _string_or_none(payload.get("session_id"))},
             scope,
             causation_id,
@@ -714,7 +739,7 @@ def _project_improvement_proposal_changed(payload, scope, causation_id):
     """Project internal improvement_proposal_changed blinker event to public UI event."""
     return [
         UiEventDraft(
-            "improvement_proposal.changed",
+            EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED,
             {
                 "proposalId": _string_or_none(payload.get("proposal_id")),
                 "sourceReviewId": _string_or_none(payload.get("source_review_id")),
@@ -779,6 +804,7 @@ _PROJECTIONS: dict[str, ProjectionHandler] = {
     "brain_skill_supersede_completed": _project_brain_skill_supersede_completed,
     "composition_review_needed": _project_composition_review_needed,
     "settings_changed": _project_settings_changed,
+    # brain 内部事件名与公共事件类型名恰好相同，但 key 语义是内部 blinker 事件名。
     "brain_zone_changed": _project_brain_zone_changed,
     "brain_specialist_recruited": _project_brain_specialist_recruited,
     "brain_specialist_changed": _project_brain_specialist_changed,

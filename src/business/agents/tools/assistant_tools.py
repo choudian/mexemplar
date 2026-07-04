@@ -1509,17 +1509,28 @@ def _latest_user_message_sequence(session_id: str) -> int | None:
 
 
 def _trigger_graph_scheduler_start(graph_id: str, *, source: str) -> bool:
+    """触发 scheduler 推进就绪节点。
+
+    通过 blinker 事件 ``graph_scheduler_start_requested`` 解耦调用方与 scheduler 单例。
+    保留返回值以兼容既有调用方；scheduler 未装配时返回 False。
+    """
     try:
         from src.business.task_collaboration.graph_scheduler import get_graph_scheduler
 
-        scheduler = get_graph_scheduler()
-        if scheduler is None:
+        if get_graph_scheduler() is None:
             return False
-        scheduler.start_graph(graph_id)
+
+        from src.utils.events import emit
+
+        emit(
+            "graph_scheduler_start_requested",
+            sender=_trigger_graph_scheduler_start,
+            graph_id=graph_id,
+        )
         return True
     except Exception:
         logger.warning(
-            "%s: scheduler start_graph failed for %s",
+            "%s: graph_scheduler_start_requested emit failed for %s",
             source,
             graph_id,
             exc_info=True,
@@ -1744,7 +1755,9 @@ def create_reply_to_user_handler(session_id: str):
 DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
     name="delegate_to_subagent",
     description=(
-        "将任务委托给一个临时子代理执行。统一任务图下异步执行，返回受理回执（accepted+taskId）；"
+        "将任务委托给一个临时子代理执行。"
+        "简单任务（1-2 步单领域）设 complexity=simple 走快速委派，不建任务图；"
+        "复杂任务（多步/跨领域/有依赖）默认走统一任务图，返回受理回执（accepted+taskId），"
         "结果完成后经「任务结果回流提示」送达，由你用 decide_task_adjudication 裁定。"
     ),
     properties={
@@ -1761,6 +1774,15 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
             "items": {"type": "string"},
             "description": "可选工具名称白名单；不传则继承当前助理会话可用技能池",
         },
+        "complexity": {
+            "type": "string",
+            "enum": ["simple", "complex"],
+            "description": (
+                "任务复杂度。simple=1-2步单领域快速委派，不建任务图；"
+                "complex=多步/跨领域/有依赖，建任务图由调度器推进。"
+                "默认 complex（向后兼容）。"
+            ),
+        },
     },
     required=["task_description"],
 )
@@ -1773,15 +1795,17 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
         task_description: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        complexity: str = "complex",
     ) -> str:
         """将任务委托给临时子代理"""
         try:
             logger.info(
-                "[delegate_to_subagent] session=%s task_chars=%d context_chars=%d whitelist_count=%d",
+                "[delegate_to_subagent] session=%s task_chars=%d context_chars=%d whitelist_count=%d complexity=%s",
                 session_id,
                 len(task_description or ""),
                 len(execution_context or ""),
                 len(tool_whitelist or []),
+                complexity,
             )
             if dispatch_callback is not None:
                 return to_json(
@@ -1790,6 +1814,7 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
                         task_description=task_description,
                         execution_context=execution_context or "",
                         tool_whitelist=tool_whitelist,
+                        complexity=complexity,
                     )
                 )
             # 无 dispatch_callback（仅测试场景）时只返回占位结果；统一任务派发由

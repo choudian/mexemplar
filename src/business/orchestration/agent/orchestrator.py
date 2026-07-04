@@ -8,6 +8,7 @@ from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from src.utils.events import emit
+from src.data.repos.base_repository import ID_PREFIX_TASK, ID_PREFIX_GRAPH
 
 from src.business.agents.agent_loop import AgentLoop
 from src.business.agents.config import (
@@ -192,20 +193,40 @@ class AgentOrchestrator:
         return teaching
 
     def get_or_create_dynamic_manager(
-        self, session_id: str, allowed_ids: set[str] | None
+        self,
+        session_id: str,
+        allowed_ids: set[str] | None,
+        allowed_composition_ids: set[str] | None = None,
     ) -> "DynamicToolManager":
         """返回 session 级 DynamicToolManager(命中复用,LRU 容量淘汰)。
 
-        命中时忽略本次 allowed_ids(不重建,保留已激活工具);仅 miss 时用本次
-        allowed_ids 新建。threading.Lock 保护 OrderedDict,锁不可重入。
+        缓存命中时比较授权集合：如果 allowed_ids 或 allowed_composition_ids
+        与缓存 manager 不同，则更新 manager 的授权集合并重新校验已激活工具，
+        确保 prompt catalog 与 runtime discovery 使用一致的授权事实。
+        仅 miss 时新建 manager。threading.Lock 保护 OrderedDict,锁不可重入。
         """
         from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 
         with self._dynamic_managers_lock:
             if session_id in self._dynamic_managers:
                 self._dynamic_managers.move_to_end(session_id)
+                manager = self._dynamic_managers[session_id]
+                # 授权漂移修复：命中时比较并更新授权集合
+                if manager.update_authorization(allowed_ids, allowed_composition_ids):
+                    logger.info(
+                        "[Orchestrator] Authorization drift detected for session %s; "
+                        "updated dynamic manager (tool_ids=%s, composition_ids=%s)",
+                        session_id,
+                        "full" if allowed_ids is None else f"{len(allowed_ids)} items",
+                        "full" if allowed_composition_ids is None else f"{len(allowed_composition_ids)} items",
+                    )
+                    # 授权变更后重新校验已激活工具，移除不再授权的条目
+                    manager.get_activated_tools()
             else:
-                self._dynamic_managers[session_id] = DynamicToolManager(allowed_ids)
+                self._dynamic_managers[session_id] = DynamicToolManager(
+                    allowed_ids,
+                    allowed_composition_ids=allowed_composition_ids,
+                )
                 while len(self._dynamic_managers) > self._MAX_DYNAMIC_MANAGERS:
                     self._dynamic_managers.popitem(last=False)
             return self._dynamic_managers[session_id]
@@ -671,6 +692,7 @@ class AgentOrchestrator:
         """
         from src.business.task_collaboration.graph_scheduler import (
             GraphScheduler,
+            install_graph_scheduler_event_subscriptions,
             set_graph_scheduler,
         )
 
@@ -680,6 +702,7 @@ class AgentOrchestrator:
         )
         dispatcher.set_scheduler_callback(scheduler.on_attempt_outcome)
         set_graph_scheduler(scheduler)
+        install_graph_scheduler_event_subscriptions()
 
     def _new_task_executor_orchestrator(self) -> "AgentOrchestrator":
         """Create a per-attempt orchestrator so dispatcher workers do not share repo sessions."""
@@ -721,12 +744,14 @@ class AgentOrchestrator:
         task_description: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        complexity: str = "complex",
     ) -> dict:
         return self._get_delegation_orchestrator().delegate_to_subagent(
             parent_session_id=parent_session_id,
             task_description=task_description,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
+            complexity=complexity,
         )
 
     def _run_sync_ephemeral_subagent(
@@ -774,6 +799,7 @@ class AgentOrchestrator:
         current_task_id: str | None = None,
         role_kind: str = "executor",
         workspace_root: str | None = None,
+        allowed_composition_ids: set[str] | None = None,
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -815,6 +841,7 @@ class AgentOrchestrator:
                 current_task_id=current_task_id,
                 parent_session_id=parent_session_id,
                 role_kind=role_kind,
+                allowed_composition_ids=allowed_composition_ids,
             )
             result = loop.run(
                 session_id,
@@ -1027,7 +1054,7 @@ class AgentOrchestrator:
         异步任务应等结果回流 + decide_task_adjudication，不要用这两个工具。
         """
         sid = (subagent_id or "").strip()
-        if sid.startswith(("tsk_", "tg_")):
+        if sid.startswith((ID_PREFIX_TASK, ID_PREFIX_GRAPH)):
             return {
                 "success": False,
                 "error": (
@@ -1413,6 +1440,7 @@ class AgentOrchestrator:
         current_task_id: str | None = None,
         parent_session_id: str | None = None,
         role_kind: str = "executor",
+        allowed_composition_ids: set[str] | None = None,
     ) -> Callable[[], List[ToolDefinition]]:
         return self.tool_registry.build_delegated_executor_tools(
             allowed_tool_ids,
@@ -1424,6 +1452,7 @@ class AgentOrchestrator:
             current_task_id=current_task_id,
             parent_session_id=parent_session_id,
             role_kind=role_kind,
+            allowed_composition_ids=allowed_composition_ids,
         )
 
     @staticmethod

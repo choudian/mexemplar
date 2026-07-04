@@ -22,6 +22,7 @@ class DelegationOrchestrator:
         task_description: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        complexity: str = "complex",
     ) -> dict:
         task = (task_description or "").strip()
         if not task:
@@ -31,6 +32,17 @@ class DelegationOrchestrator:
                 "delegation_type": "ephemeral_subagent",
             }
 
+        if complexity == "simple":
+            # 简单任务（1-2 步单领域）：直接走同步委派路径，不建任务图。
+            # 与 FR-398 "快速委派路径" 一致，崩溃恢复由 resumable_on_failure 覆盖。
+            return self.run_sync_ephemeral_subagent(
+                parent_session_id=parent_session_id,
+                task=task,
+                execution_context=execution_context,
+                tool_whitelist=tool_whitelist,
+            )
+
+        # 复杂任务：走统一模型（建图 + durable accepted）
         unified = self._owner._dispatch_task_via_unified_model(
             parent_session_id=parent_session_id,
             task=task,
@@ -95,6 +107,18 @@ class DelegationOrchestrator:
             parent_session_id=parent_session_id,
             tool_whitelist=tool_whitelist,
         )
+        # 从父会话解析 composition_ids，传递给执行体以保持组合授权限制
+        allowed_composition_ids: set[str] | None = None
+        try:
+            parent_session = self._owner._session_store.get_session(parent_session_id)
+            if parent_session is not None:
+                _, allowed_composition_ids = parent_session.parse_tool_ids()
+        except Exception:
+            logger.debug(
+                "composition_ids resolution skipped for parent=%s",
+                parent_session_id,
+                exc_info=True,
+            )
         capability_catalog_section = self._owner._prompt_builder.format_capability_catalog(
             allowed_tool_ids,
             agent_type=AgentType.EPHEMERAL_SUBAGENT.value,
@@ -121,6 +145,7 @@ class DelegationOrchestrator:
             tool_whitelist=tool_whitelist,
             current_task_id=current_task_id,
             workspace_root=workspace_root,
+            allowed_composition_ids=allowed_composition_ids,
         )
         if result.get("success"):
             self._owner._record_delegation_signal(
@@ -236,6 +261,18 @@ class DelegationOrchestrator:
             parent_session_id=parent_session_id,
             tool_whitelist=tool_whitelist,
         )
+        # 从父会话解析 composition_ids，传递给执行体以保持组合授权限制
+        allowed_composition_ids: set[str] | None = None
+        try:
+            parent_session = self._owner._session_store.get_session(parent_session_id)
+            if parent_session is not None:
+                _, allowed_composition_ids = parent_session.parse_tool_ids()
+        except Exception:
+            logger.debug(
+                "composition_ids resolution skipped for parent=%s",
+                parent_session_id,
+                exc_info=True,
+            )
         try:
             equipped_skills_snapshot = self._owner._specialist_equipped_skills_snapshot(specialist)
         except RuntimeError as exc:
@@ -282,5 +319,6 @@ class DelegationOrchestrator:
             # 024 C4: 透传 specialist.role_kind，planner 拿 build_task_graph 不拿执行器工具
             role_kind=getattr(specialist, "role_kind", "executor") or "executor",
             workspace_root=workspace_root,
+            allowed_composition_ids=allowed_composition_ids,
         )
         return result
