@@ -26,6 +26,8 @@ from collections import OrderedDict
 from contextvars import ContextVar
 from dataclasses import dataclass
 from http import HTTPStatus
+
+from src.utils.bounded_lru_cache import BoundedLruCache
 from pathlib import Path
 from typing import List
 
@@ -109,7 +111,6 @@ _WEB_FETCH_TITLE_FALLBACK_CHARS = 600
 _WEB_FETCH_REDIRECT_STATUSES = {301, 302, 307, 308}
 _WEB_FETCH_LOCAL_HOSTNAMES = {"localhost", "localhost.localdomain"}
 _WEB_FETCH_DOMAIN_INFO_URL = "https://api.anthropic.com/api/web/domain_info"
-_WEB_FETCH_LIST_PAGE_MIN_LENGTH = _WEB_FETCH_MAX_LENGTH
 _LIST_DIR_MAX_ITEMS = 1000
 
 
@@ -143,8 +144,7 @@ class _WebFetchCacheEntry:
 _web_fetch_cache: OrderedDict[str, _WebFetchCacheEntry] = OrderedDict()
 _web_fetch_cache_size_bytes = 0
 _web_fetch_cache_lock = threading.RLock()
-_web_fetch_domain_check_cache: OrderedDict[str, float] = OrderedDict()
-_web_fetch_domain_check_lock = threading.RLock()
+_web_fetch_domain_check_cache = BoundedLruCache[str, float](_WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES)
 
 # =========================================================================
 # 用户确认机制（高危工具，线程安全）
@@ -526,8 +526,8 @@ def _normalize_web_fetch_max_length(max_length: int) -> int:
 
 
 def _adjust_web_fetch_max_length(safe_url: str, max_length: int) -> tuple[int, bool]:
-    if _is_known_web_fetch_list_page(safe_url) and max_length < _WEB_FETCH_LIST_PAGE_MIN_LENGTH:
-        return _WEB_FETCH_LIST_PAGE_MIN_LENGTH, True
+    if _is_known_web_fetch_list_page(safe_url) and max_length < _WEB_FETCH_MAX_LENGTH:
+        return _WEB_FETCH_MAX_LENGTH, True
     return max_length, False
 
 
@@ -928,25 +928,20 @@ def _add_web_fetch_cache_size(delta: int) -> None:
 
 def _web_fetch_domain_check_cache_has(domain: str) -> bool:
     now = time.monotonic()
-    with _web_fetch_domain_check_lock:
-        expires_at = _web_fetch_domain_check_cache.get(domain)
-        if expires_at is None:
-            return False
-        if expires_at <= now:
-            _web_fetch_domain_check_cache.pop(domain, None)
-            return False
-        _web_fetch_domain_check_cache.move_to_end(domain)
-        return True
+    expires_at = _web_fetch_domain_check_cache.get(domain)
+    if expires_at is None:
+        return False
+    if expires_at <= now:
+        _web_fetch_domain_check_cache.remove(domain)
+        return False
+    return True
 
 
 def _set_web_fetch_domain_check_cache(domain: str) -> None:
-    with _web_fetch_domain_check_lock:
-        _web_fetch_domain_check_cache[domain] = (
-            time.monotonic() + _WEB_FETCH_DOMAIN_CHECK_CACHE_TTL_SECONDS
-        )
-        _web_fetch_domain_check_cache.move_to_end(domain)
-        while len(_web_fetch_domain_check_cache) > _WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES:
-            _web_fetch_domain_check_cache.popitem(last=False)
+    _web_fetch_domain_check_cache.put(
+        domain,
+        time.monotonic() + _WEB_FETCH_DOMAIN_CHECK_CACHE_TTL_SECONDS,
+    )
 
 
 def clear_web_fetch_cache() -> None:
@@ -954,8 +949,7 @@ def clear_web_fetch_cache() -> None:
     with _web_fetch_cache_lock:
         _web_fetch_cache.clear()
         _web_fetch_cache_size_bytes = 0
-    with _web_fetch_domain_check_lock:
-        _web_fetch_domain_check_cache.clear()
+    _web_fetch_domain_check_cache.clear()
 
 
 def _sniff_web_fetch_charset(raw: bytes) -> str | None:
@@ -1943,13 +1937,14 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
 # 这些工作必须委派给 ephemeral executor 或 specialist。协调类工具
 # (delegate/build_task_graph/decide/load_task_result 等 assistant_tools)不在此列。
 # executor/specialist 仍用全量 BUILTIN_GENERAL_TOOLS。
-ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES = frozenset(tool.name for tool in BUILTIN_GENERAL_TOOLS)
-ASSISTANT_READ_ONLY_TOOLS: List[ToolDefinition] = []
+# 主助理禁止直接调用的 builtin general 工具名全集。
+# 名称含义：这些工具名全部被禁止，而非「禁止集合只含部分」。
+# 运行时拒绝由 agent_loop._assistant_forbidden_tool_reason 消费。
+ALL_BUILTIN_GENERAL_TOOL_NAMES = frozenset(tool.name for tool in BUILTIN_GENERAL_TOOLS)
 
 
 __all__ = [
-    "ASSISTANT_READ_ONLY_TOOLS",
-    "ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES",
+    "ALL_BUILTIN_GENERAL_TOOL_NAMES",
     "BUILTIN_GENERAL_TOOLS",
     "CONFIRM_DECISION_ACCEPTED",
     "CONFIRM_DECISION_TIMEOUT",

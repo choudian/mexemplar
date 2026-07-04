@@ -25,6 +25,7 @@ from src.data.repositories import (
     SessionRepository,
     WorkflowTransitionRepository,
 )
+from src.utils.helpers import walk_exception_chain
 
 logger = logging.getLogger(__name__)
 
@@ -96,14 +97,10 @@ def _is_compression_marker(msg) -> bool:
 
 
 def _is_transient_transcript_lookup_error(exc: BaseException) -> bool:
-    current: BaseException | None = exc
-    seen: set[int] = set()
-    while current is not None and id(current) not in seen:
-        seen.add(id(current))
-        text = str(current).lower()
+    for node in walk_exception_chain(exc):
+        text = str(node).lower()
         if any(marker in text for marker in _TRANSIENT_TRANSCRIPT_LOOKUP_MARKERS):
             return True
-        current = current.__cause__ or current.__context__
     return False
 
 
@@ -147,7 +144,8 @@ class AssistantObservability:
                 sid,
                 type(exc).__name__,
             )
-            time.sleep(0.05)
+            # SQLite WAL 锁释放通常 <10ms；10ms 睡眠足够且减少调用方阻塞。
+            time.sleep(0.01)
             try:
                 messages = self._message_repo.get_all(sid)
             except Exception as retry_exc:

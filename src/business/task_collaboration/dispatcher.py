@@ -333,7 +333,7 @@ class TaskDispatcher:
                         fence_token=fence_token,
                         suspend_reason=_suspend_reason_from_result(result),
                         safe_summary=_safe_result_summary(result),
-                        result_ref=_result_reference(result),
+                        result_ref=_result_reference_with_truncation(result)[0],
                         reentry_payload=_paused_reentry_payload(result),
                     )
                 result_ref, result_ref_truncated = _result_reference_with_truncation(result)
@@ -572,7 +572,7 @@ class TaskDispatcher:
             operations.update_status(
                 operation_id,
                 OperationStatus.COMPLETED,
-                result_ref=_result_reference(result),
+                result_ref=_result_reference_with_truncation(result)[0],
             )
         return result
 
@@ -582,10 +582,6 @@ class TaskDispatcher:
 
 _MAX_RESULT_REF_CHARS = 6000
 _RESULT_REFERENCE_TEXT_KEYS = ("result_text", "message")
-
-
-def _result_reference(result: str | dict[str, Any] | None) -> str | None:
-    return _result_reference_with_truncation(result)[0]
 
 
 def _result_reference_with_truncation(

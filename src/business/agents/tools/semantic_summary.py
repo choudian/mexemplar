@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import queue
 import re
 import threading
 import time
-import copy
-import hashlib
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
@@ -18,6 +17,7 @@ from src.business.agents.tools.file_tools import _redact_text
 from src.business.debug.context import TraceContext
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils.agent_tool_health import increment_agent_tool_health
+from src.utils.bounded_lru_cache import BoundedLruCache
 
 _SUPPORTED_PROVIDERS = {
     "anthropic",
@@ -41,8 +41,7 @@ _SUMMARY_FIELDS = (
     "nextActions",
 )
 _SUMMARY_CACHE_MAX_ENTRIES = 128
-_summary_cache: OrderedDict[tuple[str, str, str, str], dict[str, Any]] = OrderedDict()
-_summary_cache_lock = threading.RLock()
+_summary_cache = BoundedLruCache[tuple[str, str, str, str], dict[str, Any]](_SUMMARY_CACHE_MAX_ENTRIES)
 _WEB_LOW_VALUE_PATTERN = re.compile(
     r"(?i)\b("
     r"sign[ -]?in|log[ -]?in|cookie|privacy|terms|footer|navigation|"
@@ -134,23 +133,6 @@ class SemanticSummarySettings:
         if self.provider not in _SUPPORTED_PROVIDERS:
             return False
         return self.provider != "openai-compatible" or is_valid_compatible_base_url(self.base_url)
-
-    def cache_signature(self) -> str:
-        payload = {
-            "provider": self.provider,
-            "model": self.model,
-            "base_url": self.base_url,
-            "temperature": self.temperature,
-            "max_input_chars": self.max_input_chars,
-            "chunk_chars": self.chunk_chars,
-            "max_map_chunks": self.max_map_chunks,
-            "map_concurrency": self.map_concurrency,
-            "total_timeout_seconds": self.total_timeout_seconds,
-            "map_max_tokens": self.map_max_tokens,
-            "reduce_max_tokens": self.reduce_max_tokens,
-            "summary_max_chars": self.summary_max_chars,
-        }
-        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -704,30 +686,35 @@ def _semantic_summary_cache_key(
     extraction_goal: str,
     settings: SemanticSummarySettings,
 ) -> tuple[str, str, str, str]:
-    text_hash = hashlib.sha256((normalized_text or "").encode("utf-8")).hexdigest()
-    return (tool_name, text_hash, extraction_goal, settings.cache_signature())
+    # 进程内 LRU：用文本 SHA-256 hash + settings 关键字段 hash 作为 key，
+    # 避免大文本作为 tuple key 保留在缓存中导致内存回归。
+    # 只 hash 影响摘要输出的字段，排除 api_key（不影响摘要内容）。
+    text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+    settings_sig = hashlib.sha256(
+        f"{settings.provider}|{settings.model}|{settings.base_url}|"
+        f"{settings.temperature}|{settings.map_max_tokens}|{settings.reduce_max_tokens}"
+        .encode("utf-8")
+    ).hexdigest()
+    return (tool_name, text_hash, extraction_goal, settings_sig)
 
 
 def _get_cached_summary(key: tuple[str, str, str, str]) -> dict[str, Any] | None:
-    with _summary_cache_lock:
-        cached = _summary_cache.get(key)
-        if cached is None:
-            return None
-        _summary_cache.move_to_end(key)
-        return copy.deepcopy(cached)
+    cached = _summary_cache.get(key)
+    if cached is None:
+        return None
+    # 深拷贝：缓存对象可能包含嵌套 list（nextActions/keyFindings 等），
+    # 调用方或 _bounded_summary 的 trim 循环可能修改这些 list。
+    # 浅拷贝 dict(cached) 只复制顶层，嵌套 list 仍指向缓存原始对象。
+    return copy.deepcopy(cached)
 
 
 def _put_cached_summary(key: tuple[str, str, str, str], summary: dict[str, Any]) -> None:
-    with _summary_cache_lock:
-        _summary_cache[key] = copy.deepcopy(summary)
-        _summary_cache.move_to_end(key)
-        while len(_summary_cache) > _SUMMARY_CACHE_MAX_ENTRIES:
-            _summary_cache.popitem(last=False)
+    # summary 是 _bounded_summary 新建的 dict，缓存可直接取得所有权
+    _summary_cache.put(key, summary)
 
 
 def clear_semantic_summary_cache_for_tests() -> None:
-    with _summary_cache_lock:
-        _summary_cache.clear()
+    _summary_cache.clear()
 
 
 def _invoke_with_deadline(
