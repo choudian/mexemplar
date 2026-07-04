@@ -143,6 +143,44 @@ class Session(Base):
             return set(tool_ids)
         return set(parsed)
 
+    def get_composition_id_set(self) -> Optional[set]:
+        """从 tool_ids JSON dict 中提取 composition_id。
+
+        Trial session 的 tool_ids 格式为
+        ``{"composition_id": "...", "member_tool_ids": [...]}``；
+        list 格式（普通授权 session）不含 composition_id。
+
+        Returns:
+            包含单个 composition_id 的 set，或 None（= 全量放行，
+            与 DynamicToolManager 的 None 语义一致）。
+        """
+        if not self.tool_ids:
+            return None
+        import json
+
+        parsed = json.loads(self.tool_ids)
+        if isinstance(parsed, dict):
+            composition_id = parsed.get("composition_id")
+            if composition_id:
+                return {composition_id}
+        return None
+
+    def parse_tool_ids(self) -> tuple[Optional[set], Optional[set]]:
+        """单次解析 tool_ids JSON，返回 (tool_id_set, composition_id_set)。
+
+        避免连续调用 get_tool_id_set + get_composition_id_set 时重复解析。
+        """
+        if not self.tool_ids:
+            return None, None
+        import json
+
+        parsed = json.loads(self.tool_ids)
+        if isinstance(parsed, dict):
+            tool_ids = set(parsed.get("member_tool_ids") or parsed.get("tool_ids") or [])
+            composition_id = parsed.get("composition_id")
+            return (tool_ids if tool_ids else None, {composition_id} if composition_id else None)
+        return (set(parsed) if parsed else None), None
+
     def __repr__(self) -> str:
         return f"<Session(session_id={self.session_id!r}, agent_type={self.agent_type!r}, status={self.status!r})>"
 

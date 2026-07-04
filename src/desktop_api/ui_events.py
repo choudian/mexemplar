@@ -56,9 +56,43 @@ CONFIRMATION_VALID_ACTION_TYPES: frozenset[str] = frozenset(
     {"write_file", "edit_file", "exec", "unknown", "skill.edit_protected", "skill.soft_delete"}
 )
 
+# ---------------------------------------------------------------------------
+# Event type constants — single source of truth for all registered UI events
+# ---------------------------------------------------------------------------
+EVENT_TYPE_ASSISTANT_MESSAGE = "assistant.message"
+EVENT_TYPE_ASSISTANT_PROGRESS = "assistant.progress"
+EVENT_TYPE_ASSISTANT_ERROR = "assistant.error"
+EVENT_TYPE_ASSISTANT_CONFIRMATION = "assistant.confirmation"
+EVENT_TYPE_ASSISTANT_CLARIFICATION_REQUESTED = "assistant.clarification_requested"
+EVENT_TYPE_ASSISTANT_CLARIFICATION_RESOLVED = "assistant.clarification_resolved"
+EVENT_TYPE_ASSISTANT_ACTIVITY = "assistant.activity"
+EVENT_TYPE_ASSISTANT_SUBAGENT = "assistant.subagent"
+EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED = "assistant.task_graph.changed"
+EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED = "assistant.task_board.changed"
+EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED = "assistant.task_question.changed"
+EVENT_TYPE_ASSISTANT_MEETING_CHANGED = "assistant.meeting.changed"
+EVENT_TYPE_ASSISTANT_TODO_CHANGED = "assistant.todo.changed"
+EVENT_TYPE_RECORDING_PROGRESS = "recording.progress"
+EVENT_TYPE_TEACHING_STAGE_CHANGED = "teaching.stage_changed"
+EVENT_TYPE_TEACHING_PROGRESS = "teaching.progress"
+EVENT_TYPE_TRIAL_PROGRESS = "trial.progress"
+EVENT_TYPE_TRIAL_PREVIEW_REQUESTED = "trial.preview_requested"
+EVENT_TYPE_TRIAL_PREVIEW_RESOLVED = "trial.preview_resolved"
+EVENT_TYPE_TOOLS_CHANGED = "tools.changed"
+EVENT_TYPE_SKILL_CHANGED = "skill.changed"
+EVENT_TYPE_SKILL_EQUIPMENT_CHANGED = "skill.equipment.changed"
+EVENT_TYPE_COMPOSITIONS_CHANGED = "compositions.changed"
+EVENT_TYPE_SETTINGS_CHANGED = "settings.changed"
+EVENT_TYPE_BACKEND_RESYNC_REQUIRED = "backend.resync_required"
+EVENT_TYPE_BRAIN_ZONE_CHANGED = "brain_zone_changed"
+EVENT_TYPE_BRAIN_SPECIALIST_RECRUITED = "brain_specialist_recruited"
+EVENT_TYPE_BRAIN_SPECIALIST_CHANGED = "brain_specialist_changed"
+EVENT_TYPE_BRAIN_CONTEXT_READY = "brain_context_ready"
+EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED = "improvement_proposal.changed"
+
 UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
-    "assistant.message": UiEventDefinition(
-        "assistant.message",
+    EVENT_TYPE_ASSISTANT_MESSAGE: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_MESSAGE,
         "notification",
         frozenset({"sequence", "role", "content", "createdAt", "rendering", "failure"}),
         frozenset({"sessionId"}),
@@ -70,8 +104,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("rendering", frozenset({"plain_text", "safe_markdown"})),
         ),
     ),
-    "assistant.progress": UiEventDefinition(
-        "assistant.progress",
+    EVENT_TYPE_ASSISTANT_PROGRESS: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_PROGRESS,
         "notification",
         frozenset({"status", "headline", "message", "question", "runId"}),
         frozenset({"sessionId", "workflowId"}),
@@ -85,8 +119,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "assistant.error": UiEventDefinition(
-        "assistant.error",
+    EVENT_TYPE_ASSISTANT_ERROR: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_ERROR,
         "notification",
         frozenset({"message", "type"}),
         frozenset({"sessionId", "workflowId"}),
@@ -94,8 +128,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"message"}),
         required_scope_keys=frozenset({"sessionId"}),
     ),
-    "assistant.confirmation": UiEventDefinition(
-        "assistant.confirmation",
+    EVENT_TYPE_ASSISTANT_CONFIRMATION: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_CONFIRMATION,
         "interactive",
         frozenset(
             {
@@ -125,8 +159,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("status", frozenset({"active"})),
         ),
     ),
-    "assistant.clarification_requested": UiEventDefinition(
-        "assistant.clarification_requested",
+    EVENT_TYPE_ASSISTANT_CLARIFICATION_REQUESTED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_CLARIFICATION_REQUESTED,
         "interactive",
         frozenset({"requestId", "sessionId", "questions", "expiresAt", "status"}),
         frozenset({"sessionId"}),
@@ -149,8 +183,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_scope_keys=frozenset({"sessionId"}),
         payload_enum_values=(("status", frozenset({"pending"})),),
     ),
-    "assistant.clarification_resolved": UiEventDefinition(
-        "assistant.clarification_resolved",
+    EVENT_TYPE_ASSISTANT_CLARIFICATION_RESOLVED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_CLARIFICATION_RESOLVED,
         "interactive",
         frozenset({"requestId", "sessionId", "status"}),
         frozenset({"sessionId"}),
@@ -164,8 +198,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "assistant.activity": UiEventDefinition(
-        "assistant.activity",
+    EVENT_TYPE_ASSISTANT_ACTIVITY: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_ACTIVITY,
         "notification",
         frozenset({"subagentId", "kind", "toolName", "text", "seq", "redacted"}),
         frozenset({"sessionId"}),
@@ -175,8 +209,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         payload_enum_values=(("kind", frozenset({"reasoning", "tool_call", "tool_result"})),),
         unredacted_payload_keys=frozenset({"text"}),
     ),
-    "assistant.subagent": UiEventDefinition(
-        "assistant.subagent",
+    EVENT_TYPE_ASSISTANT_SUBAGENT: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_SUBAGENT,
         "notification",
         frozenset({"subagentId", "label", "task", "status", "lastOutput", "reason"}),
         frozenset({"sessionId"}),
@@ -190,8 +224,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_scope_keys=frozenset({"sessionId"}),
         payload_enum_values=(("status", frozenset({"running", "done", "suspended", "failed"})),),
     ),
-    "assistant.task_graph.changed": UiEventDefinition(
-        "assistant.task_graph.changed",
+    EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED,
         "notification",
         frozenset(
             {
@@ -262,8 +296,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "assistant.task_board.changed": UiEventDefinition(
-        "assistant.task_board.changed",
+    EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED,
         "notification",
         frozenset({"taskId", "graphId", "changeType", "claimStatus", "updatedAt"}),
         _SESSION_SCOPE,
@@ -277,8 +311,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "assistant.task_question.changed": UiEventDefinition(
-        "assistant.task_question.changed",
+    EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED,
         "notification",
         frozenset({"questionId", "taskId", "graphId", "kind", "status", "changeType"}),
         _SESSION_SCOPE,
@@ -313,8 +347,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "assistant.meeting.changed": UiEventDefinition(
-        "assistant.meeting.changed",
+    EVENT_TYPE_ASSISTANT_MEETING_CHANGED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_MEETING_CHANGED,
         "notification",
         frozenset({"channelId", "graphId", "taskId", "changeType", "sequence", "status"}),
         _SESSION_SCOPE,
@@ -336,8 +370,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "assistant.todo.changed": UiEventDefinition(
-        "assistant.todo.changed",
+    EVENT_TYPE_ASSISTANT_TODO_CHANGED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_TODO_CHANGED,
         "notification",
         frozenset({"taskId", "todoId", "changeType", "status", "sortOrder"}),
         _SESSION_SCOPE,
@@ -349,8 +383,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("status", frozenset({"todo", "doing", "done", "skipped"})),
         ),
     ),
-    "recording.progress": UiEventDefinition(
-        "recording.progress",
+    EVENT_TYPE_RECORDING_PROGRESS: UiEventDefinition(
+        EVENT_TYPE_RECORDING_PROGRESS,
         "notification",
         frozenset(
             {
@@ -369,8 +403,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"status"}),
         required_scope_keys=frozenset({"workflowId"}),
     ),
-    "teaching.stage_changed": UiEventDefinition(
-        "teaching.stage_changed",
+    EVENT_TYPE_TEACHING_STAGE_CHANGED: UiEventDefinition(
+        EVENT_TYPE_TEACHING_STAGE_CHANGED,
         "notification",
         frozenset(
             {"stage", "status", "message", "headline", "failureStage", "successCount", "published"}
@@ -397,8 +431,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "teaching.progress": UiEventDefinition(
-        "teaching.progress",
+    EVENT_TYPE_TEACHING_PROGRESS: UiEventDefinition(
+        EVENT_TYPE_TEACHING_PROGRESS,
         "notification",
         frozenset({"status", "message", "headline", "question", "failureStage", "error", "type"}),
         frozenset({"workflowId", "sessionId"}),
@@ -406,8 +440,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"status"}),
         required_scope_keys=frozenset({"workflowId"}),
     ),
-    "trial.progress": UiEventDefinition(
-        "trial.progress",
+    EVENT_TYPE_TRIAL_PROGRESS: UiEventDefinition(
+        EVENT_TYPE_TRIAL_PROGRESS,
         "notification",
         frozenset(
             {
@@ -428,8 +462,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_payload_keys=frozenset({"status"}),
         required_scope_keys=frozenset({"workflowId"}),
     ),
-    "trial.preview_requested": UiEventDefinition(
-        "trial.preview_requested",
+    EVENT_TYPE_TRIAL_PREVIEW_REQUESTED: UiEventDefinition(
+        EVENT_TYPE_TRIAL_PREVIEW_REQUESTED,
         "interactive",
         frozenset(
             {
@@ -469,8 +503,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         required_scope_keys=frozenset({"workflowId"}),
         payload_enum_values=(("status", frozenset({"pending"})),),
     ),
-    "trial.preview_resolved": UiEventDefinition(
-        "trial.preview_resolved",
+    EVENT_TYPE_TRIAL_PREVIEW_RESOLVED: UiEventDefinition(
+        EVENT_TYPE_TRIAL_PREVIEW_RESOLVED,
         "interactive",
         frozenset({"requestId", "workflowId", "trialId", "decision", "status", "message"}),
         frozenset({"workflowId"}),
@@ -503,15 +537,15 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
         ),
     ),
-    "tools.changed": UiEventDefinition(
-        "tools.changed",
+    EVENT_TYPE_TOOLS_CHANGED: UiEventDefinition(
+        EVENT_TYPE_TOOLS_CHANGED,
         "notification",
         frozenset({"reason", "toolId", "status"}),
         frozenset({"toolId"}),
         {"reason": "catalog_invalidated"},
     ),
-    "skill.changed": UiEventDefinition(
-        "skill.changed",
+    EVENT_TYPE_SKILL_CHANGED: UiEventDefinition(
+        EVENT_TYPE_SKILL_CHANGED,
         "notification",
         frozenset(
             {
@@ -549,8 +583,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("callerType", frozenset({"assistant", "specialist", "user", "system"})),
         ),
     ),
-    "skill.equipment.changed": UiEventDefinition(
-        "skill.equipment.changed",
+    EVENT_TYPE_SKILL_EQUIPMENT_CHANGED: UiEventDefinition(
+        EVENT_TYPE_SKILL_EQUIPMENT_CHANGED,
         "notification",
         frozenset(
             {
@@ -586,39 +620,39 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ("entityType", frozenset({"assistant", "specialist"})),
         ),
     ),
-    "compositions.changed": UiEventDefinition(
-        "compositions.changed",
+    EVENT_TYPE_COMPOSITIONS_CHANGED: UiEventDefinition(
+        EVENT_TYPE_COMPOSITIONS_CHANGED,
         "notification",
         frozenset({"reason", "compositionId", "status"}),
         frozenset({"compositionId"}),
         {"reason": "catalog_invalidated"},
     ),
-    "settings.changed": UiEventDefinition(
-        "settings.changed",
+    EVENT_TYPE_SETTINGS_CHANGED: UiEventDefinition(
+        EVENT_TYPE_SETTINGS_CHANGED,
         "notification",
         frozenset({"reason", "keys"}),
         frozenset(),
         {"reason": "settings_invalidated", "keys": []},
         required_payload_keys=frozenset({"reason"}),
     ),
-    "backend.resync_required": UiEventDefinition(
-        "backend.resync_required",
+    EVENT_TYPE_BACKEND_RESYNC_REQUIRED: UiEventDefinition(
+        EVENT_TYPE_BACKEND_RESYNC_REQUIRED,
         "control",
         frozenset({"reason", "domains", "lastAvailableSequence", "eventSessionId"}),
         frozenset({"workflowId", "sessionId", "toolId", "compositionId"}),
         {"reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"]},
         required_payload_keys=frozenset({"reason", "domains"}),
     ),
-    "brain_zone_changed": UiEventDefinition(
-        "brain_zone_changed",
+    EVENT_TYPE_BRAIN_ZONE_CHANGED: UiEventDefinition(
+        EVENT_TYPE_BRAIN_ZONE_CHANGED,
         "notification",
         frozenset({"zone", "entryId", "changeType"}),
         frozenset(),
         {"zone": "hot", "entryId": "entry_1", "changeType": "create"},
         required_payload_keys=frozenset({"zone", "changeType"}),
     ),
-    "brain_specialist_recruited": UiEventDefinition(
-        "brain_specialist_recruited",
+    EVENT_TYPE_BRAIN_SPECIALIST_RECRUITED: UiEventDefinition(
+        EVENT_TYPE_BRAIN_SPECIALIST_RECRUITED,
         "notification",
         frozenset({"specialistId", "name", "reason", "managementUrl"}),
         frozenset(),
@@ -630,16 +664,16 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         },
         required_payload_keys=frozenset({"specialistId", "name", "reason"}),
     ),
-    "brain_specialist_changed": UiEventDefinition(
-        "brain_specialist_changed",
+    EVENT_TYPE_BRAIN_SPECIALIST_CHANGED: UiEventDefinition(
+        EVENT_TYPE_BRAIN_SPECIALIST_CHANGED,
         "notification",
         frozenset({"specialistId", "changeType"}),
         frozenset(),
         {"specialistId": "spec_1", "changeType": "update"},
         required_payload_keys=frozenset({"specialistId", "changeType"}),
     ),
-    "brain_context_ready": UiEventDefinition(
-        "brain_context_ready",
+    EVENT_TYPE_BRAIN_CONTEXT_READY: UiEventDefinition(
+        EVENT_TYPE_BRAIN_CONTEXT_READY,
         "notification",
         frozenset({"sessionId"}),
         frozenset({"sessionId"}),
@@ -650,8 +684,8 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     # status / changeType 交叉关系契约（026 I6）：changeType 恒等于 status，唯一例外
     # 是 proposal 首次创建时 changeType="created" 且 status="pending_review"。通用
     # enum 校验在 registry 中声明，交叉关系由 validate_ui_event_payload 的专用分支校验。
-    "improvement_proposal.changed": UiEventDefinition(
-        "improvement_proposal.changed",
+    EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED: UiEventDefinition(
+        EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED,
         "notification",
         frozenset({"proposalId", "sourceReviewId", "status", "severity", "changeType"}),
         frozenset(),
@@ -720,9 +754,9 @@ def validate_ui_event_payload(event_type: str, payload: dict[str, Any]) -> None:
             raise UiEventValidationError(
                 f"UI event {event_type} contains invalid enum value for {key}: {payload[key]}"
             )
-    if event_type == "improvement_proposal.changed":
+    if event_type == EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED:
         _validate_improvement_proposal_changed_payload(payload)
-    if event_type == "assistant.message" and payload.get("failure") is not None:
+    if event_type == EVENT_TYPE_ASSISTANT_MESSAGE and payload.get("failure") is not None:
         _validate_assistant_failure_payload(payload)
     for key, value in payload.items():
         if key in definition.unredacted_payload_keys:
@@ -861,7 +895,7 @@ class TrialPreviewRequestManager:
             "status": "pending",
         }
         try:
-            validate_ui_event_payload("trial.preview_requested", payload)
+            validate_ui_event_payload(EVENT_TYPE_TRIAL_PREVIEW_REQUESTED, payload)
         except UiEventValidationError as exc:
             logger.warning(
                 "Rejected unsafe trial preview request",
@@ -875,7 +909,7 @@ class TrialPreviewRequestManager:
             self._events[request_id] = wait_event
         publish(
             UiEventDraft(
-                "trial.preview_requested",
+                EVENT_TYPE_TRIAL_PREVIEW_REQUESTED,
                 payload,
                 {"workflowId": workflow_id},
                 workflow_id,
@@ -958,7 +992,7 @@ class TrialPreviewRequestManager:
     @staticmethod
     def _resolved_draft(record: TrialPreviewRecord, message: str) -> UiEventDraft:
         return UiEventDraft(
-            "trial.preview_resolved",
+            EVENT_TYPE_TRIAL_PREVIEW_RESOLVED,
             {
                 "requestId": record.request_id,
                 "workflowId": record.workflow_id,

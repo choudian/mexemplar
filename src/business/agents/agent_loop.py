@@ -19,7 +19,7 @@ from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
 from src.data.repositories import MessageRepository, SessionRepository
 from src.utils.events import emit
-from src.utils.helpers import safe_format_template
+from src.utils.helpers import safe_format_template, walk_exception_chain
 
 from . import run_context
 from .config import (
@@ -40,7 +40,7 @@ from .tools.builtin_contracts import (
     use_tool_runtime,
 )
 from .tools.builtin_config import get_config_int
-from .tools.builtin_general_tools import ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES
+from .tools.builtin_general_tools import ALL_BUILTIN_GENERAL_TOOL_NAMES
 from .tools.output_governance import (
     govern_tool_result,
     governance_double_failure_fallback,
@@ -109,20 +109,13 @@ def _is_recoverable_llm_failure(exc: BaseException) -> bool:
     遍历异常链（`__cause__` / `__context__`），按异常类型名与消息文本做标记匹配。
     无法确定时保守返回 False（按不可恢复处理），宁可如实失败也不误导主代理等待。
     """
-    _MAX_CHAIN_DEPTH = 20
-    seen: set[int] = set()
-    cur: Optional[BaseException] = exc
-    depth = 0
-    while cur is not None and id(cur) not in seen and depth < _MAX_CHAIN_DEPTH:
-        seen.add(id(cur))
-        depth += 1
-        type_name = type(cur).__name__.lower()
+    for node in walk_exception_chain(exc):
+        type_name = type(node).__name__.lower()
         if any(marker in type_name for marker in _RECOVERABLE_LLM_ERROR_TYPES):
             return True
-        message = str(cur).lower()
+        message = str(node).lower()
         if any(marker in message for marker in _RECOVERABLE_LLM_ERROR_MARKERS):
             return True
-        cur = cur.__cause__ or cur.__context__
     return False
 
 
@@ -497,7 +490,7 @@ class AgentLoop:
     def _assistant_forbidden_tool_reason(self, tool_name: str) -> str | None:
         if self._config.agent_type != AgentType.ASSISTANT:
             return None
-        if tool_name in ASSISTANT_FORBIDDEN_BUILTIN_TOOL_NAMES:
+        if tool_name in ALL_BUILTIN_GENERAL_TOOL_NAMES:
             return (
                 f"主助理不能直接调用工具 '{tool_name}'。读取、抓取、进程和执行类能力"
                 "必须先委派给临时子代理或固定专员。"
@@ -1244,7 +1237,16 @@ class AgentLoop:
             )
             # text_as_user_input=True 时，LLM 直接输出文本即可与用户对话，
             # 不需要 talk_to_user 工具（避免 LLM 在该调 submit 时误调 talk_to_user）
-            if not self._config.text_as_user_input:
+            # 子代理/专员也不注入 talk_to_user：它们的结果应回流给主助理，
+            # 不应直接与用户对话。需要向上沟通时走 ask_parent。
+            _should_inject_talk_to_user = (
+                not self._config.text_as_user_input
+                and self._config.agent_type not in (
+                    AgentType.EPHEMERAL_SUBAGENT,
+                    AgentType.SPECIALIST,
+                )
+            )
+            if _should_inject_talk_to_user:
                 registry["talk_to_user"] = ToolDefinition(
                     name="talk_to_user",
                     schema=TALK_TO_USER_SCHEMA,

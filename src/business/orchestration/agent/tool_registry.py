@@ -25,7 +25,10 @@ class _SessionToolQuery(Protocol):
 
 class _DynamicManagerCache(Protocol):
     def get_or_create_dynamic_manager(
-        self, session_id: str, allowed_ids: set[str] | None
+        self,
+        session_id: str,
+        allowed_ids: set[str] | None,
+        allowed_composition_ids: set[str] | None = None,
     ) -> DynamicToolManager: ...
 
 
@@ -37,6 +40,7 @@ class _DelegationFacade(Protocol):
         task_description: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        complexity: str = "complex",
     ) -> dict: ...
 
     def continue_subagent(
@@ -51,7 +55,11 @@ class _DelegationFacade(Protocol):
     def inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict: ...
 
     def delegate_to_specialist(
-        self, *, parent_session_id: str, specialist_name: str, task: str
+        self,
+        *,
+        parent_session_id: str,
+        specialist_name: str,
+        task: str,
     ) -> dict: ...
 
     def run_sync_ephemeral_subagent(
@@ -168,6 +176,7 @@ class ToolRegistry:
         current_task_id: str | None = None,
         parent_session_id: str | None = None,
         role_kind: str = "executor",
+        allowed_composition_ids: set[str] | None = None,
     ) -> Callable[[], list[ToolDefinition]]:
         """Build tools for delegated executors (specialists / ephemeral subagents).
 
@@ -203,7 +212,10 @@ class ToolRegistry:
             create_assistant_search_tools,
         )
 
-        dynamic_manager = DynamicToolManager(allowed_tool_ids=allowed_tool_ids)
+        dynamic_manager = DynamicToolManager(
+            allowed_tool_ids=allowed_tool_ids,
+            allowed_composition_ids=allowed_composition_ids,
+        )
         builtin_tools = _filter_builtin_tools(BUILTIN_GENERAL_TOOLS, tool_whitelist)
         search_tools = create_assistant_search_tools(dynamic_manager)
         load_skill_tool = self.make_load_skill_tool(
@@ -298,6 +310,7 @@ class ToolRegistry:
                 task_description: str,
                 execution_context: str = "",
                 tool_whitelist: list[str] | None = None,
+                complexity: str = "complex",
             ) -> dict:
                 task = (task_description or "").strip()
                 if not task:
@@ -420,7 +433,6 @@ class ToolRegistry:
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
         )
-        from src.business.agents.tools.builtin_general_tools import ASSISTANT_READ_ONLY_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             create_assistant_search_tools,
         )
@@ -434,12 +446,14 @@ class ToolRegistry:
         )
 
         session = self._session_store.get_session(session_id)
-        allowed_ids = session.get_tool_id_set() if session else None
+        if session is not None:
+            allowed_ids, allowed_composition_ids = session.parse_tool_ids()
+        else:
+            allowed_ids, allowed_composition_ids = None, None
 
         dynamic_manager = self._dynamic_manager_cache.get_or_create_dynamic_manager(
-            session_id, allowed_ids
+            session_id, allowed_ids, allowed_composition_ids
         )
-
         codify_tool = ToolDefinition(
             name="codify_as_tool",
             schema=CODIFY_AS_TOOL_SCHEMA,
@@ -601,7 +615,7 @@ class ToolRegistry:
             load_skill_methodology_tool,
             build_task_graph_tool,
             mutate_task_graph_tool,
-        ] + ASSISTANT_READ_ONLY_TOOLS
+        ]
 
         def tool_factory() -> list[ToolDefinition]:
             return search_tools + static_tools + dynamic_manager.get_activated_tools()

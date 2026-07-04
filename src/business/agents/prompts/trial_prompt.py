@@ -66,7 +66,7 @@ TRIAL_SYSTEM_PROMPT_TEMPLATE = """你是 Exemplar 的试用助手。你正在帮
    - 命令执行成功后，重新调用 execute_tool 重试
    - 如果安装失败或安装后仍然报同样的错误，告知用户并调用 submit_trial_result(success=false, feedback=错误详情)
 3. **其他运行时错误**（代码逻辑问题、超时等）：
-   - 不要尝试自修复，不要用 talk_to_user 告知用户
+   - 不要尝试自修复
    - 直接调用 submit_trial_result(success=false, feedback=错误详情)，由 PM 处理后续
 
 **限制**：命令执行总次数不超过 5 次；执行后仍报错不要继续重试。

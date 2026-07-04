@@ -161,6 +161,34 @@ class DynamicToolManager:
             self._composition_service = SkillCompositionService()
         return self._composition_service
 
+    def update_authorization(
+        self,
+        allowed_tool_ids: Optional[Set[str]] = None,
+        allowed_composition_ids: Optional[Set[str]] = None,
+    ) -> bool:
+        """Update authorization sets when they have drifted from the current session state.
+
+        Returns True if any authorization changed (caller may want to revalidate
+        activated tools).  Returns False when both sets are identical — no-op.
+        """
+        tool_changed = allowed_tool_ids != self._allowed_tool_ids
+        comp_changed = allowed_composition_ids != self._allowed_composition_ids
+        if not tool_changed and not comp_changed:
+            return False
+        self._allowed_tool_ids = set(allowed_tool_ids) if allowed_tool_ids is not None else None
+        self._allowed_composition_ids = (
+            set(allowed_composition_ids) if allowed_composition_ids is not None else None
+        )
+        return True
+
+    @property
+    def allowed_tool_ids(self) -> Optional[Set[str]]:
+        return self._allowed_tool_ids
+
+    @property
+    def allowed_composition_ids(self) -> Optional[Set[str]]:
+        return self._allowed_composition_ids
+
     def _is_allowed_tool(self, tool) -> bool:
         if self._allowed_tool_ids is None:
             return tool.status == "published"

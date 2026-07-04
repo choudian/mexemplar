@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 import pytest
 
 from src.business.task_collaboration.background_worker import TaskCollaborationBackgroundWorker
-from src.business.task_collaboration.graph_scheduler import set_graph_scheduler
+from src.business.task_collaboration.graph_scheduler import (
+    install_graph_scheduler_event_subscriptions,
+    set_graph_scheduler,
+)
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.repos import AssistantTaskAttemptRepository, AssistantTaskRepository
 from src.utils.timezone import utc_now_naive
@@ -97,6 +100,7 @@ def test_expired_attempt_requeues_graph_task_and_notifies_scheduler(in_memory_db
             recovered.append((graph_id_arg, task_id_arg))
 
     set_graph_scheduler(_Scheduler())
+    install_graph_scheduler_event_subscriptions()
     try:
         counts = TaskCollaborationBackgroundWorker().run_recovery_cycle(now=utc_now_naive())
     finally:

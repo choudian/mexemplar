@@ -129,34 +129,97 @@ class TestSimpleTaskFastDelegation:
     """US2 门卫：简单任务走快速委派、不建图。"""
 
     def test_simple_task_no_graph(self):
-        """简单任务（1-2 步单领域）不应产出任务图。
+        """简单任务（complexity="simple"）走快速委派路径，不调 _dispatch_task_via_unified_model。
 
-        这是门卫测试：验证 build_task_graph 工具只被多步任务调用。
-        复杂度分类由 LLM 软判定，门卫守的是"落库形态"。
+        验证 DelegationOrchestrator.delegate_to_subagent 在 complexity="simple" 时
+        直接走 run_sync_ephemeral_subagent，不产出任务图。
         """
-        # 简单任务走 delegate_to_subagent/specialist 路径，
-        # 根本不会调 build_task_graph，所以没有图。
-        # 门卫验证：如果只有 1 个节点，build_task_graph 应该仍能工作
-        # 但 prompt 不应路由简单任务到这里。
-        # 这里验证的是"单节点可以建图但 prompt 不该走这条路"——
-        # 实际防护在 prompt 层，门卫确认"现有 durable accepted 路径不退化"。
-        session_id = generate_id("sess")
-        with TaskCollaborationService() as svc:
-            # 验证现有 create_child_task 仍然工作（023 回归）
-            graph_id = svc.create_root_graph(
-                session_id=session_id,
-                title="简单任务",
-                description="一个简单任务",
-            )
-            assert graph_id is not None
-            child_id = svc.create_child_task(
-                graph_id=graph_id,
-                session_id=session_id,
-                parent_task_id=svc._tasks.get_graph_root(graph_id).task_id,
-                title="子任务",
-                description="快速委派",
-            )
-            assert child_id is not None
+        from unittest.mock import MagicMock
+
+        from src.business.agents.config import AgentType
+        from src.business.orchestration.agent.delegation_orchestrator import (
+            DelegationOrchestrator,
+        )
+
+        owner = MagicMock()
+        owner._dispatch_task_via_unified_model = MagicMock(return_value=None)
+
+        # Mock sync path to avoid needing full orchestrator setup
+        owner.run_sync_ephemeral_subagent = MagicMock(
+            return_value={
+                "success": True,
+                "result_text": "done",
+                "executor_session_id": "child_sess",
+                "delegation_type": "ephemeral_subagent",
+            }
+        )
+        # DelegationOrchestrator.run_sync_ephemeral_subagent calls
+        # self._owner methods; mock the full chain
+        owner._resolve_user_tool_ids = MagicMock(return_value=None)
+        owner._prompt_builder = MagicMock()
+        owner._prompt_builder.format_capability_catalog = MagicMock(return_value="")
+        owner._build_ephemeral_subagent_prompt = MagicMock(return_value="prompt")
+        owner._new_delegation_workflow_id = MagicMock(return_value="dlg_test")
+        owner._session_store = MagicMock()
+        owner._session_store.create_session = MagicMock(return_value="child_sess")
+        owner._format_delegated_task_input = MagicMock(return_value="input")
+        owner._run_delegated_executor = MagicMock(
+            return_value={
+                "success": True,
+                "result_text": "done",
+                "executor_session_id": "child_sess",
+                "workflow_id": "dlg_test",
+            }
+        )
+        owner._record_delegation_signal = MagicMock()
+
+        orch = DelegationOrchestrator(owner)
+        result = orch.delegate_to_subagent(
+            parent_session_id="parent",
+            task_description="简单任务",
+            complexity="simple",
+        )
+
+        # 验证: _dispatch_task_via_unified_model 不被调用
+        owner._dispatch_task_via_unified_model.assert_not_called()
+
+        # 验证: 走同步路径（_run_delegated_executor 被调用）
+        owner._run_delegated_executor.assert_called_once()
+
+        # 验证: 结果不含任务图标识
+        assert "taskId" not in result
+        assert "graphId" not in result
+
+    def test_complex_task_still_uses_unified_dispatch(self):
+        """复杂任务（complexity="complex"）仍走 _dispatch_task_via_unified_model。"""
+        from unittest.mock import MagicMock
+
+        from src.business.orchestration.agent.delegation_orchestrator import (
+            DelegationOrchestrator,
+        )
+
+        owner = MagicMock()
+        owner._dispatch_task_via_unified_model = MagicMock(
+            return_value={
+                "success": True,
+                "taskId": "tsk_1",
+                "graphId": "tg_1",
+            }
+        )
+
+        orch = DelegationOrchestrator(owner)
+        result = orch.delegate_to_subagent(
+            parent_session_id="parent",
+            task_description="复杂任务",
+            complexity="complex",
+        )
+
+        # 验证: _dispatch_task_via_unified_model 被调用
+        owner._dispatch_task_via_unified_model.assert_called_once()
+
+        # 验证: 结果含任务图标识
+        assert "taskId" in result
+        assert "graphId" in result
 
     def test_build_task_graph_backward_compatible(self):
         """build_task_graph 不应破坏现有 023 快速委派路径。"""
@@ -188,7 +251,10 @@ class TestSchedulerWiring:
         from src.business.agents.tools.assistant_tools import (
             create_build_task_graph_handler,
         )
-        from src.business.task_collaboration.graph_scheduler import set_graph_scheduler
+        from src.business.task_collaboration.graph_scheduler import (
+            install_graph_scheduler_event_subscriptions,
+            set_graph_scheduler,
+        )
 
         triggered: list[str] = []
 
@@ -197,6 +263,7 @@ class TestSchedulerWiring:
                 triggered.append(graph_id)
 
         set_graph_scheduler(_FakeScheduler())
+        install_graph_scheduler_event_subscriptions()
         try:
             handler = create_build_task_graph_handler(generate_id("sess"))
             data = json.loads(handler(nodes=[{"nodeId": "n1", "title": "A", "description": "x"}]))
@@ -284,7 +351,10 @@ class TestSchedulerWiring:
         from src.business.agents.tools.assistant_tools import (
             create_mutate_task_graph_handler,
         )
-        from src.business.task_collaboration.graph_scheduler import set_graph_scheduler
+        from src.business.task_collaboration.graph_scheduler import (
+            install_graph_scheduler_event_subscriptions,
+            set_graph_scheduler,
+        )
 
         triggered: list[str] = []
 
@@ -301,6 +371,7 @@ class TestSchedulerWiring:
             graph_id = result["graphId"]
 
         set_graph_scheduler(_FakeScheduler())
+        install_graph_scheduler_event_subscriptions()
         try:
             handler = create_mutate_task_graph_handler(session_id)
             data = json.loads(
