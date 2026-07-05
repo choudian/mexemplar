@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { Plus } from "lucide-react";
 
 import { SKILL_CATEGORIES } from "../../api/skills";
@@ -10,11 +10,19 @@ import { useSkillsStore } from "../../state/skillsStore";
 import { useShellStore } from "../../state/shellStore";
 import SkillCards from "./SkillCards";
 import { SkillTrialDialog } from "./SkillTrialDialog";
+import { McpServerTab } from "./McpServerTab";
 
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
   pending: "待考核",
   published: "已掌握",
   failed: "失败记录",
+};
+
+type SkillTab = SkillCategory | "mcp";
+const SKILL_TABS: SkillTab[] = [...SKILL_CATEGORIES, "mcp" as const];
+const TAB_LABELS: Record<SkillTab, string> = {
+  ...CATEGORY_LABELS,
+  mcp: "MCP 工具",
 };
 
 export function SkillListScreen(): JSX.Element {
@@ -33,11 +41,19 @@ export function SkillListScreen(): JSX.Element {
   const setRoute = useShellStore((state) => state.setRoute);
 
   const hydrated = useSkillsStore((state) => state.hydrated);
+  const [activeTab, setActiveTab] = useState<SkillTab>(activeCategory);
 
   useEffect(() => {
     if (hydrated) return;
     void loadAllCategories();
   }, [hydrated, loadAllCategories]);
+
+  // 同步 tab 切换到 skillsStore（非 mcp tab）
+  useEffect(() => {
+    if (activeTab !== "mcp") {
+      setCategory(activeTab);
+    }
+  }, [activeTab, setCategory]);
 
   const filteredSkills = useFiltered(data[activeCategory], query, (skill) => [
     skill.name,
@@ -69,41 +85,47 @@ export function SkillListScreen(): JSX.Element {
         </div>
       </div>
       <div className="skills-tabs" role="tablist" aria-label="工具分类">
-        {SKILL_CATEGORIES.map((id) => {
-          const active = activeCategory === id;
+        {SKILL_TABS.map((id) => {
+          const active = activeTab === id;
           return (
             <button
               aria-selected={active}
               className="skills-tab"
               data-active={active}
               key={id}
-              onClick={() => setCategory(id)}
+              onClick={() => setActiveTab(id)}
               role="tab"
               type="button"
             >
-              <span>{CATEGORY_LABELS[id]}</span>
-              <small className="me-mono">{counts[id]}</small>
+              <span>{TAB_LABELS[id]}</span>
+              {id !== "mcp" && <small className="me-mono">{counts[id]}</small>}
             </button>
           );
         })}
       </div>
-      {busy ? <div className="skills-empty">正在加载</div> : null}
-      <SkillCards
-        category={activeCategory}
-        skills={filteredSkills}
-        onTrial={(toolId) => {
-          openTrial(toolId);
-        }}
-        onDelete={(toolId) => {
-          void deleteSkill(toolId);
-        }}
-        onRetry={(workflowId) => {
-          void retryFailure(workflowId);
-        }}
-        onDismiss={(workflowId) => {
-          void dismissFailure(workflowId);
-        }}
-      />
+      {activeTab === "mcp" ? (
+        <McpServerTab />
+      ) : (
+        <>
+          {busy ? <div className="skills-empty">正在加载</div> : null}
+          <SkillCards
+            category={activeCategory}
+            skills={filteredSkills}
+            onTrial={(toolId) => {
+              openTrial(toolId);
+            }}
+            onDelete={(toolId) => {
+              void deleteSkill(toolId);
+            }}
+            onRetry={(workflowId) => {
+              void retryFailure(workflowId);
+            }}
+            onDismiss={(workflowId) => {
+              void dismissFailure(workflowId);
+            }}
+          />
+        </>
+      )}
       <SkillTrialDialog />
     </section>
   );

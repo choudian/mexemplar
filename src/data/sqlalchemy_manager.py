@@ -184,6 +184,22 @@ class SQLAlchemyManager:
                     setting.description = description
             session.commit()
 
+    def delete_settings_by_prefix(self, prefix: str) -> int:
+        """删除 app_settings 中所有以 prefix 开头的条目，返回删除行数。
+
+        Args:
+            prefix: 键前缀（如 'mcp.servers.mcs_abc.'），LIKE 匹配 prefix + '%'
+        """
+        if not self._initialized:
+            self.initialize()
+        with self.SessionLocal() as session:
+            result = session.execute(
+                text("DELETE FROM app_settings WHERE setting_key LIKE :pattern"),
+                {"pattern": f"{prefix}%"},
+            )
+            session.commit()
+            return result.rowcount
+
 
 # 全局单例
 _sqlalchemy_instance: Optional[SQLAlchemyManager] = None

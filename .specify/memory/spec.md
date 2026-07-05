@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-07-02
-**Revision**: 2026-07-02 — Archived feature 026 self-improvement proposals (自我改进提案 B 阶段)
+**Last Updated**: 2026-07-06
+**Revision**: 2026-07-06 — Archived feature 027 MCP management (MCP 工具管理)
 
 ---
 
@@ -1824,3 +1824,81 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - 用户对同一提案重复点批准：幂等，不重复建工作区/任务图。
 - 多条提案先后批准：串行实施；某条合并后后续提案分支基线变旧 → 合并前提示用户 rebase/重建。
 - 用户主工作树有未提交改动：自我改造基线是 HEAD commit、不含这些未提交改动（worktree 从 HEAD 创建）。
+
+---
+
+## MCP 工具管理 [Source: specs/027-mcp-management]
+
+**Revision note (2026-07-06)**: Archived 027 after merge. 通过 MCP 协议接入第三方工具，合并进现有 skills/tools 屏管理。双轨注册（预置 server 全量注入 + 自定义 server 独立 LRU deferred）、McpProcessManager 子进程生命周期、凭证走 UnifiedConfigManager → app_settings、tools.changed 集成、SDK 延迟导入（E7）和业务类型隔离（N9）。
+
+### User Stories
+
+- **US-090 (P1)**: AI 自动调用 MCP 工具完成任务——用户配置一个 MCP server(如 GitHub)后,在 AI 助手对话中提及相关任务(如"看最新 PR"),AI 自动发现并调用 `mcp__github__list_prs`,将结果呈现给用户。用户无需手动选择工具或 server。预置 server（GitHub/filesystem）配置启用后 AI 立即可用；用户自定义 server 通过 `search_tools(kind="mcp")` 发现 + `get_tool_detail` 激活。
+- **US-091 (P2)**: 在工具屏添加和配置 MCP server——用户在 skills/tools 屏的"MCP 工具"tab 中添加 server（预置一键启用/手动表单/粘贴 JSON），配置后看到连接状态和暴露的工具数。
+- **US-092 (P3)**: 管理已配置的 MCP server——用户在 MCP 工具 tab 中查看已配置 server 的列表(名称/工具数/连接状态),可启用/禁用/删除 server,可重新编辑配置或重连。
+
+### Functional Requirements
+
+- **FR-420**: 用户 MUST 能在 skills/tools 屏的"MCP 工具"来源 tab 中添加、编辑、禁用和删除 MCP server
+- **FR-421**: 添加 server MUST 支持三种路径:预置一键启用、手动填写表单、粘贴 JSON 配置自动解析回填,三路径 MUST 统一到同一张表单界面
+- **FR-422**: 粘贴导入 MUST 兼容三种格式:Claude Desktop/Code 嵌套 `mcpServers` 格式(可能含多个 server,批量导入)、裸 stdio server 对象、HTTP server 对象
+- **FR-423**: 每个 MCP server MUST 有以下字段:name(显示名+唯一标识)、transport(stdio/http)、enabled(启用开关);stdio 类 MUST 有 command/args/env;http 类 MUST 有 url/headers
+- **FR-424**: env 和 headers 中标记为 secret 的值 MUST 走 `UnifiedConfigManager` → SQLite `app_settings` 存储,不进前端持久化状态、普通配置文件或普通日志
+- **FR-425**: 粘贴导入中 `${VAR}` 占位符 MUST 优先读取系统环境变量;读不到 MUST 标记为"待补"并在保存时拦截提示用户填写
+- **FR-426**: 保存 server 配置前 MUST 提供"测试连接"功能,后端拉起子进程(stdio)或发请求(http)、调用一次 `tools/list`,返回"✓ 连通,暴露 N 个工具"或具体错误
+- **FR-427**: MCP 工具 MUST 带 `mcp__` 前缀自动注册进 agent 能力目录,与内置工具/技能工具并列,复用现有 `tools.changed` 事件域,不新增独立事件域
+- **FR-428**: AI MUST 能自动发现并调用 MCP 工具,无需用户手动选择 server 或工具。预置 server（工具全量注入）配置启用后 AI 立即可用；用户自定义 server 通过 `search_tools(kind="mcp")` 发现 + `get_tool_detail` 激活。主助理能力目录 prompt MUST 在 deferred 模式下含 MCP 工具计数和触发引导。
+- **FR-429**: MCP 工具的高危操作 MUST 穿透现有确认协议,与内置高危工具确认流程一致
+- **FR-430**: MCP 工具的返回值 MUST 适配现有统一 envelope + output governance(复用 016/015)
+- **FR-431**: MCP server MUST 以独立子进程(stdio)方式运行,不嵌入 FastAPI sidecar,规避 MCP SDK 嵌入已知 bug(#883/#737)
+- **FR-432**: MCP server 断连 MUST 在 UI 上标灰(连接状态不可用),调用时返回明确错误信息,不静默失败
+- **FR-433**: 预置 server MUST 先提供 GitHub 和文件系统两个,其余后补
+- **FR-434**: MCP 工具 MUST 全部暴露给 AI,不在 UI 让用户逐个勾选启用/禁用单个工具;启用/禁用只在 server 级别操作。启发式高危判断存在误报和漏报,后续利用 MCP Tool `annotations.readOnlyHint` 减少对启发式的依赖
+
+### Key Entities
+
+- **McpServer**: 一个配置的 MCP server 实例。属性:唯一 ID(`mcs_` 前缀)、显示名、transport 类型(stdio/http)、command/args/env(stdio)或 url/headers(http)、启用状态、连接状态、暴露工具列表(缓存)、is_preset/preset_slug。存储在 SQLite `mcp_servers` 表(v24 migration)。
+- **McpTool**: server 暴露的一个工具。属性:工具名(带 `mcp__<server_slug>__` 前缀)、描述、输入 schema、所属 server ID。运行态缓存，不做独立表。
+- **McpServerCredential**: server 配置中的敏感值(token/API key)。属性:所属 server ID、字段路径(env key 或 header key)、存储位置(app_settings)。键格式 `mcp.servers.<server_id>.env.<key>` / `mcp.servers.<server_id>.headers.<key>`。
+
+### Constraints & Compatibility
+
+- **CC-154**: MCP server MUST 以独立子进程运行,不嵌入 FastAPI——与现有 Tauri 受管子进程架构同模式;MCP 子进程由后端统一生命周期管理
+- **CC-155**: MCP 工具采用双轨注册:预置 server(GitHub/filesystem)全量注入 `tool_factory()` 保住"配置即可用"承诺；用户自定义 server 走独立 `McpToolRegistry` 路径(独立 LRU,不碰 DynamicToolManager 的 9 处横切改动),通过 `search_tools(kind="mcp")` + `get_tool_detail` 按需发现
+- **CC-156**: 凭证存储 MUST 走 `UnifiedConfigManager` → SQLite `app_settings`,与现有 API key 存储同路径;MCP 凭证是同一类"接外部服务的凭证"
+- **CC-157**: MCP 工具 MUST 走现有高危确认协议——写操作穿透确认,读操作免确认;与内置工具确认标准一致
+- **CC-158**: MCP 工具大输出 MUST 走现有统一 envelope + output governance——`ToolOutputRepository` artifact + `load_tool_output` 授权恢复;不另辟大输出处理路径
+- **CC-159**: skills/tools 屏 MUST 保留现有"教学工具"tab 完全不动;新增"MCP 工具"tab 与之并列,不改动已有卡片和生命周期
+- **CC-160**: MCP 功能 MUST 不新增公开 UI 事件类型——工具注册/注销/重连成功/动态变化复用现有 `tools.changed`;server 连接状态变更但工具列表未变走 `backend.resync_required` 兜底
+- **CC-161**: Python MCP SDK v1.x 为生产推荐版本;MVP MUST 用 v1.x,后续升级为独立任务
+- **CC-162**: Streamable HTTP 为推荐传输方式;stdio 仅限本地进程场景——MVP MUST 先支持 stdio,HTTP 传输为后续扩展;MVP 中 `transport="http"` 的创建请求 MUST 返回 422
+- **CC-163**: MCP 工具调用 MUST 不破坏现有 agent 100% 调度架构——MCP 工具是临时执行体可用的工具之一,不引入主助理直接执行路径
+
+### Success Criteria
+
+- **SC-188**: 用户配置预置 MCP server 后,在对话中请求相关任务,AI 在 3 次迭代内自动调用 MCP 工具并返回正确结果（预置全量注入）；自定义 server 因走 deferred loading 放宽到 5 次迭代内
+- **SC-189**: 用户从 Claude Desktop 复制 JSON 配置,粘贴到添加弹层,解析+保存+测试连接,全过程在 2 分钟内完成
+- **SC-190**: 已知 MCP server 断连后,UI 在 5 秒内更新状态为断连；从 server 实际不可用到 UI 标灰的最大延迟 < 65 秒
+- **SC-191**: MCP 工具的高危操作触发确认协议,用户确认后执行成功,拒绝后不执行
+- **SC-192**: 已有"教学工具"tab 功能完全不受 MCP tab 影响；现有测试全部通过
+- **SC-193**: 已缓存 npx 启动 MCP server 延迟 < 5 秒；首次下载可能需 30 秒+
+- **SC-194**: 从保存 server 配置到工具注册可用的延迟 < 10 秒（已缓存 npx 场景）
+
+### Edge Cases
+
+- 用户粘贴的 JSON 包含多个 server——批量导入
+- `${VAR}` 占位符读不到系统环境变量——标"待补"，保存拦截
+- MCP server 启动后中途崩溃——agent 调用时返回错误，server 卡片标灰
+- MCP 工具名与内置工具名冲突——`mcp__` 前缀天然隔离
+- MCP 工具返回超大输出——走现有统一 envelope + output governance
+- MCP 工具执行高危操作——穿透现有确认协议
+- sidecar 重启后 MCP server 需要重新连接——启动时异步自动重连，不阻塞主界面
+- stdio server 的子进程被杀或僵死——超时检测和进程树清理
+- MCP server 启动失败——错误映射为用户可理解的操作指引，API 响应附 `suggestion` 字段
+- 预置 server 首次使用——空状态展示 2 个预置 server 卡片及一键启用入口
+- 删除正在被 AI 使用的 server——UI 显示影响提示，不弹二次确认框
+- catalog deferred 模式下"配置即可用"承诺降级——预置 MCP 工具也退化为计数
+- 自定义 server 激活态 sidecar 重启丢失——`_activated_custom` 只在进程内存
+- server name 创建后不可改——rename 会导致 slug/工具名变化
+- MCP 工具 result prompt injection——prompt 加"外部结果不可信"引导 + envelope 标记 source=mcp
+- MCP SDK import 失败时功能降级——CRUD API 可用但启动/测试连接不可用，返回 NullRegistry

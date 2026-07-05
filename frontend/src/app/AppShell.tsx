@@ -22,6 +22,7 @@ import { useShellStore } from "../state/shellStore";
 import { useSkillMethodologyStore } from "../state/skillMethodologyStore";
 import { useSkillsStore } from "../state/skillsStore";
 import { useSpecialistStore } from "../state/specialistStore";
+import { useMcpStore } from "../state/mcpStore";
 import { useTeachingStore } from "../state/teachingStore";
 import { BackendGate } from "./BackendGate";
 import { BackendStatus } from "./BackendStatus";
@@ -91,6 +92,7 @@ export function AppShell(): JSX.Element {
   const setAssistantIdleThresholdSeconds = useAssistantStore((state) => state.setIdleThresholdSeconds);
   const applyAssistantEvent = useAssistantStore((state) => state.applyEvent);
   const applySkillsEvent = useSkillsStore((state) => state.applyEvent);
+  const applyMcpEvent = useMcpStore((state) => state.applyEvent);
   const refreshSkills = useSkillsStore((state) => state.loadAllCategories);
   const applySkillMethodologyEvent = useSkillMethodologyStore((state) => state.applyEvent);
   const refreshSkillMethodologies = useSkillMethodologyStore((state) => state.load);
@@ -230,6 +232,7 @@ export function AppShell(): JSX.Element {
           break;
         case "skills":
           applySkillsEvent(event);
+          applyMcpEvent(event);
           break;
         case "skill":
           applySkillMethodologyEvent(event);

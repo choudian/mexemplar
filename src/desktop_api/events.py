@@ -354,6 +354,8 @@ _INTERNAL_EVENT_NAMES = [
     "assistant_todo_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
+    # 027 MCP server status change (resync when tool list unchanged)
+    "backend_resync_required",
 ]
 
 

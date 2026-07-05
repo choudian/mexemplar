@@ -167,6 +167,24 @@ class UnifiedConfigManager:
         if old_value != value:
             self._notify_observers(key, old_value, value)
 
+    def delete_by_prefix(self, prefix: str) -> int:
+        """删除所有以 prefix 开头的 app_settings 条目，并清理运行时缓存。
+
+        Args:
+            prefix: 键前缀（如 'mcp.servers.mcs_abc.'）
+
+        Returns:
+            删除的行数
+        """
+        with self._cache_lock:
+            keys_to_evict = [k for k in self._runtime_cache if k.startswith(prefix)]
+            for k in keys_to_evict:
+                del self._runtime_cache[k]
+        count = self._sa.delete_settings_by_prefix(prefix)
+        if count > 0:
+            logger.info("[配置] 已按前缀删除 %d 条: %s*", count, prefix)
+        return count
+
     # ===== 便捷方法：AI 配置 =====
 
     def get_ai_model(self) -> str:

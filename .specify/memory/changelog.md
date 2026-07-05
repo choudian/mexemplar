@@ -1,7 +1,52 @@
 # Merged Features Log
 
-**Last Updated:** 2026-07-02
-**Revision:** 2026-07-02 — Archived 026 self-improvement proposals (自我改进提案 B 阶段)
+**Last Updated:** 2026-07-06
+**Revision:** 2026-07-06 — Archived 027 MCP management (MCP 工具管理)
+
+## MCP 工具管理 — 2026-07-06
+
+**Branch:** `027-mcp-management`
+**Spec:** `specs/027-mcp-management`
+
+**What was added:**
+- US-090 (P1): AI 自动调用 MCP 工具完成任务——用户配置 MCP server 后，AI 在对话中自动发现并调用 MCP 工具，无需手动选择。预置 server（GitHub/filesystem）全量注入立即可用；自定义 server 通过 search_tools + get_tool_detail 按需发现激活。
+- US-091 (P2): 在工具屏添加和配置 MCP server——skills/tools 屏新增"MCP 工具"tab，支持预置一键启用、手动表单、粘贴 JSON（三种格式）三种添加路径，配置后显示连接状态和工具数。
+- US-092 (P3): 管理已配置的 MCP server——查看 server 列表（名称/工具数/连接状态），启用/禁用/删除/重连/编辑 server。
+
+**New Components:**
+- `src/business/mcp/`（10 文件）— McpServerService、McpProcessManager（stdio_client + AsyncExitStack + _SdkSessionAdapter）、McpToolRegistry（双轨：预置全量注入 + 自定义独立 LRU，线程安全 snapshot，NullRegistry 降级）、mcp_search_tools、mcp_json_import、mcp_env_resolver、mcp_errors、mcp_presets、models（McpServerConfigPublic/McpLaunchPayload/McpToolInfo/McpCallResult）
+- `src/data/repos/mcp_server_repository.py` — McpServerRepository（继承 BaseRepository）
+- `src/data/migrations.py` — v24: `mcp_servers` 表 + unique index + downgrade
+- `src/desktop_api/routers/mcp_servers.py` — MCP server CRUD typed API（create/list/get/update/enable/disable/reconnect/delete/import-json/test-connection）
+- `frontend/src/api/mcpServers.ts` — typed API client
+- `frontend/src/state/mcpStore.ts` — Zustand store
+- `frontend/src/screens/skills/McpServerTab.tsx` + `McpServerCard.tsx` + `McpServerDialog.tsx` + `McpEnvEditor.tsx` — MCP 工具 tab UI
+
+**Modified Components:**
+- `src/business/agents/tools/capability_catalog.py` — CapabilityKind 加 "mcp"、_KIND_ORDER 加 "mcp": 2、search 校验扩展
+- `src/business/agents/tools/tool_registry.py` — tool_factory() 追加 MCP preset + activated custom 工具；create_assistant_search_tools 替换为 create_mcp_aware_search_tools
+- `src/business/agents/tools/builtin_contracts.py` — search_tools schema kind 枚举加 "mcp"
+- `src/desktop_api/app.py` — lifespan startup: seed_preset_servers + start_all_enabled；shutdown: stop_all
+- `src/data/models_sqlite.py` — McpServer ORM 模型
+- `src/data/unified_config.py` — MCP 凭证读写辅助
+- `pyproject.toml` — 新增 `mcp>=1.27,<2` 依赖
+
+**Key Decisions:**
+- 双轨注册（N8/X1）：预置 server 全量注入 tool_factory()，自定义 server 走独立 McpToolRegistry 路径（避开 DynamicToolManager 9 处横切改动）
+- SDK 延迟导入（E7）：所有 `from mcp import ...` 在函数内部，SDK 不可用时返回 NullRegistry
+- 业务类型隔离（N9）：McpCallResult/McpToolInfo 不含 SDK 类型，_SdkSessionAdapter 在 process_manager 内部做适配
+- 高危确认启发式（FR-015）：权威关键词集合 `{create, delete, update, write, push, merge, remove, add, close, deploy, execute, fork}`，存在已知误报和漏报
+- 0 新公开 UI 事件：复用 `tools.changed`；server 状态变更走 `backend.resync_required` 兜底
+
+**Known Issues:**
+- catalog deferred 模式下"配置即可用"承诺降级（预置 MCP 工具也退化为计数）
+- 自定义 server 激活态 sidecar 重启丢失（`_activated_custom` 只在进程内存）
+- server name 创建后不可改（rename 会导致 slug/工具名变化）
+- MCP 工具 result prompt injection（prompt 加"外部结果不可信"引导，MVP 不做内容级清洗）
+- ClientSession 长连接稳定性待验证（1 小时测试，泄漏则加定期重建）
+- MCP SDK import 失败时功能降级（CRUD 可用，启动/测试不可用）
+
+**Tasks Completed:** 56/56 tasks
 
 ## 自我改进提案（B 阶段） — 2026-07-02
 

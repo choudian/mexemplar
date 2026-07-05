@@ -1334,3 +1334,45 @@ class ImprovementProposal(Base):
 
     def __repr__(self) -> str:
         return f"<ImprovementProposal(id={self.id!r}, status={self.status!r})>"
+
+
+class McpServer(Base):
+    """MCP server 配置表（v24 migration）"""
+
+    __tablename__ = "mcp_servers"
+    __table_args__ = (
+        CheckConstraint(
+            "transport IN ('stdio', 'http')",
+            name="ck_mcp_servers_transport",
+        ),
+        Index("uq_mcp_servers_name", "name", unique=True),
+    )
+
+    server_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    transport: Mapped[str] = mapped_column(String(20), nullable=False)
+    command: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    args_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    headers_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    secret_header_keys_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    env_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    secret_env_keys_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_known_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    suggestion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    circuit_breaker_open: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    tool_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tools_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    is_preset: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    preset_slug: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now()
+    )
+
+    def __repr__(self) -> str:
+        return f"<McpServer(server_id={self.server_id!r}, name={self.name!r})>"

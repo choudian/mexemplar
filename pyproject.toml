@@ -48,6 +48,7 @@ dependencies = [
     "alembic>=1.18.3",
     "sqlite-vec>=0.1.6",
     "markdownify>=1.2.2",
+    "mcp>=1.27,<2",
 ]
 
 [[tool.uv.index]]
@@ -94,8 +95,9 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 markers = [
-    "e2e: headful GUI end-to-end tests that require explicit opt-in",
+    "e2e: headless GUI end-to-end tests that require explicit opt-in",
     "real_llm: run the test against a real LLM instead of the scripted mock client",
+    "integration: integration tests that require external services (e.g. npx, MCP SDK)",
 ]
 addopts = [
     "--strict-markers",
