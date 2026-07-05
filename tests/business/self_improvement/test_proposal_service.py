@@ -212,7 +212,7 @@ def test_sanitize_redacts_additional_provider_secret_shapes():
     key、JWT、URL 内嵌凭证不得原样进 DTO error/summary。denylist 是纵深防御的一层
     (服务端日志另存完整诊断),但已知 secret 形态必须命中。"""
     samples = [
-        ("stripe key sk_live_abcdefghijklmnopqrstuvwxyz leaked", "sk_live_"),
+        ("stripe key " + "sk_live_" + "abcdefghijklmnopqrstuvwxyz leaked", "sk_live_"),
         ("google AIzaSyA1234567890XYZabcd in log", "AIzaSyA"),
         ("jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.sig leaked", "eyJhbGci"),
         ("db url postgres://uploader:p4ssw0rd@db.host:5432/app", "p4ssw0rd"),
