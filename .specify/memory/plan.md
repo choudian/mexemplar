@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-07-02
-**Revision**: 2026-07-02 — Archived feature 026 self-improvement proposals (自我改进提案 B 阶段)
+**Last Updated**: 2026-07-06
+**Revision**: 2026-07-06 — Archived feature 027 MCP management (MCP 工具管理)
 
 ---
 
@@ -1409,3 +1409,96 @@ frontend/src/
 - **前端**：复盘视图提案展示/批准+补料/拒绝交互（`proposal-review.test.tsx`）
 
 Feature tasks: 33/33 completed。
+
+---
+
+## MCP 工具管理 [Source: specs/027-mcp-management]
+
+**Revision note (2026-07-06)**: Archived 027 after merge. 新增 `src/business/mcp/` 业务层（McpServerService/McpProcessManager/McpToolRegistry/mcp_search_tools/models）、SQLite v24 `mcp_servers` 表 + `app_settings` 凭证、`/api/mcp-servers` typed CRUD、前端 SkillListScreen "MCP 工具"tab；双轨注册、SDK 延迟导入、业务类型隔离、NullRegistry 降级。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）、TypeScript 5.x（前端）
+- **Primary Dependencies**: 新增 `mcp>=1.27,<2`（Python MCP SDK v1.x，延迟导入 E7）、复用 FastAPI、SQLAlchemy、Zustand、blinker、AgentLoop
+- **Storage**: SQLite `mcp_servers` 表（v24 migration + downgrade）+ `app_settings` 凭证（`mcp.servers.<server_id>.*` 键格式）
+- **Testing**: pytest（后端单元/集成/门卫/线程安全）、Vitest + React Testing Library（前端单元）、Playwright（E2E）
+- **Target Platform**: Windows 11 桌面（Tauri 2 shell + localhost FastAPI sidecar）
+- **Constraints**: MCP server 以独立子进程运行；凭证不进前端/日志/明文 DTO；MCP SDK v1.x pin `<2`；stdio 传输优先 HTTP 后续扩展；SDK import 失败时降级（CRUD 可用，启动/测试不可用）
+- **Scale/Scope**: 3-10 个 MCP server 配置；每个 server 1-50 个工具；单用户桌面应用
+
+### Source Code Structure
+
+```text
+frontend/
+├── src/
+│   ├── api/mcpServers.ts           # MCP server typed API client
+│   ├── screens/skills/
+│   │   ├── McpServerTab.tsx         # MCP 工具 tab（与 SkillListScreen 并列）
+│   │   ├── McpServerCard.tsx        # 单个 server 卡片
+│   │   ├── McpServerDialog.tsx      # 添加/编辑 server 弹层
+│   │   └── McpEnvEditor.tsx         # env 键值对编辑器
+│   └── state/mcpStore.ts           # MCP server Zustand store
+└── tests/unit/mcpStore.test.ts
+
+src/
+├── business/mcp/                   # MCP 业务层（新增）
+│   ├── __init__.py
+│   ├── mcp_server_service.py       # Server 生命周期 + 同步桥接 + 事件循环崩溃恢复
+│   ├── mcp_tool_registry.py        # 双轨注册表 + NullRegistry + 线程安全 snapshot
+│   ├── mcp_process_manager.py      # stdio_client + AsyncExitStack + _SdkSessionAdapter
+│   ├── mcp_session_protocol.py     # McpSessionProtocol（Protocol，返回业务类型 N9）
+│   ├── mcp_search_tools.py         # create_mcp_aware_search_tools（kind 含 mcp）
+│   ├── mcp_json_import.py          # JSON 配置解析（三种格式）+ secret 自动检测
+│   ├── mcp_env_resolver.py         # ${VAR} 环境变量解析
+│   ├── mcp_errors.py               # 错误分类映射 → suggestion
+│   ├── mcp_presets.py              # 预置 server 默认配置
+│   └── models.py                   # 业务模型（McpServerConfigPublic/McpLaunchPayload/McpToolInfo/McpCallResult）
+├── business/agents/tools/
+│   ├── capability_catalog.py       # 修改：CapabilityKind/_KIND_ORDER/search 加 "mcp"
+│   ├── tool_registry.py            # 修改：tool_factory 追加 MCP 工具
+│   └── builtin_contracts.py        # 修改：search_tools schema 加 mcp kind
+├── desktop_api/routers/mcp_servers.py  # MCP server CRUD API
+├── data/
+│   ├── repos/mcp_server_repository.py  # McpServerRepository
+│   ├── migrations.py               # v24: mcp_servers 表 + downgrade
+│   └── models_sqlite.py            # McpServer ORM 模型
+└── utils/events.py                 # 无修改（无新事件）
+
+tests/
+├── business/mcp/                   # 业务层测试（注入 FakeMcpSession）
+├── data/test_mcp_server_repository.py
+├── desktop_api/test_mcp_servers_router.py
+├── integration/test_mcp_filesystem_server.py  # 真实 filesystem server
+└── guardrails/test_mcp_guardrails.py          # 架构门卫测试
+```
+
+### Configuration
+
+| Key | Type | Default | Effect |
+|-----|------|---------|--------|
+| `mcp.servers.<server_id>.env.<key>` | string | — | MCP server secret env 值（app_settings） |
+| `mcp.servers.<server_id>.headers.<key>` | string | — | MCP server secret header 值（app_settings） |
+
+预置 server 配置种子数据在 `mcp_presets.py`，lifespan 启动时 upsert。凭证键格式统一为 `mcp.servers.<server_id>.env.<key>` / `mcp.servers.<server_id>.headers.<key>`。
+
+### Architecture Decisions (from research.md)
+
+- **R1**: MCP SDK v1.x + `stdio_client` + `AsyncExitStack` 管理长连接子进程
+- **R2**: 三种 JSON 配置格式兼容（嵌套 mcpServers / 裸 stdio / 裸 HTTP）
+- **R3**: 双轨工具注册——预置 server 全量注入 `tool_factory()` + 自定义 server 走独立 `McpToolRegistry` 路径
+- **R4**: `stdio_client` + `StdioServerParameters` + `AsyncExitStack` 管理子进程生命周期
+- **R5**: 高危确认走 pre_hook 启发式判断 + 穿透现有 `_confirm_or_reject`（权威关键词集合见 contracts）
+- **R6**: 能力目录集成——`search_tools(kind="mcp")` + `get_tool_detail(selector="mcp:...")` 扩展
+- **R7**: ClientSession 长连接稳定性需验证（1 小时测试），泄漏则加定期重建
+
+### Testing Strategy
+
+- **业务层**: McpProcessManager（FakeMcpSession 注入）、McpToolRegistry（双轨 + 线程安全 snapshot）、McpServerService（生命周期 + 断路器 + secret 存储 + tools.changed 发射）
+- **JSON 解析**: 三种格式 + 批量导入 + secret 检测 + fuzz 测试
+- **线程安全**: Barrier 同步 + 事件循环崩溃恢复测试
+- **配置安全**: McpLaunchPayload repr 门卫测试（secret 不泄漏）
+- **API**: CRUD + import-json + test-connection + name conflict + placeholder rejection + HTTP transport 422
+- **集成**: 真实 filesystem server（start + list_tools + call_tool + reconnect）
+- **门卫**: 双轨注册 + SDK 类型不穿业务层 + deferred loading + 凭证不泄漏 + snapshot 语义
+
+Feature tasks: 56/56 completed。

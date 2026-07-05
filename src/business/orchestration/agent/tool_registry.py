@@ -209,7 +209,6 @@ class ToolRegistry:
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
-            create_assistant_search_tools,
         )
 
         dynamic_manager = DynamicToolManager(
@@ -217,7 +216,6 @@ class ToolRegistry:
             allowed_composition_ids=allowed_composition_ids,
         )
         builtin_tools = _filter_builtin_tools(BUILTIN_GENERAL_TOOLS, tool_whitelist)
-        search_tools = create_assistant_search_tools(dynamic_manager)
         load_skill_tool = self.make_load_skill_tool(
             caller_type="specialist" if agent_type == AgentType.SPECIALIST else "assistant",
             caller_id=specialist_id or ASSISTANT_ENTITY_ID,
@@ -358,6 +356,14 @@ class ToolRegistry:
                 ),
             ]
 
+        # 027: MCP 工具注入 — 预置全量 + 自定义激活
+        from src.business.mcp import get_mcp_tool_registry
+        mcp_registry = get_mcp_tool_registry()
+
+        # 027-T029: MCP-aware search_tools（含 MCP kind 和 server_slug 过滤）
+        from src.business.mcp.mcp_search_tools import create_mcp_aware_search_tools
+        search_tools = create_mcp_aware_search_tools(dynamic_manager, mcp_registry)
+
         def tool_factory() -> list[ToolDefinition]:
             if role_kind == "planner":
                 # 规划专员：search + build_task_graph + load_skill（不含 BUILTIN_GENERAL_TOOLS 执行工具）
@@ -366,6 +372,8 @@ class ToolRegistry:
                     + planner_tools
                     + [load_skill_tool]
                     + dynamic_manager.get_activated_tools()
+                    + mcp_registry.get_preset_tools()              # 轨道 A
+                    + mcp_registry.get_activated_custom_tools()    # 轨道 B
                 )
             return (
                 search_tools
@@ -373,6 +381,8 @@ class ToolRegistry:
                 + specialist_subagent_tools
                 + builtin_tools
                 + dynamic_manager.get_activated_tools()
+                + mcp_registry.get_preset_tools()              # 轨道 A
+                + mcp_registry.get_activated_custom_tools()    # 轨道 B
             )
 
         return tool_factory
@@ -434,7 +444,7 @@ class ToolRegistry:
             create_save_profile_handler,
         )
         from src.business.agents.tools.dynamic_tool_manager import (
-            create_assistant_search_tools,
+            DynamicToolManager,
         )
         from src.business.agents.tools.skill_methodology_tools import (
             CREATE_SKILL_METHODOLOGY_SCHEMA,
@@ -589,7 +599,14 @@ class ToolRegistry:
             handler=create_mutate_task_graph_handler(session_id),
         )
 
-        search_tools = create_assistant_search_tools(dynamic_manager)
+        # 027: MCP 工具注入 — 预置全量 + 自定义激活
+        from src.business.mcp import get_mcp_tool_registry
+        mcp_registry = get_mcp_tool_registry()
+
+        # 027-T029: MCP-aware search_tools（含 MCP kind 和 server_slug 过滤）
+        from src.business.mcp.mcp_search_tools import create_mcp_aware_search_tools
+        search_tools = create_mcp_aware_search_tools(dynamic_manager, mcp_registry)
+
         static_tools = [
             REPORT_TOOL_BUG,
             save_profile_tool,
@@ -618,6 +635,12 @@ class ToolRegistry:
         ]
 
         def tool_factory() -> list[ToolDefinition]:
-            return search_tools + static_tools + dynamic_manager.get_activated_tools()
+            return (
+                search_tools
+                + static_tools
+                + dynamic_manager.get_activated_tools()
+                + mcp_registry.get_preset_tools()              # 轨道 A：预置全量
+                + mcp_registry.get_activated_custom_tools()    # 轨道 B：自定义激活
+            )
 
         return tool_factory

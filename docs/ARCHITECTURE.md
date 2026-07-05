@@ -195,6 +195,55 @@ BrainScreen proposal review
 - `reject` 可拒绝 pending 或 failed 提案；failed 提案被弃用时清理 worktree 和分支，并清空 stale worktree metadata。保留数量由 `self_improvement.proposals.worktree_retention_max` 控制，配置仍经 `UnifiedConfigManager` 读取。
 - 前端 proposal 状态只通过 typed API 和 `improvement_proposal.changed` 事件刷新；事件缺口进入 `backend.resync_required` 时，Brain domain 权威刷新必须同时重拉执行复盘和改进提案列表。
 
+### MCP Server Management（027）
+
+通过 MCP（Model Context Protocol）协议接入第三方工具，合并进现有 skills/tools 屏管理。业务层位于 `src/business/mcp/`，与 `brain/`、`task_collaboration/`、`user_todos/`、`self_improvement/` 同级。
+
+```text
+React SkillListScreen MCP tab
+  → frontend/src/api/mcpServers.ts
+  → /api/mcp-servers router
+  → McpServerService
+  → McpServerRepository → mcp_servers (SQLite v24)
+  → McpProcessManager (stdio_client + AsyncExitStack + _SdkSessionAdapter)
+  → McpToolRegistry (双轨注册)
+  → tool_factory() / search_tools / get_tool_detail
+  → AgentLoop handler + pre_hook 确认穿透 + output governance
+```
+
+**双轨注册**（CC-002 / N8）：
+
+- **轨道 A — 预置 server 全量注入**：预置 server（GitHub/filesystem）配置启用后，工具 `ToolDefinition` 直接全量注入 `tool_factory()`，保住"配置即可用"核心承诺。预置工具数可控（filesystem ~10，GitHub ~30），不走 deferred loading。
+- **轨道 B — 用户自定义 server 走独立 deferred 路径**：`McpToolRegistry` 维护独立 LRU（`MAX_ACTIVATED_CUSTOM=10`，不与 DynamicToolManager 争用），AI 通过 `search_tools(kind="mcp")` + `get_tool_detail(selector="mcp:...")` 发现激活。`search_tools`/`get_tool_detail` 的 MCP 分支直接查 `McpToolRegistry`，不碰 DynamicToolManager。
+
+**McpProcessManager 生命周期**：
+
+- 以独立子进程运行 MCP server（stdio 传输），不嵌入 FastAPI sidecar（CC-001）。
+- 使用 `stdio_client(StdioServerParameters)` + `AsyncExitStack` 管理长连接；SDK 拥有子进程完整生命周期（spawn + Job Object 清理）。
+- `_SdkSessionAdapter` 将 SDK `ClientSession` 包装为业务层 `McpSessionProtocol`（RC4），`_sessions: dict[str, McpSessionProtocol]` 存 Protocol 类型，测试可注入 `FakeMcpSession`。
+- 事件循环线程自包含：只做 asyncio I/O，绝不回调到主线程。崩溃后自动重建循环（E6）。
+- 断路器（E8）：每个 server 连续失败超 3 次直接返回错误，手动 reconnect 重置。
+- 健康检查：call_tool 失败即时标记 disconnected；60s 定时 ping 兜底。
+- Sidecar 启动时 `start_all_enabled()` 后台异步执行，不阻塞主界面；关闭时 10s 超时并发停止。
+
+**凭证流**：secret env/header 值走 `UnifiedConfigManager` → SQLite `app_settings`，键格式 `mcp.servers.<server_id>.env.<key>` / `mcp.servers.<server_id>.headers.<key>`。`McpServerConfigPublic`（不含 secret）可安全缓存/日志/序列化；`McpLaunchPayload`（含合并 secret）仅在 `McpProcessManager.start_server` 内部构造、用完丢弃，`repr` 遮罩（RC5）。`${VAR}` 占位符每次 start/reconnect 时重新解析系统环境变量。
+
+**tools.changed 集成**（CC-007）：
+
+- MCP 工具注册复用现有 `tools.changed` 事件域，不新增独立事件域。
+- 触发时机：首次注册、注销、重连成功、工具列表动态变化。
+- Server 状态变更但工具列表未变（断路器开闭）不发 `tools.changed`，走 `backend.resync_required` 兜底。
+- 启动失败也发 `backend.resync_required`，前端 MCP tab 据此刷新 server 状态。
+
+**关键约束**：
+
+- **SDK 延迟导入（E7）**：所有 `from mcp import ...` 必须在函数内部延迟导入，不放模块顶层。SDK 不可用时 CRUD API 仍可工作，启动/测试连接返回明确错误。`get_mcp_tool_registry()` 返回 `NullRegistry` 空实现。
+- **业务类型隔离（N9）**：SDK 类型不穿业务层。`McpProcessManager` 内部用 `_SdkSessionAdapter` + `_convert_sdk_*` 即时转换为业务类型（`McpToolInfo`/`McpCallResult`/`McpSessionProtocol`），业务层不 import `mcp.types`。
+- **Pre-hook 确认穿透**：MCP 工具通过 `mcp_tool_pre_hook` 穿透现有高危确认协议。启发式判断 `_is_likely_write_operation`（权威关键词集合：create/delete/update/write/push/merge/remove/add/close/deploy/execute/fork），存在误报和漏报（有意技术债务，见 FR-015）。
+- **Output governance**：MCP 工具返回值适配统一 envelope + output governance（复用 016/015），envelope 标记 `source=mcp`（N12 prompt injection 防御）。大输出走 `ToolOutputRepository` artifact + `load_tool_output` 授权恢复。
+- **并发语义**：MCP 工具一律 `is_concurrency_safe=False`（N11），串行执行。
+- **MVP 仅 stdio**：`transport="http"` 创建请求返回 422（CC-009）。
+
 ### User Todo List（025）
 
 用户个人待办是独立的轻量业务能力，不属于 task graph。数据存储在 SQLite v18 `user_todos` 表，经 `UserTodoRepository` 和 `UserTodoService` 管理；桌面 API 只暴露 `/api/user-todos` typed CRUD，前端 `/todos` 页面通过 `frontend/src/api/userTodos.ts` 与 `userTodoStore` 访问。
@@ -808,3 +857,4 @@ assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入�
 *更新：2026-06-12 — AgentLoop 对显式并发安全的连续读取工具并行执行 handler 与 output governance，结果保持主线程原序持久化*
 *更新：2026-06-17 — 新增 Assistant Task Collaboration：持久 Task 图、TaskAttempt 围栏恢复、父侧裁定、看板/会议/问题路由、私人 Todo 和 task collaboration UI event/snapshot 边界*
 *更新：2026-06-29 — 新增 Self-Improvement Proposals 自动实施闭环：审批后隔离 worktree + Task 图实施、后台 recovery 写回和 proposal executor 硬门卫*
+*更新：2026-07-04 — 新增 MCP Server Management：MCP 协议接入第三方工具、双轨注册（预置全量注入 + 自定义独立 LRU）、McpProcessManager 子进程生命周期、凭证走 UnifiedConfigManager、tools.changed 集成、SDK 延迟导入和业务类型隔离*

@@ -35,6 +35,7 @@ from src.desktop_api.ui_events import (
     EVENT_TYPE_TEACHING_STAGE_CHANGED,
     EVENT_TYPE_TOOLS_CHANGED,
     EVENT_TYPE_TRIAL_PROGRESS,
+    EVENT_TYPE_BACKEND_RESYNC_REQUIRED,
 )
 
 logger = logging.getLogger(__name__)
@@ -735,6 +736,26 @@ def _project_brain_context_ready(payload, scope, causation_id):
     ]
 
 
+def _project_backend_resync_required(payload, scope, causation_id):
+    """Project backend_resync_required blinker event to public UI event.
+
+    Used by MCP when server status changes but tool list is unchanged
+    (e.g., server disconnected/reconnected without tool count change).
+    """
+    reason = _string_or_none(payload.get("reason")) or "mcp_status_changed"
+    return [
+        UiEventDraft(
+            EVENT_TYPE_BACKEND_RESYNC_REQUIRED,
+            {
+                "reason": reason,
+                "domains": ["tools", "teaching", "brain", "skill", "settings"],
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
 def _project_improvement_proposal_changed(payload, scope, causation_id):
     """Project internal improvement_proposal_changed blinker event to public UI event."""
     return [
@@ -810,6 +831,7 @@ _PROJECTIONS: dict[str, ProjectionHandler] = {
     "brain_specialist_changed": _project_brain_specialist_changed,
     "brain_context_ready": _project_brain_context_ready,
     "improvement_proposal_changed": _project_improvement_proposal_changed,
+    "backend_resync_required": _project_backend_resync_required,
 }
 
 # task collaboration 事件复用声明式 _TASK_EVENT_PROJECTIONS（A 类 field_map）

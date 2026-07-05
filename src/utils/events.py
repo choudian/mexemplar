@@ -70,6 +70,8 @@ EventName: TypeAlias = Literal[
     "improvement_proposal_changed",
     "graph_scheduler_start_requested",
     "graph_scheduler_recovery_completed",
+    "mcp_server_disconnected",
+    "backend_resync_required",
 ]
 
 _EVENT_NAMES: tuple[EventName, ...] = get_args(EventName)
@@ -297,6 +299,13 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
     "graph_scheduler_recovery_completed": (
         "graph_id",
         "task_id",
+    ),
+    "backend_resync_required": (
+        "reason",
+    ),
+    "mcp_server_disconnected": (
+        "server_id",
+        "error",
     ),
 }
 

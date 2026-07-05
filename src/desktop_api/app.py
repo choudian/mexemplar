@@ -23,6 +23,7 @@ from src.desktop_api.routers import (
     debug,
     execution_reviews,
     health,
+    mcp_servers,
     proposals,
     settings,
     skills,
@@ -119,6 +120,21 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 "recovery/timeout jobs are DISABLED for this process",
                 exc_info=True,
             )
+        mcp_service = None
+        try:
+            from src.business.mcp import get_mcp_server_service
+
+            mcp_service = get_mcp_server_service()
+            mcp_service.seed_preset_servers()  # N19: upsert preset defaults
+            mcp_service.start_all_enabled()  # E7: non-blocking, failures→failed status
+        except Exception:
+            logger.warning("[MCP] MCP service startup failed", exc_info=True)
+        else:
+            # start_all_enabled 成功时也记录
+            if mcp_service and mcp_service.sdk_available:
+                logger.info("[MCP] MCP service started, SDK available")
+            elif mcp_service:
+                logger.info("[MCP] MCP service started, SDK unavailable (NullRegistry)")
         try:
             yield
         finally:
@@ -126,6 +142,12 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 brain_worker.stop()
             if task_worker is not None:
                 task_worker.stop()
+            # MCP shutdown: stop all running servers with 10s timeout
+            if mcp_service is not None:
+                try:
+                    mcp_service.stop_all()
+                except Exception:
+                    logger.warning("[MCP] MCP service shutdown failed", exc_info=True)
             # 关闭前把所有仍 pending 的澄清结算为 shutdown 并唤醒阻塞 worker（FR-013）。
             try:
                 from src.desktop_api.clarifications import settle_all_clarifications_shutdown
@@ -171,6 +193,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(execution_reviews.router)
     app.include_router(proposals.router)
     app.include_router(user_todos.router)
+    app.include_router(mcp_servers.router)
     app.include_router(debug.router)
 
     @app.get("/api/events", tags=["events"])

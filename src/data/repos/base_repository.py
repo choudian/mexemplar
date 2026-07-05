@@ -27,6 +27,7 @@ ID_PREFIX_ATTEMPT = "att_"
 ID_PREFIX_PROPOSAL = "prop_"
 ID_PREFIX_USER_TODO = "utodo_"
 ID_PREFIX_EXECUTION_REVIEW = "exr_"
+ID_PREFIX_MCP_SERVER = "mcs_"
 
 
 def generate_id(prefix: str) -> str:

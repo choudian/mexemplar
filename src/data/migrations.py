@@ -1854,6 +1854,69 @@ def migrate_to_v23(engine):
     logger.info("迁移到版本 23 完成：improvement_proposals.result_tests_passed CHECK")
 
 
+def migrate_to_v24(engine):
+    """迁移到版本 24：新增 mcp_servers 表。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS mcp_servers (
+                        server_id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        transport TEXT NOT NULL CHECK (transport IN ('stdio', 'http')),
+                        command TEXT,
+                        args_json TEXT,
+                        url TEXT,
+                        headers_json TEXT,
+                        secret_header_keys_json TEXT,
+                        env_json TEXT,
+                        secret_env_keys_json TEXT,
+                        enabled BOOLEAN NOT NULL DEFAULT 1,
+                        last_known_status TEXT,
+                        last_error_message TEXT,
+                        suggestion TEXT,
+                        circuit_breaker_open BOOLEAN NOT NULL DEFAULT 0,
+                        tool_count INTEGER,
+                        tools_json TEXT,
+                        is_preset BOOLEAN NOT NULL DEFAULT 0,
+                        preset_slug TEXT,
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME NOT NULL
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_servers_name "
+                    "ON mcp_servers(name)"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 24"))
+    except Exception as e:
+        logger.error(f"迁移到版本 24 失败: {e}")
+        raise
+    logger.info("迁移到版本 24 完成：mcp_servers 表")
+
+
+def downgrade_v24(engine):
+    """回退版本 24：删除 mcp_servers 表和相关凭证。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS mcp_servers"))
+            conn.execute(
+                text(
+                    "DELETE FROM app_settings WHERE setting_key LIKE 'mcp.servers.%'"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 23"))
+    except Exception as e:
+        logger.error(f"回退版本 24 失败: {e}")
+        raise
+    logger.info("回退版本 24 完成：mcp_servers 表已删除")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1877,6 +1940,7 @@ _MIGRATIONS = [
     (21, migrate_to_v21),
     (22, migrate_to_v22),
     (23, migrate_to_v23),
+    (24, migrate_to_v24),
 ]
 
 
