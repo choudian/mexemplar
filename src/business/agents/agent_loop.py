@@ -31,7 +31,7 @@ from .config import (
     ToolDefinition,
     ToolSignal,
 )
-from .builtin_tools import TALK_TO_USER_SCHEMA, LOAD_REFERENCE_SCHEMA, talk_to_user
+from .builtin_tools import LOAD_REFERENCE_SCHEMA
 from .hook_models import ToolCallContext, ToolExecutionOutcome, freeze_tool_args
 from .tool_helpers import is_standardized_error, make_error_result
 from .tools.builtin_contracts import (
@@ -49,7 +49,7 @@ from .tools.output_governance import (
 
 logger = logging.getLogger(__name__)
 
-_INJECTED_TOOL_NAMES = frozenset({"load_reference", "talk_to_user"})
+_INJECTED_TOOL_NAMES = frozenset({"load_reference"})
 _DEFAULT_PARALLEL_WORKERS = 4
 _ASSISTANT_FORBIDDEN_DYNAMIC_TOOL_PREFIXES = ("utool_", "comp_")
 
@@ -156,7 +156,7 @@ class AgentLoop:
 
     简洁的 while 循环驱动，支持：
     - 单工具调用模式（parallel_tool_calls=False）
-    - talk_to_user 哨兵机制
+    - 中断型工具哨兵机制（如 reply_to_user / ask_parent）
     - 工具执行错误不终止循环
     - LLM 调用重试
     - 与记忆机制（ContextManager）集成
@@ -1235,24 +1235,9 @@ class AgentLoop:
                 has_side_effects=False,
                 is_concurrency_safe=True,
             )
-            # text_as_user_input=True 时，LLM 直接输出文本即可与用户对话，
-            # 不需要 talk_to_user 工具（避免 LLM 在该调 submit 时误调 talk_to_user）
-            # 子代理/专员也不注入 talk_to_user：它们的结果应回流给主助理，
-            # 不应直接与用户对话。需要向上沟通时走 ask_parent。
-            _should_inject_talk_to_user = (
-                not self._config.text_as_user_input
-                and self._config.agent_type not in (
-                    AgentType.EPHEMERAL_SUBAGENT,
-                    AgentType.SPECIALIST,
-                )
-            )
-            if _should_inject_talk_to_user:
-                registry["talk_to_user"] = ToolDefinition(
-                    name="talk_to_user",
-                    schema=TALK_TO_USER_SCHEMA,
-                    handler=talk_to_user,
-                    is_interrupting=True,
-                )
+            # talk_to_user 已整体移除：主助理走 reply_to_user，PM/Trial 走
+            # text_as_user_input=True 的纯文本对话，子代理/专员向上沟通走 ask_parent。
+            # 历史会话中已存的 talk_to_user tool_calls 仅由展示层反查兼容。
             return registry
 
         def _refresh_tool_defs(tool_defs: List[ToolDefinition], ctx: ContextManager):
@@ -1262,9 +1247,7 @@ class AgentLoop:
             nonlocal all_tool_schemas
             _refresh_tool_defs(tool_defs, ctx)
             all_tool_schemas = [td.schema for td in tool_defs] + [
-                self._current_tool_defs[k].schema
-                for k in ("load_reference", "talk_to_user")
-                if k in self._current_tool_defs
+                self._current_tool_defs["load_reference"].schema
             ]
 
         _tools_callable = callable(tools)

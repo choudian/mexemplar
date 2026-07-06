@@ -93,7 +93,7 @@ def test_llm_chat_with_tools_connection(real_llm):
 
 
 # ---------------------------------------------------------------------------
-# Test 3: AgentLoop 端到端（带 talk_to_user 哨兵）
+# Test 3: AgentLoop 端到端（工具调用后纯文本收尾）
 # ---------------------------------------------------------------------------
 
 
@@ -125,7 +125,7 @@ def test_agent_loop_with_real_llm(real_llm):
 
     config = AgentConfig(
         agent_type=AgentType.ASSISTANT,
-        system_prompt="你是一个测试助手。用户让你做什么你就做，做完后用 talk_to_user 告诉用户结果。",
+        system_prompt="你是一个测试助手。用户让你做什么你就做，做完后直接用文字总结结果。",
         max_iterations=5,
     )
 

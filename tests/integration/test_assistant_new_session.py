@@ -11,8 +11,8 @@ Mock 策略：
 import json
 from unittest.mock import patch
 
-from src.business.agents.config import AgentType
-from src.business.ai.llm_client import LLMResponse, ToolCallInfo
+from src.business.agents.config import AgentType, ResultType
+from src.business.ai.llm_client import LLMResponse
 from src.business.orchestration.agent import AgentOrchestrator
 from src.data.models_sqlite import Session
 from src.data.repositories import SessionRepository, MessageRepository
@@ -25,22 +25,8 @@ from tests.conftest import MockLLMClient
 
 
 def _assistant_text_reply(content: str, tc_id: str = "tc-ast-1") -> LLMResponse:
-    """模拟 assistant 直接文字回复（text_as_user_input=True → NEEDS_USER_INPUT）"""
+    """模拟 assistant 直接文字回复（text_as_user_input=False → COMPLETED，消息落库展示）"""
     return LLMResponse(content=content, tool_calls=[])
-
-
-def _assistant_talk_to_user(message: str, tc_id: str = "tc-ast-1") -> LLMResponse:
-    """模拟 assistant 调用 talk_to_user 工具"""
-    return LLMResponse(
-        content=None,
-        tool_calls=[
-            ToolCallInfo(
-                id=tc_id,
-                name="talk_to_user",
-                args={"message": message},
-            )
-        ],
-    )
 
 
 def _create_assistant_session() -> str:
@@ -104,8 +90,8 @@ class TestAssistantNewSession:
         2. 保存 system prompt（首条消息）
         3. 保存用户消息
         4. 调用 LLM 并保存 assistant 回复
-        5. 对于 text_as_user_input=True 的 assistant，直接文字回复触发 NEEDS_USER_INPUT
-        6. 发出 agent_needs_user_input 事件
+        5. 对于 text_as_user_input=False 的主助理，纯文本回复按 COMPLETED 结束，
+           不再发出 agent_needs_user_input（回复统一走 reply_to_user 显式工具）
         """
         session_id = _create_assistant_session()
 
@@ -116,18 +102,19 @@ class TestAssistantNewSession:
             ]
         )
         orchestrator = AgentOrchestrator(mock_llm, mock_config)
-        orchestrator.run_agent(
+        result = orchestrator.run_agent(
             agent_type=AgentType.ASSISTANT,
             user_input="你好",
             session_id=session_id,
         )
 
-        # 验证事件：应发出 agent_needs_user_input（因为 text_as_user_input=True）
-        assert "agent_needs_user_input" in events_collector
-        event_data = events_collector["agent_needs_user_input"][0]
-        assert event_data["session_id"] == session_id
-        assert event_data["agent_type"] == AgentType.ASSISTANT
-        assert "办公助理" in event_data["question"]
+        # 纯文本回复：COMPLETED 结束，不发 agent_needs_user_input
+        assert result.result_type == ResultType.COMPLETED
+        assert "agent_needs_user_input" not in events_collector
+        # 回复内容仍落库（display-message 路径可展示）
+        msg_repo = MessageRepository()
+        assistant_msgs = [m for m in msg_repo.get_all(session_id) if m.role == "assistant"]
+        assert any("办公助理" in (m.content or "") for m in assistant_msgs)
 
     def test_orchestrator_saves_messages(self, in_memory_db, mock_config):
         """Orchestrator 运行后，数据库中应有 system + user + assistant 三条消息"""
@@ -218,11 +205,13 @@ class TestAssistantNewSession:
         seal_segment.assert_called_once_with(session_id, boundary_reason="token_limit")
 
     # -------------------------------------------------------------------------
-    # 3. Agent 执行层：AgentLoop 正确处理 assistant 的 talk_to_user
+    # 3. Agent 执行层：主助理纯文本回复的统一语义（无 talk_to_user，无隐式提问）
     # -------------------------------------------------------------------------
 
-    def test_talk_to_user_triggers_needs_input(self, in_memory_db, mock_config, events_collector):
-        """assistant 直接文字回复（text_as_user_input=True）应触发 NEEDS_USER_INPUT"""
+    def test_bare_text_completes_without_needs_input(
+        self, in_memory_db, mock_config, events_collector
+    ):
+        """主助理纯文本回复按 COMPLETED 结束；提问必须显式走 reply_to_user 工具"""
         session_id = _create_assistant_session()
 
         mock_llm = MockLLMClient(
@@ -231,17 +220,18 @@ class TestAssistantNewSession:
             ]
         )
         orchestrator = AgentOrchestrator(mock_llm, mock_config)
-        orchestrator.run_agent(
+        result = orchestrator.run_agent(
             agent_type=AgentType.ASSISTANT,
             user_input="帮我查一下",
             session_id=session_id,
         )
 
-        # 验证事件
-        assert "agent_needs_user_input" in events_collector
-        event_data = events_collector["agent_needs_user_input"][0]
-        assert event_data["session_id"] == session_id
-        assert "帮助" in event_data["question"]
+        assert result.result_type == ResultType.COMPLETED
+        assert "agent_needs_user_input" not in events_collector
+        # 文本内容不丢：仍作为 assistant 消息落库
+        msg_repo = MessageRepository()
+        assistant_msgs = [m for m in msg_repo.get_all(session_id) if m.role == "assistant"]
+        assert any("帮助" in (m.content or "") for m in assistant_msgs)
 
     # -------------------------------------------------------------------------
     # 4. 多轮对话：用户回复后继续对话

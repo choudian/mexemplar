@@ -2,20 +2,15 @@
 内置工具定义
 
 定义所有 Agent 共享的内置工具。
-talk_to_user 和 load_reference 由 AgentLoop 自动追加到每次请求的工具列表中。
-talk_to_user handler 返回 ToolSignal，与业务工具（如 submit_requirements）使用同一套机制。
+load_reference 由 AgentLoop 自动追加到每次请求的工具列表中，
+handler 由 ContextManager 提供，不进入 hook 管线。
+
+talk_to_user 已整体移除（向用户输出统一）：主助理走 reply_to_user 显式工具，
+PM/Trial 走 text_as_user_input=True 的纯文本对话，子代理/专员向上沟通走 ask_parent。
+历史会话中已存的 talk_to_user tool_calls 由 agent_session_store 展示层反查兼容。
 """
 
-from .config import ResultType, ToolSignal
 from .tool_helpers import make_tool_schema
-
-# talk_to_user 向用户提问或展示信息，handler 返回 ToolSignal 中断循环
-TALK_TO_USER_SCHEMA = make_tool_schema(
-    name="talk_to_user",
-    description="向用户提问，等待用户回复。这是一个中断信号，不会实际执行。",
-    properties={"message": {"type": "string", "description": "要向用户提出的问题"}},
-    required=["message"],
-)
 
 # load_reference 由 AgentLoop 内部处理，不在注册表中
 LOAD_REFERENCE_SCHEMA = make_tool_schema(
@@ -28,24 +23,6 @@ LOAD_REFERENCE_SCHEMA = make_tool_schema(
 )
 
 
-def talk_to_user(message: str) -> ToolSignal:
-    """
-    talk_to_user handler — 返回 ToolSignal 中断循环，等待用户回复。
-
-    Args:
-        message: 向用户展示的消息或问题
-
-    Returns:
-        ToolSignal，result_type=NEEDS_USER_INPUT
-    """
-    return ToolSignal(
-        result_type=ResultType.NEEDS_USER_INPUT,
-        display_text="[等待用户回复]",
-    )
-
-
 __all__ = [
-    "TALK_TO_USER_SCHEMA",
     "LOAD_REFERENCE_SCHEMA",
-    "talk_to_user",
 ]

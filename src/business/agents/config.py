@@ -124,9 +124,10 @@ class AgentConfig:
     # 实际重试参数由 unified_config 的 ai.retry_max_retries / ai.retry_delay 决定。
     retry: RetryConfig = field(default_factory=RetryConfig)
     text_as_user_input: bool = False
-    # 为 True 时，LLM 直接返回文字（未调用任何工具）视为隐式 talk_to_user，
+    # 为 True 时，LLM 直接返回文字（未调用任何工具）视为对用户的提问，
     # loop 返回 NEEDS_USER_INPUT 而非 COMPLETED。
-    # 适用于需要持续与用户对话、不能自然结束的 Agent（如 PM Agent）。
+    # 适用于需要持续与用户对话、不能自然结束的 Agent（如 PM/Trial）。
+    # 主助理为 False：给用户回复统一走 reply_to_user 显式工具。
     resumable_on_failure: bool = False
     # 为 True 时，撞 max_iterations 或 LLM 调用经重试仍最终失败，
     # loop 不返回 MAX_ITERATIONS_REACHED/ERROR，而是把会话置 suspended 并返回 PAUSED，
@@ -173,11 +174,13 @@ PROGRAMMER_CONFIG = AgentConfig(
 # Assistant Agent 配置
 # system_prompt 含 {profile_section}/{memory_section}/{tools_section} 占位符，
 # 由 Orchestrator 通过 format_assistant_prompt() 格式化后传入 system_prompt_override
+# text_as_user_input=False：主助理给用户的回复统一走 reply_to_user 显式工具；
+# 纯文本输出仍会落库并展示，但按 COMPLETED 结束本轮，不再转 NEEDS_USER_INPUT。
 ASSISTANT_CONFIG = AgentConfig(
     agent_type=AgentType.ASSISTANT,
     system_prompt=ASSISTANT_SYSTEM_PROMPT,
     max_iterations=200,
-    text_as_user_input=True,
+    text_as_user_input=False,
 )
 
 

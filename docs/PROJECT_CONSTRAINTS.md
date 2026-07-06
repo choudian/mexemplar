@@ -171,7 +171,7 @@ Reviewer 必须拒绝下列改动：
 - 将 assistant 高危确认改回模态阻塞确认，或让普通 Toast 与高危确认浮层复用同一个生命周期引用。
 - 让 Assistant 终止失败只存在于乐观前端消息、绕过 Repository 状态机重试，或把原始 provider 错误暴露到普通聊天 DTO、UI event、Toast 或日志。
 - 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。
-- 让 AgentLoop 内建注入的 `load_reference` 或 `talk_to_user` 进入 tool/global hook 链。
+- 让 AgentLoop 内建注入的 `load_reference` 进入 tool/global hook 链，或以任何形式恢复已移除的 `talk_to_user` 注入（主助理回复只走 `reply_to_user`）。
 - 绕过 `src/recording/filtering/` 的 SQL 改写或 DuckDB 代理边界读取录制网络数据。
 - 让桌面录制 UI 直接访问 Repository 或 Recorder，或绕过 `DesktopRecordingService`。
 - 在桌面 mode 中注入 `analyze_image`，或允许桌面工具读取浏览器录制表。

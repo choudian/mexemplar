@@ -380,7 +380,7 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 并发分区内单个读取失败只保存该调用的错误，不取消同分区其他调用，也不阻断后续串行分区。串行路径继续按 `ToolDefinition.has_side_effects` 级联：副作用工具（write_file、exec）失败时后续调用写 `not_executed`；未标记并发安全的无副作用工具仍串行执行且失败后可继续。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。当前并发白名单只包含确认线程安全的 web/file/search/raw-output 读取工具、`search_tools` 和 `load_reference`；会修改激活缓存的 `get_tool_detail`、增加加载计数的 `load_skill_methodology`、用户工具、组合工具、process 系列及所有写入/执行/委派工具保持串行。
 
-`load_reference` 和 `talk_to_user` 是 AgentLoop 内建注入工具，继续用于上下文引用和用户交互，但不进入 tool/global hook 管线。
+`load_reference` 是 AgentLoop 唯一的内建注入工具，用于上下文引用下钻，不进入 tool/global hook 管线。`talk_to_user` 已整体移除：主助理给用户回复统一走 `reply_to_user` 显式中断型工具，PM/Trial 走 `text_as_user_input=True` 的纯文本对话（无工具调用的文本输出转 NEEDS_USER_INPUT），子代理/专员向上沟通走 `ask_parent`；主助理的纯文本输出仍落库展示但按 COMPLETED 结束本轮。历史会话中已存的 `talk_to_user` tool_calls 由展示层反查兼容。
 
 ### 内置通用工具运行结构
 

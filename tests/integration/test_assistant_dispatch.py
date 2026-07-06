@@ -29,7 +29,9 @@ class TestAssistantDispatchToolsRegistered:
         from tests.conftest import MockLLMClient
 
         with (
-            patch("src.business.orchestration.agent.orchestrator.AgentSessionStore"),
+            patch(
+                "src.business.orchestration.agent.orchestrator.AgentSessionStore"
+            ) as mock_store_cls,
             patch("src.business.orchestration.agent.orchestrator.AssistantPromptBuilder"),
             patch("src.business.orchestration.agent.orchestrator.AssistantTaskWorker"),
             patch("src.business.orchestration.agent.orchestrator.TeachingFailureTracker"),
@@ -39,6 +41,9 @@ class TestAssistantDispatchToolsRegistered:
         ):
             from src.business.orchestration.agent.orchestrator import AgentOrchestrator
             from src.data.unified_config import UnifiedConfigManager
+
+            # get_session 返回 None = 全量授权，与真实 Session.parse_tool_ids 契约对齐
+            mock_store_cls.return_value.get_session.return_value = None
 
             mock_config = MagicMock(spec=UnifiedConfigManager)
             mock_config.get_memory_reference_steps_threshold.return_value = 999
@@ -87,7 +92,9 @@ class TestReplyToUserIsInterrupting:
         from tests.conftest import MockLLMClient
 
         with (
-            patch("src.business.orchestration.agent.orchestrator.AgentSessionStore"),
+            patch(
+                "src.business.orchestration.agent.orchestrator.AgentSessionStore"
+            ) as mock_store_cls,
             patch("src.business.orchestration.agent.orchestrator.AssistantPromptBuilder"),
             patch("src.business.orchestration.agent.orchestrator.AssistantTaskWorker"),
             patch("src.business.orchestration.agent.orchestrator.TeachingFailureTracker"),
@@ -97,6 +104,9 @@ class TestReplyToUserIsInterrupting:
         ):
             from src.business.orchestration.agent.orchestrator import AgentOrchestrator
             from src.data.unified_config import UnifiedConfigManager
+
+            # get_session 返回 None = 全量授权，与真实 Session.parse_tool_ids 契约对齐
+            mock_store_cls.return_value.get_session.return_value = None
 
             mock_config = MagicMock(spec=UnifiedConfigManager)
             mock_config.get_memory_reference_steps_threshold.return_value = 999
@@ -129,7 +139,9 @@ class TestReplyToUserIsInterrupting:
         from tests.conftest import MockLLMClient
 
         with (
-            patch("src.business.orchestration.agent.orchestrator.AgentSessionStore"),
+            patch(
+                "src.business.orchestration.agent.orchestrator.AgentSessionStore"
+            ) as mock_store_cls,
             patch("src.business.orchestration.agent.orchestrator.AssistantPromptBuilder"),
             patch("src.business.orchestration.agent.orchestrator.AssistantTaskWorker"),
             patch("src.business.orchestration.agent.orchestrator.TeachingFailureTracker"),
@@ -139,6 +151,9 @@ class TestReplyToUserIsInterrupting:
         ):
             from src.business.orchestration.agent.orchestrator import AgentOrchestrator
             from src.data.unified_config import UnifiedConfigManager
+
+            # get_session 返回 None = 全量授权，与真实 Session.parse_tool_ids 契约对齐
+            mock_store_cls.return_value.get_session.return_value = None
 
             mock_config = MagicMock(spec=UnifiedConfigManager)
             mock_config.get_memory_reference_steps_threshold.return_value = 999

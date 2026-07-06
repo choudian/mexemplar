@@ -157,6 +157,8 @@ class AgentSessionStore:
                         self._logger.warning(f"跳过损坏的 tool_calls: session={session_id}")
                         continue
                     for tool_call in tool_calls:
+                        # legacy 兼容：talk_to_user 工具已从运行时移除，但历史会话的
+                        # assistant 消息里仍存有它的 tool_calls，反查 message 供展示。
                         if tool_call.get("name") == "talk_to_user":
                             question = tool_call.get("args", {}).get("message", "")
                             if question:
