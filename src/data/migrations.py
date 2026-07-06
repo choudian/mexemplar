@@ -1969,6 +1969,58 @@ def downgrade_v25(engine):
     logger.info("回退版本 25 完成：discussion_session_id 列已移除")
 
 
+def migrate_to_v26(engine):
+    """迁移到版本 26：新增 external_skill_installs 表（029 技能商店）。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS external_skill_installs (
+                        install_id TEXT PRIMARY KEY,
+                        skill_id TEXT NOT NULL,
+                        source_type TEXT NOT NULL
+                            CHECK (source_type IN ('skills_sh', 'github')),
+                        source_ref TEXT NOT NULL,
+                        source_url TEXT NOT NULL,
+                        local_dir TEXT NOT NULL,
+                        installed_at TEXT NOT NULL,
+                        uninstalled_at TEXT
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_external_skill_installs_skill_id "
+                    "ON external_skill_installs(skill_id)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_skill_installs_source "
+                    "ON external_skill_installs(source_type, source_ref)"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 26"))
+    except Exception as e:
+        logger.error(f"迁移到版本 26 失败: {e}")
+        raise
+    logger.info("迁移到版本 26 完成：external_skill_installs 表")
+
+
+def downgrade_v26(engine):
+    """回退版本 26：删除 external_skill_installs 表（文件目录非 schema，不在此清理）。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS external_skill_installs"))
+            conn.execute(text("UPDATE schema_version SET version = 25"))
+    except Exception as e:
+        logger.error(f"回退版本 26 失败: {e}")
+        raise
+    logger.info("回退版本 26 完成：external_skill_installs 表已删除")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1994,6 +2046,7 @@ _MIGRATIONS = [
     (23, migrate_to_v23),
     (24, migrate_to_v24),
     (25, migrate_to_v25),
+    (26, migrate_to_v26),
 ]
 
 

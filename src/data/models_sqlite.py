@@ -1339,6 +1339,39 @@ class ImprovementProposal(Base):
         return f"<ImprovementProposal(id={self.id!r}, status={self.status!r})>"
 
 
+class ExternalSkillInstall(Base):
+    """外部技能安装记录表（v26，029）——brain_skills 的来源元数据伴生表。
+
+    不建 FK：brain_skills 生命周期（supersede/软删）独立演进，绑定由业务层维护。
+    "活跃安装" = uninstalled_at IS NULL；卸载置时间戳软记录，文件目录物理清理。
+    """
+
+    __tablename__ = "external_skill_installs"
+    __table_args__ = (
+        CheckConstraint(
+            "source_type IN ('skills_sh', 'github')",
+            name="ck_external_skill_installs_source_type",
+        ),
+        UniqueConstraint("skill_id", name="uq_external_skill_installs_skill_id"),
+        Index("ix_external_skill_installs_source", "source_type", "source_ref"),
+    )
+
+    install_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    skill_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_ref: Mapped[str] = mapped_column(String(300), nullable=False)
+    source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    local_dir: Mapped[str] = mapped_column(String(500), nullable=False)
+    installed_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    uninstalled_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<ExternalSkillInstall(install_id={self.install_id!r}, "
+            f"source={self.source_type!r}:{self.source_ref!r})>"
+        )
+
+
 class McpServer(Base):
     """MCP server 配置表（v24 migration）"""
 
