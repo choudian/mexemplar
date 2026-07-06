@@ -287,4 +287,58 @@ describe("proposal review UI", () => {
     );
     expect(screen.queryByRole("button", { name: "拒绝" })).not.toBeInTheDocument();
   });
+
+  test("detail renders reasoning chain and outcome zone by semantic region", async () => {
+    const doneProposal = {
+      ...proposals[0],
+      id: "prop-done",
+      status: "done",
+      what: "重复抓取同一 URL",
+      userSupplement: "优先覆盖缓存层",
+      branchName: "improvement/prop-done",
+      resultTestsPassed: true,
+      resultSummary: "已加请求级缓存，12 个测试通过",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/brain/zones")) return jsonResponse({ zones: [] });
+      if (url.includes("/api/brain/zones/hot/entries")) {
+        return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+      }
+      if (url.includes("/api/brain/segments")) return jsonResponse({ items: [], total: 0 });
+      if (url.includes("/api/execution-reviews")) return jsonResponse({ reviews: [] });
+      if (url.includes("/api/improvement-proposals")) {
+        return jsonResponse({ proposals: [doneProposal] });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BrainScreen />);
+    await settleAsyncUpdates();
+
+    fireEvent.click(screen.getByRole("button", { name: /改进提案/ }));
+    await waitFor(() => expect(screen.getByText("重复抓取同一 URL")).toBeInTheDocument());
+
+    const list = screen.getByLabelText("改进提案列表");
+    fireEvent.click(within(list).getByText("重复抓取同一 URL"));
+
+    const detail = within(screen.getByLabelText("改进提案详情"));
+
+    // 论证链三个语义节点按序出现，"建议"是终点
+    expect(detail.getByText("问题")).toBeInTheDocument();
+    expect(detail.getByText("证据")).toBeInTheDocument();
+    expect(detail.getByText("建议")).toBeInTheDocument();
+    expect(detail.getByText("增加请求级缓存")).toBeInTheDocument();
+
+    // 用户补充与机器实施结果各自成区
+    expect(detail.getByText("你的补充")).toBeInTheDocument();
+    expect(detail.getByText("优先覆盖缓存层")).toBeInTheDocument();
+    expect(detail.getByText("实施情况")).toBeInTheDocument();
+    expect(detail.getByText("improvement/prop-done")).toBeInTheDocument();
+    expect(detail.getByText("测试通过")).toBeInTheDocument();
+
+    // 已完成的提案不显示批准/拒绝
+    expect(detail.queryByRole("button", { name: "批准" })).not.toBeInTheDocument();
+  });
 });

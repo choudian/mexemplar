@@ -5647,6 +5647,172 @@ select:focus-visible,
   line-height: 1.5;
 }
 
+/* 改进提案详情：问题→证据→建议是一条论证链，"建议"是链的终点也是被批准的对象，
+   accent 只落在这一个节点上；实施结果是机器产出，独立分区并按结果着色。 */
+.brain-proposal-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.brain-proposal-meta small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.brain-proposal-chain {
+  position: relative;
+  display: grid;
+  gap: 14px;
+  padding-left: 18px;
+}
+
+.brain-proposal-chain::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--border-2);
+}
+
+.brain-proposal-node {
+  position: relative;
+  display: grid;
+  gap: 4px;
+}
+
+.brain-proposal-node::before {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: -18px;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--border-2);
+  border-radius: 50%;
+  background: var(--surface-1);
+}
+
+.brain-proposal-node-label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.brain-proposal-node p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.brain-proposal-node[data-kind="evidence"] p {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.brain-proposal-node[data-kind="suggestion"]::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.brain-proposal-node[data-kind="suggestion"] .brain-proposal-node-label {
+  color: var(--accent);
+}
+
+.brain-proposal-node[data-kind="suggestion"] p {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 25%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--accent-weak);
+}
+
+.brain-proposal-supplement {
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+
+.brain-proposal-supplement strong {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.brain-proposal-supplement p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.brain-proposal-outcome {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-1);
+}
+
+.brain-proposal-outcome-title {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+}
+
+.brain-proposal-branch {
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.brain-proposal-result {
+  display: grid;
+  justify-items: start;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.brain-proposal-result[data-outcome="passed"] {
+  border-color: color-mix(in oklch, var(--ok) 30%, transparent);
+  background: color-mix(in oklch, var(--ok) 7%, transparent);
+}
+
+.brain-proposal-result[data-outcome="failed"] {
+  border-color: color-mix(in oklch, var(--danger) 30%, transparent);
+  background: color-mix(in oklch, var(--danger) 6%, transparent);
+}
+
+.brain-proposal-result p {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .brain-editor-actions,
 .specialist-editor-actions {
   justify-content: flex-end;

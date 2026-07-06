@@ -540,64 +540,80 @@ function ImprovementProposalDetail({
     return <div className="brain-empty">选择一条提案查看详情</div>;
   }
   const isPending = proposal.status === "pending_review";
+  const hasOutcome = Boolean(proposal.branchName || proposal.resultSummary || proposal.error);
   return (
-    <section className="brain-execution-review">
+    <section aria-label="改进提案详情" className="brain-execution-review brain-proposal-detail">
       <div className="brain-section-title">
         <span>改进提案</span>
         <Badge tone={statusToTone(proposal.status, PROPOSAL_STATUS_TONES)}>
           {PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status}
         </Badge>
       </div>
-      {proposal.severity ? (
-        <div className="brain-reason">
-          <strong>严重程度</strong>
-          <Badge tone={severityTone(proposal.severity)}>{proposal.severity}</Badge>
+      {proposal.severity || proposal.findingType ? (
+        <div className="brain-proposal-meta">
+          {proposal.severity ? (
+            <Badge tone={severityTone(proposal.severity)}>{proposal.severity}</Badge>
+          ) : null}
           {proposal.findingType ? <small>{proposal.findingType}</small> : null}
         </div>
       ) : null}
-      <div className="brain-reason">
-        <strong>问题描述</strong>
-        <p>{proposal.what}</p>
+      <div className="brain-proposal-chain">
+        <div className="brain-proposal-node" data-kind="what">
+          <span className="brain-proposal-node-label">问题</span>
+          <p>{proposal.what}</p>
+        </div>
+        {proposal.evidence ? (
+          <div className="brain-proposal-node" data-kind="evidence">
+            <span className="brain-proposal-node-label">证据</span>
+            <p>{proposal.evidence}</p>
+          </div>
+        ) : null}
+        {proposal.suggestion ? (
+          <div className="brain-proposal-node" data-kind="suggestion">
+            <span className="brain-proposal-node-label">建议</span>
+            <p>{proposal.suggestion}</p>
+          </div>
+        ) : null}
       </div>
-      {proposal.evidence ? (
-        <div className="brain-reason">
-          <strong>证据</strong>
-          <p>{proposal.evidence}</p>
-        </div>
-      ) : null}
-      {proposal.suggestion ? (
-        <div className="brain-reason">
-          <strong>建议</strong>
-          <p>{proposal.suggestion}</p>
-        </div>
-      ) : null}
       {proposal.userSupplement ? (
-        <div className="brain-reason">
-          <strong>补充说明</strong>
+        <div className="brain-proposal-supplement">
+          <strong>你的补充</strong>
           <p>{proposal.userSupplement}</p>
         </div>
       ) : null}
-      {proposal.branchName ? (
-        <div className="brain-reason">
-          <strong>实施分支</strong>
-          <p>{proposal.branchName}</p>
-        </div>
-      ) : null}
-      {proposal.resultSummary ? (
-        <div className="brain-reason">
-          <strong>实施结果</strong>
-          <p>{proposal.resultSummary}</p>
-          {proposal.resultTestsPassed != null ? (
-            <Badge tone={proposal.resultTestsPassed ? "ok" : "danger"}>
-              {proposal.resultTestsPassed ? "测试通过" : "测试失败"}
-            </Badge>
+      {hasOutcome ? (
+        <div className="brain-proposal-outcome">
+          <span className="brain-proposal-outcome-title">实施情况</span>
+          {proposal.branchName ? (
+            <code className="brain-proposal-branch" title="实施分支">
+              {proposal.branchName}
+            </code>
           ) : null}
-        </div>
-      ) : null}
-      {proposal.error ? (
-        <div className="brain-reason">
-          <strong>失败原因</strong>
-          <p>{proposal.error}</p>
+          {proposal.resultSummary ? (
+            <div
+              className="brain-proposal-result"
+              data-outcome={
+                proposal.resultTestsPassed == null
+                  ? "neutral"
+                  : proposal.resultTestsPassed
+                    ? "passed"
+                    : "failed"
+              }
+            >
+              <p>{proposal.resultSummary}</p>
+              {proposal.resultTestsPassed != null ? (
+                <Badge tone={proposal.resultTestsPassed ? "ok" : "danger"}>
+                  {proposal.resultTestsPassed ? "测试通过" : "测试失败"}
+                </Badge>
+              ) : null}
+            </div>
+          ) : null}
+          {proposal.error ? (
+            <div className="brain-proposal-result" data-outcome="failed">
+              <span className="brain-proposal-node-label">失败原因</span>
+              <p>{proposal.error}</p>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {isPending ? (
