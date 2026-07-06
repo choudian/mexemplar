@@ -84,7 +84,12 @@ class SkillService:
         caller_id: str,
         change_reason: str,
     ) -> dict[str, Any]:
-        self._validate_source_segments(source_segments)
+        # external_import（029 技能商店）没有 Segment 来源，允许空 segments；
+        # 其余 origin 维持既有非空校验。
+        self._validate_source_segments(
+            source_segments,
+            allow_empty=origin == "external_import",
+        )
         self._skill_repo.assert_no_same_name_active(name)
         try:
             skill = self._skill_repo.create_skill(

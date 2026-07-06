@@ -23,9 +23,11 @@ class ExternalSkillInstallRepository(BaseRepository):
         source_ref: str,
         source_url: str,
         local_dir: str,
+        install_id: str | None = None,
     ) -> ExternalSkillInstall:
+        # install_id 可由调用方预生成（安装编排需要先用它命名文件目录，D5 顺序）
         row = ExternalSkillInstall(
-            install_id=generate_id("esi"),
+            install_id=install_id or generate_id("esi"),
             skill_id=skill_id,
             source_type=source_type,
             source_ref=source_ref,

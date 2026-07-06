@@ -26,6 +26,7 @@ from src.desktop_api.routers import (
     mcp_servers,
     proposals,
     settings,
+    skill_store,
     skills,
     skills_methodology,
     teaching,
@@ -194,6 +195,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(proposals.router)
     app.include_router(user_todos.router)
     app.include_router(mcp_servers.router)
+    app.include_router(skill_store.router)
     app.include_router(debug.router)
 
     @app.get("/api/events", tags=["events"])
