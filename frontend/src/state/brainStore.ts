@@ -18,6 +18,7 @@ import { fetchExecutionReviews } from "../api/executionReview";
 import {
   fetchImprovementProposals,
   approveProposal,
+  openProposalDiscussion,
   rejectProposal,
 } from "../api/improvementProposal";
 import type { ImprovementProposalDto } from "../api/improvementProposal";
@@ -61,6 +62,7 @@ export interface BrainState {
   } | null;
   improvementProposals: ImprovementProposalDto[];
   loadingImprovementProposals: boolean;
+  openingDiscussionProposalId: string | null;
 
   loadZones: () => Promise<void>;
   loadEntries: (zone: BrainZone, options?: { limit?: number; offset?: number; status?: BrainEntryStatus }) => Promise<void>;
@@ -77,6 +79,7 @@ export interface BrainState {
   loadImprovementProposals: (status?: string) => Promise<void>;
   approveImprovementProposal: (id: string, supplement?: string) => Promise<boolean>;
   rejectImprovementProposal: (id: string) => Promise<boolean>;
+  openProposalDiscussion: (id: string) => Promise<string | null>;
   applyEvent: (event: UiEvent) => void;
 }
 
@@ -100,6 +103,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   pendingSkillRemoval: null,
   improvementProposals: [],
   loadingImprovementProposals: false,
+  openingDiscussionProposalId: null,
 
   loadZones: async () => {
     set({ loadingZones: true, lastError: null });
@@ -284,6 +288,22 @@ export const useBrainStore = create<BrainState>((set, get) => ({
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法拒绝提案。") });
       return false;
+    }
+  },
+
+  openProposalDiscussion: async (id: string) => {
+    // 幂等入口：后端返回既有绑定或新建的普通助理会话；请求期间按钮 disable。
+    set({ openingDiscussionProposalId: id, lastError: null });
+    try {
+      const result = await openProposalDiscussion(id);
+      // 刷新列表让 discussionSessionId 绑定进 DTO（按钮文案切"继续讨论"）
+      await get().loadImprovementProposals();
+      return result.sessionId;
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "无法打开讨论会话。") });
+      return null;
+    } finally {
+      set({ openingDiscussionProposalId: null });
     }
   },
 

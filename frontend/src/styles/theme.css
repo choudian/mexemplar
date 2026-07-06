@@ -5758,6 +5758,11 @@ select:focus-visible,
   overflow-wrap: anywhere;
 }
 
+.brain-proposal-discuss {
+  display: flex;
+  justify-content: flex-start;
+}
+
 .brain-proposal-outcome {
   display: grid;
   gap: 10px;

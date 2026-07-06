@@ -7,8 +7,10 @@ import SearchInput from "../../components/SearchInput";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { statusToTone } from "../../components/statusTone";
 import { useFiltered } from "../../hooks/useFiltered";
+import { useAssistantStore } from "../../state/assistantStore";
 import { useBrainStore } from "../../state/brainStore";
 import { useSettingsStore } from "../../state/settingsStore";
+import { useShellStore } from "../../state/shellStore";
 import EntryEvolution from "./EntryEvolution";
 
 const ZONES = [
@@ -66,6 +68,8 @@ export function BrainScreen(): JSX.Element {
   const loadImprovementProposals = useBrainStore((state) => state.loadImprovementProposals);
   const approveImprovementProposal = useBrainStore((state) => state.approveImprovementProposal);
   const rejectImprovementProposal = useBrainStore((state) => state.rejectImprovementProposal);
+  const openProposalDiscussion = useBrainStore((state) => state.openProposalDiscussion);
+  const openingDiscussionProposalId = useBrainStore((state) => state.openingDiscussionProposalId);
   const proposalsEnabled =
     useSettingsStore((state) => state.values["self_improvement.proposals.enabled"]) !== false;
 
@@ -325,6 +329,16 @@ export function BrainScreen(): JSX.Element {
               onReject={(id) => {
                 void rejectImprovementProposal(id);
               }}
+              onDiscuss={(id) => {
+                void (async () => {
+                  const sessionId = await openProposalDiscussion(id);
+                  if (sessionId) {
+                    void useAssistantStore.getState().selectSession(sessionId);
+                    useShellStore.getState().setRoute("assistant");
+                  }
+                })();
+              }}
+              discussPending={openingDiscussionProposalId !== null}
             />
           ) : reviewingExecutions ? (
             <ExecutionReviewDetail review={selectedReview} />
@@ -529,12 +543,16 @@ function ImprovementProposalDetail({
   onSupplementChange,
   onApprove,
   onReject,
+  onDiscuss,
+  discussPending,
 }: {
   proposal: ImprovementProposalDto | null;
   supplement: string;
   onSupplementChange: (value: string) => void;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
+  onDiscuss: (id: string) => void;
+  discussPending: boolean;
 }) {
   if (!proposal) {
     return <div className="brain-empty">选择一条提案查看详情</div>;
@@ -581,6 +599,11 @@ function ImprovementProposalDetail({
           <p>{proposal.userSupplement}</p>
         </div>
       ) : null}
+      <div className="brain-proposal-discuss">
+        <Button disabled={discussPending} kind="ghost" onClick={() => onDiscuss(proposal.id)}>
+          {proposal.discussionSessionId ? "继续讨论" : "讨论"}
+        </Button>
+      </div>
       {hasOutcome ? (
         <div className="brain-proposal-outcome">
           <span className="brain-proposal-outcome-title">实施情况</span>

@@ -1365,17 +1365,13 @@ class McpServer(Base):
     last_known_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     suggestion: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    circuit_breaker_open: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
+    circuit_breaker_open: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     tool_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tools_json: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_preset: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     preset_slug: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=func.now(), onupdate=func.now()
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 
     def __repr__(self) -> str:
         return f"<McpServer(server_id={self.server_id!r}, name={self.name!r})>"

@@ -17,6 +17,7 @@ export interface ImprovementProposalDto {
   resultTestsPassed: boolean | null;
   resultSummary: string | null;
   error: string | null;
+  discussionSessionId: string | null;
   createdAt: string;
   decidedAt: string | null;
   completedAt: string | null;
@@ -48,6 +49,14 @@ export async function rejectProposal(
   id: string,
 ): Promise<{ accepted: boolean; id?: string; status?: string; reason?: string }> {
   return requestJson(`/api/improvement-proposals/${id}/reject`, {
+    method: "POST",
+  });
+}
+
+export async function openProposalDiscussion(
+  id: string,
+): Promise<{ sessionId: string; created: boolean }> {
+  return requestJson(`/api/improvement-proposals/${id}/discussion`, {
     method: "POST",
   });
 }

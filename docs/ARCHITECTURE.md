@@ -194,6 +194,7 @@ BrainScreen proposal review
 - 自动执行的内建文件/命令工具在 `builtin_permissions.py` 额外调用 `proposal_workspace` 门卫：只允许 proposal worktree 内源码/测试/文档 mutation，拒绝 `self_improvement`、`orchestration/agent`、`task_collaboration`、`desktop_api`、`src-tauri`、guardrail tests 和 legacy/startup 核心路径；`exec` 只能用于测试、lint、format check 或 typecheck，网络、安装、破坏性 git/merge 命令 fail-closed。
 - `reject` 可拒绝 pending 或 failed 提案；failed 提案被弃用时清理 worktree 和分支，并清空 stale worktree metadata。保留数量由 `self_improvement.proposals.worktree_retention_max` 控制，配置仍经 `UnifiedConfigManager` 读取。
 - 前端 proposal 状态只通过 typed API 和 `improvement_proposal.changed` 事件刷新；事件缺口进入 `backend.resync_required` 时，Brain domain 权威刷新必须同时重拉执行复盘和改进提案列表。
+- **提案讨论会话（028）**：任意状态的提案可经 `POST /api/improvement-proposals/{id}/discussion` 获取或创建一个真实普通助理会话（幂等）：首次创建时以 `proposal_context.format_discussion_opening_message` 的 markdown 上下文作为会话内首条 assistant 消息（零模型调用），绑定持久化在 `improvement_proposals.discussion_session_id`（v25 列，首绑走条件 UPDATE CAS）；绑定会话被删除（归档）后惰性自愈重建换绑。讨论路径与实施路径在源码层隔离（守卫测试断言不引用 proposal_bridge/build_task_graph/worktree），finding 文本序列化与 bridge 共用 `proposal_context.py` 单一来源；0 新公开 UI 事件。
 
 ### MCP Server Management（027）
 

@@ -36,6 +36,7 @@ const proposals = [
     resultTestsPassed: null,
     resultSummary: null,
     error: null,
+    discussionSessionId: null,
     createdAt: "2026-06-29T10:00:00",
     decidedAt: null,
     completedAt: null,
@@ -57,6 +58,7 @@ const proposals = [
     resultTestsPassed: null,
     resultSummary: null,
     error: null,
+    discussionSessionId: null,
     createdAt: "2026-06-29T10:10:00",
     decidedAt: null,
     completedAt: null,
@@ -338,7 +340,102 @@ describe("proposal review UI", () => {
     expect(detail.getByText("improvement/prop-done")).toBeInTheDocument();
     expect(detail.getByText("测试通过")).toBeInTheDocument();
 
-    // 已完成的提案不显示批准/拒绝
+    // 已完成的提案不显示批准/拒绝，但可发起复盘讨论（US3）
     expect(detail.queryByRole("button", { name: "批准" })).not.toBeInTheDocument();
+    expect(detail.getByRole("button", { name: "讨论" })).toBeEnabled();
+  });
+
+  test("discuss button opens session, navigates to assistant and selects it", async () => {
+    const { useAssistantStore } = await import("../../src/state/assistantStore");
+    const { useShellStore } = await import("../../src/state/shellStore");
+
+    const selectSessionMock = vi.fn(async () => {});
+    useAssistantStore.setState({ selectSession: selectSessionMock });
+    useShellStore.setState({ activeRoute: "brain" });
+
+    let discussionCalls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/api/brain/zones")) return jsonResponse({ zones: [] });
+      if (url.includes("/api/brain/zones/hot/entries")) {
+        return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+      }
+      if (url.includes("/api/brain/segments")) return jsonResponse({ items: [], total: 0 });
+      if (url.includes("/api/execution-reviews")) return jsonResponse({ reviews: [] });
+      if (url.includes("/api/improvement-proposals/prop-1/discussion")) {
+        expect(init?.method).toBe("POST");
+        discussionCalls += 1;
+        return jsonResponse({ sessionId: "ast_disc_001", created: true });
+      }
+      if (url.includes("/api/improvement-proposals")) {
+        return jsonResponse({
+          proposals:
+            discussionCalls > 0
+              ? [{ ...proposals[0], discussionSessionId: "ast_disc_001" }, proposals[1]]
+              : [proposals[0], proposals[1]],
+        });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BrainScreen />);
+    await settleAsyncUpdates();
+
+    fireEvent.click(screen.getByRole("button", { name: /改进提案/ }));
+    await waitFor(() => expect(screen.getByText("重复抓取同一 URL")).toBeInTheDocument());
+
+    const list = screen.getByLabelText("改进提案列表");
+    fireEvent.click(within(list).getByText("重复抓取同一 URL"));
+
+    const detail = within(screen.getByLabelText("改进提案详情"));
+    fireEvent.click(detail.getByRole("button", { name: "讨论" }));
+
+    await waitFor(() => expect(selectSessionMock).toHaveBeenCalledWith("ast_disc_001"));
+    expect(useShellStore.getState().activeRoute).toBe("assistant");
+    expect(discussionCalls).toBe(1);
+
+    // 绑定回写后按钮文案切换为"继续讨论"（US2）
+    await waitFor(() =>
+      expect(detail.getByRole("button", { name: "继续讨论" })).toBeInTheDocument(),
+    );
+  });
+
+  test("discuss button is disabled while the request is pending", async () => {
+    let resolveDiscussion: ((value: Response) => void) | null = null;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/brain/zones")) return jsonResponse({ zones: [] });
+      if (url.includes("/api/brain/zones/hot/entries")) {
+        return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+      }
+      if (url.includes("/api/brain/segments")) return jsonResponse({ items: [], total: 0 });
+      if (url.includes("/api/execution-reviews")) return jsonResponse({ reviews: [] });
+      if (url.includes("/api/improvement-proposals/prop-1/discussion")) {
+        return new Promise<Response>((resolve) => {
+          resolveDiscussion = resolve;
+        });
+      }
+      if (url.includes("/api/improvement-proposals")) {
+        return jsonResponse({ proposals: [proposals[0], proposals[1]] });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BrainScreen />);
+    await settleAsyncUpdates();
+
+    fireEvent.click(screen.getByRole("button", { name: /改进提案/ }));
+    await waitFor(() => expect(screen.getByText("重复抓取同一 URL")).toBeInTheDocument());
+    fireEvent.click(within(screen.getByLabelText("改进提案列表")).getByText("重复抓取同一 URL"));
+
+    const detail = within(screen.getByLabelText("改进提案详情"));
+    fireEvent.click(detail.getByRole("button", { name: "讨论" }));
+
+    await waitFor(() => expect(detail.getByRole("button", { name: "讨论" })).toBeDisabled());
+
+    resolveDiscussion?.(jsonResponse({ sessionId: "ast_disc_002", created: true }));
+    await waitFor(() => expect(detail.getByRole("button", { name: /讨论/ })).toBeEnabled());
   });
 });

@@ -353,9 +353,7 @@ def test_finding_serialization_single_source() -> None:
     service_src = inspect.getsource(proposal_service)
 
     assert "format_proposal_finding_text" in bridge_src, "bridge 必须消费 proposal_context"
-    assert (
-        "format_discussion_opening_message" in service_src
-    ), "讨论开场必须消费 proposal_context"
+    assert "format_discussion_opening_message" in service_src, "讨论开场必须消费 proposal_context"
     # 手拼模板的特征串只允许存在于 proposal_context 单一来源
     assert "问题：" not in bridge_src, "bridge 不得手拼 finding 模板（问题：…）"
     assert "问题：" not in service_src, "proposal_service 不得手拼 finding 模板（问题：…）"

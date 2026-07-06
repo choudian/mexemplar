@@ -1858,9 +1858,7 @@ def migrate_to_v24(engine):
     """迁移到版本 24：新增 mcp_servers 表。"""
     try:
         with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
+            conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS mcp_servers (
                         server_id TEXT PRIMARY KEY,
                         name TEXT NOT NULL,
@@ -1884,13 +1882,10 @@ def migrate_to_v24(engine):
                         created_at DATETIME NOT NULL,
                         updated_at DATETIME NOT NULL
                     )
-                    """
-                )
-            )
+                    """))
             conn.execute(
                 text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_servers_name "
-                    "ON mcp_servers(name)"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_servers_name " "ON mcp_servers(name)"
                 )
             )
             conn.execute(text("UPDATE schema_version SET version = 24"))
@@ -1905,11 +1900,7 @@ def downgrade_v24(engine):
     try:
         with engine.begin() as conn:
             conn.execute(text("DROP TABLE IF EXISTS mcp_servers"))
-            conn.execute(
-                text(
-                    "DELETE FROM app_settings WHERE setting_key LIKE 'mcp.servers.%'"
-                )
-            )
+            conn.execute(text("DELETE FROM app_settings WHERE setting_key LIKE 'mcp.servers.%'"))
             conn.execute(text("UPDATE schema_version SET version = 23"))
     except Exception as e:
         logger.error(f"回退版本 24 失败: {e}")
@@ -1968,8 +1959,7 @@ def downgrade_v25(engine):
                 if "discussion_session_id" in columns:
                     conn.execute(
                         text(
-                            "ALTER TABLE improvement_proposals "
-                            "DROP COLUMN discussion_session_id"
+                            "ALTER TABLE improvement_proposals " "DROP COLUMN discussion_session_id"
                         )
                     )
             conn.execute(text("UPDATE schema_version SET version = 24"))
