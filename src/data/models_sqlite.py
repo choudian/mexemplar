@@ -1328,6 +1328,9 @@ class ImprovementProposal(Base):
     result_tests_passed: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     result_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # v25：绑定的讨论会话 id（sessions.session_id）。一个提案至多一个；
+    # 不建 FK——会话可被用户删除，绑定死亡由业务层惰性自愈重建。
+    discussion_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     created_at: Mapped[str] = mapped_column(String(50), nullable=False)
     decided_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     completed_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

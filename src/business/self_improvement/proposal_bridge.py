@@ -188,10 +188,14 @@ def _build_implementation_graph(
     """Build a planner -> implementer -> test task graph."""
     from src.business.task_collaboration.service import TaskCollaborationService
 
+    from src.business.self_improvement.proposal_context import (
+        format_proposal_finding_text,
+    )
+
     session_id = _proposal_session_id(proposal_id)
     worktree = str(worktree_path)
-    supplement = (proposal.user_supplement or "").strip()
-    supplement_block = f"\n\n用户补充说明：{supplement}" if supplement else ""
+    # finding 块（问题/证据/建议/严重度/类型/用户补充）单一来源：proposal_context（028 D3）
+    finding_block = format_proposal_finding_text(proposal, include_outcome=False)
     guard_block = (
         "\n\n安全边界：只能在隔离 worktree 内修改源码、测试或文档；不得修改 "
         "src/business/self_improvement、src/business/task_collaboration、src-tauri、"
@@ -208,11 +212,8 @@ def _build_implementation_graph(
                 "title": f"规划改进：{proposal.what}",
                 "description": (
                     f"为改进提案「{proposal.what}」制定代码实施计划。\n\n"
-                    f"问题：{proposal.what}\n"
-                    f"证据：{proposal.evidence}\n"
-                    f"建议：{proposal.suggestion}\n"
-                    f"严重度：{proposal.severity}"
-                    f"{supplement_block}{guard_block}\n\n"
+                    f"{finding_block}"
+                    f"{guard_block}\n\n"
                     "只输出计划和风险点，不执行修改。"
                 ),
                 "assigneeHint": "ephemeral_subagent",
@@ -224,9 +225,8 @@ def _build_implementation_graph(
                 "title": f"实施改进：{proposal.what}",
                 "description": (
                     f"按照规划实施改进提案「{proposal.what}」。\n\n"
-                    f"问题：{proposal.what}\n"
-                    f"建议：{proposal.suggestion}"
-                    f"{supplement_block}{guard_block}\n\n"
+                    f"{finding_block}"
+                    f"{guard_block}\n\n"
                     "完成后交给验证节点运行测试。"
                 ),
                 "assigneeHint": "ephemeral_subagent",

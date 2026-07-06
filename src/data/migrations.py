@@ -1917,6 +1917,68 @@ def downgrade_v24(engine):
     logger.info("回退版本 24 完成：mcp_servers 表已删除")
 
 
+def migrate_to_v25(engine):
+    """迁移到版本 25：improvement_proposals 新增 discussion_session_id 列（028）。"""
+    try:
+        with engine.begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='improvement_proposals'"
+                )
+            ).fetchone()
+            if exists is not None:
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        text("PRAGMA table_info(improvement_proposals)")
+                    ).fetchall()
+                }
+                if "discussion_session_id" not in columns:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE improvement_proposals "
+                            "ADD COLUMN discussion_session_id TEXT"
+                        )
+                    )
+            conn.execute(text("UPDATE schema_version SET version = 25"))
+    except Exception as e:
+        logger.error(f"迁移到版本 25 失败: {e}")
+        raise
+    logger.info("迁移到版本 25 完成：improvement_proposals.discussion_session_id")
+
+
+def downgrade_v25(engine):
+    """回退版本 25：移除 discussion_session_id 列。"""
+    try:
+        with engine.begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='improvement_proposals'"
+                )
+            ).fetchone()
+            if exists is not None:
+                columns = {
+                    row[1]
+                    for row in conn.execute(
+                        text("PRAGMA table_info(improvement_proposals)")
+                    ).fetchall()
+                }
+                if "discussion_session_id" in columns:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE improvement_proposals "
+                            "DROP COLUMN discussion_session_id"
+                        )
+                    )
+            conn.execute(text("UPDATE schema_version SET version = 24"))
+    except Exception as e:
+        logger.error(f"回退版本 25 失败: {e}")
+        raise
+    logger.info("回退版本 25 完成：discussion_session_id 列已移除")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -1941,6 +2003,7 @@ _MIGRATIONS = [
     (22, migrate_to_v22),
     (23, migrate_to_v23),
     (24, migrate_to_v24),
+    (25, migrate_to_v25),
 ]
 
 

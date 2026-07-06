@@ -321,6 +321,33 @@ class ImprovementProposalRepository(BaseRepository):
             return None
         return self._refetch(proposal_id)
 
+    # -- Discussion session binding (028) --------------------------------------
+
+    def bind_discussion_session(self, proposal_id: str, session_id: str) -> bool:
+        """First-time binding via conditional UPDATE (idempotency guard).
+
+        Matches only when no discussion session is bound yet; rowcount 0 means
+        another caller won the race (or the proposal doesn't exist) and the
+        caller must discard its own session and re-read the winner's binding.
+        """
+        updated = (
+            self.session.query(ImprovementProposal)
+            .filter(
+                ImprovementProposal.id == proposal_id,
+                ImprovementProposal.discussion_session_id.is_(None),
+            )
+            .update({"discussion_session_id": session_id}, synchronize_session=False)
+        )
+        self._commit()
+        return updated == 1
+
+    def rebind_discussion_session(self, proposal_id: str, session_id: str) -> None:
+        """Replace a binding whose session is confirmed dead (self-heal path)."""
+        self.session.query(ImprovementProposal).filter(
+            ImprovementProposal.id == proposal_id
+        ).update({"discussion_session_id": session_id}, synchronize_session=False)
+        self._commit()
+
     # -- Internal helpers -----------------------------------------------------
 
     def _cas_transition(

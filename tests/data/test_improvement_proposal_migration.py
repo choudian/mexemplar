@@ -280,3 +280,68 @@ def test_v23_migration_adds_result_tests_passed_check_to_existing_table() -> Non
 def test_v23_registered_in_migration_steps() -> None:
     versions = [version for version, _ in migrations._MIGRATIONS]
     assert 23 in versions
+
+
+# ---------------------------------------------------------------------------
+# v25: discussion_session_id 列（028）
+# ---------------------------------------------------------------------------
+
+
+def _engine_at_v24():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE schema_version (version INTEGER NOT NULL)"))
+        conn.execute(text("INSERT INTO schema_version (version) VALUES (20)"))
+    migrations.migrate_to_v21(engine)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE schema_version SET version = 24"))
+    return engine
+
+
+def test_v25_adds_discussion_session_id_column() -> None:
+    engine = _engine_at_v24()
+
+    migrations.migrate_to_v25(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(improvement_proposals)"))}
+        version = conn.execute(text("SELECT version FROM schema_version")).scalar_one()
+    assert "discussion_session_id" in columns
+    assert version == 25
+
+    # 列可写可读
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO improvement_proposals "
+                "(id, source_review_id, finding_index, status, created_at, discussion_session_id) "
+                "VALUES ('p25', 'r25', 0, 'pending_review', '2026-01-01', 'ast_abc')"
+            )
+        )
+    with engine.connect() as conn:
+        value = conn.execute(
+            text("SELECT discussion_session_id FROM improvement_proposals WHERE id='p25'")
+        ).scalar_one()
+    assert value == "ast_abc"
+
+
+def test_v25_idempotent() -> None:
+    engine = _engine_at_v24()
+    migrations.migrate_to_v25(engine)
+    migrations.migrate_to_v25(engine)
+    with engine.connect() as conn:
+        version = conn.execute(text("SELECT version FROM schema_version")).scalar_one()
+    assert version == 25
+
+
+def test_v25_downgrade_removes_column() -> None:
+    engine = _engine_at_v24()
+    migrations.migrate_to_v25(engine)
+
+    migrations.downgrade_v25(engine)
+
+    with engine.connect() as conn:
+        columns = {row[1] for row in conn.execute(text("PRAGMA table_info(improvement_proposals)"))}
+        version = conn.execute(text("SELECT version FROM schema_version")).scalar_one()
+    assert "discussion_session_id" not in columns
+    assert version == 24
