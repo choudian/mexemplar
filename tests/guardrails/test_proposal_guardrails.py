@@ -336,3 +336,42 @@ def test_proposal_bridge_and_workspace_never_invoke_merge_or_restart(relative_pa
     assert not _FR015_FORBIDDEN_LIST_FORM.search(
         text
     ), f"FR-015 违例：{source.name} 含列表形式 git merge/rebase/push/reset/clean/checkout 调用"
+
+
+# ---------------------------------------------------------------------------
+# 028: 讨论功能守卫 — 序列化单一来源 + 讨论路径零实施副作用
+# ---------------------------------------------------------------------------
+
+
+def test_finding_serialization_single_source() -> None:
+    """028 D3：bridge 与讨论开场必须都消费 proposal_context，禁止手拼 finding 模板回潮。"""
+    import inspect
+
+    from src.business.self_improvement import proposal_bridge, proposal_service
+
+    bridge_src = inspect.getsource(proposal_bridge)
+    service_src = inspect.getsource(proposal_service)
+
+    assert "format_proposal_finding_text" in bridge_src, "bridge 必须消费 proposal_context"
+    assert (
+        "format_discussion_opening_message" in service_src
+    ), "讨论开场必须消费 proposal_context"
+    # 手拼模板的特征串只允许存在于 proposal_context 单一来源
+    assert "问题：" not in bridge_src, "bridge 不得手拼 finding 模板（问题：…）"
+    assert "问题：" not in service_src, "proposal_service 不得手拼 finding 模板（问题：…）"
+
+
+def test_discussion_path_has_no_implementation_references() -> None:
+    """028 FR-425：讨论入口的实现不得触碰实施桥/任务图/worktree 符号。
+
+    静态守卫：get_or_create_discussion_session 方法体内出现 proposal_bridge、
+    build_task_graph 或 worktree 任一符号即失败——讨论路径与实施路径必须在
+    源码层就不共享入口，而不是靠运行时自觉。
+    """
+    import inspect
+
+    from src.business.self_improvement.proposal_service import ProposalService
+
+    source = inspect.getsource(ProposalService.get_or_create_discussion_session)
+    for forbidden in ("proposal_bridge", "build_task_graph", "trigger_implementation", "worktree"):
+        assert forbidden not in source, f"讨论路径不得引用 {forbidden}"

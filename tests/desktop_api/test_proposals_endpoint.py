@@ -144,6 +144,7 @@ def test_list_endpoint_response_matches_contract_fields(desktop_api_client) -> N
         "resultTestsPassed",
         "resultSummary",
         "error",
+        "discussionSessionId",
         "createdAt",
         "decidedAt",
         "completedAt",
@@ -243,3 +244,101 @@ def test_reject_failed_endpoint_returns_cleanup_failed_when_worktree_cleanup_fai
         assert row is not None
         assert row.status == "failed"
         assert row.worktree_path == str(worktree)
+
+
+# ---------------------------------------------------------------------------
+# 028: discussion endpoint contract（contracts/discussion-api.md 五条行为约束）
+# ---------------------------------------------------------------------------
+
+
+def _assistant_session_count() -> int:
+    from src.business.agents.config import AgentType
+    from src.data.repositories import SessionRepository
+
+    return len(SessionRepository().get_by_agent_type(AgentType.ASSISTANT))
+
+
+def test_discussion_idempotent_and_session_count(in_memory_db):
+    """约束 1：连续两次返回同一 sessionId，第二次 created=false，会话数只 +1。"""
+    from src.desktop_api.routers.proposals import open_proposal_discussion
+
+    pid = _seed_proposal(source_review_id="rev_disc_1")
+    baseline = _assistant_session_count()
+
+    first = open_proposal_discussion(pid)
+    second = open_proposal_discussion(pid)
+
+    assert first.sessionId == second.sessionId
+    assert first.created is True
+    assert second.created is False
+    assert _assistant_session_count() == baseline + 1
+
+
+def test_discussion_opening_message_contract(in_memory_db):
+    """约束 2：开场为 assistant 角色且含 finding 字段。"""
+    from src.data.repositories import MessageRepository
+    from src.desktop_api.routers.proposals import open_proposal_discussion
+
+    pid = _seed_proposal(source_review_id="rev_disc_2")
+    response = open_proposal_discussion(pid)
+
+    messages = MessageRepository().get_all(response.sessionId)
+    assert len(messages) == 1
+    assert messages[0].role == "assistant"
+    for expected in ("API test finding", "evidence", "suggestion"):
+        assert expected in messages[0].content
+
+
+def test_discussion_zero_side_effect(in_memory_db):
+    """约束 3：不改状态、不建 worktree/task graph。"""
+    from src.desktop_api.routers.proposals import open_proposal_discussion
+
+    pid = _seed_proposal(source_review_id="rev_disc_3")
+    with patch(
+        "src.business.self_improvement.proposal_bridge.trigger_implementation_async",
+        side_effect=AssertionError("discussion must not trigger implementation"),
+    ):
+        open_proposal_discussion(pid)
+
+    dto = ProposalService().get_proposal(pid)
+    assert dto["status"] == "pending_review"
+    assert dto["graphId"] is None
+    assert dto["worktreeAvailable"] is False
+
+
+def test_discussion_self_heal_after_session_delete(in_memory_db):
+    """约束 4：绑定会话删除后返回新 sessionId 且 created=true。"""
+    from src.business.services.chat_service import ChatService
+    from src.desktop_api.routers.proposals import open_proposal_discussion
+
+    pid = _seed_proposal(source_review_id="rev_disc_4")
+    first = open_proposal_discussion(pid)
+    ChatService().archive_session(first.sessionId)
+
+    healed = open_proposal_discussion(pid)
+    assert healed.sessionId != first.sessionId
+    assert healed.created is True
+    assert ProposalService().get_proposal(pid)["discussionSessionId"] == healed.sessionId
+
+
+def test_discussion_unknown_proposal_404(in_memory_db):
+    """404：提案不存在。"""
+    import pytest
+    from fastapi import HTTPException
+
+    from src.desktop_api.routers.proposals import open_proposal_discussion
+
+    with pytest.raises(HTTPException) as exc_info:
+        open_proposal_discussion("prop_nonexistent")
+    assert exc_info.value.status_code == 404
+
+
+def test_discussion_session_id_in_list_dto(in_memory_db):
+    """列表 DTO 携带 discussionSessionId，前端按钮文案据此切换。"""
+    from src.desktop_api.routers.proposals import open_proposal_discussion
+
+    pid = _seed_proposal(source_review_id="rev_disc_5")
+    assert ProposalService().list_proposals()[0]["discussionSessionId"] is None
+
+    response = open_proposal_discussion(pid)
+    assert ProposalService().list_proposals()[0]["discussionSessionId"] == response.sessionId

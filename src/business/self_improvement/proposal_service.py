@@ -149,6 +149,77 @@ class ProposalService:
         self._emit_changed(row, change_type="rejected")
         return result
 
+    # -- Discussion session (028) ---------------------------------------------
+
+    # 会话列表可见状态（chat_service._VISIBLE_SESSION_STATUSES 同源语义）：
+    # 归档（删除）或行缺失都视为绑定死亡，走自愈重建。
+    _DISCUSSION_ALIVE_STATUSES = ("active", "suspended", "completed", "failed")
+
+    def get_or_create_discussion_session(self, proposal_id: str) -> dict[str, Any] | None:
+        """获取或创建提案的讨论会话（幂等 + 绑定死亡自愈）。
+
+        Returns ``{"sessionId": str, "created": bool}``，提案不存在返回 None。
+        创建路径零模型调用：新会话仅落一条 assistant 角色开场消息
+        （proposal_context 序列化），不触发任何实施副作用（FR-425）。
+        """
+        from src.business.self_improvement.proposal_context import (
+            format_discussion_opening_message,
+        )
+        from src.business.services.chat_service import ChatService
+        from src.data.models_sqlite import Message
+        from src.data.repositories import MessageRepository, SessionRepository
+
+        with ImprovementProposalRepository() as repo:
+            row = repo.get_by_id(proposal_id)
+            if row is None:
+                return None
+            bound_id = row.discussion_session_id
+            opening = format_discussion_opening_message(row)
+            title_stub = (row.what or "改进提案").strip() or "改进提案"
+
+        if bound_id:
+            session = SessionRepository().get_by_id(bound_id)
+            if session is not None and session.status in self._DISCUSSION_ALIVE_STATUSES:
+                return {"sessionId": bound_id, "created": False}
+
+        chat = ChatService()
+        new_session_id = chat.create_session(title=f"讨论：{title_stub[:24]}")
+        import uuid as _uuid
+
+        msg_repo = MessageRepository()
+        msg_repo.create(
+            Message(
+                message_id=str(_uuid.uuid4()),
+                session_id=new_session_id,
+                sequence=msg_repo.get_next_sequence(new_session_id),
+                role="assistant",
+                content=opening,
+            )
+        )
+
+        if bound_id:
+            # 旧绑定已确认死亡：直接换绑（自愈路径）。
+            with ImprovementProposalRepository() as repo:
+                repo.rebind_discussion_session(proposal_id, new_session_id)
+            return {"sessionId": new_session_id, "created": True}
+
+        with ImprovementProposalRepository() as repo:
+            if repo.bind_discussion_session(proposal_id, new_session_id):
+                return {"sessionId": new_session_id, "created": True}
+            # 竞态输者：丢弃孤儿会话，复用赢者绑定。
+            chat.archive_session(new_session_id)
+            current = repo.get_by_id(proposal_id)
+        winner = current.discussion_session_id if current is not None else None
+        if winner:
+            return {"sessionId": winner, "created": False}
+        logger.error(
+            "Discussion binding race left proposal %s unbound; rebinding fallback",
+            proposal_id,
+        )
+        with ImprovementProposalRepository() as repo:
+            repo.rebind_discussion_session(proposal_id, new_session_id)
+        return {"sessionId": new_session_id, "created": True}
+
     # -- Query ---------------------------------------------------------------
 
     def list_proposals(self, *, status: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
@@ -226,6 +297,7 @@ class ProposalService:
             ),
             "resultSummary": _sanitize_dto_text(row.result_summary),
             "error": _sanitize_dto_text(row.error),
+            "discussionSessionId": row.discussion_session_id,
             "createdAt": row.created_at,
             "decidedAt": row.decided_at,
             "completedAt": row.completed_at,

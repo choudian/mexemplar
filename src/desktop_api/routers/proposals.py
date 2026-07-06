@@ -1,10 +1,10 @@
-"""Improvement proposal API — list, approve, reject."""
+"""Improvement proposal API — list, approve, reject, discussion."""
 
 from __future__ import annotations
 
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.business.self_improvement.proposal_bridge import trigger_implementation_async
@@ -42,6 +42,7 @@ class ProposalDto(BaseModel):
     resultTestsPassed: bool | None = None
     resultSummary: str | None = None
     error: str | None = None
+    discussionSessionId: str | None = None
     createdAt: str
     decidedAt: str | None = None
     completedAt: str | None = None
@@ -49,6 +50,13 @@ class ProposalDto(BaseModel):
 
 class ProposalListResponse(BaseModel):
     proposals: list[ProposalDto]
+
+
+class ProposalDiscussionResponse(BaseModel):
+    """讨论会话入口响应（028）：绑定或新建的普通助理会话。"""
+
+    sessionId: str
+    created: bool
 
 
 @router.get("", response_model=ProposalListResponse)
@@ -80,3 +88,12 @@ def reject_proposal(proposal_id: str) -> dict:
     if result is None:
         return {"accepted": False, "reason": "invalid_transition"}
     return {"accepted": True, "id": result["id"], "status": result["status"]}
+
+
+@router.post("/{proposal_id}/discussion", response_model=ProposalDiscussionResponse)
+def open_proposal_discussion(proposal_id: str) -> ProposalDiscussionResponse:
+    """获取或创建提案讨论会话（幂等；零实施副作用，FR-425）。"""
+    result = ProposalService().get_or_create_discussion_session(proposal_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="提案不存在")
+    return ProposalDiscussionResponse(sessionId=result["sessionId"], created=result["created"])
