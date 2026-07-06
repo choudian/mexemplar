@@ -77,8 +77,6 @@ def test_external_skill_files_confined_to_managed_root(tmp_path, monkeypatch) ->
         write_install_dir,
     )
 
-    final_dir = write_install_dir(
-        "esi_guard", [SkillFile(path="SKILL.md", content="x")]
-    )
+    final_dir = write_install_dir("esi_guard", [SkillFile(path="SKILL.md", content="x")])
     root = external_skills_root().resolve()
     assert final_dir.resolve().is_relative_to(root)

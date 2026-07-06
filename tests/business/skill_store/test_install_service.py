@@ -36,12 +36,14 @@ def _detail(source_ref="vercel-labs/frontend-design", files=None):
             installs=1200,
             source_url=f"https://skills.sh/{source_ref}",
         ),
-        files=files
-        if files is not None
-        else [
-            {"path": "SKILL.md", "content": _SKILL_MD},
-            {"path": "references/palette.md", "content": "colors"},
-        ],
+        files=(
+            files
+            if files is not None
+            else [
+                {"path": "SKILL.md", "content": _SKILL_MD},
+                {"path": "references/palette.md", "content": "colors"},
+            ]
+        ),
     )
 
 
@@ -213,20 +215,17 @@ def test_installed_skill_loads_with_external_warning(in_memory_db):
     assert "# frontend-design" in rendered
 
     # 对照：非外部技能不带警示
-    assert (
-        "来自外部导入的技能"
-        not in _render_skill_md(
-            type(
-                "S",
-                (),
-                {
-                    "name": "n",
-                    "description": "d",
-                    "trigger_conditions": "[]",
-                    "required_tools": "[]",
-                    "body_markdown": "b",
-                    "origin": "assistant_tool_call",
-                },
-            )()
-        )
+    assert "来自外部导入的技能" not in _render_skill_md(
+        type(
+            "S",
+            (),
+            {
+                "name": "n",
+                "description": "d",
+                "trigger_conditions": "[]",
+                "required_tools": "[]",
+                "body_markdown": "b",
+                "origin": "assistant_tool_call",
+            },
+        )()
     )

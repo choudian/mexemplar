@@ -74,11 +74,19 @@ def test_database_rejects_unknown_origin_even_on_direct_insert() -> None:
 
 
 def test_external_import_is_schema_anchor_not_desktop_api_surface() -> None:
+    """external_import 不得成为 API/工具可创建的 origin。
+
+    029 起 `_render_skill_md` 对 external_import 条目做只读渲染消费（来源警示头），
+    这是合法的展示逻辑；守卫收窄到真正的边界——创建路径（router 源码 + create
+    handler 源码 + create schema）不得出现/暴露 external_import。
+    """
     router_source = inspect.getsource(skills_methodology)
-    tool_source = inspect.getsource(skill_methodology_tools)
+    create_handler_source = inspect.getsource(
+        skill_methodology_tools.create_create_skill_methodology_handler
+    )
 
     assert "external_import" not in router_source
-    assert "external_import" not in tool_source
+    assert "external_import" not in create_handler_source
     properties = skill_methodology_tools.CREATE_SKILL_METHODOLOGY_SCHEMA["function"]["parameters"][
         "properties"
     ]

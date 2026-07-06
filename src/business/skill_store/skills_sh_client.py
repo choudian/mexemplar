@@ -149,7 +149,9 @@ class SkillsShClient:
         source = str(raw.get("source") or source_ref.rsplit("/", 1)[0])
         installs_raw = raw.get("installs")
         installs = int(installs_raw) if isinstance(installs_raw, (int, float)) else 0
-        source_url = str(raw.get("url") or raw.get("installUrl") or f"https://skills.sh/{source_ref}")
+        source_url = str(
+            raw.get("url") or raw.get("installUrl") or f"https://skills.sh/{source_ref}"
+        )
         return StoreSkillSummary(
             source_ref=source_ref,
             name=name,

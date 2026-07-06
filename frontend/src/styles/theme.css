@@ -8669,3 +8669,230 @@ select:focus-visible,
     max-width: none;
   }
 }
+
+/* 技能商店 tab（029）：搜索列表 + GitHub 直装 + 预览弹层 */
+.skill-store-tab {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.skill-store-toolbar {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.skill-store-error {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--warn) 35%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--warn) 8%, transparent);
+  color: var(--text-2);
+  font-size: 12.5px;
+}
+
+.skill-store-list {
+  display: grid;
+  gap: 8px;
+}
+
+.skill-store-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-md);
+  background: var(--surface-1);
+}
+
+.skill-store-card-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.skill-store-card-main strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.skill-store-card-main small,
+.skill-store-card-meta small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.skill-store-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.skill-store-github {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px dashed var(--border-2);
+  border-radius: var(--radius-md);
+}
+
+.skill-store-github-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-store-github-header strong {
+  font-size: 12.5px;
+}
+
+.skill-store-github-header small,
+.skill-store-github-message {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.skill-store-github-input {
+  display: flex;
+  gap: 8px;
+}
+
+.skill-store-github-input input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 12.5px;
+  font-family: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+}
+
+.skill-store-preview {
+  display: grid;
+  gap: 12px;
+  width: min(680px, 92vw);
+  max-height: 84vh;
+}
+
+.skill-store-preview-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.skill-store-preview-title h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.skill-store-preview-title a {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.skill-store-preview-header button {
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.skill-store-audit {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-2);
+  border: 1px solid var(--border-1);
+  background: var(--surface-2);
+}
+
+.skill-store-audit[data-tone="warn"] {
+  border-color: color-mix(in oklch, var(--warn) 35%, transparent);
+  background: color-mix(in oklch, var(--warn) 8%, transparent);
+}
+
+.skill-store-audit[data-tone="ok"] {
+  border-color: color-mix(in oklch, var(--ok) 30%, transparent);
+  background: color-mix(in oklch, var(--ok) 7%, transparent);
+}
+
+.skill-store-preview-body {
+  min-height: 0;
+  max-height: 40vh;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.skill-store-preview-files {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.skill-store-preview-files ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 3px;
+  max-height: 16vh;
+  overflow: auto;
+}
+
+.skill-store-preview-files li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.skill-store-preview-files code {
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.skill-store-preview-files small {
+  color: var(--text-muted);
+}
+
+.skill-store-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.skill-store-preview-reason {
+  margin-right: auto;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.methodology-external-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+
+.methodology-external-strip a {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+  margin-right: auto;
+}

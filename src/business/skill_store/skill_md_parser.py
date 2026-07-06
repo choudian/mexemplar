@@ -53,9 +53,7 @@ def _split_frontmatter(content: str) -> tuple[dict[str, str], str]:
 
 def _first_paragraph(body: str) -> str:
     for block in body.split("\n\n"):
-        cleaned = " ".join(
-            line.strip() for line in block.splitlines() if line.strip()
-        ).strip()
+        cleaned = " ".join(line.strip() for line in block.splitlines() if line.strip()).strip()
         cleaned = cleaned.lstrip("#").strip()
         if cleaned:
             return cleaned

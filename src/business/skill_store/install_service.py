@@ -174,9 +174,7 @@ class InstallService:
 
     def installed_source_refs(self, source_type: str) -> set[str]:
         repo = ExternalSkillInstallRepository()
-        return {
-            row.source_ref for row in repo.list_active() if row.source_type == source_type
-        }
+        return {row.source_ref for row in repo.list_active() if row.source_type == source_type}
 
     # -- Internal -----------------------------------------------------------------
 
@@ -242,9 +240,7 @@ class InstallService:
                 if str(exc).startswith("skill_name_collision"):
                     continue
                 raise
-        raise InstallNameConflictError(
-            f"已存在同名方法论「{parsed.name}」，请先处理重名后重试"
-        )
+        raise InstallNameConflictError(f"已存在同名方法论「{parsed.name}」，请先处理重名后重试")
 
     @staticmethod
     def _rollback_methodology(skill_id: str) -> None:

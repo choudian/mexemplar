@@ -1,18 +1,62 @@
 import { ChevronDown, ChevronRight, Plus, Save, Trash2, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import type { SkillPoolItem } from "../../api/brain";
 import type { SkillDetail } from "../../api/skillsMethodology";
 import SkillCheckboxGrid from "../../components/SkillCheckboxGrid";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { SkillEditDraft } from "../../state/skillMethodologyStore";
+import { useSkillMethodologyStore } from "../../state/skillMethodologyStore";
+import { useSkillStoreStore } from "../../state/skillStoreStore";
 
 function originLabel(origin: string): string {
   if (origin === "system_bootstrap") return "系统内置";
   if (origin === "user_edit") return "用户编辑";
   if (origin === "assistant_tool_call") return "Assistant 创建";
   if (origin === "specialist_tool_call") return "专员创建";
+  if (origin === "external_import") return "外部导入";
   return origin || "未知来源";
+}
+
+function ExternalSourceStrip({ skillId }: { skillId: string }): JSX.Element | null {
+  const installed = useSkillStoreStore((s) => s.installed);
+  const loadInstalled = useSkillStoreStore((s) => s.loadInstalled);
+  const uninstall = useSkillStoreStore((s) => s.uninstall);
+  const [removing, setRemoving] = useState(false);
+
+  useEffect(() => {
+    void loadInstalled();
+  }, [loadInstalled]);
+
+  const install = installed.find((item) => item.skillId === skillId);
+  if (!install) return null;
+  const sourceLabel = install.sourceType === "skills_sh" ? "skills.sh" : "GitHub";
+  return (
+    <div className="methodology-external-strip">
+      <Badge tone="neutral">来自 {sourceLabel}</Badge>
+      <a href={install.sourceUrl} rel="noreferrer" target="_blank">
+        {install.sourceRef}
+      </a>
+      <Button
+        disabled={removing}
+        kind="ghost"
+        onClick={() => {
+          void (async () => {
+            setRemoving(true);
+            try {
+              await uninstall(install.installId);
+              await useSkillMethodologyStore.getState().load();
+              await useSkillMethodologyStore.getState().selectSkill(null);
+            } finally {
+              setRemoving(false);
+            }
+          })();
+        }}
+      >
+        {removing ? "卸载中…" : "卸载"}
+      </Button>
+    </div>
+  );
 }
 
 function EditableList({
@@ -97,6 +141,9 @@ export function SkillEditor({
         <span>来源：{originLabel(detail.origin)}</span>
         <span>版本：v{detail.version}{detail.parent_skill_id ? " (演进版本)" : " (初始版本)"}</span>
       </div>
+      {detail.origin === "external_import" ? (
+        <ExternalSourceStrip skillId={detail.skill_id} />
+      ) : null}
 
       <div className="methodology-form-grid">
         <label>

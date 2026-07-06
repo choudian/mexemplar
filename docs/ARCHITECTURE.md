@@ -245,6 +245,25 @@ React SkillListScreen MCP tab
 - **并发语义**：MCP 工具一律 `is_concurrency_safe=False`（N11），串行执行。
 - **MVP 仅 stdio**：`transport="http"` 创建请求返回 422（CC-009）。
 
+### Skill Store（029）
+
+技能商店让用户从外部生态安装现成技能：skills.sh 市场（搜索/精选/详情含完整文件树/安全审计）与 GitHub 仓库直装（发现根目录或 `skills/*/` 的 SKILL.md）。业务层位于 `src/business/skill_store/`（`skills_sh_client` / `github_discovery` / `skill_md_parser` / `install_service` / `file_store`），UI 在 Skill List 屏第三个"技能商店"tab（独立组件 + 独立 `skillStoreStore`，照 027 MCP tab 模式），API 面为 `/api/skill-store/*`。
+
+```text
+SkillStoreTab（搜索 / GitHub 输入）
+  → /api/skill-store search|discover-github|preview|install|installed|uninstall
+  → InstallService（预览零持久化；安装编排）
+  → file_store（受管目录原子写）+ SkillService.create(origin='external_import') + external_skill_installs（v26）
+```
+
+- **安装即三件套原子成对**：受管目录文件（`<data>/external_skills/<install_id>/`）+ `brain_skills` 方法论行（origin=`external_import`，复用 012 装备/加载语义）+ `external_skill_installs` 来源元数据行；任一步失败逆序清理零残留。
+- **安装路径零执行（CC-170 硬边界）**：安装/预览是纯数据落地，`skill_store` 模块源码不得出现 subprocess/exec/执行层 import，由守卫测试焊死。"支持可执行技能"= 附带脚本随技能落盘，由执行体在既有 exec fail-closed 管线（015）内按需运行，不新增执行通道。
+- **受管目录写盘边界（CC-174）**：相对路径规范化拒绝 `..`/绝对路径/盘符（zip-slip 防御）；单文件 ≤ 512KB、总量 ≤ 2MB、文件数 ≤ 40；仅 UTF-8 文本，二进制拒绝/跳过。
+- **装前强制预览**：SKILL.md 全文 + 文件清单 + skills.sh 审计结果；GitHub 直装无审计显著警示。预览零持久化副作用。
+- **外部来源警示（advisory，照 027 N12 定位）**：`load_skill_methodology` 渲染 external_import 条目时注入"内容来自外部、不可无条件信任"警示头；硬保证仍由 exec 确认协议承担。
+- **卸载**：方法论走既有软删除生命周期（历史链保留），`uninstalled_at` 置位，受管目录物理清理；卸载后重装为新条目。
+- **降级语义**：skills.sh 不可达 → search 返回 `sourceAvailable:false`（不抛 5xx），商店 tab 显示可行动提示，其他 tab 与屏幕零影响；GitHub 匿名限额耗尽给出明确等待提示。0 新公开 UI 事件、0 新 secret（MVP 匿名访问）。
+
 ### User Todo List（025）
 
 用户个人待办是独立的轻量业务能力，不属于 task graph。数据存储在 SQLite v18 `user_todos` 表，经 `UserTodoRepository` 和 `UserTodoService` 管理；桌面 API 只暴露 `/api/user-todos` typed CRUD，前端 `/todos` 页面通过 `frontend/src/api/userTodos.ts` 与 `userTodoStore` 访问。

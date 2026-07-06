@@ -1973,9 +1973,7 @@ def migrate_to_v26(engine):
     """迁移到版本 26：新增 external_skill_installs 表（029 技能商店）。"""
     try:
         with engine.begin() as conn:
-            conn.execute(
-                text(
-                    """
+            conn.execute(text("""
                     CREATE TABLE IF NOT EXISTS external_skill_installs (
                         install_id TEXT PRIMARY KEY,
                         skill_id TEXT NOT NULL,
@@ -1987,9 +1985,7 @@ def migrate_to_v26(engine):
                         installed_at TEXT NOT NULL,
                         uninstalled_at TEXT
                     )
-                    """
-                )
-            )
+                    """))
             conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_external_skill_installs_skill_id "

@@ -68,9 +68,7 @@ class GithubFetcher:
             str(item.get("name")): item for item in root_listing if isinstance(item, dict)
         }
         if "SKILL.md" in root_names:
-            found.append(
-                {"sourceRef": f"{owner}/{repo}", "name": repo, "path": "SKILL.md"}
-            )
+            found.append({"sourceRef": f"{owner}/{repo}", "name": repo, "path": "SKILL.md"})
         skills_dir = root_names.get("skills")
         if skills_dir is not None and skills_dir.get("type") == "dir":
             sub_listing = self._get_json(f"/repos/{owner}/{repo}/contents/skills") or []
@@ -79,9 +77,7 @@ class GithubFetcher:
                     continue
                 name = str(item.get("name") or "")
                 inner = self._get_json(f"/repos/{owner}/{repo}/contents/skills/{name}") or []
-                if any(
-                    isinstance(f, dict) and f.get("name") == "SKILL.md" for f in inner
-                ):
+                if any(isinstance(f, dict) and f.get("name") == "SKILL.md" for f in inner):
                     found.append(
                         {
                             "sourceRef": f"{owner}/{repo}/skills/{name}",
@@ -192,9 +188,7 @@ class GithubFetcher:
         if response.status_code == 404:
             return None
         if response.status_code in (403, 429):
-            raise GithubUnavailableError(
-                "GitHub 匿名访问额度已用尽，请约一小时后重试。"
-            )
+            raise GithubUnavailableError("GitHub 匿名访问额度已用尽，请约一小时后重试。")
         if response.status_code >= 400:
             raise GithubUnavailableError("GitHub 暂时无法访问，请稍后重试。")
         try:
