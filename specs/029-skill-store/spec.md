@@ -2,7 +2,7 @@
 
 **Feature Branch**: `029-skill-store`
 **Created**: 2026-07-06
-**Status**: Draft
+**Status**: Completed
 **Input**: User description: "技能商店功能：可以从 skills.sh 市场搜索/浏览并安装技能，也可以从 GitHub 仓库直接安装。用户已定：(1) 支持可执行技能——外部技能可携带脚本文件；(2) 装前必须预览确认——先看 SKILL.md 全文 + skills.sh 安全审计结果再装，GitHub 直装无审计要明确提示。"
 
 ## User Scenarios & Testing *(mandatory)*

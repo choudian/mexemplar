@@ -2,7 +2,7 @@
 
 **Feature Branch**: `028-proposal-discussion`
 **Created**: 2026-07-06
-**Status**: Draft
+**Status**: Completed
 **Input**: User description: "在 BrainScreen 改进提案审批视图中，用户可以对一条提案的分析内容展开真实对话讨论，而不是只能读静态文本后直接批准/拒绝。提案与讨论会话持久绑定，同一提案再次点击讨论回到同一会话；守住 026 审批前零副作用红线；讨论会话是普通助理会话但以提案上下文开场；终态提案也可讨论（复盘用途）。"
 
 ## User Scenarios & Testing *(mandatory)*

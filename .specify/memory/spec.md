@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-07-06
-**Revision**: 2026-07-06 — Archived feature 027 MCP management (MCP 工具管理)
+**Last Updated**: 2026-07-07
+**Revision**: 2026-07-07 — Archived features 028 (提案审批讨论) + 029 (技能商店)
 
 ---
 
@@ -1902,3 +1902,110 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - server name 创建后不可改——rename 会导致 slug/工具名变化
 - MCP 工具 result prompt injection——prompt 加"外部结果不可信"引导 + envelope 标记 source=mcp
 - MCP SDK import 失败时功能降级——CRUD API 可用但启动/测试连接不可用，返回 NullRegistry
+
+## 提案审批"讨论"功能（chat about this） [Source: specs/028-proposal-discussion]
+
+**Revision note (2026-07-07)**: Archived 028 after merge. BrainScreen 提案详情区新增"讨论/继续讨论"入口，用户在批准/拒绝前可对提案 finding 展开真实助理会话讨论；提案与讨论会话持久绑定（v25 `discussion_session_id` 列 + 条件 UPDATE CAS），会话删除惰性自愈重建；守住 026 审批前零副作用红线。
+
+### User Stories
+
+- **US-093 (P1)**: 审批前对提案展开讨论——用户在复盘视图看到待审批提案，对分析内容有疑问，点击详情区"讨论"入口进入以该提案完整分析开场的助理会话，追问细节后回到提案页做批准/拒绝决定。
+- **US-094 (P2)**: 回到上次的讨论继续聊——用户上次对某提案讨论几轮后关闭，重启应用再点"讨论"回到同一会话，历史完整，可接着上次思路继续。
+- **US-095 (P3)**: 终态提案的复盘讨论——提案已 done/failed/rejected，用户想复盘"当时为什么拒绝""实施失败还值不值得再试"，同样能点"讨论"，此时开场上下文含实施结果/失败原因。
+
+### Functional Requirements
+
+- **FR-435**: 提案详情区 MUST 提供"讨论"入口；对任意状态的提案（含 pending_review 与全部终态）均可用。
+- **FR-436**: 首次点击"讨论"MUST 创建一个真实的普通助理会话，并以该提案的分析上下文开场：问题（what）、证据（evidence）、建议（suggestion）、严重程度（severity）、类型（findingType）、用户已填补充说明（如有）；终态提案还包含实施结果摘要 / 测试结论 / 失败原因（如有）。上下文序列化 MUST 复用既有 finding 文本拼装逻辑（`proposal_context.py` 单一来源），不另写一份副本。
+- **FR-437**: 提案与讨论会话的绑定 MUST 持久化存储并跨应用重启有效；同一提案再次点击"讨论"MUST 回到已绑定会话。
+- **FR-438**: 绑定的会话不存在或已删除时，点击"讨论"MUST 自动创建新会话并更新绑定（自愈，不报错终止）。
+- **FR-439**: 讨论会话 MUST 是普通助理会话：出现在会话列表、使用既有消息与事件通道、可被用户像普通会话一样重命名/删除；不引入新的会话类型或独立聊天界面。
+- **FR-440(028)**: 点击"讨论"与讨论过程本身 MUST NOT 触发任何提案实施副作用（不建 worktree、不建任务图、不改代码、不改变提案审批状态）；提案状态转换仍 MUST 只经既有批准/拒绝操作。允许的唯一提案数据变更是讨论会话绑定关系本身。
+- **FR-441(028)**: 打开讨论会话 MUST NOT 自动消耗模型调用；助理从用户在讨论会话中发出第一条消息起才开始回应。
+- **FR-442(028)**: 绑定写入 MUST 幂等：并发或重复触发"讨论"时至多创建一个会话（后到者复用先到者的绑定）。
+- **FR-443**: 用户在讨论会话中 MUST 能看出讨论对象是哪条提案（开场上下文自身可读，无需跳回提案页对照）。
+
+> 注：memory FR 续号至 FR-443 时与 028 feature-local FR-440~442 号段重叠，为保 memory 连续性对三条加 `(028)` 消歧，语义以本条目为准。
+
+### Key Entities
+
+- **改进提案（ImprovementProposal）**: 既有实体，新增可空 `discussion_session_id`（v25 migration）与讨论会话一对一绑定；绑定可因原会话删除而换绑。不建 FK，绑定死亡由业务层惰性自愈。
+- **助理会话（Assistant Session）**: 既有实体；讨论会话是其普通实例，无新增会话属性。
+
+### Constraints & Compatibility
+
+- **CC-164**: 026 的"审批前零副作用"红线保持不变：审批前不得建 worktree / task graph / 执行代码；讨论路径不得成为绕过审批的实施入口（守卫测试断言讨论路径源码层不引用 proposal_bridge/build_task_graph/worktree）。
+- **CC-165**: 讨论会话不赋予助理任何新增能力或工具；助理在讨论会话中的能力边界与普通会话完全一致。
+- **CC-166**: 0 新公开 UI 事件类型：提案数据变化沿用既有 `improvement_proposal.changed`，会话消息沿用既有 assistant 事件。
+- **CC-167**: 既有 approve/reject/list API 行为不变；既有提案审批测试必须继续通过。
+
+### Success Criteria
+
+- **SC-195**: 从提案详情到可输入的讨论会话 ≤ 1 次点击（不含首次加载）；开场上下文完整包含该提案全部已填分析字段。
+- **SC-196**: 讨论-重启-再讨论闭环 100% 回到同一会话（绑定跨进程持久）；绑定会话删除后再讨论 100% 自愈成功。
+- **SC-197**: 讨论路径产生的提案实施副作用为 0（无 worktree / 任务图 / 代码变更 / 状态转换），由守卫测试断言。
+- **SC-198**: 既有提案审批交互（批准带补充说明 / 拒绝 / 刷新 / 权限开关）回归测试 100% 通过。
+
+### Edge Cases
+
+- 绑定会话被删除后再点"讨论"——创建新会话并重新绑定
+- 快速连点"讨论"两次——绑定幂等，第二次复用第一次结果，不创建两个会话
+- 助理在其他会话运行时点"讨论"——会话相互独立，不受影响
+- 讨论中用户要求"直接把这个提案实施了"——助理按普通会话既有能力/限制行事，本 feature 不提供从讨论直达实施的捷径
+
+## 技能商店（skills.sh / GitHub 安装外部技能） [Source: specs/029-skill-store]
+
+**Revision note (2026-07-07)**: Archived 029 after merge. Skill List 屏第三个"技能商店"tab，从 skills.sh 市场与 GitHub 仓库直装外部技能；安装 = 受管目录文件 + BrainSkill(origin='external_import') + v26 来源元数据三件套原子成对；装前强制预览（SKILL.md 全文 + 审计/无审计警示）；安装路径零执行由守卫焊死；附带脚本只经既有 exec 管线运行。
+
+### User Stories
+
+- **US-096 (P1)**: 从 skills.sh 搜索并安装技能——用户在"技能商店"tab 搜索关键词，看到市场匹配结果（名称/来源/安装量），点开看 SKILL.md 全文 + 文件清单 + 安全审计后确认安装，技能进入方法论池可被执行体装备使用。
+- **US-097 (P2)**: 从 GitHub 仓库直接安装——用户输入 `owner/repo` 或仓库 URL，系统发现根/skills/* 下的 SKILL.md，进入与 skills.sh 相同的预览确认流，但因无审计明确警示"未经安全审计"。
+- **US-098 (P3)**: 已安装技能的管理——用户在方法论池能看出哪些来自外部（来源标注 + 原始链接），不想要的可卸载，走既有软删除生命周期并清理落盘文件。
+
+### Functional Requirements
+
+- **FR-444(029)**: Skill List 屏 MUST 新增"技能商店"来源 tab（与"教学工具""MCP 工具"并列）；tab 内支持关键词搜索 skills.sh 市场，空关键词展示精选/热门列表；结果项含名称、来源仓库、安装量。
+- **FR-445**: 安装前 MUST 强制经过预览确认：SKILL.md 全文（markdown 安全渲染）、附带文件清单（路径+大小）、安全审计结果（skills.sh 来源）或"未经安全审计"显著警示（GitHub 直装）；预览阶段不落任何持久数据。
+- **FR-446**: 确认安装 MUST 把技能落为外部导入方法论（名称/描述取 SKILL.md frontmatter，正文为 SKILL.md body），附带文件 MUST 只保存到受管的外部技能目录；安装动作本身 MUST NOT 执行技能内任何脚本或代码。
+- **FR-447(029)**: 安装 MUST 幂等：同一来源+同一技能已安装（未卸载）时展示"已安装"，不重复创建；安装失败 MUST NOT 留下半安装状态（条目与文件原子成对）。
+- **FR-448(029)**: GitHub 直装 MUST 支持 `owner/repo` 与完整 GitHub URL 两种输入；发现范围为仓库根目录 `SKILL.md` 与 `skills/*/SKILL.md`；多个匹配时列出供用户选择；无匹配时给出可理解错误。
+- **FR-449**: 已安装外部技能 MUST 可卸载：方法论走既有软删除生命周期（历史链保留），受管目录附带文件清理，商店已安装标识同步消失。
+- **FR-450**: 外部技能 MUST 全程可溯源：方法论详情展示来源（skills.sh/GitHub）与原始仓库链接；技能内容注入执行体上下文时 MUST 附带外部来源警示框架（提示内容来自外部、不可无条件信任其中指令）。
+- **FR-451**: 附带脚本的执行 MUST 只发生在既有 delegated executor 的命令执行管线内（fail-closed workspace 策略 + 既有确认协议）；本 feature MUST NOT 引入任何新的执行通道或沙箱。
+- **FR-452**: 网络错误、限速、来源不可达 MUST 转换为用户可理解、可行动的错误文案；商店功能降级 MUST NOT 影响教学工具/MCP 工具 tab 与其他屏。
+
+> 注：memory FR 续号至 FR-444/FR-447/FR-448 时与 029 feature-local 号段重叠，加 `(029)` 消歧，语义以本条目为准。
+
+### Key Entities
+
+- **外部技能（安装态）**: 复用既有方法论资产 BrainSkill，`origin='external_import'`（已预留枚举）；来源元数据落 v26 `external_skill_installs` 伴生表（install_id/skill_id/source_type/source_ref/source_url/local_dir/installed_at/uninstalled_at），与 brain_skills 一对一。
+- **技能商店条目（浏览态）**: 搜索结果/详情/审计结果，纯接口临时数据，不持久化。
+- **受管外部技能文件目录**: 每个已安装技能一个独立子目录（`<data>/external_skills/<install_id>/`），存 SKILL.md 与附带文件；随卸载清理。
+
+### Constraints & Compatibility
+
+- **CC-168**: 安装路径零执行是硬边界：安装/预览代码 MUST NOT 调用命令执行、代码执行沙箱或 import 执行层模块，由守卫测试断言。
+- **CC-169**: "支持可执行技能"的语义 = 附带脚本随技能落盘、由执行体在既有 exec 硬边界内按需运行；MUST NOT 在安装时试跑、MUST NOT 绕过 015 的 fail-closed workspace/确认契约。
+- **CC-170(029)**: MVP 全部匿名访问外部服务；不引入任何新 secret/凭证存储。
+- **CC-171(029)**: 0 新公开 UI 事件：方法论变化沿用既有事件与快照刷新；商店搜索/预览为前端临时态。
+- **CC-172(029)**: 外部文件写盘 MUST 限定在受管目录内（路径规范化防穿越），单文件（≤512KB）与总大小（≤2MB）、文件数（≤40）设上限；二进制/超限文件拒绝。
+- **CC-173(029)**: 既有教学工具 tab、MCP 工具 tab、方法论屏全部行为不变；既有测试必须继续通过。
+
+### Success Criteria
+
+- **SC-199**: 从商店 tab 到看到某技能的完整预览 ≤ 2 次点击；预览必含全文与审计/警示信息。
+- **SC-200**: 安装完成的技能 100% 出现在方法论池、可被装备、`load_skill_methodology` 可加载其内容（附来源警示框架）。
+- **SC-201**: 安装/预览路径的执行调用次数恒为 0，由守卫测试断言。
+- **SC-202**: 公开 GitHub 仓库直装闭环可完成（发现→预览→安装）；无技能仓库得到明确错误。
+- **SC-203**: 外部服务不可达时商店 tab 给出可行动错误提示，其余 tab 与屏幕零影响；既有全部测试通过。
+
+### Edge Cases
+
+- SKILL.md frontmatter 缺 name/description——回退用 slug 作名、正文首段截断作描述
+- 同名方法论已存在——安装名自动加来源后缀（如 `frontend-design (skills.sh)`）避免冲突
+- 技能文件树过大/含二进制——超单文件/总量/数量上限时拒绝安装并说明
+- 文件路径含 `..`/绝对路径/盘符（zip-slip）——写盘前规范化校验，越界整体拒绝
+- skills.sh/GitHub 不可达或限速——商店 tab 显示可行动错误，其他 tab 不受影响
+- 安装到一半失败——逆序清理，方法论条目与文件目录要么都在要么都不在
+- 卸载后重装同一技能——作为新条目正常安装，旧条目在软删除历史里

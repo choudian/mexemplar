@@ -1,7 +1,55 @@
 # Merged Features Log
 
-**Last Updated:** 2026-07-06
-**Revision:** 2026-07-06 — Archived 027 MCP management (MCP 工具管理)
+**Last Updated:** 2026-07-07
+**Revision:** 2026-07-07 — Archived 028 提案审批讨论 + 029 技能商店
+
+## 技能商店（skills.sh / GitHub 安装外部技能） — 2026-07-07
+
+**Branch:** `029-skill-store`
+**Spec:** `specs/029-skill-store`
+**Revision note:** Archived after merge into `prepare-github`; no unresolved conflicts or constitution exceptions.
+
+**What was added:**
+- US-096 (P1): 从 skills.sh 市场搜索/浏览并一键安装外部技能，装前强制预览（SKILL.md 全文 + 文件清单 + 安全审计），确认后进入方法论池可被执行体装备。
+- US-097 (P2): 从 GitHub 仓库直装（`owner/repo` 或 URL），发现根/skills/* 下的 SKILL.md，预览显著警示"未经安全审计"。
+- US-098 (P3): 已安装外部技能可溯源（来源徽章 + 原始链接）与卸载（软删除 + 受管目录清理）。
+- 安装三件套原子成对：受管目录文件 + `BrainSkill(origin='external_import')` + v26 `external_skill_installs` 来源元数据；失败逆序清理零残留。
+- 安装/预览路径零执行（守卫焊死）；附带脚本只经既有 015 exec fail-closed 管线运行；外部内容注入执行体时附来源警示头（advisory）。
+
+**New Components:**
+- `src/business/skill_store/`（skills_sh_client / github_discovery / skill_md_parser / install_service / file_store）
+- `src/data/repos/external_skill_install_repository.py` + v26 migration + `ExternalSkillInstall` ORM
+- `src/desktop_api/routers/skill_store.py`（search/discover-github/preview/install/installed/uninstall）
+- 前端 `api/skillStore.ts`、`state/skillStoreStore.ts`、`SkillStoreTab.tsx`、`SkillStorePreviewDialog.tsx`、SkillListScreen "技能商店"tab
+
+**Modified Components:**
+- `skill_methodology_tools.py`（external_import 来源警示头）、`skill_service.py`（external_import 允许空 source_segments）、方法论详情外部来源徽章 + 卸载入口。
+
+**Tasks Completed:** 24/24 tasks
+
+## 提案审批"讨论"功能（chat about this） — 2026-07-07
+
+**Branch:** `028-proposal-discussion`
+**Spec:** `specs/028-proposal-discussion`
+**Revision note:** Archived after merge into `prepare-github`; no unresolved conflicts or constitution exceptions.
+
+**What was added:**
+- US-093 (P1): BrainScreen 提案详情区"讨论"入口——批准/拒绝前对提案 finding 展开真实助理会话讨论，会话以提案完整分析开场（零模型调用）。
+- US-094 (P2): 提案与讨论会话持久绑定（v25 `discussion_session_id` 列 + 条件 UPDATE CAS），跨重启回到同一会话；绑定会话删除后惰性自愈重建。
+- US-095 (P3): 终态提案（done/failed/rejected）可复盘讨论，开场含实施结果/失败原因。
+- finding 文本序列化收敛到 `proposal_context.py` 单一来源，供 proposal_bridge 与讨论开场共用。
+- 守住 026 审批前零副作用红线：讨论路径源码层不引用 proposal_bridge/build_task_graph/worktree（守卫断言）。
+
+**New Components:**
+- `src/business/self_improvement/proposal_context.py`（finding 序列化单一来源）
+- `POST /api/improvement-proposals/{id}/discussion` + `ProposalDto.discussionSessionId`
+- v25 migration（`improvement_proposals.discussion_session_id`）+ Repository bind/rebind
+- 前端 `openProposalDiscussion`（api + brainStore）+ BrainScreen 讨论/继续讨论按钮
+
+**Modified Components:**
+- `proposal_service.py`（get_or_create_discussion_session）、`proposal_bridge.py`（节点 description 改调 proposal_context）、`improvement_proposal_repository.py`。
+
+**Tasks Completed:** 21/21 tasks
 
 ## MCP 工具管理 — 2026-07-06
 

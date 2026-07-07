@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-07-06
-**Revision**: 2026-07-06 — Archived feature 027 MCP management (MCP 工具管理)
+**Last Updated**: 2026-07-07
+**Revision**: 2026-07-07 — Archived features 028 (提案审批讨论) + 029 (技能商店)
 
 ---
 
@@ -1502,3 +1502,102 @@ tests/
 - **门卫**: 双轨注册 + SDK 类型不穿业务层 + deferred loading + 凭证不泄漏 + snapshot 语义
 
 Feature tasks: 56/56 completed。
+
+## 提案审批"讨论"功能 [Source: specs/028-proposal-discussion]
+
+**Revision note (2026-07-07)**: Archived 028 after merge. 提案与讨论会话持久绑定（v25 `discussion_session_id` 列 + 条件 UPDATE CAS）；finding 序列化收敛到 `proposal_context.py` 单一来源供 bridge 与讨论共用；讨论路径零实施副作用由守卫守住。0 新公开 UI 事件 / 0 新工具 / 0 新 secret。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）、TypeScript 5.x（前端）
+- **Primary Dependencies**: 复用既有 ChatService / ImprovementProposalRepository / SkillService / assistantStore / brainStore；无新依赖
+- **Storage**: SQLite `improvement_proposals` 新增可空 `discussion_session_id` 列（v25 migration + downgrade）；首绑走条件 UPDATE CAS（`WHERE discussion_session_id IS NULL`）
+- **Constraints**: 026 审批前零副作用红线；讨论会话即普通助理会话；开场消息零模型调用；0 新公开 UI 事件
+- **Scale/Scope**: 1 列 migration + 1 序列化模块 + 1 endpoint + 前端 1 按钮/1 store action/跳转
+
+### Source Code Structure
+
+```text
+src/business/self_improvement/
+├── proposal_context.py          # 新增：finding 序列化单一来源（bridge + 讨论开场共用）
+├── proposal_service.py          # 修改：get_or_create_discussion_session（幂等首绑 + 死亡自愈）
+└── proposal_bridge.py           # 修改：节点 description 改调 proposal_context
+src/business/agents/tools/skill_methodology_tools.py  # 无关（028 不改）
+src/data/
+├── migrations.py                # v25: discussion_session_id 列 + downgrade
+├── models_sqlite.py             # ImprovementProposal.discussion_session_id
+└── repos/improvement_proposal_repository.py  # bind/rebind_discussion_session（条件 UPDATE）
+src/desktop_api/routers/proposals.py  # POST /{id}/discussion + ProposalDto.discussionSessionId
+frontend/src/
+├── api/improvementProposal.ts   # openProposalDiscussion typed client
+├── state/brainStore.ts          # openProposalDiscussion action
+└── screens/BrainScreen/BrainScreen.tsx  # 讨论/继续讨论按钮 + selectSession + 切路由
+```
+
+### Testing Strategy
+
+- **service 行为**: 首绑幂等、连续两次同 id、终态含实施结果、绑定自愈、跨 Repository 实例持久、零模型调用
+- **endpoint 契约**: discussion 6 条行为约束（全库会话数只 +1、preview 零持久化等）
+- **守卫**: 讨论路径源码零实施引用（proposal_bridge/build_task_graph/worktree）+ finding 序列化单一来源
+- **migration**: v25 往返 + 幂等
+- **前端**: 讨论按钮发起 POST + 导航 + selectSession + 请求期间 disable + 按钮文案随绑定切换
+
+Feature tasks: 21/21 completed。
+
+## 技能商店 [Source: specs/029-skill-store]
+
+**Revision note (2026-07-07)**: Archived 029 after merge. 新增 `src/business/skill_store/` 业务层、SQLite v26 `external_skill_installs` 表、`/api/skill-store/*` typed API、前端第三个"技能商店"tab；安装三件套原子成对、安装路径零执行守卫、外部来源警示头。0 新公开 UI 事件 / 0 新 secret（MVP 匿名）。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）、TypeScript 5.x（前端）
+- **Primary Dependencies**: 复用 httpx 0.28（已在依赖树，skills.sh/GitHub 匿名 REST）、既有 SkillService/SkillRepository、Zustand、SafeMarkdown；无新依赖
+- **Storage**: SQLite v26 `external_skill_installs` 来源元数据伴生表（与 brain_skills 一对一）；技能文件落 `<data>/external_skills/<install_id>/` 受管目录
+- **Constraints**: 安装路径零执行（CC 守卫）；MVP 匿名访问（无新 secret）；受管目录 + 路径规范化防穿越 + 大小/数量上限（单文件 512KB / 总量 2MB / 40 文件）；0 新公开 UI 事件
+- **Scale/Scope**: 1 业务模块（5 文件）+ 1 表 + 4-6 endpoint + 前端 1 tab/1 store/1 弹层
+
+### Source Code Structure
+
+```text
+src/business/skill_store/          # 新增业务模块
+├── __init__.py
+├── skills_sh_client.py            # skills.sh /api/v1 搜索/精选/详情/审计（降级）
+├── github_discovery.py            # owner/repo 与 URL 解析 + SKILL.md 发现 + 匿名取数
+├── skill_md_parser.py             # 零依赖 frontmatter 解析 + 回退
+├── install_service.py            # 预览零持久化 + 安装编排（原子成对/幂等/重名后缀）+ 卸载
+└── file_store.py                  # 受管目录写盘（路径规范化/大小上限/原子 rename）
+src/business/agents/tools/skill_methodology_tools.py  # 修改：external_import 附来源警示头
+src/business/brain/skill_service.py  # 修改：external_import 允许空 source_segments
+src/data/
+├── migrations.py                  # v26: external_skill_installs 表 + downgrade
+├── models_sqlite.py               # ExternalSkillInstall ORM
+└── repos/external_skill_install_repository.py  # 安装记录 CRUD + 幂等查询
+src/desktop_api/routers/skill_store.py  # search/discover-github/preview/install/installed/uninstall
+frontend/src/
+├── api/skillStore.ts              # typed client
+├── state/skillStoreStore.ts       # 独立 store（照 mcpStore 模式）
+└── screens/skills/
+    ├── SkillListScreen.tsx        # 修改：SkillTab 加 "store"
+    ├── SkillStoreTab.tsx          # 搜索 + GitHub 直装输入 + 已安装徽章
+    └── SkillStorePreviewDialog.tsx  # SafeMarkdown 全文 + 审计/未审计警示 + 文件清单
+```
+
+### Architecture Decisions (from research.md)
+
+- **D1**: "可执行技能" = 脚本随技能落盘、由执行体在既有 015 exec fail-closed 管线运行；安装/预览零执行守卫焊死
+- **D2**: 来源元数据用 v26 伴生表（brain_skills 不加列，downgrade 干净）
+- **D3**: skills.sh 详情端点自带文件树省掉 GitHub 依赖；GitHub 匿名 REST 一层枚举
+- **D4**: 零依赖 frontmatter 解析（仅 name/description）+ 缺字段回退
+- **D5**: 安装原子性——文件先写临时目录 → rename → SkillService.create → 伴生表；失败逆序清理
+- **D6**: 外部来源警示头（advisory，照 027 N12）；硬保证仍由 exec 确认协议承担
+
+### Testing Strategy
+
+- **解析/文件边界**: frontmatter 完整/缺字段回退、路径穿越拒绝零残留、超限拒绝、清理
+- **安装编排**: 三件套原子成对、失败逆序清理零残留、幂等同 installId、重名后缀、卸载闭环、preview 零持久化
+- **GitHub 发现**: URL/owner-repo 解析、根与子目录发现、限额/404 分类、二进制跳过
+- **endpoint 契约**: 6 条行为约束 + discover 契约（mock 网络）
+- **守卫**: skill_store 模块零执行 import + 外部来源警示框架存在 + 受管目录约束
+- **前端**: tab 渲染/搜索/预览审计/安装/已安装徽章/市场不可达提示 + GitHub 流
+
+Feature tasks: 24/24 completed。
