@@ -3,7 +3,6 @@ T024: MCP 架构门卫测试 — 验证关键架构约束。
 """
 
 import ast
-import pytest
 
 
 class TestMcpGuardrails:
@@ -39,9 +38,7 @@ class TestMcpGuardrails:
                 source = f.read()
 
             # 不允许 `from mcp.types import` 或 `from mcp import ...types...`
-            assert "from mcp.types import" not in source, (
-                f"{source_file}: SDK types 不应穿入业务层"
-            )
+            assert "from mcp.types import" not in source, f"{source_file}: SDK types 不应穿入业务层"
             # 允许延迟 import `from mcp import ClientSession` 等（在 process_manager 内）
             # 但不允许 from mcp.types import
 
@@ -54,9 +51,7 @@ class TestMcpGuardrails:
         import importlib
         import os
 
-        mcp_dir = os.path.dirname(
-            importlib.import_module("src.business.mcp").__file__
-        )
+        mcp_dir = os.path.dirname(importlib.import_module("src.business.mcp").__file__)
         # 这些模块完全不允许任何 MCP SDK import
         no_sdk_import_modules = {
             "mcp_server_service.py",
@@ -80,16 +75,18 @@ class TestMcpGuardrails:
 
             if filename in no_sdk_import_modules:
                 # 完全不允许 from mcp import
-                assert "from mcp " not in source and "from mcp." not in source, (
-                    f"{filename}: 业务模块不得 import MCP SDK（E7）"
-                )
+                assert (
+                    "from mcp " not in source and "from mcp." not in source
+                ), f"{filename}: 业务模块不得 import MCP SDK（E7）"
             elif filename == "mcp_process_manager.py":
                 # 允许延迟导入，但不允许模块级 from mcp import
                 tree = ast.parse(source)
                 top_level_imports = []
                 for node in ast.iter_child_nodes(tree):
-                    if isinstance(node, ast.ImportFrom) and node.module and (
-                        node.module == "mcp" or node.module.startswith("mcp.")
+                    if (
+                        isinstance(node, ast.ImportFrom)
+                        and node.module
+                        and (node.module == "mcp" or node.module.startswith("mcp."))
                     ):
                         top_level_imports.append(node)
                 assert len(top_level_imports) == 0, (
@@ -120,9 +117,9 @@ class TestMcpGuardrails:
             detected_secret_keys=["GITHUB_TOKEN"],
         )
         r = repr(preview)
-        assert "ghp_supersecret123" not in r, (
-            "McpServerParsedPreview.__repr__ 不得包含 secret 原始值"
-        )
+        assert (
+            "ghp_supersecret123" not in r
+        ), "McpServerParsedPreview.__repr__ 不得包含 secret 原始值"
         # 非secret 值应可见
         assert "github" in r
 
@@ -235,14 +232,46 @@ class TestMcpGuardrails:
         source = inspect.getsource(service_mod.McpServerService._cleanup_secrets)
 
         # 必须调用 UnifiedConfigManager.delete_by_prefix
-        assert "delete_by_prefix" in source, (
-            "_cleanup_secrets 应调用 UnifiedConfigManager.delete_by_prefix()"
-        )
+        assert (
+            "delete_by_prefix" in source
+        ), "_cleanup_secrets 应调用 UnifiedConfigManager.delete_by_prefix()"
 
         # 不得直接操作 SQLAlchemy session
-        assert "session.execute" not in source, (
-            "_cleanup_secrets 不应直接操作 SQLAlchemy session"
+        assert "session.execute" not in source, "_cleanup_secrets 不应直接操作 SQLAlchemy session"
+        assert "sqlalchemy" not in source, "_cleanup_secrets 不应导入 sqlalchemy"
+
+
+class TestMcpSingletonLockReentrancy:
+    """MCP 单例锁必须可重入——防止可重入死锁回潮。
+
+    `McpServerService.__init__` 在 `get_mcp_server_service()` 持锁期间又调
+    `get_mcp_tool_registry()`，两个入口共用 `_singleton_lock`。若把它改回非
+    可重入 `threading.Lock()`，同线程重入会永久死锁（当 server_service 是进程
+    首个 MCP 触点时必现），并让 `test_app_startup` 等 lifespan 测试整体挂死。
+    """
+
+    def test_singleton_lock_is_reentrant(self):
+        import threading
+
+        import src.business.mcp as mcp_pkg
+
+        assert isinstance(mcp_pkg._singleton_lock, type(threading.RLock())), (
+            "_singleton_lock 必须是 threading.RLock（可重入）；"
+            "改回 threading.Lock 会导致 get_mcp_server_service 首触点时死锁"
         )
-        assert "sqlalchemy" not in source, (
-            "_cleanup_secrets 不应导入 sqlalchemy"
+
+    def test_server_service_init_calls_tool_registry_within_lock(self):
+        """守卫前提：__init__ 确实在锁内调 get_mcp_tool_registry（可重入约束的由来）。
+
+        若未来重构把这次调用移出锁外（打破可重入前提），此断言提醒同步复审
+        _singleton_lock 是否仍需 RLock。
+        """
+        import inspect
+
+        import src.business.mcp.mcp_server_service as service_mod
+
+        source = inspect.getsource(service_mod.McpServerService.__init__)
+        assert "get_mcp_tool_registry" in source, (
+            "McpServerService.__init__ 预期调用 get_mcp_tool_registry；"
+            "调用点若移动，请复审 _singleton_lock 的可重入需求"
         )

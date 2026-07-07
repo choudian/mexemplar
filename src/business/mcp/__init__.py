@@ -45,7 +45,10 @@ __all__ = [
 
 _mcp_server_service = None
 _mcp_tool_registry = None
-_singleton_lock = threading.Lock()
+# RLock（可重入）：McpServerService.__init__ 在 get_mcp_server_service() 持锁期间
+# 又调 get_mcp_tool_registry()，两个入口共用本锁。非可重入 Lock 会让同线程重入
+# 时死锁（当 get_mcp_server_service 是进程首个 MCP 触点、两单例皆 None 时必现）。
+_singleton_lock = threading.RLock()
 
 
 def get_mcp_server_service():
@@ -78,6 +81,7 @@ def get_mcp_tool_registry():
 
         try:
             from src.business.mcp.mcp_tool_registry import McpToolRegistry
+
             _mcp_tool_registry = McpToolRegistry()
         except ImportError:
             logger.warning("[MCP] MCP SDK import failed, using NullRegistry")
