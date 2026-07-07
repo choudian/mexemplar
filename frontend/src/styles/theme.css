@@ -6818,8 +6818,6 @@ select:focus-visible,
 .methodology-header,
 .methodology-header-actions,
 .methodology-card-title,
-.methodology-card-footer,
-.methodology-card-metrics,
 .methodology-version-head,
 .token-budget-meter-head,
 .token-budget-meter-foot,
@@ -7076,22 +7074,29 @@ select:focus-visible,
 
 .methodology-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-  gap: 10px;
+  grid-template-columns: 1fr;
+  gap: 8px;
   overflow: auto;
   padding: 2px 2px 0 0;
 }
 
 .methodology-card {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 210px;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  appearance: none;
+  min-height: 76px;
   border: 1px solid var(--border-1);
   border-radius: 8px;
   background: var(--surface-1);
-  padding: 14px;
-  transition: border-color .18s ease, transform .18s ease, background .18s ease;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  padding: 11px 12px;
+  text-align: left;
+  transition: border-color .18s ease, transform .18s ease, background .18s ease, box-shadow .18s ease;
 }
 
 .methodology-card:hover,
@@ -7104,10 +7109,10 @@ select:focus-visible,
   transform: translateY(-1px);
 }
 
-.methodology-card-head {
-  display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
-  gap: 10px;
+.methodology-card:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-weak);
+  outline: none;
 }
 
 .methodology-card-icon,
@@ -7122,12 +7127,25 @@ select:focus-visible,
   color: var(--accent);
 }
 
+.methodology-card .methodology-card-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+}
+
+.methodology-card-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
 .methodology-card-title {
   gap: 8px;
   justify-content: space-between;
+  min-width: 0;
 }
 
-.methodology-card-title h3,
+.methodology-card-name,
 .methodology-version-head strong,
 .assistant-equipment-card strong {
   margin: 0;
@@ -7136,21 +7154,39 @@ select:focus-visible,
   letter-spacing: 0;
 }
 
-.methodology-card-head p,
+.methodology-card-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.methodology-card-description,
 .methodology-version-node p,
 .assistant-equipment-card small {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--text-muted);
   line-height: 1.45;
 }
 
-.methodology-trigger-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+.methodology-card-description {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 12.5px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
-.methodology-trigger-list span,
+.methodology-card-protected {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: var(--warn);
+}
+
 .methodology-danger-list span,
 .equipment-warning span {
   border-radius: 999px;
@@ -7158,27 +7194,6 @@ select:focus-visible,
   color: var(--text-2);
   padding: 4px 8px;
   font-size: 12px;
-}
-
-.methodology-card-metrics {
-  justify-content: space-between;
-  gap: 8px;
-  color: var(--text-2);
-  font-size: 12px;
-}
-
-.methodology-card-footer {
-  margin-top: auto;
-  justify-content: space-between;
-  gap: 10px;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.methodology-card-footer span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
 }
 
 .methodology-editor-panel {
