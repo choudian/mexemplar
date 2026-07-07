@@ -34,6 +34,8 @@ _SAFE_CONFLICT_MESSAGES = frozenset(
         "skill trial is already running",
         "desktop health decisions apply only to desktop recordings",
         "unsupported desktop health decision",
+        "browser recording failed to start",
+        "browser recording failed to save",
     }
 )
 

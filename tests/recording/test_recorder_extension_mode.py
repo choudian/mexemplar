@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from src.recording.browser_recorder import BrowserRecorder
 
 
@@ -391,6 +393,33 @@ def test_async_start_recording_marks_startup_busy_before_launch():
     assert recorder._recording_startup_in_progress is False
     assert recorder._recording_id is None
     assert recorder._action_queue_path is None
+
+
+def test_stop_recording_raises_when_duckdb_save_fails():
+    recorder = build_recorder()
+    recorder._is_recording = True
+    recorder._recording_id = "rec_save_failed"
+    recorder._recording_start_time = 100.0
+    recorder._action_queue_path, recorder._screenshot_queue_path = recorder._get_queue_paths(
+        "rec_save_failed"
+    )
+    recorder._active_recording_mode = "browser"
+    recorder._playwright_driver.cleanup_user_data_dir = MagicMock()
+
+    with patch.object(recorder, "_send_stop_command_via_ws", return_value=None):
+        with patch.object(recorder, "_wait_for_stop_drain", new=AsyncMock(return_value=None)):
+            with patch.object(recorder, "_close_browser", new=AsyncMock(return_value=None)):
+                with patch.object(recorder, "_cleanup_playwright_extension_bundle"):
+                    with patch.object(
+                        recorder,
+                        "_save_to_duckdb",
+                        side_effect=RuntimeError("missing packaged data"),
+                    ):
+                        with pytest.raises(RuntimeError, match="recording_persistence_failed"):
+                            asyncio.run(recorder._async_stop_recording())
+
+    assert recorder._recording_id is None
+    assert recorder._is_recording is False
 
 
 def test_control_stop_stops_recorders_and_emits_event():

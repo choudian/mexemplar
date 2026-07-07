@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Optional
 from logging.handlers import RotatingFileHandler
 
+from src.utils.helpers import get_default_data_dir
+
 
 def setup_logger(
     name: str = "mexemplar",
@@ -56,9 +58,8 @@ def setup_logger(
         # 文件处理器
         if file_output:
             if log_dir is None:
-                # 使用默认路径：data/logs
-                project_root = Path(__file__).parent.parent.parent
-                log_dir = project_root / "data" / "logs"
+                # 使用统一 data 目录，Tauri sidecar 会通过 EXEMPLAR_DATA_DIR 指定运行期根目录。
+                log_dir = get_default_data_dir() / "logs"
 
             log_dir = Path(log_dir)
             log_dir.mkdir(parents=True, exist_ok=True)

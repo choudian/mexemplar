@@ -35,11 +35,19 @@ class FakeBrowserRecorder:
     def __init__(self) -> None:
         self.armed_recording_id: str | None = None
         self.cleaned = False
+        self.start_result = True
+        self.stop_error: Exception | None = None
+
+    def start_recording(self, recording_id: str | None = None) -> bool:
+        self.armed_recording_id = recording_id
+        return self.start_result
 
     def arm_extension_triggered_mode(self, recording_id: str | None = None) -> None:
         self.armed_recording_id = recording_id
 
     def stop_recording(self) -> dict[str, object]:
+        if self.stop_error is not None:
+            raise self.stop_error
         return {"recording_id": self.armed_recording_id}
 
     def cleanup(self) -> None:
@@ -189,3 +197,58 @@ def test_extension_recording_uses_teaching_workflow_id():
 
     assert started["stage"] == "recording"
     assert fake_recorder.armed_recording_id == workflow_id
+
+
+def test_browser_recording_start_failure_rejects_request(desktop_api_client):
+    fake_recorder = FakeBrowserRecorder()
+    fake_recorder.start_result = False
+    service = TeachingService(browser_recorder_factory=lambda: fake_recorder)
+    desktop_api_client.app.dependency_overrides[teaching_router.get_teaching_service] = (
+        lambda: service
+    )
+    try:
+        created = desktop_api_client.post("/api/teaching/runs", json={"mode": "browser"})
+        workflow_id = created.json()["workflowId"]
+
+        started = desktop_api_client.post(
+            f"/api/teaching/runs/{workflow_id}/recording/start",
+            json={"mode": "browser"},
+        )
+        run = service.get_run(workflow_id)
+    finally:
+        desktop_api_client.app.dependency_overrides.clear()
+
+    assert started.status_code == 409
+    assert started.json()["detail"] == "browser recording failed to start"
+    assert run["stage"] == "selecting"
+
+
+def test_browser_recording_save_failure_rejects_stop_and_does_not_start_pm(desktop_api_client):
+    fake_recorder = FakeBrowserRecorder()
+    fake_recorder.stop_error = RuntimeError("recording_persistence_failed")
+    learning_calls: list[tuple[str, str]] = []
+    service = TeachingService(
+        browser_recorder_factory=lambda: fake_recorder,
+        learning_starter=lambda workflow_id, mode: learning_calls.append((workflow_id, mode)),
+    )
+    desktop_api_client.app.dependency_overrides[teaching_router.get_teaching_service] = (
+        lambda: service
+    )
+    try:
+        created = desktop_api_client.post("/api/teaching/runs", json={"mode": "browser"})
+        workflow_id = created.json()["workflowId"]
+        desktop_api_client.post(
+            f"/api/teaching/runs/{workflow_id}/recording/start",
+            json={"mode": "browser"},
+        )
+
+        stopped = desktop_api_client.post(f"/api/teaching/runs/{workflow_id}/recording/stop")
+        run = service.get_run(workflow_id)
+    finally:
+        desktop_api_client.app.dependency_overrides.clear()
+
+    assert stopped.status_code == 409
+    assert stopped.json()["detail"] == "browser recording failed to save"
+    assert run["stage"] == "recording"
+    assert fake_recorder.cleaned is True
+    assert learning_calls == []

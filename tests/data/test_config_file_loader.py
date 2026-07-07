@@ -97,3 +97,19 @@ def test_sync_startup_config_skips_when_no_source_file():
     ConfigFileLoader._sync_startup_config(target, working_dir=working_dir)
 
     assert target.read_text(encoding="utf-8") == '{"app_name": "keep_existing"}'
+
+
+def test_default_loader_uses_runtime_data_dir(monkeypatch, tmp_path):
+    data_dir = tmp_path / "runtime-data"
+    working_dir = tmp_path / "working"
+    working_dir.mkdir()
+    (working_dir / "config.json").write_text('{"app_name": "from_runtime"}', encoding="utf-8")
+
+    monkeypatch.setenv("EXEMPLAR_DATA_DIR", str(data_dir))
+    monkeypatch.chdir(working_dir)
+
+    loader = ConfigFileLoader()
+
+    expected = data_dir / "config" / "config.json"
+    assert loader.config_path == expected
+    assert expected.read_text(encoding="utf-8") == '{"app_name": "from_runtime"}'

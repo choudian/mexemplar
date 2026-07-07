@@ -89,6 +89,15 @@ class TeachingService:
             self._desktop_service = DesktopRecordingService()
         return self._desktop_service
 
+    @staticmethod
+    def _cleanup_browser_recorder(recorder: BrowserRecorder) -> None:
+        cleanup = getattr(recorder, "cleanup", None)
+        if callable(cleanup):
+            try:
+                cleanup()
+            except Exception as exc:
+                logger.warning("浏览器录制器清理失败: %s", exc)
+
     def get_readiness(self) -> dict[str, object]:
         return self._readiness.to_response()
 
@@ -129,7 +138,14 @@ class TeachingService:
             self._browser_recorders[workflow_id] = recorder
         else:
             recorder = self._browser_recorder_factory()
-            recorder.start_recording(recording_id=workflow_id)
+            if not recorder.start_recording(recording_id=workflow_id):
+                cleanup = getattr(recorder, "cleanup", None)
+                if callable(cleanup):
+                    try:
+                        cleanup()
+                    except Exception as exc:
+                        logger.warning("浏览器录制器启动失败后清理失败: %s", exc)
+                raise ValueError("browser recording failed to start")
             self._browser_recorders[workflow_id] = recorder
 
         run.transition("recording")
@@ -143,17 +159,18 @@ class TeachingService:
             health = self._get_desktop_service().stop(workflow_id)
             summary["desktopHealth"] = health.to_dict()
         else:
-            recorder = self._browser_recorders.pop(workflow_id, None)
+            recorder = self._browser_recorders.get(workflow_id)
             if recorder is not None:
                 try:
                     summary["recording"] = recorder.stop_recording()
-                finally:
-                    cleanup = getattr(recorder, "cleanup", None)
-                    if callable(cleanup):
-                        try:
-                            cleanup()
-                        except Exception as exc:
-                            logger.warning("浏览器录制器清理失败: %s", exc)
+                except Exception as exc:
+                    self._cleanup_browser_recorder(recorder)
+                    self._browser_recorders.pop(workflow_id, None)
+                    logger.error("浏览器录制保存失败: %s", exc, exc_info=True)
+                    raise ValueError("browser recording failed to save") from exc
+                else:
+                    self._cleanup_browser_recorder(recorder)
+                    self._browser_recorders.pop(workflow_id, None)
 
         run.transition("intent_confirmation")
         run.summary = summary

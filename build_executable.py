@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -30,6 +31,10 @@ def build_sidecar() -> Path:
     entry = root / "src" / "desktop_api" / "__main__.py"
     if not entry.exists():
         raise FileNotFoundError(f"Sidecar entrypoint not found: {entry}")
+    browser_extension = root / "src" / "recording" / "browser_extension"
+    if not browser_extension.exists():
+        raise FileNotFoundError(f"Browser recording extension not found: {browser_extension}")
+    browser_extension_dest = Path("src") / "recording" / "browser_extension"
 
     cmd = [
         sys.executable,
@@ -42,7 +47,10 @@ def build_sidecar() -> Path:
         "--clean",
         "--collect-submodules=uvicorn",
         "--collect-submodules=fastapi",
+        "--collect-submodules=sqlglot",
+        "--collect-data=tldextract",
         "--hidden-import=sqlite_vec",
+        f"--add-data={browser_extension}{os.pathsep}{browser_extension_dest}",
         str(entry),
     ]
     subprocess.run(cmd, cwd=root, check=True)

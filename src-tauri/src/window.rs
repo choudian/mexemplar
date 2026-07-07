@@ -1,4 +1,3 @@
-use crate::sidecar::SidecarState;
 use tauri::Manager;
 
 #[tauri::command]
@@ -17,9 +16,7 @@ pub fn toggle_maximize(window: tauri::Window) -> Result<(), String> {
 
 #[tauri::command]
 pub fn close(window: tauri::Window) -> Result<(), String> {
-    if let Some(state) = window.try_state::<SidecarState>() {
-        state.kill();
-    }
+    crate::sidecar::kill_sidecar(window.app_handle());
     window.close().map_err(|error| error.to_string())
 }
 

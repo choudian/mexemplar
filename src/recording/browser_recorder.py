@@ -388,19 +388,23 @@ class BrowserRecorder:
             )
 
         action_count = 0
-        save_ok = True
+        save_error: Exception | None = None
         if self._use_duckdb:
             try:
                 action_count = self._save_to_duckdb(end_time) or 0
             except Exception as exc:
-                logger.error(f"保存扩展触发录制到 DuckDB 失败: {exc}")
-                save_ok = False
+                logger.error(f"保存扩展触发录制到 DuckDB 失败: {exc}", exc_info=True)
+                save_error = exc
 
-        if save_ok:
+        if save_error is None:
             from src.recording.queue_paths import delete_queue_file
 
             for qpath in [queue_file, self._screenshot_queue_path]:
                 delete_queue_file(qpath)
+
+        if save_error is not None:
+            self._reset_recording_state()
+            raise RuntimeError("recording_persistence_failed") from save_error
 
         emit(
             "recording_stopped",
@@ -730,17 +734,17 @@ class BrowserRecorder:
             logger.warning(f"清理扩展目录失败: {exc}")
 
         action_count = 0
-        save_ok = True
+        save_error: Exception | None = None
         if self._use_duckdb:
             try:
                 logger.info("开始保存录制数据到 DuckDB...")
                 action_count = self._save_to_duckdb(end_time)
                 logger.info("DuckDB 保存完成")
             except Exception as exc:
-                logger.error(f"保存到 DuckDB 失败: {exc}")
-                save_ok = False
+                logger.error(f"保存到 DuckDB 失败: {exc}", exc_info=True)
+                save_error = exc
 
-        if save_ok:
+        if save_error is None:
             from src.recording.queue_paths import delete_queue_file
 
             for qpath in [result_queue_path, result_screenshot_path]:
@@ -752,6 +756,9 @@ class BrowserRecorder:
             logger.warning(f"清理用户数据目录失败: {exc}")
 
         self._reset_recording_state()
+
+        if save_error is not None:
+            raise RuntimeError("recording_persistence_failed") from save_error
 
         logger.info("浏览器录制已停止 (WebSocket 模式)")
         logger.info(f"   - recording_id: {result_recording_id}")

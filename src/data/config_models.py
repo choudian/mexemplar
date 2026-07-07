@@ -30,6 +30,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field, asdict
 
+from src.utils.helpers import get_default_data_dir
+
 logger = logging.getLogger(__name__)
 
 
@@ -585,8 +587,7 @@ class ConfigFileLoader:
         """
         if config_path is None:
             # 使用默认路径：data/config/config.json
-            project_root = Path(__file__).parent.parent.parent
-            config_dir = project_root / "data" / "config"
+            config_dir = get_default_data_dir() / "config"
             config_dir.mkdir(parents=True, exist_ok=True)
             target_config_path = config_dir / "config.json"
             self._sync_startup_config(target_config_path)

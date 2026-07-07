@@ -5,13 +5,21 @@ use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
         .setup(|app| {
             let state = sidecar::launch_sidecar(app.handle())?;
             app.manage(state);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if matches!(
+                event,
+                tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed
+            ) {
+                sidecar::kill_sidecar(window.app_handle());
+            }
         })
         .invoke_handler(tauri::generate_handler![
             sidecar::get_sidecar_config,
@@ -20,6 +28,15 @@ pub fn run() {
             window::close,
             window::start_dragging
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("failed to run Mexemplar desktop shell");
+
+    app.run(|app_handle, event| {
+        if matches!(
+            event,
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+        ) {
+            sidecar::kill_sidecar(app_handle);
+        }
+    });
 }
