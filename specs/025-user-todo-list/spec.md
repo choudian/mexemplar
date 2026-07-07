@@ -2,7 +2,7 @@
 
 **Feature Branch**: `025-user-todo-list`  
 **Created**: 2026-06-27  
-**Status**: implementation  
+**Status**: Completed
 **Input**: `docs/local/todo/user-todo-spec.md`
 
 ## User Stories

@@ -1348,6 +1348,34 @@ Feature tasks: 42/42 completed。
 
 ---
 
+## 用户个人待办列表 [Source: specs/025-user-todo-list]
+
+**Revision note (2026-07-07)**: Backfilled 025（merged 2026-06-27）。独立个人待办模块——SQLite v18 `user_todos` 表、`UserTodoRepository`/`UserTodoService`、`/api/user-todos` typed CRUD、delegated executor 专用 user_todo 工具、前端 `/todos` 主屏。0 新公开 UI 事件；与 `assistant_todo_items` 完全隔离。
+
+### Source Code Structure
+
+```text
+src/business/user_todos/          # 个人待办业务层（校验/截断/状态归一化/投影）
+src/data/
+├── repos/user_todo_repository.py # UserTodoRepository
+├── migrations.py                 # v18: user_todos 表
+└── models_sqlite.py              # UserTodo ORM
+src/desktop_api/routers/user_todos.py         # /api/user-todos typed CRUD
+src/business/agents/tools/user_todo_tools.py  # create/list/update/complete/delete，只注册到 delegated executor
+frontend/src/
+├── api/userTodos.ts
+├── state/userTodoStore.ts
+└── screens/（UserTodoScreen，路由 /todos）
+```
+
+### Testing Strategy
+
+- Repository/Service：CRUD + 校验 + 状态/优先级归一化 + 投影
+- 隔离门卫：user_todo 工具只进 delegated executor 工具集（不进主助理）；与 `assistant_todo_items` 隔离
+- 前端：`/todos` 主屏 CRUD + 筛选 + 完成/撤销
+
+Feature tasks: 9/9 completed。
+
 ## 自我改进提案（B 阶段） [Source: specs/026-self-improvement-proposals]
 
 **Revision note (2026-07-02)**: Archived 026 after merge. 在 A 阶段执行复盘之上加"人审批 + 机器实施"层：提案生成旁路、批准→桥接建 worktree+任务图→调度推进→轮询回报。完整 Technical Context、Project Structure、实施排序与门禁见 `specs/026-self-improvement-proposals/plan.md`，这里摘录落点。

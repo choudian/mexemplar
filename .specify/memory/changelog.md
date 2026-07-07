@@ -138,6 +138,26 @@
 
 **Tasks Completed:** 33/33 tasks
 
+## 用户个人待办列表 — 2026-06-27
+
+**Branch:** `025-user-todo-list`
+**Spec:** `specs/025-user-todo-list`
+**Revision note:** Backfilled 2026-07-07（归档滞后于合并；补入项目记忆）。No unresolved conflicts or constitution exceptions.
+
+**What was added:**
+- US-099~101 (P1): 在 `/todos` 主屏创建、查看/筛选、完成/撤销个人待办。
+- US-102 (P2): 编辑和删除待办。
+- US-103 (P2): 通过 AI 助手管理待办——AI 经被调度执行体的 user_todo 工具操作，不复用主助理工具集。
+- 与 task collaboration 的 `assistant_todo_items` 执行者私人 checklist 完全隔离；0 新公开 UI 事件。
+
+**New Components:**
+- `src/business/user_todos/`、`src/data/repos/user_todo_repository.py` + v18 migration + `UserTodo` ORM
+- `src/desktop_api/routers/user_todos.py`（`/api/user-todos` typed CRUD）
+- `src/business/agents/tools/user_todo_tools.py`（5 工具，只注册到 delegated executor）
+- 前端 `api/userTodos.ts`、`state/userTodoStore.ts`、UserTodoScreen（`/todos` 主屏）
+
+**Tasks Completed:** 9/9 tasks
+
 ## Task Graph Scheduling — 2026-06-26
 
 **Branch:** `024-task-graph-scheduling`

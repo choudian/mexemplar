@@ -1743,6 +1743,34 @@ remains explicitly incomplete; automated implementation and regression tasks are
 
 ---
 
+## 用户个人待办列表 [Source: specs/025-user-todo-list]
+
+**Revision note (2026-07-07)**: Backfilled 025（merged 2026-06-27，归档时被跳过）。独立个人待办业务层——SQLite v18 `user_todos` 表、`/api/user-todos` typed CRUD、delegated executor 专用 user_todo 工具，与 `assistant_todo_items` 执行者私人 checklist 完全隔离。0 新公开 UI 事件。
+
+> ID 说明：025 早于 026-029 合并但归档滞后；为保 memory 既有 ID 不重排，其编号续在当前最高号之后（US-099~103 / FR-453~459），与文档中相邻的 024/026 段号段不连续，属预期。
+
+### User Stories
+
+- **US-099 (P1)**: 创建待办——用户在 `/todos` 主屏创建个人待办（标题/描述/优先级）。
+- **US-100 (P1)**: 查看和筛选待办——用户查看待办列表并按状态/优先级筛选。
+- **US-101 (P1)**: 完成和撤销完成——用户标记待办完成或撤销完成。
+- **US-102 (P2)**: 编辑和删除待办——用户编辑已有待办或删除。
+- **US-103 (P2)**: 通过 AI 助手管理待办——用户在对话中让 AI 管理待办，AI 经被调度执行体的 user_todo 工具操作，不复用主助理工具集。
+
+### Functional Requirements
+
+- **FR-453**: 系统 MUST 支持创建、查看、编辑、完成/撤销完成、删除个人待办。
+- **FR-454**: 系统 MUST 将个人待办存储在本地 SQLite `user_todos` 表（v18 migration）。
+- **FR-455**: Desktop API MUST 只调用业务 service，不直接访问 Repository。
+- **FR-456**: 前端 MUST 通过 typed API client（`/api/user-todos`）访问待办能力。
+- **FR-457**: AI 管理待办 MUST 通过被调度执行体的工具完成，不把待办写工具加入主助理工具集。
+- **FR-458**: 用户待办 MUST 与 task collaboration 的 `assistant_todo_items` 私人 checklist 完全隔离。
+- **FR-459**: V1 MUST 不新增公开 UI event；UI 操作后通过 API 刷新权威列表。
+
+### Key Entities
+
+- **UserTodo**: 用户个人待办条目。属性：id、标题、描述、状态（pending/in_progress/done）、优先级、时间戳。存储在 SQLite `user_todos` 表（v18 migration），经 `UserTodoRepository` / `UserTodoService` 访问；与 `assistant_todo_items`（执行器私人 checklist）完全隔离。
+
 ## 自我改进提案（B 阶段：人审批、机器实施） [Source: specs/026-self-improvement-proposals]
 
 **Revision note (2026-07-02)**: Archived 026 after merge. 在 A 阶段（执行复盘·只读报告制）上加一层「人审批 + 机器实施」：`worth_changing` 发现落成可审批提案，用户批准（带补料）后由桥接 service 建独立 git worktree + 程序化任务图，执行体在隔离 worktree 内改源码并跑测试，结果回写提案。停在 B，不引入机器自批自改（C）。完整 User Stories 验收场景、Assumptions、Architecture Impact 见 `specs/026-self-improvement-proposals/spec.md`。
