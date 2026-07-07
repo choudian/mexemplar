@@ -16,6 +16,10 @@ def _now() -> str:
 
 
 class ExecutionReviewRepository(BaseRepository):
+    def get_by_id(self, review_id: str) -> ExecutionReview | None:
+        """Return one execution review row by id."""
+        return self.session.get(ExecutionReview, review_id)
+
     def enqueue(self, turn_session_id: str, priority: int = 0) -> str:
         review_id = generate_id("exr")
         row = ExecutionReview(

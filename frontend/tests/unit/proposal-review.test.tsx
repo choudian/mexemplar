@@ -65,6 +65,58 @@ const proposals = [
   },
 ] as const;
 
+function sourcePackage(proposalId = "prop-1") {
+  return {
+    proposalId,
+    view: "overview",
+    scope: "session_tail",
+    scopeNote: "第一版未存精确消息范围，以下为复盘会话尾部、文本命中和 skeleton 异常片段。",
+    proposal: { id: proposalId, sourceReviewId: "rev-1", findingIndex: 0 },
+    source: {
+      sourceReviewId: "rev-1",
+      findingIndex: 0,
+      turnSessionId: "ast_source_1",
+      reviewStatus: "completed",
+      reviewedAt: "2026-06-29T10:02:00",
+      createdAt: "2026-06-29T10:01:00",
+      modelUsed: "test-model",
+      available: true,
+    },
+    review: {
+      verdict: "发现重复抓取风险",
+      currentFinding: { what: "重复抓取同一 URL" },
+      findingCount: 1,
+    },
+    evidence: [
+      {
+        id: "proposal_finding",
+        kind: "review_finding",
+        label: "当前 finding",
+        excerpt: "重复抓取同一 URL\n两次读取同一页面\n增加请求级缓存",
+        truncated: false,
+        anchor: { sourceReviewId: "rev-1", findingIndex: 0 },
+        reason: "提案直接来自这条复盘 finding",
+      },
+      {
+        id: "tail_user_1",
+        kind: "user_message",
+        label: "最近用户消息",
+        excerpt: "请检查这个页面",
+        truncated: false,
+        anchor: { sessionId: "ast_source_1", messageId: "msg_1", sequence: 1 },
+        reason: "未找到精确消息范围时，用复盘会话尾部辅助定位",
+      },
+    ],
+    nextActions: [
+      {
+        view: "messages",
+        label: "查看原始消息片段",
+        description: "分页读取来源会话的用户、助理和工具消息预览。",
+      },
+    ],
+  };
+}
+
 describe("proposal review UI", () => {
   beforeEach(() => {
     configureDesktopApi({ baseUrl: "http://desktop.test", sessionToken: "token" });
@@ -88,6 +140,9 @@ describe("proposal review UI", () => {
       pendingSkillRemoval: null,
       improvementProposals: [],
       loadingImprovementProposals: false,
+      proposalSources: {},
+      loadingProposalSourceId: null,
+      proposalSourceError: null,
     });
     useSettingsStore.setState({
       values: {
@@ -123,6 +178,9 @@ describe("proposal review UI", () => {
       if (url.includes("/api/improvement-proposals/prop-2/reject")) {
         return jsonResponse({ accepted: true, id: "prop-2", status: "rejected" });
       }
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage(url.includes("prop-2") ? "prop-2" : "prop-1"));
+      }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({ proposals });
       }
@@ -138,6 +196,9 @@ describe("proposal review UI", () => {
 
     const list = screen.getByLabelText("改进提案列表");
     fireEvent.click(within(list).getByText("重复抓取同一 URL"));
+    await screen.findByText("来源证据");
+    expect(screen.getByText("当前 finding")).toBeInTheDocument();
+    expect(screen.getByText("复盘 rev-1")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("补充说明"), {
       target: { value: "先覆盖请求缓存测试" },
     });
@@ -179,6 +240,9 @@ describe("proposal review UI", () => {
       if (url.includes("/api/improvement-proposals/prop-1/approve")) {
         return jsonResponse({ accepted: false, reason: "not_pending" });
       }
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage());
+      }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({ proposals });
       }
@@ -218,6 +282,9 @@ describe("proposal review UI", () => {
       }
       if (url.includes("/api/execution-reviews")) {
         return jsonResponse({ reviews: [] });
+      }
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage());
       }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({ proposals });
@@ -259,6 +326,9 @@ describe("proposal review UI", () => {
       if (url.includes("/api/improvement-proposals/prop-1/approve")) {
         prop1Approved = true;
         return jsonResponse({ accepted: true, id: "prop-1", status: "approved" });
+      }
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage());
       }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({
@@ -316,6 +386,9 @@ describe("proposal review UI", () => {
       }
       if (url.includes("/api/brain/segments")) return jsonResponse({ items: [], total: 0 });
       if (url.includes("/api/execution-reviews")) return jsonResponse({ reviews: [] });
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage("prop-done"));
+      }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({ proposals: [doneProposal] });
       }
@@ -331,6 +404,7 @@ describe("proposal review UI", () => {
 
     const list = screen.getByLabelText("改进提案列表");
     fireEvent.click(within(list).getByText("重复抓取同一 URL"));
+    await screen.findByText("当前 finding");
 
     const detail = within(screen.getByLabelText("改进提案详情"));
     expect(detail.getByRole("button", { name: "讨论" }).closest(".brain-proposal-followup")).not.toBeNull();
@@ -374,6 +448,9 @@ describe("proposal review UI", () => {
         expect(init?.method).toBe("POST");
         discussionCalls += 1;
         return jsonResponse({ sessionId: "ast_disc_001", created: true });
+      }
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage());
       }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({
@@ -423,6 +500,9 @@ describe("proposal review UI", () => {
         return new Promise<Response>((resolve) => {
           pendingDiscussion.resolve = resolve;
         });
+      }
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        return jsonResponse(sourcePackage());
       }
       if (url.includes("/api/improvement-proposals")) {
         return jsonResponse({ proposals: [proposals[0], proposals[1]] });

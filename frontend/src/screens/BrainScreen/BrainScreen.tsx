@@ -1,8 +1,8 @@
-import { MessageSquare, RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { FileSearch, MessageSquare, RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
-import type { ImprovementProposalDto } from "../../api/improvementProposal";
+import type { ImprovementProposalDto, ProposalSourceAnchor, ProposalSourcePackage } from "../../api/improvementProposal";
 import SearchInput from "../../components/SearchInput";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { statusToTone } from "../../components/statusTone";
@@ -66,6 +66,10 @@ export function BrainScreen(): JSX.Element {
   const improvementProposals = useBrainStore((state) => state.improvementProposals);
   const loadingImprovementProposals = useBrainStore((state) => state.loadingImprovementProposals);
   const loadImprovementProposals = useBrainStore((state) => state.loadImprovementProposals);
+  const proposalSources = useBrainStore((state) => state.proposalSources);
+  const loadingProposalSourceId = useBrainStore((state) => state.loadingProposalSourceId);
+  const proposalSourceError = useBrainStore((state) => state.proposalSourceError);
+  const loadProposalSource = useBrainStore((state) => state.loadProposalSource);
   const approveImprovementProposal = useBrainStore((state) => state.approveImprovementProposal);
   const rejectImprovementProposal = useBrainStore((state) => state.rejectImprovementProposal);
   const openProposalDiscussion = useBrainStore((state) => state.openProposalDiscussion);
@@ -136,6 +140,8 @@ export function BrainScreen(): JSX.Element {
 
   const reviewingExecutions = activeView === "execution_review";
   const viewingProposals = activeView === "improvement_proposals";
+  const selectedProposal = improvementProposals.find((p) => p.id === selectedProposalId) ?? null;
+  const selectedProposalSource = selectedProposalId ? proposalSources[selectedProposalId] ?? null : null;
   const selectedEntry = (reviewingExecutions || viewingProposals) ? null : entries.find((entry) => entry.entry_id === selectedId) ?? null;
   const selectedReview =
     executionReviews.find((review) => review.id === selectedReviewId) ?? executionReviews[0] ?? null;
@@ -158,6 +164,11 @@ export function BrainScreen(): JSX.Element {
     setSelectedId(null);
     void loadExecutionReviews();
   };
+
+  useEffect(() => {
+    if (!viewingProposals || !selectedProposalId) return;
+    void loadProposalSource(selectedProposalId);
+  }, [loadProposalSource, selectedProposalId, viewingProposals]);
 
   const chooseStatus = (nextStatus: BrainEntryStatus | "") => {
     setStatus(nextStatus);
@@ -315,7 +326,10 @@ export function BrainScreen(): JSX.Element {
         <aside className="brain-detail-pane me-scroll" aria-label="条目详情">
           {viewingProposals ? (
             <ImprovementProposalDetail
-              proposal={improvementProposals.find((p) => p.id === selectedProposalId) ?? null}
+              proposal={selectedProposal}
+              source={selectedProposalSource}
+              sourceError={proposalSourceError}
+              sourceLoading={loadingProposalSourceId === selectedProposalId}
               supplement={proposalSupplement}
               onSupplementChange={setProposalSupplement}
               onApprove={(id) => {
@@ -539,6 +553,9 @@ function ImprovementProposalList({
 
 function ImprovementProposalDetail({
   proposal,
+  source,
+  sourceLoading,
+  sourceError,
   supplement,
   onSupplementChange,
   onApprove,
@@ -547,6 +564,9 @@ function ImprovementProposalDetail({
   discussPending,
 }: {
   proposal: ImprovementProposalDto | null;
+  source: ProposalSourcePackage | null;
+  sourceLoading: boolean;
+  sourceError: string | null;
   supplement: string;
   onSupplementChange: (value: string) => void;
   onApprove: (id: string) => void;
@@ -612,6 +632,7 @@ function ImprovementProposalDetail({
           <p>{proposal.userSupplement}</p>
         </div>
       ) : null}
+      <ProposalSourcePanel error={sourceError} loading={sourceLoading} source={source} />
       {!isPending ? <div className="brain-proposal-followup">{discussionButton}</div> : null}
       {hasOutcome ? (
         <div className="brain-proposal-outcome">
@@ -677,6 +698,64 @@ function ImprovementProposalDetail({
           </Button>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function anchorLabel(anchor: ProposalSourceAnchor): string {
+  if (typeof anchor.sequence === "number") return `消息 #${anchor.sequence}`;
+  if (typeof anchor.findingIndex === "number") return `Finding #${anchor.findingIndex + 1}`;
+  if (typeof anchor.stepIndex === "number") return `步骤 #${anchor.stepIndex + 1}`;
+  if (anchor.toolName) return anchor.toolName;
+  if (anchor.sourceReviewId) return anchor.sourceReviewId;
+  return "来源锚点";
+}
+
+function ProposalSourcePanel({
+  source,
+  loading,
+  error,
+}: {
+  source: ProposalSourcePackage | null;
+  loading: boolean;
+  error: string | null;
+}): JSX.Element {
+  const evidence = source?.evidence ?? [];
+  return (
+    <section className="brain-proposal-source" aria-label="来源证据">
+      <div className="brain-section-title">
+        <span>
+          <FileSearch size={14} />
+          来源证据
+        </span>
+        {source?.source?.available === false ? <Badge tone="warn">来源缺失</Badge> : null}
+      </div>
+      {loading ? <div className="brain-empty">正在读取来源证据</div> : null}
+      {!loading && error ? <div className="brain-error">{error}</div> : null}
+      {!loading && !error && source ? (
+        <>
+          <div className="brain-proposal-source-meta">
+            <span>复盘 {source.source.sourceReviewId ?? "未知"}</span>
+            {source.source.turnSessionId ? <span>会话 {source.source.turnSessionId}</span> : null}
+            {source.source.reviewedAt ? <span>{source.source.reviewedAt}</span> : null}
+          </div>
+          {source.scopeNote ? <p className="brain-proposal-source-note">{source.scopeNote}</p> : null}
+          <div className="brain-proposal-source-list">
+            {evidence.map((item) => (
+              <article className="brain-proposal-source-item" key={item.id}>
+                <div>
+                  <span className="brain-proposal-node-label">{item.label}</span>
+                  <small>{anchorLabel(item.anchor)}</small>
+                </div>
+                <p>{item.excerpt}{item.truncated ? "\n...[已截断]" : ""}</p>
+                <small>{item.reason}</small>
+              </article>
+            ))}
+          </div>
+          {evidence.length === 0 ? <div className="brain-empty">暂无可展示的来源片段</div> : null}
+        </>
+      ) : null}
+      {!loading && !error && !source ? <div className="brain-empty">选择提案后会读取来源证据</div> : null}
     </section>
   );
 }

@@ -23,6 +23,72 @@ export interface ImprovementProposalDto {
   completedAt: string | null;
 }
 
+export interface ProposalSourceAnchor {
+  sessionId?: string;
+  messageId?: string;
+  sequence?: number;
+  sourceReviewId?: string;
+  findingIndex?: number;
+  stepIndex?: number;
+  toolName?: string;
+  outputRef?: string;
+}
+
+export interface ProposalSourceEvidenceItem {
+  id: string;
+  kind: string;
+  label: string;
+  excerpt: string;
+  truncated: boolean;
+  anchor: ProposalSourceAnchor;
+  reason: string;
+}
+
+export interface ProposalSourceMessageItem {
+  kind: "message";
+  messageId: string;
+  sessionId: string;
+  sequence: number;
+  role: string;
+  toolName: string | null;
+  excerpt: string;
+  truncated: boolean;
+  createdAt: string | null;
+  anchor: ProposalSourceAnchor;
+}
+
+export interface ProposalSourcePackage {
+  proposalId: string;
+  view: "overview" | "messages";
+  scope: string;
+  scopeNote?: string | null;
+  proposal: Record<string, unknown>;
+  source: {
+    sourceReviewId?: string | null;
+    findingIndex?: number | null;
+    turnSessionId?: string | null;
+    reviewStatus?: string | null;
+    reviewedAt?: string | null;
+    createdAt?: string | null;
+    modelUsed?: string | null;
+    available?: boolean;
+  };
+  review?: {
+    verdict?: string;
+    currentFinding?: Record<string, unknown> | null;
+    findingCount?: number;
+  } | null;
+  evidence?: ProposalSourceEvidenceItem[] | null;
+  nextActions?: Array<{ view: string; label: string; description: string }> | null;
+  items?: ProposalSourceMessageItem[] | null;
+  page?: {
+    cursor?: string | null;
+    nextCursor?: string | null;
+    limit: number;
+    hasMore: boolean;
+  } | null;
+}
+
 export async function fetchImprovementProposals(
   status?: string,
   limit = 50,
@@ -59,4 +125,17 @@ export async function openProposalDiscussion(
   return requestJson(`/api/improvement-proposals/${id}/discussion`, {
     method: "POST",
   });
+}
+
+export async function fetchProposalSource(
+  id: string,
+  options: { view?: "overview" | "messages"; cursor?: string | null; limit?: number } = {},
+): Promise<ProposalSourcePackage> {
+  const params = new URLSearchParams();
+  params.set("view", options.view ?? "overview");
+  params.set("limit", String(options.limit ?? 20));
+  if (options.cursor) params.set("cursor", options.cursor);
+  return requestJson<ProposalSourcePackage>(
+    `/api/improvement-proposals/${encodeURIComponent(id)}/source?${params}`,
+  );
 }

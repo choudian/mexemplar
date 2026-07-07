@@ -174,6 +174,20 @@ def test_list_endpoint_hides_worktree_absolute_path(desktop_api_client, tmp_path
     assert proposal["worktreeAvailable"] is True
 
 
+def test_source_endpoint_returns_overview_package(desktop_api_client) -> None:
+    pid = _seed_proposal(source_review_id="rev_missing_source", finding_index=0)
+
+    response = desktop_api_client.get(f"/api/improvement-proposals/{pid}/source")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["proposalId"] == pid
+    assert payload["view"] == "overview"
+    assert payload["source"]["sourceReviewId"] == "rev_missing_source"
+    assert payload["source"]["available"] is False
+    assert payload["evidence"][0]["kind"] == "review_finding"
+
+
 def test_list_endpoint_rejects_unknown_status(desktop_api_client) -> None:
     response = desktop_api_client.get("/api/improvement-proposals?status=bogus")
     assert response.status_code == 422

@@ -140,6 +140,13 @@ class ImprovementProposalRepository(BaseRepository):
     def get_by_id(self, proposal_id: str) -> ImprovementProposal | None:
         return self.session.get(ImprovementProposal, proposal_id)
 
+    def get_by_discussion_session(self, session_id: str) -> ImprovementProposal | None:
+        return (
+            self.session.query(ImprovementProposal)
+            .filter(ImprovementProposal.discussion_session_id == session_id)
+            .one_or_none()
+        )
+
     def list_recent(self, limit: int = 50, status: str | None = None) -> list[ImprovementProposal]:
         q = self.session.query(ImprovementProposal)
         if status:

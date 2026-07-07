@@ -5808,6 +5808,79 @@ select:focus-visible,
   overflow-wrap: anywhere;
 }
 
+.brain-proposal-source {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 18%, var(--border-1));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--accent) 4%, var(--surface-1));
+}
+
+.brain-proposal-source .brain-section-title > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.brain-proposal-source-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.brain-proposal-source-meta span {
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding: 3px 7px;
+}
+
+.brain-proposal-source-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.brain-proposal-source-list {
+  display: grid;
+  gap: 8px;
+}
+
+.brain-proposal-source-item {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 10px;
+}
+
+.brain-proposal-source-item > div:first-child {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.brain-proposal-source-item p {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.brain-proposal-source-item small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .brain-proposal-outcome {
   display: grid;
   gap: 10px;

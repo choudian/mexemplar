@@ -86,7 +86,8 @@ def format_discussion_opening_message(proposal: Any) -> str:
     return (
         f"## 改进提案讨论\n\n"
         f"这条对话用于讨论下面这条改进提案（当前状态：{status_line}）。"
-        f"你可以追问细节、评估影响范围或权衡利弊；"
+        f"你可以追问这条提案为什么会生成、证据是否充分，以及复盘提示词是否需要收紧；"
+        f"需要分析来源时，助理可以读取该提案的来源复盘和相关消息片段。"
         f"批准或拒绝仍在提案页面完成。\n\n"
         f"{finding_block}"
     )

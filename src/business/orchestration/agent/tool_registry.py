@@ -446,6 +446,10 @@ class ToolRegistry:
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
         )
+        from src.business.agents.tools.proposal_source_tools import (
+            create_inspect_proposal_source_tool,
+            discussion_source_tool_available,
+        )
         from src.business.agents.tools.skill_methodology_tools import (
             CREATE_SKILL_METHODOLOGY_SCHEMA,
             create_create_skill_methodology_handler,
@@ -598,6 +602,7 @@ class ToolRegistry:
             schema=MUTATE_TASK_GRAPH_SCHEMA,
             handler=create_mutate_task_graph_handler(session_id),
         )
+        inspect_proposal_source_tool = create_inspect_proposal_source_tool(session_id)
 
         # 027: MCP 工具注入 — 预置全量 + 自定义激活
         from src.business.mcp import get_mcp_tool_registry
@@ -635,9 +640,13 @@ class ToolRegistry:
         ]
 
         def tool_factory() -> list[ToolDefinition]:
+            proposal_discussion_tools = (
+                [inspect_proposal_source_tool] if discussion_source_tool_available(session_id) else []
+            )
             return (
                 search_tools
                 + static_tools
+                + proposal_discussion_tools
                 + dynamic_manager.get_activated_tools()
                 + mcp_registry.get_preset_tools()              # 轨道 A：预置全量
                 + mcp_registry.get_activated_custom_tools()    # 轨道 B：自定义激活

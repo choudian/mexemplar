@@ -18,10 +18,11 @@ import { fetchExecutionReviews } from "../api/executionReview";
 import {
   fetchImprovementProposals,
   approveProposal,
+  fetchProposalSource,
   openProposalDiscussion,
   rejectProposal,
 } from "../api/improvementProposal";
-import type { ImprovementProposalDto } from "../api/improvementProposal";
+import type { ImprovementProposalDto, ProposalSourcePackage } from "../api/improvementProposal";
 import type {
   AffectedSpecialist,
   BrainZoneSummary,
@@ -63,6 +64,9 @@ export interface BrainState {
   improvementProposals: ImprovementProposalDto[];
   loadingImprovementProposals: boolean;
   openingDiscussionProposalId: string | null;
+  proposalSources: Record<string, ProposalSourcePackage>;
+  loadingProposalSourceId: string | null;
+  proposalSourceError: string | null;
 
   loadZones: () => Promise<void>;
   loadEntries: (zone: BrainZone, options?: { limit?: number; offset?: number; status?: BrainEntryStatus }) => Promise<void>;
@@ -77,6 +81,7 @@ export interface BrainState {
   removeSkill: (toolId: string, force?: boolean) => Promise<void>;
   clearPendingSkillRemoval: () => void;
   loadImprovementProposals: (status?: string) => Promise<void>;
+  loadProposalSource: (id: string) => Promise<void>;
   approveImprovementProposal: (id: string, supplement?: string) => Promise<boolean>;
   rejectImprovementProposal: (id: string) => Promise<boolean>;
   openProposalDiscussion: (id: string) => Promise<string | null>;
@@ -104,6 +109,9 @@ export const useBrainStore = create<BrainState>((set, get) => ({
   improvementProposals: [],
   loadingImprovementProposals: false,
   openingDiscussionProposalId: null,
+  proposalSources: {},
+  loadingProposalSourceId: null,
+  proposalSourceError: null,
 
   loadZones: async () => {
     set({ loadingZones: true, lastError: null });
@@ -253,6 +261,22 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       set({ lastError: toErrorMessage(error, "无法加载改进提案。") });
     } finally {
       set({ loadingImprovementProposals: false });
+    }
+  },
+
+  loadProposalSource: async (id: string) => {
+    set({ loadingProposalSourceId: id, proposalSourceError: null });
+    try {
+      const source = await fetchProposalSource(id, { view: "overview", limit: 20 });
+      set((state) => ({
+        proposalSources: { ...state.proposalSources, [id]: source },
+      }));
+    } catch (error) {
+      set({ proposalSourceError: toErrorMessage(error, "来源证据暂时不可用。") });
+    } finally {
+      set((state) => ({
+        loadingProposalSourceId: state.loadingProposalSourceId === id ? null : state.loadingProposalSourceId,
+      }));
     }
   },
 
