@@ -229,8 +229,7 @@ describe("AppShell", () => {
     await waitFor(() => expect(screen.getByRole("tab", { name: "AI" })).toBeInTheDocument());
   });
 
-  test("surfaces pending improvement proposals as a badge on the brain nav (FR-020)", async () => {
-    // FR-020：pending_review 提案必须在全局大脑导航项可见，不能静悄悄躺在管理屏无人知。
+  test("does not show pending improvement proposal counts on the brain nav", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -272,8 +271,7 @@ describe("AppShell", () => {
     await waitFor(() => expect(screen.getByText("已就绪")).toBeInTheDocument());
     const navigation = screen.getByRole("navigation", { name: "主导航" });
     const brainButton = within(navigation).getByRole("button", { name: /大脑管理/ });
-    // 全局导航项上的 pending_review 计数徽标（屏外可发现）。
-    await waitFor(() => expect(within(brainButton).getByText("1")).toBeInTheDocument());
+    expect(within(brainButton).queryByText("1")).not.toBeInTheDocument();
   });
 
   test("retries bootstrap while the sidecar is still starting", async () => {
