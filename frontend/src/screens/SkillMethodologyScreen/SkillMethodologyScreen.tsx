@@ -1,4 +1,4 @@
-import { AlertTriangle, BookOpenCheck, GitBranch, ListChecks } from "lucide-react";
+import { AlertTriangle, BookOpenCheck, GitBranch, ListChecks, Store } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "../../components/primitives";
@@ -9,6 +9,7 @@ import SkillActiveList from "./SkillActiveList";
 import SkillAuditView from "./SkillAuditView";
 import SkillDangerConfirm from "./SkillDangerConfirm";
 import SkillEditor from "./SkillEditor";
+import { SkillStoreTab } from "../skills/SkillStoreTab";
 
 export function SkillMethodologyScreen(): JSX.Element {
   const items = useSkillMethodologyStore((state) => state.items);
@@ -39,7 +40,7 @@ export function SkillMethodologyScreen(): JSX.Element {
   const loadingSkillPool = useBrainStore((state) => state.loadingSkillPool);
   const loadSkillPool = useBrainStore((state) => state.loadSkillPool);
 
-  const [view, setView] = useState<"active" | "audit">("active");
+  const [view, setView] = useState<"active" | "store" | "audit">("active");
   const [listCollapsed, setListCollapsed] = useState(false);
 
   useEffect(() => {
@@ -79,12 +80,25 @@ export function SkillMethodologyScreen(): JSX.Element {
           <h2>方法论</h2>
           <p>沉淀、修订和装备可按需加载的 Skill 方法论</p>
         </div>
-        <div className="methodology-header-actions">
-          <Button kind={view === "active" ? "primary" : "ghost"} onClick={() => setView("active")}>
+        <div className="methodology-header-actions" aria-label="方法论视图" role="group">
+          <Button
+            aria-pressed={view === "active"}
+            kind={view === "active" ? "primary" : "ghost"}
+            onClick={() => setView("active")}
+          >
             <ListChecks size={14} />
-            Active
+            我的方法论
           </Button>
           <Button
+            aria-pressed={view === "store"}
+            kind={view === "store" ? "primary" : "ghost"}
+            onClick={() => setView("store")}
+          >
+            <Store size={14} />
+            技能商店
+          </Button>
+          <Button
+            aria-pressed={view === "audit"}
             disabled={!selectedDetail}
             kind={view === "audit" ? "primary" : "ghost"}
             onClick={() => setView("audit")}
@@ -105,49 +119,55 @@ export function SkillMethodologyScreen(): JSX.Element {
         </div>
       ) : null}
 
-      <div className="methodology-workspace" data-collapsed={listCollapsed}>
-        <SkillActiveList
-          collapsed={listCollapsed}
-          filterKey={filterKey}
-          items={items}
-          onFilter={setFilterKey}
-          onOpen={(skillId) => {
-            void selectSkill(skillId);
-          }}
-          onSort={setSortKey}
-          onToggleCollapsed={() => setListCollapsed((v) => !v)}
-          selectedSkillId={selectedSkillId}
-          sortKey={sortKey}
-        />
-
-        <main className="methodology-detail-pane">
-          {loading ? <div className="brain-empty">正在加载方法论列表</div> : null}
-          {view === "active" ? (
-            loadingDetail ? (
-              <div className="brain-empty">正在加载方法论详情</div>
-            ) : (
-              <SkillEditor
-                detail={selectedDetail}
-                draft={editDraft}
-                loadingSkillPool={loadingSkillPool}
-                onDraftField={setDraftField}
-                onSave={() => {
-                  void saveDraft();
-                }}
-                onSoftDelete={() => {
-                  void softDeleteSelected();
-                }}
-                saving={saving}
-                skillPool={skillPool}
-              />
-            )
-          ) : (
-            <SkillAuditView audit={equipmentAudit} history={history} />
-          )}
+      {view === "store" ? (
+        <main className="methodology-store-pane me-scroll" aria-label="技能商店">
+          <SkillStoreTab />
         </main>
-      </div>
+      ) : (
+        <div className="methodology-workspace" data-collapsed={listCollapsed}>
+          <SkillActiveList
+            collapsed={listCollapsed}
+            filterKey={filterKey}
+            items={items}
+            onFilter={setFilterKey}
+            onOpen={(skillId) => {
+              void selectSkill(skillId);
+            }}
+            onSort={setSortKey}
+            onToggleCollapsed={() => setListCollapsed((v) => !v)}
+            selectedSkillId={selectedSkillId}
+            sortKey={sortKey}
+          />
 
-      {items.length === 0 && !loading ? (
+          <main className="methodology-detail-pane">
+            {loading ? <div className="brain-empty">正在加载方法论列表</div> : null}
+            {view === "active" ? (
+              loadingDetail ? (
+                <div className="brain-empty">正在加载方法论详情</div>
+              ) : (
+                <SkillEditor
+                  detail={selectedDetail}
+                  draft={editDraft}
+                  loadingSkillPool={loadingSkillPool}
+                  onDraftField={setDraftField}
+                  onSave={() => {
+                    void saveDraft();
+                  }}
+                  onSoftDelete={() => {
+                    void softDeleteSelected();
+                  }}
+                  saving={saving}
+                  skillPool={skillPool}
+                />
+              )
+            ) : (
+              <SkillAuditView audit={equipmentAudit} history={history} />
+            )}
+          </main>
+        </div>
+      )}
+
+      {view !== "store" && items.length === 0 && !loading ? (
         <div className="methodology-empty-state">
           <BookOpenCheck size={18} />
           <span>暂无 active 方法论。让 Assistant 将完成过的流程做成方法论后会出现在这里。</span>

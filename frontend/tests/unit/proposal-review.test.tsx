@@ -402,7 +402,7 @@ describe("proposal review UI", () => {
   });
 
   test("discuss button is disabled while the request is pending", async () => {
-    let resolveDiscussion: ((value: Response) => void) | null = null;
+    const pendingDiscussion: { resolve?: (value: Response) => void } = {};
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/api/brain/zones")) return jsonResponse({ zones: [] });
@@ -413,7 +413,7 @@ describe("proposal review UI", () => {
       if (url.includes("/api/execution-reviews")) return jsonResponse({ reviews: [] });
       if (url.includes("/api/improvement-proposals/prop-1/discussion")) {
         return new Promise<Response>((resolve) => {
-          resolveDiscussion = resolve;
+          pendingDiscussion.resolve = resolve;
         });
       }
       if (url.includes("/api/improvement-proposals")) {
@@ -435,7 +435,7 @@ describe("proposal review UI", () => {
 
     await waitFor(() => expect(detail.getByRole("button", { name: "讨论" })).toBeDisabled());
 
-    resolveDiscussion?.(jsonResponse({ sessionId: "ast_disc_002", created: true }));
+    pendingDiscussion.resolve?.(jsonResponse({ sessionId: "ast_disc_002", created: true }));
     await waitFor(() => expect(detail.getByRole("button", { name: /讨论/ })).toBeEnabled());
   });
 });

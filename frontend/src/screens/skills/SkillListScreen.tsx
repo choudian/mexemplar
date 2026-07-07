@@ -11,7 +11,6 @@ import { useShellStore } from "../../state/shellStore";
 import SkillCards from "./SkillCards";
 import { SkillTrialDialog } from "./SkillTrialDialog";
 import { McpServerTab } from "./McpServerTab";
-import { SkillStoreTab } from "./SkillStoreTab";
 
 const CATEGORY_LABELS: Record<SkillCategory, string> = {
   pending: "待考核",
@@ -19,12 +18,11 @@ const CATEGORY_LABELS: Record<SkillCategory, string> = {
   failed: "失败记录",
 };
 
-type SkillTab = SkillCategory | "mcp" | "store";
-const SKILL_TABS: SkillTab[] = [...SKILL_CATEGORIES, "mcp" as const, "store" as const];
+type SkillTab = SkillCategory | "mcp";
+const SKILL_TABS: SkillTab[] = [...SKILL_CATEGORIES, "mcp" as const];
 const TAB_LABELS: Record<SkillTab, string> = {
   ...CATEGORY_LABELS,
   mcp: "MCP 工具",
-  store: "技能商店",
 };
 
 export function SkillListScreen(): JSX.Element {
@@ -52,7 +50,7 @@ export function SkillListScreen(): JSX.Element {
 
   // 同步 tab 切换到 skillsStore（仅教学工具分类 tab）
   useEffect(() => {
-    if (activeTab !== "mcp" && activeTab !== "store") {
+    if (activeTab !== "mcp") {
       setCategory(activeTab);
     }
   }, [activeTab, setCategory]);
@@ -100,15 +98,13 @@ export function SkillListScreen(): JSX.Element {
               type="button"
             >
               <span>{TAB_LABELS[id]}</span>
-              {id !== "mcp" && id !== "store" && <small className="me-mono">{counts[id]}</small>}
+              {id !== "mcp" && <small className="me-mono">{counts[id]}</small>}
             </button>
           );
         })}
       </div>
       {activeTab === "mcp" ? (
         <McpServerTab />
-      ) : activeTab === "store" ? (
-        <SkillStoreTab />
       ) : (
         <>
           {busy ? <div className="skills-empty">正在加载</div> : null}

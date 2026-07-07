@@ -6773,6 +6773,17 @@ select:focus-visible,
   grid-template-columns: 40px minmax(0, 1fr);
 }
 
+.methodology-store-pane {
+  min-height: 0;
+  flex: 1;
+  margin: 0 26px 26px;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: var(--surface-1);
+  padding: 16px;
+}
+
 .methodology-list-pane,
 .methodology-detail-pane,
 .methodology-editor-panel,

@@ -6,6 +6,7 @@ import {
   listInstalledExternalSkills,
   previewStoreSkill,
   searchStoreSkills,
+  uninstallExternalSkill,
 } from "../api/skillStore";
 import type {
   DiscoveredGithubSkill,

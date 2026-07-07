@@ -183,23 +183,55 @@ describe("skill store tab", () => {
     );
   });
 
-  test("skill list screen exposes store tab", async () => {
+  test("methodology screen exposes store view", async () => {
+    const { SkillMethodologyScreen } = await import(
+      "../../src/screens/SkillMethodologyScreen/SkillMethodologyScreen"
+    );
+    const { useBrainStore } = await import("../../src/state/brainStore");
+    const { useSkillMethodologyStore } = await import("../../src/state/skillMethodologyStore");
+    useBrainStore.setState({ skillPool: [], loadingSkillPool: false });
+    useSkillMethodologyStore.setState({ hydrated: true, items: [], bootstrapWarning: null });
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/skill-store/search")) {
+        return jsonResponse({ items: [], sourceAvailable: true, message: null });
+      }
+      if (url.includes("/api/skill-store/installed")) {
+        return jsonResponse({ items: [] });
+      }
+      if (url.includes("/api/skills/methodology/bootstrap-status")) {
+        return jsonResponse({
+          bootstrap_active_skill_id: "bootstrap.how_to_create_skill_methodology",
+          fallback_used: false,
+          seed_file_path: "seed.md",
+          last_seed_check_at: "2026-05-31T00:00:00Z",
+        });
+      }
+      if (url.includes("/api/brain/skill-pool")) {
+        return jsonResponse({ skills: [] });
+      }
+      return jsonResponse({ skills: [] });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<SkillMethodologyScreen />);
+    await settle();
+
+    fireEvent.click(screen.getByRole("button", { name: "技能商店" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("搜索技能市场")).toBeInTheDocument(),
+    );
+  });
+
+  test("skill list screen no longer exposes store tab", async () => {
     const { SkillListScreen } = await import("../../src/screens/skills/SkillListScreen");
     const { useSkillsStore } = await import("../../src/state/skillsStore");
     useSkillsStore.setState({ hydrated: true });
 
-    const fetchMock = vi.fn(async () =>
-      jsonResponse({ items: [], sourceAvailable: true, message: null }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
     render(<SkillListScreen />);
-    await settle();
 
-    const storeTab = screen.getByRole("tab", { name: "技能商店" });
-    fireEvent.click(storeTab);
-    await waitFor(() =>
-      expect(screen.getByLabelText("搜索技能市场")).toBeInTheDocument(),
-    );
+    expect(screen.queryByRole("tab", { name: "技能商店" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "MCP 工具" })).toBeInTheDocument();
   });
 });
