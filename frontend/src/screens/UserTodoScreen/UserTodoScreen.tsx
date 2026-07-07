@@ -141,9 +141,8 @@ export function UserTodoScreen(): JSX.Element {
   const [progress, setProgress] = useState({ total: 0, done: 0 });
 
   useEffect(() => {
-    if (hydrated) return;
     void load();
-  }, [hydrated, load]);
+  }, [load]);
 
   // 进度环口径是「全部待办」的完成度，独立于当前筛选视图拉一次轻量计数。
   useEffect(() => {

@@ -133,4 +133,33 @@ describe("UserTodoScreen", () => {
     await waitFor(() => expect(screen.getByText("还没有待办")).toBeInTheDocument());
     expect(screen.getByText("在上面添加第一件要做的事吧")).toBeInTheDocument();
   });
+
+  test("refreshes when the screen is opened after the store was already hydrated", async () => {
+    useUserTodoStore.setState({
+      hydrated: true,
+      items: [],
+      total: 0,
+    });
+    const addedElsewhere = {
+      ...baseTodo,
+      todoId: "utodo_from_db",
+      title: "数据库新增待办",
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("status=open")) {
+        return jsonResponse({ items: [addedElsewhere], total: 1, limit: 200, offset: 0 });
+      }
+      return jsonResponse({ items: [], total: 0, limit: 1, offset: 0 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<UserTodoScreen />);
+
+    await screen.findByText("数据库新增待办");
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining("status=open"),
+      expect.any(Object),
+    );
+  });
 });
