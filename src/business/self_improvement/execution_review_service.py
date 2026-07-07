@@ -20,6 +20,11 @@ _REVIEW_PROMPT = (
     "type 只能是 效率 或 健壮性；severity 只能是 high、med 或 low。无问题时 findings 为空。"
 )
 
+
+def get_execution_review_prompt_template() -> str:
+    """Return the deterministic reviewer system prompt used for execution reviews."""
+    return _REVIEW_PROMPT
+
 # prompt 声明 severity 只能 high/med/low，但 LLM 可能幻觉出 critical 等值；
 # _normalize_severity 据此把非法值收敛为 low（026 I6）。
 _SEVERITY_VALUES = frozenset({"high", "med", "low"})

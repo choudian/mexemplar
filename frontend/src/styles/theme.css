@@ -5850,6 +5850,44 @@ select:focus-visible,
   gap: 8px;
 }
 
+.brain-proposal-source-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-2) 72%, transparent);
+}
+
+.brain-proposal-source-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.brain-proposal-source-tabs button[aria-selected="true"] {
+  border-color: color-mix(in oklch, var(--accent) 34%, var(--border-1));
+  background: var(--surface-1);
+  color: var(--text);
+  box-shadow: 0 6px 18px color-mix(in oklch, var(--accent) 10%, transparent);
+}
+
+.brain-proposal-source-tabs button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
 .brain-proposal-source-item {
   display: grid;
   gap: 6px;
@@ -5879,6 +5917,71 @@ select:focus-visible,
   color: var(--text-muted);
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+.brain-proposal-source-item-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.brain-proposal-source-item-footer button {
+  border: 1px solid color-mix(in oklch, var(--accent) 35%, var(--border-1));
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--accent) 7%, var(--surface-1));
+  color: var(--accent-strong);
+  font-size: 11.5px;
+  font-weight: 700;
+  padding: 4px 7px;
+  cursor: pointer;
+}
+
+.brain-proposal-source-code {
+  display: grid;
+  gap: 10px;
+}
+
+.brain-proposal-source-code > div {
+  display: grid;
+  gap: 6px;
+}
+
+.brain-proposal-source-code pre,
+.brain-proposal-source-inline-code {
+  margin: 0;
+  max-height: 260px;
+  overflow: auto;
+  border: 1px solid var(--border-1);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--surface-2) 82%, #000 4%);
+  color: var(--text);
+  font-family: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  line-height: 1.55;
+  padding: 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.brain-proposal-source-inline-code {
+  max-height: 150px;
+  font-size: 11px;
+}
+
+.brain-proposal-source-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.brain-proposal-source-tools span {
+  border: 1px solid var(--border-1);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding: 3px 7px;
 }
 
 .brain-proposal-outcome {

@@ -188,6 +188,18 @@ def test_source_endpoint_returns_overview_package(desktop_api_client) -> None:
     assert payload["evidence"][0]["kind"] == "review_finding"
 
 
+def test_source_endpoint_returns_prompt_view(desktop_api_client) -> None:
+    pid = _seed_proposal(source_review_id="rev_missing_source", finding_index=0)
+
+    response = desktop_api_client.get(f"/api/improvement-proposals/{pid}/source?view=prompt")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["proposalId"] == pid
+    assert payload["view"] == "prompt"
+    assert "独立的执行复盘审查员" in payload["prompt"]["system"]
+
+
 def test_list_endpoint_rejects_unknown_status(desktop_api_client) -> None:
     response = desktop_api_client.get("/api/improvement-proposals?status=bogus")
     assert response.status_code == 422

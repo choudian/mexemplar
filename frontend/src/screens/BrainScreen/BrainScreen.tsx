@@ -1,8 +1,27 @@
-import { FileSearch, MessageSquare, RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
+import {
+  FileSearch,
+  FileText,
+  ListTree,
+  MessageSquare,
+  RefreshCcw,
+  RotateCcw,
+  ScrollText,
+  Save,
+  Trash2,
+  Wrench,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
+import { sendAssistantMessage } from "../../api/assistant";
 import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
-import type { ImprovementProposalDto, ProposalSourceAnchor, ProposalSourcePackage } from "../../api/improvementProposal";
+import {
+  fetchProposalSource,
+  type ImprovementProposalDto,
+  type ProposalSourceAnchor,
+  type ProposalSourcePackage,
+  type ProposalSourceTimelineItem,
+  type ProposalSourceView,
+} from "../../api/improvementProposal";
 import SearchInput from "../../components/SearchInput";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { statusToTone } from "../../components/statusTone";
@@ -28,6 +47,9 @@ const STATUS_OPTIONS = [
   { value: "fading", label: "衰减中" },
   { value: "invalidated", label: "已失效" },
 ] as const;
+
+const PROPOSAL_AUTO_INVESTIGATION_PROMPT =
+  "请先调查这条改进提案为什么会生成。请调用 inspect_proposal_source 读取 overview、prompt 和 timeline；必要时再读取 messages 或相关 tool_output。请重点回答：来源证据是否真的支持这条 finding、可能有哪些误判或证据缺口、复盘提示词应该如何收紧。不要批准、拒绝或实施这条提案。";
 
 function entryCountFor(zone: BrainZone, summaries: ReturnType<typeof useBrainStore.getState>["zones"]): number {
   const summary = summaries.find((item) => item.zone === zone);
@@ -345,10 +367,20 @@ export function BrainScreen(): JSX.Element {
               }}
               onDiscuss={(id) => {
                 void (async () => {
-                  const sessionId = await openProposalDiscussion(id);
-                  if (sessionId) {
-                    void useAssistantStore.getState().selectSession(sessionId);
+                  const discussion = await openProposalDiscussion(id);
+                  if (discussion) {
+                    await useAssistantStore.getState().selectSession(discussion.sessionId);
                     useShellStore.getState().setRoute("assistant");
+                    if (discussion.created) {
+                      void sendAssistantMessage(
+                        discussion.sessionId,
+                        PROPOSAL_AUTO_INVESTIGATION_PROMPT,
+                      ).catch(() => {
+                        useAssistantStore
+                          .getState()
+                          .setError("讨论已打开，但自动调查请求发送失败。可以在会话里手动要求助理分析来源。");
+                      });
+                    }
                   }
                 })();
               }}
@@ -711,6 +743,54 @@ function anchorLabel(anchor: ProposalSourceAnchor): string {
   return "来源锚点";
 }
 
+const SOURCE_VIEW_OPTIONS: Array<{ view: ProposalSourceView; label: string }> = [
+  { view: "overview", label: "概览" },
+  { view: "messages", label: "原文" },
+  { view: "prompt", label: "Prompt" },
+  { view: "timeline", label: "工具线" },
+  { view: "tool_output", label: "大输出" },
+];
+
+function sourceRoleLabel(role?: string | null): string {
+  if (role === "user") return "用户";
+  if (role === "assistant") return "助理";
+  if (role === "tool") return "工具";
+  return role || "消息";
+}
+
+function formatBytes(value?: number | null): string {
+  if (!value || value <= 0) return "0 B";
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function localErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+function mergeSourcePackage(
+  previous: ProposalSourcePackage | undefined,
+  next: ProposalSourcePackage,
+  append: boolean,
+): ProposalSourcePackage {
+  if (!append || !previous || previous.view !== next.view) return next;
+  if (next.view === "messages") {
+    return {
+      ...next,
+      items: [...(previous.items ?? []), ...(next.items ?? [])],
+    };
+  }
+  if (next.view === "tool_output") {
+    return {
+      ...next,
+      content: `${previous.content ?? ""}${next.content ?? ""}`,
+    };
+  }
+  return next;
+}
+
 function ProposalSourcePanel({
   source,
   loading,
@@ -720,7 +800,85 @@ function ProposalSourcePanel({
   loading: boolean;
   error: string | null;
 }): JSX.Element {
+  const [activeView, setActiveView] = useState<ProposalSourceView>("overview");
+  const [viewPackages, setViewPackages] = useState<Partial<Record<ProposalSourceView, ProposalSourcePackage>>>({});
+  const [loadingView, setLoadingView] = useState<ProposalSourceView | null>(null);
+  const [viewError, setViewError] = useState<string | null>(null);
+  const [activeReferenceId, setActiveReferenceId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveView("overview");
+    setViewPackages(source ? { overview: source } : {});
+    setViewError(null);
+    setActiveReferenceId(null);
+  }, [source?.proposalId]);
+
+  useEffect(() => {
+    if (!source) return;
+    setViewPackages((previous) => ({ ...previous, overview: source }));
+  }, [source]);
+
+  const loadView = async (
+    view: ProposalSourceView,
+    options: {
+      cursor?: string | null;
+      append?: boolean;
+      referenceId?: string | null;
+      offset?: number | null;
+    } = {},
+  ) => {
+    if (!source?.proposalId) return;
+    if (view === "tool_output" && !options.referenceId && !activeReferenceId) {
+      setViewError("先在工具时间线里选择一条大输出。");
+      return;
+    }
+    setLoadingView(view);
+    setViewError(null);
+    try {
+      const next = await fetchProposalSource(source.proposalId, {
+        view,
+        cursor: options.cursor,
+        limit: view === "messages" ? 20 : 20,
+        referenceId: options.referenceId ?? activeReferenceId,
+        offset: options.offset,
+        maxBytes: 32000,
+      });
+      setViewPackages((previous) => ({
+        ...previous,
+        [view]: mergeSourcePackage(previous[view], next, Boolean(options.append)),
+      }));
+    } catch (loadError) {
+      setViewError(localErrorMessage(loadError, "来源视图暂时不可用。"));
+    } finally {
+      setLoadingView(null);
+    }
+  };
+
+  const chooseView = (view: ProposalSourceView) => {
+    setActiveView(view);
+    if (view === "overview") return;
+    if (view === "tool_output" && !activeReferenceId && !viewPackages.tool_output) {
+      setViewError("先在工具时间线里选择一条大输出。");
+      return;
+    }
+    if (!viewPackages[view]) {
+      void loadView(view);
+    }
+  };
+
+  const openToolOutput = (referenceId: string) => {
+    setActiveReferenceId(referenceId);
+    setActiveView("tool_output");
+    void loadView("tool_output", { referenceId });
+  };
+
   const evidence = source?.evidence ?? [];
+  const activePackage = activeView === "overview" ? source : viewPackages[activeView] ?? null;
+  const messages = activePackage?.items ?? [];
+  const timeline = activePackage?.timeline ?? [];
+  const prompt = activePackage?.prompt ?? null;
+  const outputReference = activePackage?.reference ?? null;
+  const outputError = activePackage?.error?.message;
   return (
     <section className="brain-proposal-source" aria-label="来源证据">
       <div className="brain-section-title">
@@ -740,19 +898,151 @@ function ProposalSourcePanel({
             {source.source.reviewedAt ? <span>{source.source.reviewedAt}</span> : null}
           </div>
           {source.scopeNote ? <p className="brain-proposal-source-note">{source.scopeNote}</p> : null}
-          <div className="brain-proposal-source-list">
-            {evidence.map((item) => (
-              <article className="brain-proposal-source-item" key={item.id}>
-                <div>
-                  <span className="brain-proposal-node-label">{item.label}</span>
-                  <small>{anchorLabel(item.anchor)}</small>
-                </div>
-                <p>{item.excerpt}{item.truncated ? "\n...[已截断]" : ""}</p>
-                <small>{item.reason}</small>
-              </article>
-            ))}
+          <div className="brain-proposal-source-tabs" role="tablist" aria-label="来源证据视图">
+            {SOURCE_VIEW_OPTIONS.map((option) => {
+              const disabled = option.view === "tool_output" && !activeReferenceId && !viewPackages.tool_output;
+              return (
+                <button
+                  aria-selected={activeView === option.view}
+                  disabled={disabled}
+                  key={option.view}
+                  onClick={() => chooseView(option.view)}
+                  role="tab"
+                  type="button"
+                >
+                  {option.view === "overview" ? <FileSearch size={13} /> : null}
+                  {option.view === "messages" ? <ScrollText size={13} /> : null}
+                  {option.view === "prompt" ? <FileText size={13} /> : null}
+                  {option.view === "timeline" ? <ListTree size={13} /> : null}
+                  {option.view === "tool_output" ? <Wrench size={13} /> : null}
+                  <span>{option.label}</span>
+                </button>
+              );
+            })}
           </div>
-          {evidence.length === 0 ? <div className="brain-empty">暂无可展示的来源片段</div> : null}
+
+          {loadingView ? <div className="brain-empty">正在读取{SOURCE_VIEW_OPTIONS.find((item) => item.view === loadingView)?.label}</div> : null}
+          {viewError ? <div className="brain-error">{viewError}</div> : null}
+
+          {activeView === "overview" ? (
+            <>
+              <div className="brain-proposal-source-list">
+                {evidence.map((item) => (
+                  <article className="brain-proposal-source-item" key={item.id}>
+                    <div>
+                      <span className="brain-proposal-node-label">{item.label}</span>
+                      <small>{anchorLabel(item.anchor)}</small>
+                    </div>
+                    <p>{item.excerpt}{item.truncated ? "\n...[已截断]" : ""}</p>
+                    <small>{item.reason}</small>
+                  </article>
+                ))}
+              </div>
+              {evidence.length === 0 ? <div className="brain-empty">暂无可展示的来源片段</div> : null}
+            </>
+          ) : null}
+
+          {activeView === "messages" ? (
+            <div className="brain-proposal-source-list">
+              {messages.map((item) => (
+                <article className="brain-proposal-source-item" key={item.messageId}>
+                  <div>
+                    <span className="brain-proposal-node-label">{sourceRoleLabel(item.role)}</span>
+                    <small>{anchorLabel(item.anchor)}</small>
+                  </div>
+                  <p>{item.excerpt}{item.truncated ? "\n...[已截断]" : ""}</p>
+                  {item.toolName ? <small>{item.toolName}</small> : null}
+                </article>
+              ))}
+              {messages.length === 0 && !loadingView ? <div className="brain-empty">暂无原始消息片段</div> : null}
+              {activePackage?.page?.hasMore ? (
+                <Button
+                  kind="ghost"
+                  onClick={() => {
+                    void loadView("messages", {
+                      cursor: activePackage.page?.nextCursor,
+                      append: true,
+                    });
+                  }}
+                >
+                  加载更多
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
+
+          {activeView === "prompt" ? (
+            <div className="brain-proposal-source-code">
+              {activePackage?.scopeNote ? <p className="brain-proposal-source-note">{activePackage.scopeNote}</p> : null}
+              <div>
+                <span className="brain-proposal-node-label">复盘系统提示词</span>
+                <pre>{prompt?.system || "暂无"}</pre>
+              </div>
+              <div>
+                <span className="brain-proposal-node-label">Skeleton 输入</span>
+                <pre>{prompt?.userPayload || "{}"}</pre>
+              </div>
+              {prompt?.tools?.length ? (
+                <div className="brain-proposal-source-tools">
+                  {prompt.tools.map((tool) => (
+                    <span key={tool.name}>{tool.name}</span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {activeView === "timeline" ? (
+            <div className="brain-proposal-source-list">
+              {timeline.map((item: ProposalSourceTimelineItem) => (
+                <article className="brain-proposal-source-item" key={item.id}>
+                  <div>
+                    <span className="brain-proposal-node-label">{item.label}</span>
+                    <small>{item.sequence != null ? `消息 #${item.sequence}` : item.toolName}</small>
+                  </div>
+                  {item.argsPreview ? <pre className="brain-proposal-source-inline-code">{item.argsPreview}</pre> : null}
+                  {item.excerpt ? <p>{item.excerpt}{item.truncated ? "\n...[已截断]" : ""}</p> : null}
+                  <div className="brain-proposal-source-item-footer">
+                    {item.resultSize != null ? <small>{formatBytes(item.resultSize)}</small> : null}
+                    {item.outputRef ? (
+                      <button onClick={() => openToolOutput(item.outputRef as string)} type="button">
+                        查看大输出
+                      </button>
+                    ) : null}
+                  </div>
+                </article>
+              ))}
+              {timeline.length === 0 && !loadingView ? <div className="brain-empty">暂无工具时间线</div> : null}
+            </div>
+          ) : null}
+
+          {activeView === "tool_output" ? (
+            <div className="brain-proposal-source-code">
+              {outputReference ? (
+                <div className="brain-proposal-source-meta">
+                  <span>{outputReference.toolName ?? "工具输出"}</span>
+                  <span>{formatBytes(outputReference.sizeBytes)}</span>
+                  {outputReference.contentType ? <span>{outputReference.contentType}</span> : null}
+                </div>
+              ) : null}
+              {outputError ? <div className="brain-error">{outputError}</div> : null}
+              <pre>{activePackage?.content || "暂无可展示内容"}</pre>
+              {activePackage?.page?.hasMore ? (
+                <Button
+                  kind="ghost"
+                  onClick={() => {
+                    void loadView("tool_output", {
+                      referenceId: activeReferenceId,
+                      offset: activePackage.page?.nextOffset,
+                      append: true,
+                    });
+                  }}
+                >
+                  继续读取
+                </Button>
+              ) : null}
+            </div>
+          ) : null}
         </>
       ) : null}
       {!loading && !error && !source ? <div className="brain-empty">选择提案后会读取来源证据</div> : null}

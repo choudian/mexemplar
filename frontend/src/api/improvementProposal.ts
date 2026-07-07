@@ -57,9 +57,49 @@ export interface ProposalSourceMessageItem {
   anchor: ProposalSourceAnchor;
 }
 
+export type ProposalSourceView = "overview" | "messages" | "prompt" | "timeline" | "tool_output";
+
+export interface ProposalSourcePromptPackage {
+  system: string;
+  systemTruncated: boolean;
+  userPayload: string;
+  userPayloadTruncated: boolean;
+  tools: Array<{ name: string; description: string }>;
+}
+
+export interface ProposalSourceTimelineItem {
+  id: string;
+  type: string;
+  label: string;
+  sequence?: number | null;
+  role?: string | null;
+  callId?: string | null;
+  toolName?: string | null;
+  argsPreview?: string | null;
+  argsTruncated?: boolean;
+  ok?: boolean;
+  outcome?: string;
+  resultSize?: number;
+  outputRef?: string | null;
+  excerpt?: string | null;
+  truncated?: boolean;
+  createdAt?: string | null;
+  anchor?: ProposalSourceAnchor;
+}
+
+export interface ProposalSourceReference {
+  referenceId: string;
+  toolName?: string | null;
+  kind?: string | null;
+  sizeBytes?: number | null;
+  contentType?: string | null;
+  status?: string | null;
+  expiresAt?: string | null;
+}
+
 export interface ProposalSourcePackage {
   proposalId: string;
-  view: "overview" | "messages";
+  view: ProposalSourceView;
   scope: string;
   scopeNote?: string | null;
   proposal: Record<string, unknown>;
@@ -81,11 +121,20 @@ export interface ProposalSourcePackage {
   evidence?: ProposalSourceEvidenceItem[] | null;
   nextActions?: Array<{ view: string; label: string; description: string }> | null;
   items?: ProposalSourceMessageItem[] | null;
+  prompt?: ProposalSourcePromptPackage | null;
+  timeline?: ProposalSourceTimelineItem[] | null;
+  reference?: ProposalSourceReference | null;
+  content?: string | null;
+  contentTruncated?: boolean | null;
+  error?: { code?: string; message?: string } | null;
   page?: {
     cursor?: string | null;
     nextCursor?: string | null;
+    offset?: number | null;
+    nextOffset?: number | null;
     limit: number;
     hasMore: boolean;
+    bytesReturned?: number;
   } | null;
 }
 
@@ -129,12 +178,22 @@ export async function openProposalDiscussion(
 
 export async function fetchProposalSource(
   id: string,
-  options: { view?: "overview" | "messages"; cursor?: string | null; limit?: number } = {},
+  options: {
+    view?: ProposalSourceView;
+    cursor?: string | null;
+    limit?: number;
+    referenceId?: string | null;
+    offset?: number | null;
+    maxBytes?: number;
+  } = {},
 ): Promise<ProposalSourcePackage> {
   const params = new URLSearchParams();
   params.set("view", options.view ?? "overview");
   params.set("limit", String(options.limit ?? 20));
   if (options.cursor) params.set("cursor", options.cursor);
+  if (options.referenceId) params.set("referenceId", options.referenceId);
+  if (options.offset != null) params.set("offset", String(options.offset));
+  if (options.maxBytes != null) params.set("maxBytes", String(options.maxBytes));
   return requestJson<ProposalSourcePackage>(
     `/api/improvement-proposals/${encodeURIComponent(id)}/source?${params}`,
   );

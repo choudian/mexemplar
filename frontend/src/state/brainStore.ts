@@ -84,7 +84,7 @@ export interface BrainState {
   loadProposalSource: (id: string) => Promise<void>;
   approveImprovementProposal: (id: string, supplement?: string) => Promise<boolean>;
   rejectImprovementProposal: (id: string) => Promise<boolean>;
-  openProposalDiscussion: (id: string) => Promise<string | null>;
+  openProposalDiscussion: (id: string) => Promise<{ sessionId: string; created: boolean } | null>;
   applyEvent: (event: UiEvent) => void;
 }
 
@@ -322,7 +322,7 @@ export const useBrainStore = create<BrainState>((set, get) => ({
       const result = await openProposalDiscussion(id);
       // 刷新列表让 discussionSessionId 绑定进 DTO（按钮文案切"继续讨论"）
       await get().loadImprovementProposals();
-      return result.sessionId;
+      return result;
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法打开讨论会话。") });
       return null;

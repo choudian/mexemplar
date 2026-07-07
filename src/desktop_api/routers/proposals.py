@@ -12,6 +12,7 @@ from src.business.self_improvement.proposal_service import ProposalCleanupError,
 from src.business.self_improvement.proposal_source_inspector import (
     ProposalSourceForbidden,
     ProposalSourceInspector,
+    ProposalSourceInvalidRequest,
     ProposalSourceInvalidView,
     ProposalSourceNotFound,
 )
@@ -69,7 +70,7 @@ class ProposalSourceResponse(BaseModel):
     """Evidence package for proposal discussion and source review."""
 
     proposalId: str
-    view: Literal["overview", "messages"]
+    view: Literal["overview", "messages", "prompt", "timeline", "tool_output"]
     scope: str
     scopeNote: str | None = None
     proposal: dict[str, Any]
@@ -78,6 +79,12 @@ class ProposalSourceResponse(BaseModel):
     evidence: list[dict[str, Any]] | None = None
     nextActions: list[dict[str, Any]] | None = None
     items: list[dict[str, Any]] | None = None
+    prompt: dict[str, Any] | None = None
+    timeline: list[dict[str, Any]] | None = None
+    reference: dict[str, Any] | None = None
+    content: str | None = None
+    contentTruncated: bool | None = None
+    error: dict[str, Any] | None = None
     page: dict[str, Any] | None = None
 
 
@@ -104,9 +111,14 @@ def approve_proposal(proposal_id: str, body: ApproveBody) -> dict:
 @router.get("/{proposal_id}/source", response_model=ProposalSourceResponse)
 def get_proposal_source(
     proposal_id: str,
-    view: Literal["overview", "messages"] = Query(default="overview"),
+    view: Literal["overview", "messages", "prompt", "timeline", "tool_output"] = Query(
+        default="overview"
+    ),
     cursor: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=50),
+    referenceId: str | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    maxBytes: int = Query(default=32000, ge=1, le=131072),
 ) -> ProposalSourceResponse:
     """Return a read-only evidence package for a proposal source."""
     try:
@@ -115,6 +127,9 @@ def get_proposal_source(
             view=view,
             cursor=cursor,
             limit=limit,
+            reference_id=referenceId,
+            offset=offset,
+            max_bytes=maxBytes,
         )
     except ProposalSourceNotFound as exc:
         raise HTTPException(status_code=404, detail="提案或来源不存在") from exc
@@ -122,6 +137,8 @@ def get_proposal_source(
         raise HTTPException(status_code=403, detail="无权查看该提案来源") from exc
     except ProposalSourceInvalidView as exc:
         raise HTTPException(status_code=422, detail="不支持的来源视图") from exc
+    except ProposalSourceInvalidRequest as exc:
+        raise HTTPException(status_code=422, detail=str(exc) or "来源视图参数不完整") from exc
     return ProposalSourceResponse(**package)
 
 

@@ -9,6 +9,7 @@ from src.business.agents.config import ToolDefinition
 from src.business.self_improvement.proposal_source_inspector import (
     ProposalSourceForbidden,
     ProposalSourceInspector,
+    ProposalSourceInvalidRequest,
     ProposalSourceInvalidView,
     ProposalSourceNotFound,
 )
@@ -31,9 +32,17 @@ INSPECT_PROPOSAL_SOURCE_SCHEMA = {
                 },
                 "view": {
                     "type": "string",
-                    "enum": ["overview", "messages"],
-                    "description": "overview 返回证据包地图；messages 分页返回来源会话消息预览。",
+                    "enum": ["overview", "messages", "prompt", "timeline", "tool_output"],
+                    "description": (
+                        "overview 返回证据包地图；messages 分页返回来源会话消息预览；"
+                        "prompt 返回复盘系统提示词和 skeleton 输入；timeline 返回工具调用时间线；"
+                        "tool_output 分页读取某个 output reference。"
+                    ),
                     "default": "overview",
+                },
+                "referenceId": {
+                    "type": "string",
+                    "description": "tool_output view 必填；必须来自当前提案来源 timeline/overview 中的 outputRef。",
                 },
                 "cursor": {
                     "type": "string",
@@ -44,6 +53,17 @@ INSPECT_PROPOSAL_SOURCE_SCHEMA = {
                     "minimum": 1,
                     "maximum": 50,
                     "description": "messages view 每页条数，默认 20。",
+                },
+                "offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "tool_output view 的字节偏移。",
+                },
+                "maxBytes": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 131072,
+                    "description": "tool_output view 每次读取的最大字节数。",
                 },
             },
             "required": [],
@@ -64,8 +84,11 @@ def create_inspect_proposal_source_tool(session_id: str) -> ToolDefinition:
     def handler(
         proposalId: str | None = None,
         view: str = "overview",
+        referenceId: str | None = None,
         cursor: str | None = None,
         limit: int | None = None,
+        offset: int | None = None,
+        maxBytes: int | None = None,
     ) -> str:
         try:
             package = ProposalSourceInspector().inspect(
@@ -73,6 +96,9 @@ def create_inspect_proposal_source_tool(session_id: str) -> ToolDefinition:
                 view=view,
                 cursor=cursor,
                 limit=limit,
+                reference_id=referenceId,
+                offset=offset,
+                max_bytes=maxBytes,
                 discussion_session_id=session_id,
                 enforce_discussion=True,
             )
@@ -88,13 +114,24 @@ def create_inspect_proposal_source_tool(session_id: str) -> ToolDefinition:
                 },
                 ensure_ascii=False,
             )
+        except ProposalSourceInvalidRequest as exc:
+            return json.dumps(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "invalid_request",
+                        "message": str(exc) or "来源视图参数不完整。",
+                    },
+                },
+                ensure_ascii=False,
+            )
         except ProposalSourceInvalidView:
             return json.dumps(
                 {
                     "ok": False,
                     "error": {
                         "code": "invalid_view",
-                        "message": "不支持的来源视图。可用 view: overview, messages。",
+                        "message": "不支持的来源视图。可用 view: overview, messages, prompt, timeline, tool_output。",
                     },
                 },
                 ensure_ascii=False,

@@ -18,6 +18,7 @@ from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 from src.data.models_sqlite import Message, Session
 from src.data.repos.execution_review_repository import ExecutionReviewRepository
 from src.data.repos.improvement_proposal_repository import ImprovementProposalRepository
+from src.data.repos.tool_output_repository import ToolOutputRepository
 from src.data.repositories import MessageRepository, SessionRepository
 
 
@@ -151,6 +152,64 @@ def test_messages_view_paginates_and_truncates_tool_preview(in_memory_db):
     assert [item["sequence"] for item in second["items"]] == [3]
     assert second["items"][0]["role"] == "tool"
     assert len(second["items"][0]["excerpt"]) <= 500
+
+
+def test_prompt_view_rebuilds_review_prompt_and_payload(in_memory_db):
+    proposal_id, _, _ = _seed_source()
+
+    package = ProposalSourceInspector().inspect(proposal_id, view="prompt")
+
+    assert package["view"] == "prompt"
+    assert "独立的执行复盘审查员" in package["prompt"]["system"]
+    assert "read_file" in package["prompt"]["userPayload"]
+    assert package["prompt"]["tools"][0]["name"] == "load_tool_output"
+
+
+def test_timeline_view_pairs_tool_calls_and_results(in_memory_db):
+    proposal_id, _, _ = _seed_source()
+
+    package = ProposalSourceInspector().inspect(proposal_id, view="timeline")
+
+    assert package["view"] == "timeline"
+    assert any(item["type"] == "tool_call" and item["toolName"] == "read_file" for item in package["timeline"])
+    assert any(item["type"] == "tool_result" and item["resultSize"] == 2400 for item in package["timeline"])
+
+
+def test_tool_output_view_loads_only_referenced_source_output(in_memory_db):
+    proposal_id, _, source_session_id = _seed_source()
+    model = ToolOutputRepository().create_reference(
+        session_id=source_session_id,
+        tool_name="read_file",
+        tool_call_id="call_1",
+        kind="text",
+        data="alpha\nbeta\ngamma",
+        workspace_root=None,
+        content_type="text/plain",
+    )
+    MessageRepository().update_content(
+        "msg_tool_3",
+        json.dumps(
+            {
+                "outcome": "success",
+                "limits": {"visibleChars": 2400},
+                "references": [{"referenceId": model.reference_id}],
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    package = ProposalSourceInspector().inspect(
+        proposal_id,
+        view="tool_output",
+        reference_id=model.reference_id,
+        max_bytes=8,
+    )
+
+    assert package["view"] == "tool_output"
+    assert package["reference"]["referenceId"] == model.reference_id
+    assert package["content"] == "alpha\nbe"
+    assert package["page"]["hasMore"] is True
+    assert package["page"]["nextOffset"] == 8
 
 
 def test_discussion_permission_is_enforced(in_memory_db):

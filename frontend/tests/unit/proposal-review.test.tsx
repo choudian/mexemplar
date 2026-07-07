@@ -117,6 +117,105 @@ function sourcePackage(proposalId = "prop-1") {
   };
 }
 
+function sourceViewPackage(view: string, proposalId = "prop-1") {
+  if (view === "messages") {
+    return {
+      proposalId,
+      view: "messages",
+      scope: "session_messages",
+      proposal: { id: proposalId, sourceReviewId: "rev-1", findingIndex: 0 },
+      source: { sourceReviewId: "rev-1", turnSessionId: "ast_source_1", available: true },
+      items: [
+        {
+          kind: "message",
+          messageId: "msg_1",
+          sessionId: "ast_source_1",
+          sequence: 1,
+          role: "user",
+          toolName: null,
+          excerpt: "请检查这个页面",
+          truncated: false,
+          createdAt: "2026-06-29T10:01:00",
+          anchor: { sessionId: "ast_source_1", messageId: "msg_1", sequence: 1 },
+        },
+      ],
+      page: { cursor: null, nextCursor: null, limit: 20, hasMore: false },
+    };
+  }
+  if (view === "prompt") {
+    return {
+      proposalId,
+      view: "prompt",
+      scope: "review_prompt",
+      scopeNote: "复盘 prompt 未单独落库；这里展示的是当前执行复盘代码的固定系统提示词。",
+      proposal: { id: proposalId, sourceReviewId: "rev-1", findingIndex: 0 },
+      source: { sourceReviewId: "rev-1", turnSessionId: "ast_source_1", available: true },
+      prompt: {
+        system: "你是独立的执行复盘审查员。",
+        systemTruncated: false,
+        userPayload: "{\n  \"steps\": []\n}",
+        userPayloadTruncated: false,
+        tools: [{ name: "load_tool_output", description: "读取大输出" }],
+      },
+    };
+  }
+  if (view === "timeline") {
+    return {
+      proposalId,
+      view: "timeline",
+      scope: "source_tool_timeline",
+      proposal: { id: proposalId, sourceReviewId: "rev-1", findingIndex: 0 },
+      source: { sourceReviewId: "rev-1", turnSessionId: "ast_source_1", available: true },
+      timeline: [
+        {
+          id: "call_1",
+          type: "tool_call",
+          label: "调用 read_file",
+          sequence: 2,
+          role: "assistant",
+          callId: "call_1",
+          toolName: "read_file",
+          argsPreview: "{ \"path\": \"a\" }",
+          argsTruncated: false,
+        },
+        {
+          id: "tool_result_3",
+          type: "tool_result",
+          label: "read_file结果",
+          sequence: 3,
+          role: "tool",
+          toolName: "read_file",
+          resultSize: 2048,
+          outputRef: "out_1",
+          excerpt: "结果摘要",
+          truncated: false,
+        },
+      ],
+    };
+  }
+  if (view === "tool_output") {
+    return {
+      proposalId,
+      view: "tool_output",
+      scope: "tool_output_reference",
+      proposal: { id: proposalId, sourceReviewId: "rev-1", findingIndex: 0 },
+      source: { sourceReviewId: "rev-1", turnSessionId: "ast_source_1", available: true },
+      reference: {
+        referenceId: "out_1",
+        toolName: "read_file",
+        kind: "text",
+        sizeBytes: 16,
+        contentType: "text/plain",
+        status: "active",
+      },
+      content: "alpha\nbeta",
+      contentTruncated: false,
+      page: { offset: 0, nextOffset: null, limit: 32000, hasMore: false, bytesReturned: 10 },
+    };
+  }
+  return sourcePackage(proposalId);
+}
+
 describe("proposal review UI", () => {
   beforeEach(() => {
     configureDesktopApi({ baseUrl: "http://desktop.test", sessionToken: "token" });
@@ -140,6 +239,7 @@ describe("proposal review UI", () => {
       pendingSkillRemoval: null,
       improvementProposals: [],
       loadingImprovementProposals: false,
+      openingDiscussionProposalId: null,
       proposalSources: {},
       loadingProposalSourceId: null,
       proposalSourceError: null,
@@ -479,11 +579,63 @@ describe("proposal review UI", () => {
     await waitFor(() => expect(selectSessionMock).toHaveBeenCalledWith("ast_disc_001"));
     expect(useShellStore.getState().activeRoute).toBe("assistant");
     expect(discussionCalls).toBe(1);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/assistant/sessions/ast_disc_001/messages",
+        expect.objectContaining({
+          method: "POST",
+          body: expect.stringContaining("inspect_proposal_source"),
+        }),
+      ),
+    );
 
     // 绑定回写后按钮文案切换为"继续讨论"（US2）
     await waitFor(() =>
       expect(detail.getByRole("button", { name: "继续讨论" })).toBeInTheDocument(),
     );
+  });
+
+  test("source panel switches between messages, prompt, timeline and raw output", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/brain/zones")) return jsonResponse({ zones: [] });
+      if (url.includes("/api/brain/zones/hot/entries")) {
+        return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+      }
+      if (url.includes("/api/brain/segments")) return jsonResponse({ items: [], total: 0 });
+      if (url.includes("/api/execution-reviews")) return jsonResponse({ reviews: [] });
+      if (url.includes("/api/improvement-proposals/") && url.includes("/source")) {
+        const parsed = new URL(url);
+        return jsonResponse(sourceViewPackage(parsed.searchParams.get("view") ?? "overview"));
+      }
+      if (url.includes("/api/improvement-proposals")) {
+        return jsonResponse({ proposals });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<BrainScreen />);
+    await settleAsyncUpdates();
+
+    fireEvent.click(screen.getByRole("button", { name: /改进提案/ }));
+    await waitFor(() => expect(screen.getByText("重复抓取同一 URL")).toBeInTheDocument());
+    fireEvent.click(within(screen.getByLabelText("改进提案列表")).getByText("重复抓取同一 URL"));
+    await screen.findByText("当前 finding");
+
+    const panel = within(screen.getByLabelText("来源证据"));
+    fireEvent.click(panel.getByRole("tab", { name: "原文" }));
+    await screen.findByText("请检查这个页面");
+
+    fireEvent.click(panel.getByRole("tab", { name: "Prompt" }));
+    await screen.findByText("复盘系统提示词");
+    expect(screen.getByText("你是独立的执行复盘审查员。")).toBeInTheDocument();
+
+    fireEvent.click(panel.getByRole("tab", { name: "工具线" }));
+    await screen.findByText("调用 read_file");
+    fireEvent.click(screen.getByRole("button", { name: "查看大输出" }));
+    await screen.findByText(/alpha/);
+    expect(screen.getByText(/beta/)).toBeInTheDocument();
   });
 
   test("discuss button is disabled while the request is pending", async () => {
