@@ -1,4 +1,4 @@
-import { RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { MessageSquare, RefreshCcw, RotateCcw, Save, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import type { BrainEntryStatus, BrainMemoryEntry, BrainZone } from "../../api/brain";
@@ -559,13 +559,26 @@ function ImprovementProposalDetail({
   }
   const isPending = proposal.status === "pending_review";
   const hasOutcome = Boolean(proposal.branchName || proposal.resultSummary || proposal.error);
+  const discussionButton = (
+    <button
+      className="brain-proposal-discuss-button"
+      disabled={discussPending}
+      onClick={() => onDiscuss(proposal.id)}
+      type="button"
+    >
+      <MessageSquare size={15} />
+      <span>{proposal.discussionSessionId ? "继续讨论" : "讨论"}</span>
+    </button>
+  );
   return (
     <section aria-label="改进提案详情" className="brain-execution-review brain-proposal-detail">
-      <div className="brain-section-title">
-        <span>改进提案</span>
-        <Badge tone={statusToTone(proposal.status, PROPOSAL_STATUS_TONES)}>
-          {PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status}
-        </Badge>
+      <div className="brain-proposal-heading">
+        <div className="brain-section-title">
+          <span>改进提案</span>
+          <Badge tone={statusToTone(proposal.status, PROPOSAL_STATUS_TONES)}>
+            {PROPOSAL_STATUS_LABELS[proposal.status] ?? proposal.status}
+          </Badge>
+        </div>
       </div>
       {proposal.severity || proposal.findingType ? (
         <div className="brain-proposal-meta">
@@ -599,11 +612,7 @@ function ImprovementProposalDetail({
           <p>{proposal.userSupplement}</p>
         </div>
       ) : null}
-      <div className="brain-proposal-discuss">
-        <Button disabled={discussPending} kind="ghost" onClick={() => onDiscuss(proposal.id)}>
-          {proposal.discussionSessionId ? "继续讨论" : "讨论"}
-        </Button>
-      </div>
+      {!isPending ? <div className="brain-proposal-followup">{discussionButton}</div> : null}
       {hasOutcome ? (
         <div className="brain-proposal-outcome">
           <span className="brain-proposal-outcome-title">实施情况</span>
@@ -640,18 +649,22 @@ function ImprovementProposalDetail({
         </div>
       ) : null}
       {isPending ? (
-        <div className="brain-proposal-actions">
-          <label>
-            <strong>补充说明（可选）</strong>
+        <div className="brain-proposal-decision">
+          <label className="brain-proposal-supplement-field">
+            <span>
+              <strong>补充说明</strong>
+              <small>可选，写给实施任务</small>
+            </span>
             <textarea
               aria-label="补充说明"
               onChange={(e) => onSupplementChange(e.target.value)}
               placeholder="给实施补充说明或优先方向"
-              rows={3}
+              rows={4}
               value={supplement}
             />
           </label>
           <div className="brain-action-buttons">
+            {discussionButton}
             <Button kind="primary" onClick={() => onApprove(proposal.id)}>批准</Button>
             <Button kind="danger" onClick={() => onReject(proposal.id)}>拒绝</Button>
           </div>

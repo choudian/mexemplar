@@ -280,6 +280,13 @@ describe("proposal review UI", () => {
     const list = screen.getByLabelText("改进提案列表");
     fireEvent.click(within(list).getByText("重复抓取同一 URL"));
     expect(screen.getByRole("button", { name: "批准" })).toBeInTheDocument();
+    expect(screen.getByLabelText("补充说明").closest(".brain-proposal-decision")).not.toBeNull();
+    const actionButtons = screen.getByRole("button", { name: "批准" }).closest(".brain-action-buttons");
+    expect(actionButtons).not.toBeNull();
+    const actionLabels = Array.from((actionButtons as HTMLElement).querySelectorAll("button")).map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(actionLabels).toEqual(["讨论", "批准", "拒绝"]);
 
     fireEvent.change(screen.getByLabelText("补充说明"), { target: { value: "覆盖缓存层" } });
     fireEvent.click(screen.getByRole("button", { name: "批准" }));
@@ -326,6 +333,7 @@ describe("proposal review UI", () => {
     fireEvent.click(within(list).getByText("重复抓取同一 URL"));
 
     const detail = within(screen.getByLabelText("改进提案详情"));
+    expect(detail.getByRole("button", { name: "讨论" }).closest(".brain-proposal-followup")).not.toBeNull();
 
     // 论证链三个语义节点按序出现，"建议"是终点
     expect(detail.getByText("问题")).toBeInTheDocument();

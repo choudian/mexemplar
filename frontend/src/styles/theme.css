@@ -5649,6 +5649,56 @@ select:focus-visible,
 
 /* 改进提案详情：问题→证据→建议是一条论证链，"建议"是链的终点也是被批准的对象，
    accent 只落在这一个节点上；实施结果是机器产出，独立分区并按结果着色。 */
+.brain-proposal-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.brain-proposal-heading .brain-section-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.brain-proposal-discuss-button {
+  display: inline-flex;
+  min-height: 34px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 34%, var(--border-1));
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface-1));
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease,
+    transform 0.12s ease;
+}
+
+.brain-proposal-discuss-button:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--accent) 54%, var(--border-1));
+  background: color-mix(in oklch, var(--accent) 15%, var(--surface-1));
+  transform: translateY(-1px);
+}
+
+.brain-proposal-discuss-button:disabled {
+  cursor: default;
+  opacity: 0.58;
+  transform: none;
+}
+
+.brain-proposal-followup {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .brain-proposal-meta {
   display: flex;
   align-items: center;
@@ -5758,11 +5808,6 @@ select:focus-visible,
   overflow-wrap: anywhere;
 }
 
-.brain-proposal-discuss {
-  display: flex;
-  justify-content: flex-start;
-}
-
 .brain-proposal-outcome {
   display: grid;
   gap: 10px;
@@ -5816,6 +5861,78 @@ select:focus-visible,
   line-height: 1.55;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.brain-proposal-decision {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in oklch, var(--accent) 18%, var(--border-1));
+  border-radius: 8px;
+  background: linear-gradient(
+    180deg,
+    color-mix(in oklch, var(--accent) 7%, var(--surface-1)),
+    var(--surface-1)
+  );
+}
+
+.brain-proposal-supplement-field {
+  display: grid;
+  gap: 8px;
+}
+
+.brain-proposal-supplement-field > span {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.brain-proposal-supplement-field strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.brain-proposal-supplement-field small {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.brain-proposal-supplement-field textarea {
+  width: 100%;
+  min-height: 104px;
+  resize: vertical;
+  border: 1px solid var(--border-2);
+  border-radius: 8px;
+  outline: 0;
+  background: color-mix(in oklch, var(--surface-2) 36%, var(--surface-1));
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  transition:
+    border-color 0.12s ease,
+    background 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.brain-proposal-supplement-field textarea::placeholder {
+  color: var(--text-muted);
+}
+
+.brain-proposal-supplement-field textarea:focus {
+  border-color: color-mix(in oklch, var(--accent) 52%, var(--border-2));
+  background: var(--surface-1);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--accent) 11%, transparent);
+}
+
+.brain-action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .brain-editor-actions,
