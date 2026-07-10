@@ -21,9 +21,7 @@ from src.business.orchestration.agent.task_executor_adapter import (
 def test_proposal_executor_with_missing_workspace_fails_closed():
     """task.workspace_root 数据丢失(最可能失效路径)→ fail-closed,不得执行。"""
     with pytest.raises(RuntimeError, match="workspace"):
-        _assert_proposal_executor_workspace_or_raise(
-            "self_improvement:prop_missing", None
-        )
+        _assert_proposal_executor_workspace_or_raise("self_improvement:prop_missing", None)
 
 
 def test_proposal_executor_with_drifted_workspace_fails_closed():
@@ -37,9 +35,7 @@ def test_proposal_executor_with_drifted_workspace_fails_closed():
 def test_proposal_executor_with_empty_workspace_fails_closed():
     """空字符串 workspace 等同缺失 → fail-closed。"""
     with pytest.raises(RuntimeError):
-        _assert_proposal_executor_workspace_or_raise(
-            "self_improvement:prop_empty", ""
-        )
+        _assert_proposal_executor_workspace_or_raise("self_improvement:prop_empty", "")
 
 
 def test_proposal_executor_with_valid_improvement_worktree_passes():
@@ -60,6 +56,4 @@ def test_proposal_executor_with_windows_style_worktree_path_passes():
 
 def test_non_proposal_executor_unaffected_by_missing_workspace():
     """普通 task executor(workspace 自由)不受该 guard 影响。"""
-    _assert_proposal_executor_workspace_or_raise(
-        "assistant_session_xyz", None
-    )  # 不抛
+    _assert_proposal_executor_workspace_or_raise("assistant_session_xyz", None)  # 不抛

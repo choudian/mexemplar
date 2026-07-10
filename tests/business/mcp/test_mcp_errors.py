@@ -2,8 +2,6 @@
 T015: mcp_errors 单元测试 — startup/runtime error classification + suggestion mapping。
 """
 
-import pytest
-
 from src.business.mcp.mcp_errors import (
     McpCircuitBreakerOpenError,
     McpServerDisconnectedError,

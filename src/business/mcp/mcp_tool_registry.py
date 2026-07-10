@@ -8,12 +8,11 @@ McpToolRegistry — 进程级 MCP 工具注册表。
 线程安全：所有 getter 返回 snapshot，内部用 RLock 保护。
 """
 
-import json
 import logging
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any, Callable
 
 from src.business.agents.config import ToolDefinition
 
@@ -97,9 +96,7 @@ class McpToolRegistry:
                 # ToolDefinition 需要外部构建（因为需要 handler/pre_hook）
                 # 如果提供了构建函数则使用，否则创建占位
                 if build_tool_definition_fn is not None:
-                    tool_def = build_tool_definition_fn(
-                        server_id, tool.name, full_name, tool
-                    )
+                    tool_def = build_tool_definition_fn(server_id, tool.name, full_name, tool)
                     self._all_tools[full_name] = tool_def
                     registered.append(tool_def)
 
@@ -121,9 +118,7 @@ class McpToolRegistry:
         """轨道 A：预置 server 工具全量注入（snapshot）。"""
         with self._lock:
             return [
-                self._all_tools[n]
-                for n in sorted(self._preset_tool_names)
-                if n in self._all_tools
+                self._all_tools[n] for n in sorted(self._preset_tool_names) if n in self._all_tools
             ]
 
     def get_activated_custom_tools(self) -> list[ToolDefinition]:

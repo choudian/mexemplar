@@ -172,6 +172,40 @@ Assistant tool handler / Orchestrator
 - 前端只读 task snapshot 和公开 UI events：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。缺口或事件会话不匹配时走 `backend.resync_required` 拉 graph/board/meeting/todo 权威快照。
 - 024 DAG 调度：复杂任务（中等主助理自拆 / 超阈值委派 `role_kind='planner'` 规划专员）经 `build_task_graph` 原子落库为带 `dependency` 边的 DAG，由确定性 `GraphScheduler`（`task_collaboration/graph_scheduler.py`，orchestrator 装配的进程级单例）按依赖就绪自动推进——建图 handler 触发 `start_graph`，节点 attempt 完成经 `scheduler_callback` 回调 `on_attempt_outcome` 推进下游，全图完成经 `ParentReentrySink.notify_graph_complete` kick 续跑汇报。`requires_confirmation=1` 高风险节点派发前建 needs_confirmation adjudication 暂停（`waiting_user`），`decide(accepted)` 放行翻 `pending_dispatch` 派发（普通结果裁定 `decide(accepted)` 仍翻 `completed`，023 语义不回归）；节点失败回流附确定性 `healingActions` 候选集（advisory）+ `safeRecoveryHint` 安全文案。就绪硬校验 `_assert_dependencies_satisfied` 在 scheduler 与 dispatcher 派发层双层兜底。节点 todo 概览在回流 briefing 中按进行中节点标题渲染，详细 todo 经 TaskGraphPanel 节点展开按需可见、默认任务界面不展示（DEC-E）。
 
+### External Coding Sessions（030）
+
+外部 coding session 把 Claude Code / Codex CLI 作为专员执行体可调用的工具，而不是把它们并入主助理自身执行路径。业务层位于 `src/business/external_coding/`，持久化走 SQLite v27 `external_coding_*` 表与 v28 worktree 基线列，CLI 子进程启动在 `src/execution/external_coding_process.py`，文件 artifact 默认落在 `data/coding_sessions/`，隔离 worktree 默认落在 `.worktrees/coding/`。
+
+```text
+Assistant delegated executor / specialist tool
+  → external_coding_tools.py
+  → ExternalCodingSessionService
+  → ExternalCodingSessionRepository → external_coding_* tables
+  → GitOps + CliExternalCodingAdapter
+  → ExternalCodingProcessRunner → Claude Code / Codex CLI
+  → internal external_coding_session_changed
+  → desktop_api UI Event Registry + projector
+  → React task detail external coding panel
+```
+
+- 只能由临时执行体或固定专员工具集派发；planner 不拿外部 coding 工具，主助理仍只做协调。
+- session 必须有 owner（`task` 或 `workflow`）和 `codingSessionId`；记录工具选择、quota 观察、attempt、artifact、worktree、merge 和 rollback 决策，便于追溯“何时派发、派发了什么、产出了什么、何时完成”。
+- 默认 headless 且自动启动；交互模式在 Windows 新控制台启动真实 CLI TUI，并继续由 PID/超时与 artifact 判定完成，不解析终端屏幕。Claude Code 默认 `--effort max`，Codex CLI 默认 `model_reasoning_effort="xhigh"`，都可经 `UnifiedConfigManager` 配置。
+- 两阶段协议：外部 agent 先写 `PLAN.md`，派活 agent 审核后才批准实现；实现完成写 `RESULT.md`。semantic validator 只是软校验，强约束靠 session 状态机、artifact 缺失/脏 diff 检测、owner 绑定和后续 review。
+- quota probe 由 execution adapter 调用 Claude `/usage` 或 Codex app-server
+  `account/rateLimits/read`，在原始响应离开 execution 层前只提取使用率、reset
+  时间和 exhausted 标记；失败统一降级为 `unknown`。默认优先选择非 exhausted
+  工具，但 quota state 仍只是时点性调度参考，不是授权或套餐余量硬保证。
+- plan 阶段所有 staged、unstaged、untracked 或 committed 代码改动都相对 worktree 创建基线检查；修改代码或 artifact 缺失会把 session 标记为 interrupted/protocol_violation。没有有效批准时间戳时不得 resume 到 implement；派活 agent 可重新规划/abandon，不能解决时再暴露给用户。
+- merge 先验证 coding 分支有已提交变更，再记录两端 HEAD、目标 worktree dirty
+  文件、分支 changed 文件和 `git merge-tree` 冲突预测；执行前重验快照，no-op、陈旧
+  分析或未提交 coding diff 一律 fail-closed。rollback 只对本 session 记录的精确
+  merge commit 生成并确认 `git revert`，不使用 reset/clean 改写历史。
+- 公开 UI event 只有 `assistant.external_coding.changed`，payload 只含脱敏状态字段；
+  完整 handoff/plan/result/有界 log tail 通过 typed API detail 按需读取。前端 task
+  detail 把事件当刷新通知，按 `availableActions` 调用真实 approve/reject/resume/
+  abandon/merge/rollback API，并在非模态区域展示成功或失败结果。
+
 ### Self-Improvement Proposals（026）
 
 执行复盘中的 `worth_changing=true` findings 会生成 `improvement_proposals` 待审批项，由 Brain 管理界面的“改进提案”视图展示。用户批准只通过 `/api/improvement-proposals/{id}/approve` 做 CAS 状态迁移和异步触发；实施副作用统一由 `src/business/self_improvement/proposal_bridge.py` 承担。

@@ -348,17 +348,24 @@ def _matching_messages(messages: list[Any], terms: list[str], *, limit: int) -> 
     return list(reversed(result))
 
 
-def _latest_message(messages: list[Any], role: str, *, after_sequence: int | None = None) -> Any | None:
+def _latest_message(
+    messages: list[Any], role: str, *, after_sequence: int | None = None
+) -> Any | None:
     for message in reversed(messages):
         if str(getattr(message, "role", "") or "") != role:
             continue
-        if after_sequence is not None and int(getattr(message, "sequence", 0) or 0) < after_sequence:
+        if (
+            after_sequence is not None
+            and int(getattr(message, "sequence", 0) or 0) < after_sequence
+        ):
             continue
         return message
     return None
 
 
-def _tool_evidence_from_skeleton(skeleton: dict[str, Any], *, session_id: str) -> list[dict[str, Any]]:
+def _tool_evidence_from_skeleton(
+    skeleton: dict[str, Any], *, session_id: str
+) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     steps = skeleton.get("steps") if isinstance(skeleton, dict) else []
     if not isinstance(steps, list):
@@ -367,7 +374,11 @@ def _tool_evidence_from_skeleton(skeleton: dict[str, Any], *, session_id: str) -
         step
         for step in steps
         if isinstance(step, dict)
-        and (step.get("ok") is False or int(step.get("result_size") or 0) > 2000 or step.get("output_ref"))
+        and (
+            step.get("ok") is False
+            or int(step.get("result_size") or 0) > 2000
+            or step.get("output_ref")
+        )
     ]
     if not interesting:
         interesting = [step for step in steps if isinstance(step, dict)][-2:]
@@ -504,7 +515,9 @@ class ProposalSourceInspector:
                 )
             )
 
-        terms = _terms_from(proposal.get("what"), proposal.get("evidence"), proposal.get("suggestion"))
+        terms = _terms_from(
+            proposal.get("what"), proposal.get("evidence"), proposal.get("suggestion")
+        )
         for index, message in enumerate(_matching_messages(messages, terms, limit=2)):
             item = _message_to_item(message)
             evidence.append(
@@ -528,7 +541,10 @@ class ProposalSourceInspector:
             if message is None:
                 continue
             item = _message_to_item(message)
-            if any(existing.get("anchor", {}).get("messageId") == item["messageId"] for existing in evidence):
+            if any(
+                existing.get("anchor", {}).get("messageId") == item["messageId"]
+                for existing in evidence
+            ):
                 continue
             evidence.append(
                 _evidence_item(
@@ -541,7 +557,9 @@ class ProposalSourceInspector:
                 )
             )
 
-        evidence.extend(_tool_evidence_from_skeleton(skeleton, session_id=str(turn_session_id or "")))
+        evidence.extend(
+            _tool_evidence_from_skeleton(skeleton, session_id=str(turn_session_id or ""))
+        )
 
         current_finding = None
         if review:
@@ -587,7 +605,7 @@ class ProposalSourceInspector:
                     "view": "timeline",
                     "label": "查看工具时间线",
                     "description": "按消息顺序查看来源会话的工具调用、结果和大输出引用。",
-                }
+                },
             ],
         }
 

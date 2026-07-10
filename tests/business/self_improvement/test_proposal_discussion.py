@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest.mock import patch
 
 from src.business.self_improvement.proposal_service import ProposalService
-from src.data.models_sqlite import Session
 from src.data.repos.improvement_proposal_repository import ImprovementProposalRepository
 from src.data.repositories import MessageRepository, SessionRepository
 

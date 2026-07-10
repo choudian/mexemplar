@@ -369,14 +369,11 @@ def test_trigger_implementation_logs_original_exception_when_mark_in_progress_fa
         raise_mark_in_progress,
     )
 
-    with caplog.at_level(
-        _logging.WARNING, logger="src.business.self_improvement.proposal_bridge"
-    ):
+    with caplog.at_level(_logging.WARNING, logger="src.business.self_improvement.proposal_bridge"):
         trigger_implementation(proposal_id)
 
     assert any(
-        record.exc_info and "db failed" in str(record.exc_info[1])
-        for record in caplog.records
+        record.exc_info and "db failed" in str(record.exc_info[1]) for record in caplog.records
     ), "implementation failure must log the original exception via exc_info"
 
 
@@ -629,6 +626,7 @@ def test_recovery_prunes_stale_worktrees_beyond_retention_limit(
     handled = run_proposal_recovery_cycle()
 
     # At least 1 worktree should have been pruned (the oldest)
+    assert handled >= 1
     assert len(removed_worktrees) >= 1
     # The pruned worktree's proposal should have worktree_path cleared
     with ImprovementProposalRepository() as repo:

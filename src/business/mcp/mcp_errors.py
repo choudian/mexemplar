@@ -2,8 +2,6 @@
 MCP 错误分类映射 — 将原始异常映射为用户友好的 suggestion（N14/RC3）。
 """
 
-from typing import Optional
-
 
 class McpServerDisconnectedError(Exception):
     """MCP server 连接已断开。"""

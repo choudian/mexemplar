@@ -14,11 +14,17 @@ import type {
   BrainSpecialistChangedEvent,
   BrainSpecialistRecruitedEvent,
   BrainZoneChangedEvent,
-  ImprovementProposalChangedEvent,
   ClarificationOptionPayload,
   ClarificationQuestionPayload,
   ClarificationRequestedEvent,
   ClarificationResolvedEvent,
+  ExternalCodingChangedEvent,
+  ExternalCodingEventChangeType,
+  ExternalCodingEventOwnerType,
+  ExternalCodingEventPhase,
+  ExternalCodingEventStatus,
+  ExternalCodingEventTool,
+  ImprovementProposalChangedEvent,
   MeetingChangeType,
   MeetingChangedEvent,
   RecordingProgressEvent,
@@ -89,6 +95,21 @@ const TASK_BOARD_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assis
 const MEETING_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.meeting.changed"].changeType);
 const TODO_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.todo.changed"].changeType);
 const TODO_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.todo.changed"].status);
+const EXTERNAL_CODING_OWNER_TYPE_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["assistant.external_coding.changed"].ownerType,
+);
+const EXTERNAL_CODING_TOOL_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["assistant.external_coding.changed"].tool,
+);
+const EXTERNAL_CODING_STATUS_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["assistant.external_coding.changed"].status,
+);
+const EXTERNAL_CODING_PHASE_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["assistant.external_coding.changed"].phase,
+);
+const EXTERNAL_CODING_CHANGE_TYPE_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["assistant.external_coding.changed"].changeType,
+);
 const IMPROVEMENT_PROPOSAL_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["improvement_proposal.changed"].status);
 const IMPROVEMENT_PROPOSAL_CHANGE_TYPE_SET = new Set<string>(
   UI_EVENT_PAYLOAD_ENUMS["improvement_proposal.changed"].changeType,
@@ -166,6 +187,11 @@ const isTaskQuestionChangeType = makeEnumGuard<TaskQuestionChangeType>(TASK_QUES
 const isTaskBoardChangeType = makeEnumGuard<TaskBoardChangeType>(TASK_BOARD_CHANGE_TYPE_SET);
 const isMeetingChangeType = makeEnumGuard<MeetingChangeType>(MEETING_CHANGE_TYPE_SET);
 const isTodoChangeType = makeEnumGuard<TodoChangeType>(TODO_CHANGE_TYPE_SET);
+const isExternalCodingOwnerType = makeEnumGuard<ExternalCodingEventOwnerType>(EXTERNAL_CODING_OWNER_TYPE_SET);
+const isExternalCodingTool = makeEnumGuard<ExternalCodingEventTool>(EXTERNAL_CODING_TOOL_SET);
+const isExternalCodingStatus = makeEnumGuard<ExternalCodingEventStatus>(EXTERNAL_CODING_STATUS_SET);
+const isExternalCodingPhase = makeEnumGuard<ExternalCodingEventPhase>(EXTERNAL_CODING_PHASE_SET);
+const isExternalCodingChangeType = makeEnumGuard<ExternalCodingEventChangeType>(EXTERNAL_CODING_CHANGE_TYPE_SET);
 const isOptionalTaskGraphStatus = (v: unknown): v is TaskGraphStatus | null | undefined =>
   isOptionalNullableEnumMember<TaskGraphStatus>(TASK_GRAPH_STATUS_SET, v);
 const isOptionalTaskGraphDisplayPhase = (v: unknown): v is TaskGraphDisplayPhase | null | undefined =>
@@ -487,6 +513,34 @@ function parseTodoChangedPayload(payload: Record<string, unknown>): TodoChangedE
   };
 }
 
+function parseExternalCodingChangedPayload(
+  payload: Record<string, unknown>,
+): ExternalCodingChangedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["codingSessionId", "ownerId"]) ||
+    !isExternalCodingOwnerType(payload.ownerType) ||
+    !isExternalCodingTool(payload.tool) ||
+    !isExternalCodingStatus(payload.status) ||
+    !isExternalCodingPhase(payload.phase) ||
+    !isExternalCodingChangeType(payload.changeType) ||
+    !isOptionalNullableString(payload.sessionId) ||
+    !isOptionalNullableString(payload.updatedAt)
+  ) {
+    return null;
+  }
+  return {
+    codingSessionId: payload.codingSessionId as string,
+    sessionId: payload.sessionId ?? null,
+    ownerType: payload.ownerType,
+    ownerId: payload.ownerId as string,
+    tool: payload.tool,
+    status: payload.status,
+    phase: payload.phase,
+    changeType: payload.changeType,
+    updatedAt: payload.updatedAt ?? null,
+  };
+}
+
 type ParsedUiEventCandidate = Omit<UiEventEnvelope<UiEventType, Record<string, unknown>>, "payload"> & {
   payload: Record<string, unknown>;
 };
@@ -641,6 +695,8 @@ const UI_EVENT_MAPPERS: Partial<Record<UiEventType, UiEventMapper>> = {
   "assistant.meeting.changed": (event) =>
     requireSessionScopedEvent<MeetingChangedEvent>(event, parseMeetingChangedPayload),
   "assistant.todo.changed": (event) => requireSessionScopedEvent<TodoChangedEvent>(event, parseTodoChangedPayload),
+  "assistant.external_coding.changed": (event) =>
+    requireSessionScopedEvent<ExternalCodingChangedEvent>(event, parseExternalCodingChangedPayload),
 };
 
 export function parseUiEvent(value: unknown): UiEvent | null {

@@ -4,7 +4,6 @@ Provides a reusable alternative to the ad-hoc OrderedDict + threading.RLock
 + popitem(last=False) pattern duplicated across multiple modules.
 """
 
-
 from __future__ import annotations
 
 import threading

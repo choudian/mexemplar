@@ -1,4 +1,5 @@
 import { requestJson } from "./client";
+import type { ExternalCodingSessionTaskSummary } from "./externalCodingSessions";
 
 export type TaskStatus =
   | "pending_dispatch"
@@ -38,6 +39,7 @@ export interface AssistantTaskSnapshot {
   assignee?: AssistantActorRef | null;
   adjudicationId?: string | null;
   updatedAt?: string | null;
+  externalCodingSessions?: ExternalCodingSessionTaskSummary[];
 }
 
 export interface AssistantTaskEdgeSnapshot {

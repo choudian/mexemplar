@@ -2017,6 +2017,217 @@ def downgrade_v26(engine):
     logger.info("回退版本 26 完成：external_skill_installs 表已删除")
 
 
+def migrate_to_v27(engine):
+    """迁移到版本 27：新增外部 coding session 表（030）。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS external_coding_sessions (
+                        coding_session_id TEXT PRIMARY KEY,
+                        session_id TEXT,
+                        owner_type TEXT NOT NULL CHECK (owner_type IN ('task', 'workflow')),
+                        owner_id TEXT NOT NULL,
+                        parent_session_id TEXT,
+                        tool TEXT NOT NULL CHECK (tool IN ('claude_code', 'codex_cli')),
+                        launch_mode TEXT NOT NULL CHECK (launch_mode IN ('headless', 'interactive')),
+                        status TEXT NOT NULL CHECK (
+                            status IN (
+                                'created','planning','plan_ready','plan_approved','plan_rejected',
+                                'implementing','interrupted','waiting_user','completed','merge_ready',
+                                'merged','merge_blocked','rollback_proposed','rolled_back','abandoned','failed'
+                            )
+                        ),
+                        phase TEXT NOT NULL CHECK (phase IN ('plan','implement','merge','rollback','done')),
+                        selected_reason TEXT,
+                        quota_state TEXT,
+                        external_session_ref TEXT,
+                        worktree_path TEXT NOT NULL,
+                        branch_name TEXT NOT NULL,
+                        base_commit TEXT,
+                        target_branch TEXT,
+                        target_worktree_path TEXT,
+                        artifact_dir TEXT NOT NULL,
+                        handoff_path TEXT NOT NULL,
+                        plan_path TEXT,
+                        result_path TEXT,
+                        plan_approved_at TEXT,
+                        plan_approved_by TEXT,
+                        last_error_category TEXT,
+                        last_error_message TEXT,
+                        resume_count INTEGER NOT NULL DEFAULT 0,
+                        review_recommended BOOLEAN NOT NULL DEFAULT 1,
+                        review_skipped_reason TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL,
+                        completed_at TEXT
+                    )
+                    """))
+            conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS external_coding_attempts (
+                        attempt_id TEXT PRIMARY KEY,
+                        coding_session_id TEXT NOT NULL,
+                        phase TEXT NOT NULL CHECK (phase IN ('plan', 'implement')),
+                        launch_mode TEXT NOT NULL CHECK (launch_mode IN ('headless', 'interactive')),
+                        command_summary TEXT,
+                        external_session_ref TEXT,
+                        status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'interrupted', 'failed')),
+                        pid INTEGER,
+                        exit_code INTEGER,
+                        started_at TEXT NOT NULL,
+                        finished_at TEXT,
+                        log_path TEXT,
+                        log_tail TEXT,
+                        error_category TEXT,
+                        error_message TEXT
+                    )
+                    """))
+            conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS external_coding_quota_observations (
+                        observation_id TEXT PRIMARY KEY,
+                        tool TEXT NOT NULL CHECK (tool IN ('claude_code', 'codex_cli')),
+                        state TEXT NOT NULL CHECK (state IN ('available', 'low', 'exhausted', 'unknown')),
+                        source TEXT NOT NULL,
+                        confidence REAL NOT NULL DEFAULT 0.0,
+                        reset_at TEXT,
+                        checked_at TEXT NOT NULL,
+                        safe_detail TEXT
+                    )
+                    """))
+            conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS external_coding_merge_records (
+                        merge_record_id TEXT PRIMARY KEY,
+                        coding_session_id TEXT NOT NULL,
+                        target_branch TEXT NOT NULL,
+                        target_worktree_path TEXT NOT NULL,
+                        pre_merge_head TEXT NOT NULL,
+                        coding_branch_head TEXT NOT NULL,
+                        dirty_files_json TEXT NOT NULL DEFAULT '[]',
+                        changed_files_json TEXT NOT NULL DEFAULT '[]',
+                        overlap_files_json TEXT NOT NULL DEFAULT '[]',
+                        conflict_risk TEXT NOT NULL CHECK (
+                            conflict_risk IN ('low', 'overlap', 'conflict_predicted', 'unknown')
+                        ),
+                        agent_decision TEXT,
+                        status TEXT NOT NULL CHECK (
+                            status IN ('analysis_ready', 'merged', 'blocked', 'failed', 'rolled_back')
+                        ),
+                        merge_commit TEXT,
+                        error TEXT,
+                        created_at TEXT NOT NULL,
+                        merged_at TEXT
+                    )
+                    """))
+            conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS external_coding_rollback_decisions (
+                        rollback_id TEXT PRIMARY KEY,
+                        coding_session_id TEXT NOT NULL,
+                        merge_record_id TEXT,
+                        intent_summary TEXT NOT NULL,
+                        chosen_strategy TEXT NOT NULL CHECK (
+                            chosen_strategy IN ('revert_commit', 'reverse_patch', 'reset_hard', 'manual')
+                        ),
+                        requires_confirmation BOOLEAN NOT NULL DEFAULT 1,
+                        confirmed_by TEXT,
+                        status TEXT NOT NULL CHECK (status IN ('proposed', 'applied', 'blocked', 'failed')),
+                        created_at TEXT NOT NULL,
+                        applied_at TEXT
+                    )
+                    """))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_sessions_owner "
+                    "ON external_coding_sessions(owner_type, owner_id, updated_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_sessions_session "
+                    "ON external_coding_sessions(session_id, updated_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_sessions_status "
+                    "ON external_coding_sessions(status, updated_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_attempts_session "
+                    "ON external_coding_attempts(coding_session_id, started_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_quota_tool_checked "
+                    "ON external_coding_quota_observations(tool, checked_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_merge_session "
+                    "ON external_coding_merge_records(coding_session_id, created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_external_coding_rollback_session "
+                    "ON external_coding_rollback_decisions(coding_session_id, created_at)"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 27"))
+    except Exception as e:
+        logger.error(f"迁移到版本 27 失败: {e}")
+        raise
+    logger.info("迁移到版本 27 完成：external_coding_* 表")
+
+
+def downgrade_v27(engine):
+    """回退版本 27：删除外部 coding session 表。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DROP TABLE IF EXISTS external_coding_rollback_decisions"))
+            conn.execute(text("DROP TABLE IF EXISTS external_coding_merge_records"))
+            conn.execute(text("DROP TABLE IF EXISTS external_coding_quota_observations"))
+            conn.execute(text("DROP TABLE IF EXISTS external_coding_attempts"))
+            conn.execute(text("DROP TABLE IF EXISTS external_coding_sessions"))
+            conn.execute(text("UPDATE schema_version SET version = 26"))
+    except Exception as e:
+        logger.error(f"回退版本 27 失败: {e}")
+        raise
+    logger.info("回退版本 27 完成：external_coding_* 表已删除")
+
+
+def migrate_to_v28(engine):
+    """迁移到版本 28：记录 external coding worktree 创建基线。"""
+    try:
+        with engine.begin() as conn:
+            _add_column_if_missing(
+                conn,
+                "external_coding_sessions",
+                "base_commit",
+                "TEXT",
+            )
+            conn.execute(text("UPDATE schema_version SET version = 28"))
+    except Exception as e:
+        logger.error(f"迁移到版本 28 失败: {e}")
+        raise
+    logger.info("迁移到版本 28 完成：external coding base_commit")
+
+
+def downgrade_v28(engine):
+    """回退版本 28：删除 external coding 基线列。"""
+    try:
+        with engine.begin() as conn:
+            if _column_exists(conn, "external_coding_sessions", "base_commit"):
+                conn.execute(text("ALTER TABLE external_coding_sessions DROP COLUMN base_commit"))
+            conn.execute(text("UPDATE schema_version SET version = 27"))
+    except Exception as e:
+        logger.error(f"回退版本 28 失败: {e}")
+        raise
+    logger.info("回退版本 28 完成：external coding base_commit 已删除")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -2043,6 +2254,8 @@ _MIGRATIONS = [
     (24, migrate_to_v24),
     (25, migrate_to_v25),
     (26, migrate_to_v26),
+    (27, migrate_to_v27),
+    (28, migrate_to_v28),
 ]
 
 

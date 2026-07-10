@@ -2,9 +2,7 @@
 T020: McpToolRegistry 单元测试 — dual-track + preset full injection + custom LRU + unregister。
 """
 
-import pytest
-
-from src.business.mcp.mcp_tool_registry import McpToolRegistry, NullRegistry, McpCatalogItem
+from src.business.mcp.mcp_tool_registry import McpToolRegistry, NullRegistry
 from src.business.mcp.models import McpToolInfo
 
 
@@ -21,7 +19,7 @@ class TestMcpToolRegistry:
         tools = [_make_tool("list_prs"), _make_tool("create_issue")]
         registry.register_server_tools("srv1", "github", tools, is_preset=True)
 
-        preset = registry.get_preset_tools()
+        registry.get_preset_tools()
         # 预置工具注册后需要 ToolDefinition 才能被 get_preset_tools 获取
         # register_server_tools 只注册了 catalog items，ToolDefinition 需通过 register_tool_definition
         catalog = registry.get_catalog_items()
@@ -56,6 +54,7 @@ class TestMcpToolRegistry:
 
         # 先注册 ToolDefinition（activate 需要 _all_tools 中存在）
         from src.business.agents.config import ToolDefinition
+
         for i in range(15):
             full_name = f"mcp__custom__tool_{i}"
             tool_def = ToolDefinition(
@@ -122,6 +121,7 @@ class TestMcpToolRegistry:
         # register_server_tools 注册了 catalog items
         # ToolDefinition 通过 register_tool_definition 注册到 _all_tools
         from src.business.agents.config import ToolDefinition
+
         for tools, server_id, slug, is_preset in [
             (preset_tools, "srv1", "preset", True),
             (custom_tools, "srv2", "custom", False),
@@ -133,7 +133,9 @@ class TestMcpToolRegistry:
                     schema={"name": full_name, "parameters": {"type": "object"}},
                     handler=lambda **kw: "ok",
                 )
-                registry.register_tool_definition(full_name, tool_def, server_id, is_preset=is_preset)
+                registry.register_tool_definition(
+                    full_name, tool_def, server_id, is_preset=is_preset
+                )
 
         preset_count, custom_count = registry.get_tool_count()
         assert preset_count == 1

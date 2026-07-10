@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-07-07
-**Revision**: 2026-07-07 — Archived features 028 (提案审批讨论) + 029 (技能商店)
+**Last Updated**: 2026-07-10
+**Revision**: 2026-07-10 — Archived feature 030 (外部 Coding Session)
 
 ---
 
@@ -1629,3 +1629,105 @@ frontend/src/
 - **前端**: tab 渲染/搜索/预览审计/安装/已安装徽章/市场不可达提示 + GitHub 流
 
 Feature tasks: 24/24 completed。
+
+## 外部 Coding Session（Claude Code / Codex CLI） [Source: specs/030-external-coding-sessions]
+
+**Revision note (2026-07-10)**: Archived 030 for merge into `prepare-github`. 新增 owner-bound external coding session 业务模块、SQLite v27/v28 持久状态、Claude/Codex execution adapters、typed API/UI event 与 task detail 操作面；PLAN-before-code、RESULT completion、quota 路由、merge/rollback 均由确定性状态机和安全门卫约束。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）、React 18 + TypeScript 5.x、FastAPI、SQLite、git CLI；Windows-first Tauri 2 桌面运行时。
+- **Primary Dependencies**: 复用 SQLAlchemy、FastAPI/Pydantic、blinker、AgentLoop `ToolDefinition`、Zustand/Vite、subprocess/process helpers 与 git CLI；无新增 Python/npm package。Claude Code / Codex CLI 是可选本机 executable，不进入项目依赖锁。
+- **Storage**: SQLite v27 `external_coding_sessions`、`external_coding_attempts`、`external_coding_quota_observations`、`external_coding_merge_records`、`external_coding_rollback_decisions`；v28 为 session 增加 worktree `base_commit`。Artifact 默认在 `data/coding_sessions/<id>/`。
+- **Testing**: pytest 覆盖 Repository/state machine/process/quota/API/event/guardrails/git integration；Vitest/RTL 覆盖 typed client、store、event refresh 与 TaskNodeCard actions。外部 CLI 默认用 fake adapters，真实登录态 smoke 为可选人工验证。
+- **Constraints**: owner required、固定 tool、最高 effort 不降级、plan mutation fail-closed、有效 `RESULT.md` 才 completed、raw credential/usage/prompt/log 不进公开投影、merge/rollback 只由 Exemplar 执行。
+- **Scale/Scope**: 多个 task graph node 可并行拥有 session；每个 session 的 process/log/artifact preview 有界；V1 只支持 Claude Code 与 Codex CLI。
+
+### Source Code Structure
+
+```text
+src/
+├── business/
+│   ├── agents/tools/external_coding_tools.py  # owner-bound tool factory + action handlers
+│   └── external_coding/
+│       ├── artifacts.py       # HANDOFF/PLAN/RESULT writing + bounded reads
+│       ├── cli_adapters.py    # Claude/Codex command profiles + resume protocol
+│       ├── git_ops.py         # worktree/baseline/merge/revert safety
+│       ├── models.py          # business enums and value models
+│       ├── quota_probe.py     # normalized routing policy
+│       ├── serializers.py     # safe detail/action projection
+│       ├── service.py         # lifecycle/state/merge/rollback orchestration
+│       └── validators.py      # semantic PLAN/RESULT validation
+├── execution/
+│   ├── external_coding_process.py  # managed headless/interactive process lifecycle
+│   └── external_coding_quota.py    # Claude /usage + Codex app-server safe extraction
+├── data/
+│   ├── repos/external_coding_session_repository.py
+│   ├── migrations.py         # v27 tables + v28 base_commit
+│   ├── models_sqlite.py
+│   └── unified_config.py
+├── desktop_api/routers/external_coding_sessions.py
+├── desktop_api/{schemas.py,ui_events.py,ui_event_projector.py,app.py}
+└── utils/{events.py,sensitive_text.py}
+
+frontend/src/
+├── api/{externalCodingSessions.ts,assistantTasks.ts,uiEventParser.ts,uiEventTypes.ts}
+├── state/{externalCodingSessionStore.ts,assistantTaskStore.ts}
+└── screens/assistant/TaskNodeCard.tsx
+```
+
+Task collaboration 只持有 owner/task snapshot 关联，不接管外部 session 状态机。Desktop API 只调用 `ExternalCodingSessionService`；business 通过 `ExternalCodingSessionRepository` 和 execution adapters 协调；execution 不反向 import business。
+
+### Configuration
+
+全部配置通过 `UnifiedConfigManager` 读取：
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `external_coding.enabled` | `true` | 总开关 |
+| `external_coding.default_launch_mode` | `headless` | 默认 launch mode |
+| `external_coding.preferred_tool` | `auto` | 自动/显式工具偏好 |
+| `external_coding.artifact_root` | `data/coding_sessions` | 受管 artifact 根 |
+| `external_coding.worktree_root` | `.worktrees/coding` | dedicated worktree 根 |
+| `external_coding.log_tail_chars` | `8000` | DTO/UI 有界 log tail |
+| `external_coding.plan_timeout_seconds` | `1800` | plan attempt timeout |
+| `external_coding.run_timeout_seconds` | `7200` | implement attempt timeout |
+| `external_coding.quota_probe.enabled` | `true` | quota probe 开关 |
+| `external_coding.quota_probe.timeout_seconds` | `12` | 单次 probe timeout |
+| `external_coding.quota_probe.low_threshold_percent` | `80` | 使用率达到该百分比时归一化为 low |
+| `external_coding.autostart_enabled` | `true` | 创建后自动启动 plan attempt |
+| `external_coding.claude.command` | `claude` | Claude executable |
+| `external_coding.codex.command` | `codex` | Codex executable |
+| `external_coding.claude.effort` | `max` | Claude 最高 effort |
+| `external_coding.codex.reasoning_effort` | `xhigh` | Codex reasoning effort |
+
+这些配置不新增 Exemplar secret。Quota adapter 可使用 CLI 自身登录态，但只把归一化信号传出 execution 层，原始响应立即丢弃。
+
+### API, Events And UI
+
+- `/api/external-coding/sessions` 提供 create/list/get；session actions 包括 refresh、plan-decision、resume、abandon、review-outcome、escalate-to-user、merge-analysis、merge、rollback-plan、confirm-rollback。
+- 公开事件仅 `assistant.external_coding.changed`；payload allowlist 包含 session/owner/tool/status/phase/changeType/updatedAt，不含 artifact body、raw logs、prompt、账户或 quota response。
+- Task snapshot 仅批量附加四字段轻量 summary；TaskNodeCard 按需从 detail API 拉取 previews/log/actions。Event 只触发权威刷新，gap 走 `backend.resync_required`。
+- 所有 mutation action 以服务端 `availableActions` 为准；409/validation/unsafe merge/rollback 以非模态安全文案显示，不用本地乐观状态推断终态。
+
+### Architecture Decisions (from research.md)
+
+- **R1**: 独立 `business/external_coding` 深模块承接 session 协议，避免耦合 task scheduler 或把业务状态塞进 execution。
+- **R2**: SQLite 保存状态机与审计，文件系统保存 Markdown artifacts 和有界日志；二者由 service 协调。
+- **R3**: Plan-before-code 由持久 base commit + staged/unstaged/untracked/committed diff 硬校验，不依赖 prompt 自觉。
+- **R4**: QuotaProbe 只传安全归一化 `available/low/exhausted/unknown`，`unknown` 是可路由状态而非 hard failure。
+- **R5**: Merge 权限集中在 Exemplar；coding branch 必须有 committed changes，merge analysis 在执行前重验两端 HEAD，陈旧/no-op/dirty coding branch fail-closed。
+- **R6**: UI 复用 task detail；snapshot 轻量，完整安全详情按需 API 拉取。
+- **R7**: V1 rollback 只支持对精确已记录 merge commit 执行 `git revert`；要求 clean target、branch/HEAD/ancestry/双 parent 校验，不使用 reset/clean/reverse patch。
+- **R8**: Interactive mode 在 Windows 新控制台启动真实 TUI，但 completion 仍只由 PID/status/artifact 确定，不解析屏幕。
+
+### Testing Strategy
+
+- **Persistence/state**: v27/v28 migration、Repository CRUD、owner/fixed-tool/state transitions、批准失效、resume/abandon/waiting_user、restart recovery。
+- **Protocol/artifacts**: phase-specific immutable prompts、PLAN/RESULT semantic coverage、plan baseline mutation、missing/empty artifact、bounded/redacted reads。
+- **Execution/quota**: CLI flags、highest effort、headless/interactive separation、PID reuse guard、timeout/termination、Claude/Codex quota normalization与 raw response discard。
+- **Merge/rollback**: real temporary git repositories/worktrees、dirty overlap、`git merge-tree` prediction、stale analysis、two-parent merge、exact revert 与 unsupported strategies。
+- **Security/architecture**: owner-bound tools、business/execution import direction、Repository boundary、public event allowlist、secret/path/prompt/log redaction、dangerous git command denial。
+- **API/UI**: typed endpoints and 409 behavior、review outcome、task snapshot batch query、event parser/store refresh、TaskNodeCard 全 action 流。
+
+Feature tasks: 45/45 completed。Final verification: Python `2741 passed, 3 skipped`; frontend unit `392 passed`; Black、Flake8、ESLint、TypeScript 与 `git diff --check` 均通过。

@@ -41,7 +41,7 @@ def test_assistant_str_input_passes_guard(in_memory_db, mock_config):
     result = orch.run_agent(AgentType.ASSISTANT, "你好", session_id=session_id)
 
     assert result is not None
-    assert result.result_type.value == "needs_user_input"
+    assert result.result_type.value == "completed"
 
 
 def test_assistant_dict_input_passes_guard(in_memory_db, mock_config):
@@ -57,7 +57,7 @@ def test_assistant_dict_input_passes_guard(in_memory_db, mock_config):
     )
 
     assert result is not None
-    assert result.result_type.value == "needs_user_input"
+    assert result.result_type.value == "completed"
 
 
 def test_assistant_dict_missing_role_returns_error(in_memory_db, mock_config):

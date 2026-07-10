@@ -112,8 +112,7 @@ def create_mcp_aware_search_tools(
             # 按 server_slug 过滤 MCP items
             if server_slug:
                 all_items = [
-                    item for item in all_items
-                    if _item_matches_server_slug(item, server_slug)
+                    item for item in all_items if _item_matches_server_slug(item, server_slug)
                 ]
 
             # 使用 search_capability_catalog 做搜索
@@ -132,19 +131,21 @@ def create_mcp_aware_search_tools(
                 limit=limit,
             )
 
-            return json.dumps({
-                "items": [
-                    {
-                        "name": item.name,
-                        "kind": item.kind,
-                        "description": item.description[:200],
-                    }
-                    for item in page.items
-                ],
-                "total": page.total,
-                "offset": page.offset,
-                "limit": page.limit,
-            })
+            return json.dumps(
+                {
+                    "items": [
+                        {
+                            "name": item.name,
+                            "kind": item.kind,
+                            "description": item.description[:200],
+                        }
+                        for item in page.items
+                    ],
+                    "total": page.total,
+                    "offset": page.offset,
+                    "limit": page.limit,
+                }
+            )
         except Exception as exc:
             logger.error("[MCP] search_tools error: %s", exc)
             return json.dumps({"error": str(exc)[:500]})
@@ -157,21 +158,25 @@ def create_mcp_aware_search_tools(
                 full_name = tool_name[4:]
                 tool_def = mcp_registry.find_tool(full_name)
                 if tool_def is None:
-                    return json.dumps({
-                        "error": "tool_not_found",
-                        "message": f"MCP 工具 '{full_name}' 不存在",
-                    })
+                    return json.dumps(
+                        {
+                            "error": "tool_not_found",
+                            "message": f"MCP 工具 '{full_name}' 不存在",
+                        }
+                    )
 
                 # 激活自定义 MCP 工具
                 activated = mcp_registry.activate_custom_tool(full_name)
 
-                return json.dumps({
-                    "name": tool_def.name,
-                    "description": tool_def.schema.get("description", ""),
-                    "parameters": tool_def.schema.get("parameters", {}),
-                    "kind": "mcp",
-                    "activated": activated,
-                })
+                return json.dumps(
+                    {
+                        "name": tool_def.name,
+                        "description": tool_def.schema.get("description", ""),
+                        "parameters": tool_def.schema.get("parameters", {}),
+                        "kind": "mcp",
+                        "activated": activated,
+                    }
+                )
 
             # 非 MCP：委托给 DynamicToolManager
             return dynamic_manager.get_tool_detail(tool_name)

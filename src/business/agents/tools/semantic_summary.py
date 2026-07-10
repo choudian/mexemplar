@@ -41,7 +41,9 @@ _SUMMARY_FIELDS = (
     "nextActions",
 )
 _SUMMARY_CACHE_MAX_ENTRIES = 128
-_summary_cache = BoundedLruCache[tuple[str, str, str, str], dict[str, Any]](_SUMMARY_CACHE_MAX_ENTRIES)
+_summary_cache = BoundedLruCache[tuple[str, str, str, str], dict[str, Any]](
+    _SUMMARY_CACHE_MAX_ENTRIES
+)
 _WEB_LOW_VALUE_PATTERN = re.compile(
     r"(?i)\b("
     r"sign[ -]?in|log[ -]?in|cookie|privacy|terms|footer|navigation|"
@@ -692,8 +694,9 @@ def _semantic_summary_cache_key(
     text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
     settings_sig = hashlib.sha256(
         f"{settings.provider}|{settings.model}|{settings.base_url}|"
-        f"{settings.temperature}|{settings.map_max_tokens}|{settings.reduce_max_tokens}"
-        .encode("utf-8")
+        f"{settings.temperature}|{settings.map_max_tokens}|{settings.reduce_max_tokens}".encode(
+            "utf-8"
+        )
     ).hexdigest()
     return (tool_name, text_hash, extraction_goal, settings_sig)
 

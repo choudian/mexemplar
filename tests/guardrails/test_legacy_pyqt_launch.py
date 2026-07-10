@@ -79,4 +79,4 @@ def test_sidecar_build_includes_browser_extension_resources() -> None:
     assert "--collect-submodules=sqlglot" in build_script
     assert "--collect-data=tldextract" in build_script
     assert "--add-data" in build_script
-    assert "src\" / \"recording\" / \"browser_extension" in build_script
+    assert 'src" / "recording" / "browser_extension' in build_script

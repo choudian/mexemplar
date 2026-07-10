@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Any
 
 from src.business.agents.config import ToolDefinition
 from src.business.self_improvement.proposal_source_inspector import (
@@ -13,7 +12,6 @@ from src.business.self_improvement.proposal_source_inspector import (
     ProposalSourceInvalidView,
     ProposalSourceNotFound,
 )
-
 
 INSPECT_PROPOSAL_SOURCE_SCHEMA = {
     "type": "function",

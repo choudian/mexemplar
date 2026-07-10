@@ -2,14 +2,13 @@
 MCP server API router — CRUD + 连接管理 typed API endpoints。
 """
 
-import json
 import logging
 import re
 from collections.abc import Iterator
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Response
+from pydantic import BaseModel
 from typing import Literal
 
 from src.business.mcp.mcp_json_import import McpJsonParseError, parse_mcp_json
@@ -37,6 +36,7 @@ def _sanitize_api_error(text: str) -> str:
     for pattern in _API_REDACT_PATTERNS:
         text = pattern.sub("***", text)
     return text[:500]
+
 
 router = APIRouter(prefix="/api/mcp-servers", tags=["mcp-servers"])
 
@@ -124,6 +124,7 @@ class McpServerJsonImportResponse(BaseModel):
 
 def get_mcp_service() -> Iterator[McpServerService]:
     from src.business.mcp import get_mcp_server_service
+
     service = get_mcp_server_service()
     yield service
 
@@ -189,9 +190,7 @@ def import_mcp_json(
     try:
         previews = parse_mcp_json(body.jsonText)
         return McpServerJsonImportResponse(
-            servers=[
-                McpServerParsedPreview(**p.to_dict()) for p in previews
-            ]
+            servers=[McpServerParsedPreview(**p.to_dict()) for p in previews]
         )
     except McpJsonParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

@@ -76,6 +76,19 @@
 - Todo 是 Task + executor scoped 的私人 checklist；不得创建 Task edge、adjudication、board claim 或 brain memory entry，前端展示必须使用独立状态词，不与 Task status 混用。
 - 新 task collaboration 前端事件只能通过 `src/desktop_api/ui_events.py` Registry 和 `ui_event_projector.py` 投影：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。事件只作通知；缺口必须用 graph/board/meeting/todo typed API 拉权威快照。
 
+## External Coding Session Boundaries
+
+- 外部 coding session 的业务事实源是 `external_coding_*` SQLite 表、`ExternalCodingSessionRepository` 和 `ExternalCodingSessionService`；desktop API/router、task snapshot 和前端不得绕过 service 直接写 session、attempt、merge 或 rollback 状态。
+- 外部 coding 工具只进入 delegated executor / specialist 工具集；planner 不得拿实现型外部 CLI 工具，主 Assistant 不得把它当作自己直接执行用户代码任务的通道。
+- 每个 session 必须绑定 owner（`task` 或 `workflow`）和 `codingSessionId`；不得启动无 owner 的外部 agent，也不得只靠本地进程 PID/日志推断业务完成。
+- Headless 外部 CLI 默认先产出 `PLAN.md`，经派活 agent 调用 `decide_external_coding_plan` 批准后才进入实现；`PLAN.md` 语义校验是 advisory。Plan 阶段必须相对持久化的 worktree 创建基线检测 staged、unstaged、untracked 和 committed diff；缺基线时 fail-closed，不得进入 `plan_ready`。没有有效 `plan_approved_at` 时不得 resume 到 implement。
+- `RESULT.md` 是完成信号之一，但不能替代后续 review/test/merge 判断；review 是强烈建议，不是强制门卫。独立 review/test 尚未完成时，session detail 和最终汇报必须显式保留 `reviewSkippedReason`，不得把外部 CLI 自报测试结果写成独立验证。
+- quota observation 只能保存从 Claude `/usage` 或 Codex app-server 响应中归一化出的可用性、来源、置信度、使用率摘要和 reset 提示；原始响应必须在 execution adapter 内丢弃，不得保存订阅 token、账号、email、原始 CLI 输出或密钥路径。探测失败必须降级 `unknown`；Quota state 是调度参考，不是套餐余量的硬保证。
+- CLI 命令摘要、attempt log tail、UI event payload 和 DTO 不得持久化完整 prompt、secret、token、raw stack trace 或未脱敏本地敏感路径；完整日志只能作为受控 artifact tail 暴露。
+- 外部 coding worktree 必须隔离于目标 worktree；merge 前必须验证 coding 分支存在已提交变更，并分析目标 dirty files、分支 changed files 与 `git merge-tree` 冲突。执行 merge 前必须重验两端 HEAD；no-op、陈旧快照、未提交 coding diff 或 merge 中断必须 fail-closed 并留审计。非低风险 merge 必须有 agent decision 记录。外部 session 工具不得执行 push、reset --hard、clean 或删除目标分支。
+- rollback 工具只对本 session 已记录的精确 merge commit 生成可解释 `revert_commit` 方案并要求确认；执行前必须验证目标 HEAD 与 merge 记录，禁止用 reset/hard reset/clean 改写或丢弃无关历史。
+- `assistant.external_coding.changed` 只能作为刷新通知；前端必须通过 `/api/external-coding/*` typed API 拉权威详情，不得根据内部 blinker 事件或本地乐观状态推断终态。
+
 ## Self-Improvement Proposal Boundaries
 
 - 改进提案的业务事实源是 `improvement_proposals` SQLite 表和 `ProposalService` / `ImprovementProposalRepository`；desktop API 只做 typed DTO、CAS approve/reject 和异步触发，不直接建 worktree、写 task graph 或改 proposal 结果。
@@ -179,4 +192,5 @@ Reviewer 必须拒绝下列改动：
 - 让前端、Tauri 命令或 desktop API 直接读取/写入 SQLite、DuckDB 或 config 文件。
 - 让改进提案审批前创建 worktree/task graph/代码副作用，或让 approve router 直接实施而不是异步调用 `proposal_bridge`。
 - 让 self-improvement proposal executor 绕过隔离 worktree、修改 `self_improvement` / `orchestration/agent` / `task_collaboration` / `desktop_api` / `src-tauri` / guardrail tests / startup 核心路径，或执行网络、安装、merge/rebase/reset/clean/push 等非测试型命令。
+- 让外部 coding session 无 owner 启动、跳过 PLAN.md 审核直接实现、在 plan 阶段修改目标代码仍标记 plan_ready、把完整 prompt/secret 写入命令摘要或 UI event、未做 dirty/changed overlap 分析就自动 merge，或允许外部 session 工具 push/reset --hard/clean/删除目标分支。
 - 重新引入 PyQt runtime 依赖、`src.ui` 生产代码、旧 Python GUI E2E，或任何正常用户可触达的 PyQt 启动路径。

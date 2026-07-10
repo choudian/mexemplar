@@ -151,8 +151,7 @@ def test_worker_logs_error_when_proposals_enabled_but_dispatch_disabled(caplog):
     ):
         worker._warn_on_proposal_dispatch_misconfig()
     assert any(
-        "unified_dispatch" in r.getMessage() and r.levelno >= logging.ERROR
-        for r in caplog.records
+        "unified_dispatch" in r.getMessage() and r.levelno >= logging.ERROR for r in caplog.records
     )
 
 
@@ -167,9 +166,7 @@ def test_worker_no_misconfig_warning_when_dispatch_and_proposals_aligned(
     import logging
 
     worker = TaskCollaborationBackgroundWorker(
-        config=_ProposalDispatchFakeConfig(
-            unified_dispatch=unified_dispatch, proposals=proposals
-        )
+        config=_ProposalDispatchFakeConfig(unified_dispatch=unified_dispatch, proposals=proposals)
     )
     with caplog.at_level(
         logging.ERROR,
@@ -177,9 +174,7 @@ def test_worker_no_misconfig_warning_when_dispatch_and_proposals_aligned(
     ):
         worker._warn_on_proposal_dispatch_misconfig()
     assert not any(
-        "unified_dispatch" in r.getMessage()
-        for r in caplog.records
-        if r.levelno >= logging.ERROR
+        "unified_dispatch" in r.getMessage() for r in caplog.records if r.levelno >= logging.ERROR
     )
 
 
@@ -198,9 +193,7 @@ def test_recovery_tick_runs_proposal_recovery_when_dispatch_disabled_but_proposa
         config=_ProposalDispatchFakeConfig(unified_dispatch=False, proposals=True)
     )
     cycle_calls: list[dict] = []
-    monkeypatch.setattr(
-        worker, "run_recovery_cycle", lambda **kw: cycle_calls.append(kw) or {}
-    )
+    monkeypatch.setattr(worker, "run_recovery_cycle", lambda **kw: cycle_calls.append(kw) or {})
     proposal_calls: list = []
     monkeypatch.setattr(
         bw_module,
@@ -222,9 +215,7 @@ def test_recovery_tick_runs_full_cycle_when_dispatch_enabled(in_memory_db, monke
         config=_ProposalDispatchFakeConfig(unified_dispatch=True, proposals=True)
     )
     cycle_calls: list[dict] = []
-    monkeypatch.setattr(
-        worker, "run_recovery_cycle", lambda **kw: cycle_calls.append(kw) or {}
-    )
+    monkeypatch.setattr(worker, "run_recovery_cycle", lambda **kw: cycle_calls.append(kw) or {})
     proposal_calls: list = []
     monkeypatch.setattr(
         bw_module,

@@ -4,10 +4,10 @@ McpServerRepository — MCP server 配置数据仓库。
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from src.data.models_sqlite import McpServer
-from src.data.repos.base_repository import BaseRepository, ID_PREFIX_MCP_SERVER, generate_id
+from src.data.repos.base_repository import BaseRepository, generate_id
 from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -109,10 +109,16 @@ class McpServerRepository(BaseRepository):
         # 可更新字段白名单（禁止修改 server_id/created_at/name 等关键字段）
         # name 不可改：slug 由 name 派生，改名会导致 mcp__<slug>__<tool> 全名变化
         _ALLOWED_UPDATE_FIELDS = {
-            "command", "url", "enabled",
-            "is_preset", "preset_slug",
-            "last_known_status", "last_error_message",
-            "suggestion", "tool_count", "circuit_breaker_open",
+            "command",
+            "url",
+            "enabled",
+            "is_preset",
+            "preset_slug",
+            "last_known_status",
+            "last_error_message",
+            "suggestion",
+            "tool_count",
+            "circuit_breaker_open",
         }
 
         for key, value in fields.items():

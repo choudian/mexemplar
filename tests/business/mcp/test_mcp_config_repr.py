@@ -2,8 +2,6 @@
 T023: Config repr guard 测试 — RC5: assert secret not in repr。
 """
 
-import pytest
-
 from src.business.mcp.models import McpServerConfigPublic, McpLaunchPayload
 
 

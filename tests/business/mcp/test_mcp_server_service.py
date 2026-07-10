@@ -5,9 +5,8 @@ T021: McpServerService 单元测试 — CRUD + 生命周期 + 断路器 + 工具
 """
 
 import json
-import threading
 from datetime import datetime
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -22,7 +21,6 @@ from src.business.mcp.models import (
     McpServerConfigPublic,
     McpToolInfo,
 )
-
 
 # ─── Fixtures ───
 
@@ -167,7 +165,11 @@ class TestAddServer:
         ctx, repo = mock_repo
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_save_secrets"):
-                with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test", "name": "my-server"}):
+                with patch.object(
+                    service,
+                    "_get_server_detail",
+                    return_value={"serverId": "mcs_test", "name": "my-server"},
+                ):
                     result = service.add_server(
                         name="my-server",
                         transport="stdio",
@@ -202,7 +204,9 @@ class TestAddServer:
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_save_secrets"):
                 with patch.object(service, "_start_and_register") as mock_start:
-                    with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
+                    with patch.object(
+                        service, "_get_server_detail", return_value={"serverId": "mcs_test"}
+                    ):
                         service.add_server(name="auto-start", transport="stdio", command="npx")
 
         mock_start.assert_called_once()
@@ -216,14 +220,18 @@ class TestAddServer:
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_save_secrets"):
                 with patch.object(service, "_start_and_register") as mock_start:
-                    with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
+                    with patch.object(
+                        service, "_get_server_detail", return_value={"serverId": "mcs_test"}
+                    ):
                         service.add_server(
                             name="no-auto", transport="stdio", command="npx", enabled=False
                         )
 
         mock_start.assert_not_called()
 
-    def test_add_server_auto_start_failure_marks_failed(self, service, mock_repo, mock_process_manager):
+    def test_add_server_auto_start_failure_marks_failed(
+        self, service, mock_repo, mock_process_manager
+    ):
         """auto-start 失败时标记 server 为 failed。"""
         ctx, repo = mock_repo
         row = _make_row(enabled=True)
@@ -231,8 +239,12 @@ class TestAddServer:
 
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_save_secrets"):
-                with patch.object(service, "_start_and_register", side_effect=RuntimeError("spawn failed")):
-                    with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
+                with patch.object(
+                    service, "_start_and_register", side_effect=RuntimeError("spawn failed")
+                ):
+                    with patch.object(
+                        service, "_get_server_detail", return_value={"serverId": "mcs_test"}
+                    ):
                         service.add_server(name="fail-start", transport="stdio", command="npx")
 
         # update_status 被调用来标记 failed
@@ -245,7 +257,9 @@ class TestAddServer:
         ctx, repo = mock_repo
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_save_secrets") as mock_save:
-                with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
+                with patch.object(
+                    service, "_get_server_detail", return_value={"serverId": "mcs_test"}
+                ):
                     service.add_server(
                         name="secret-srv",
                         transport="stdio",
@@ -272,7 +286,11 @@ class TestUpdateServer:
         mock_process_manager.is_server_running.return_value = False
 
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
-            with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test", "name": "updated"}):
+            with patch.object(
+                service,
+                "_get_server_detail",
+                return_value={"serverId": "mcs_test", "name": "updated"},
+            ):
                 result = service.update_server("mcs_test", command="new-cmd")
 
         assert result["name"] == "updated"
@@ -329,7 +347,9 @@ class TestDeleteServer:
         mock_process_manager.stop_server.assert_not_called()
         assert result is True
 
-    def test_delete_server_unregisters_tools(self, service, mock_repo, mock_process_manager, mock_registry):
+    def test_delete_server_unregisters_tools(
+        self, service, mock_repo, mock_process_manager, mock_registry
+    ):
         """删除 server 时注销工具。"""
         ctx, repo = mock_repo
         mock_process_manager.is_server_running.return_value = False
@@ -363,7 +383,9 @@ class TestStartStopReconnect:
         ctx, repo = mock_repo
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_start_and_register", return_value=[_make_tool()]):
-                with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
+                with patch.object(
+                    service, "_get_server_detail", return_value={"serverId": "mcs_test"}
+                ):
                     result = service.start_server("mcs_test")
 
         assert result["serverId"] == "mcs_test"
@@ -373,7 +395,7 @@ class TestStartStopReconnect:
         ctx, repo = mock_repo
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
-                result = service.stop_server("mcs_test")
+                service.stop_server("mcs_test")
 
         mock_process_manager.stop_server.assert_called_once_with("mcs_test")
         mock_registry.unregister_server_tools.assert_called_once_with("mcs_test")
@@ -384,16 +406,16 @@ class TestStartStopReconnect:
         with patch("src.business.mcp.mcp_server_service.McpServerRepository", return_value=ctx):
             with patch.object(service, "_get_server_detail", return_value={"serverId": "mcs_test"}):
                 with patch("src.business.mcp.mcp_server_service.emit") as mock_emit:
-                    result = service.reconnect_server("mcs_test")
+                    service.reconnect_server("mcs_test")
 
         mock_process_manager.reconnect_server.assert_called_once()
         # reconnect_server 内部调用 _on_server_started（emit tools_changed mcp_server_started）
         # + 自己 emit tools_changed mcp_server_reconnected
         emit_calls = mock_emit.call_args_list
         assert any(
-            c.kwargs.get("action") == "mcp_server_reconnected" or
-            c.kwargs.get("reason") == "mcp_server_reconnected" or
-            (len(c.args) > 1 and c.args[1] == "mcp_server_reconnected")
+            c.kwargs.get("action") == "mcp_server_reconnected"
+            or c.kwargs.get("reason") == "mcp_server_reconnected"
+            or (len(c.args) > 1 and c.args[1] == "mcp_server_reconnected")
             for c in emit_calls
         )
 
@@ -573,9 +595,7 @@ class TestBuildToolDefinition:
     def test_tool_definition_schema(self, service):
         """ToolDefinition schema 包含 mcp__ 前缀名。"""
         tool_info = _make_tool("search", "Search code")
-        tool_def = service._build_tool_definition(
-            "mcs_x", "search", "mcp__x__search", tool_info
-        )
+        tool_def = service._build_tool_definition("mcs_x", "search", "mcp__x__search", tool_info)
 
         assert tool_def.schema["name"] == "mcp__x__search"
         assert "parameters" in tool_def.schema
@@ -809,6 +829,7 @@ class TestSanitizeErrorText:
     def test_strips_github_token(self):
         """ghp_ token 被遮罩。"""
         from src.business.mcp.mcp_server_service import _sanitize_error_text
+
         result = _sanitize_error_text("auth failed: ghp_abc123def456ghi789jkl012mno345")
         assert "ghp_" not in result
         assert "***" in result
@@ -816,6 +837,7 @@ class TestSanitizeErrorText:
     def test_strips_openai_key(self):
         """sk- key 被遮罩。"""
         from src.business.mcp.mcp_server_service import _sanitize_error_text
+
         result = _sanitize_error_text("invalid key sk-proj-abc123def456ghi789")
         assert "sk-" not in result
         assert "***" in result
@@ -823,6 +845,7 @@ class TestSanitizeErrorText:
     def test_strips_url_credentials(self):
         """URL 内嵌凭证被遮罩。"""
         from src.business.mcp.mcp_server_service import _sanitize_error_text
+
         result = _sanitize_error_text("connect to https://user:pass@host.example.com/path")
         assert "user:pass@" not in result
         assert "***" in result
@@ -830,12 +853,14 @@ class TestSanitizeErrorText:
     def test_truncates_long_text(self):
         """超长文本截断到 500 字符。"""
         from src.business.mcp.mcp_server_service import _sanitize_error_text
+
         result = _sanitize_error_text("x" * 1000)
         assert len(result) <= 500
 
     def test_preserves_safe_text(self):
         """无密钥的安全文本保持不变。"""
         from src.business.mcp.mcp_server_service import _sanitize_error_text
+
         result = _sanitize_error_text("connection refused on port 8080")
         assert result == "connection refused on port 8080"
 
@@ -853,9 +878,7 @@ class TestOnServerDisconnected:
         service._registry.register_server_tools(server_id, "test", [_make_tool("tool1")], True)
 
         # 模拟断连事件
-        service._on_server_disconnected(
-            sender=None, server_id=server_id, error="ping failed"
-        )
+        service._on_server_disconnected(sender=None, server_id=server_id, error="ping failed")
 
         # 工具应被注销
         items = service._registry.search_tools(query="tool1")
@@ -866,7 +889,7 @@ class TestOnServerDisconnected:
         server_id = "mcs_test_cleanup"
         service._consecutive_failures[server_id] = 3
 
-        with patch.object(service, '_process_manager') as mock_pm:
+        with patch.object(service, "_process_manager") as mock_pm:
             mock_pm.is_server_running.return_value = False
             service.delete_server(server_id)
 

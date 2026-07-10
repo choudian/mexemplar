@@ -1,7 +1,36 @@
 # Merged Features Log
 
-**Last Updated:** 2026-07-07
-**Revision:** 2026-07-07 — Archived 028 提案审批讨论 + 029 技能商店
+**Last Updated:** 2026-07-10
+**Revision:** 2026-07-10 — Archived 030 外部 Coding Session
+
+## 外部 Coding Session（Claude Code / Codex CLI） — 2026-07-10
+
+**Branch:** `030-external-coding-sessions`
+**Spec:** `specs/030-external-coding-sessions`
+**Revision note:** Archived on the verified feature branch for merge into `prepare-github`; no unresolved conflicts or constitution exceptions.
+
+**What was added:**
+- US-104 (P1): Owner-bound 外部 coding session，独立 `.worktrees/coding/<id>` 与 `data/coding_sessions/<id>`，先产出 `PLAN.md` 并由派活 agent 审批后才实现。
+- US-105 (P2): 同一工具/同一 `codingSessionId` 的可恢复 attempt；quota、网络、登录、模型、进程和 artifact 中断保留完整安全上下文供 inspect/resume/abandon。
+- US-106 (P3): Exemplar-owned merge/rollback；merge 前分析 dirty/changed/overlap/conflict 并重验 HEAD，rollback 只对精确记录的 merge commit 执行确认后的 `git revert`。
+- US-107 (P4): Claude `/usage` 与 Codex app-server quota probe 归一化为 `available/low/exhausted/unknown`，自动路由记录理由且不暴露 credential、账户或原始响应。
+- Task detail 提供权威 session 状态、PLAN/RESULT/log previews、review warning 与真实 approve/reject/resume/abandon/merge/rollback actions；公开事件只作安全刷新通知。
+
+**New Components:**
+- `src/business/external_coding/`（artifacts / cli_adapters / git_ops / models / quota_probe / serializers / service / validators）
+- `src/execution/external_coding_process.py` + `src/execution/external_coding_quota.py`
+- `src/data/repos/external_coding_session_repository.py` + SQLite v27 tables / v28 `base_commit`
+- `src/business/agents/tools/external_coding_tools.py`
+- `src/desktop_api/routers/external_coding_sessions.py` + `assistant.external_coding.changed`
+- 前端 `api/externalCodingSessions.ts`、`state/externalCodingSessionStore.ts`、TaskNodeCard external coding panel
+
+**Modified Components:**
+- Task collaboration snapshot batch projection、agent tool registry、unified config、Desktop API schema/event registry、frontend task/event stores。
+- `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md` 与根/src/frontend AI 入口文档。
+
+**Verification:** Python `2741 passed, 3 skipped`; frontend unit `392 passed`; Black、Flake8、ESLint、TypeScript、`git diff --check` passed.
+
+**Tasks Completed:** 45/45 tasks
 
 ## 技能商店（skills.sh / GitHub 安装外部技能） — 2026-07-07
 

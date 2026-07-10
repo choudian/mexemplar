@@ -20,4 +20,5 @@ from src.data.repos import (  # noqa: F401
     ToolOutputRepository,
     AssistantRunFailureRepository,
     UserTodoRepository,
+    ExternalCodingSessionRepository,
 )

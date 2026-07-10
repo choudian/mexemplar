@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-07-07
-**Revision**: 2026-07-07 — Archived features 028 (提案审批讨论) + 029 (技能商店)
+**Last Updated**: 2026-07-10
+**Revision**: 2026-07-10 — Archived feature 030 (外部 Coding Session)
 
 ---
 
@@ -2037,3 +2037,93 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - skills.sh/GitHub 不可达或限速——商店 tab 显示可行动错误，其他 tab 不受影响
 - 安装到一半失败——逆序清理，方法论条目与文件目录要么都在要么都不在
 - 卸载后重装同一技能——作为新条目正常安装，旧条目在软删除历史里
+
+## 外部 Coding Session（Claude Code / Codex CLI） [Source: specs/030-external-coding-sessions]
+
+**Revision note (2026-07-10)**: Archived 030 for merge into `prepare-github`. Claude Code / Codex CLI 作为 owner-bound 外部代码执行体接入任务协作；采用独立 coding worktree、PLAN/RESULT 两阶段协议、可恢复 attempt、quota-aware 选择、Exemplar-owned merge/rollback 审计和 task detail 权威状态。V1 只支持 Claude Code 与 Codex CLI，不新增依赖或 secret 存储。
+
+> ID mapping: feature-local `US1~US4 / FR-001~030 / CC-001~008 / SC-001~007` archived as `US-104~107 / FR-460~489 / CC-174~181 / SC-204~210` to preserve the global memory sequence.
+
+### User Stories
+
+- **US-104 (P1)**: Agent 启动外部 coding session 并先审计划——为明确 Task/Workflow owner 创建持久 session、独立 worktree 与 artifact 目录，外部工具先产出 `PLAN.md`，派活 agent 审查后才允许实现。
+- **US-105 (P2)**: 外部工具按已批准计划实现并可中断恢复——优先续用同一外部会话，在 quota、网络、登录、模型或进程中断后保留 attempt、日志、diff 与上下文供 inspect/resume/abandon。
+- **US-106 (P3)**: Exemplar 自动合并并按用户意图回滚——完成后先分析目标 dirty set、coding branch changes、重叠和冲突，再由 Exemplar 合并；回滚只对本 session 的精确 merge commit 创建受确认的 revert。
+- **US-107 (P4)**: Agent 自动选择 Claude/Codex 并关注 quota——读取安全归一化 quota 信号，优先健康工具、避免 exhausted 工具，且不暴露凭证、账户或原始 usage 响应。
+
+### Functional Requirements
+
+- **FR-460**: V1 MUST 只支持 Claude Code 与 Codex CLI 两种外部 coding 工具；Gemini、Agy 等不在本功能范围。
+- **FR-461**: 外部 coding 能力 MUST 以可配置 agent tools 暴露，且没有明确 Task 或 Workflow owner 时 MUST 拒绝启动。
+- **FR-462**: 启动 session MUST 创建持久 `codingSessionId`，记录 owner、工具、launch mode、时间、status/phase、可用的外部 session/thread id、worktree、branch 与 artifact 目录。
+- **FR-463**: 每个 session MUST 默认使用 `.worktrees/coding/<codingSessionId>` 独立 worktree 与 `coding/<codingSessionId>` 分支。
+- **FR-464**: `HANDOFF.md`、`PLAN.md`、`RESULT.md` 与审计/恢复所需有界日志 MUST 存在 `data/coding_sessions/<codingSessionId>/`。
+- **FR-465**: 系统 MUST 支持默认 headless managed launch 与 interactive supervised launch；交互模式仍以显式 artifact 判断完成，不解析终端屏幕。
+- **FR-466**: 每个新 session MUST plan-before-code；只有续跑已批准计划且记录原因时才可直接进入 implement。
+- **FR-467**: Plan 阶段 MUST 请求 `PLAN.md` 覆盖目标复述、计划改动、影响范围、假设/非目标、风险、测试计划、开放问题和是否继续建议。
+- **FR-468**: `PLAN.md` MUST 是最低语义覆盖的 soft template，不得把固定标题文本当成硬 schema。
+- **FR-469**: Plan 阶段 MUST 只读调查；相对持久 worktree 创建基线的 staged、unstaged、untracked 或 committed mutation MUST 作为协议违规回流裁定。
+- **FR-470**: 实现前派活 agent MUST 审核计划，并明确 approve、带反馈 reject、request clarification 或向用户升级高风险产品决策。
+- **FR-471**: 实现 SHOULD 复用同一外部会话；需要新进程时 MUST 保持同一 `codingSessionId` 并记录 attempt 边界。
+- **FR-472**: session 生命周期内工具选择 MUST 固定；Claude/Codex 切换必须放弃或完成旧 session 后新建 session。
+- **FR-473**: Claude Code 与 Codex CLI MUST 默认请求可用的最高 reasoning/effort；不可用时 MUST 中断为 `model_unavailable`，不得静默降级。
+- **FR-474**: 外部工具 MAY 运行测试、lint、类型检查、依赖安装或网络动作；依赖、网络与 lockfile 影响 MUST 在 `RESULT.md` 披露。
+- **FR-475**: 外部工具 MUST NOT 获得目标分支 merge/push/reset/clean 权限；检测到的尝试 MUST 作为高风险偏离展示给派活 agent。
+- **FR-476**: 有效完成 MUST 要求 `RESULT.md` 在语义上包含状态、摘要、changed files、计划偏差、测试及结果、已知风险、后续事项和 completion notes。
+- **FR-477**: 进程退出但没有有效 `RESULT.md` 时，session MUST 保持 interrupted/failed，不得标记 completed。
+- **FR-478**: 中断 MUST 保存 task brief、plan、日志、外部 id、worktree、当前 diff、最后错误类别与 resume count，允许 inspect/resume/abandon 而无需用户重述任务。
+- **FR-479**: 只有 owner agent 判断内部无法解决并已向用户请求行动或澄清后，session 才能进入 `waiting_user`。
+- **FR-480**: 外部完成后的独立 review/test MUST 被强烈建议但不是状态机硬门卫；跳过任何一项时最终详情和摘要 MUST 明示 `reviewSkippedReason`。
+- **FR-481**: 自动 merge MUST 由 Exemplar 执行并记录 target branch、pre-merge HEAD、coding branch HEAD、changed files、dirty/conflict analysis 与结果。
+- **FR-482**: Merge 前 MUST 比较目标 workspace dirty files 与 coding branch changed files，并展示 overlap/conflict 风险。
+- **FR-483**: 低风险分析 MAY 允许自动 merge；存在 overlap 或 predicted conflict 时 MUST NOT 静默合并，必须有 agent 裁定。
+- **FR-484**: V1 rollback MUST 只针对本 session 已记录的精确 merge commit 执行 `git revert`；执行前必须验证 target branch/HEAD、merge ancestry、双 parent 与 clean workspace，并要求显式确认；reset/clean/reverse patch/manual apply 不受支持。
+- **FR-485**: QuotaProbe MUST 为两种工具输出 `available | low | exhausted | unknown`，并含安全 source、confidence 与 checked/reset time。
+- **FR-486**: QuotaProbe MAY 读取本地 credential/status/usage source，但 MUST NOT 在日志、DTO、UI event 或 artifact 中持久化或暴露 credential、账户标识、原始响应或密钥路径。
+- **FR-487**: 自动选择 MUST 按 `available > unknown > low > exhausted` 排序，默认避免 exhausted；只有显式 override 才允许选择 exhausted，并记录原因。
+- **FR-488**: 关联 task/subagent detail MUST 展示 status、phase、tool、branch、artifact previews、有界 log tail 与 `availableActions`，操作必须调用真实 typed API。
+- **FR-489**: UI MUST 能在 event gap、断线或重启后从后端权威 snapshot 恢复；公开 event 只作安全刷新通知，raw external output 始终有界且脱敏。
+
+### Key Entities
+
+- **ExternalCodingSession**: 外部 coding assignment 的持久事实源；含 owner、固定 tool、launch mode、status/phase、worktree/branch/artifacts、base commit、review 状态和最终结果。SQLite v27 建表、v28 补 `base_commit`。
+- **ExternalCodingAttempt**: 一次 plan/implement CLI invocation 或 resume；含 command summary、external ref、PID/identity、exit/status、log tail 与安全错误分类。
+- **CodingHandoff / CodingPlan / CodingResult**: 分别对应 `HANDOFF.md`、`PLAN.md`、`RESULT.md` 的协议 artifact；正文落受管目录，API 只返回有界预览。
+- **ExternalCodingQuotaObservation**: 安全归一化 quota 观察；仅保存 state/source/confidence/reset/check time/safe detail。
+- **ExternalCodingMergeRecord**: merge analysis 与执行审计；记录两端 HEAD、dirty/changed/overlap、conflict risk、agent decision 与 merge commit。
+- **ExternalCodingRollbackDecision**: 绑定 merge record 的 rollback 审计；V1 固定 `revert_commit`、显式确认和 applied/blocked/failed 状态。
+
+### Constraints & Compatibility
+
+- **CC-174**: 主 Assistant 仍是协调者；外部 coding 工具只进入 delegated executor / specialist 工具集，planner 不拿实现型工具，不创建无 owner 后台任务。
+- **CC-175**: Claude Code / Codex CLI 只是外部 coding execution tools，不得成为 Exemplar 的通用 LLM provider。
+- **CC-176**: 业务状态 MUST 持久化到 SQLite Repository；进程内 registry 只管理运行态，不能作为恢复事实源。
+- **CC-177**: quota credential access 仍受 UnifiedConfigManager 与 secret 脱敏规则约束；原始 usage response 必须在 execution adapter 内丢弃。
+- **CC-178**: Merge/rollback authority 只属于 Exemplar；外部 CLI 命令 profile 必须禁止目标分支 push/merge/reset/clean。
+- **CC-179**: V1 隔离以 dedicated worktree、owner/state gate、plan review 和 merge control 为核心，不复制 self-improvement proposal 的 source-only sandbox 语义。
+- **CC-180**: `PLAN.md` / `RESULT.md` 采用 semantic soft validation；关键状态、owner、baseline、merge 和 rollback 安全由确定性业务门卫保证。
+- **CC-181**: 一个 session 固定一种外部工具；cross-tool continuation 必须建新 session 并保留旧 session 审计。
+
+### Success Criteria
+
+- **SC-204**: 代表性任务能在 agent 与外部 CLI 之间自动完成建 session、产出 `PLAN.md` 和 approve/reject，不需用户跨应用搬运计划。
+- **SC-205**: 受控验证中至少 95% 的 completed session 在进程结束后 5 秒内提供 `RESULT.md`、worktree diff summary 与可见 task detail 状态。
+- **SC-206**: quota/network/login/model/missing-result 中断 100% 保留足够上下文供 inspect/resume/abandon，无需用户重述原任务。
+- **SC-207**: 每个 merged session 100% 留下 pre-merge state、dirty/conflict analysis 与 post-merge outcome。
+- **SC-208**: quota probe 的普通日志、公开 event、DTO、前端状态与 session artifact 中 raw credential/account/usage response 泄漏为 0。
+- **SC-209**: 一工具 exhausted、另一工具 available 时，除显式 override 外，routing tests 100% 选择 available 工具。
+- **SC-210**: 独立 review 或 test 被跳过时，最终 agent summary 100% 显示尚未独立 review/test 及原因。
+
+### Edge Cases
+
+- CLI 未安装、不可执行或未登录——session 不启动，返回安全且可行动的 setup/login 错误。
+- 最高 reasoning/effort 档不可用——中断为 `model_unavailable`，不自动降档。
+- Plan 阶段任何基线后 mutation——`protocol_violation`，不得进入 `plan_ready`。
+- 有 `RESULT.md` 但 coding branch 无提交/无改动——merge readiness fail-closed，不把用户任务盲目标记为已交付。
+- `RESULT.md` 自报测试但无独立证据——保留 review warning，不冒充独立验证。
+- 依赖/网络/lockfile 影响——必须在 result 与 merge risk 中披露。
+- 外部 CLI 尝试 merge/push/reset/clean——命令层拒绝并在审计中展示偏离。
+- 目标 workspace 有 dirty files——先做 overlap/conflict analysis；非低风险必须裁定。
+- 中途切换 Claude/Codex——拒绝；放弃或完成旧 session 后另建 session。
+- rollback intent 不清或 merge/HEAD 已变化——拒绝陈旧 proposal，先澄清并重新分析；不得用 reset/clean 覆盖后续工作。
+- UI event gap 或 session mismatch——触发 `backend.resync_required` 并拉 task/session 权威 snapshot。

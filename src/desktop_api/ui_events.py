@@ -72,6 +72,7 @@ EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED = "assistant.task_board.changed"
 EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED = "assistant.task_question.changed"
 EVENT_TYPE_ASSISTANT_MEETING_CHANGED = "assistant.meeting.changed"
 EVENT_TYPE_ASSISTANT_TODO_CHANGED = "assistant.todo.changed"
+EVENT_TYPE_ASSISTANT_EXTERNAL_CODING_CHANGED = "assistant.external_coding.changed"
 EVENT_TYPE_RECORDING_PROGRESS = "recording.progress"
 EVENT_TYPE_TEACHING_STAGE_CHANGED = "teaching.stage_changed"
 EVENT_TYPE_TEACHING_PROGRESS = "teaching.progress"
@@ -381,6 +382,93 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
         payload_enum_values=(
             ("changeType", frozenset({"created", "updated", "deleted", "reordered"})),
             ("status", frozenset({"todo", "doing", "done", "skipped"})),
+        ),
+    ),
+    EVENT_TYPE_ASSISTANT_EXTERNAL_CODING_CHANGED: UiEventDefinition(
+        EVENT_TYPE_ASSISTANT_EXTERNAL_CODING_CHANGED,
+        "notification",
+        frozenset(
+            {
+                "codingSessionId",
+                "sessionId",
+                "ownerType",
+                "ownerId",
+                "tool",
+                "status",
+                "phase",
+                "changeType",
+                "updatedAt",
+            }
+        ),
+        _SESSION_SCOPE,
+        {
+            "codingSessionId": "ecs_123",
+            "sessionId": "sess_1",
+            "ownerType": "task",
+            "ownerId": "tsk_1",
+            "tool": "claude_code",
+            "status": "plan_ready",
+            "phase": "plan",
+            "changeType": "plan_ready",
+        },
+        required_payload_keys=frozenset(
+            {"codingSessionId", "ownerType", "ownerId", "tool", "status", "phase", "changeType"}
+        ),
+        required_scope_keys=frozenset(),
+        payload_enum_values=(
+            ("ownerType", frozenset({"task", "workflow"})),
+            ("tool", frozenset({"claude_code", "codex_cli"})),
+            (
+                "status",
+                frozenset(
+                    {
+                        "created",
+                        "planning",
+                        "plan_ready",
+                        "plan_approved",
+                        "plan_rejected",
+                        "implementing",
+                        "interrupted",
+                        "waiting_user",
+                        "completed",
+                        "merge_ready",
+                        "merged",
+                        "merge_blocked",
+                        "rollback_proposed",
+                        "rolled_back",
+                        "abandoned",
+                        "failed",
+                    }
+                ),
+            ),
+            ("phase", frozenset({"plan", "implement", "merge", "rollback", "done"})),
+            (
+                "changeType",
+                frozenset(
+                    {
+                        "created",
+                        "start_failed",
+                        "plan_ready",
+                        "plan_approved",
+                        "plan_rejected",
+                        "resumed",
+                        "waiting_user",
+                        "abandoned",
+                        "merge_analysis",
+                        "merge_failed",
+                        "merged",
+                        "rollback_proposed",
+                        "rolled_back",
+                        "rollback_failed",
+                        "protocol_violation",
+                        "plan_invalid",
+                        "result_invalid",
+                        "review_recorded",
+                        "missing_artifact",
+                        "completed",
+                    }
+                ),
+            ),
         ),
     ),
     EVENT_TYPE_RECORDING_PROGRESS: UiEventDefinition(

@@ -14,6 +14,7 @@ from src.desktop_api.ui_event_types import UiEventDraft
 from src.desktop_api.ui_events import (
     EVENT_TYPE_ASSISTANT_ACTIVITY,
     EVENT_TYPE_ASSISTANT_ERROR,
+    EVENT_TYPE_ASSISTANT_EXTERNAL_CODING_CHANGED,
     EVENT_TYPE_ASSISTANT_MEETING_CHANGED,
     EVENT_TYPE_ASSISTANT_PROGRESS,
     EVENT_TYPE_ASSISTANT_SUBAGENT,
@@ -171,8 +172,14 @@ _TASK_GRAPH_FIELD_MAP: dict[str, tuple[str, Any]] = {
 # Each entry: internal_event_name → (public_type, field_map)
 # field_map: {public_key: (internal_key, converter)}
 _TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
-    "assistant_task_graph_changed": (EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED, _TASK_GRAPH_FIELD_MAP),
-    "assistant_task_adjudication_changed": (EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED, _TASK_GRAPH_FIELD_MAP),
+    "assistant_task_graph_changed": (
+        EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED,
+        _TASK_GRAPH_FIELD_MAP,
+    ),
+    "assistant_task_adjudication_changed": (
+        EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED,
+        _TASK_GRAPH_FIELD_MAP,
+    ),
     "assistant_task_root_failed": (EVENT_TYPE_ASSISTANT_TASK_GRAPH_CHANGED, _TASK_GRAPH_FIELD_MAP),
     "assistant_task_board_changed": (
         EVENT_TYPE_ASSISTANT_TASK_BOARD_CHANGED,
@@ -286,7 +293,9 @@ def _project_recording_started(payload, scope, causation_id):
             scope,
             causation_id,
         ),
-        UiEventDraft(EVENT_TYPE_TEACHING_STAGE_CHANGED, {"stage": "recording"}, scope, causation_id),
+        UiEventDraft(
+            EVENT_TYPE_TEACHING_STAGE_CHANGED, {"stage": "recording"}, scope, causation_id
+        ),
     ]
 
 
@@ -774,6 +783,28 @@ def _project_improvement_proposal_changed(payload, scope, causation_id):
     ]
 
 
+def _project_external_coding_session_changed(payload, scope, causation_id):
+    """Project external coding status changes without artifact/log/credential bodies."""
+    return [
+        UiEventDraft(
+            EVENT_TYPE_ASSISTANT_EXTERNAL_CODING_CHANGED,
+            {
+                "codingSessionId": _string_or_none(payload.get("coding_session_id")),
+                "sessionId": _string_or_none(payload.get("session_id")),
+                "ownerType": _string_or_none(payload.get("owner_type")),
+                "ownerId": _string_or_none(payload.get("owner_id")),
+                "tool": _string_or_none(payload.get("tool")),
+                "status": _string_or_none(payload.get("status")),
+                "phase": _string_or_none(payload.get("phase")),
+                "changeType": _string_or_none(payload.get("change_type")),
+                "updatedAt": _string_or_none(payload.get("updated_at")),
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
 def _make_task_projection(public_type: str, field_map: dict[str, tuple[str, Any]]):
     def _project(payload, scope, causation_id):
         projected = {
@@ -831,6 +862,7 @@ _PROJECTIONS: dict[str, ProjectionHandler] = {
     "brain_specialist_changed": _project_brain_specialist_changed,
     "brain_context_ready": _project_brain_context_ready,
     "improvement_proposal_changed": _project_improvement_proposal_changed,
+    "external_coding_session_changed": _project_external_coding_session_changed,
     "backend_resync_required": _project_backend_resync_required,
 }
 

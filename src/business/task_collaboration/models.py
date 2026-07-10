@@ -142,6 +142,7 @@ class TaskSnapshot:
     assignee: TaskAssignee | None = None
     adjudication_id: str | None = None
     updated_at: datetime | None = None
+    external_coding_sessions: list[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
