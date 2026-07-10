@@ -206,6 +206,7 @@ class ToolRegistry:
             create_update_user_todo_handler,
             create_user_todo_handler,
         )
+        from src.business.agents.tools.external_coding_tools import create_external_coding_tools
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
@@ -296,6 +297,10 @@ class ToolRegistry:
                 schema=DELETE_USER_TODO_SCHEMA,
                 handler=create_delete_user_todo_handler(),
             ),
+            *create_external_coding_tools(
+                session_id=parent_session_id or executor_id,
+                bound_task_id=current_task_id,
+            ),
         ]
 
         specialist_subagent_tools: list[ToolDefinition] = []
@@ -358,10 +363,12 @@ class ToolRegistry:
 
         # 027: MCP 工具注入 — 预置全量 + 自定义激活
         from src.business.mcp import get_mcp_tool_registry
+
         mcp_registry = get_mcp_tool_registry()
 
         # 027-T029: MCP-aware search_tools（含 MCP kind 和 server_slug 过滤）
         from src.business.mcp.mcp_search_tools import create_mcp_aware_search_tools
+
         search_tools = create_mcp_aware_search_tools(dynamic_manager, mcp_registry)
 
         def tool_factory() -> list[ToolDefinition]:
@@ -372,8 +379,8 @@ class ToolRegistry:
                     + planner_tools
                     + [load_skill_tool]
                     + dynamic_manager.get_activated_tools()
-                    + mcp_registry.get_preset_tools()              # 轨道 A
-                    + mcp_registry.get_activated_custom_tools()    # 轨道 B
+                    + mcp_registry.get_preset_tools()  # 轨道 A
+                    + mcp_registry.get_activated_custom_tools()  # 轨道 B
                 )
             return (
                 search_tools
@@ -381,8 +388,8 @@ class ToolRegistry:
                 + specialist_subagent_tools
                 + builtin_tools
                 + dynamic_manager.get_activated_tools()
-                + mcp_registry.get_preset_tools()              # 轨道 A
-                + mcp_registry.get_activated_custom_tools()    # 轨道 B
+                + mcp_registry.get_preset_tools()  # 轨道 A
+                + mcp_registry.get_activated_custom_tools()  # 轨道 B
             )
 
         return tool_factory
@@ -442,9 +449,6 @@ class ToolRegistry:
             create_retrieve_archive_handler,
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
-        )
-        from src.business.agents.tools.dynamic_tool_manager import (
-            DynamicToolManager,
         )
         from src.business.agents.tools.proposal_source_tools import (
             create_inspect_proposal_source_tool,
@@ -606,10 +610,12 @@ class ToolRegistry:
 
         # 027: MCP 工具注入 — 预置全量 + 自定义激活
         from src.business.mcp import get_mcp_tool_registry
+
         mcp_registry = get_mcp_tool_registry()
 
         # 027-T029: MCP-aware search_tools（含 MCP kind 和 server_slug 过滤）
         from src.business.mcp.mcp_search_tools import create_mcp_aware_search_tools
+
         search_tools = create_mcp_aware_search_tools(dynamic_manager, mcp_registry)
 
         static_tools = [
@@ -641,15 +647,17 @@ class ToolRegistry:
 
         def tool_factory() -> list[ToolDefinition]:
             proposal_discussion_tools = (
-                [inspect_proposal_source_tool] if discussion_source_tool_available(session_id) else []
+                [inspect_proposal_source_tool]
+                if discussion_source_tool_available(session_id)
+                else []
             )
             return (
                 search_tools
                 + static_tools
                 + proposal_discussion_tools
                 + dynamic_manager.get_activated_tools()
-                + mcp_registry.get_preset_tools()              # 轨道 A：预置全量
-                + mcp_registry.get_activated_custom_tools()    # 轨道 B：自定义激活
+                + mcp_registry.get_preset_tools()  # 轨道 A：预置全量
+                + mcp_registry.get_activated_custom_tools()  # 轨道 B：自定义激活
             )
 
         return tool_factory

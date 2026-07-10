@@ -4,22 +4,20 @@ MCP filesystem server 集成测试 (T051)。
 使用真实 MCP SDK + npx @modelcontextprotocol/server-filesystem 进行端到端验证。
 标记 @pytest.mark.integration，SDK/npx 不可用时 skip。
 """
+
 from __future__ import annotations
 
 import os
 import shutil
 import tempfile
-import time
 
 import pytest
 
 from src.business.mcp.models import (
     McpCallResult,
     McpServerConfigPublic,
-    McpServerStatus,
     McpToolInfo,
 )
-
 
 # ── Skip 条件 ──
 
@@ -27,6 +25,7 @@ from src.business.mcp.models import (
 def _sdk_available() -> bool:
     try:
         import mcp  # noqa: F401
+
         return True
     except ImportError:
         return False
@@ -143,7 +142,6 @@ def test_filesystem_server_call_tool_read_file(temp_dir, process_manager):
     server_id = config.server_id
 
     tools = process_manager.start_server(server_id, config)
-    tool_names = [t.name for t in tools]
 
     # 找到 read_file 工具
     read_tool = next(

@@ -3,7 +3,6 @@ T033: mcp_search_tools 单元测试 — RC6 wrapper + kind="mcp" filter + server
 """
 
 import json
-import pytest
 
 from src.business.mcp.mcp_search_tools import create_mcp_aware_search_tools
 from src.business.mcp.mcp_tool_registry import McpToolRegistry, NullRegistry
@@ -36,7 +35,11 @@ def _setup_registry_with_tools() -> McpToolRegistry:
             full_name = f"mcp__{slug}__{tool.name}"
             tool_def = ToolDefinition(
                 name=full_name,
-                schema={"name": full_name, "description": tool.description, "parameters": {"type": "object"}},
+                schema={
+                    "name": full_name,
+                    "description": tool.description,
+                    "parameters": {"type": "object"},
+                },
                 handler=lambda **kw: "ok",
             )
             registry.register_tool_definition(full_name, tool_def, server_id, is_preset=is_preset)
@@ -63,6 +66,7 @@ class TestMcpSearchTools:
 
         # 用 Null DynamicToolManager（无用户技能）
         from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
+
         dynamic_manager = DynamicToolManager(allowed_tool_ids=None)
 
         search_tools = create_mcp_aware_search_tools(dynamic_manager, registry)
@@ -81,6 +85,7 @@ class TestMcpSearchTools:
         registry = _setup_registry_with_tools()
 
         from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
+
         dynamic_manager = DynamicToolManager(allowed_tool_ids=None)
 
         search_tools = create_mcp_aware_search_tools(dynamic_manager, registry)
@@ -98,6 +103,7 @@ class TestMcpSearchTools:
         registry = _setup_registry_with_tools()
 
         from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
+
         dynamic_manager = DynamicToolManager(allowed_tool_ids=None)
 
         search_tools = create_mcp_aware_search_tools(dynamic_manager, registry)
@@ -114,6 +120,7 @@ class TestMcpSearchTools:
         registry = McpToolRegistry()
 
         from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
+
         dynamic_manager = DynamicToolManager(allowed_tool_ids=None)
 
         search_tools = create_mcp_aware_search_tools(dynamic_manager, registry)
@@ -128,6 +135,7 @@ class TestMcpSearchTools:
         """search_tools schema kind enum 含 "mcp"。"""
         registry = NullRegistry()
         from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
+
         dynamic_manager = DynamicToolManager(allowed_tool_ids=None)
 
         tools = create_mcp_aware_search_tools(dynamic_manager, registry)

@@ -945,51 +945,83 @@ class TaskCollaborationService(AtomicTaskService):
             adjudication.task_id: adjudication
             for adjudication in self._adjudications.list_pending_for_graph(graph_id)
         }
+        external_coding = None
+        try:
+            from src.business.external_coding import ExternalCodingSessionService
+
+            external_coding = ExternalCodingSessionService()
+        except ImportError:
+            pass
+        except Exception as exc:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Failed to initialize external coding service: %s", exc
+            )
+        external_by_task: dict[str, list[dict]] = {}
+        if external_coding is not None:
+            try:
+                external_by_task = external_coding.list_task_summaries_by_task(
+                    [task.task_id for task in tasks]
+                )
+            except Exception as exc:
+                import logging
+
+                logging.getLogger(__name__).warning(
+                    "Failed to list external coding task summaries: %s",
+                    exc,
+                )
         snapshots: list[TaskSnapshot] = []
         adjudication_items: list[TaskAdjudicationSnapshot] = []
-        for task in tasks:
-            pending = pending_by_task.get(task.task_id)
-            if pending is not None:
-                adjudication_items.append(
-                    TaskAdjudicationSnapshot(
-                        adjudication_id=pending.adjudication_id,
-                        task_id=pending.task_id,
-                        safe_summary=pending.safe_summary,
-                        delivered_status=pending.delivered_status,
-                        raw_result_ref=pending.raw_result_ref,
+        try:
+            for task in tasks:
+                pending = pending_by_task.get(task.task_id)
+                if pending is not None:
+                    adjudication_items.append(
+                        TaskAdjudicationSnapshot(
+                            adjudication_id=pending.adjudication_id,
+                            task_id=pending.task_id,
+                            safe_summary=pending.safe_summary,
+                            delivered_status=pending.delivered_status,
+                            raw_result_ref=pending.raw_result_ref,
+                        )
+                    )
+                external_summaries = external_by_task.get(task.task_id, [])
+                snapshots.append(
+                    TaskSnapshot(
+                        task_id=task.task_id,
+                        graph_id=task.graph_id,
+                        parent_task_id=task.parent_task_id,
+                        title=safe_public_preview(task.title, key="title", max_chars=80),
+                        description_preview=safe_public_preview(
+                            task.description, key="descriptionPreview"
+                        ),
+                        status=task.status,
+                        display_phase=derive_display_phase(
+                            task.status,
+                            has_pending_adjudication=pending is not None,
+                        ),
+                        requires_review=pending is not None,
+                        requires_confirmation=task.requires_confirmation,  # DB Boolean → snapshot bool（统一类型）
+                        safe_explanation=_PENDING_REVIEW_EXPLANATION if pending is not None else "",
+                        suspend_reason=task.suspend_reason,
+                        assignee=(
+                            TaskAssignee(
+                                type=task.assignee_type,
+                                id=task.assignee_id,
+                                label=task.assignee_id,
+                            )
+                            if task.assignee_type and task.assignee_id
+                            else None
+                        ),
+                        adjudication_id=pending.adjudication_id if pending else None,
+                        updated_at=task.updated_at,
+                        external_coding_sessions=external_summaries,
                     )
                 )
-            snapshots.append(
-                TaskSnapshot(
-                    task_id=task.task_id,
-                    graph_id=task.graph_id,
-                    parent_task_id=task.parent_task_id,
-                    title=safe_public_preview(task.title, key="title", max_chars=80),
-                    description_preview=safe_public_preview(
-                        task.description, key="descriptionPreview"
-                    ),
-                    status=task.status,
-                    display_phase=derive_display_phase(
-                        task.status,
-                        has_pending_adjudication=pending is not None,
-                    ),
-                    requires_review=pending is not None,
-                    requires_confirmation=task.requires_confirmation,  # DB Boolean → snapshot bool（统一类型）
-                    safe_explanation=_PENDING_REVIEW_EXPLANATION if pending is not None else "",
-                    suspend_reason=task.suspend_reason,
-                    assignee=(
-                        TaskAssignee(
-                            type=task.assignee_type,
-                            id=task.assignee_id,
-                            label=task.assignee_id,
-                        )
-                        if task.assignee_type and task.assignee_id
-                        else None
-                    ),
-                    adjudication_id=pending.adjudication_id if pending else None,
-                    updated_at=task.updated_at,
-                )
-            )
+        finally:
+            if external_coding is not None:
+                external_coding.close()
         return TaskGraphSnapshot(
             graph_id=graph_id,
             session_id=session_id,
@@ -1127,6 +1159,7 @@ class TaskCollaborationService(AtomicTaskService):
                     ),
                     "adjudicationId": t.adjudication_id,
                     "updatedAt": t.updated_at,
+                    "externalCodingSessions": t.external_coding_sessions,
                 }
                 for t in snapshot.tasks
             ],

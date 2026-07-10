@@ -397,6 +397,9 @@ def test_unified_dispatch_helper_uses_task_dispatcher(monkeypatch):
     )
     orchestrator = AgentOrchestrator.__new__(AgentOrchestrator)
     orchestrator._config = _TaskConfig()
+    # This test covers durable delegation through TaskDispatcher. The real
+    # asynchronous execution/reentry path has dedicated integration coverage.
+    monkeypatch.setattr(orchestrator, "_start_unified_attempt", lambda *a, **kw: None)
 
     result = orchestrator._dispatch_task_via_unified_model(
         parent_session_id="parent-session",

@@ -136,7 +136,6 @@ class TestSimpleTaskFastDelegation:
         """
         from unittest.mock import MagicMock
 
-        from src.business.agents.config import AgentType
         from src.business.orchestration.agent.delegation_orchestrator import (
             DelegationOrchestrator,
         )

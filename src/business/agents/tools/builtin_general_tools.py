@@ -144,7 +144,9 @@ class _WebFetchCacheEntry:
 _web_fetch_cache: OrderedDict[str, _WebFetchCacheEntry] = OrderedDict()
 _web_fetch_cache_size_bytes = 0
 _web_fetch_cache_lock = threading.RLock()
-_web_fetch_domain_check_cache = BoundedLruCache[str, float](_WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES)
+_web_fetch_domain_check_cache = BoundedLruCache[str, float](
+    _WEB_FETCH_DOMAIN_CHECK_CACHE_MAX_ENTRIES
+)
 
 # =========================================================================
 # 用户确认机制（高危工具，线程安全）

@@ -28,9 +28,9 @@ class TestWorkspaceDetectionEquivalence:
         ],
     )
     def test_path_and_string_checks_agree_on_valid_worktrees(self, workspace_root):
-        assert is_improvement_workspace_root(workspace_root) == \
-            is_improvement_workspace_root_str(workspace_root), \
-            f"Path and string checks disagree for {workspace_root}"
+        assert is_improvement_workspace_root(workspace_root) == is_improvement_workspace_root_str(
+            workspace_root
+        ), f"Path and string checks disagree for {workspace_root}"
 
     @pytest.mark.parametrize(
         "workspace_root",
@@ -43,9 +43,11 @@ class TestWorkspaceDetectionEquivalence:
         ],
     )
     def test_path_and_string_checks_agree_on_invalid_worktrees(self, workspace_root):
-        assert is_improvement_workspace_root(workspace_root or "") == \
-            is_improvement_workspace_root_str(workspace_root), \
-            f"Path and string checks disagree for {workspace_root}"
+        assert is_improvement_workspace_root(
+            workspace_root or ""
+        ) == is_improvement_workspace_root_str(
+            workspace_root
+        ), f"Path and string checks disagree for {workspace_root}"
 
     def test_main_repo_rejected(self):
         assert not is_improvement_workspace_root("E:\\code\\Exemplar")
@@ -53,7 +55,9 @@ class TestWorkspaceDetectionEquivalence:
 
     def test_improvement_worktree_accepted(self):
         assert is_improvement_workspace_root("E:\\code\\Exemplar\\.worktrees\\improvement\\prop_ok")
-        assert is_improvement_workspace_root_str("E:\\code\\Exemplar\\.worktrees\\improvement\\prop_ok")
+        assert is_improvement_workspace_root_str(
+            "E:\\code\\Exemplar\\.worktrees\\improvement\\prop_ok"
+        )
 
     def test_bare_improvement_dir_rejected(self):
         """`/.worktrees/improvement/` without a proposal ID must be rejected."""
@@ -67,15 +71,16 @@ class TestSessionPrefixConsistency:
         from src.business.self_improvement.proposal_bridge import (
             SELF_IMPROVEMENT_SESSION_PREFIX as bridge_prefix,
         )
+
         assert bridge_prefix == SELF_IMPROVEMENT_SESSION_PREFIX
 
     def test_executor_adapter_uses_proposal_policy(self):
         """task_executor_adapter 不再保留本地前缀别名，直接使用 proposal_policy。"""
         import src.business.orchestration.agent.task_executor_adapter as adapter_mod
 
-        assert not hasattr(adapter_mod, "_SELF_IMPROVEMENT_SESSION_PREFIX"), (
-            "adapter should not retain local prefix alias; use proposal_policy.is_proposal_session instead"
-        )
+        assert not hasattr(
+            adapter_mod, "_SELF_IMPROVEMENT_SESSION_PREFIX"
+        ), "adapter should not retain local prefix alias; use proposal_policy.is_proposal_session instead"
 
     def test_is_proposal_session(self):
         assert is_proposal_session("self_improvement:prop_123")
@@ -96,22 +101,23 @@ class TestBuiltinPermissionsFallback:
         from src.business.agents.tools.builtin_permissions import (
             _looks_like_improvement_workspace_root,
         )
+
         path = "E:\\code\\Exemplar\\.worktrees\\improvement\\prop_ok"
-        assert _looks_like_improvement_workspace_root(path) == \
-            is_improvement_workspace_root(path)
+        assert _looks_like_improvement_workspace_root(path) == is_improvement_workspace_root(path)
 
     def test_fallback_agrees_with_policy_on_invalid_path(self):
         from src.business.agents.tools.builtin_permissions import (
             _looks_like_improvement_workspace_root,
         )
+
         path = "E:\\code\\Exemplar\\src"
-        assert _looks_like_improvement_workspace_root(path) == \
-            is_improvement_workspace_root(path)
+        assert _looks_like_improvement_workspace_root(path) == is_improvement_workspace_root(path)
 
     def test_fallback_agrees_with_policy_on_none(self):
         from src.business.agents.tools.builtin_permissions import (
             _looks_like_improvement_workspace_root,
         )
+
         # Both should return False for empty/invalid paths
         assert not _looks_like_improvement_workspace_root("")
         assert not is_improvement_workspace_root("")

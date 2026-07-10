@@ -21,7 +21,6 @@ from src.data.repos.improvement_proposal_repository import ImprovementProposalRe
 from src.data.repos.tool_output_repository import ToolOutputRepository
 from src.data.repositories import MessageRepository, SessionRepository
 
-
 _FINDING = {
     "type": "效率",
     "what": "重复抓取同一 URL",
@@ -60,7 +59,7 @@ def _seed_source() -> tuple[str, str, str]:
             role="assistant",
             content="我会检查页面，并留意重复抓取。",
             tool_calls=json.dumps(
-                [{"id": "call_1", "function": {"name": "read_file", "arguments": "{\"path\":\"a\"}"}}],
+                [{"id": "call_1", "function": {"name": "read_file", "arguments": '{"path":"a"}'}}],
                 ensure_ascii=False,
             ),
         )
@@ -171,8 +170,13 @@ def test_timeline_view_pairs_tool_calls_and_results(in_memory_db):
     package = ProposalSourceInspector().inspect(proposal_id, view="timeline")
 
     assert package["view"] == "timeline"
-    assert any(item["type"] == "tool_call" and item["toolName"] == "read_file" for item in package["timeline"])
-    assert any(item["type"] == "tool_result" and item["resultSize"] == 2400 for item in package["timeline"])
+    assert any(
+        item["type"] == "tool_call" and item["toolName"] == "read_file"
+        for item in package["timeline"]
+    )
+    assert any(
+        item["type"] == "tool_result" and item["resultSize"] == 2400 for item in package["timeline"]
+    )
 
 
 def test_tool_output_view_loads_only_referenced_source_output(in_memory_db):

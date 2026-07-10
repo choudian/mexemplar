@@ -37,6 +37,7 @@ const EXAMPLE_SCOPES: Partial<Record<UiEventType, Record<string, string>>> = {
   "assistant.task_question.changed": { sessionId: "ast_1" },
   "assistant.meeting.changed": { sessionId: "ast_1" },
   "assistant.todo.changed": { sessionId: "ast_1" },
+  "assistant.external_coding.changed": { sessionId: "ast_1" },
   "recording.progress": { workflowId: "rec_1" },
   "teaching.stage_changed": { workflowId: "rec_1" },
   "teaching.progress": { workflowId: "rec_1" },

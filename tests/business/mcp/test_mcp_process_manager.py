@@ -5,23 +5,19 @@ T019: McpProcessManager 单元测试 — FakeMcpSession 注入、启动/停止�
 
 import asyncio
 import threading
-from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from src.business.mcp.mcp_errors import (
-    McpCircuitBreakerOpenError,
     McpServerDisconnectedError,
     McpToolSchemaValidationError,
-    McpToolTimeoutError,
 )
 from src.business.mcp.models import (
     McpCallResult,
     McpServerConfigPublic,
     McpToolInfo,
 )
-
 
 # ─── FakeMcpSession（RC4 Protocol 实现）───
 
@@ -148,7 +144,6 @@ class TestFakeMcpSessionInjection:
 
     def test_stop_server_clears_session(self):
         """stop_server 后 session 被清除。"""
-        from src.business.mcp.mcp_process_manager import McpProcessManager
 
         # 需要一个运行中的事件循环来调用 stop_server
         mgr = _create_manager_with_loop()
@@ -269,7 +264,6 @@ class TestConvertSdkTypes:
 
     def test_convert_sdk_call_result_normal(self):
         """_convert_sdk_call_result 正常转换。"""
-        from src.business.mcp.mcp_process_manager import _convert_sdk_call_result
 
         # 需要模拟 mcp.types.TextContent
         text_content = MagicMock()
@@ -293,7 +287,6 @@ class TestConvertSdkTypes:
 
     def test_convert_sdk_call_result_error_flag(self):
         """_convert_sdk_call_result isError 标志正确传播。"""
-        from src.business.mcp.mcp_process_manager import _convert_sdk_call_result
 
         sdk_result = MagicMock()
         sdk_result.content = []
@@ -312,7 +305,6 @@ class TestConvertSdkTypes:
         from src.business.mcp.mcp_process_manager import _SdkSessionAdapter
 
         sdk_session = MagicMock()
-        sdk_result = MagicMock()
         sdk_session.call_tool = MagicMock(
             side_effect=RuntimeError("structured content does not match output schema")
         )
@@ -332,9 +324,7 @@ class TestConvertSdkTypes:
         from src.business.mcp.mcp_process_manager import _SdkSessionAdapter
 
         sdk_session = MagicMock()
-        sdk_session.call_tool = MagicMock(
-            side_effect=RuntimeError("some other error")
-        )
+        sdk_session.call_tool = MagicMock(side_effect=RuntimeError("some other error"))
 
         adapter = _SdkSessionAdapter(sdk_session)
 

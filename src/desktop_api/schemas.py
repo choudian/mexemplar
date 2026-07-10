@@ -202,8 +202,43 @@ def _assert_enum_literal_sync() -> None:
         f"literal={_suspend_literal_values - _suspend_values}"
     )
 
+    # External coding enum/literal sync
+    from src.business.external_coding.models import (
+        CodingSessionStatus as _CSStatus,
+        CodingPhase as _CSPhase,
+        ExternalCodingTool as _CSTool,
+        OwnerType as _CSOwnerType,
+        LaunchMode as _CSLaunchMode,
+        AttemptStatus as _CSAttemptStatus,
+        ConflictRisk as _CSConflictRisk,
+        MergeRecordStatus as _CSMergeStatus,
+        RollbackStrategy as _CSRollbackStrategy,
+        RollbackDecisionStatus as _CSRollbackDecisionStatus,
+        ErrorCategory as _CSErrorCategory,
+        QuotaState as _CSQuotaState,
+    )
 
-_assert_enum_literal_sync()
+    _sync_pairs: list[tuple[type, type, str]] = [
+        (_CSStatus, ExternalCodingStatus, "CodingSessionStatus"),
+        (_CSPhase, ExternalCodingPhase, "CodingPhase"),
+        (_CSTool, ExternalCodingTool, "ExternalCodingTool"),
+        (_CSOwnerType, ExternalCodingOwnerType, "OwnerType"),
+        (_CSLaunchMode, ExternalCodingLaunchMode, "LaunchMode"),
+        (_CSAttemptStatus, ExternalCodingAttemptStatus, "AttemptStatus"),
+        (_CSConflictRisk, ExternalCodingConflictRisk, "ConflictRisk"),
+        (_CSMergeStatus, ExternalCodingMergeRecordStatus, "MergeRecordStatus"),
+        (_CSRollbackStrategy, ExternalCodingRollbackStrategy, "RollbackStrategy"),
+        (_CSRollbackDecisionStatus, ExternalCodingRollbackDecisionStatus, "RollbackDecisionStatus"),
+        (_CSErrorCategory, ExternalCodingErrorCategory, "ErrorCategory"),
+        (_CSQuotaState, ExternalCodingQuotaState, "QuotaState"),
+    ]
+    for enum_cls, literal_cls, name in _sync_pairs:
+        enum_values = {e.value for e in enum_cls}
+        literal_values = set(literal_cls.__args__)  # type: ignore[attr-defined]
+        assert enum_values == literal_values, (
+            f"{name} enum/label mismatch: enum={enum_values - literal_values} "
+            f"literal={literal_values - enum_values}"
+        )
 
 
 class AssistantTaskAssignee(BaseModel):
@@ -227,6 +262,7 @@ class AssistantTaskSnapshot(BaseModel):
     assignee: AssistantTaskAssignee | None = None
     adjudicationId: str | None = None
     updatedAt: datetime | None = None
+    externalCodingSessions: list[ExternalCodingSessionTaskSummary] = Field(default_factory=list)
 
 
 class AssistantTaskEdgeSnapshot(BaseModel):
@@ -282,6 +318,225 @@ class AssistantTaskGraphCancelResponse(BaseModel):
     accepted: bool
     graphId: str
     cancelledTaskCount: int
+
+
+ExternalCodingTool = Literal["claude_code", "codex_cli"]
+ExternalCodingLaunchMode = Literal["headless", "interactive"]
+ExternalCodingOwnerType = Literal["task", "workflow"]
+ExternalCodingStatus = Literal[
+    "created",
+    "planning",
+    "plan_ready",
+    "plan_approved",
+    "plan_rejected",
+    "implementing",
+    "interrupted",
+    "waiting_user",
+    "completed",
+    "merge_ready",
+    "merged",
+    "merge_blocked",
+    "rollback_proposed",
+    "rolled_back",
+    "abandoned",
+    "failed",
+]
+ExternalCodingPhase = Literal["plan", "implement", "merge", "rollback", "done"]
+ExternalCodingAttemptStatus = Literal["running", "succeeded", "failed", "interrupted"]
+ExternalCodingConflictRisk = Literal["low", "overlap", "conflict_predicted", "unknown"]
+ExternalCodingMergeRecordStatus = Literal[
+    "analysis_ready", "merged", "blocked", "failed", "rolled_back"
+]
+ExternalCodingRollbackStrategy = Literal["revert_commit", "reverse_patch", "reset_hard", "manual"]
+ExternalCodingRollbackDecisionStatus = Literal["proposed", "applied", "blocked", "failed"]
+ExternalCodingErrorCategory = Literal[
+    "quota_exhausted",
+    "missing_artifact",
+    "protocol_violation",
+    "process_error",
+    "login_required",
+    "network",
+    "model_unavailable",
+    "unknown",
+]
+ExternalCodingQuotaState = Literal["available", "low", "exhausted", "unknown"]
+
+# Run sync assertions after all Literal types are defined
+_assert_enum_literal_sync()
+
+
+class ExternalCodingAttemptDetail(BaseModel):
+    attemptId: str
+    codingSessionId: str
+    phase: ExternalCodingPhase
+    launchMode: ExternalCodingLaunchMode
+    commandSummary: str | None = None
+    externalSessionRef: str | None = None
+    status: ExternalCodingAttemptStatus
+    pid: int | None = None
+    exitCode: int | None = None
+    startedAt: str | None = None
+    finishedAt: str | None = None
+    logPath: str | None = None
+    logTail: str | None = None
+    errorCategory: ExternalCodingErrorCategory | None = None
+    errorMessage: str | None = None
+
+
+class ExternalCodingQuotaObservation(BaseModel):
+    observationId: str
+    tool: ExternalCodingTool
+    state: ExternalCodingQuotaState
+    source: str | None = None
+    confidence: float = 0.0
+    resetAt: str | None = None
+    checkedAt: str | None = None
+    safeDetail: str | None = None
+
+
+class ExternalCodingMergeRecordDetail(BaseModel):
+    mergeRecordId: str
+    codingSessionId: str
+    targetBranch: str | None = None
+    targetWorktreePath: str | None = None
+    preMergeHead: str | None = None
+    codingBranchHead: str | None = None
+    dirtyFiles: list[str] = Field(default_factory=list)
+    changedFiles: list[str] = Field(default_factory=list)
+    overlapFiles: list[str] = Field(default_factory=list)
+    conflictRisk: ExternalCodingConflictRisk
+    agentDecision: str | None = None
+    status: ExternalCodingMergeRecordStatus
+    mergeCommit: str | None = None
+    error: str | None = None
+    createdAt: str | None = None
+    mergedAt: str | None = None
+
+
+class ExternalCodingRollbackDecisionDetail(BaseModel):
+    rollbackId: str
+    codingSessionId: str
+    mergeRecordId: str | None = None
+    intentSummary: str
+    chosenStrategy: ExternalCodingRollbackStrategy
+    safeExplanation: str
+    requiresConfirmation: bool = True
+    confirmedBy: str | None = None
+    status: ExternalCodingRollbackDecisionStatus
+    createdAt: str | None = None
+    appliedAt: str | None = None
+
+
+class ExternalCodingArtifacts(BaseModel):
+    handoff: dict[str, str | None] = Field(default_factory=dict)
+    plan: dict[str, str | None] | None = None
+    result: dict[str, str | None] | None = None
+
+
+class ExternalCodingSessionTaskSummary(BaseModel):
+    """Lightweight summary for embedding in task snapshots."""
+
+    codingSessionId: str
+    tool: ExternalCodingTool
+    status: ExternalCodingStatus
+    phase: ExternalCodingPhase
+
+
+class ExternalCodingSessionSummary(BaseModel):
+    codingSessionId: str
+    sessionId: str | None = None
+    ownerType: ExternalCodingOwnerType
+    ownerId: str
+    tool: ExternalCodingTool
+    launchMode: ExternalCodingLaunchMode
+    status: ExternalCodingStatus
+    phase: ExternalCodingPhase
+    selectedReason: str | None = None
+    quotaState: ExternalCodingQuotaState | None = None
+    worktreePath: str
+    branchName: str
+    artifactDir: str
+    planPreview: str | None = None
+    resultPreview: str | None = None
+    logTail: str | None = None
+    lastErrorCategory: str | None = None
+    lastErrorMessage: str | None = None
+    resumeCount: int = 0
+    reviewRecommended: bool = True
+    reviewSkippedReason: str | None = None
+    createdAt: str
+    updatedAt: str
+    completedAt: str | None = None
+
+
+class ExternalCodingSessionDetail(ExternalCodingSessionSummary):
+    attempts: list[ExternalCodingAttemptDetail] = Field(default_factory=list)
+    quota: list[ExternalCodingQuotaObservation] = Field(default_factory=list)
+    mergeRecords: list[ExternalCodingMergeRecordDetail] = Field(default_factory=list)
+    rollbackDecisions: list[ExternalCodingRollbackDecisionDetail] = Field(default_factory=list)
+    availableActions: list[str] = Field(default_factory=list)
+    artifacts: ExternalCodingArtifacts = Field(default_factory=ExternalCodingArtifacts)
+
+
+class ExternalCodingSessionListResponse(BaseModel):
+    items: list[ExternalCodingSessionSummary] = Field(default_factory=list)
+
+
+class ExternalCodingSessionCreateRequest(BaseModel):
+    sessionId: str | None = None
+    ownerType: ExternalCodingOwnerType
+    ownerId: str = Field(min_length=1)
+    objective: str = Field(min_length=1)
+    context: str = ""
+    toolPreference: Literal["auto", "claude_code", "codex_cli"] = "auto"
+    launchMode: ExternalCodingLaunchMode = "headless"
+    targetBranch: str | None = None
+    targetWorktreePath: str | None = None
+    explicitExhaustedOverride: bool = False
+
+
+class ExternalCodingPlanDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected", "clarification_requested"]
+    decidedBy: Literal["agent", "user"] = "agent"
+    feedback: str = ""
+
+
+class ExternalCodingResumeRequest(BaseModel):
+    instruction: str = ""
+    phase: Literal["plan", "implement"] | None = None
+
+
+class ExternalCodingReviewOutcomeRequest(BaseModel):
+    independentlyReviewed: bool
+    independentlyTested: bool
+    skippedReason: str = ""
+
+
+class ExternalCodingAbandonRequest(BaseModel):
+    reason: str = Field(min_length=1)
+
+
+class ExternalCodingMergeAnalysisRequest(BaseModel):
+    targetBranch: str = Field(min_length=1)
+    targetWorktreePath: str = Field(min_length=1)
+
+
+class ExternalCodingMergeRequest(BaseModel):
+    mergeRecordId: str = Field(min_length=1)
+    agentDecision: str = ""
+
+
+class ExternalCodingRollbackPlanRequest(BaseModel):
+    intentSummary: str = Field(min_length=1)
+
+
+class ExternalCodingRollbackConfirmRequest(BaseModel):
+    rollbackId: str = Field(min_length=1)
+    confirmedBy: Literal["agent", "user"] = "agent"
+
+
+class ExternalCodingEscalateRequest(BaseModel):
+    reason: str = Field(min_length=1)
 
 
 class AssistantTaskAdjudicationDecisionRequest(BaseModel):

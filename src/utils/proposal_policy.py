@@ -13,7 +13,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Session prefix
 # ---------------------------------------------------------------------------
@@ -64,9 +63,8 @@ def is_improvement_workspace_root_str(workspace_root: str | None) -> bool:
     preferred over Path resolution (avoids OS-specific path semantics).
     """
     raw = str(workspace_root or "").replace("\\", "/").lower()
-    return (
-        f"/{WORKTREES_DIR}/{IMPROVEMENT_DIR}/" in raw
-        and not raw.endswith(f"/{WORKTREES_DIR}/{IMPROVEMENT_DIR}/")
+    return f"/{WORKTREES_DIR}/{IMPROVEMENT_DIR}/" in raw and not raw.endswith(
+        f"/{WORKTREES_DIR}/{IMPROVEMENT_DIR}/"
     )
 
 

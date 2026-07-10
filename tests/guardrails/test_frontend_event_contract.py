@@ -158,15 +158,15 @@ def test_event_type_constants_match_registry_keys() -> None:
 
     # Every constant value must be a registry key
     extra_constants = constant_values - registry_keys
-    assert extra_constants == set(), (
-        f"EVENT_TYPE_* constants with values not in registry: {sorted(extra_constants)}"
-    )
+    assert (
+        extra_constants == set()
+    ), f"EVENT_TYPE_* constants with values not in registry: {sorted(extra_constants)}"
 
     # Every registry key must have a constant
     missing_constants = registry_keys - constant_values
-    assert missing_constants == set(), (
-        f"Registry keys without EVENT_TYPE_* constants: {sorted(missing_constants)}"
-    )
+    assert (
+        missing_constants == set()
+    ), f"Registry keys without EVENT_TYPE_* constants: {sorted(missing_constants)}"
 
 
 def test_projector_payload_keys_are_subset_of_registry() -> None:
@@ -250,14 +250,23 @@ def test_projector_payload_keys_are_subset_of_registry() -> None:
         },
         "composition_catalog_invalidated": {"session_id": "s1", "composition_id": "c1"},
         "settings_invalidated": {"session_id": "s1", "keys": ["key1"]},
-        "brain_zone_changed": {"session_id": "s1", "zone": "hot", "entry_id": "e1", "change_type": "added"},
+        "brain_zone_changed": {
+            "session_id": "s1",
+            "zone": "hot",
+            "entry_id": "e1",
+            "change_type": "added",
+        },
         "brain_specialist_recruited": {
             "session_id": "s1",
             "specialist_id": "sp1",
             "name": "n1",
             "reason": "auto",
         },
-        "brain_specialist_changed": {"session_id": "s1", "specialist_id": "sp1", "change_type": "updated"},
+        "brain_specialist_changed": {
+            "session_id": "s1",
+            "specialist_id": "sp1",
+            "change_type": "updated",
+        },
         "brain_context_ready": {"session_id": "s1"},
         "improvement_proposal_changed": {
             "session_id": "s1",
@@ -290,9 +299,7 @@ def test_projector_payload_keys_are_subset_of_registry() -> None:
                 continue
             extra = set(draft.payload) - set(definition.payload_keys)
             if extra:
-                violations.append(
-                    f"{event_name} -> {draft.event_type}: extra keys {sorted(extra)}"
-                )
+                violations.append(f"{event_name} -> {draft.event_type}: extra keys {sorted(extra)}")
 
     assert violations == [], "\n".join(violations)
 
@@ -301,7 +308,9 @@ def test_events_py_resync_type_matches_registry() -> None:
     """The hardcoded 'backend.resync_required' in events.py must match the Registry."""
     source = (REPO_ROOT / "src" / "desktop_api" / "events.py").read_text(encoding="utf-8")
     resync_count = source.count('"backend.resync_required"')
-    assert resync_count >= 2, "Expected at least 2 occurrences of backend.resync_required in events.py"
+    assert (
+        resync_count >= 2
+    ), "Expected at least 2 occurrences of backend.resync_required in events.py"
     assert "backend.resync_required" in registered_event_types()
 
 
@@ -326,9 +335,9 @@ def test_runtime_and_confirmation_event_types_are_registered() -> None:
         found_types = {t for t in found_types if "." in t}
         unregistered_all |= found_types - registered
 
-    assert unregistered_all == set(), (
-        f"Runtime/confirmation files use unregistered event types: {sorted(unregistered_all)}"
-    )
+    assert (
+        unregistered_all == set()
+    ), f"Runtime/confirmation files use unregistered event types: {sorted(unregistered_all)}"
 
 
 def test_frontend_parser_covers_all_registered_types() -> None:
@@ -343,9 +352,9 @@ def test_frontend_parser_covers_all_registered_types() -> None:
     parser_source = (REPO_ROOT / "frontend" / "src" / "api" / "uiEventParser.ts").read_text(
         encoding="utf-8"
     )
-    assert "UI_EVENT_TYPES" in parser_source or "UiEventType" in parser_source, (
-        "uiEventParser.ts must reference UI_EVENT_TYPES or UiEventType to cover all registered types"
-    )
+    assert (
+        "UI_EVENT_TYPES" in parser_source or "UiEventType" in parser_source
+    ), "uiEventParser.ts must reference UI_EVENT_TYPES or UiEventType to cover all registered types"
 
     # Verify that every event type with a typed mapper in the parser is registered
     registered = set(registered_event_types())
@@ -356,6 +365,6 @@ def test_frontend_parser_covers_all_registered_types() -> None:
             re.findall(r'"([a-z][a-z_]*\.[a-z_]+(?:\.[a-z_]+)?)"', after_mappers[:5000])
         )
         unregistered_mappers = mapper_types - registered
-        assert unregistered_mappers == set(), (
-            f"Parser UI_EVENT_MAPPERS references unregistered types: {sorted(unregistered_mappers)}"
-        )
+        assert (
+            unregistered_mappers == set()
+        ), f"Parser UI_EVENT_MAPPERS references unregistered types: {sorted(unregistered_mappers)}"

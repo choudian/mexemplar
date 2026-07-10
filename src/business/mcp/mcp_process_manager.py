@@ -11,7 +11,6 @@ McpProcessManager — 管理所有 MCP server 子进程的 asyncio 生命周期�
 
 import asyncio
 import logging
-import os
 import re
 import tempfile
 import threading
@@ -34,7 +33,6 @@ from src.business.mcp.models import (
     McpCallResult,
     McpLaunchPayload,
     McpServerConfigPublic,
-    McpServerStatus,
     McpToolInfo,
 )
 from src.utils.events import emit
@@ -84,8 +82,7 @@ class _SdkSessionAdapter:
         except RuntimeError as exc:
             # RC3: SDK schema 校验错误
             msg = str(exc).lower()
-            if ("structured content" in msg or "invalid schema" in msg
-                    or "output schema" in msg):
+            if "structured content" in msg or "invalid schema" in msg or "output schema" in msg:
                 raise McpToolSchemaValidationError(name, str(exc)) from exc
             raise
 
@@ -148,6 +145,7 @@ class McpProcessManager:
         """延迟 import 检测 MCP SDK 是否可用（E7）。"""
         try:
             from mcp import ClientSession  # noqa: F401
+
             return True
         except ImportError:
             logger.warning("[MCP] MCP SDK 不可用，MCP 启动/测试功能将降级")
@@ -182,20 +180,18 @@ class McpProcessManager:
                     logger.critical("[MCP] event loop crashed 5+ times, giving up recovery")
                     break
                 import time
+
                 time.sleep(min(crash_count, 3))
 
     def get_or_create_event_loop(self) -> asyncio.AbstractEventLoop:
         """获取事件循环，如果线程死了则重建。"""
-        if (self._event_loop_thread is None
-                or not self._event_loop_thread.is_alive()):
+        if self._event_loop_thread is None or not self._event_loop_thread.is_alive():
             self._start_event_loop()
         return self._event_loop  # type: ignore
 
     # ─── 同步入口 ───
 
-    def start_server(
-        self, server_id: str, config: McpServerConfigPublic
-    ) -> list[McpToolInfo]:
+    def start_server(self, server_id: str, config: McpServerConfigPublic) -> list[McpToolInfo]:
         """同步启动 server（可从任意线程调用）。
 
         Returns:
@@ -205,9 +201,7 @@ class McpProcessManager:
             raise RuntimeError("MCP SDK 不可用，无法启动 server")
 
         loop = self.get_or_create_event_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._start_server_coro(server_id, config), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._start_server_coro(server_id, config), loop)
         try:
             return future.result(timeout=60)
         except Exception as exc:
@@ -221,9 +215,7 @@ class McpProcessManager:
             RuntimeError: stop 超时或失败（子进程可能残留为孤儿）。
         """
         loop = self.get_or_create_event_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._stop_server_coro(server_id), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._stop_server_coro(server_id), loop)
         try:
             future.result(timeout=15)
         except asyncio.TimeoutError:
@@ -233,9 +225,7 @@ class McpProcessManager:
             logger.warning("[MCP] stop_server %s failed: %s", server_id, exc)
             raise RuntimeError(f"停止 MCP server {server_id} 失败: {exc}") from exc
 
-    def call_tool_sync(
-        self, server_id: str, tool_name: str, args: dict
-    ) -> McpCallResult:
+    def call_tool_sync(self, server_id: str, tool_name: str, args: dict) -> McpCallResult:
         """同步调用工具（可从任意线程调用）。"""
         if not self._event_loop_thread or not self._event_loop_thread.is_alive():
             self._start_event_loop()
@@ -256,9 +246,7 @@ class McpProcessManager:
         except Exception as exc:
             raise McpServerDisconnectedError(server_id) from exc
 
-    def reconnect_server(
-        self, server_id: str, config: McpServerConfigPublic
-    ) -> list[McpToolInfo]:
+    def reconnect_server(self, server_id: str, config: McpServerConfigPublic) -> list[McpToolInfo]:
         """重连 = stop + start。
 
         Returns:
@@ -274,9 +262,7 @@ class McpProcessManager:
     def health_check(self, server_id: str) -> bool:
         """同步健康检查。"""
         loop = self.get_or_create_event_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._health_check_coro(server_id), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._health_check_coro(server_id), loop)
         try:
             return future.result(timeout=10)
         except Exception:
@@ -284,9 +270,7 @@ class McpProcessManager:
 
     # ─── 异步核心 ───
 
-    async def _start_server_coro(
-        self, server_id: str, public_config: McpServerConfigPublic
-    ):
+    async def _start_server_coro(self, server_id: str, public_config: McpServerConfigPublic):
         """在 MCP 事件循环上执行的实际启动逻辑。"""
         from mcp import ClientSession  # 延迟 import（E7）
         from mcp.client.stdio import stdio_client, StdioServerParameters
@@ -304,9 +288,7 @@ class McpProcessManager:
         )
 
         # RC1: stderr 用 tempfile（有 fileno，subprocess 接受）
-        stderr_file = tempfile.TemporaryFile(
-            mode="w+", encoding="utf-8", errors="replace"
-        )
+        stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
         stop_event = asyncio.Event()
         stack = AsyncExitStack()
 
@@ -419,9 +401,7 @@ class McpProcessManager:
                     try:
                         ok = await session.send_ping()
                         if not ok:
-                            await self._mark_disconnected(
-                                sid, RuntimeError("ping failed")
-                            )
+                            await self._mark_disconnected(sid, RuntimeError("ping failed"))
                     except Exception as exc:
                         await self._mark_disconnected(sid, exc)
         except asyncio.CancelledError:
@@ -442,7 +422,9 @@ class McpProcessManager:
             try:
                 await asyncio.wait_for(stack.aclose(), timeout=5)
             except Exception as exc:
-                logger.debug("[MCP] stack.aclose() in _mark_disconnected for %s: %s", server_id, exc)
+                logger.debug(
+                    "[MCP] stack.aclose() in _mark_disconnected for %s: %s", server_id, exc
+                )
         self._stop_events.pop(server_id, None)
 
         stderr_file = self._stderr_files.pop(server_id, None)
@@ -503,9 +485,7 @@ class McpProcessManager:
                 if new_data and new_data.strip():
                     server_name = self._server_names.get(server_id, server_id)
                     masked = _mask_secrets(new_data)
-                    logger.info(
-                        "[MCP] server=%s stderr: %s", server_name, masked.strip()
-                    )
+                    logger.info("[MCP] server=%s stderr: %s", server_name, masked.strip())
             except Exception as exc:
                 logger.debug("[MCP] stderr reader error for %s: %s", server_id, exc)
             await asyncio.sleep(5)
@@ -515,10 +495,7 @@ class McpProcessManager:
     async def start_all_enabled(self, configs: list[tuple[str, McpServerConfigPublic]]):
         """并发启动所有 enabled server，失败标 failed 但不阻塞（E7 try/except）。"""
         results = await asyncio.gather(
-            *[
-                self._safe_start(server_id, config)
-                for server_id, config in configs
-            ],
+            *[self._safe_start(server_id, config) for server_id, config in configs],
             return_exceptions=True,
         )
         return results

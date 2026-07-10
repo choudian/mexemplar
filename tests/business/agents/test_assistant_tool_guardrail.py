@@ -70,7 +70,9 @@ def _run_forbidden_call(mock_config, tool_name: str) -> tuple[dict[str, int], st
 
     assert result.result_type == ResultType.NEEDS_USER_INPUT
     tool_results = [
-        message.content for message in MessageRepository().get_context(sid) if message.role == "tool"
+        message.content
+        for message in MessageRepository().get_context(sid)
+        if message.role == "tool"
     ]
     return calls, "\n".join(tool_results)
 

@@ -218,7 +218,11 @@ class AgentOrchestrator:
                         "updated dynamic manager (tool_ids=%s, composition_ids=%s)",
                         session_id,
                         "full" if allowed_ids is None else f"{len(allowed_ids)} items",
-                        "full" if allowed_composition_ids is None else f"{len(allowed_composition_ids)} items",
+                        (
+                            "full"
+                            if allowed_composition_ids is None
+                            else f"{len(allowed_composition_ids)} items"
+                        ),
                     )
                     # 授权变更后重新校验已激活工具，移除不再授权的条目
                     manager.get_activated_tools()

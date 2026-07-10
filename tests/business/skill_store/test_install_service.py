@@ -10,7 +10,6 @@ from src.business.skill_store.skills_sh_client import (
     StoreSkillDetail,
     StoreSkillSummary,
 )
-from src.data.models_sqlite import BrainSkill
 from src.data.repos.external_skill_install_repository import (
     ExternalSkillInstallRepository,
 )

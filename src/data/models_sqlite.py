@@ -1372,6 +1372,195 @@ class ExternalSkillInstall(Base):
         )
 
 
+class ExternalCodingSession(Base):
+    """外部 coding session 主记录（v27，030）。"""
+
+    __tablename__ = "external_coding_sessions"
+    __table_args__ = (
+        CheckConstraint(
+            "owner_type IN ('task', 'workflow')",
+            name="ck_external_coding_sessions_owner_type",
+        ),
+        CheckConstraint(
+            "tool IN ('claude_code', 'codex_cli')",
+            name="ck_external_coding_sessions_tool",
+        ),
+        CheckConstraint(
+            "launch_mode IN ('headless', 'interactive')",
+            name="ck_external_coding_sessions_launch_mode",
+        ),
+        CheckConstraint(
+            "status IN ("
+            "'created','planning','plan_ready','plan_approved','plan_rejected',"
+            "'implementing','interrupted','waiting_user','completed','merge_ready',"
+            "'merged','merge_blocked','rollback_proposed','rolled_back','abandoned','failed'"
+            ")",
+            name="ck_external_coding_sessions_status",
+        ),
+        CheckConstraint(
+            "phase IN ('plan','implement','merge','rollback','done')",
+            name="ck_external_coding_sessions_phase",
+        ),
+        Index("ix_external_coding_sessions_owner", "owner_type", "owner_id", "updated_at"),
+        Index("ix_external_coding_sessions_session", "session_id", "updated_at"),
+        Index("ix_external_coding_sessions_status", "status", "updated_at"),
+    )
+
+    coding_session_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    owner_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(100), nullable=False)
+    parent_session_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    tool: Mapped[str] = mapped_column(String(20), nullable=False)
+    launch_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    phase: Mapped[str] = mapped_column(String(20), nullable=False)
+    selected_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    quota_state: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    external_session_ref: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    worktree_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    branch_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    base_commit: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    target_branch: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    target_worktree_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    artifact_dir: Mapped[str] = mapped_column(String(500), nullable=False)
+    handoff_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    plan_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    result_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    plan_approved_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    plan_approved_by: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    last_error_category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    last_error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    resume_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    review_recommended: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    review_skipped_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    updated_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    completed_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+
+class ExternalCodingAttempt(Base):
+    """外部 coding session 的一次 CLI 调用或续跑。"""
+
+    __tablename__ = "external_coding_attempts"
+    __table_args__ = (
+        CheckConstraint("phase IN ('plan', 'implement')", name="ck_external_coding_attempts_phase"),
+        CheckConstraint(
+            "launch_mode IN ('headless', 'interactive')",
+            name="ck_external_coding_attempts_launch_mode",
+        ),
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'interrupted', 'failed')",
+            name="ck_external_coding_attempts_status",
+        ),
+        Index("ix_external_coding_attempts_session", "coding_session_id", "started_at"),
+    )
+
+    attempt_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    coding_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    phase: Mapped[str] = mapped_column(String(20), nullable=False)
+    launch_mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    command_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    external_session_ref: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    finished_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    log_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    log_tail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    error_category: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ExternalCodingQuotaObservation(Base):
+    """外部 coding 工具 quota 的脱敏归一化观测。"""
+
+    __tablename__ = "external_coding_quota_observations"
+    __table_args__ = (
+        CheckConstraint(
+            "tool IN ('claude_code', 'codex_cli')",
+            name="ck_external_coding_quota_tool",
+        ),
+        CheckConstraint(
+            "state IN ('available', 'low', 'exhausted', 'unknown')",
+            name="ck_external_coding_quota_state",
+        ),
+        Index("ix_external_coding_quota_tool_checked", "tool", "checked_at"),
+    )
+
+    observation_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    tool: Mapped[str] = mapped_column(String(20), nullable=False)
+    state: Mapped[str] = mapped_column(String(20), nullable=False)
+    source: Mapped[str] = mapped_column(String(100), nullable=False)
+    confidence: Mapped[float] = mapped_column(nullable=False, default=0.0)
+    reset_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    checked_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    safe_detail: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+
+
+class ExternalCodingMergeRecord(Base):
+    """外部 coding session 自动合并审计记录。"""
+
+    __tablename__ = "external_coding_merge_records"
+    __table_args__ = (
+        CheckConstraint(
+            "conflict_risk IN ('low', 'overlap', 'conflict_predicted', 'unknown')",
+            name="ck_external_coding_merge_conflict_risk",
+        ),
+        CheckConstraint(
+            "status IN ('analysis_ready', 'merged', 'blocked', 'failed', 'rolled_back')",
+            name="ck_external_coding_merge_status",
+        ),
+        Index("ix_external_coding_merge_session", "coding_session_id", "created_at"),
+    )
+
+    merge_record_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    coding_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    target_branch: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_worktree_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    pre_merge_head: Mapped[str] = mapped_column(String(100), nullable=False)
+    coding_branch_head: Mapped[str] = mapped_column(String(100), nullable=False)
+    dirty_files_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    changed_files_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    overlap_files_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    conflict_risk: Mapped[str] = mapped_column(String(30), nullable=False)
+    agent_decision: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(30), nullable=False)
+    merge_commit: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    merged_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+
+class ExternalCodingRollbackDecision(Base):
+    """外部 coding session 回滚裁定记录。"""
+
+    __tablename__ = "external_coding_rollback_decisions"
+    __table_args__ = (
+        CheckConstraint(
+            "chosen_strategy IN ('revert_commit', 'reverse_patch', 'reset_hard', 'manual')",
+            name="ck_external_coding_rollback_strategy",
+        ),
+        CheckConstraint(
+            "status IN ('proposed', 'applied', 'blocked', 'failed')",
+            name="ck_external_coding_rollback_status",
+        ),
+        Index("ix_external_coding_rollback_session", "coding_session_id", "created_at"),
+    )
+
+    rollback_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    coding_session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    merge_record_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    intent_summary: Mapped[str] = mapped_column(Text, nullable=False)
+    chosen_strategy: Mapped[str] = mapped_column(String(30), nullable=False)
+    requires_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    confirmed_by: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    created_at: Mapped[str] = mapped_column(String(50), nullable=False)
+    applied_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+
+
 class McpServer(Base):
     """MCP server 配置表（v24 migration）"""
 

@@ -127,9 +127,7 @@ class TestMcpToolRegistryThreadSafety:
         assert len(errors) == 0, f"Errors during barrier test: {errors}"
         # 所有线程应看到完整的 12 项（4 servers × 3 tools）
         for idx, snapshot in results.items():
-            assert len(snapshot) == 12, (
-                f"Thread {idx} saw {len(snapshot)} items, expected 12"
-            )
+            assert len(snapshot) == 12, f"Thread {idx} saw {len(snapshot)} items, expected 12"
 
 
 class TestConcurrentCallToolSync:

@@ -9,14 +9,11 @@ MCP JSON 配置解析 — 支持三种粘贴导入格式 + secret 自动检测�
 import json
 import logging
 import re
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # secret 自动检测关键词（E9，不区分大小写）
-_SECRET_KEY_PATTERNS = re.compile(
-    r"(token|key|secret|password|credential|auth)", re.IGNORECASE
-)
+_SECRET_KEY_PATTERNS = re.compile(r"(token|key|secret|password|credential|auth)", re.IGNORECASE)
 
 
 class McpJsonParseError(ValueError):
@@ -52,20 +49,26 @@ class McpServerParsedPreview:
 
     def __repr__(self) -> str:
         # RC5: repr 遮罩 secret 值，防止意外泄漏到日志
-        masked_env = {k: ("***" if k in self.detected_secret_keys else v)
-                      for k, v in self.env.items()}
-        masked_headers = {k: ("***" if k in self.detected_secret_keys else v)
-                          for k, v in self.headers.items()}
-        return (f"McpServerParsedPreview(name={self.name!r}, transport={self.transport!r}, "
-                f"env=<{len(masked_env)} keys, masked>, headers=<{len(masked_headers)} keys, masked>)")
+        masked_env = {
+            k: ("***" if k in self.detected_secret_keys else v) for k, v in self.env.items()
+        }
+        masked_headers = {
+            k: ("***" if k in self.detected_secret_keys else v) for k, v in self.headers.items()
+        }
+        return (
+            f"McpServerParsedPreview(name={self.name!r}, transport={self.transport!r}, "
+            f"env=<{len(masked_env)} keys, masked>, headers=<{len(masked_headers)} keys, masked>)"
+        )
 
     def to_dict(self) -> dict:
         """序列化为 API 响应 dict。secret 值被遮罩，只保留键名列表。"""
         # 遮罩 detected secret 值，防止通过预览 API 泄漏
-        safe_env = {k: ("***" if k in self.detected_secret_keys else v)
-                    for k, v in self.env.items()}
-        safe_headers = {k: ("***" if k in self.detected_secret_keys else v)
-                        for k, v in self.headers.items()}
+        safe_env = {
+            k: ("***" if k in self.detected_secret_keys else v) for k, v in self.env.items()
+        }
+        safe_headers = {
+            k: ("***" if k in self.detected_secret_keys else v) for k, v in self.headers.items()
+        }
         return {
             "name": self.name,
             "transport": self.transport,

@@ -6,10 +6,7 @@ sets when the session's allowed tools change between agent turns, and that
 the prompt catalog and runtime discovery stay consistent.
 """
 
-import pytest
-
 from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
-
 
 # ---------------------------------------------------------------------------
 # DynamicToolManager.update_authorization
@@ -32,10 +29,13 @@ class TestUpdateAuthorization:
             allowed_tool_ids=None,
             allowed_composition_ids={"comp_1"},
         )
-        assert mgr.update_authorization(
-            allowed_tool_ids=None,
-            allowed_composition_ids={"comp_1", "comp_2"},
-        ) is True
+        assert (
+            mgr.update_authorization(
+                allowed_tool_ids=None,
+                allowed_composition_ids={"comp_1", "comp_2"},
+            )
+            is True
+        )
 
     def test_tool_ids_removed_returns_true(self):
         mgr = DynamicToolManager(allowed_tool_ids={"a", "b"})

@@ -4,9 +4,7 @@ T044/T050: MCP server API router 测试 — CRUD + 连接管理 + JSON 导入 + 
 使用 FastAPI TestClient，mock McpServerService。
 """
 
-import json
 from collections.abc import Iterator
-from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -14,12 +12,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.desktop_api.routers.mcp_servers import (
-    McpServerCreateRequest,
-    McpServerJsonImportRequest,
-    McpServerUpdateRequest,
     router,
 )
-
 
 # ─── Fixtures ───
 
@@ -121,9 +115,7 @@ class TestCreateMcpServer:
 
     def test_create_server_success(self, api_client, mock_service):
         """正常创建 server 返回 201。"""
-        mock_service.add_server.return_value = _make_detail(
-            server_id="mcs_new", name="my-server"
-        )
+        mock_service.add_server.return_value = _make_detail(server_id="mcs_new", name="my-server")
 
         resp = api_client.post(
             "/api/mcp-servers",
@@ -206,9 +198,7 @@ class TestGetMcpServer:
 
     def test_get_server_found(self, api_client, mock_service):
         """存在的 server 返回详情。"""
-        mock_service.get_server.return_value = _make_detail(
-            server_id="mcs_x", name="found"
-        )
+        mock_service.get_server.return_value = _make_detail(server_id="mcs_x", name="found")
 
         resp = api_client.get("/api/mcp-servers/mcs_x")
 
@@ -362,9 +352,7 @@ class TestEnableMcpServer:
 
     def test_enable_server_success(self, api_client, mock_service):
         """启用 server 并启动。"""
-        mock_service.enable_server.return_value = _make_detail(
-            enabled=True, status="running"
-        )
+        mock_service.enable_server.return_value = _make_detail(enabled=True, status="running")
 
         resp = api_client.post("/api/mcp-servers/mcs_test/enable")
 
@@ -384,9 +372,7 @@ class TestDisableMcpServer:
 
     def test_disable_server_success(self, api_client, mock_service):
         """禁用 server 并停止。"""
-        mock_service.disable_server.return_value = _make_detail(
-            enabled=False, status="stopped"
-        )
+        mock_service.disable_server.return_value = _make_detail(enabled=False, status="stopped")
 
         resp = api_client.post("/api/mcp-servers/mcs_test/disable")
 

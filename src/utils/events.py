@@ -63,6 +63,7 @@ EventName: TypeAlias = Literal[
     "assistant_todo_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
+    "external_coding_session_changed",
     "self_improvement_action",
     "prompt_supplement_changed",
     "tool_gap_detected",
@@ -263,6 +264,17 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "display_phase",
         "safe_explanation",
     ),
+    "external_coding_session_changed": (
+        "session_id",
+        "owner_type",
+        "owner_id",
+        "coding_session_id",
+        "tool",
+        "status",
+        "phase",
+        "change_type",
+        "updated_at",
+    ),
     "self_improvement_action": (
         "action_type",
         "target_type",
@@ -293,16 +305,12 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "severity",
         "change_type",
     ),
-    "graph_scheduler_start_requested": (
-        "graph_id",
-    ),
+    "graph_scheduler_start_requested": ("graph_id",),
     "graph_scheduler_recovery_completed": (
         "graph_id",
         "task_id",
     ),
-    "backend_resync_required": (
-        "reason",
-    ),
+    "backend_resync_required": ("reason",),
     "mcp_server_disconnected": (
         "server_id",
         "error",
@@ -425,6 +433,7 @@ assistant_meeting_changed = _registry.signal("assistant_meeting_changed")
 assistant_todo_changed = _registry.signal("assistant_todo_changed")
 assistant_task_adjudication_changed = _registry.signal("assistant_task_adjudication_changed")
 assistant_task_root_failed = _registry.signal("assistant_task_root_failed")
+external_coding_session_changed = _registry.signal("external_coding_session_changed")
 
 # 自我改进事件
 self_improvement_action = _registry.signal("self_improvement_action")
@@ -595,6 +604,7 @@ __all__ = [
     "assistant_todo_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
+    "external_coding_session_changed",
     # 自我改进
     "self_improvement_action",
     "prompt_supplement_changed",

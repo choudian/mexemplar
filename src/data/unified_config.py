@@ -1040,6 +1040,73 @@ class UnifiedConfigManager:
             "self_improvement.proposals.dedup_cooldown_hours", 24, minimum=0
         )
 
+    # ===== 外部 Coding Session 配置 =====
+
+    def get_external_coding_enabled(self) -> bool:
+        return bool(self.get("external_coding.enabled", default=True))
+
+    def get_external_coding_default_launch_mode(self) -> str:
+        value = str(self.get("external_coding.default_launch_mode", default="headless") or "")
+        return value if value in {"headless", "interactive"} else "headless"
+
+    def get_external_coding_preferred_tool(self) -> str:
+        value = str(self.get("external_coding.preferred_tool", default="auto") or "")
+        return value if value in {"auto", "claude_code", "codex_cli"} else "auto"
+
+    def get_external_coding_artifact_root(self) -> str:
+        return str(self.get("external_coding.artifact_root", default="data/coding_sessions"))
+
+    def get_external_coding_worktree_root(self) -> str:
+        return str(self.get("external_coding.worktree_root", default=".worktrees/coding"))
+
+    def get_external_coding_log_tail_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "external_coding.log_tail_chars", 8000, minimum=1000, maximum=50000
+        )
+
+    def get_external_coding_plan_timeout_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "external_coding.plan_timeout_seconds", 1800, minimum=30, maximum=86400
+        )
+
+    def get_external_coding_run_timeout_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "external_coding.run_timeout_seconds", 7200, minimum=60, maximum=172800
+        )
+
+    def get_external_coding_quota_probe_enabled(self) -> bool:
+        return bool(self.get("external_coding.quota_probe.enabled", default=True))
+
+    def get_external_coding_quota_probe_timeout_seconds(self) -> int:
+        return self._get_bounded_positive_int(
+            "external_coding.quota_probe.timeout_seconds", 12, minimum=2, maximum=60
+        )
+
+    def get_external_coding_quota_low_threshold_percent(self) -> int:
+        return self._get_bounded_positive_int(
+            "external_coding.quota_probe.low_threshold_percent",
+            80,
+            minimum=1,
+            maximum=99,
+        )
+
+    def get_external_coding_autostart_enabled(self) -> bool:
+        return bool(self.get("external_coding.autostart_enabled", default=True))
+
+    def get_external_coding_claude_command(self) -> str:
+        return str(self.get("external_coding.claude.command", default="claude"))
+
+    def get_external_coding_codex_command(self) -> str:
+        return str(self.get("external_coding.codex.command", default="codex"))
+
+    def get_external_coding_claude_effort(self) -> str:
+        value = str(self.get("external_coding.claude.effort", default="max") or "")
+        return value or "max"
+
+    def get_external_coding_codex_reasoning_effort(self) -> str:
+        value = str(self.get("external_coding.codex.reasoning_effort", default="xhigh") or "")
+        return value or "xhigh"
+
     # ===== 内部方法 =====
 
     def _get_secret(self, key: str) -> Optional[str]:

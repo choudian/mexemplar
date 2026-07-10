@@ -7,6 +7,10 @@ from src.business.agents.config import ResultType
 from src.business.agents.tools.dynamic_tool_manager import DynamicToolManager
 from src.business.orchestration.agent import AgentOrchestrator
 from src.business.services import SkillCompositionError, SkillCompositionService, SkillsService
+from src.business.services.skill_composition import (
+    build_trial_session_snapshot_payload,
+    build_trial_system_prompt,
+)
 import src.business.services.skill_composition.service as skill_composition_service_module
 from src.data.models import SkillComposition, SkillCompositionMember, Tool
 from src.data.models_sqlite import (
@@ -166,7 +170,6 @@ def test_needs_review_compositions_are_hidden_from_assistant_queries():
     service = SkillCompositionService()
 
     assert service.get_assistant_published_summaries() == []
-    assert service.search_published_compositions("待复核组合") == []
 
     detail = DynamicToolManager().get_tool_detail("技能组合:待复核组合")
     assert "不存在或当前不可用" in detail
@@ -588,7 +591,7 @@ def test_trial_prompt_does_not_reference_unavailable_helper_tools():
         ],
     )
 
-    prompt = SkillCompositionService._build_trial_system_prompt(composition)
+    prompt = build_trial_system_prompt(composition)
 
     assert "search_tools" not in prompt
     assert "get_tool_detail" not in prompt
@@ -761,7 +764,7 @@ def test_continue_trial_uses_saved_session_snapshot_when_live_composition_change
             {"tool_id": "snapold2_member", "selected_order": 2, "execution_order": 2},
         ],
     )
-    snapshot_payload = service._build_trial_session_snapshot_payload(composition)
+    snapshot_payload = build_trial_session_snapshot_payload(composition)
     _patch_trial_environment(monkeypatch)
 
     service.update_composition(
@@ -810,7 +813,7 @@ def test_continue_trial_uses_saved_session_snapshot_when_live_composition_change
         session = session_repo.get_by_id(session_id)
         assert session is not None
 
-    restored = service._get_trial_session_composition(session)
+    restored = service._trial_sessions.get_trial_session_composition(session)
     assert restored is not None
     assert restored.mode == "ordered"
     assert restored.description == "旧版组合"

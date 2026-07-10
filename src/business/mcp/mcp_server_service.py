@@ -9,6 +9,10 @@ import json
 import logging
 import re
 import threading
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.business.agents.config import ToolDefinition
 
 from src.business.mcp.mcp_errors import (
     McpCircuitBreakerOpenError,
@@ -26,13 +30,11 @@ from src.business.mcp.mcp_env_resolver import (
 from src.business.mcp.models import (
     McpCallResult,
     McpServerConfigPublic,
-    McpServerStatus,
     McpToolInfo,
 )
 from src.data.repos.mcp_server_repository import McpServerRepository
 from src.data.unified_config import get_unified_config
 from src.utils.events import emit
-from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +75,12 @@ class McpServerService:
 
         # 使用全局单例 registry（与 tool_registry.py/tool_factory 共享同一实例）
         from src.business.mcp import get_mcp_tool_registry
+
         self._registry = get_mcp_tool_registry()
 
         # 订阅 ProcessManager 断连事件（ping/call_tool 异常触发）
         from src.utils.events import connect
+
         connect("mcp_server_disconnected", self._on_server_disconnected, weak=False)
 
     @property
@@ -112,6 +116,7 @@ class McpServerService:
 
         # secret 自动检测
         from src.business.mcp.mcp_json_import import detect_secret_keys_in_dict
+
         detected_env_secrets = detect_secret_keys_in_dict(env)
         detected_header_secrets = detect_secret_keys_in_dict(kwargs.get("headers", {}))
 
@@ -272,9 +277,7 @@ class McpServerService:
 
         return self._get_server_detail(server_id)
 
-    def test_connection(
-        self, server_id: str
-    ) -> tuple[list[McpToolInfo], str | None]:
+    def test_connection(self, server_id: str) -> tuple[list[McpToolInfo], str | None]:
         """测试 server 连接：临时启动 + list_tools + 立即停止。
 
         不触碰全局 registry、不 emit 事件、不更新 DB 状态，
@@ -355,9 +358,7 @@ class McpServerService:
     def stop_all(self) -> None:
         """停止所有 running server。"""
         loop = self._process_manager.get_or_create_event_loop()
-        future = asyncio.run_coroutine_threadsafe(
-            self._process_manager.stop_all(), loop
-        )
+        future = asyncio.run_coroutine_threadsafe(self._process_manager.stop_all(), loop)
         try:
             future.result(timeout=10)
         except Exception as exc:
@@ -365,9 +366,7 @@ class McpServerService:
 
     # ─── 工具调用 ───
 
-    def call_tool_sync(
-        self, server_id: str, tool_name: str, args: dict
-    ) -> McpCallResult:
+    def call_tool_sync(self, server_id: str, tool_name: str, args: dict) -> McpCallResult:
         """同步调用工具，含断路器检查（E8）。"""
         # 断路器检查
         with self._lock:
@@ -381,8 +380,11 @@ class McpServerService:
             with self._lock:
                 self._consecutive_failures[server_id] = 0
             return result
-        except (McpServerDisconnectedError, McpToolTimeoutError,
-                McpToolSchemaValidationError) as exc:
+        except (
+            McpServerDisconnectedError,
+            McpToolTimeoutError,
+            McpToolSchemaValidationError,
+        ):
             # 失败：增加计数
             with self._lock:
                 self._consecutive_failures[server_id] = (
@@ -477,17 +479,13 @@ class McpServerService:
         is_preset = config.is_preset
 
         # 注册到 registry（先注册目录项，再逐个注册 ToolDefinition）
-        self._registry.register_server_tools(
-            server_id, slug, tools, is_preset
-        )
+        self._registry.register_server_tools(server_id, slug, tools, is_preset)
 
         # 构建 ToolDefinition 并注册
         for tool in tools:
             full_name = f"mcp__{slug}__{tool.name}"
             tool_def = self._build_tool_definition(server_id, tool.name, full_name, tool)
-            self._registry.register_tool_definition(
-                full_name, tool_def, server_id, is_preset
-            )
+            self._registry.register_tool_definition(full_name, tool_def, server_id, is_preset)
 
         # 更新 DB 工具缓存
         tools_json = json.dumps([t.to_dict() for t in tools])
@@ -518,7 +516,8 @@ class McpServerService:
         schema = {
             "name": full_name,
             "description": (tool_info.description or "")[:500],
-            "parameters": tool_info.input_schema or {
+            "parameters": tool_info.input_schema
+            or {
                 "type": "object",
                 "properties": {},
             },
@@ -538,40 +537,48 @@ class McpServerService:
 
     def _create_sync_handler(self, server_id: str, tool_name: str, full_name: str):
         """为 MCP 工具创建同步 handler。"""
+
         def handler(**kwargs) -> str:
             try:
                 result = self.call_tool_sync(server_id, tool_name, kwargs)
                 return self._format_mcp_result(full_name, result)
             except McpServerDisconnectedError:
                 return _mcp_error_json(
-                    full_name, "mcp_server_disconnected",
+                    full_name,
+                    "mcp_server_disconnected",
                     "MCP server 连接已断开，去工具列表重连后重试",
-                    retryable=True, next_action="reconnect_server",
+                    retryable=True,
+                    next_action="reconnect_server",
                 )
             except McpToolTimeoutError:
                 return _mcp_error_json(
-                    full_name, "mcp_tool_timeout",
+                    full_name,
+                    "mcp_tool_timeout",
                     f"MCP tool '{tool_name}' 调用超时",
                     retryable=True,
                 )
             except McpToolSchemaValidationError:
                 return _mcp_error_json(
-                    full_name, "mcp_tool_schema_validation_error",
+                    full_name,
+                    "mcp_tool_schema_validation_error",
                     f"MCP tool '{tool_name}' 输出格式异常",
                 )
             except McpCircuitBreakerOpenError:
                 return _mcp_error_json(
-                    full_name, "mcp_circuit_open",
+                    full_name,
+                    "mcp_circuit_open",
                     "MCP server 连续失败，请重连后重试",
                     next_action="reconnect_server",
                 )
             except Exception as e:
                 suggestion = classify_runtime_error(e)
                 return _mcp_error_json(full_name, "mcp_tool_error", suggestion)
+
         return handler
 
     def _create_pre_hook(self, full_name: str):
         """创建 MCP 工具的 pre_hook（高危确认穿透，R5）。"""
+
         def pre_hook(context):
             # 从 context 提取 args（兼容 ToolCallContext 对象和裸 dict）
             try:
@@ -584,20 +591,22 @@ class McpServerService:
                     from src.business.agents.tools.builtin_general_tools import (
                         _confirm_or_reject,
                     )
+
                     rejected = _confirm_or_reject(
-                        full_name,
-                        f"MCP 工具 {full_name} 可能是写操作，确认执行？"
+                        full_name, f"MCP 工具 {full_name} 可能是写操作，确认执行？"
                     )
                     if rejected is not None:
                         return rejected  # PreHookResult 类型，与 AgentLoop 兼容
                 except ImportError:
                     # 确认模块不可用时 fail-closed：返回 PreHookResult 拒绝写操作
                     from src.business.agents.hook_models import PreHookResult
+
                     return PreHookResult(
                         error=f"无法确认 MCP 写操作 {full_name}，确认模块不可用",
                         error_code="confirmation_failed_closed",
                     )
             return None
+
         return pre_hook
 
     def _format_mcp_result(self, tool_name: str, result: McpCallResult) -> str:
@@ -698,7 +707,9 @@ class McpServerService:
             "envKeys": list(set(config.non_secret_env.keys()) | set(config.secret_env_keys)),
             "envMissingKeys": self._get_missing_env_keys(config),
             "envPresence": env_presence,
-            "headerKeys": list(set(config.non_secret_headers.keys()) | set(config.secret_header_keys)),
+            "headerKeys": list(
+                set(config.non_secret_headers.keys()) | set(config.secret_header_keys)
+            ),
             "headerMissingKeys": [],
             "headerPresence": header_presence,
             "enabled": row.enabled,
@@ -816,8 +827,18 @@ def _is_likely_write_operation(tool_name: str, args: dict) -> bool:
     漏报样本：star_repository / follow_user / move_file（不含任何关键词但是写操作）
     """
     write_keywords = {
-        "create", "delete", "update", "write", "push", "merge",
-        "remove", "add", "close", "deploy", "execute", "fork",
+        "create",
+        "delete",
+        "update",
+        "write",
+        "push",
+        "merge",
+        "remove",
+        "add",
+        "close",
+        "deploy",
+        "execute",
+        "fork",
     }
     name_lower = tool_name.lower()
     return any(kw in name_lower for kw in write_keywords)

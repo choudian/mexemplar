@@ -11,6 +11,7 @@ import {
   stopAssistantTaskGraph,
   updateAssistantTaskTodos,
 } from "../api/assistantTasks";
+import { useExternalCodingSessionStore } from "./externalCodingSessionStore";
 import type { TaskAdjudicationDecision } from "../api/assistantTasks";
 import type {
   AssistantMeetingTranscript,
@@ -371,6 +372,14 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
           },
         };
       });
+      return;
+    }
+    if (event.type === "assistant.external_coding.changed") {
+      const codingSessionId = String(event.payload.codingSessionId ?? "");
+      if (codingSessionId) {
+        useExternalCodingSessionStore.getState().refreshIfCached(codingSessionId);
+      }
+      set({ needsResync: true });
       return;
     }
     if (event.type !== "assistant.task_graph.changed") {

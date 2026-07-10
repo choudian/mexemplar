@@ -12,6 +12,7 @@ export const UI_EVENT_TYPES = [
   "assistant.task_question.changed",
   "assistant.meeting.changed",
   "assistant.todo.changed",
+  "assistant.external_coding.changed",
   "recording.progress",
   "teaching.stage_changed",
   "teaching.progress",
@@ -99,6 +100,16 @@ export const UI_EVENT_EXAMPLES = {
     "taskId": "tsk_1",
     "todoId": "todo_1",
     "changeType": "updated",
+  },
+  "assistant.external_coding.changed": {
+    "codingSessionId": "ecs_123",
+    "sessionId": "sess_1",
+    "ownerType": "task",
+    "ownerId": "tsk_1",
+    "tool": "claude_code",
+    "status": "plan_ready",
+    "phase": "plan",
+    "changeType": "plan_ready",
   },
   "recording.progress": { "status": "recording", "message": "Recording started.", "recordingMode": "desktop" },
   "teaching.stage_changed": { "stage": "learning", "message": "Tool learning started." },
@@ -242,6 +253,51 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
     "changeType": ["created", "deleted", "reordered", "updated"],
     "status": ["doing", "done", "skipped", "todo"],
   },
+  "assistant.external_coding.changed": {
+    "ownerType": ["task", "workflow"],
+    "tool": ["claude_code", "codex_cli"],
+    "status": [
+      "abandoned",
+      "completed",
+      "created",
+      "failed",
+      "implementing",
+      "interrupted",
+      "merge_blocked",
+      "merge_ready",
+      "merged",
+      "plan_approved",
+      "plan_ready",
+      "plan_rejected",
+      "planning",
+      "rollback_proposed",
+      "rolled_back",
+      "waiting_user",
+    ],
+    "phase": ["done", "implement", "merge", "plan", "rollback"],
+    "changeType": [
+      "abandoned",
+      "completed",
+      "created",
+      "merge_analysis",
+      "merge_failed",
+      "merged",
+      "missing_artifact",
+      "plan_approved",
+      "plan_invalid",
+      "plan_ready",
+      "plan_rejected",
+      "protocol_violation",
+      "result_invalid",
+      "resumed",
+      "review_recorded",
+      "rollback_failed",
+      "rollback_proposed",
+      "rolled_back",
+      "start_failed",
+      "waiting_user",
+    ],
+  },
   "teaching.stage_changed": {
     "stage": [
       "abandoned",
@@ -322,6 +378,7 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "assistant.task_question.changed": "assistant",
   "assistant.meeting.changed": "assistant",
   "assistant.todo.changed": "assistant",
+  "assistant.external_coding.changed": "assistant",
   "recording.progress": "teaching",
   "teaching.stage_changed": "teaching",
   "teaching.progress": "teaching",
@@ -604,6 +661,16 @@ export type TaskQuestionChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.
 export type MeetingChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.meeting.changed"]["changeType"][number];
 export type TodoChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.todo.changed"]["changeType"][number];
 export type TodoStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.todo.changed"]["status"][number];
+export type ExternalCodingEventOwnerType =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.external_coding.changed"]["ownerType"][number];
+export type ExternalCodingEventTool =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.external_coding.changed"]["tool"][number];
+export type ExternalCodingEventStatus =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.external_coding.changed"]["status"][number];
+export type ExternalCodingEventPhase =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.external_coding.changed"]["phase"][number];
+export type ExternalCodingEventChangeType =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.external_coding.changed"]["changeType"][number];
 
 export type TaskBoardChangedEvent = UiEventEnvelope<
   "assistant.task_board.changed",
@@ -666,6 +733,21 @@ export type TodoChangedEvent = UiEventEnvelope<
   }
 >;
 
+export type ExternalCodingChangedEvent = UiEventEnvelope<
+  "assistant.external_coding.changed",
+  {
+    codingSessionId: string;
+    sessionId?: string | null;
+    ownerType: ExternalCodingEventOwnerType;
+    ownerId: string;
+    tool: ExternalCodingEventTool;
+    status: ExternalCodingEventStatus;
+    phase: ExternalCodingEventPhase;
+    changeType: ExternalCodingEventChangeType;
+    updatedAt?: string | null;
+  }
+>;
+
 export type SkillChangedEvent = UiEventEnvelope<
   "skill.changed",
   {
@@ -715,6 +797,7 @@ export type UiEvent =
   | TaskQuestionChangedEvent
   | MeetingChangedEvent
   | TodoChangedEvent
+  | ExternalCodingChangedEvent
   | UiEventEnvelope<
       Exclude<
         UiEventType,
@@ -740,5 +823,6 @@ export type UiEvent =
         | "assistant.task_question.changed"
         | "assistant.meeting.changed"
         | "assistant.todo.changed"
+        | "assistant.external_coding.changed"
       >
     >;

@@ -23,7 +23,9 @@ USER_TODO_TOOL_NAMES = {
 
 class _DynamicManagerCache:
     def get_or_create_dynamic_manager(self, session_id, allowed_ids, allowed_composition_ids=None):
-        return DynamicToolManager(allowed_tool_ids=allowed_ids, allowed_composition_ids=allowed_composition_ids)
+        return DynamicToolManager(
+            allowed_tool_ids=allowed_ids, allowed_composition_ids=allowed_composition_ids
+        )
 
 
 def _registry() -> ToolRegistry:
