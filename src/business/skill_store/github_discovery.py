@@ -27,6 +27,7 @@ _TIMEOUT_SECONDS = 10.0
 _REPO_PATTERN = re.compile(
     r"^(?:https?://github\.com/)?(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+?)(?:\.git)?/?$"
 )
+_CLI_SKILL_REF_PATTERN = re.compile(r"^(?P<owner>[\w.\-]+)/(?P<repo>[\w.\-]+)@(?P<skill>[\w.\-]+)$")
 
 
 class GithubRepoInputError(ValueError):
@@ -46,6 +47,17 @@ def parse_repo_input(raw: str) -> tuple[str, str]:
     if not matched:
         raise GithubRepoInputError("请输入 owner/repo 或完整 GitHub 仓库链接")
     return matched.group("owner"), matched.group("repo")
+
+
+def parse_cli_skill_ref(raw: str) -> tuple[str, str, str] | None:
+    matched = _CLI_SKILL_REF_PATTERN.match((raw or "").strip())
+    if not matched:
+        return None
+    return matched.group("owner"), matched.group("repo"), matched.group("skill")
+
+
+def is_cli_skill_ref(raw: str) -> bool:
+    return parse_cli_skill_ref(raw) is not None
 
 
 class GithubFetcher:
@@ -110,7 +122,36 @@ class GithubFetcher:
         del base_path
         return StoreSkillDetail(summary=summary, files=files)
 
+    def fetch_cli_skill_detail(self, source_ref: str) -> StoreSkillDetail:
+        parsed = parse_cli_skill_ref(source_ref)
+        if parsed is None:
+            raise GithubRepoInputError("请输入 owner/repo@skill")
+        owner, repo, skill = parsed
+        resolved = self._resolve_cli_source_ref(owner, repo, skill)
+        detail = self.fetch_detail(resolved)
+        return StoreSkillDetail(
+            summary=StoreSkillSummary(
+                source_ref=source_ref,
+                name=detail.summary.name,
+                source=f"{owner}/{repo}",
+                installs=0,
+                source_url=f"https://skills.sh/{owner}/{repo}/{skill}",
+            ),
+            files=detail.files,
+        )
+
     # -- Internal -----------------------------------------------------------------
+
+    def _resolve_cli_source_ref(self, owner: str, repo: str, skill: str) -> str:
+        for discovered in self.discover(f"{owner}/{repo}"):
+            if discovered["name"] == skill:
+                return discovered["sourceRef"]
+        fallback = f"{owner}/{repo}/skills/{skill}"
+        try:
+            self.fetch_detail(fallback)
+            return fallback
+        except GithubSkillNotFoundError:
+            raise GithubSkillNotFoundError(f"{owner}/{repo}@{skill}")
 
     @staticmethod
     def _split_source_ref(source_ref: str) -> tuple[str, str, str]:

@@ -73,7 +73,7 @@ class InstallService:
         except SkillFileStoreError as exc:
             installable = False
             reason = str(exc)
-        if source_type == "skills_sh":
+        if source_type == "skills_sh" and not self._is_cli_market_ref(source_ref):
             audit = self._skills_sh.audit(source_ref)
         else:
             audit = {"status": "unaudited"}
@@ -180,6 +180,24 @@ class InstallService:
 
     def _fetch_detail(self, source_type: str, source_ref: str) -> StoreSkillDetail:
         if source_type == "skills_sh":
+            if self._is_cli_market_ref(source_ref):
+                if self._github is None:
+                    from src.business.skill_store.github_discovery import GithubFetcher
+
+                    self._github = GithubFetcher()
+                try:
+                    return self._github.fetch_cli_skill_detail(source_ref)
+                except Exception as exc:
+                    from src.business.skill_store.github_discovery import (
+                        GithubSkillNotFoundError,
+                        GithubUnavailableError,
+                    )
+
+                    if isinstance(exc, GithubSkillNotFoundError):
+                        raise SkillNotFoundError(source_ref) from exc
+                    if isinstance(exc, GithubUnavailableError):
+                        raise SkillInstallError(str(exc)) from exc
+                    raise
             try:
                 return self._skills_sh.detail(source_ref)
             except SkillsShNotFoundError as exc:
@@ -191,6 +209,12 @@ class InstallService:
                 self._github = GithubFetcher()
             return self._github.fetch_detail(source_ref)
         raise SkillInstallError(f"不支持的来源类型：{source_type}")
+
+    @staticmethod
+    def _is_cli_market_ref(source_ref: str) -> bool:
+        from src.business.skill_store.github_discovery import is_cli_skill_ref
+
+        return is_cli_skill_ref(source_ref)
 
     @staticmethod
     def _as_skill_files(detail: StoreSkillDetail) -> list[SkillFile]:

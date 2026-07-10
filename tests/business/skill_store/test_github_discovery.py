@@ -11,6 +11,8 @@ from src.business.skill_store.github_discovery import (
     GithubFetcher,
     GithubRepoInputError,
     GithubUnavailableError,
+    is_cli_skill_ref,
+    parse_cli_skill_ref,
     parse_repo_input,
 )
 
@@ -49,6 +51,15 @@ class TestParseRepoInput:
     def test_invalid_inputs(self, raw):
         with pytest.raises(GithubRepoInputError):
             parse_repo_input(raw)
+
+    def test_cli_skill_ref(self):
+        assert parse_cli_skill_ref("vercel-labs/skills@find-skills") == (
+            "vercel-labs",
+            "skills",
+            "find-skills",
+        )
+        assert is_cli_skill_ref("vercel-labs/skills@find-skills") is True
+        assert parse_cli_skill_ref("vercel-labs/skills/find-skills") is None
 
 
 class TestDiscover:
@@ -128,3 +139,29 @@ class TestFetchDetail:
 
         with _pytest.raises(KeyError):
             fetcher.fetch_detail("o/r")
+
+    def test_fetch_cli_skill_detail_resolves_discovered_skill(self):
+        skill_md = "---\nname: find-skills\n---\nbody"
+        routes = {
+            "/repos/vercel-labs/skills/contents/": [
+                {"name": "skills", "type": "dir"},
+            ],
+            "/repos/vercel-labs/skills/contents/skills": [
+                {"name": "find-skills", "type": "dir"},
+            ],
+            "/repos/vercel-labs/skills/contents/skills/find-skills": [
+                {
+                    "name": "SKILL.md",
+                    "type": "file",
+                    "url": "https://api.github.com/file/find-skill",
+                },
+            ],
+            "/file/find-skill": {"content": _b64(skill_md)},
+        }
+        fetcher = GithubFetcher(http_client=_client(routes))
+
+        detail = fetcher.fetch_cli_skill_detail("vercel-labs/skills@find-skills")
+
+        assert detail.summary.source_ref == "vercel-labs/skills@find-skills"
+        assert detail.summary.source_url == "https://skills.sh/vercel-labs/skills/find-skills"
+        assert detail.files[0]["content"] == skill_md

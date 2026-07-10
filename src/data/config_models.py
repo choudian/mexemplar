@@ -234,6 +234,13 @@ class WebConfig:
 
 
 @dataclass
+class SkillStoreConfig:
+    """External skill store configuration."""
+
+    skills_sh_api_key: Optional[str] = None
+
+
+@dataclass
 class BrainSegmentConfig:
     """大脑 Segment 配置"""
 
@@ -438,6 +445,7 @@ class AppConfig:
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     web: WebConfig = field(default_factory=WebConfig)
+    skill_store: SkillStoreConfig = field(default_factory=SkillStoreConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
     self_improvement: SelfImprovementConfig = field(default_factory=SelfImprovementConfig)
     agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
@@ -486,6 +494,11 @@ class AppConfig:
 
         if "web" in data:
             config.web = WebConfig(**_filter_dataclass_fields(data["web"], WebConfig))
+
+        if "skill_store" in data:
+            config.skill_store = SkillStoreConfig(
+                **_filter_dataclass_fields(data["skill_store"], SkillStoreConfig)
+            )
 
         if "brain" in data:
             brain_data = _filter_dataclass_fields(data["brain"], BrainConfig)

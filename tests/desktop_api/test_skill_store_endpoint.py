@@ -7,10 +7,11 @@ from fastapi import HTTPException
 
 from src.business.skill_store.skills_sh_client import (
     SkillsShClient,
-    SkillsShUnavailableError,
     StoreSkillDetail,
     StoreSkillSummary,
 )
+from src.business.services.skill_store_market_service import SkillStoreSearchResult
+from src.execution.skills_cli import SkillsCliUnavailableError
 
 _SKILL_MD = """---
 name: api-test-skill
@@ -46,25 +47,47 @@ def _redirect_data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture()
 def _mock_skills_sh(monkeypatch):
-    monkeypatch.setattr(SkillsShClient, "search", lambda self, q, limit=30: [_summary()])
-    monkeypatch.setattr(SkillsShClient, "curated", lambda self, limit=30: [_summary()])
     monkeypatch.setattr(SkillsShClient, "detail", lambda self, ref: _detail(ref))
     monkeypatch.setattr(SkillsShClient, "audit", lambda self, ref: {"status": "unavailable"})
+    _mock_market_search(monkeypatch, [_summary()])
     yield
+
+
+def _mock_market_search(monkeypatch, summaries):
+    from src.business.services.skill_store_market_service import SkillStoreMarketService
+
+    monkeypatch.setattr(
+        SkillStoreMarketService,
+        "search",
+        lambda self, q, limit=30: SkillStoreSearchResult(items=list(summaries)),
+    )
 
 
 def test_search_degrades_when_source_unavailable(in_memory_db, monkeypatch):
     """约束 1：外部失败 → sourceAvailable=false，不抛 5xx。"""
+    from src.business.services.skill_store_market_service import SkillStoreMarketService
     from src.desktop_api.routers.skill_store import search_store
 
     def _down(self, q, limit=30):
-        raise SkillsShUnavailableError()
+        raise SkillsCliUnavailableError("未找到 npx，请安装 Node.js/npm 后重试。")
 
-    monkeypatch.setattr(SkillsShClient, "search", _down)
+    monkeypatch.setattr(SkillStoreMarketService, "search", _down)
     response = search_store(q="anything", limit=10)
     assert response.sourceAvailable is False
     assert response.items == []
     assert response.message
+
+
+def test_search_uses_cli_market_results(in_memory_db, monkeypatch):
+    """搜索走 skills CLI 结果格式：owner/repo@skill。"""
+    from src.desktop_api.routers.skill_store import search_store
+
+    _mock_market_search(monkeypatch, [_summary("vercel-labs/skills@find-skills")])
+
+    response = search_store(q="find skills", limit=10)
+
+    assert response.sourceAvailable is True
+    assert response.items[0].sourceRef == "vercel-labs/skills@find-skills"
 
 
 def test_preview_has_no_persistence(in_memory_db, _mock_skills_sh):
@@ -78,6 +101,31 @@ def test_preview_has_no_persistence(in_memory_db, _mock_skills_sh):
     response = preview_skill(PreviewBody(sourceType="skills_sh", sourceRef="acme/api-test-skill"))
     assert response.skillMd.startswith("---")
     assert response.audit["status"] == "unavailable"
+    assert ExternalSkillInstallRepository().list_active() == []
+    assert not any(p.is_dir() for p in file_store.external_skills_root().iterdir())
+
+
+def test_preview_cli_market_ref_uses_github_without_api_token(in_memory_db, monkeypatch):
+    """CLI 搜索结果 owner/repo@skill → GitHub 取 SKILL.md，不依赖 skills.sh API token。"""
+    from src.business.skill_store import file_store
+    from src.business.skill_store.github_discovery import GithubFetcher
+    from src.data.repos.external_skill_install_repository import (
+        ExternalSkillInstallRepository,
+    )
+    from src.desktop_api.routers.skill_store import PreviewBody, preview_skill
+
+    monkeypatch.setattr(
+        GithubFetcher,
+        "fetch_cli_skill_detail",
+        lambda self, ref: _detail(ref),
+    )
+
+    response = preview_skill(
+        PreviewBody(sourceType="skills_sh", sourceRef="vercel-labs/skills@find-skills")
+    )
+
+    assert response.sourceRef == "vercel-labs/skills@find-skills"
+    assert response.skillMd.startswith("---")
     assert ExternalSkillInstallRepository().list_active() == []
     assert not any(p.is_dir() for p in file_store.external_skills_root().iterdir())
 

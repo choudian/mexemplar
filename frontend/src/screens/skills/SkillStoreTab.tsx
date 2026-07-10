@@ -47,7 +47,7 @@ export function SkillStoreTab(): JSX.Element {
           <SearchInput
             ariaLabel="搜索技能市场"
             onChange={onQueryChange}
-            placeholder="搜索技能市场（留空显示精选）"
+            placeholder="输入关键词搜索技能市场"
             value={queryDraft}
           />
         </label>
@@ -56,6 +56,9 @@ export function SkillStoreTab(): JSX.Element {
       {lastError ? <div className="skill-store-error">{lastError}</div> : null}
       {!sourceAvailable ? (
         <div className="skill-store-error">{sourceMessage ?? "技能市场暂时无法访问，请稍后重试。"}</div>
+      ) : null}
+      {sourceAvailable && sourceMessage ? (
+        <div className="skill-store-github-message">{sourceMessage}</div>
       ) : null}
       {loading ? <div className="skills-empty">正在加载技能市场</div> : null}
 
@@ -83,7 +86,7 @@ export function SkillStoreTab(): JSX.Element {
           </article>
         ))}
         {!loading && sourceAvailable && items.length === 0 ? (
-          <div className="skills-empty">没有匹配的技能</div>
+          <div className="skills-empty">{queryDraft.trim() ? "没有匹配的技能" : "输入关键词开始搜索"}</div>
         ) : null}
       </div>
 

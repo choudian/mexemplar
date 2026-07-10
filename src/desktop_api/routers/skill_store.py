@@ -16,7 +16,12 @@ from src.business.skill_store.install_service import (
     SkillInstallError,
     SkillNotFoundError,
 )
-from src.business.skill_store.skills_sh_client import SkillsShUnavailableError
+from src.business.skill_store.skills_sh_client import (
+    SkillsShAuthenticationError,
+    SkillsShUnavailableError,
+)
+from src.business.services.skill_store_market_service import SkillStoreMarketService
+from src.execution.skills_cli import SkillsCliUnavailableError
 
 router = APIRouter(prefix="/api/skill-store", tags=["skill-store"])
 
@@ -97,9 +102,10 @@ def search_store(
 ) -> SearchResponse:
     service = InstallService()
     try:
-        summaries = service._skills_sh.search(q, limit=limit)
-    except SkillsShUnavailableError as exc:
+        result = SkillStoreMarketService().search(q, limit=limit)
+    except SkillsCliUnavailableError as exc:
         return SearchResponse(items=[], sourceAvailable=False, message=str(exc))
+    summaries = result.items
     installed_refs = service.installed_source_refs("skills_sh")
     items = [
         StoreSkillSummaryDto(
@@ -112,7 +118,7 @@ def search_store(
         )
         for s in summaries
     ]
-    return SearchResponse(items=items, sourceAvailable=True)
+    return SearchResponse(items=items, sourceAvailable=True, message=result.message)
 
 
 @router.post("/discover-github", response_model=DiscoverGithubResponse)
@@ -145,6 +151,8 @@ def preview_skill(body: PreviewBody) -> PreviewResponse:
         return PreviewResponse(**InstallService().preview(body.sourceType, body.sourceRef))
     except SkillNotFoundError:
         raise HTTPException(status_code=404, detail="技能不存在")
+    except SkillsShAuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
     except SkillsShUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except SkillInstallError as exc:
@@ -161,6 +169,8 @@ def install_skill(body: PreviewBody) -> InstallResponse:
         raise HTTPException(status_code=404, detail="技能不存在")
     except InstallNameConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
+    except SkillsShAuthenticationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
     except SkillsShUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
     except SkillInstallError as exc:

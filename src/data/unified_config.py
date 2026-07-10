@@ -42,6 +42,7 @@ SENSITIVE_CONFIG_KEYS = frozenset(
         "ai.embedding_api_key",
         "ai.compression_model_api_key",
         "web.brave_api_key",
+        "skill_store.skills_sh_api_key",
         "agent_tools.output.semantic_summary.api_key",
     }
 )
@@ -323,6 +324,18 @@ class UnifiedConfigManager:
     def clear_web_brave_api_key(self) -> None:
         """清除统一配置中的 Brave Search API Key。"""
         self._clear_secret("web.brave_api_key")
+
+    def get_skill_store_skills_sh_api_key(self) -> Optional[str]:
+        """从统一配置读取 skills.sh API/OIDC token。"""
+        return self._get_secret("skill_store.skills_sh_api_key")
+
+    def set_skill_store_skills_sh_api_key(self, api_key: str) -> None:
+        """写入统一配置中的 skills.sh API/OIDC token。"""
+        self._set_secret("skill_store.skills_sh_api_key", api_key)
+
+    def clear_skill_store_skills_sh_api_key(self) -> None:
+        """清除统一配置中的 skills.sh API/OIDC token。"""
+        self._clear_secret("skill_store.skills_sh_api_key")
 
     # ===== 便捷方法：会话压缩调用配置 =====
 

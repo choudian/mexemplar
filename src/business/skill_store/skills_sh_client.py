@@ -1,23 +1,26 @@
-"""skills.sh 公开 API client（029 D3）。
+"""skills.sh API client（029 D3）。
 
-匿名访问 `/api/v1`：列表/搜索/详情（含完整文件树）/审计。所有网络错误分类为
-用户可读消息（FR-448）；审计端点失败降级为 "unavailable"，不阻塞安装流。
+访问 `/api/v1`：列表/搜索/详情（含完整文件树）/审计。请求使用统一配置中的
+skills.sh token 发送 Bearer 鉴权。所有网络错误分类为用户可读消息（FR-448）；
+审计端点失败降级为 "unavailable"，不阻塞安装流。
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://www.skills.sh/api/v1"
+_BASE_URL = "https://skills.sh/api/v1"
 _TIMEOUT_SECONDS = 10.0
 
 UNAVAILABLE_MESSAGE = "技能市场暂时无法访问，请稍后重试。"
+AUTH_REQUIRED_MESSAGE = "skills.sh API token 未配置，请通过技能市场搜索结果或 GitHub 直装安装。"
+AUTH_INVALID_MESSAGE = "skills.sh API token 无效或已过期，请重新搜索后重试或使用 GitHub 直装。"
 
 
 class SkillsShUnavailableError(RuntimeError):
@@ -25,6 +28,10 @@ class SkillsShUnavailableError(RuntimeError):
 
     def __init__(self, message: str = UNAVAILABLE_MESSAGE):
         super().__init__(message)
+
+
+class SkillsShAuthenticationError(SkillsShUnavailableError):
+    """skills.sh 缺少或拒绝 token——消息面向用户。"""
 
 
 class SkillsShNotFoundError(KeyError):
@@ -49,8 +56,14 @@ class StoreSkillDetail:
 class SkillsShClient:
     """技能市场只读 client；`http_client` 可注入便于测试。"""
 
-    def __init__(self, http_client: httpx.Client | None = None):
+    def __init__(
+        self,
+        http_client: httpx.Client | None = None,
+        *,
+        api_key_provider: Callable[[], str | None] | None = None,
+    ):
         self._http = http_client
+        self._api_key_provider = api_key_provider
 
     # -- Public API -----------------------------------------------------------
 
@@ -73,7 +86,7 @@ class SkillsShClient:
         summary = self._parse_summary(payload, fallback_ref=source_ref)
         raw_files = payload.get("files") or []
         files = [
-            {"path": str(item.get("path") or ""), "content": str(item.get("content") or "")}
+            {"path": str(item.get("path") or ""), "content": self._file_content(item)}
             for item in raw_files
             if isinstance(item, dict) and item.get("path")
         ]
@@ -102,18 +115,21 @@ class SkillsShClient:
         params: dict[str, Any] | None = None,
         not_found_ok: bool = False,
     ) -> Any:
+        headers = self._auth_headers()
         try:
             if self._http is not None:
-                response = self._http.get(f"{_BASE_URL}{path}", params=params)
+                response = self._http.get(f"{_BASE_URL}{path}", params=params, headers=headers)
             else:
                 with httpx.Client(timeout=_TIMEOUT_SECONDS, follow_redirects=True) as client:
-                    response = client.get(f"{_BASE_URL}{path}", params=params)
+                    response = client.get(f"{_BASE_URL}{path}", params=params, headers=headers)
         except httpx.HTTPError as exc:
             logger.warning("skills.sh request failed: %s %s", path, exc)
             raise SkillsShUnavailableError() from exc
 
         if response.status_code == 404 and not_found_ok:
             return None
+        if response.status_code == 401:
+            raise SkillsShAuthenticationError(AUTH_INVALID_MESSAGE)
         if response.status_code >= 500:
             raise SkillsShUnavailableError()
         if response.status_code == 429:
@@ -124,6 +140,23 @@ class SkillsShClient:
             return response.json()
         except ValueError as exc:
             raise SkillsShUnavailableError() from exc
+
+    def _auth_headers(self) -> dict[str, str]:
+        token = self._read_api_key()
+        if not token:
+            raise SkillsShAuthenticationError(AUTH_REQUIRED_MESSAGE)
+        return {"Authorization": f"Bearer {token}"}
+
+    def _read_api_key(self) -> str | None:
+        if self._api_key_provider is not None:
+            value = self._api_key_provider()
+        else:
+            from src.data.unified_config import get_unified_config
+
+            value = get_unified_config().get_skill_store_skills_sh_api_key()
+        if not isinstance(value, str):
+            return None
+        return value.strip() or None
 
     def _parse_summaries(self, payload: Any) -> list[StoreSkillSummary]:
         items = []
@@ -159,3 +192,10 @@ class SkillsShClient:
             installs=installs,
             source_url=source_url,
         )
+
+    @staticmethod
+    def _file_content(raw: dict[str, Any]) -> str:
+        content = raw.get("content")
+        if content is None:
+            content = raw.get("contents")
+        return str(content or "")

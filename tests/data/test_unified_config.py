@@ -138,6 +138,7 @@ def test_all_api_keys_are_read_from_unified_config(tmp_path):
                     "embedding_api_key": "embedding-key",
                 },
                 "web": {"brave_api_key": "brave-key"},
+                "skill_store": {"skills_sh_api_key": "skills-sh-key"},
                 "agent_tools": {
                     "output": {
                         "semantic_summary": {
@@ -156,6 +157,7 @@ def test_all_api_keys_are_read_from_unified_config(tmp_path):
     assert config.get_ai_vision_api_key() == "vision-key"
     assert config.get_embedding_api_key() == "embedding-key"
     assert config.get_web_brave_api_key() == "brave-key"
+    assert config.get_skill_store_skills_sh_api_key() == "skills-sh-key"
     assert config.get_tool_output_summary_api_key() == "summary-key"
 
 
@@ -166,21 +168,26 @@ def test_secret_setters_persist_to_unified_config_and_clear(tmp_path):
 
     config.set_ai_api_key(" main-key ")
     config.set_web_brave_api_key(" brave-key ")
+    config.set_skill_store_skills_sh_api_key(" skills-sh-key ")
     config.set_tool_output_summary_api_key(" summary-key ")
 
     assert store.values["ai.api_key"] == "main-key"
     assert store.values["web.brave_api_key"] == "brave-key"
+    assert store.values["skill_store.skills_sh_api_key"] == "skills-sh-key"
     assert store.values["agent_tools.output.semantic_summary.api_key"] == "summary-key"
     assert config.get_ai_api_key() == "main-key"
     assert config.get_web_brave_api_key() == "brave-key"
+    assert config.get_skill_store_skills_sh_api_key() == "skills-sh-key"
     assert config.get_tool_output_summary_api_key() == "summary-key"
 
     config.clear_ai_api_key()
     config.clear_web_brave_api_key()
+    config.clear_skill_store_skills_sh_api_key()
     config.clear_tool_output_summary_api_key()
 
     assert config.get_ai_api_key() is None
     assert config.get_web_brave_api_key() is None
+    assert config.get_skill_store_skills_sh_api_key() is None
     assert config.get_tool_output_summary_api_key() is None
 
 
