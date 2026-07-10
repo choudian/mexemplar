@@ -334,7 +334,7 @@ describe("SettingsScreen", () => {
     );
 
     fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "sk-secret-value" } });
-    fireEvent.click(screen.getByRole("button", { name: /保存密钥/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存 API Key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/ai.api_key",
@@ -344,7 +344,7 @@ describe("SettingsScreen", () => {
     expect(document.body.textContent).not.toContain("sk-secret-value");
     expect(await screen.findByText("已保存")).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "删除密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 API Key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/ai.api_key",
@@ -366,7 +366,7 @@ describe("SettingsScreen", () => {
     );
 
     fireEvent.change(screen.getByLabelText("Brave Search API Key"), { target: { value: "brave-secret-value" } });
-    fireEvent.click(screen.getByRole("button", { name: /保存密钥/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存 Brave Search API Key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/web.brave_api_key",
@@ -375,7 +375,7 @@ describe("SettingsScreen", () => {
     );
     expect(document.body.textContent).not.toContain("brave-secret-value");
 
-    fireEvent.click(screen.getByRole("button", { name: "删除密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 Brave Search API Key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/web.brave_api_key",
@@ -401,7 +401,7 @@ describe("SettingsScreen", () => {
       ),
     );
     fireEvent.change(screen.getByLabelText("摘要 API Key"), { target: { value: "sk-summary" } });
-    fireEvent.click(screen.getByRole("button", { name: /保存密钥/ }));
+    fireEvent.click(screen.getByRole("button", { name: "保存 摘要 API Key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/agent_tools.output.semantic_summary.api_key",
@@ -410,7 +410,7 @@ describe("SettingsScreen", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /执行/ }));
     await waitFor(() => expect(screen.getByText("摘要模型连接成功。")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "删除密钥" }));
+    fireEvent.click(screen.getByRole("button", { name: "删除 摘要 API Key" }));
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
         "http://desktop.test/api/settings/secrets/agent_tools.output.semantic_summary.api_key",

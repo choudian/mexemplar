@@ -92,7 +92,7 @@ test("TC-GT-005 用户调整应用设置", async ({ page }) => {
   // 保存密钥
   const apiKeyInput = page.getByLabel("API Key");
   await apiKeyInput.fill("sk-test-e2e-key");
-  await page.getByRole("button", { name: /保存密钥/ }).click();
+  await page.getByRole("button", { name: "保存 API Key" }).click();
 });
 
 // ── TC-GT-006: 用户尝试教学新技能 ──────────────────────────────

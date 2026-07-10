@@ -16,7 +16,7 @@ test("T094 saves settings, masks secrets, shows validation, and runs visible act
   await expect(page.getByText("无未保存更改")).toBeVisible();
 
   await page.getByLabel("API Key").fill("sk-e2e-secret");
-  await page.getByRole("button", { name: /保存密钥/ }).click();
+  await page.getByRole("button", { name: "保存 API Key" }).click();
   await expect(page.getByText("已保存")).toBeVisible();
   await expect(page.locator("body")).not.toContainText("sk-e2e-secret");
 
@@ -27,11 +27,11 @@ test("T094 saves settings, masks secrets, shows validation, and runs visible act
   await page.getByLabel("摘要模型").fill("summary-model");
   await page.getByRole("button", { name: /保存设置/ }).click();
   await page.getByLabel("摘要 API Key").fill("sk-summary-e2e");
-  await page.getByRole("button", { name: /保存密钥/ }).click();
+  await page.getByRole("button", { name: "保存 摘要 API Key" }).click();
   await expect(page.locator("body")).not.toContainText("sk-summary-e2e");
   await page.getByRole("button", { name: /执行/ }).click();
   await expect(page.getByText("摘要模型连接成功。")).toBeVisible();
-  await page.getByRole("button", { name: "删除密钥" }).click();
+  await page.getByRole("button", { name: "删除 摘要 API Key" }).click();
   await page.getByRole("button", { name: /执行/ }).click();
   await expect(page.getByText("缺少摘要 API Key。")).toBeVisible();
 

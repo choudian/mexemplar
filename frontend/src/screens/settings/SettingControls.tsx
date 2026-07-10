@@ -56,6 +56,7 @@ function SettingControls({
           <div className="settings-control-meta">
             <Badge tone={secret.present ? "ok" : "warn"}>{secret.present ? "已保存" : "未设置"}</Badge>
             <Button
+              aria-label={`保存 ${item.label}`}
               disabled={busy || unavailable || !draft.trim()}
               kind="secondary"
               onClick={() => {
@@ -66,7 +67,7 @@ function SettingControls({
               <KeyRound size={14} />
               <span>保存密钥</span>
             </Button>
-            <IconButton label="删除密钥" disabled={busy || unavailable || !secret.present} onClick={() => onDeleteSecret(item.key)}>
+            <IconButton label={`删除 ${item.label}`} disabled={busy || unavailable || !secret.present} onClick={() => onDeleteSecret(item.key)}>
               <Trash2 size={14} />
             </IconButton>
           </div>

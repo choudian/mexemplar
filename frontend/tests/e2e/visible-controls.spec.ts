@@ -94,8 +94,8 @@ test("T107 visible controls across primary screens invoke real bridge paths or e
   await page.getByLabel("主模型").fill("gpt-5.1");
   await page.getByRole("button", { name: /保存设置/ }).click();
   await page.getByLabel("API Key").fill("sk-control-audit");
-  await page.getByRole("button", { name: /保存密钥/ }).click();
-  await page.getByRole("button", { name: "删除密钥" }).click();
+  await page.getByRole("button", { name: "保存 API Key" }).click();
+  await page.getByRole("button", { name: "删除 API Key" }).click();
   await page.getByRole("button", { name: /执行/ }).click();
   await page.getByRole("tab", { name: "关于" }).click();
   await page.getByRole("button", { name: /执行/ }).click();
