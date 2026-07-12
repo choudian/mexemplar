@@ -74,29 +74,22 @@ def test_exec_rejects_path_reader_command_targeting_outside_workspace(tmp_path, 
     assert result["error"]["code"] == "command_rejected"
 
 
-def test_exec_rejects_shell_syntax_inline_code_and_external_paths(tmp_path, monkeypatch):
+def test_exec_rejects_shell_syntax_inline_code_and_parent_traversal(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside-command-write.txt"
-    outside_executable = tmp_path.parent / "outside-command.exe"
-    outside_executable.write_bytes(b"not executable")
     cases = [
         "echo ok\nwhoami",
         f'echo unsafe > "{outside}"',
         f'"{sys.executable}" -c "print(1)"',
-        f'"{outside_executable}"',
-        "cmd /c whoami",
         "git -C .. status",
     ]
 
-    try:
-        for command in cases:
-            result = _obj(command_tools.exec_handler(command, cwd="."))
-            assert result["outcome"] == "rejected"
-            assert result["error"]["code"] == "command_rejected"
-        assert not outside.exists()
-        assert is_safe_exec_command("echo ok\nwhoami") is False
-    finally:
-        outside_executable.unlink(missing_ok=True)
+    for command in cases:
+        result = _obj(command_tools.exec_handler(command, cwd="."))
+        assert result["outcome"] == "rejected"
+        assert result["error"]["code"] == "command_rejected"
+    assert not outside.exists()
+    assert is_safe_exec_command("echo ok\nwhoami") is False
 
 
 def test_exec_large_output_creates_recoverable_raw_reference(tmp_path, monkeypatch):

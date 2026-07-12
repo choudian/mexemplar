@@ -292,7 +292,7 @@ SkillStoreTab（搜索 / GitHub 输入）
 ```
 
 - **安装即三件套原子成对**：受管目录文件（`<data>/external_skills/<install_id>/`）+ `brain_skills` 方法论行（origin=`external_import`，复用 012 装备/加载语义）+ `external_skill_installs` 来源元数据行；任一步失败逆序清理零残留。
-- **安装路径零执行（CC-170 硬边界）**：安装/预览是纯数据落地，`skill_store` 模块源码不得出现 subprocess/exec/执行层 import，由守卫测试焊死。"支持可执行技能"= 附带脚本随技能落盘，由执行体在既有 exec fail-closed 管线（015）内按需运行，不新增执行通道。
+- **安装路径零执行（CC-170 硬边界）**：安装/预览是纯数据落地，`skill_store` 模块源码不得出现 subprocess/exec/执行层 import，由守卫测试焊死。"支持可执行技能"= 附带脚本随技能落盘，由执行体在既有 exec 权限/确认管线（015）内按需运行，不新增执行通道。
 - **受管目录写盘边界（CC-174）**：相对路径规范化拒绝 `..`/绝对路径/盘符（zip-slip 防御）；单文件 ≤ 512KB、总量 ≤ 2MB、文件数 ≤ 40；仅 UTF-8 文本，二进制拒绝/跳过。
 - **装前强制预览**：SKILL.md 全文 + 文件清单 + skills.sh 审计结果；GitHub 直装无审计显著警示。预览零持久化副作用。
 - **外部来源警示（advisory，照 027 N12 定位）**：`load_skill_methodology` 渲染 external_import 条目时注入"内容来自外部、不可无条件信任"警示头；硬保证仍由 exec 确认协议承担。
@@ -460,7 +460,7 @@ AgentLoop 在执行已升级内置工具时注入 `ToolRuntimeContext`（session
 
 能力目录参数位于 `agent_tools.discovery.*`：完整目录条目/字符双阈值、搜索默认/最大页大小和单项描述上限。它们由 `UnifiedConfigManager` 在每次 Prompt 构建或搜索调用时读取，运行时覆盖无需重启即可影响后续调用；属于工程调优参数，不在 Settings UI 暴露。
 
-文件修改采用先读后写模型：`read_file` 返回基于原始字节的 baseline；已存在文件的 `write_file`、`edit_file` 和 `apply_patch` update/delete 必须带当前 baseline，过期或缺失在落盘前拒绝。`list_dir` 和搜索返回有界、相对路径的结构化结果，搜索默认使用原生遍历而非 shell 解析。命令解析为 argv 后以 `shell=False` 启动，只允许 workspace 内 cwd 和路径参数；shell 控制语法、shell host 与内联解释器代码在执行前拒绝。后台进程受会话级数量、日志和等待上限约束，只在当前 sidecar 进程会话内可管理，重启后旧 `proc_*` id 返回 unavailable。
+文件修改采用先读后写模型：`read_file` 返回基于原始字节的 baseline；已存在文件的 `write_file`、`edit_file` 和 `apply_patch` update/delete 必须带当前 baseline，过期或缺失在落盘前拒绝。`list_dir` 和搜索返回有界、相对路径的结构化结果，搜索默认使用原生遍历而非 shell 解析。命令解析为 argv 后以 `shell=False` 启动，cwd 只允许位于 workspace 内；shell host 与显式 workspace 外目标进入高风险确认链，用户单次确认或当前进程会话级“全部允许”后可执行；shell 控制语法、内联解释器代码和含独立 `..` 路径段的相对穿越始终硬拒绝。后台进程受会话级数量、日志和等待上限约束，只在当前 sidecar 进程会话内可管理，重启后旧 `proc_*` id 返回 unavailable。
 
 ### 内置工具依赖预装
 

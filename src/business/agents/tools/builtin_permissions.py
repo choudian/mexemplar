@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import os
 import re
-import sys
 import threading
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +24,76 @@ _SENSITIVE_PATTERNS = [
     re.compile(r"(?i)\b(api[_-]?key|token|password|secret)\s*[:=]\s*[^\s,;]+"),
     re.compile(r"(?i)\b(bearer)\s+[A-Za-z0-9._\-]{12,}"),
 ]
+_PARENT_PATH_SEGMENT_PATTERN = re.compile(r"(?:^|[\\/])\.\.(?:$|[\\/])")
+_EMBEDDED_PARENT_PATH_SEGMENT_PATTERN = re.compile(r"(?<![\w.+-])\.\.(?![\w.+-])")
+
+# Compact path options have no generic value delimiter. Keep this list to
+# established path-taking forms so arbitrary data such as ``--label=foo..``
+# is never guessed to be a traversal target.
+_COMPACT_DASH_PATH_OPTION_PREFIXES = (
+    "-idirafter",
+    "-isystem",
+    "-iquote",
+    "-include",
+    "-imacros",
+    "-MF",
+    "-MJ",
+    "-MT",
+    "-MQ",
+    "-C",
+    "-I",
+    "-L",
+    "-o",
+    "-B",
+    "-F",
+)
+_COMPACT_WINDOWS_PATH_OPTION_PREFIXES = (
+    "/external:i",
+    "/winsysroot",
+    "/imsvc",
+    "/ai",
+    "/fu",
+    "/fi",
+    "/fo",
+    "/fd",
+    "/fe",
+    "/fa",
+    "/fp",
+    "/fr",
+    "/i",
+)
+_SEPARATED_DASH_PATH_OPTIONS = frozenset(
+    {
+        "-C",
+        "-I",
+        "-L",
+        "-o",
+        "-B",
+        "-F",
+        "-idirafter",
+        "-isystem",
+        "-iquote",
+        "-include",
+        "-imacros",
+        "-MF",
+        "-MJ",
+        "--target",
+        "--path",
+        "--directory",
+        "--output",
+        "--prefix",
+        "--root",
+        "--cwd",
+        "--file",
+        "--config",
+    }
+)
+_SEPARATED_CASE_INSENSITIVE_PATH_OPTIONS = frozenset(
+    {"-path", "-literalpath", "-destination", "-filepath", "-workingdirectory"}
+)
+_SEPARATED_WINDOWS_PATH_OPTIONS = frozenset(
+    {"/i", "/ai", "/fu", "/fi", "/fo", "/fd", "/fe", "/fa", "/fp", "/fr"}
+)
 
 _SYSTEM_ROOTS = [
     Path("C:/Windows"),
@@ -67,6 +137,78 @@ _SHELL_HOST_NAMES = frozenset(
         "wscript.exe",
         "wsl",
         "zsh",
+    }
+)
+_ALL_ARGUMENT_DATA_EXECUTABLES = frozenset({"echo", "echo.exe", "printf"})
+_PATTERN_EXECUTABLES = frozenset(
+    {
+        "egrep",
+        "fgrep",
+        "findstr",
+        "findstr.exe",
+        "grep",
+        "grep.exe",
+        "rg",
+        "rg.exe",
+        "ripgrep",
+    }
+)
+_PATTERN_VALUE_FLAGS = frozenset({"-e", "--regexp"})
+_PATTERN_FILE_FLAGS = frozenset({"-f", "--file"})
+_GREP_EXECUTABLES = frozenset({"egrep", "fgrep", "grep", "grep.exe"})
+_RG_EXECUTABLES = frozenset({"rg", "rg.exe", "ripgrep"})
+_GREP_AUX_VALUE_FLAGS = frozenset(
+    {
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+        "-m",
+        "--max-count",
+        "-d",
+        "--directories",
+        "-D",
+        "--devices",
+        "--exclude",
+        "--exclude-from",
+        "--exclude-dir",
+        "--include",
+        "--label",
+        "--binary-files",
+    }
+)
+_RG_AUX_VALUE_FLAGS = frozenset(
+    {
+        "-A",
+        "--after-context",
+        "-B",
+        "--before-context",
+        "-C",
+        "--context",
+        "-m",
+        "--max-count",
+        "-g",
+        "--glob",
+        "-t",
+        "--type",
+        "-T",
+        "--type-not",
+        "-j",
+        "--threads",
+        "--max-depth",
+        "--encoding",
+        "--engine",
+        "--sort",
+        "--sortr",
+        "--type-add",
+        "--type-clear",
+        "-r",
+        "--replace",
+        "--pre",
+        "--pre-glob",
+        "--path-separator",
     }
 )
 _INLINE_CODE_FLAGS = {
@@ -417,7 +559,7 @@ def build_exec_summary(command: str) -> str:
     lines = str(command).splitlines()
     first_line = lines[0] if lines else ""
     return _truncate_summary(
-        f"Run elevated command in workspace: {redact_fragment(first_line, 120)}"
+        f"Run elevated command from workspace: {redact_fragment(first_line, 120)}"
     )
 
 
@@ -430,26 +572,158 @@ def is_safe_exec_command(command: str) -> bool:
     return normalized in SAFE_EXEC_COMMANDS
 
 
-def _looks_like_path_argument(token: str) -> bool:
+def _contains_parent_path_segment(value: str) -> bool:
+    text = str(value).strip("'\"")
+    return _PARENT_PATH_SEGMENT_PATTERN.search(text) is not None
+
+
+def _explicit_option_values(token: str) -> tuple[str, ...]:
+    text = str(token)
+    if not text.startswith("-") and not (os.name == "nt" and text.startswith("/")):
+        return ()
+    return tuple(part.strip("'\"") for part in re.split(r"[=:,]", text)[1:] if part)
+
+
+def _compact_path_option_value(token: str, *, executable: str) -> str | None:
+    text = str(token)
+    if executable in _PATTERN_EXECUTABLES:
+        if text.startswith("-f") and len(text) > 2:
+            return text[2:].strip("'\"")
+        return None
+    for prefix in _COMPACT_DASH_PATH_OPTION_PREFIXES:
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return text[len(prefix) :].strip("'\"")
+    if os.name != "nt":
+        return None
+    lowered = text.lower()
+    for prefix in _COMPACT_WINDOWS_PATH_OPTION_PREFIXES:
+        if lowered.startswith(prefix) and len(text) > len(prefix):
+            return text[len(prefix) :].strip("'\"")
+    return None
+
+
+def _is_separated_path_option(token: str | None, *, executable: str) -> bool:
     if not token:
         return False
-    if token.startswith("-"):
-        return False
-    # Windows single-letter switches such as /b are not path targets.
-    if token.startswith("/") and len(token) <= 3 and token[1:].isalnum():
-        return False
-    return token.startswith((".", "~", "/", "\\")) or "/" in token or "\\" in token or ":" in token
+    if executable in _PATTERN_EXECUTABLES:
+        return token in _PATTERN_FILE_FLAGS
+    if token in _SEPARATED_DASH_PATH_OPTIONS:
+        return True
+    lowered = token.lower()
+    if lowered in _SEPARATED_CASE_INSENSITIVE_PATH_OPTIONS:
+        return True
+    return os.name == "nt" and lowered in _SEPARATED_WINDOWS_PATH_OPTIONS
 
 
-def _path_candidate_from_argument(token: str) -> str | None:
-    value = str(token).strip()
-    if not value:
-        return None
-    if "=" in value and value.startswith("-"):
-        value = value.split("=", 1)[1]
-    if not _looks_like_path_argument(value):
-        return None
-    return value
+def _is_inline_pattern_option(token: str, *, executable: str) -> bool:
+    if executable not in _PATTERN_EXECUTABLES:
+        return False
+    lowered = token.lower()
+    if executable.startswith("findstr"):
+        return lowered.startswith("/c:")
+    return lowered.startswith("--regexp=") or (lowered.startswith("-e") and lowered != "-e")
+
+
+def _pattern_aux_value_flags(executable: str) -> frozenset[str]:
+    if executable in _GREP_EXECUTABLES:
+        return _GREP_AUX_VALUE_FLAGS
+    if executable in _RG_EXECUTABLES:
+        return _RG_AUX_VALUE_FLAGS
+    return frozenset()
+
+
+def _bare_parent_data_indexes(tokens: list[str], *, executable: str) -> set[int]:
+    if executable in _ALL_ARGUMENT_DATA_EXECUTABLES:
+        return set(range(1, len(tokens)))
+    if executable not in _PATTERN_EXECUTABLES:
+        return set()
+
+    indexes: set[int] = set()
+    option_syntax = True
+    has_flag_pattern = False
+    positional_pattern_seen = False
+    aux_value_flags = _pattern_aux_value_flags(executable)
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            option_syntax = False
+            index += 1
+            continue
+        if option_syntax and token in _PATTERN_VALUE_FLAGS and index + 1 < len(tokens):
+            indexes.add(index + 1)
+            has_flag_pattern = True
+            index += 2
+            continue
+        if option_syntax and _is_inline_pattern_option(token, executable=executable):
+            indexes.add(index)
+            has_flag_pattern = True
+            index += 1
+            continue
+        if option_syntax and token in _PATTERN_FILE_FLAGS and index + 1 < len(tokens):
+            has_flag_pattern = True
+            index += 2
+            continue
+        if option_syntax and (
+            (token.startswith("-f") and token != "-f") or token.startswith("--file=")
+        ):
+            has_flag_pattern = True
+            index += 1
+            continue
+        if option_syntax and token in aux_value_flags and index + 1 < len(tokens):
+            index += 2
+            continue
+        if option_syntax and (
+            token.startswith("-") or (executable.startswith("findstr") and token.startswith("/"))
+        ):
+            index += 1
+            continue
+        if not has_flag_pattern and not positional_pattern_seen:
+            indexes.add(index)
+            positional_pattern_seen = True
+        index += 1
+    return indexes
+
+
+def _command_contains_parent_path_traversal(
+    tokens: list[str],
+    *,
+    executable: str,
+) -> bool:
+    option_syntax = True
+    previous_token: str | None = None
+    shell_host = executable in _SHELL_HOST_NAMES
+    data_indexes = _bare_parent_data_indexes(tokens, executable=executable)
+    # shlex removes wrapping quotes. Only a bare ``..`` in a known
+    # data/pattern argument position is exempt from path interpretation.
+    for index, token in enumerate(tokens):
+        if token == "--":
+            option_syntax = False
+            previous_token = token
+            continue
+
+        path_option_context = option_syntax and _is_separated_path_option(
+            previous_token,
+            executable=executable,
+        )
+        is_data_argument = index in data_indexes and not path_option_context
+        if not is_data_argument and _contains_parent_path_segment(token):
+            return True
+        if shell_host and _EMBEDDED_PARENT_PATH_SEGMENT_PATTERN.search(token) is not None:
+            return True
+
+        if option_syntax and not is_data_argument:
+            for value in _explicit_option_values(token):
+                if _contains_parent_path_segment(value):
+                    return True
+            compact_value = _compact_path_option_value(
+                token,
+                executable=executable,
+            )
+            if compact_value is not None and _contains_parent_path_segment(compact_value):
+                return True
+        previous_token = token
+    return False
 
 
 def _command_policy_rejection(
@@ -584,12 +858,6 @@ def command_path_policy_violation(
             reason="shell_syntax_or_parse_error",
         )
     executable = Path(tokens[0]).name.lower()
-    if executable in _SHELL_HOST_NAMES:
-        return _command_policy_rejection(
-            root=root,
-            message="Shell host commands are not supported by the workspace-safe exec tool.",
-            reason="shell_host_denied",
-        )
     denied_flags = _INLINE_CODE_FLAGS.get(executable, set())
     if any(token.lower() in denied_flags for token in tokens[1:]):
         return _command_policy_rejection(
@@ -597,32 +865,15 @@ def command_path_policy_violation(
             message="Inline interpreter code is not supported by the workspace-safe exec tool.",
             reason="inline_code_denied",
         )
-    for index, token in enumerate(tokens):
-        candidate_value = _path_candidate_from_argument(token)
-        if candidate_value is None:
-            continue
-        raw = Path(candidate_value).expanduser()
-        candidate = raw if raw.is_absolute() else base / raw
-        if index == 0:
-            try:
-                if candidate.resolve() == Path(sys.executable).resolve():
-                    continue
-            except OSError:
-                pass
-        check = permission_for_path(candidate, operation="read", workspace_root=root)
-        if not check.classification.inside_workspace:
-            return PermissionCheck(
-                check.classification,
-                PermissionDecision(
-                    scope=check.decision.scope,
-                    risk="denied",
-                    decision="denied",
-                    summary=f"Denied exec path target: {check.classification.display_path}",
-                    reason="exec_path_target_outside_workspace",
-                ),
-                "command_rejected",
-                "Command path arguments outside the workspace are denied.",
-            )
+    if _command_contains_parent_path_traversal(
+        tokens,
+        executable=executable,
+    ):
+        return _command_policy_rejection(
+            root=root,
+            message="Parent-directory traversal is not supported by the exec tool.",
+            reason="exec_path_traversal_denied",
+        )
     improvement_denial = _self_improvement_exec_denial(
         command,
         workspace_root=root,
