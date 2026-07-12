@@ -1,4 +1,4 @@
-import { PanelLeft, Plus, Search } from "lucide-react";
+import { PanelLeft, Plus, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
@@ -320,7 +320,9 @@ export function AssistantScreen(): JSX.Element {
           {loadingMessages ? <div className="assistant-empty">正在加载消息</div> : null}
           {!loadingMessages && visibleMessages.length === 0 ? (
             <div className="assistant-welcome">
-              <div className="assistant-welcome-mark" aria-hidden="true" />
+              <div className="assistant-welcome-mark" aria-hidden="true">
+                <Sparkles size={26} strokeWidth={1.9} />
+              </div>
               <h2>今天想完成什么？</h2>
               <p>直接描述任务即可，也可以让已掌握的工具上场。</p>
               <div className="assistant-suggestion-row">

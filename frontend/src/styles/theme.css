@@ -1,38 +1,93 @@
 :root {
   color-scheme: light;
-  --page-bg: oklch(94% 0.008 80);
-  --surface-1: oklch(99% 0.003 80);
-  --surface-2: oklch(96.5% 0.005 80);
-  --surface-3: oklch(93% 0.006 80);
-  --surface-hover: oklch(95% 0.006 80);
-  --titlebar-bg: oklch(97.5% 0.004 80);
-  --border-1: oklch(91% 0.005 80);
-  --border-2: oklch(85% 0.006 80);
-  --text: oklch(22% 0.012 80);
-  --text-2: oklch(38% 0.01 80);
-  --text-muted: oklch(58% 0.008 80);
-  --accent: oklch(58% 0.085 178);
-  --accent-hover: oklch(53% 0.09 178);
-  --accent2: oklch(70% 0.06 195);
-  --accent-weak: color-mix(in oklch, var(--accent) 13%, transparent);
-  --nav-active-bg: color-mix(in oklch, var(--accent) 12%, transparent);
-  --bubble-user-bg: var(--accent);
-  --bubble-user-fg: white;
-  --bubble-user-border: transparent;
-  --ok: oklch(58% 0.1 150);
-  --warn: oklch(68% 0.12 70);
-  --danger: oklch(58% 0.16 25);
-  --rec: oklch(60% 0.18 25);
+
+  /* ── 表面层级 (elevation) ───────────────────────────────
+     page-bg 主内容区(象牙白) → surface-1 卡片(纯白, 靠阴影浮起)
+     → surface-2/3 次级填充。拉开背景与卡片, 修掉"卡片和背景同色"的扁平。 */
+  --page-bg: #FAFDFC;                      /* 近白微青 · 主内容区底 */
+  --surface-1: #FFFFFF;                    /* 纯白 · 卡片/面板 */
+  --surface-2: #F1F7F4;                    /* 次级填充 · 输入框/tab 底 */
+  --surface-3: #E8F1ED;                    /* 三级填充 · 徽章/分隔 */
+  --surface-hover: #EDF6F1;                /* 悬停底 */
+  --nav-bg: #EEF7F3;                       /* 淡薄荷 · 侧栏 */
+  --titlebar-bg: #F4FAF8;                  /* 标题栏, 与主区连成一片 */
+
+  --border-1: #E4EDE9;                     /* 常规描边 */
+  --border-2: #D5E3DD;                     /* 强描边 */
+
+  /* ── 文字 (近黑带一点青绿冷调) ─────────────────────────── */
+  --text: #1A2621;                         /* 近墨黑 */
+  --text-2: #46564F;                       /* 次文字 */
+  --text-muted: #83938B;                   /* 弱文字 */
+  --text-1: var(--text);                   /* 别名 · 收敛历史幽灵变量 */
+  --text-secondary: var(--text-2);         /* 别名 */
+  --text-3: var(--text-muted);             /* 别名 */
+
+  /* ── 品牌色: 轻盈薄荷青 ───────────────────────────────────
+     基调是淡薄荷青 (--nav-active-bg #DCF1EA) 大面积铺开;
+     accent 深青只做文字/图标/选中字/小控件; highlight 亮青只做细线点缀;
+     浓青不铺大色块——主按钮走"淡底深字"(见 --btn-primary-*)。 */
+  --accent: #0A6E52;                       /* 深青 · 文字/图标/选中字/焦点 */
+  --accent-hover: #085A43;                 /* 更深 */
+  --accent-active: #05452F;                /* 按下 */
+  --accent-text: #fff;                     /* 深青实心小控件上的前景 */
+  --accent-1: var(--accent);               /* 别名 · 收敛历史幽灵变量 */
+  --highlight: #14B58C;                    /* 亮青 · 下划线/进度/开关点缀 */
+  --highlight-strong: #0FA075;             /* 可读亮青 · 描边 */
+  --accent2: #2FCBA4;                      /* logo/头像渐变亮端 */
+  --accent-weak: color-mix(in oklch, var(--accent) 12%, transparent);
+  --nav-active-bg: #DCF1EA;                /* 淡薄荷 · 选中态基调 (你喜欢的那个色) */
+  --bubble-user-bg: #DCF1EA;               /* 用户气泡 · 淡薄荷底 */
+  --bubble-user-fg: #0A5C46;               /* 用户气泡 · 深青字 */
+  --bubble-user-border: #BEE6D6;
+
+  /* 主按钮 · 轻盈款 (淡薄荷底 + 深青字, 不铺深色实心大块) */
+  --btn-primary-bg: #C6EADD;
+  --btn-primary-fg: #0A5C46;
+  --btn-primary-border: #A9DECB;
+  --btn-primary-hover: #B7E3D1;
+
+  /* ── 语义色 ─────────────────────────────────────────── */
+  --ok: #17A883;                           /* 成功 · 青绿 */
+  --warn: #E0913A;                         /* 警告/琥珀 */
+  --danger: #E5533C;                       /* 危险 */
+  --info: #2B9FD4;                         /* 中性信息 · 青蓝 */
+  --rec: oklch(60% 0.18 25);               /* 录制脉冲红 */
+
+  /* ── 间距 scale (收敛 --space-* 幽灵变量) ──────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ── 字号 scale (收敛 --text-xs/-sm 幽灵变量) ──────────── */
+  --text-xs: 11.5px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 22px;
+
+  /* ── 圆角 ───────────────────────────────────────────── */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --shell-radius: 16px;
+
+  /* ── 阴影 · elevation 体系 (带一丝墨绿调, 比纯黑更精致) ──── */
+  --shadow-1: 0 1px 2px oklch(30% 0.03 165 / 0.05), 0 1px 3px oklch(30% 0.03 165 / 0.045);
+  --shadow-2: 0 2px 8px oklch(30% 0.03 165 / 0.07), 0 6px 18px oklch(30% 0.03 165 / 0.05);
+  --shadow-3: 0 10px 34px oklch(26% 0.03 165 / 0.14);
+
   --toast-radius: var(--radius-lg);
   --toast-max-w: 400px;
   --toast-padding: 14px 16px;
-  --toast-shadow: 0 8px 28px rgb(0 0 0 / 14%);
+  --toast-shadow: var(--shadow-3);
   --toast-z: 9990;
+
   --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font-family: var(--font-ui);
 }
 
@@ -91,7 +146,7 @@ select:focus-visible,
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--surface-1);
+  background: var(--page-bg);
 }
 
 .me-main-pane,
@@ -101,7 +156,7 @@ select:focus-visible,
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  background: var(--surface-1);
+  background: var(--page-bg);
 }
 
 .me-screen-host > * {
@@ -417,7 +472,7 @@ select:focus-visible,
   flex-shrink: 0;
   flex-direction: column;
   border-right: 1px solid var(--border-1);
-  background: var(--surface-2);
+  background: var(--nav-bg);
 }
 
 .me-nav-brand {
@@ -438,7 +493,7 @@ select:focus-visible,
   align-items: center;
   justify-content: center;
   border-radius: 7px;
-  background: var(--accent);
+  background: linear-gradient(140deg, var(--accent), var(--accent2));
 }
 
 .me-logo-mark span {
@@ -590,13 +645,14 @@ select:focus-visible,
 }
 
 .me-button-primary {
-  border: 1px solid transparent;
-  background: var(--accent);
-  color: white;
+  border: 1px solid var(--btn-primary-border);
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  font-weight: 650;
 }
 
 .me-button-primary:hover {
-  background: var(--accent-hover);
+  background: var(--btn-primary-hover);
 }
 
 .me-button-secondary {
@@ -810,6 +866,7 @@ select:focus-visible,
   border: 1px solid var(--border-1);
   border-radius: var(--radius-lg);
   background: var(--surface-1);
+  box-shadow: var(--shadow-1);
 }
 
 .me-panel {
@@ -1161,12 +1218,16 @@ select:focus-visible,
 }
 
 .assistant-welcome-mark {
+  display: flex;
   width: 56px;
   height: 56px;
+  align-items: center;
+  justify-content: center;
   margin: 0 auto 18px;
   border-radius: 16px;
   background: linear-gradient(135deg, var(--accent), var(--accent2));
-  box-shadow: 0 6px 20px color-mix(in oklch, var(--accent) 30%, transparent);
+  box-shadow: var(--shadow-2), 0 8px 22px color-mix(in oklch, var(--accent) 26%, transparent);
+  color: #fff;
 }
 
 .assistant-welcome h2 {

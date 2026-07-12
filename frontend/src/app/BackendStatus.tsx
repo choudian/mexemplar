@@ -31,7 +31,9 @@ export function BackendStatus({ backend }: { backend: BackendConnectionState | n
     >
       <Icon size={14} aria-hidden="true" />
       <Badge tone={tone}>{labels[status]}</Badge>
-      <span className="me-backend-message">{backend?.message ?? "正在连接本地后端"}</span>
+      {status !== "ready" ? (
+        <span className="me-backend-message">{backend?.message ?? "正在连接本地后端"}</span>
+      ) : null}
     </div>
   );
 }
