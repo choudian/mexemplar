@@ -39,7 +39,14 @@ def test_self_improvement_execution_review_config_loads_from_file(tmp_path):
             "self_improvement": {
                 "execution_review": {
                     "enabled": False,
-                    "model": {"provider": "openai", "model": "reviewer"},
+                    "model": {
+                        "provider": "openai",
+                        "model": "reviewer",
+                        "temperature": 0.3,
+                        "max_tokens": 777,
+                        "thinking_level": "high",
+                        "timeout": 90,
+                    },
                     "max_per_session": 9,
                 }
             }
@@ -50,6 +57,10 @@ def test_self_improvement_execution_review_config_loads_from_file(tmp_path):
     assert config.get_self_improvement_execution_review_model() == {
         "provider": "openai",
         "model": "reviewer",
+        "temperature": 0.3,
+        "max_tokens": 777,
+        "thinking_level": "high",
+        "timeout": 90,
     }
     assert config.get_self_improvement_execution_review_max_per_session() == 9
 

@@ -12,12 +12,15 @@
 """
 
 import logging
+import math
 import threading
+from collections.abc import Mapping
 from typing import Optional, Dict, Any, Callable, List
 import dataclasses
 
 from src.utils.helpers import normalize_thinking_level
 from src.data.config_models import (
+    AIConfig,
     AppConfig,
     AgentToolsDiscoveryConfig,
     AgentToolsFileConfig,
@@ -35,21 +38,53 @@ from src.data.sqlalchemy_manager import SQLAlchemyManager, get_sqlalchemy_manage
 
 logger = logging.getLogger(__name__)
 
+_MISSING = object()
+
 SENSITIVE_CONFIG_KEYS = frozenset(
     {
         "ai.api_key",
         "ai.vision_api_key",
         "ai.embedding_api_key",
         "ai.compression_model_api_key",
+        "self_improvement.execution_review.model.api_key",
         "web.brave_api_key",
         "skill_store.skills_sh_api_key",
         "agent_tools.output.semantic_summary.api_key",
     }
 )
 
+_AI_TEMPERATURE_DEFAULT = AIConfig().temperature
+_AI_TEMPERATURE_MIN = 0.0
+_AI_TEMPERATURE_MAX = 2.0
+
+
+def _is_sensitive_key(key: str) -> bool:
+    if key in SENSITIVE_CONFIG_KEYS:
+        return True
+    parts = key.split(".")
+    return (
+        len(parts) >= 5
+        and parts[0] == "mcp"
+        and parts[1] == "servers"
+        and parts[3] in {"env", "headers"}
+    )
+
+
+def _contains_sensitive_value(key: str, value: Any) -> bool:
+    if _is_sensitive_key(key) and bool(value):
+        return True
+    if isinstance(value, Mapping):
+        return any(
+            _contains_sensitive_value(f"{key}.{child_key}", child_value)
+            for child_key, child_value in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_sensitive_value(key, item) for item in value)
+    return False
+
 
 def _log_value(key: str, value: Any) -> Any:
-    return "<redacted>" if key in SENSITIVE_CONFIG_KEYS and value else value
+    return "<redacted>" if _contains_sensitive_value(key, value) else value
 
 
 @dataclasses.dataclass
@@ -78,9 +113,11 @@ class UnifiedConfigManager:
         self._sa: SQLAlchemyManager = get_sqlalchemy_manager()
         self._sa.initialize()
 
-        # 缓存运行时配置
+        # 仅缓存显式 persist="runtime" 的进程内覆盖。文件和数据库值不能
+        # 写入此处，否则后来写入 app_settings 的值会被旧读取结果遮住。
         self._runtime_cache: Dict[str, Any] = {}
         self._cache_lock = threading.RLock()
+        self._legacy_key_warnings: set[tuple[str, str]] = set()
 
         # ⭐ 配置变化观察者列表
         self._observers: List[Callable[[str, Any, Any], None]] = []
@@ -93,14 +130,14 @@ class UnifiedConfigManager:
         获取配置值（三层优先级）
 
         Args:
-            key: 配置键，支持点分隔的路径（如 'ai.model', 'recording.browser_type'）
+            key: 配置键，支持点分隔的路径（如 'ai.model', 'recording.browser_start_url'）
             default: 默认值（最低优先级）
 
         Returns:
             配置值
 
         优先级：
-            1. 运行时缓存（_runtime_cache）
+            1. 运行时覆盖（_runtime_cache）
             2. 数据库配置（app_settings 表）
             3. 配置文件（config.json）
             4. 默认值
@@ -118,16 +155,12 @@ class UnifiedConfigManager:
         # 2. 检查数据库配置
         db_value = self._sa.get_setting(key)
         if db_value is not None:
-            with self._cache_lock:
-                self._runtime_cache[key] = db_value
             logger.debug("[配置] 从数据库读取: %s = %s", key, _log_value(key, db_value))
             return db_value
 
         # 3. 从配置文件读取（支持点分隔路径）
         file_value = self._get_from_file_config(key)
         if file_value is not None:
-            with self._cache_lock:
-                self._runtime_cache[key] = file_value
             return file_value
 
         # 4. 返回默认值
@@ -145,9 +178,8 @@ class UnifiedConfigManager:
                 - 'runtime': 仅缓存（重启后失效）
             value_type: 值类型（用于数据库存储）
         """
-        # ⭐ 保存旧值（用于通知观察者）
-        with self._cache_lock:
-            old_value = self._runtime_cache.get(key)
+        # 先解析当前有效值，供观察者获得真实的变更前状态。
+        old_value = self.get(key, default=None)
 
         if persist == "runtime":
             # 仅缓存
@@ -157,9 +189,9 @@ class UnifiedConfigManager:
         elif persist == "database":
             # 保存到数据库
             self._sa.set_setting(key, value, value_type)
-            # 同时更新缓存
+            # database 写入必须覆盖既有 runtime 值；普通数据库读取不缓存。
             with self._cache_lock:
-                self._runtime_cache[key] = value
+                self._runtime_cache.pop(key, None)
             logger.info("[配置] 已保存到数据库: %s = %s", key, _log_value(key, value))
         else:
             raise ValueError(f"未知的 persist 类型: {persist!r}，可选 'database' 或 'runtime'")
@@ -185,6 +217,56 @@ class UnifiedConfigManager:
         if count > 0:
             logger.info("[配置] 已按前缀删除 %d 条: %s*", count, prefix)
         return count
+
+    def _warn_legacy_key(self, legacy_key: str, canonical_key: str) -> None:
+        warning_key = (legacy_key, canonical_key)
+        with self._cache_lock:
+            if warning_key in self._legacy_key_warnings:
+                return
+            self._legacy_key_warnings.add(warning_key)
+        logger.warning("[配置] 已读取弃用配置键 %s；请改用 %s", legacy_key, canonical_key)
+
+    def _get_from_raw_file_config(self, key: str) -> Any:
+        value: Any = self.file_loader.raw_config
+        for part in key.split("."):
+            if isinstance(value, dict) and part in value:
+                value = value[part]
+            else:
+                return _MISSING
+        return value
+
+    def _get_canonical_with_legacy(
+        self,
+        canonical_key: str,
+        legacy_key: str,
+        default: Any,
+        *,
+        allow_none: bool = False,
+    ) -> Any:
+        """Resolve one canonical config key while safely honoring its legacy alias."""
+        with self._cache_lock:
+            if canonical_key in self._runtime_cache:
+                return self._runtime_cache[canonical_key]
+            if legacy_key in self._runtime_cache:
+                self._warn_legacy_key(legacy_key, canonical_key)
+                return self._runtime_cache[legacy_key]
+
+        canonical_db = self._sa.get_setting(canonical_key)
+        if canonical_db is not None:
+            return canonical_db
+        legacy_db = self._sa.get_setting(legacy_key)
+        if legacy_db is not None:
+            self._warn_legacy_key(legacy_key, canonical_key)
+            return legacy_db
+
+        canonical_file = self._get_from_raw_file_config(canonical_key)
+        if canonical_file is not _MISSING and (canonical_file is not None or allow_none):
+            return canonical_file
+        legacy_file = self._get_from_raw_file_config(legacy_key)
+        if legacy_file is not _MISSING and (legacy_file is not None or allow_none):
+            self._warn_legacy_key(legacy_key, canonical_key)
+            return legacy_file
+        return default
 
     # ===== 便捷方法：AI 配置 =====
 
@@ -288,6 +370,26 @@ class UnifiedConfigManager:
             return 1.0
         return value
 
+    def get_ai_temperature(self) -> float:
+        """LLM 采样温度（有限且在 0 到 2 之间）。"""
+        raw = self.get("ai.temperature", default=_AI_TEMPERATURE_DEFAULT)
+        try:
+            if isinstance(raw, bool):
+                raise TypeError("boolean is not a temperature")
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
+            logger.warning("[配置] ai.temperature 非法，回退到 %s", _AI_TEMPERATURE_DEFAULT)
+            return _AI_TEMPERATURE_DEFAULT
+        if not math.isfinite(value) or not _AI_TEMPERATURE_MIN <= value <= _AI_TEMPERATURE_MAX:
+            logger.warning(
+                "[配置] ai.temperature 必须是 %s 到 %s 之间的有限数字，回退到 %s",
+                _AI_TEMPERATURE_MIN,
+                _AI_TEMPERATURE_MAX,
+                _AI_TEMPERATURE_DEFAULT,
+            )
+            return _AI_TEMPERATURE_DEFAULT
+        return value
+
     def get_ai_max_tokens(self) -> int:
         """LLM 单次回复最大 output tokens。非法值回退到 32000。"""
         raw = self.get("ai.max_tokens", default=32000)
@@ -368,27 +470,52 @@ class UnifiedConfigManager:
 
     def get_memory_reference_steps_threshold(self) -> int:
         """tool result 被引用替换前需要的 assistant 消息数"""
-        return self.get("memory.reference_steps_threshold", default=3)
+        return self._get_canonical_with_legacy(
+            "ai.memory_reference_steps_threshold",
+            "memory.reference_steps_threshold",
+            3,
+        )
 
     def get_memory_reference_size_threshold(self) -> int:
         """触发引用替换的最小字符数"""
-        return self.get("memory.reference_size_threshold", default=10000)
+        return self._get_canonical_with_legacy(
+            "ai.memory_reference_size_threshold",
+            "memory.reference_size_threshold",
+            10000,
+        )
 
     def get_memory_compression_token_threshold(self) -> int:
         """token 估算触发压缩的阈值"""
-        return self.get("memory.compression_token_threshold", default=80000)
+        return self._get_canonical_with_legacy(
+            "ai.memory_compression_token_threshold",
+            "memory.compression_token_threshold",
+            80000,
+        )
 
     def get_memory_compression_count_threshold(self) -> Optional[int]:
         """消息条数触发压缩的阈值（可选）"""
-        return self.get("memory.compression_count_threshold", default=None)
+        return self._get_canonical_with_legacy(
+            "ai.memory_compression_count_threshold",
+            "memory.compression_count_threshold",
+            None,
+            allow_none=True,
+        )
 
     def get_memory_compression_keep_recent(self) -> int:
         """压缩时保留的最近消息数"""
-        return self.get("memory.compression_keep_recent", default=20)
+        return self._get_canonical_with_legacy(
+            "ai.memory_compression_keep_recent",
+            "memory.compression_keep_recent",
+            20,
+        )
 
     def get_memory_compression_trigger_strategy(self) -> str:
         """压缩触发策略："token" | "count" | "combined" """
-        return self.get("memory.compression_trigger_strategy", default="token")
+        return self._get_canonical_with_legacy(
+            "ai.memory_compression_trigger_strategy",
+            "memory.compression_trigger_strategy",
+            "token",
+        )
 
     # ===== 便捷方法：Agent 内建工具配置 =====
 
@@ -811,22 +938,38 @@ class UnifiedConfigManager:
         return self.get("recording.websocket.host", default="127.0.0.1")
 
     def get_websocket_port(self) -> int:
-        """获取 WebSocket 端口"""
-        return self.get("recording.websocket.port", default=8765)
+        """获取用于浏览器扩展连接的 WebSocket TCP 端口（1-65535）。"""
+        return self._get_bounded_positive_int(
+            "recording.websocket.port",
+            8765,
+            minimum=1,
+            maximum=65535,
+        )
+
+    def get_recording_browser_start_url(self) -> Optional[str]:
+        """获取录制浏览器的可选启动 URL；合法性由录制启动边界校验。"""
+        value = self.get("recording.browser_start_url", default=None)
+        return value if isinstance(value, str) else None
 
     def get_websocket_max_message_size(self) -> int:
         """获取 WebSocket 最大消息大小（字节）"""
-        return self.get(
-            "recording.websocket.max_message_size", default=50 * 1024 * 1024
-        )  # 默认 50 MB
+        return self._get_bounded_positive_int(
+            "recording.websocket.max_message_size",
+            50 * 1024 * 1024,
+            minimum=1024,
+            maximum=100 * 1024 * 1024,
+        )
 
     def get_websocket_max_response_body_size(
         self,
     ) -> int:
         """获取 WebSocket 最大响应体大小（字节，用于扩展端截断）"""
-        return self.get(
-            "recording.websocket.max_response_body_size", default=5 * 1024 * 1024
-        )  # 默认 5 MB
+        return self._get_bounded_positive_int(
+            "recording.websocket.max_response_body_size",
+            5 * 1024 * 1024,
+            minimum=1024,
+            maximum=100 * 1024 * 1024,
+        )
 
     def get_proxy_host(self) -> str:
         """获取录制代理主机"""
@@ -1021,7 +1164,11 @@ class UnifiedConfigManager:
     def get_self_improvement_execution_review_model(self) -> dict:
         """执行复盘审查员模型配置；空 dict 表示回退主模型配置。"""
         value = self.get("self_improvement.execution_review.model", default={}) or {}
-        return value if isinstance(value, dict) else {}
+        if dataclasses.is_dataclass(value):
+            value = dataclasses.asdict(value)
+        if not isinstance(value, dict):
+            return {}
+        return {key: item for key, item in value.items() if item not in (None, "")}
 
     def get_self_improvement_execution_review_max_per_session(self) -> int:
         """单会话每日最多生成多少条执行复盘。"""

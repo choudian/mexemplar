@@ -98,12 +98,16 @@ cd frontend && npm install && cd ..
 cp config.example.json config.json
 ```
 
-2. 修改 `config.json` 里的配置项，或直接在应用内设置界面调整：
+2. 修改 `config.json` 里的启动默认值，或直接在应用内设置界面调整：
 
 - `ai.provider`
 - `ai.model`
 - `ai.base_url`
 - `web.search_backend`
+
+配置统一由 `UnifiedConfigManager` 读取，优先级为：当前 sidecar 的 runtime 覆盖 → SQLite `app_settings`（Settings 写入）→ `config.json` → 代码默认值。因此 Settings 的值会覆盖同名文件值；手工编辑 `config.json` 后需要重启桌面应用/sidecar 才会重新加载。配置示例必须保持严格 JSON，字段说明见 [config.example.comments.md](config.example.comments.md)。
+
+会话压缩始终继承主 `ai` 的 provider、model、API key 与 base URL；仅 `ai.compression_model_temperature` 和 `ai.compression_model_max_tokens` 可单独调优。浏览器录制可用 `recording.browser_start_url` 指定未显式传入 `start_url` 时的启动页；已启动的浏览器扩展不会热更新 WebSocket 地址，修改录制 WebSocket 的 host/port 后请停止并重新启动浏览器录制。
 
 配置示例：
 

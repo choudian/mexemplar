@@ -23,6 +23,7 @@ React UI (frontend/)
 - UI event stream 由后端 `UI Event Registry` 拥有公开契约；前端只消费注册 UI event type，不使用内部 blinker 事件名或 `sourceEvent` 推断展示行为。事件 envelope 包含 `eventId`、当前桌面事件会话内单调递增的 `sequence`、`sessionId`、`causationId`、`type`、`scope`、安全校验后的 `payload` 和 `createdAt`。
 - sidecar event stream 为每个订阅者维护独立队列，并保留当前进程内的有界 replay buffer。前端重连时携带同一事件会话的 last-seen sequence；buffer 能覆盖缺口时按序回放，不能覆盖或事件会话不匹配时发送 `backend.resync_required`，由前端刷新权威快照恢复状态。
 - sidecar 只绑定本机回环地址，并要求每次启动生成的 session token；token 不写入配置、OpenAPI 或日志。
+- 运行时配置统一经 `UnifiedConfigManager`：runtime 覆盖（仅当前 sidecar）→ SQLite `app_settings` → `config.json` 启动默认值 → 代码默认值。Settings 写入 `app_settings` 并覆盖文件值；手工修改文件需重启 sidecar 重新加载，启动期组件（例如浏览器录制扩展）还需重启对应录制会话。
 - Debug Inspector 只通过 authenticated `/api/debug` 暴露，trace arm 是运行时状态，不持久化。Trace buffer 以进程内 epoch 隔离，受 record/bytes 限制；disable、clear、restart 都会销毁 raw detail。Raw debug endpoints 使用 `Cache-Control: no-store`，前端 raw trace/flow/reference state 只保存在组件内存，离开 `/debug` 或 clear/stop 时清理。模型 text/tool/vision 调用统一走 fail-isolated observation boundary；vision 只保留媒体元数据，embedding 不进入 LLM trace record，但必须在 provider/redaction inventory 中登记。
 - Agent Flow 以持久 `workflow_transitions` 为权威，Debug Inspector 只在 armed epoch 中叠加临时 trace link 和 Assistant delegation task/result debug detail；UI 必须标出 linked/unlinked 与 provenance，不能把临时 detail 写回业务事实。
 - Manual Real Grand Tour 是独立 Playwright 套件，默认 E2E 仍为 mock/controlled/cost-free。真实套件只通过 `npm run test:e2e:grand-tour` 运行，并内置启用 real-tour runtime 和 live capture；运行时使用随机 localhost port/token、临时数据目录、`UnifiedConfigManager` 只读凭据 getter、paid-call/time budget、public event watcher 和 sanitized summary report；trace/video/screenshot 默认关闭，现场录制只能按固定安全旅程执行。
@@ -584,7 +585,7 @@ PM/程序员/助理三个 Agent 有预定义的固定 Config（`PM_CONFIG`、`PR
   Agent: 发现这个 API 返回了 JSON，data 字段包含列表数据
 ```
 
-- `memory.reference_size_threshold` 的默认值保留为 10000 字符，用于后续重新设计时的兼容配置。
+- `ai.memory_reference_size_threshold` 的默认值保留为 10000 字符，用于后续重新设计时的兼容配置；历史 `memory.reference_size_threshold` 仍会兼容读取并记录弃用提示。
 - `load_reference` 仍保留给跨会话摘要等显式 REF 下钻场景，但会话内 tool result 不再由 `ReferenceHandler` 自动生成 `REF::` 指针。
 - 大输出治理优先走已升级内置工具的可见摘要 + `load_tool_output` 授权读取机制。
 
@@ -631,8 +632,10 @@ PM/程序员/助理三个 Agent 有预定义的固定 Config（`PM_CONFIG`、`PR
 
 - Playwright + Chrome 扩展（content_script + background service worker）+ CDP
 - 覆盖所有 Chromium 系浏览器（Chrome、Edge、Brave、Arc、Opera）
-- CDP 用于在页面加载前注入 `MEXEMPLAR_CONFIG` 配置（`browser_recorder.py` `_inject_config_via_cdp`）
-- Extension 负责事件采集并通过 WebSocket 上报
+- `PlaywrightRecordingDriver._build_page_init_script()` 通过 Playwright `BrowserContext.add_init_script()` 在页面加载前注入 `MEXEMPLAR_CONFIG`，供内容脚本读取；不存在 `browser_recorder.py::_inject_config_via_cdp` 这一路径。
+- 每次 Playwright 启动会复制独立扩展副本并写入 `launch_context.js`。其中 `websocket_url` 由 MV3 background service worker 在首个页面出现前读取，避免只依赖页面初始化脚本导致首次 WebSocket 仍连默认端口。
+- Extension 负责事件采集并通过 WebSocket 上报。`recording.websocket.host/port` 修改后，必须停止并重新启动浏览器录制才会生成新的扩展 launch context。
+- `recording.browser_start_url` 仅在调用方未显式传入 `start_url` 时充当浏览器录制启动页回退；空白/无效值不导航。
 
 ### 扩展能力边界
 

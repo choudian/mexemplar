@@ -103,7 +103,7 @@ class BrainBackgroundWorker:
                 model=config.get_ai_model(),
                 api_key=config.get_ai_api_key(),
                 base_url=config.get_ai_base_url(),
-                temperature=0.7,
+                temperature=config.get_ai_temperature(),
                 max_tokens=config.get_ai_max_tokens(),
                 thinking_level=config.get_ai_thinking_level(),
                 timeout=config.get_ai_request_timeout(),

@@ -1,20 +1,17 @@
 import os
-import shutil
 from pathlib import Path
 
 from src.data.config_models import ConfigFileLoader
 
 
-def _reset_case_dir(case_name: str) -> Path:
-    base_dir = Path("tests") / "_tmp_config_loader" / case_name
-    if base_dir.exists():
-        shutil.rmtree(base_dir)
+def _case_dir(tmp_path: Path, case_name: str) -> Path:
+    base_dir = tmp_path / case_name
     base_dir.mkdir(parents=True, exist_ok=True)
     return base_dir
 
 
-def test_sync_startup_config_prefers_config_json():
-    case_dir = _reset_case_dir("prefers_config")
+def test_sync_startup_config_prefers_config_json(tmp_path):
+    case_dir = _case_dir(tmp_path, "prefers_config")
     working_dir = case_dir / "working"
     working_dir.mkdir()
 
@@ -30,8 +27,8 @@ def test_sync_startup_config_prefers_config_json():
     assert target.read_text(encoding="utf-8") == config_file.read_text(encoding="utf-8")
 
 
-def test_sync_startup_config_uses_example_when_config_missing():
-    case_dir = _reset_case_dir("fallback_example")
+def test_sync_startup_config_uses_example_when_config_missing(tmp_path):
+    case_dir = _case_dir(tmp_path, "fallback_example")
     working_dir = case_dir / "working"
     working_dir.mkdir()
 
@@ -45,8 +42,8 @@ def test_sync_startup_config_uses_example_when_config_missing():
     assert target.read_text(encoding="utf-8") == example_file.read_text(encoding="utf-8")
 
 
-def test_sync_startup_config_overwrites_when_content_differs():
-    case_dir = _reset_case_dir("overwrite_when_diff")
+def test_sync_startup_config_overwrites_when_content_differs(tmp_path):
+    case_dir = _case_dir(tmp_path, "overwrite_when_diff")
     working_dir = case_dir / "working"
     working_dir.mkdir()
 
@@ -62,8 +59,8 @@ def test_sync_startup_config_overwrites_when_content_differs():
     assert target.read_text(encoding="utf-8") == config_file.read_text(encoding="utf-8")
 
 
-def test_sync_startup_config_skips_when_content_same():
-    case_dir = _reset_case_dir("skip_when_same")
+def test_sync_startup_config_skips_when_content_same(tmp_path):
+    case_dir = _case_dir(tmp_path, "skip_when_same")
     working_dir = case_dir / "working"
     working_dir.mkdir()
 
@@ -85,8 +82,8 @@ def test_sync_startup_config_skips_when_content_same():
     assert int(target.stat().st_mtime) == old_ts
 
 
-def test_sync_startup_config_skips_when_no_source_file():
-    case_dir = _reset_case_dir("skip_when_no_source")
+def test_sync_startup_config_skips_when_no_source_file(tmp_path):
+    case_dir = _case_dir(tmp_path, "skip_when_no_source")
     working_dir = case_dir / "working"
     working_dir.mkdir()
 
@@ -113,3 +110,45 @@ def test_default_loader_uses_runtime_data_dir(monkeypatch, tmp_path):
     expected = data_dir / "config" / "config.json"
     assert loader.config_path == expected
     assert expected.read_text(encoding="utf-8") == '{"app_name": "from_runtime"}'
+
+
+def test_loader_warns_about_deprecated_keys_without_logging_values(tmp_path, caplog):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"ai": {"compression_model_api_key": "old-secret"}}',
+        encoding="utf-8",
+    )
+
+    ConfigFileLoader(str(config_path)).load()
+
+    assert "ai.compression_model_api_key" in caplog.text
+    assert "old-secret" not in caplog.text
+
+
+def test_loader_warns_and_ignores_deprecated_recording_keys(tmp_path, caplog):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"recording": {"record_mouse_move": true, "websocket": {"enabled": false}}}',
+        encoding="utf-8",
+    )
+
+    config = ConfigFileLoader(str(config_path)).load()
+
+    assert "recording.record_mouse_move" in caplog.text
+    assert "recording.websocket.enabled" in caplog.text
+    assert not hasattr(config.recording, "record_mouse_move")
+    assert not hasattr(config.recording.websocket, "enabled")
+
+
+def test_loader_warns_about_runtime_only_and_unknown_keys_without_values(tmp_path, caplog):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"debug": {"trace": {"max_records": 17}}, "unsupported": {"value": "hidden"}}',
+        encoding="utf-8",
+    )
+
+    ConfigFileLoader(str(config_path)).load()
+
+    assert "debug.trace.max_records" in caplog.text
+    assert "unsupported.value" in caplog.text
+    assert "hidden" not in caplog.text

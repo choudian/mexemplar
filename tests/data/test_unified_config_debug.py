@@ -242,8 +242,5 @@ class TestDebugConfigFileOverride:
             ensure_ascii=False,
         )
         config = _make_config(tmp_path, config_json)
-        # 注意：file_config 通过 _get_from_file_config 读取
-        # 这取决于 AppConfig dataclass 是否包含 debug 字段
-        # accessor 实现后，这里验证 config 文件值确实生效
         raw = config._get_from_file_config("debug.trace.max_records")
-        assert raw == 100 or raw is None  # None if AppConfig 未定义 debug
+        assert raw is None

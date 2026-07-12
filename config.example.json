@@ -1,7 +1,6 @@
 {
   "app_name": "Mexemplar",
   "version": "0.1.0",
-  "debug": false,
   "ai": {
     "provider": "openai",
     "model": "GLM-5.1",
@@ -18,10 +17,6 @@
     "vision_api_key": null,
     "vision_base_url": null,
     "embedding_api_key": null,
-    "compression_model_provider": "anthropic",
-    "compression_model_name": "claude-3-5-haiku-20241022",
-    "compression_model_api_key": null,
-    "compression_model_base_url": null,
     "compression_model_temperature": 0.5,
     "compression_model_max_tokens": 1024,
     "memory_reference_steps_threshold": 3,
@@ -34,17 +29,7 @@
   "recording": {
     "screenshot_quality": 85,
     "screenshot_delay_after_action": 0.2,
-    "enable_video_recording": true,
-    "video_fps": 15,
-    "video_quality": 85,
-    "record_mouse_move": false,
-    "default_recording_mode": "browser",
-    "browser_type": "chromium",
-    "browser_headless": false,
     "browser_start_url": null,
-    "capture_network_requests": true,
-    "network_request_filter": "xhr_fetch",
-    "network_request_timeout": 5.0,
     "noise_filter": {
       "enabled": true,
       "blacklist_domains": [
@@ -82,13 +67,8 @@
     "persistent_user_data": true,
     "user_data_dir": null,
     "websocket": {
-      "enabled": true,
       "host": "127.0.0.1",
       "port": 8765,
-      "ping_interval": 30.0,
-      "max_reconnect_attempts": 10,
-      "reconnect_delay": 1.0,
-      "message_queue_size": 1000,
       "max_message_size": 52428800,
       "max_response_body_size": 5242880
     },
@@ -108,14 +88,14 @@
   },
   "ui": {
     "theme": "light",
-    "density": "comfy",
-    "language": "zh_CN",
-    "window_width": 1200,
-    "window_height": 800
+    "density": "comfy"
   },
   "web": {
     "search_backend": "auto",
     "brave_api_key": null
+  },
+  "skill_store": {
+    "skills_sh_api_key": null
   },
   "brain": {
     "segment": {
@@ -127,6 +107,7 @@
       "prediction_verification_retries": 3
     },
     "injection": {
+      "persistent_top_n": 50,
       "hot_zone_top_n": 20,
       "subconscious_top_n": 10
     },
@@ -177,6 +158,37 @@
     },
     "api": {
       "default_limit": 50
+    },
+    "complexity": {
+      "step_threshold": 3,
+      "domain_threshold": 2
+    },
+    "planner": {
+      "specialist_name": "planner"
+    }
+  },
+  "external_coding": {
+    "enabled": true,
+    "default_launch_mode": "headless",
+    "preferred_tool": "auto",
+    "artifact_root": "data/coding_sessions",
+    "worktree_root": ".worktrees/coding",
+    "log_tail_chars": 8000,
+    "plan_timeout_seconds": 1800,
+    "run_timeout_seconds": 7200,
+    "autostart_enabled": true,
+    "quota_probe": {
+      "enabled": true,
+      "timeout_seconds": 12,
+      "low_threshold_percent": 80
+    },
+    "claude": {
+      "command": "claude",
+      "effort": "max"
+    },
+    "codex": {
+      "command": "codex",
+      "reasoning_effort": "xhigh"
     }
   },
   "agent_tools": {
@@ -190,6 +202,7 @@
       "raw_reference_threshold_chars": 20000,
       "max_artifact_bytes": 10485760,
       "retention_days": 14,
+      "load_max_bytes": 131072,
       "semantic_summary": {
         "enabled": true,
         "provider": "anthropic",
@@ -218,7 +231,10 @@
       "default_timeout_ms": 30000,
       "max_timeout_ms": 600000,
       "log_tail_chars": 4000,
-      "max_background_processes": 16
+      "max_background_processes": 16,
+      "event_buffer_size": 64,
+      "stalled_threshold_ms": 10000,
+      "chunk_threshold_chars": 4096
     },
     "discovery": {
       "full_catalog_max_items": 20,
@@ -226,9 +242,33 @@
       "search_default_limit": 10,
       "search_max_limit": 25,
       "result_description_max_chars": 500
-    }
+    },
+    "max_parallel_workers": 4
   },
   "self_improvement": {
+    "max_prompt_supplements_per_day": 3,
+    "max_tool_creations_per_day": 1,
+    "max_reflections_per_session": 5,
+    "convergence_threshold": 0.01,
+    "degradation_threshold": 0.1,
+    "sandbox_window": 20,
+    "rollback_monitor_window": 10,
+    "avoidance_top_n": 5,
+    "tool_gap_threshold": 3,
+    "execution_review": {
+      "enabled": true,
+      "model": {
+        "provider": null,
+        "model": null,
+        "api_key": null,
+        "base_url": null,
+        "temperature": null,
+        "max_tokens": null,
+        "thinking_level": null,
+        "timeout": null
+      },
+      "max_per_session": 3
+    },
     "proposals": {
       "enabled": true,
       "worktree_retention_max": 10,

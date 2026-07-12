@@ -1,6 +1,6 @@
 import json
 
-from src.data.unified_config import UnifiedConfigManager
+from src.data.unified_config import UnifiedConfigManager, _log_value
 
 
 class _SettingsStore:
@@ -64,6 +64,31 @@ def test_tool_output_semantic_summary_defaults_and_bounds(tmp_path):
     assert config.get_agent_tools_output_semantic_summary_map_max_tokens() == 500
     assert config.get_agent_tools_output_semantic_summary_reduce_max_tokens() == 900
     assert config.get_agent_tools_output_semantic_summary_summary_max_chars() == 4000
+
+
+def test_ai_temperature_defaults_and_rejects_non_finite_or_out_of_range_values(tmp_path):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    config._sa = _SettingsStore()
+
+    assert config.get_ai_temperature() == 0.7
+
+    for invalid in (
+        None,
+        True,
+        "not-a-number",
+        -0.01,
+        2.01,
+        float("nan"),
+        float("inf"),
+        float("-inf"),
+    ):
+        config.set("ai.temperature", invalid, persist="runtime")
+        assert config.get_ai_temperature() == 0.7
+
+    config.set("ai.temperature", 0, persist="runtime")
+    assert config.get_ai_temperature() == 0.0
+    config.set("ai.temperature", 2, persist="runtime")
+    assert config.get_ai_temperature() == 2.0
 
 
 def test_agent_tools_discovery_defaults_and_bounds(tmp_path):
@@ -259,3 +284,205 @@ def test_memory_reference_size_threshold_default_is_raised(tmp_path):
     config._sa = _SettingsStore()
 
     assert config.get_memory_reference_size_threshold() == 10000
+
+
+def test_memory_reference_size_threshold_reads_canonical_ai_file_key(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {"ai": {"memory_reference_size_threshold": 4321}},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_memory_reference_size_threshold() == 4321
+
+
+def test_memory_legacy_file_key_is_compatible_but_canonical_key_wins(tmp_path, caplog):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "memory": {"reference_size_threshold": 4321},
+                "ai": {"memory_reference_size_threshold": 7654},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_memory_reference_size_threshold() == 7654
+
+    legacy_path = tmp_path / "legacy-config.json"
+    legacy_path.write_text(
+        json.dumps({"memory": {"reference_size_threshold": 4321}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    legacy_config = UnifiedConfigManager(config_path=str(legacy_path))
+    legacy_config._sa = _SettingsStore()
+
+    assert legacy_config.get_memory_reference_size_threshold() == 4321
+    assert "memory.reference_size_threshold" in caplog.text
+
+
+def test_memory_legacy_database_key_is_used_when_canonical_key_is_absent(tmp_path, caplog):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    store = _SettingsStore()
+    store.values["memory.reference_size_threshold"] = 4321
+    config._sa = store
+
+    assert config.get_memory_reference_size_threshold() == 4321
+    assert "memory.reference_size_threshold" in caplog.text
+
+
+def test_websocket_size_limits_read_from_file_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "recording": {
+                    "websocket": {
+                        "max_message_size": 123456,
+                        "max_response_body_size": 654321,
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_websocket_max_message_size() == 123456
+    assert config.get_websocket_max_response_body_size() == 654321
+
+
+def test_websocket_size_limits_reject_non_positive_or_non_numeric_values(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "recording": {
+                    "websocket": {
+                        "max_message_size": "not-a-size",
+                        "max_response_body_size": 0,
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_websocket_max_message_size() == 50 * 1024 * 1024
+    assert config.get_websocket_max_response_body_size() == 5 * 1024 * 1024
+
+
+def test_websocket_file_port_requires_a_connectable_tcp_port(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"recording": {"websocket": {"port": 0}}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_websocket_port() == 8765
+
+
+def test_assistant_task_settings_read_from_file_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "assistant_tasks": {
+                    "unified_dispatch": {"enabled": False},
+                    "complexity": {"step_threshold": 7},
+                    "planner": {"specialist_name": "architecture-planner"},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_assistant_tasks_unified_dispatch_enabled() is False
+    assert config.get_assistant_tasks_complexity_step_threshold() == 7
+    assert config.get_assistant_tasks_planner_specialist_name() == "architecture-planner"
+
+
+def test_external_coding_settings_read_from_file_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "external_coding": {
+                    "enabled": False,
+                    "default_launch_mode": "interactive",
+                    "quota_probe": {
+                        "enabled": False,
+                        "timeout_seconds": 9,
+                        "low_threshold_percent": 70,
+                    },
+                    "codex": {
+                        "command": "custom-codex",
+                        "reasoning_effort": "high",
+                    },
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_external_coding_enabled() is False
+    assert config.get_external_coding_default_launch_mode() == "interactive"
+    assert config.get_external_coding_quota_probe_enabled() is False
+    assert config.get_external_coding_quota_probe_timeout_seconds() == 9
+    assert config.get_external_coding_quota_low_threshold_percent() == 70
+    assert config.get_external_coding_codex_command() == "custom-codex"
+    assert config.get_external_coding_codex_reasoning_effort() == "high"
+
+
+def test_agent_tool_limits_read_from_file_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agent_tools": {
+                    "max_parallel_workers": 7,
+                    "output": {"load_max_bytes": 262144},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_agent_tools_max_parallel_workers() == 7
+    assert config.get_agent_tools_output_load_max_bytes() == 262144
+
+
+def test_nested_model_profile_secret_is_redacted_from_config_logs():
+    assert (
+        _log_value(
+            "self_improvement.execution_review.model",
+            {"provider": "test", "api_key": "x"},
+        )
+        == "<redacted>"
+    )
+    assert _log_value("mcp.servers.mcs_example.env.API_TOKEN", "x") == "<redacted>"

@@ -5,12 +5,13 @@ importScripts('websocket_client.js');
 
 // console.log('[BACKGROUND] Service Worker 已启动');
 
+const launchContext = self.MEXEMPLAR_LAUNCH_CONTEXT || {};
+
 let wsClient = null;
 let isRecording = false;
 let recordingId = null;
 let recordingSource = null;
 let hasLoadedPersistedState = false;
-const launchContext = self.MEXEMPLAR_LAUNCH_CONTEXT || {};
 
 const RECORDING_SOURCE = Object.freeze({
   PLAYWRIGHT: 'playwright',
@@ -28,8 +29,14 @@ const STORAGE_KEYS = [
 // ⭐ 新增：网络请求存储（按 origin 分组）
 const networkRequests = new Map(); // origin -> []Array
 
-// ⭐ 动态 WebSocket URL（可通过 CDP 注入更新）
-let WEBSOCKET_URL = 'ws://localhost:8765';  // 默认值
+// 每次 Playwright 启动的扩展副本会在 launch_context.js 中携带地址；
+// service worker 首次连接早于页面 CDP 注入时也能使用正确端点。
+const launchWebSocketUrl = launchContext.websocket_url;
+let WEBSOCKET_URL = (
+  typeof launchWebSocketUrl === 'string' && launchWebSocketUrl.trim()
+    ? launchWebSocketUrl
+    : 'ws://localhost:8765'
+);
 
 function isWsConnected() {
   return Boolean(wsClient && wsClient.connected && wsClient.ws && wsClient.ws.readyState === WebSocket.OPEN);
@@ -132,7 +139,7 @@ function restoreRecordingState() {
   });
 }
 
-// 立即初始化并连接（使用默认 URL，稍后可通过 CDP 注入更新）
+// 立即使用 launch context URL 连接；页面 CDP 注入只补充页面侧配置。
 wsClient = new WebSocketClient(WEBSOCKET_URL);
 attachWsClientHandlers();
 restoreRecordingState();

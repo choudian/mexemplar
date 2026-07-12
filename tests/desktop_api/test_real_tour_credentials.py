@@ -6,8 +6,13 @@ import pytest
 
 
 class FakeConfig:
-    def __init__(self, api_key: str | None = "sk-config") -> None:
+    def __init__(
+        self,
+        api_key: str | None = "sk-config",
+        temperature: float = 0.65,
+    ) -> None:
         self.api_key = api_key
+        self.temperature = temperature
 
     def get_ai_provider(self) -> str:
         return "anthropic"
@@ -32,6 +37,9 @@ class FakeConfig:
 
     def get_ai_thinking_level(self) -> str:
         return "off"
+
+    def get_ai_temperature(self) -> float:
+        return self.temperature
 
     def get_ai_max_tokens(self) -> int:
         return 32000
@@ -70,6 +78,7 @@ def test_real_tour_build_default_orchestrator_uses_unified_config(monkeypatch) -
 
     assert captured["api_key"] == "sk-config"
     assert captured["model"] == "model-from-config"
+    assert captured["temperature"] == 0.65
 
 
 def test_real_tour_missing_unified_config_credential_reaches_client_validation(

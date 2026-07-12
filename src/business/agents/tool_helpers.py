@@ -111,7 +111,8 @@ def get_vision_llm_client(model: str | None = None) -> Any:
     resolved_model = model or config.get_ai_vision_model()
     api_key = config.get_ai_vision_api_key()
     base_url = config.get_ai_vision_base_url()
-    key = (provider, resolved_model, api_key, base_url)
+    temperature = config.get_ai_temperature()
+    key = (provider, resolved_model, api_key, base_url, temperature)
 
     client = _vision_client_cache.get(key)
     if client is not None:
@@ -126,7 +127,7 @@ def get_vision_llm_client(model: str | None = None) -> Any:
             model=resolved_model,
             api_key=api_key,
             base_url=base_url,
-            temperature=0.3,
+            temperature=temperature,
             max_tokens=1024,
             timeout=config.get_ai_request_timeout(),
         )

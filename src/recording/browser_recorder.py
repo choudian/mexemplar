@@ -13,6 +13,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
+from urllib.parse import urlparse
 
 from src.data.unified_config import get_unified_config
 from src.utils.events import emit
@@ -473,6 +474,34 @@ class BrowserRecorder:
     ) -> bool:
         return self._run_async(self._async_start_recording(start_url, recording_id))
 
+    @staticmethod
+    def _normalize_browser_start_url(candidate: object) -> Optional[str]:
+        """将空白或非法 URL 归一为 None，交由 driver 保持空白页。"""
+        if not isinstance(candidate, str):
+            return None
+        normalized = candidate.strip()
+        if not normalized or any(char.isspace() for char in normalized):
+            return None
+        try:
+            parsed = urlparse(normalized)
+        except ValueError:
+            return None
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return None
+        return normalized
+
+    def _resolve_browser_start_url(self, explicit_start_url: Optional[str]) -> Optional[str]:
+        """显式参数优先；仅 None 表示可回退到配置文件/Settings。"""
+        candidate = (
+            self._unified_config.get_recording_browser_start_url()
+            if explicit_start_url is None
+            else explicit_start_url
+        )
+        resolved = self._normalize_browser_start_url(candidate)
+        if candidate is not None and resolved is None:
+            logger.warning("[BrowserRecorder] browser_start_url 无效，浏览器将保持空白页")
+        return resolved
+
     async def _async_start_recording(
         self, start_url: Optional[str] = None, recording_id: Optional[str] = None
     ) -> bool:
@@ -500,7 +529,8 @@ class BrowserRecorder:
             existing_clients = set(self._ws_server.clients) if self._ws_server else set()
 
             logger.info("启动浏览器并加载扩展...")
-            if not await self._launch_browser_with_subprocess(start_url):
+            resolved_start_url = self._resolve_browser_start_url(start_url)
+            if not await self._launch_browser_with_subprocess(resolved_start_url):
                 logger.error("启动浏览器失败")
                 return False
 

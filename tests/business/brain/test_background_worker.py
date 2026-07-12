@@ -43,6 +43,49 @@ def _replace_jobs(worker: BrainBackgroundWorker, calls: list[str]) -> None:
         setattr(worker, name, lambda name=name: calls.append(name))
 
 
+def test_worker_llm_client_uses_configured_temperature(monkeypatch) -> None:
+    import src.business.ai.llm_client as llm_client_module
+
+    captured: dict[str, object] = {}
+
+    class Config:
+        def get_ai_provider(self) -> str:
+            return "openai"
+
+        def get_ai_model(self) -> str:
+            return "background-model"
+
+        def get_ai_api_key(self):
+            return None
+
+        def get_ai_base_url(self):
+            return None
+
+        def get_ai_temperature(self) -> float:
+            return 0.35
+
+        def get_ai_max_tokens(self) -> int:
+            return 256
+
+        def get_ai_thinking_level(self) -> str:
+            return "off"
+
+        def get_ai_request_timeout(self) -> float:
+            return 12.0
+
+    class FakeLLM:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.delenv("MEXEMPLAR_REAL_GRAND_TOUR", raising=False)
+    monkeypatch.setattr(llm_client_module, "LangChainLLMClient", FakeLLM)
+
+    client = BrainBackgroundWorker(config=Config())._get_llm_client()
+
+    assert isinstance(client, FakeLLM)
+    assert captured["temperature"] == 0.35
+
+
 def test_worker_loop_runs_maintenance_jobs_in_order() -> None:
     worker = BrainBackgroundWorker(config=_Config())
     calls: list[str] = []

@@ -29,8 +29,8 @@ class WebSocketServer:
             port: 监听端口（如果为 None 则从配置读取）
         """
         config = get_unified_config()
-        self.host = host or config.get_websocket_host()
-        self.port = port or config.get_websocket_port()
+        self.host = host if host is not None else config.get_websocket_host()
+        self.port = port if port is not None else config.get_websocket_port()
         self.clients: Set[WebSocketServerProtocol] = set()
         self._client_connected_at: Dict[WebSocketServerProtocol, float] = {}
         self._client_metadata: Dict[WebSocketServerProtocol, Dict[str, Any]] = {}

@@ -227,6 +227,35 @@ def test_settings_service_validates_web_search_backend() -> None:
         service.update_values({"web.search_backend": "unknown"})
 
 
+def test_recording_settings_hide_deprecated_controls_but_keep_live_ones() -> None:
+    schema = SettingsService(config=FakeConfig()).get_schema()
+    recording = next(section for section in schema["sections"] if section["id"] == "recording")
+    keys = {item["key"] for item in recording["items"]}
+
+    assert {
+        "recording.screenshot_quality",
+        "recording.noise_filter.enabled",
+        "recording.desktop.enable_clip",
+        "recording.desktop.vision_model",
+    } <= keys
+    assert {
+        "recording.enable_video_recording",
+        "recording.video_fps",
+        "recording.video_quality",
+        "recording.capture_network_requests",
+        "recording.network_request_filter",
+        "recording.default_recording_mode",
+        "recording.browser_type",
+        "recording.browser_headless",
+        "recording.record_mouse_move",
+        "recording.websocket.enabled",
+        "recording.websocket.ping_interval",
+        "recording.websocket.max_reconnect_attempts",
+        "recording.websocket.reconnect_delay",
+        "recording.websocket.message_queue_size",
+    }.isdisjoint(keys)
+
+
 def test_tool_output_settings_schema_exposes_advanced_fields():
     schema = SettingsService().get_schema()
     section = next(item for item in schema["sections"] if item["id"] == "tool_output")

@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from src.recording.browser.playwright_recording_driver import PlaywrightRecordingDriver
 from src.recording.browser_recorder import BrowserRecorder
 
 
@@ -36,6 +37,63 @@ def test_browser_recorder_init_does_not_start_ws_server():
         BrowserRecorder()
 
     mock_ensure.assert_not_called()
+
+
+def test_playwright_extension_bundle_carries_websocket_url_for_service_worker(tmp_path):
+    unified_config = MagicMock()
+    unified_config.get_websocket_host.return_value = "127.0.0.42"
+    unified_config.get_websocket_port.return_value = 9876
+    driver = PlaywrightRecordingDriver(
+        storage_path=tmp_path / "recordings",
+        unified_config=unified_config,
+    )
+    extension_source = Path(__file__).parents[2] / "src" / "recording" / "browser_extension"
+
+    bundle_path = driver.prepare_playwright_extension_bundle(
+        extension_source,
+        recording_id="rec-launch-context",
+    )
+
+    try:
+        launch_context_source = (bundle_path / "launch_context.js").read_text(encoding="utf-8")
+        payload = launch_context_source.removeprefix(
+            "self.MEXEMPLAR_LAUNCH_CONTEXT = "
+        ).removesuffix(";\n")
+
+        assert json.loads(payload) == {
+            "client_kind": "playwright_background",
+            "launch_token": driver.playwright_launch_token,
+            "recording_id": "rec-launch-context",
+            "websocket_url": "ws://127.0.0.42:9876",
+        }
+
+        background_source = (bundle_path / "background_simple.js").read_text(encoding="utf-8")
+        assert "launchContext.websocket_url" in background_source
+        assert "new WebSocketClient(WEBSOCKET_URL)" in background_source
+    finally:
+        driver.cleanup_playwright_extension_bundle()
+
+
+def test_playwright_init_script_serializes_recording_config_as_json(tmp_path):
+    driver = PlaywrightRecordingDriver(
+        storage_path=tmp_path / "recordings",
+        unified_config=MagicMock(),
+    )
+    recording_id = "rec'; globalThis.injected = true; //"
+
+    script = driver._build_page_init_script(
+        websocket_url="ws://127.0.0.1:8765",
+        recording_id=recording_id,
+        max_response_body_size=3_145_728,
+    )
+
+    payload_source = script.split("window.MEXEMPLAR_CONFIG = ", 1)[1].split(";\n", 1)[0]
+    assert json.loads(payload_source) == {
+        "websocketUrl": "ws://127.0.0.1:8765",
+        "recordingId": recording_id,
+        "maxResponseBodySize": 3_145_728,
+        "version": "1.0",
+    }
 
 
 def test_stop_recording_runs_resource_cleanup():

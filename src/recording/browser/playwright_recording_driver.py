@@ -303,23 +303,15 @@ class PlaywrightRecordingDriver:
                 except Exception as exc:
                     self._logger.warning(f"on_browser_ready 回调失败: {exc}")
 
-            ws_host = self._unified_config.get_websocket_host()
-            ws_port = self._unified_config.get_websocket_port()
+            websocket_url = self._get_websocket_url()
             max_body_size = self._unified_config.get_websocket_max_response_body_size()
-            init_script = f"""
-            Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }});
-            window.MEXEMPLAR_CONFIG = {{
-                websocketUrl: 'ws://{ws_host}:{ws_port}',
-                recordingId: '{recording_id}',
-                maxResponseBodySize: {max_body_size},
-                version: '1.0'
-            }};
-            if (typeof window !== 'undefined' && window.MEXEMPLAR_DEBUG) {{
-                console.log('[Mexemplar] 配置已通过 CDP 注入:', window.MEXEMPLAR_CONFIG);
-            }}
-            """
+            init_script = self._build_page_init_script(
+                websocket_url=websocket_url,
+                recording_id=recording_id,
+                max_response_body_size=max_body_size,
+            )
             await self._context.add_init_script(init_script)
-            self._logger.info(f"[CDP] 已注入配置到所有页面: ws://{ws_host}:{ws_port}")
+            self._logger.info(f"[CDP] 已注入配置到所有页面: {websocket_url}")
             self._logger.info(f"[CDP] 最大响应体大小: {max_body_size / 1024 / 1024:.1f} MB")
 
             def handle_new_page(page) -> None:
@@ -513,6 +505,8 @@ class PlaywrightRecordingDriver:
             "client_kind": "playwright_background",
             "launch_token": launch_token,
             "recording_id": recording_id,
+            # MV3 service worker may connect before any page receives the CDP init script.
+            "websocket_url": self._get_websocket_url(),
         }
         (bundle_path / "launch_context.js").write_text(
             "self.MEXEMPLAR_LAUNCH_CONTEXT = "
@@ -525,6 +519,36 @@ class PlaywrightRecordingDriver:
         self._playwright_extension_bundle_path = bundle_path
         self._logger.info(f"[BrowserRecorder] 已生成 Playwright 扩展副本: {bundle_path}")
         return bundle_path
+
+    def _get_websocket_url(self) -> str:
+        host = self._unified_config.get_websocket_host()
+        port = self._unified_config.get_websocket_port()
+        return f"ws://{host}:{port}"
+
+    @staticmethod
+    def _build_page_init_script(
+        *,
+        websocket_url: str,
+        recording_id: Optional[str],
+        max_response_body_size: int,
+    ) -> str:
+        """生成传给页面的 CDP 初始化脚本，动态值统一以 JSON 字面量嵌入。"""
+        config_payload = json.dumps(
+            {
+                "websocketUrl": websocket_url,
+                "recordingId": recording_id,
+                "maxResponseBodySize": max_response_body_size,
+                "version": "1.0",
+            },
+            ensure_ascii=True,
+        )
+        return f"""
+        Object.defineProperty(navigator, 'webdriver', {{ get: () => undefined }});
+        window.MEXEMPLAR_CONFIG = {config_payload};
+        if (typeof window !== 'undefined' && window.MEXEMPLAR_DEBUG) {{
+            console.log('[Mexemplar] 配置已通过 CDP 注入:', window.MEXEMPLAR_CONFIG);
+        }}
+        """
 
     def cleanup_playwright_extension_bundle(self) -> None:
         if (

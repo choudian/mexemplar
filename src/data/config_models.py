@@ -22,6 +22,7 @@ config = AIConfig()  # 不要这样做！
 ```
 """
 
+import copy
 import json
 import logging
 import dataclasses
@@ -105,13 +106,10 @@ class AIConfig:
 class WebSocketConfig:
     """WebSocket 配置"""
 
-    enabled: bool = True  # 是否启用 WebSocket
     host: str = "127.0.0.1"  # 监听地址
     port: int = 8765  # 监听端口
-    ping_interval: float = 30.0  # 心跳间隔（秒）
-    max_reconnect_attempts: int = 10  # 最大重连次数
-    reconnect_delay: float = 1.0  # 初始重连延迟（秒）
-    message_queue_size: int = 1000  # 离线消息队列大小
+    max_message_size: int = 50 * 1024 * 1024  # 服务端单条消息上限（字节）
+    max_response_body_size: int = 5 * 1024 * 1024  # 扩展端响应体上限（字节）
 
 
 @dataclass
@@ -188,21 +186,10 @@ class RecordingConfig:
     """录制配置"""
 
     screenshot_quality: int = 85  # 截图质量 (1-100)
-    # 视频录制配置
-    enable_video_recording: bool = True  # 是否启用视频录制
-    video_fps: int = 15  # 视频帧率
-    video_quality: int = 85  # 视频质量 (1-100)
     # 截图配置
     screenshot_delay_after_action: float = 0.2  # 操作后截图延迟（秒）
-    record_mouse_move: bool = False  # 是否记录鼠标移动事件
     # 浏览器录制配置
-    default_recording_mode: str = "browser"  # 默认录制模式（'browser' 或 'desktop'）
-    browser_type: str = "chromium"  # 浏览器类型（'chromium', 'firefox', 'webkit'）
-    browser_headless: bool = False  # 是否无头模式
     browser_start_url: Optional[str] = None  # 浏览器启动URL
-    capture_network_requests: bool = True  # 是否捕获网络请求（浏览器模式）
-    network_request_filter: str = "xhr_fetch"  # 网络请求过滤类型（'all', 'xhr_fetch', 'api_only'）
-    network_request_timeout: float = 5.0  # 关联操作和请求的时间窗口（秒）
     # WebSocket 配置
     websocket: WebSocketConfig = field(default_factory=WebSocketConfig)
     proxy: ProxyConfig = field(default_factory=ProxyConfig)
@@ -308,11 +295,154 @@ class BrainConfig:
 
 
 @dataclass
+class AssistantTasksUnifiedDispatchConfig:
+    enabled: bool = True
+
+
+@dataclass
+class AssistantTasksCutoverConfig:
+    clean_start_guard: bool = True
+
+
+@dataclass
+class AssistantTasksDispatchConfig:
+    max_workers: int = 4
+
+
+@dataclass
+class AssistantTasksGraphConfig:
+    max_tasks: int = 200
+
+
+@dataclass
+class AssistantTasksBoardConfig:
+    capacity: int = 50
+    fallback_seconds: int = 60
+
+
+@dataclass
+class AssistantTasksRecruitmentConfig:
+    min_fallback_count: int = 3
+
+
+@dataclass
+class AssistantTasksAttemptConfig:
+    lease_seconds: int = 120
+
+
+@dataclass
+class AssistantTasksRecoveryConfig:
+    scan_interval_seconds: int = 30
+
+
+@dataclass
+class AssistantTasksMeetingConfig:
+    turn_budget: int = 12
+    time_budget_seconds: int = 900
+    mutual_wait_window: int = 4
+
+
+@dataclass
+class AssistantTasksApiConfig:
+    default_limit: int = 50
+
+
+@dataclass
+class AssistantTasksComplexityConfig:
+    step_threshold: int = 3
+    domain_threshold: int = 2
+
+
+@dataclass
+class AssistantTasksPlannerConfig:
+    specialist_name: str = "planner"
+
+
+@dataclass
+class AssistantTasksConfig:
+    """Assistant task collaboration configuration."""
+
+    unified_dispatch: AssistantTasksUnifiedDispatchConfig = field(
+        default_factory=AssistantTasksUnifiedDispatchConfig
+    )
+    cutover: AssistantTasksCutoverConfig = field(default_factory=AssistantTasksCutoverConfig)
+    dispatch: AssistantTasksDispatchConfig = field(default_factory=AssistantTasksDispatchConfig)
+    graph: AssistantTasksGraphConfig = field(default_factory=AssistantTasksGraphConfig)
+    board: AssistantTasksBoardConfig = field(default_factory=AssistantTasksBoardConfig)
+    recruitment: AssistantTasksRecruitmentConfig = field(
+        default_factory=AssistantTasksRecruitmentConfig
+    )
+    attempt: AssistantTasksAttemptConfig = field(default_factory=AssistantTasksAttemptConfig)
+    recovery: AssistantTasksRecoveryConfig = field(default_factory=AssistantTasksRecoveryConfig)
+    meeting: AssistantTasksMeetingConfig = field(default_factory=AssistantTasksMeetingConfig)
+    api: AssistantTasksApiConfig = field(default_factory=AssistantTasksApiConfig)
+    complexity: AssistantTasksComplexityConfig = field(
+        default_factory=AssistantTasksComplexityConfig
+    )
+    planner: AssistantTasksPlannerConfig = field(default_factory=AssistantTasksPlannerConfig)
+
+
+@dataclass
+class ExternalCodingQuotaProbeConfig:
+    enabled: bool = True
+    timeout_seconds: int = 12
+    low_threshold_percent: int = 80
+
+
+@dataclass
+class ExternalCodingClaudeConfig:
+    command: str = "claude"
+    effort: str = "max"
+
+
+@dataclass
+class ExternalCodingCodexConfig:
+    command: str = "codex"
+    reasoning_effort: str = "xhigh"
+
+
+@dataclass
+class ExternalCodingConfig:
+    """Owner-bound external coding session defaults."""
+
+    enabled: bool = True
+    default_launch_mode: str = "headless"
+    preferred_tool: str = "auto"
+    artifact_root: str = "data/coding_sessions"
+    worktree_root: str = ".worktrees/coding"
+    log_tail_chars: int = 8000
+    plan_timeout_seconds: int = 1800
+    run_timeout_seconds: int = 7200
+    autostart_enabled: bool = True
+    quota_probe: ExternalCodingQuotaProbeConfig = field(
+        default_factory=ExternalCodingQuotaProbeConfig
+    )
+    claude: ExternalCodingClaudeConfig = field(default_factory=ExternalCodingClaudeConfig)
+    codex: ExternalCodingCodexConfig = field(default_factory=ExternalCodingCodexConfig)
+
+
+@dataclass
+class SelfImprovementExecutionReviewModelConfig:
+    """可选的执行复盘模型 profile；全部为空时继承主 ai.* profile。"""
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    thinking_level: Optional[str] = None
+    timeout: Optional[float] = None
+
+
+@dataclass
 class SelfImprovementExecutionReviewConfig:
     """自我改进执行复盘配置。"""
 
     enabled: bool = True
-    model: dict[str, Any] = field(default_factory=dict)
+    model: SelfImprovementExecutionReviewModelConfig = field(
+        default_factory=SelfImprovementExecutionReviewModelConfig
+    )
     max_per_session: int = 3
 
 
@@ -384,6 +514,7 @@ class AgentToolsOutputConfig:
     raw_reference_threshold_chars: int = 20000
     max_artifact_bytes: int = 10485760
     retention_days: int = 14
+    load_max_bytes: int = 131072
     semantic_summary: AgentToolsOutputSemanticSummaryConfig = field(
         default_factory=AgentToolsOutputSemanticSummaryConfig
     )
@@ -432,6 +563,7 @@ class AgentToolsConfig:
     search: AgentToolsSearchConfig = field(default_factory=AgentToolsSearchConfig)
     process: AgentToolsProcessConfig = field(default_factory=AgentToolsProcessConfig)
     discovery: AgentToolsDiscoveryConfig = field(default_factory=AgentToolsDiscoveryConfig)
+    max_parallel_workers: int = 4
 
 
 @dataclass
@@ -440,19 +572,21 @@ class AppConfig:
 
     app_name: str = "Mexemplar"
     version: str = "0.1.0"
-    debug: bool = False
     ai: AIConfig = field(default_factory=AIConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
     web: WebConfig = field(default_factory=WebConfig)
     skill_store: SkillStoreConfig = field(default_factory=SkillStoreConfig)
     brain: BrainConfig = field(default_factory=BrainConfig)
+    assistant_tasks: AssistantTasksConfig = field(default_factory=AssistantTasksConfig)
+    external_coding: ExternalCodingConfig = field(default_factory=ExternalCodingConfig)
     self_improvement: SelfImprovementConfig = field(default_factory=SelfImprovementConfig)
     agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为可写配置字典（不含密钥等敏感信息）。"""
         from src.data.unified_config import SENSITIVE_CONFIG_KEYS
+        from src.data.config_contract import omit_deprecated_paths
 
         data = asdict(self)
         # 不序列化任何密钥（api_key 等），避免明文写入 config.json。
@@ -466,6 +600,7 @@ class AppConfig:
                 node = node[key]
             if isinstance(node, dict) and parts[-1] in node:
                 node[parts[-1]] = None
+        omit_deprecated_paths(data)
         return data
 
     @classmethod
@@ -524,15 +659,57 @@ class AppConfig:
                 )
             config.brain = BrainConfig(**brain_data)
 
+        if "assistant_tasks" in data:
+            task_data = _filter_dataclass_fields(data["assistant_tasks"], AssistantTasksConfig)
+            for key, sub_cls in (
+                ("unified_dispatch", AssistantTasksUnifiedDispatchConfig),
+                ("cutover", AssistantTasksCutoverConfig),
+                ("dispatch", AssistantTasksDispatchConfig),
+                ("graph", AssistantTasksGraphConfig),
+                ("board", AssistantTasksBoardConfig),
+                ("recruitment", AssistantTasksRecruitmentConfig),
+                ("attempt", AssistantTasksAttemptConfig),
+                ("recovery", AssistantTasksRecoveryConfig),
+                ("meeting", AssistantTasksMeetingConfig),
+                ("api", AssistantTasksApiConfig),
+                ("complexity", AssistantTasksComplexityConfig),
+                ("planner", AssistantTasksPlannerConfig),
+            ):
+                value = task_data.get(key)
+                if isinstance(value, dict):
+                    task_data[key] = sub_cls(**_filter_dataclass_fields(value, sub_cls))
+            config.assistant_tasks = AssistantTasksConfig(**task_data)
+
+        if "external_coding" in data:
+            external_data = _filter_dataclass_fields(data["external_coding"], ExternalCodingConfig)
+            for key, sub_cls in (
+                ("quota_probe", ExternalCodingQuotaProbeConfig),
+                ("claude", ExternalCodingClaudeConfig),
+                ("codex", ExternalCodingCodexConfig),
+            ):
+                value = external_data.get(key)
+                if isinstance(value, dict):
+                    external_data[key] = sub_cls(**_filter_dataclass_fields(value, sub_cls))
+            config.external_coding = ExternalCodingConfig(**external_data)
+
         if "self_improvement" in data:
             si_data = _filter_dataclass_fields(data["self_improvement"], SelfImprovementConfig)
             execution_review = si_data.get("execution_review")
             if isinstance(execution_review, dict):
-                si_data["execution_review"] = SelfImprovementExecutionReviewConfig(
-                    **_filter_dataclass_fields(
-                        execution_review,
-                        SelfImprovementExecutionReviewConfig,
+                execution_review_data = _filter_dataclass_fields(
+                    execution_review,
+                    SelfImprovementExecutionReviewConfig,
+                )
+                model_data = execution_review_data.get("model")
+                if isinstance(model_data, dict):
+                    execution_review_data["model"] = SelfImprovementExecutionReviewModelConfig(
+                        **_filter_dataclass_fields(
+                            model_data,
+                            SelfImprovementExecutionReviewModelConfig,
+                        )
                     )
+                si_data["execution_review"] = SelfImprovementExecutionReviewConfig(
+                    **execution_review_data
                 )
             proposals = si_data.get("proposals")
             if isinstance(proposals, dict):
@@ -571,9 +748,6 @@ class AppConfig:
             config.app_name = data["app_name"]
         if "version" in data:
             config.version = data["version"]
-        if "debug" in data:
-            config.debug = data["debug"]
-
         return config
 
 
@@ -607,6 +781,7 @@ class ConfigFileLoader:
             config_path = str(target_config_path)
 
         self.config_path = Path(config_path)
+        self.raw_config: Dict[str, Any] = {}
 
     @staticmethod
     def _sync_startup_config(target_config_path: Path, working_dir: Optional[Path] = None) -> None:
@@ -666,13 +841,48 @@ class ConfigFileLoader:
             try:
                 with open(self.config_path, "r", encoding="utf-8") as f:
                     data = json.load(f)
+                    if isinstance(data, dict):
+                        self.raw_config = copy.deepcopy(data)
+                        from src.data.config_contract import DEFAULT_CONFIG_CONTRACT
+
+                        deprecated_paths = DEFAULT_CONFIG_CONTRACT.deprecated_paths(data)
+                        if deprecated_paths:
+                            logger.warning(
+                                "[配置文件] 已忽略弃用配置键: %s",
+                                ", ".join(deprecated_paths),
+                            )
+                        non_file_paths = tuple(
+                            path
+                            for path in DEFAULT_CONFIG_CONTRACT.non_file_paths(data)
+                            if path not in deprecated_paths
+                        )
+                        if non_file_paths:
+                            logger.warning(
+                                "[配置文件] 已忽略非文件配置键: %s",
+                                ", ".join(non_file_paths),
+                            )
+                        unknown_paths = tuple(
+                            violation.path
+                            for violation in DEFAULT_CONFIG_CONTRACT.validate_mapping(
+                                data,
+                                template=False,
+                            )
+                            if violation.code == "unknown_path"
+                        )
+                        if unknown_paths:
+                            logger.warning(
+                                "[配置文件] 已忽略未支持配置键: %s",
+                                ", ".join(unknown_paths),
+                            )
                     config = AppConfig.from_dict(data)
                     logger.info(f"[配置文件] 已加载: {self.config_path}")
                     return config
             except Exception as e:
+                self.raw_config = {}
                 logger.error(f"[配置文件] 加载失败: {e}")
                 return AppConfig()
         else:
+            self.raw_config = {}
             logger.info("[配置文件] 不存在，使用默认配置")
             return AppConfig()
 

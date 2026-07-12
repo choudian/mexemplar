@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from src.data.config_models import AppConfig
 from src.data.unified_config import UnifiedConfigManager
@@ -8,7 +9,8 @@ def test_recording_desktop_config_defaults_and_round_trip(tmp_path):
     assert AppConfig().ai.timeout == 180
     assert AppConfig().recording.desktop.enable_clip is True
     assert AppConfig().recording.desktop.vision_model is None
-    assert AppConfig().recording.default_recording_mode == "browser"
+    assert not hasattr(AppConfig().recording, "default_recording_mode")
+    assert not hasattr(AppConfig().recording.websocket, "enabled")
 
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -40,7 +42,7 @@ def test_desktop_vision_model_does_not_fallback_to_general_vision(tmp_path):
 
 
 def test_example_config_has_desktop_keys():
-    data = json.loads(open("config.example.json", encoding="utf-8").read())
+    repo_root = Path(__file__).resolve().parents[2]
+    data = json.loads((repo_root / "config.example.json").read_text(encoding="utf-8"))
 
-    assert data["recording"]["default_recording_mode"] == "browser"
     assert data["recording"]["desktop"] == {"enable_clip": True, "vision_model": None}
