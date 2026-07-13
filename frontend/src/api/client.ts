@@ -3,7 +3,8 @@ import { parseEventFrame } from "./uiEvents";
 import type { UiEvent } from "./uiEvents";
 
 export type BackendStatus = "starting" | "ready" | "degraded" | "failed" | "shutting_down";
-type UiTheme = "light" | "dark" | "system" | "sage";
+export type UiTheme = "mint" | "indigo" | "dark" | "mono";
+export type UiRadius = "sharp" | "medium" | "round";
 type UiDensity = "compact" | "comfy";
 
 interface HealthCheck {
@@ -33,6 +34,8 @@ export interface BootstrapResponse {
   };
   settingsSummary: {
     theme: UiTheme;
+    accent: string;
+    radius: UiRadius;
     dark: boolean;
     density: UiDensity;
   };

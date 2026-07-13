@@ -84,7 +84,13 @@ def test_bootstrap_settings_summary_comes_from_unified_config(monkeypatch) -> No
 
     summary = DesktopBootstrapService().get_settings_summary()
 
-    assert summary == {"theme": "dark", "dark": True, "density": "compact"}
+    assert summary == {
+        "theme": "dark",
+        "dark": True,
+        "density": "compact",
+        "accent": "",
+        "radius": "medium",
+    }
 
 
 def test_bootstrap_brain_config_comes_from_unified_config(monkeypatch) -> None:

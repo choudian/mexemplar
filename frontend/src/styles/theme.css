@@ -23,29 +23,34 @@
   --text-secondary: var(--text-2);         /* 别名 */
   --text-3: var(--text-muted);             /* 别名 */
 
-  /* ── 品牌色: 轻盈薄荷青 ───────────────────────────────────
-     基调是淡薄荷青 (--nav-active-bg #DCF1EA) 大面积铺开;
-     accent 深青只做文字/图标/选中字/小控件; highlight 亮青只做细线点缀;
-     浓青不铺大色块——主按钮走"淡底深字"(见 --btn-primary-*)。 */
-  --accent: #0A6E52;                       /* 深青 · 文字/图标/选中字/焦点 */
-  --accent-hover: #085A43;                 /* 更深 */
-  --accent-active: #05452F;                /* 按下 */
-  --accent-text: #fff;                     /* 深青实心小控件上的前景 */
-  --accent-1: var(--accent);               /* 别名 · 收敛历史幽灵变量 */
-  --highlight: #14B58C;                    /* 亮青 · 下划线/进度/开关点缀 */
-  --highlight-strong: #0FA075;             /* 可读亮青 · 描边 */
-  --accent2: #2FCBA4;                      /* logo/头像渐变亮端 */
-  --accent-weak: color-mix(in oklch, var(--accent) 12%, transparent);
-  --nav-active-bg: #DCF1EA;                /* 淡薄荷 · 选中态基调 (你喜欢的那个色) */
-  --bubble-user-bg: #DCF1EA;               /* 用户气泡 · 淡薄荷底 */
-  --bubble-user-fg: #0A5C46;               /* 用户气泡 · 深青字 */
-  --bubble-user-border: #BEE6D6;
+  /* ── 强调色系统: 单一可调来源 → color-mix 派生 ─────────────────────
+     --accent-base 是唯一的"强调色源"(用户可在外观设置里自定义, 经 --user-accent 覆盖);
+     --accent-fg 是该主题的"前景方向"(亮主题近黑 / 暗主题近白)。
+     所有强调色 token 都从这两个用 color-mix 派生, 所以换主题或拖强调色时,
+     选中态/按钮/下划线/logo 会协调地一起变, 且始终保持可读对比。
+     mint 默认值经 color-mix 复现原"轻盈薄荷青"(--accent≈#0A6E52 等), 回归基准不变。 */
+  --accent-base: var(--user-accent, #14B58C);   /* 亮薄荷青 · 强调色源(可被用户自定义覆盖) */
+  --accent-fg: #04271d;                          /* 前景方向 · 近黑墨绿(亮主题) */
 
-  /* 主按钮 · 轻盈款 (淡薄荷底 + 深青字, 不铺深色实心大块) */
-  --btn-primary-bg: #C6EADD;
-  --btn-primary-fg: #0A5C46;
-  --btn-primary-border: #A9DECB;
-  --btn-primary-hover: #B7E3D1;
+  --accent: color-mix(in oklch, var(--accent-base), var(--accent-fg) 46%);        /* 深青 · 文字/图标/选中字/焦点 */
+  --accent-hover: color-mix(in oklch, var(--accent-base), var(--accent-fg) 60%);  /* 更深 */
+  --accent-active: color-mix(in oklch, var(--accent-base), var(--accent-fg) 76%); /* 按下 */
+  --accent-text: #fff;                           /* 强调色实心小控件上的前景(暗主题翻深) */
+  --accent-1: var(--accent);                     /* 别名 · 收敛历史幽灵变量 */
+  --highlight: var(--accent-base);               /* 亮青 · 下划线/进度/开关点缀(= 强调色源) */
+  --highlight-strong: color-mix(in oklch, var(--accent-base), var(--accent-fg) 13%); /* 可读亮青 · 描边 */
+  --accent2: color-mix(in oklch, var(--accent-base), #fff 22%);  /* logo/头像渐变亮端 */
+  --accent-weak: color-mix(in oklch, var(--accent-base) 12%, transparent);
+  --nav-active-bg: color-mix(in oklch, var(--accent-base) 16%, var(--page-bg));  /* 淡薄荷 · 选中态基调 */
+  --bubble-user-bg: color-mix(in oklch, var(--accent-base) 16%, var(--page-bg)); /* 用户气泡 · 淡薄荷底 */
+  --bubble-user-fg: color-mix(in oklch, var(--accent-base), var(--accent-fg) 59%); /* 用户气泡 · 深青字 */
+  --bubble-user-border: color-mix(in oklch, var(--accent-base) 33%, var(--page-bg));
+
+  /* 主按钮 · 轻盈款 (淡底深字, 从强调色源派生, 不铺深色实心大块) */
+  --btn-primary-bg: color-mix(in oklch, var(--accent-base) 28%, var(--page-bg));
+  --btn-primary-fg: color-mix(in oklch, var(--accent-base), var(--accent-fg) 59%);
+  --btn-primary-border: color-mix(in oklch, var(--accent-base) 44%, var(--page-bg));
+  --btn-primary-hover: color-mix(in oklch, var(--accent-base) 37%, var(--page-bg));
 
   /* ── 语义色 ─────────────────────────────────────────── */
   --ok: #17A883;                           /* 成功 · 青绿 */
@@ -89,6 +94,98 @@
   --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   font-family: var(--font-ui);
+}
+
+/* ══ 外观基础主题 ══════════════════════════════════════════════════════════
+   :root 上面那套 == 基础主题 "mint"(轻盈薄荷青), 也是 data-theme 缺失时的默认。
+   下面三套只覆盖"中性色 + --accent-base + --accent-fg + --accent-text + 语义色";
+   强调色派生公式只写在 :root, 会用各主题覆盖后的 --accent-base/--accent-fg/--page-bg
+   自动重算(CSS 自定义属性按元素在计算值阶段解析), 所以四套主题共用同一套派生逻辑。
+   用户自定义强调色经 --user-accent 注入 --accent-base, 对四套主题一致生效。 */
+
+/* indigo · 靛蓝(暖奶白底 + 靛蓝强调) */
+:root[data-theme="indigo"] {
+  color-scheme: light;
+  --page-bg: #FAF9F5;
+  --surface-1: #FFFFFF;
+  --surface-2: #F1F0EA;
+  --surface-3: #E7E5DC;
+  --surface-hover: #F1F0EA;
+  --nav-bg: #F1F0EA;
+  --titlebar-bg: #F6F5EF;
+  --border-1: #E5E2D9;
+  --border-2: #D8D3C6;
+  --text: #1B2036;
+  --text-2: #474C63;
+  --text-muted: #6C7086;
+  --accent-base: var(--user-accent, #3B4C86);
+  --accent-fg: #0e1330;
+  --accent-text: #fff;
+  --ok: #3E8E5E;
+}
+
+/* dark · 深色科技(近黑底 + 亮蓝强调, 前景方向翻为近白) */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page-bg: #0E0F13;
+  --surface-1: #181B22;
+  --surface-2: #1F232B;
+  --surface-3: #262B36;
+  --surface-hover: #22262F;
+  --nav-bg: #0A0B0F;
+  --titlebar-bg: #101217;
+  --border-1: #262B36;
+  --border-2: #333A48;
+  --text: #E7E9ED;
+  --text-2: #AEB4BF;
+  --text-muted: #868D9C;
+  --accent-base: var(--user-accent, #4C8DFF);
+  --accent-fg: #eaf6ff;                          /* 前景方向 · 近白(暗主题) */
+  --accent-text: #0B1220;                        /* 亮强调实心控件上翻深字 */
+  --ok: #46AD86;
+  --warn: #D99A4A;
+  --danger: #E06B58;
+  --info: #5AA6CE;
+  --rec: oklch(66% 0.19 25);
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.40), 0 1px 3px rgb(0 0 0 / 0.30);
+  --shadow-2: 0 2px 8px rgb(0 0 0 / 0.45), 0 6px 18px rgb(0 0 0 / 0.40);
+  --shadow-3: 0 12px 40px rgb(0 0 0 / 0.55);
+}
+
+/* mono · 极简无彩(纯白底 + 中性灰强调) */
+:root[data-theme="mono"] {
+  color-scheme: light;
+  --page-bg: #FFFFFF;
+  --surface-1: #FFFFFF;
+  --surface-2: #FAFAF9;
+  --surface-3: #F1F1EF;
+  --surface-hover: #F5F5F4;
+  --nav-bg: #FAFAF9;
+  --titlebar-bg: #FCFCFB;
+  --border-1: #EAEAE6;
+  --border-2: #DDDDD8;
+  --text: #18181B;
+  --text-2: #45454B;
+  --text-muted: #74747C;
+  --accent-base: var(--user-accent, #4B5563);
+  --accent-fg: #0b0e13;
+  --accent-text: #fff;
+  --ok: #4C9A6A;
+}
+
+/* ══ 圆角档 ════════════════════════════════════════════════════════════════
+   medium == :root 现值(默认); sharp 更小, round 更圆润(观感参考原型 4/9/15)。 */
+:root[data-radius="sharp"] {
+  --radius-sm: 3px;
+  --radius-md: 5px;
+  --radius-lg: 8px;
+  --shell-radius: 10px;
+}
+:root[data-radius="round"] {
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+  --shell-radius: 24px;
 }
 
 *,
@@ -499,7 +596,7 @@ select:focus-visible,
 .me-logo-mark span {
   width: 8px;
   height: 8px;
-  border: 1.6px solid white;
+  border: 1.6px solid var(--accent-text);
   border-radius: 50%;
   opacity: 0.95;
 }
@@ -510,7 +607,7 @@ select:focus-visible,
   width: 4px;
   height: 4px;
   border-radius: 50%;
-  background: white;
+  background: var(--accent-text);
 }
 
 .me-logo-text {
@@ -576,7 +673,7 @@ select:focus-visible,
 
 .me-nav-item[data-active="true"] .me-badge {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .me-user-card {
@@ -596,7 +693,7 @@ select:focus-visible,
   justify-content: center;
   border-radius: 50%;
   background: linear-gradient(135deg, var(--accent), var(--accent2));
-  color: white;
+  color: var(--accent-text);
   font-size: 12px;
   font-weight: 650;
 }
@@ -1227,7 +1324,7 @@ select:focus-visible,
   border-radius: 16px;
   background: linear-gradient(135deg, var(--accent), var(--accent2));
   box-shadow: var(--shadow-2), 0 8px 22px color-mix(in oklch, var(--accent) 26%, transparent);
-  color: #fff;
+  color: var(--accent-text);
 }
 
 .assistant-welcome h2 {
@@ -2092,7 +2189,7 @@ select:focus-visible,
 
 .teaching-stepper-item[data-done="true"] span {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .teaching-stepper-item strong {
@@ -2694,7 +2791,7 @@ select:focus-visible,
 
 .teaching-learning-steps > div[data-done="true"] span {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .teaching-learning-steps strong,
@@ -3143,7 +3240,7 @@ select:focus-visible,
   border: 0;
   border-radius: var(--radius-md);
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   cursor: pointer;
   transition: background 0.12s;
 }
@@ -4951,7 +5048,7 @@ select:focus-visible,
 
 .composition-mode-option[data-active="true"] > span {
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .composition-mode-option strong,
@@ -5194,7 +5291,7 @@ select:focus-visible,
 .composition-skill-option[aria-pressed="true"] .composition-skill-check {
   border-color: var(--accent);
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
 }
 
 .composition-skill-option > svg {
@@ -6405,6 +6502,11 @@ select:focus-visible,
   background-size: 100%;
 }
 
+/* 暗主题下 --accent 为亮蓝, 勾选标记翻深以保对比 */
+:root[data-theme="dark"] .specialist-skill-option[data-active="true"]::before {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 17 17' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M4 8.5L7 11.5L13 5.5' stroke='%230B1220' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
 .specialist-skill-option span {
   display: block;
 }
@@ -6749,9 +6851,9 @@ select:focus-visible,
   justify-content: space-between;
   gap: 12px;
   padding: 8px 16px;
-  border-bottom: 1px solid rgba(180, 83, 9, 0.28);
-  background: rgba(255, 247, 237, 0.95);
-  color: #7c2d12;
+  border-bottom: 1px solid color-mix(in oklch, var(--warn) 42%, transparent);
+  background: color-mix(in oklch, var(--warn) 14%, var(--surface-1));
+  color: color-mix(in oklch, var(--warn), var(--text) 32%);
   font-size: 13px;
   font-weight: 650;
 }
@@ -6763,7 +6865,7 @@ select:focus-visible,
   border: 0;
   border-radius: var(--radius-sm);
   background: var(--accent);
-  color: white;
+  color: var(--accent-text);
   cursor: pointer;
   font: inherit;
   font-size: 12px;
@@ -6835,15 +6937,15 @@ select:focus-visible,
 }
 
 .debug-status-badge[data-enabled="true"] {
-  background: #dcfce7;
-  color: #166534;
+  background: color-mix(in oklch, var(--ok) 18%, var(--surface-1));
+  color: color-mix(in oklch, var(--ok), var(--text) 40%);
 }
 
 .debug-error {
-  border: 1px solid rgba(185, 28, 28, 0.22);
+  border: 1px solid color-mix(in oklch, var(--danger) 40%, transparent);
   border-radius: var(--radius-md);
-  background: rgba(254, 242, 242, 0.9);
-  color: #991b1b;
+  background: color-mix(in oklch, var(--danger) 12%, var(--surface-1));
+  color: color-mix(in oklch, var(--danger), var(--text) 30%);
   padding: 10px 12px;
   font-size: 13px;
 }
@@ -9639,3 +9741,26 @@ select:focus-visible,
   overflow-wrap: anywhere;
   margin-right: auto;
 }
+
+/* ── 外观设置面板 (Settings → 外观) ────────────────────────── */
+.appearance-panel { display: flex; flex-direction: column; gap: 22px; max-width: 480px; }
+.appearance-hint { margin: 0; font-size: 12.5px; color: var(--text-muted); }
+.appearance-group { display: flex; flex-direction: column; gap: 11px; }
+.appearance-label { margin: 0; font-size: 11px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
+.appearance-themes { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.appearance-theme { display: flex; align-items: center; gap: 9px; padding: 10px 11px; border: 1.5px solid var(--border-1); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text); cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; text-align: left; transition: border-color 130ms ease, box-shadow 130ms ease; }
+.appearance-theme-sw { width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px; }
+.appearance-theme-name { flex: 1; }
+.appearance-theme-mode { font-size: 10.5px; font-weight: 500; color: var(--text-muted); }
+.appearance-theme[aria-pressed="true"] { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+.appearance-accents { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; }
+.appearance-accent { width: 27px; height: 27px; padding: 0; border: 2px solid var(--surface-1); border-radius: 50%; box-shadow: 0 0 0 1px var(--border-2); cursor: pointer; transition: transform 100ms ease; }
+.appearance-accent:hover { transform: scale(1.1); }
+.appearance-accent[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 4px var(--accent); }
+.appearance-custom { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--text-2); }
+.appearance-custom input[type="color"] { width: 32px; height: 28px; padding: 0; border: 1px solid var(--border-1); border-radius: 7px; background: var(--surface-1); cursor: pointer; }
+.appearance-radius { display: flex; gap: 7px; }
+.appearance-radius button { flex: 1; max-width: 96px; padding: 8px 0; border: 1.5px solid var(--border-1); border-radius: var(--radius-md); background: var(--surface-1); color: var(--text-2); cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; transition: border-color 130ms ease, color 130ms ease, box-shadow 130ms ease; }
+.appearance-radius button[aria-pressed="true"] { border-color: var(--accent); color: var(--text); box-shadow: 0 0 0 3px var(--accent-weak); }
+.appearance-reset { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent); cursor: pointer; font: inherit; font-size: 12.5px; font-weight: 600; }
+.appearance-reset:hover { text-decoration: underline; }

@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 BackendStatus = Literal["starting", "ready", "degraded", "failed", "shutting_down"]
 SessionStatus = Literal["active", "suspended", "completed", "failed", "archived"]
-UiTheme = Literal["light", "dark", "system", "sage"]
+UiTheme = Literal["mint", "indigo", "dark", "mono"]
+UiRadius = Literal["sharp", "medium", "round"]
 UiDensity = Literal["compact", "comfy"]
 AssistantExecutorType = Literal["ephemeral_subagent", "specialist"]
 
@@ -48,7 +49,9 @@ class BootstrapNavigation(BaseModel):
 
 
 class BootstrapSettingsSummary(BaseModel):
-    theme: UiTheme = "sage"
+    theme: UiTheme = "mint"
+    accent: str = ""
+    radius: UiRadius = "medium"
     dark: bool = False
     density: UiDensity = "comfy"
 
@@ -1140,7 +1143,7 @@ class CompositionTrialRequest(BaseModel):
 class SettingDescriptor(BaseModel):
     key: str
     label: str
-    section: Literal["ai", "web", "tool_output", "recording", "data", "about"]
+    section: Literal["appearance", "ai", "web", "tool_output", "recording", "data", "about"]
     valueKind: Literal["string", "integer", "number", "boolean", "enum", "path", "secret", "action"]
     description: str = ""
     options: list[str] = Field(default_factory=list)
@@ -1150,7 +1153,7 @@ class SettingDescriptor(BaseModel):
 
 
 class SettingSection(BaseModel):
-    id: Literal["ai", "web", "tool_output", "recording", "data", "about"]
+    id: Literal["appearance", "ai", "web", "tool_output", "recording", "data", "about"]
     label: str
     items: list[SettingDescriptor] = Field(default_factory=list)
     actions: list[SettingDescriptor] = Field(default_factory=list)

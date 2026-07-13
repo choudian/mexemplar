@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -92,21 +93,32 @@ class DesktopBootstrapService:
     def get_settings_summary(self) -> dict[str, Any]:
         try:
             config = get_unified_config()
-            theme = str(config.get("ui.theme", default="light") or "light")
+            theme = str(config.get("ui.theme", default="mint") or "mint")
             density = str(config.get("ui.density", default="comfy") or "comfy")
+            accent = str(config.get("ui.accent", default="") or "")
+            radius = str(config.get("ui.radius", default="medium") or "medium")
         except Exception as exc:
             self._record_degraded("bootstrap.settings", "Unable to load UI settings", exc)
-            theme = "light"
+            theme = "mint"
             density = "comfy"
+            accent = ""
+            radius = "medium"
 
-        if theme not in {"light", "dark", "system", "sage"}:
-            theme = "light"
+        if theme not in {"mint", "indigo", "dark", "mono"}:
+            theme = "mint"
         if density not in {"compact", "comfy"}:
             density = "comfy"
+        if radius not in {"sharp", "medium", "round"}:
+            radius = "medium"
+        accent = accent.strip()
+        if accent and not re.fullmatch(r"#[0-9a-fA-F]{6}", accent):
+            accent = ""
         return {
             "theme": theme,
             "dark": theme == "dark",
             "density": density,
+            "accent": accent,
+            "radius": radius,
         }
 
     def get_brain_config(self) -> dict[str, Any]:

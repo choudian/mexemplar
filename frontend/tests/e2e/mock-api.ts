@@ -33,7 +33,7 @@ function bootstrap(status: BackendStatus, message: string) {
     },
     user: { displayName: "E2E User", statusLabel: "Fixture backend" },
     navigation: { pendingSkillCount: 1, publishedSkillCount: 1, failureCount: 1, compositionCount: 0 },
-    settingsSummary: { theme: "light", dark: false, density: "comfy" },
+    settingsSummary: { theme: "mint", accent: "", radius: "medium", dark: false, density: "comfy" },
     brain: { segmentIdleThresholdSeconds: 300 },
   };
 }

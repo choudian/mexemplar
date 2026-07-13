@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -16,7 +17,7 @@ from src.data.real_tour_audit import is_real_tour_runtime
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.utils import events
 
-SettingSectionId = Literal["ai", "web", "tool_output", "recording", "data", "about"]
+SettingSectionId = Literal["appearance", "ai", "web", "tool_output", "recording", "data", "about"]
 SettingKind = Literal["string", "integer", "number", "boolean", "enum", "path", "secret", "action"]
 
 
@@ -36,6 +37,7 @@ class SettingSpec:
 
 
 SECTION_LABELS: dict[SettingSectionId, str] = {
+    "appearance": "外观",
     "ai": "AI",
     "web": "Web",
     "tool_output": "工具输出",
@@ -363,16 +365,38 @@ SETTING_SPECS: tuple[SettingSpec, ...] = (
     ),
     SettingSpec(
         "ui.theme",
-        "界面主题",
-        "about",
+        "基础主题",
+        "appearance",
         "enum",
-        options=["light", "dark", "system"],
+        description="选一套基础主题定明暗和整体气质：mint 轻盈薄荷青、indigo 靛蓝、dark 深色科技、mono 极简无彩。",
+        options=["mint", "indigo", "dark", "mono"],
         default=_UI_DEFAULTS.theme,
+    ),
+    SettingSpec(
+        "ui.accent",
+        "强调色",
+        "appearance",
+        "string",
+        description="自定义强调色（#RRGGBB）。留空使用当前主题默认强调色。",
+        validation_rules={
+            "pattern": r"#[0-9a-fA-F]{6}",
+            "pattern_message": "请输入 #RRGGBB 格式的颜色。",
+        },
+        default=_UI_DEFAULTS.accent,
+    ),
+    SettingSpec(
+        "ui.radius",
+        "圆角",
+        "appearance",
+        "enum",
+        description="控件圆角档：sharp 直角、medium 适中、round 圆润。",
+        options=["sharp", "medium", "round"],
+        default=_UI_DEFAULTS.radius,
     ),
     SettingSpec(
         "ui.density",
         "界面密度",
-        "about",
+        "appearance",
         "enum",
         options=["compact", "comfy"],
         default=_UI_DEFAULTS.density,
@@ -637,6 +661,10 @@ class SettingsService:
         normalized = "" if value is None else str(value).strip()
         if spec.validation_rules.get("required") and not normalized:
             raise SettingsValidationError(spec.key, "不能为空。")
+        pattern = spec.validation_rules.get("pattern")
+        if pattern and normalized and not re.fullmatch(pattern, normalized):
+            message = spec.validation_rules.get("pattern_message", "格式不正确。")
+            raise SettingsValidationError(spec.key, message)
         return normalized
 
     @staticmethod

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { SettingSectionId } from "../../api/settings";
 import { Button } from "../../components/primitives";
 import { useSettingsStore } from "../../state/settingsStore";
+import AppearancePanel from "./AppearancePanel";
 import SettingControls from "./SettingControls";
 import SettingsActions from "./SettingsActions";
 
@@ -62,32 +63,38 @@ export function SettingsScreen(): JSX.Element {
               <h3>{section.label}</h3>
               {busy ? <span>正在处理</span> : null}
             </div>
-            <SettingControls
-              items={section.items}
-              values={values}
-              secrets={secrets}
-              dirtyKeys={dirtyKeys}
-              validationErrors={validationErrors}
-              busy={busy}
-              onValue={setValue}
-              onSave={() => {
-                void saveValues();
-              }}
-              onWriteSecret={(key, value) => {
-                void writeSecret(key, value);
-              }}
-              onDeleteSecret={(key) => {
-                void deleteSecret(key);
-              }}
-            />
-            <SettingsActions
-              actions={section.actions}
-              results={actionResults}
-              busy={busy}
-              onRun={(actionName, options) => {
-                void runAction(actionName, options);
-              }}
-            />
+            {section.id === "appearance" ? (
+              <AppearancePanel />
+            ) : (
+              <>
+                <SettingControls
+                  items={section.items}
+                  values={values}
+                  secrets={secrets}
+                  dirtyKeys={dirtyKeys}
+                  validationErrors={validationErrors}
+                  busy={busy}
+                  onValue={setValue}
+                  onSave={() => {
+                    void saveValues();
+                  }}
+                  onWriteSecret={(key, value) => {
+                    void writeSecret(key, value);
+                  }}
+                  onDeleteSecret={(key) => {
+                    void deleteSecret(key);
+                  }}
+                />
+                <SettingsActions
+                  actions={section.actions}
+                  results={actionResults}
+                  busy={busy}
+                  onRun={(actionName, options) => {
+                    void runAction(actionName, options);
+                  }}
+                />
+              </>
+            )}
           </>
         ) : (
           <div className="settings-empty">正在加载设置</div>

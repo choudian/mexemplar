@@ -27,7 +27,9 @@ const bootstrapPayload = {
     compositionCount: 3,
   },
   settingsSummary: {
-    theme: "sage",
+    theme: "mint",
+    accent: "",
+    radius: "medium",
     dark: false,
     density: "comfy",
   },

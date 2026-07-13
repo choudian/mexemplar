@@ -205,7 +205,9 @@ class RecordingConfig:
 class UIConfig:
     """UI配置"""
 
-    theme: str = "light"  # light, dark, system
+    theme: str = "mint"  # mint, indigo, dark, mono（外观基础主题）
+    accent: str = ""  # 强调色 hex（如 #14B58C）；空串=用主题默认
+    radius: str = "medium"  # sharp, medium, round（圆角档）
     density: str = "comfy"  # comfy, compact
     language: str = "zh_CN"  # zh_CN, en_US
     window_width: int = 1200

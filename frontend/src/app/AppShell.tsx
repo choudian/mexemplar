@@ -29,6 +29,7 @@ import { BackendStatus } from "./BackendStatus";
 import { ErrorToastHost } from "./ErrorToastHost";
 import { CustomTitlebar } from "./CustomTitlebar";
 import { NavRail } from "./NavRail";
+import { applyTheme, writeAppearanceMirror } from "./applyTheme";
 import { getHiddenRoute, getRoute, redirectPathFor, routeIdFromPath, routePaths } from "./routes";
 import { isToolRenameToastDismissed, markToolRenameToastDismissed } from "./toolRenameToastStorage";
 
@@ -186,6 +187,7 @@ export function AppShell(): JSX.Element {
         if (cancelled) return;
         hydrate(bootstrap);
         setAssistantIdleThresholdSeconds(bootstrap.brain.segmentIdleThresholdSeconds);
+        writeAppearanceMirror(applyTheme(bootstrap.settingsSummary));
       }
       const refreshes: Promise<void>[] = [];
       if (!domains || domains.includes("teaching")) refreshes.push(refreshTeaching());
@@ -303,6 +305,7 @@ export function AppShell(): JSX.Element {
           }
           hydrate(bootstrap);
           setAssistantIdleThresholdSeconds(bootstrap.brain.segmentIdleThresholdSeconds);
+          writeAppearanceMirror(applyTheme(bootstrap.settingsSummary));
           void loadSkillBootstrapStatus();
           // FR-020：启动即加载改进提案，使全局大脑导航的 pending_review 徽标在用户
           // 进入 Brain 屏之前就可见，避免提案静悄悄躺在管理屏无人知。
