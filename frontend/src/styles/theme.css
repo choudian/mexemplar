@@ -5400,10 +5400,10 @@ select:focus-visible,
 }
 
 .settings-detail {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  align-content: start;
   gap: 16px;
   padding: 0 32px 32px;
   overflow-y: auto;
@@ -5729,8 +5729,8 @@ select:focus-visible,
 }
 
 .brain-detail-pane {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
   overflow: auto;
   padding: 14px;
@@ -6425,11 +6425,19 @@ select:focus-visible,
 }
 
 .specialist-editor {
-  display: grid;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
   overflow: auto;
   padding: 18px 32px 28px;
+}
+
+/* 子区块不被 flex 压缩: 撑开自身高度, 内容超出时整体滚动而非塌叠重叠。
+   settings-detail / brain-detail-pane 与 specialist-editor 同为可滚动详情容器, 共用此防护。 */
+.specialist-editor > *,
+.settings-detail > *,
+.brain-detail-pane > * {
+  flex-shrink: 0;
 }
 
 .specialist-form-grid {
@@ -6449,7 +6457,7 @@ select:focus-visible,
 .specialist-skill-option {
   display: block;
   min-width: 0;
-  padding: 10px 34px 10px 12px;
+  padding: 10px 42px 10px 12px;
   border: 1.5px solid var(--border-1);
   border-radius: 10px;
   background: var(--surface-1);
