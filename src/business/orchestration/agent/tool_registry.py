@@ -206,15 +206,35 @@ class ToolRegistry:
             create_update_user_todo_handler,
             create_user_todo_handler,
         )
-        from src.business.agents.tools.external_coding_tools import create_external_coding_tools
         from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
         from src.business.agents.tools.dynamic_tool_manager import (
             DynamicToolManager,
         )
+        from src.business.agents.tools.external_coding_tools import create_external_coding_tools
+        from src.business.services.skill_composition.builtin_compositions import (
+            EXTERNAL_CODING_COMPOSITION_ID,
+        )
 
+        builtin_composition_tools: dict[str, ToolDefinition] = {}
+        if (
+            agent_type == AgentType.SPECIALIST
+            and role_kind == "executor"
+            and bool(specialist_id)
+            and current_task_id
+            and allowed_composition_ids is not None
+            and EXTERNAL_CODING_COMPOSITION_ID in allowed_composition_ids
+        ):
+            builtin_composition_tools = {
+                tool.name: tool
+                for tool in create_external_coding_tools(
+                    session_id=parent_session_id or executor_id,
+                    bound_task_id=current_task_id,
+                )
+            }
         dynamic_manager = DynamicToolManager(
             allowed_tool_ids=allowed_tool_ids,
-            allowed_composition_ids=allowed_composition_ids,
+            allowed_composition_ids=(set() if role_kind == "planner" else allowed_composition_ids),
+            builtin_tool_definitions=builtin_composition_tools,
         )
         builtin_tools = _filter_builtin_tools(BUILTIN_GENERAL_TOOLS, tool_whitelist)
         load_skill_tool = self.make_load_skill_tool(
@@ -296,10 +316,6 @@ class ToolRegistry:
                 name="delete_user_todo",
                 schema=DELETE_USER_TODO_SCHEMA,
                 handler=create_delete_user_todo_handler(),
-            ),
-            *create_external_coding_tools(
-                session_id=parent_session_id or executor_id,
-                bound_task_id=current_task_id,
             ),
         ]
 

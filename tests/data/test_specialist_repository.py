@@ -77,6 +77,24 @@ class TestCreateSpecialist:
         whitelist = json.loads(specialist.tool_whitelist)
         assert whitelist == ["tool_a", "tool_b"]
 
+    def test_create_versions_skill_composition_assignments(self, in_memory_db):
+        repo = SpecialistRepository()
+
+        specialist_id = repo.create_specialist(
+            name="外部编码专员",
+            description="处理正式编码任务",
+            role_definition="使用已装备的技能组合完成编码",
+            tool_whitelist=[],
+            composition_ids=["comp_builtin_external_coding"],
+            origin="user_management_ui",
+            reason="测试技能组合装备",
+        )
+
+        specialist = repo.get_specialist(specialist_id)
+        versions = repo.get_version_history(specialist_id)
+        assert json.loads(specialist.composition_ids) == ["comp_builtin_external_coding"]
+        assert json.loads(versions[0].composition_ids) == ["comp_builtin_external_coding"]
+
     def test_create_initial_version(self, in_memory_db):
         """创建专员时自动创建 version 1"""
         repo = SpecialistRepository()
@@ -176,6 +194,21 @@ class TestUpdateSpecialist:
         assert specialist.name == "保留测试"
         assert specialist.role_definition == "原始角色"
         assert specialist.description == "新描述"
+
+    def test_update_versions_skill_composition_assignments(self, in_memory_db):
+        repo = SpecialistRepository()
+        sid = _create_specialist_via_repo(repo)
+
+        repo.update_specialist(
+            sid,
+            composition_ids=["comp_builtin_external_coding"],
+            changed_by="user",
+        )
+
+        specialist = repo.get_specialist(sid)
+        versions = repo.get_version_history(sid)
+        assert json.loads(specialist.composition_ids) == ["comp_builtin_external_coding"]
+        assert json.loads(versions[0].composition_ids) == ["comp_builtin_external_coding"]
 
     def test_update_nonexistent_returns_false(self, in_memory_db):
         """更新不存在的专员返回 False"""

@@ -34,10 +34,17 @@ class AssistantPromptBuilder:
 
         profile = self.get_assistant_profile()
         session = self._session_store.get_session(session_id)
-        allowed_tool_ids = session.get_tool_id_set() if session else None
+        allowed_tool_ids = None
+        allowed_composition_ids = None
+        if session is not None:
+            if hasattr(session, "parse_tool_ids"):
+                allowed_tool_ids, allowed_composition_ids = session.parse_tool_ids()
+            else:
+                allowed_tool_ids = session.get_tool_id_set()
 
         capability_catalog_section = self.format_capability_catalog(
             allowed_tool_ids,
+            allowed_composition_ids=allowed_composition_ids,
             agent_type=AgentType.ASSISTANT.value,
             include_descriptions=True,
         )
@@ -101,21 +108,39 @@ class AssistantPromptBuilder:
         self,
         allowed_tool_ids: set[str] | None,
         *,
+        allowed_composition_ids: set[str] | None = None,
         agent_type: str,
         include_descriptions: bool,
     ) -> str:
         all_published = self._tool_repo.get_published_summaries()
         all_compositions = self._composition_catalog.get_assistant_published_summaries()
-        if allowed_tool_ids is not None:
-            tools = [tool for tool in all_published if tool["tool_id"] in allowed_tool_ids]
-            compositions = [
-                composition
-                for composition in all_compositions
-                if set(composition["member_tool_ids"]).issubset(allowed_tool_ids)
-            ]
-        else:
-            tools = all_published
-            compositions = all_compositions
+        tools = (
+            all_published
+            if allowed_tool_ids is None
+            else [tool for tool in all_published if tool["tool_id"] in allowed_tool_ids]
+        )
+        compositions = []
+        for composition in all_compositions:
+            composition_id = composition["composition_id"]
+            is_builtin = bool(composition.get("is_builtin", False))
+            # System built-ins are never global catalog entries: only an explicit
+            # specialist assignment may reveal them.
+            if is_builtin:
+                if (
+                    agent_type != AgentType.SPECIALIST.value
+                    or allowed_composition_ids is None
+                    or composition_id not in allowed_composition_ids
+                ):
+                    continue
+            elif (
+                allowed_composition_ids is not None
+                and composition_id not in allowed_composition_ids
+            ):
+                continue
+            if not is_builtin and allowed_tool_ids is not None:
+                if not set(composition["member_tool_ids"]).issubset(allowed_tool_ids):
+                    continue
+            compositions.append(composition)
 
         catalog_items = [
             CapabilityCatalogItem(

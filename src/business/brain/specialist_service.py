@@ -23,19 +23,41 @@ class WhitelistValidationError(ValueError):
     """白名单验证失败：工具不在技能池中。"""
 
 
-def parse_tool_whitelist(raw) -> list[str]:
-    """Parse a tool_whitelist value from JSON string or list to a clean list of strings."""
+class CompositionValidationError(ValueError):
+    """技能组合验证失败：组合不存在、未发布或当前不可用。"""
+
+
+def _parse_identifier_list(raw) -> list[str]:
+    """Parse a JSON/list identifier collection into a stable, de-duplicated list."""
     if isinstance(raw, list):
-        return [str(item) for item in raw if str(item).strip()]
-    if not raw:
+        parsed = raw
+    elif not raw:
         return []
-    try:
-        parsed = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return []
+    else:
+        try:
+            parsed = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return []
     if not isinstance(parsed, list):
         return []
-    return [str(item) for item in parsed if str(item).strip()]
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in parsed:
+        identifier = str(item).strip()
+        if identifier and identifier not in seen:
+            result.append(identifier)
+            seen.add(identifier)
+    return result
+
+
+def parse_tool_whitelist(raw) -> list[str]:
+    """Parse a tool_whitelist value from JSON string or list."""
+    return _parse_identifier_list(raw)
+
+
+def parse_composition_ids(raw) -> list[str]:
+    """Parse specialist skill-composition assignments from JSON string or list."""
+    return _parse_identifier_list(raw)
 
 
 logger = logging.getLogger(__name__)
@@ -46,8 +68,20 @@ RECRUITMENT_DELEGATION_THRESHOLD = 3
 class SpecialistService:
     """专员业务逻辑服务"""
 
-    def __init__(self, repo: Optional[SpecialistRepository] = None):
+    def __init__(
+        self,
+        repo: Optional[SpecialistRepository] = None,
+        composition_service=None,
+    ):
         self._repo = repo or SpecialistRepository()
+        self._composition_service = composition_service
+
+    def _get_composition_service(self):
+        if self._composition_service is None:
+            from src.business.services.skill_composition.service import SkillCompositionService
+
+            self._composition_service = SkillCompositionService()
+        return self._composition_service
 
     def create_specialist(
         self,
@@ -59,6 +93,7 @@ class SpecialistService:
         reason: str = "",
         caller_type: Optional[str] = None,
         role_kind: str = "executor",
+        composition_ids: Optional[list[str]] = None,
     ) -> dict:
         """
         创建新专员。
@@ -72,6 +107,7 @@ class SpecialistService:
             reason: 创建原因
             caller_type: UI/API 调用者类型；提供时由 Service 生成审计来源和默认原因
             role_kind: 角色类型（executor / planner）。024 新增。
+            composition_ids: 专员可激活的已发布技能组合 ID
 
         Returns:
             创建的专员信息 dict
@@ -87,6 +123,7 @@ class SpecialistService:
             description=description,
             role_definition=role_definition,
             tool_whitelist=tool_whitelist,
+            composition_ids=composition_ids or [],
             origin=origin,
             reason=reason,
             commit=True,
@@ -101,6 +138,7 @@ class SpecialistService:
         description: str,
         role_definition: str,
         tool_whitelist: list[str],
+        composition_ids: list[str],
         origin: str,
         reason: str,
         commit: bool,
@@ -115,6 +153,8 @@ class SpecialistService:
 
         # 验证白名单子集
         self._validate_whitelist(tool_whitelist)
+        normalized_composition_ids = parse_composition_ids(composition_ids)
+        self._validate_compositions(normalized_composition_ids)
 
         try:
             specialist_id = self._repo.create_specialist(
@@ -122,6 +162,7 @@ class SpecialistService:
                 description=description,
                 role_definition=role_definition,
                 tool_whitelist=tool_whitelist,
+                composition_ids=normalized_composition_ids,
                 origin=origin,
                 reason=reason,
                 commit=False,
@@ -168,6 +209,7 @@ class SpecialistService:
         changed_by: str = "user",
         change_reason: Optional[str] = None,
         caller_type: Optional[str] = None,
+        composition_ids: Optional[list[str]] = None,
     ) -> dict:
         """更新专员信息，自动创建新版本记录。"""
         if caller_type is not None:
@@ -189,6 +231,10 @@ class SpecialistService:
         # 如果修改了白名单，验证子集
         if tool_whitelist is not None:
             self._validate_whitelist(tool_whitelist)
+        normalized_composition_ids = None
+        if composition_ids is not None:
+            normalized_composition_ids = parse_composition_ids(composition_ids)
+            self._validate_compositions(normalized_composition_ids)
 
         success = self._repo.update_specialist(
             specialist_id=specialist_id,
@@ -196,6 +242,7 @@ class SpecialistService:
             description=description,
             role_definition=role_definition,
             tool_whitelist=tool_whitelist,
+            composition_ids=normalized_composition_ids,
             changed_by=changed_by,
             change_reason=change_reason,
         )
@@ -413,6 +460,7 @@ class SpecialistService:
                 description=description,
                 role_definition=role_definition,
                 tool_whitelist=[],
+                composition_ids=[],
                 origin="auto_recruitment",
                 reason=reason,
                 commit=False,
@@ -740,6 +788,24 @@ class SpecialistService:
         if invalid_tools:
             raise WhitelistValidationError(f"白名单包含不存在的工具: {', '.join(invalid_tools)}")
 
+    def _validate_compositions(self, composition_ids: list[str]) -> None:
+        """Only published, review-clean compositions can become specialist authority."""
+        if not composition_ids:
+            return
+        service = self._get_composition_service()
+        invalid: list[str] = []
+        for composition_id in composition_ids:
+            composition = service.get_composition(composition_id)
+            if (
+                composition is None
+                or getattr(composition, "status", None) != "published"
+                or bool(getattr(composition, "needs_review", False))
+                or not bool(getattr(composition, "assistant_enabled", False))
+            ):
+                invalid.append(composition_id)
+        if invalid:
+            raise CompositionValidationError(f"技能组合不存在或未发布/不可用: {', '.join(invalid)}")
+
     @staticmethod
     def _to_dict(specialist) -> dict:
         """将 ORM 对象转为 API 响应 dict。"""
@@ -749,6 +815,7 @@ class SpecialistService:
             "description": getattr(specialist, "description", ""),
             "role_definition": getattr(specialist, "role_definition", ""),
             "tool_whitelist": parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]")),
+            "composition_ids": parse_composition_ids(getattr(specialist, "composition_ids", "[]")),
             "origin": getattr(specialist, "origin", ""),
             "reason": getattr(specialist, "reason", ""),
             "current_version": getattr(specialist, "current_version", 1),
@@ -768,6 +835,7 @@ class SpecialistService:
             "description": getattr(version, "description", ""),
             "role_definition": getattr(version, "role_definition", ""),
             "tool_whitelist": parse_tool_whitelist(getattr(version, "tool_whitelist", "[]")),
+            "composition_ids": parse_composition_ids(getattr(version, "composition_ids", "[]")),
             "changed_by": getattr(version, "changed_by", ""),
             "change_reason": getattr(version, "change_reason", None),
             "changed_at": getattr(version, "changed_at", None),

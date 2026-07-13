@@ -175,11 +175,13 @@ Assistant tool handler / Orchestrator
 
 ### External Coding Sessions（030）
 
-外部 coding session 把 Claude Code / Codex CLI 作为专员执行体可调用的工具，而不是把它们并入主助理自身执行路径。业务层位于 `src/business/external_coding/`，持久化走 SQLite v27 `external_coding_*` 表与 v28 worktree 基线列，CLI 子进程启动在 `src/execution/external_coding_process.py`，文件 artifact 默认落在 `data/coding_sessions/`，隔离 worktree 默认落在 `.worktrees/coding/`。
+外部 coding session 把 Claude Code / Codex CLI 作为固定专员在正式 Task 中可激活的能力，而不是并入主助理或通用执行体工具集。11 个操作由 `builtin_compositions.py` 声明为系统内置、只读、已发布的范围型技能组合“外部 Coding”；专员只配置组合 ID，不逐项配置成员工具。专员当前配置与版本快照通过 SQLite v29 `composition_ids` 保存。会话业务层位于 `src/business/external_coding/`，持久化走 SQLite v27 `external_coding_*` 表与 v28 worktree 基线列，CLI 子进程启动在 `src/execution/external_coding_process.py`，文件 artifact 默认落在 `data/coding_sessions/`，隔离 worktree 默认落在 `.worktrees/coding/`。
 
 ```text
-Assistant delegated executor / specialist tool
-  → external_coding_tools.py
+Specialist Management → SpecialistService → v29 composition_ids
+  → TaskExecutorAdapter（固定 executor specialist + 持久 Task）
+  → DynamicToolManager（先发现/激活“外部 Coding”组合）
+  → external_coding_tools.py（按需加入 11 个成员 schema）
   → ExternalCodingSessionService
   → ExternalCodingSessionRepository → external_coding_* tables
   → GitOps + CliExternalCodingAdapter
@@ -189,7 +191,9 @@ Assistant delegated executor / specialist tool
   → React task detail external coding panel
 ```
 
-- 只能由临时执行体或固定专员工具集派发；planner 不拿外部 coding 工具，主助理仍只做协调。
+- “配置组合”只授予资格，不做 eager 注入。只有固定 `specialist`、`role_kind='executor'`、专员显式配置该组合且 `current_task_id` 非空时，运行时才提供组合虚拟工具；专员调用组合后才激活 11 个成员 schema。
+- 主助理、ephemeral、planner、同步专员、组合试用和未配置组合的专员都看不到成员工具；即使猜中内置组合 ID，也会因 agent 类型、Task 绑定和成员定义缺失而 fail-closed。
+- Specialist Management 从 `/api/compositions` 展示已发布组合；“外部 Coding”带 `isBuiltin/readOnly/trialSupported=false`，在组合页可查看成员但不可编辑/试用，在专员页作为一个范围型组合配置。
 - session 必须有 owner（`task` 或 `workflow`）和 `codingSessionId`；记录工具选择、quota 观察、attempt、artifact、worktree、merge 和 rollback 决策，便于追溯“何时派发、派发了什么、产出了什么、何时完成”。
 - 默认 headless 且自动启动；交互模式在 Windows 新控制台启动真实 CLI TUI，并继续由 PID/超时与 artifact 判定完成，不解析终端屏幕。Claude Code 默认 `--effort max`，Codex CLI 默认 `model_reasoning_effort="xhigh"`，都可经 `UnifiedConfigManager` 配置。
 - 两阶段协议：外部 agent 先写 `PLAN.md`，派活 agent 审核后才批准实现；实现完成写 `RESULT.md`。semantic validator 只是软校验，强约束靠 session 状态机、artifact 缺失/脏 diff 检测、owner 绑定和后续 review。

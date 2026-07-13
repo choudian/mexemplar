@@ -102,7 +102,11 @@ class UiAdapter:
             "status": composition.status,
             "displayStatus": display_status,
             "needsReview": bool(composition.needs_review),
+            "assistantEnabled": bool(composition.assistant_enabled),
             "applicability": composition.applicability or "",
+            "isBuiltin": bool(getattr(composition, "is_builtin", False)),
+            "readOnly": bool(getattr(composition, "is_read_only", False)),
+            "trialSupported": bool(getattr(composition, "trial_supported", True)),
             "members": [
                 {
                     "memberId": member.member_id,

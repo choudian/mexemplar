@@ -37,4 +37,4 @@ def test_v28_adds_external_coding_base_commit_idempotently() -> None:
 
 def test_v28_is_registered_after_external_coding_tables() -> None:
     versions = [version for version, _ in migrations._MIGRATIONS]
-    assert versions[-2:] == [27, 28]
+    assert versions.index(28) == versions.index(27) + 1

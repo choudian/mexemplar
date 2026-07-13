@@ -160,6 +160,11 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
     set({ busy: true, lastError: null });
     try {
       const selectedId = get().selectedId;
+      const selected = get().items.find((item) => item.compositionId === selectedId);
+      if (selected?.readOnly) {
+        set({ lastError: "系统内置技能组合不可修改。" });
+        return;
+      }
       const saved = selectedId
         ? await updateComposition(selectedId, get().draft)
         : await createComposition(get().draft);
@@ -175,6 +180,7 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
   },
   publish: async (compositionId = get().selectedId ?? "") => {
     if (!compositionId) return;
+    if (get().items.find((item) => item.compositionId === compositionId)?.readOnly) return;
     const published = await publishComposition(compositionId);
     set({
       items: get().items.map((item) => (item.compositionId === compositionId ? published : item)),
@@ -184,6 +190,9 @@ export const useCompositionsStore = create<CompositionsState>((set, get) => ({
   },
   startTrial: async (compositionId = get().selectedId ?? "") => {
     if (!compositionId) return;
+    if (get().items.find((item) => item.compositionId === compositionId)?.trialSupported === false) {
+      return;
+    }
     await startCompositionTrial(compositionId);
   },
   applyEvent: (event) => {

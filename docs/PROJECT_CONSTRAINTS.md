@@ -79,7 +79,7 @@
 ## External Coding Session Boundaries
 
 - 外部 coding session 的业务事实源是 `external_coding_*` SQLite 表、`ExternalCodingSessionRepository` 和 `ExternalCodingSessionService`；desktop API/router、task snapshot 和前端不得绕过 service 直接写 session、attempt、merge 或 rollback 状态。
-- 外部 coding 工具只进入 delegated executor / specialist 工具集；planner 不得拿实现型外部 CLI 工具，主 Assistant 不得把它当作自己直接执行用户代码任务的通道。
+- 外部 coding 的 11 个工具不得进入常规 delegated executor 工具集，也不得拆成逐工具白名单；它们只属于系统内置、只读、已发布的范围型技能组合“外部 Coding”。只有显式配置该组合的固定 executor specialist 在持久 Task（非空 `current_task_id`）中可先激活组合、再按需获得成员工具；主 Assistant、ephemeral、planner、同步 specialist、试用路径和未配置专员全部 fail-closed。
 - 每个 session 必须绑定 owner（`task` 或 `workflow`）和 `codingSessionId`；不得启动无 owner 的外部 agent，也不得只靠本地进程 PID/日志推断业务完成。
 - Headless 外部 CLI 默认先产出 `PLAN.md`，经派活 agent 调用 `decide_external_coding_plan` 批准后才进入实现；`PLAN.md` 语义校验是 advisory。Plan 阶段必须相对持久化的 worktree 创建基线检测 staged、unstaged、untracked 和 committed diff；缺基线时 fail-closed，不得进入 `plan_ready`。没有有效 `plan_approved_at` 时不得 resume 到 implement。
 - `RESULT.md` 是完成信号之一，但不能替代后续 review/test/merge 判断；review 是强烈建议，不是强制门卫。独立 review/test 尚未完成时，session detail 和最终汇报必须显式保留 `reviewSkippedReason`，不得把外部 CLI 自报测试结果写成独立验证。
@@ -160,6 +160,7 @@
 - Segment 沉淀写入全部 `brain_memory_entries` INSERT 和 Segment 状态转换必须在单个数据库事务内提交；崩溃发生在 commit 前 → 整体回滚，不残留半成品条目。
 - 大脑数据不物理删除，`invalidation` 是降权，`soft-deleted` 物理保留但排除在普通检索外。
 - 专员管理删除是业务层软删除（`brain_specialists.is_active = 0`），版本历史必须保留；不要从 API/router 走物理删除路径。
+- 专员技能组合配置必须走 `SpecialistService`，只接受已发布、非待复核且 assistant-enabled 的组合；`composition_ids` 必须同时写入 `brain_specialists` 与 `brain_specialist_versions`（SQLite v29）。前端勾选组合不得复制成员 ID 到 `tool_whitelist`，运行时也不得把目录快照当授权事实。
 - `brain_segments` 表的 `open` 态不持久化——进行中 Segment 由消息表推导，行仅在封存（转入 `pending`）时创建。
 
 ## Skill Methodology Constraints
@@ -192,5 +193,5 @@ Reviewer 必须拒绝下列改动：
 - 让前端、Tauri 命令或 desktop API 直接读取/写入 SQLite、DuckDB 或 config 文件。
 - 让改进提案审批前创建 worktree/task graph/代码副作用，或让 approve router 直接实施而不是异步调用 `proposal_bridge`。
 - 让 self-improvement proposal executor 绕过隔离 worktree、修改 `self_improvement` / `orchestration/agent` / `task_collaboration` / `desktop_api` / `src-tauri` / guardrail tests / startup 核心路径，或执行网络、安装、merge/rebase/reset/clean/push 等非测试型命令。
-- 让外部 coding session 无 owner 启动、跳过 PLAN.md 审核直接实现、在 plan 阶段修改目标代码仍标记 plan_ready、把完整 prompt/secret 写入命令摘要或 UI event、未做 dirty/changed overlap 分析就自动 merge，或允许外部 session 工具 push/reset --hard/clean/删除目标分支。
+- 让外部 coding session 无 owner 启动、跳过 PLAN.md 审核直接实现、在 plan 阶段修改目标代码仍标记 plan_ready、把完整 prompt/secret 写入命令摘要或 UI event、未做 dirty/changed overlap 分析就自动 merge，或允许外部 session 工具 push/reset --hard/clean/删除目标分支；以及把 11 个外部 Coding 工具无条件注入、逐项加入专员白名单，或让非正式 Task/非 executor 专员激活系统内置组合。
 - 重新引入 PyQt runtime 依赖、`src.ui` 生产代码、旧 Python GUI E2E，或任何正常用户可触达的 PyQt 启动路径。

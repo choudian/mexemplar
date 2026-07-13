@@ -58,10 +58,31 @@ def test_composition_create_update_publish_and_needs_review(desktop_api_client):
     SkillCompositionRepository().mark_needs_review_by_tool("tool_a")
     listed = desktop_api_client.get("/api/compositions")
     assert listed.status_code == 200
-    item = listed.json()["items"][0]
+    items = listed.json()["items"]
+    builtin = next(
+        item for item in items if item["compositionId"] == "comp_builtin_external_coding"
+    )
+    assert builtin["isBuiltin"] is True
+    assert builtin["assistantEnabled"] is True
+    assert builtin["readOnly"] is True
+    assert builtin["trialSupported"] is False
+    item = next(item for item in items if item["compositionId"] == composition_id)
     assert item["needsReview"] is True
     assert item["status"] == "published"
     assert item["displayStatus"] == "needs_review"
+
+
+def test_builtin_external_coding_composition_rejects_mutation_and_trial(desktop_api_client):
+    composition_id = "comp_builtin_external_coding"
+
+    published = desktop_api_client.post(f"/api/compositions/{composition_id}/publish")
+    trial = desktop_api_client.post(
+        f"/api/compositions/{composition_id}/trial",
+        json={"task": "try it"},
+    )
+
+    assert published.status_code == 422
+    assert trial.status_code == 422
 
 
 def test_composition_create_rejects_empty_members_at_api_boundary(desktop_api_client):

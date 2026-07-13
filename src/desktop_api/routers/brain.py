@@ -7,7 +7,11 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from src.business.brain.management_service import BrainManagementService
-from src.business.brain.specialist_service import SpecialistService, WhitelistValidationError
+from src.business.brain.specialist_service import (
+    CompositionValidationError,
+    SpecialistService,
+    WhitelistValidationError,
+)
 from src.desktop_api.schemas import (
     BrainCreateSpecialistRequest,
     BrainEditEntryRequest,
@@ -137,12 +141,18 @@ async def create_specialist(body: BrainCreateSpecialistRequest):
             description=body.description,
             role_definition=body.role_definition,
             tool_whitelist=body.tool_whitelist,
+            composition_ids=body.composition_ids,
             caller_type="user_management_ui",
         )
         return specialist
     except WhitelistValidationError as exc:
         raise HTTPException(
             status_code=400, detail={"error": "invalid_whitelist", "message": str(exc)}
+        )
+    except CompositionValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_compositions", "message": str(exc)},
         )
     except ValueError:
         raise HTTPException(status_code=409, detail={"error": "conflict"})
@@ -194,6 +204,7 @@ async def update_specialist(specialist_id: str, body: BrainUpdateSpecialistReque
             description=body.description,
             role_definition=body.role_definition,
             tool_whitelist=body.tool_whitelist,
+            composition_ids=body.composition_ids,
             caller_type="user_management_ui",
             change_reason=body.change_reason,
         )
@@ -203,6 +214,11 @@ async def update_specialist(specialist_id: str, body: BrainUpdateSpecialistReque
     except WhitelistValidationError as exc:
         raise HTTPException(
             status_code=400, detail={"error": "invalid_whitelist", "message": str(exc)}
+        )
+    except CompositionValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "invalid_compositions", "message": str(exc)},
         )
     except ValueError:
         raise HTTPException(status_code=409, detail={"error": "conflict"})

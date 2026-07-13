@@ -2228,6 +2228,46 @@ def downgrade_v28(engine):
     logger.info("回退版本 28 完成：external coding base_commit 已删除")
 
 
+def migrate_to_v29(engine):
+    """迁移到版本 29：为专员及其版本记录增加技能组合授权。"""
+    try:
+        with engine.begin() as conn:
+            _add_column_if_missing(
+                conn,
+                "brain_specialists",
+                "composition_ids",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            _add_column_if_missing(
+                conn,
+                "brain_specialist_versions",
+                "composition_ids",
+                "TEXT NOT NULL DEFAULT '[]'",
+            )
+            conn.execute(text("UPDATE schema_version SET version = 29"))
+    except Exception as e:
+        logger.error(f"迁移到版本 29 失败: {e}")
+        raise
+    logger.info("迁移到版本 29 完成：specialist composition_ids")
+
+
+def downgrade_v29(engine):
+    """回退版本 29：删除专员技能组合授权列。"""
+    try:
+        with engine.begin() as conn:
+            if _column_exists(conn, "brain_specialist_versions", "composition_ids"):
+                conn.execute(
+                    text("ALTER TABLE brain_specialist_versions DROP COLUMN composition_ids")
+                )
+            if _column_exists(conn, "brain_specialists", "composition_ids"):
+                conn.execute(text("ALTER TABLE brain_specialists DROP COLUMN composition_ids"))
+            conn.execute(text("UPDATE schema_version SET version = 28"))
+    except Exception as e:
+        logger.error(f"回退版本 29 失败: {e}")
+        raise
+    logger.info("回退版本 29 完成：specialist composition_ids 已删除")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -2256,6 +2296,7 @@ _MIGRATIONS = [
     (26, migrate_to_v26),
     (27, migrate_to_v27),
     (28, migrate_to_v28),
+    (29, migrate_to_v29),
 ]
 
 

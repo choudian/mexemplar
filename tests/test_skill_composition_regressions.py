@@ -169,7 +169,10 @@ def test_needs_review_compositions_are_hidden_from_assistant_queries():
 
     service = SkillCompositionService()
 
-    assert service.get_assistant_published_summaries() == []
+    assert all(
+        item["composition_id"] != "comp_review"
+        for item in service.get_assistant_published_summaries()
+    )
 
     detail = DynamicToolManager().get_tool_detail("技能组合:待复核组合")
     assert "不存在或当前不可用" in detail

@@ -19,8 +19,12 @@ export interface CompositionSummary {
   status: "draft" | "published" | "offline";
   displayStatus?: "draft" | "published" | "offline" | "needs_review";
   needsReview: boolean;
+  assistantEnabled: boolean;
   applicability: string;
   members: CompositionMember[];
+  isBuiltin?: boolean;
+  readOnly?: boolean;
+  trialSupported?: boolean;
 }
 
 export interface CompositionInput {
@@ -91,4 +95,3 @@ export function publishComposition(compositionId: string): Promise<CompositionSu
     method: "POST",
   });
 }
-

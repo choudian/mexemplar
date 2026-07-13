@@ -5744,6 +5744,7 @@ select:focus-visible,
 .brain-skill-pool,
 .brain-execution-review,
 .specialist-whitelist,
+.specialist-compositions,
 .specialist-version-panel {
   display: grid;
   gap: 12px;
@@ -6550,6 +6551,27 @@ select:focus-visible,
   font-size: 11.5px;
   color: var(--text-muted);
   line-height: 1.4;
+}
+
+.specialist-composition-hint {
+  margin: -4px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.specialist-composition-title {
+  display: flex !important;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.specialist-composition-option > span {
+  display: grid;
+  gap: 3px;
 }
 
 .specialist-version-row {

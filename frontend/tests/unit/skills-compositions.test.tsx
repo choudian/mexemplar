@@ -211,6 +211,53 @@ describe("skills and compositions screens", () => {
     expect(screen.queryByText("技能组合至少要添加 2 个技能")).not.toBeInTheDocument();
   });
 
+  test("shows built-in compositions as read-only and disables trial", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/compositions")) {
+          return jsonResponse({
+            items: [
+              {
+                compositionId: "comp_builtin_external_coding",
+                name: "外部 Coding",
+                description: "专员正式任务中的外部 Coding 能力范围",
+                mode: "range",
+                status: "published",
+                displayStatus: "published",
+                needsReview: false,
+                assistantEnabled: true,
+                applicability: "正式编码任务",
+                isBuiltin: true,
+                readOnly: true,
+                trialSupported: false,
+                members: [
+                  {
+                    toolId: "start_external_coding_session",
+                    name: "启动外部 Coding 会话",
+                    selectedOrder: 1,
+                  },
+                ],
+              },
+            ],
+          });
+        }
+        if (url.endsWith("/api/skills?category=published")) {
+          return jsonResponse({ category: "published", count: 0, items: [] });
+        }
+        return jsonResponse({});
+      }),
+    );
+
+    render(<CompositionListScreen />);
+
+    await waitFor(() => expect(screen.getByText("外部 Coding")).toBeInTheDocument());
+    expect(screen.getByText("系统内置")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "试用" })).toBeDisabled();
+  });
+
   test("creates an ordered composition, reorders members, tries it, and publishes it", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -224,6 +271,7 @@ describe("skills and compositions screens", () => {
             status: "draft",
             displayStatus: "draft",
             needsReview: false,
+            assistantEnabled: true,
             applicability: "When opening daily workspace",
             members: [
               {
@@ -255,6 +303,7 @@ describe("skills and compositions screens", () => {
               status: "published",
               displayStatus: "needs_review",
               needsReview: true,
+              assistantEnabled: true,
               applicability: "When a member skill changed",
               members: [],
             },
@@ -288,6 +337,7 @@ describe("skills and compositions screens", () => {
           status: "published",
           displayStatus: "published",
           needsReview: false,
+          assistantEnabled: true,
           applicability: "When opening daily workspace",
           members: [
             {

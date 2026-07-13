@@ -28,6 +28,7 @@ def _make_specialist_orm(
     description="天气查询专员",
     role_definition="你负责查询天气",
     tool_whitelist='["get_weather"]',
+    composition_ids="[]",
     origin="user_conversation",
     reason="用户创建",
     current_version=1,
@@ -40,6 +41,7 @@ def _make_specialist_orm(
     s.description = description
     s.role_definition = role_definition
     s.tool_whitelist = tool_whitelist
+    s.composition_ids = composition_ids
     s.origin = origin
     s.reason = reason
     s.current_version = current_version
@@ -65,6 +67,7 @@ def _make_version_orm(
     v.description = "天气查询专员"
     v.role_definition = "你负责查询天气"
     v.tool_whitelist = '["get_weather"]'
+    v.composition_ids = "[]"
     v.changed_by = "user_conversation"
     v.change_reason = change_reason
     v.changed_at = "2026-01-01T00:00:00"
@@ -106,6 +109,65 @@ class TestSpecialistServiceCreate:
             assert result["name"] == "天气专家"
             assert result["specialist_id"] == "sp-001"
             mock_repo.create_specialist.assert_called_once()
+
+    def test_create_persists_published_skill_composition_assignment(self):
+        """专员配置的技能组合必须经业务层校验并写入版本化记录。"""
+        from src.business.brain.specialist_service import SpecialistService
+        from src.business.services.skill_composition.builtin_compositions import (
+            EXTERNAL_CODING_COMPOSITION_ID,
+            external_coding_composition,
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_specialist_by_name.return_value = None
+        mock_repo.create_specialist.return_value = "sp-001"
+        mock_repo.get_specialist.return_value = _make_specialist_orm(
+            composition_ids=f'["{EXTERNAL_CODING_COMPOSITION_ID}"]'
+        )
+        mock_composition_service = MagicMock()
+        mock_composition_service.get_composition.return_value = external_coding_composition()
+
+        service = SpecialistService(
+            repo=mock_repo,
+            composition_service=mock_composition_service,
+        )
+        result = service.create_specialist(
+            name="代码专员",
+            description="处理外部 Coding 会话",
+            role_definition="只在正式任务中执行编码工作",
+            tool_whitelist=[],
+            composition_ids=[EXTERNAL_CODING_COMPOSITION_ID],
+        )
+
+        assert result["composition_ids"] == [EXTERNAL_CODING_COMPOSITION_ID]
+        assert mock_repo.create_specialist.call_args.kwargs["composition_ids"] == [
+            EXTERNAL_CODING_COMPOSITION_ID
+        ]
+
+    def test_create_rejects_unknown_skill_composition(self):
+        """不存在的组合不能被伪装成专员授权。"""
+        from src.business.brain.specialist_service import (
+            CompositionValidationError,
+            SpecialistService,
+        )
+
+        mock_repo = MagicMock()
+        mock_repo.get_specialist_by_name.return_value = None
+        mock_composition_service = MagicMock()
+        mock_composition_service.get_composition.return_value = None
+        service = SpecialistService(
+            repo=mock_repo,
+            composition_service=mock_composition_service,
+        )
+
+        with pytest.raises(CompositionValidationError, match="不存在或未发布"):
+            service.create_specialist(
+                name="代码专员",
+                description="处理编码任务",
+                role_definition="执行代码工作",
+                tool_whitelist=[],
+                composition_ids=["comp_missing"],
+            )
 
     def test_create_rejects_duplicate_name(self):
         """重复名称应抛出 ValueError"""

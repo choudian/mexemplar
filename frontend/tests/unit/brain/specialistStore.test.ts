@@ -15,6 +15,7 @@ const specialist = {
   description: "处理周期报表",
   role_definition: "你负责处理报表。",
   tool_whitelist: ["tool-1"],
+  composition_ids: [],
   origin: "auto_recruitment",
   reason: "检测到持续报表委托",
   current_version: 1,
@@ -36,6 +37,7 @@ describe("specialistStore", () => {
         description: "",
         role_definition: "",
         tool_whitelist: [],
+        composition_ids: [],
         change_reason: "",
       },
       versions: [],
@@ -78,6 +80,10 @@ describe("specialistStore", () => {
 
     useSpecialistStore.getState().toggleWhitelist("tool-2");
     expect(useSpecialistStore.getState().draft.tool_whitelist).toContain("tool-2");
+    useSpecialistStore.getState().toggleComposition("comp_builtin_external_coding");
+    expect(useSpecialistStore.getState().draft.composition_ids).toContain(
+      "comp_builtin_external_coding",
+    );
   });
 
   test("creates, updates, deletes, and displays recruitment toast from events", async () => {
@@ -185,6 +191,7 @@ describe("specialistStore", () => {
         description: "处理周期报表",
         role_definition: "你负责处理报表。",
         tool_whitelist: ["tool-1"],
+        composition_ids: [],
         change_reason: "",
       },
       versions: [
@@ -196,6 +203,7 @@ describe("specialistStore", () => {
           description: "处理周期报表",
           role_definition: "你负责处理报表。",
           tool_whitelist: ["tool-1"],
+          composition_ids: [],
           changed_by: "user",
           change_reason: null,
           changed_at: null,

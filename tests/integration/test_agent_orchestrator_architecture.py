@@ -279,6 +279,96 @@ def test_assistant_prompt_builder_reloads_runtime_discovery_policy():
     assert "能力B" in second
 
 
+def test_builtin_external_coding_catalog_requires_explicit_composition_assignment():
+    from src.business.orchestration.agent.assistant_prompt_builder import AssistantPromptBuilder
+    from src.business.services.skill_composition.builtin_compositions import (
+        EXTERNAL_CODING_COMPOSITION_ID,
+    )
+    from src.business.services.skill_composition_service import SkillCompositionService
+
+    builder = AssistantPromptBuilder(
+        llm_client=SimpleNamespace(),
+        session_store=SimpleNamespace(),
+        tool_repo=SimpleNamespace(get_published_summaries=lambda: []),
+        composition_catalog=SkillCompositionService(),
+        profile_repo=SimpleNamespace(get_default=lambda: None),
+    )
+
+    assistant_catalog = builder.format_capability_catalog(
+        None,
+        allowed_composition_ids=None,
+        agent_type="assistant",
+        include_descriptions=True,
+    )
+    specialist_catalog = builder.format_capability_catalog(
+        set(),
+        allowed_composition_ids={EXTERNAL_CODING_COMPOSITION_ID},
+        agent_type="specialist",
+        include_descriptions=True,
+    )
+
+    assert "外部 Coding" not in assistant_catalog
+    assert "外部 Coding" in specialist_catalog
+
+
+@pytest.mark.parametrize(
+    ("current_task_id", "role_kind", "expected_composition_ids"),
+    [
+        ("task-coding", "executor", {"comp_builtin_external_coding"}),
+        (None, "executor", set()),
+        ("task-coding", "planner", set()),
+    ],
+)
+def test_specialist_external_coding_assignment_only_materializes_for_formal_executor_task(
+    current_task_id,
+    role_kind,
+    expected_composition_ids,
+):
+    from src.business.orchestration.agent.delegation_orchestrator import DelegationOrchestrator
+    from src.business.services.skill_composition_service import SkillCompositionService
+
+    owner = SimpleNamespace()
+    owner._resolve_user_tool_ids = MagicMock(return_value=set())
+    owner._composition_service = SkillCompositionService()
+    owner._session_store = SimpleNamespace(
+        get_session=lambda _session_id: SimpleNamespace(parse_tool_ids=lambda: (None, None)),
+        create_session=MagicMock(return_value="specialist-session"),
+    )
+    owner._specialist_equipped_skills_snapshot = MagicMock(return_value=[])
+    owner._prompt_builder = SimpleNamespace(
+        format_capability_catalog=MagicMock(return_value="能力目录")
+    )
+    owner._build_specialist_prompt = MagicMock(return_value="专员提示词")
+    owner._new_delegation_workflow_id = MagicMock(return_value="wf-specialist")
+    owner._extract_methodology_equipment_snapshot = MagicMock(return_value=[])
+    owner._format_delegated_task_input = MagicMock(return_value="任务")
+    owner._run_delegated_executor = MagicMock(return_value={"success": False})
+    specialist = SimpleNamespace(
+        specialist_id="sp-coding",
+        role_kind=role_kind,
+        composition_ids='["comp_builtin_external_coding"]',
+    )
+
+    DelegationOrchestrator(owner).run_specialist_via_delegated_executor(
+        parent_session_id="parent-session",
+        specialist=specialist,
+        task="实现功能",
+        tool_whitelist=[],
+        current_task_id=current_task_id,
+    )
+
+    owner._prompt_builder.format_capability_catalog.assert_called_once_with(
+        set(),
+        allowed_composition_ids=expected_composition_ids,
+        agent_type="specialist",
+        include_descriptions=True,
+    )
+    assert (
+        owner._run_delegated_executor.call_args.kwargs["allowed_composition_ids"]
+        == expected_composition_ids
+    )
+
+
 def test_delegated_prompts_accept_shared_catalog_section_without_raw_whitelist():
     deferred_section = (
         "### 用户技能与技能组合\n\n"
@@ -331,6 +421,7 @@ def test_subagent_delegation_wires_shared_catalog_before_child_session_creation(
     assert result["delegation_type"] == "ephemeral_subagent"
     orchestrator._prompt_builder.format_capability_catalog.assert_called_once_with(
         {"tool-a"},
+        allowed_composition_ids=None,
         agent_type="ephemeral_subagent",
         include_descriptions=True,
     )
@@ -560,6 +651,7 @@ def test_specialist_delegation_wires_shared_catalog_before_child_session_creatio
     assert result["delegation_type"] == "specialist"
     orchestrator._prompt_builder.format_capability_catalog.assert_called_once_with(
         {"tool-a"},
+        allowed_composition_ids=set(),
         agent_type="specialist",
         include_descriptions=True,
     )

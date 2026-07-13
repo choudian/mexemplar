@@ -139,6 +139,7 @@ class DynamicToolManager:
         allowed_tool_ids: Optional[Set[str]] = None,
         allowed_composition_ids: Optional[Set[str]] = None,
         revalidate_activated: bool = True,
+        builtin_tool_definitions: dict[str, ToolDefinition] | None = None,
     ):
         """
         Args:
@@ -151,6 +152,7 @@ class DynamicToolManager:
         self._allowed_tool_ids = allowed_tool_ids
         self._allowed_composition_ids = allowed_composition_ids
         self._revalidate_activated = revalidate_activated
+        self._builtin_tool_definitions = dict(builtin_tool_definitions or {})
         self._search_lock = threading.Lock()
         self._tool_repo = ToolRepository()
         self._composition_service: Optional[SkillCompositionService] = None
@@ -195,6 +197,15 @@ class DynamicToolManager:
         return tool.tool_id in self._allowed_tool_ids and tool.status == "published"
 
     def _is_allowed_composition(self, composition) -> bool:
+        if getattr(composition, "is_builtin", False):
+            if (
+                self._allowed_composition_ids is None
+                or composition.composition_id not in self._allowed_composition_ids
+            ):
+                return False
+            return all(
+                member.tool_id in self._builtin_tool_definitions for member in composition.members
+            )
         if (
             composition.status != "published"
             or not composition.assistant_enabled
@@ -255,14 +266,23 @@ class DynamicToolManager:
             if self._is_allowed_tool(tool)
         ]
         for composition in self.composition_service.get_assistant_published_summaries():
+            is_builtin = bool(composition.get("is_builtin", False))
             member_tool_ids = set(composition["member_tool_ids"])
+            if is_builtin:
+                composition_model = self.composition_service.get_execution_snapshot(
+                    composition["composition_id"]
+                )
+                if composition_model is None or not self._is_allowed_composition(composition_model):
+                    continue
             if (
                 self._allowed_composition_ids is not None
                 and composition["composition_id"] not in self._allowed_composition_ids
             ):
                 continue
-            if self._allowed_tool_ids is not None and not member_tool_ids.issubset(
-                self._allowed_tool_ids
+            if (
+                not is_builtin
+                and self._allowed_tool_ids is not None
+                and not member_tool_ids.issubset(self._allowed_tool_ids)
             ):
                 continue
             items.append(
@@ -439,20 +459,36 @@ class DynamicToolManager:
 
     def _activate_composition_members(self, composition) -> None:
         ordered_members = self._get_ordered_members(composition)
-        activatable_members = [
+        activatable_builtin_members = [
+            member
+            for member in ordered_members
+            if member.tool_id in self._builtin_tool_definitions
+            and f"builtin:{member.tool_id}" not in self._entity_id_to_short_id
+        ]
+        activatable_user_members = [
             member
             for member in ordered_members
             if member.tool
+            and member.tool_id not in self._builtin_tool_definitions
             and self._is_allowed_tool(member.tool)
             and member.tool.tool_id not in self._entity_id_to_short_id
         ]
+        activatable_members = activatable_builtin_members + activatable_user_members
         if not activatable_members:
             return
         member_activation_limit = max(
             self.MAX_ACTIVATED,
             len(activatable_members) + 1,
         )
-        for member in activatable_members:
+        for member in activatable_builtin_members:
+            tool_def = self._builtin_tool_definitions[member.tool_id]
+            self._register_activated_definition(
+                short_id=tool_def.name,
+                entity_id=f"builtin:{member.tool_id}",
+                tool_def=tool_def,
+                max_activated=member_activation_limit,
+            )
+        for member in activatable_user_members:
             tool_def = self._build_tool_definition(member.tool)
             self._register_activated_definition(
                 short_id=self._make_short_id(member.tool.tool_id, "utool"),
@@ -523,6 +559,15 @@ class DynamicToolManager:
                     stale_short_ids.append(short_id)
                     continue
                 self._activated_tools[short_id] = self._build_tool_definition(tool)
+                continue
+
+            if entity_id.startswith("builtin:"):
+                tool_id = entity_id.removeprefix("builtin:")
+                tool_def = self._builtin_tool_definitions.get(tool_id)
+                if tool_def is None or not self._is_builtin_tool_authorized(tool_id):
+                    stale_short_ids.append(short_id)
+                    continue
+                self._activated_tools[short_id] = tool_def
 
         for short_id in stale_short_ids:
             self._remove_activated_definition(short_id)
@@ -532,6 +577,20 @@ class DynamicToolManager:
         entity_id = self._short_id_to_entity_id.pop(short_id, None)
         if entity_id:
             self._entity_id_to_short_id.pop(entity_id, None)
+
+    def _is_builtin_tool_authorized(self, tool_id: str) -> bool:
+        if self._allowed_composition_ids is None:
+            return False
+        for composition_id in self._allowed_composition_ids:
+            composition = self.composition_service.get_execution_snapshot(composition_id)
+            if (
+                composition is not None
+                and getattr(composition, "is_builtin", False)
+                and self._is_allowed_composition(composition)
+                and any(member.tool_id == tool_id for member in composition.members)
+            ):
+                return True
+        return False
 
     @staticmethod
     def _get_ordered_members(composition):

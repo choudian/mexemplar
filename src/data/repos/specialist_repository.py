@@ -44,6 +44,7 @@ class SpecialistRepository(BaseRepository):
         origin: str,
         reason: str,
         *,
+        composition_ids: list[str] | None = None,
         commit: bool = True,
         role_kind: str = "executor",
     ) -> str:
@@ -54,12 +55,14 @@ class SpecialistRepository(BaseRepository):
             )
         specialist_id = new_id()
         whitelist_json = json.dumps(tool_whitelist, ensure_ascii=False)
+        composition_ids_json = json.dumps(composition_ids or [], ensure_ascii=False)
         specialist = BrainSpecialist(
             specialist_id=specialist_id,
             name=name,
             description=description,
             role_definition=role_definition,
             tool_whitelist=whitelist_json,
+            composition_ids=composition_ids_json,
             origin=origin,
             reason=reason,
             current_version=1,
@@ -80,6 +83,7 @@ class SpecialistRepository(BaseRepository):
                 description=description,
                 role_definition=role_definition,
                 tool_whitelist=whitelist_json,
+                composition_ids=composition_ids_json,
                 changed_by=origin,
                 change_reason=reason,
             )
@@ -139,6 +143,7 @@ class SpecialistRepository(BaseRepository):
         description: Optional[str] = None,
         role_definition: Optional[str] = None,
         tool_whitelist: Optional[list[str]] = None,
+        composition_ids: Optional[list[str]] = None,
         changed_by: str = "user",
         change_reason: Optional[str] = None,
         *,
@@ -157,6 +162,11 @@ class SpecialistRepository(BaseRepository):
             if tool_whitelist is not None
             else specialist.tool_whitelist
         )
+        new_composition_ids_json = (
+            json.dumps(composition_ids, ensure_ascii=False)
+            if composition_ids is not None
+            else specialist.composition_ids
+        )
 
         new_version = specialist.current_version + 1
 
@@ -165,6 +175,7 @@ class SpecialistRepository(BaseRepository):
             specialist.description = new_description
             specialist.role_definition = new_role
             specialist.tool_whitelist = new_whitelist_json
+            specialist.composition_ids = new_composition_ids_json
             specialist.current_version = new_version
 
             version_id = new_id()
@@ -176,6 +187,7 @@ class SpecialistRepository(BaseRepository):
                 description=new_description,
                 role_definition=new_role,
                 tool_whitelist=new_whitelist_json,
+                composition_ids=new_composition_ids_json,
                 changed_by=changed_by,
                 change_reason=change_reason,
             )

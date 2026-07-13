@@ -20,6 +20,7 @@ export interface SpecialistDraft {
   description: string;
   role_definition: string;
   tool_whitelist: string[];
+  composition_ids: string[];
   change_reason: string;
 }
 
@@ -46,6 +47,7 @@ export interface SpecialistState {
   select: (specialistId: string | null) => void;
   setDraftField: <K extends keyof SpecialistDraft>(field: K, value: SpecialistDraft[K]) => void;
   toggleWhitelist: (toolId: string) => void;
+  toggleComposition: (compositionId: string) => void;
   saveDraft: () => Promise<void>;
   deleteById: (specialistId: string) => Promise<void>;
   loadVersions: (specialistId: string) => Promise<void>;
@@ -59,6 +61,7 @@ const EMPTY_DRAFT: SpecialistDraft = {
   description: "",
   role_definition: "",
   tool_whitelist: [],
+  composition_ids: [],
   change_reason: "",
 };
 
@@ -69,6 +72,7 @@ function draftFromSpecialist(item: BrainSpecialist): SpecialistDraft {
     description: item.description,
     role_definition: item.role_definition,
     tool_whitelist: [...item.tool_whitelist],
+    composition_ids: [...(item.composition_ids ?? [])],
     change_reason: "",
   };
 }
@@ -148,6 +152,20 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
     });
   },
 
+  toggleComposition: (compositionId) => {
+    set((state) => {
+      const exists = state.draft.composition_ids.includes(compositionId);
+      return {
+        draft: {
+          ...state.draft,
+          composition_ids: exists
+            ? state.draft.composition_ids.filter((item) => item !== compositionId)
+            : [...state.draft.composition_ids, compositionId],
+        },
+      };
+    });
+  },
+
   saveDraft: async () => {
     const draft = get().draft;
     set({ saving: true, lastError: null });
@@ -158,6 +176,7 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
           description: draft.description,
           role_definition: draft.role_definition,
           tool_whitelist: draft.tool_whitelist,
+          composition_ids: draft.composition_ids,
           change_reason: draft.change_reason || "通过管理界面更新",
         });
       } else {
@@ -166,6 +185,7 @@ export const useSpecialistStore = create<SpecialistState>((set, get) => ({
           description: draft.description,
           role_definition: draft.role_definition,
           tool_whitelist: draft.tool_whitelist,
+          composition_ids: draft.composition_ids,
         });
         set({ selectedId: created.specialist_id, draft: draftFromSpecialist(created) });
       }

@@ -66,6 +66,7 @@ export function CompositionListScreen(): JSX.Element {
     setView("create");
   };
   const openEditor = (compositionId: string) => {
+    if (items.find((item) => item.compositionId === compositionId)?.readOnly) return;
     select(compositionId);
     setView("create");
   };
@@ -162,6 +163,7 @@ function CompositionSummaryStrip({
           <button
             className="composition-summary-pill"
             data-active={item.compositionId === selectedId}
+            disabled={item.readOnly}
             key={item.compositionId}
             onClick={() => onEdit(item.compositionId)}
             type="button"
@@ -231,7 +233,9 @@ function CompositionCard({
 }) {
   const displayStatus = displayStatusFor(item);
   const ModeIcon = modeIconFor(item.mode);
-  const canTrial = Boolean(item.applicability.trim() && item.members.length > 0);
+  const canTrial = Boolean(
+    item.trialSupported !== false && item.applicability.trim() && item.members.length > 0,
+  );
 
   return (
     <article className="composition-card" data-active={selected}>
@@ -242,6 +246,7 @@ function CompositionCard({
         <div>
           <div className="composition-card-title">
             <h3>{item.name}</h3>
+            {item.isBuiltin ? <Badge tone="neutral">系统内置</Badge> : null}
             <Badge tone={statusToTone(displayStatus, COMPOSITION_STATUS_TONES)}>
               {statusLabels[displayStatus]}
             </Badge>
@@ -284,10 +289,12 @@ function CompositionCard({
             <Play size={14} />
             试用
           </Button>
-          <Button kind="ghost" onClick={onEdit}>
-            <Edit3 size={14} />
-            编辑
-          </Button>
+          {!item.readOnly ? (
+            <Button kind="ghost" onClick={onEdit}>
+              <Edit3 size={14} />
+              编辑
+            </Button>
+          ) : null}
         </div>
       </div>
     </article>

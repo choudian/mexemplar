@@ -48,6 +48,7 @@ export interface BrainSpecialist {
   description: string;
   role_definition: string;
   tool_whitelist: string[];
+  composition_ids: string[];
   origin: string;
   reason: string;
   current_version: number;
@@ -117,6 +118,7 @@ export interface SpecialistVersion {
   description: string;
   role_definition: string;
   tool_whitelist: string[];
+  composition_ids: string[];
   changed_by: string;
   change_reason: string | null;
   changed_at: string | null;
@@ -211,6 +213,7 @@ export function createSpecialist(body: {
   description: string;
   role_definition: string;
   tool_whitelist: string[];
+  composition_ids: string[];
 }): Promise<BrainSpecialist> {
   return requestJson<BrainSpecialist>('/api/brain/specialists', {
     method: 'POST',
@@ -225,6 +228,7 @@ export function updateSpecialist(
     description?: string;
     role_definition?: string;
     tool_whitelist?: string[];
+    composition_ids?: string[];
     change_reason?: string;
   },
 ): Promise<BrainSpecialist> {

@@ -71,6 +71,9 @@ class SkillComposition:
     assistant_enabled: bool = True
     recommend_order: bool = False
     needs_review: bool = False
+    is_builtin: bool = False
+    is_read_only: bool = False
+    trial_supported: bool = True
     members: List[SkillCompositionMember] = field(default_factory=list)
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

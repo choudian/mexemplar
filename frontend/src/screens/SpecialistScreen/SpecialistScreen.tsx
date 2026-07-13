@@ -2,11 +2,13 @@ import { Plus, Save, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import type { BrainSpecialist } from "../../api/brain";
+import type { CompositionSummary } from "../../api/compositions";
 import SearchInput from "../../components/SearchInput";
 import SkillCheckboxGrid from "../../components/SkillCheckboxGrid";
 import { Badge, Button, IconButton } from "../../components/primitives";
 import { useFiltered } from "../../hooks/useFiltered";
 import { useBrainStore } from "../../state/brainStore";
+import { useCompositionsStore } from "../../state/compositionsStore";
 import { useSpecialistStore } from "../../state/specialistStore";
 import AssistantEquipmentCard from "./AssistantEquipmentCard";
 import EquipmentPanel from "./EquipmentPanel";
@@ -26,22 +28,35 @@ export function SpecialistScreen(): JSX.Element {
   const versions = useSpecialistStore((state) => state.versions);
   const loading = useSpecialistStore((state) => state.loading);
   const loadingSkillPool = useBrainStore((state) => state.loadingSkillPool);
+  const compositions = useCompositionsStore((state) => state.items);
+  const loadingCompositions = useCompositionsStore((state) => state.busy);
   const saving = useSpecialistStore((state) => state.saving);
   const load = useSpecialistStore((state) => state.load);
   const select = useSpecialistStore((state) => state.select);
   const setDraftField = useSpecialistStore((state) => state.setDraftField);
   const toggleWhitelist = useSpecialistStore((state) => state.toggleWhitelist);
+  const toggleComposition = useSpecialistStore((state) => state.toggleComposition);
   const saveDraft = useSpecialistStore((state) => state.saveDraft);
   const deleteById = useSpecialistStore((state) => state.deleteById);
 
   const loadSkillPool = useBrainStore((state) => state.loadSkillPool);
+  const loadCompositions = useCompositionsStore((state) => state.load);
 
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    void load();
-    void loadSkillPool();
-  }, [load, loadSkillPool]);
+    void Promise.all([load(), loadSkillPool(), loadCompositions()]);
+  }, [load, loadCompositions, loadSkillPool]);
+
+  const visibleCompositions = compositions.filter(
+    (item) =>
+      (item.status === "published" && !item.needsReview && item.assistantEnabled) ||
+      draft.composition_ids.includes(item.compositionId),
+  );
+  const missingCompositionIds = draft.composition_ids.filter(
+    (compositionId) =>
+      !compositions.some((item) => item.compositionId === compositionId),
+  );
 
   const filtered = useFiltered(items, query, (item) => [
     item.name,
@@ -55,7 +70,7 @@ export function SpecialistScreen(): JSX.Element {
       <header className="specialist-header">
         <div>
           <h2>专员管理</h2>
-          <p>管理固定专员的职责、版本、可用工具白名单和方法论装备</p>
+          <p>管理固定专员的职责、工具、技能组合和方法论装备</p>
         </div>
         <Button kind="primary" onClick={() => select(null)}>
           <Plus size={14} />
@@ -150,6 +165,56 @@ export function SpecialistScreen(): JSX.Element {
             />
           </section>
 
+          <section className="specialist-compositions" aria-label="技能组合配置">
+            <div className="brain-section-title">
+              <span>技能组合</span>
+              <small>{draft.composition_ids.length} 个已选</small>
+            </div>
+            <p className="specialist-composition-hint">
+              组合定义一组可按需激活的能力。系统内置组合只在该专员执行正式任务时生效。
+            </p>
+            <div className="specialist-skill-grid specialist-composition-grid">
+              {visibleCompositions.map((composition) => (
+                <CompositionOption
+                  checked={draft.composition_ids.includes(composition.compositionId)}
+                  composition={composition}
+                  key={composition.compositionId}
+                  onToggle={() => toggleComposition(composition.compositionId)}
+                  unavailable={
+                    composition.status !== "published" ||
+                    composition.needsReview ||
+                    !composition.assistantEnabled
+                  }
+                />
+              ))}
+              {missingCompositionIds.map((compositionId) => (
+                <label
+                  className="specialist-skill-option specialist-composition-option"
+                  data-active="true"
+                  key={compositionId}
+                >
+                  <input
+                    aria-label="移除已失效的技能组合"
+                    checked
+                    onChange={() => toggleComposition(compositionId)}
+                    type="checkbox"
+                  />
+                  <span>
+                    <span className="specialist-composition-title">
+                      <strong>已失效的技能组合</strong>
+                      <Badge tone="warn">不可用</Badge>
+                    </span>
+                    <small>该组合已被移除；取消勾选并保存即可清理旧授权。</small>
+                  </span>
+                </label>
+              ))}
+              {!loadingCompositions && visibleCompositions.length === 0 && missingCompositionIds.length === 0 ? (
+                <div className="brain-empty">暂无可配置的已发布技能组合</div>
+              ) : null}
+              {loadingCompositions ? <div className="brain-empty">正在加载技能组合</div> : null}
+            </div>
+          </section>
+
           {draft.specialist_id ? <EquipmentPanel entityId={draft.specialist_id} /> : null}
 
           <div className="specialist-editor-actions">
@@ -185,6 +250,46 @@ export function SpecialistScreen(): JSX.Element {
         </main>
       </div>
     </section>
+  );
+}
+
+function CompositionOption({
+  composition,
+  checked,
+  onToggle,
+  unavailable,
+}: {
+  composition: CompositionSummary;
+  checked: boolean;
+  onToggle: () => void;
+  unavailable: boolean;
+}) {
+  return (
+    <label
+      className="specialist-skill-option specialist-composition-option"
+      data-active={checked}
+    >
+      <input
+        aria-label={`技能组合 ${composition.name}`}
+        checked={checked}
+        onChange={onToggle}
+        type="checkbox"
+      />
+      <span>
+        <span className="specialist-composition-title">
+          <strong>{composition.name}</strong>
+          <Badge tone="neutral">{composition.mode === "range" ? "范围型" : "顺序型"}</Badge>
+          {composition.isBuiltin ? <Badge tone="neutral">系统内置</Badge> : null}
+          {unavailable ? <Badge tone="warn">不可用</Badge> : null}
+        </span>
+        <small>
+          {unavailable
+            ? "该组合已下线、待复核或已禁用；取消勾选并保存后将移除旧授权。"
+            : composition.description || composition.applicability || "无描述"}
+        </small>
+        <small>{composition.members.length} 个成员能力 · 运行时按组合激活</small>
+      </span>
+    </label>
   );
 }
 

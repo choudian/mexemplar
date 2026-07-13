@@ -4,7 +4,10 @@ import logging
 from typing import Any
 
 from src.business.agents.config import AgentType
-from src.business.brain.specialist_service import parse_tool_whitelist
+from src.business.brain.specialist_service import parse_composition_ids, parse_tool_whitelist
+from src.business.services.skill_composition.builtin_compositions import (
+    EXTERNAL_CODING_COMPOSITION_ID,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +124,7 @@ class DelegationOrchestrator:
             )
         capability_catalog_section = self._owner._prompt_builder.format_capability_catalog(
             allowed_tool_ids,
+            allowed_composition_ids=allowed_composition_ids,
             agent_type=AgentType.EPHEMERAL_SUBAGENT.value,
             include_descriptions=True,
         )
@@ -257,22 +261,57 @@ class DelegationOrchestrator:
         （统一任务派发的异步执行器）共用此方法。装备/提示词构建异常返回 success=False
         dict，不抛异常（让 dispatcher 把"没干完"记为 stuck 交父侧裁定）。
         """
+        effective_whitelist = (
+            tool_whitelist
+            if tool_whitelist is not None
+            else parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
+        )
         allowed_tool_ids = self._owner._resolve_user_tool_ids(
             parent_session_id=parent_session_id,
-            tool_whitelist=tool_whitelist,
+            tool_whitelist=effective_whitelist,
         )
-        # 从父会话解析 composition_ids，传递给执行体以保持组合授权限制
-        allowed_composition_ids: set[str] | None = None
+        parent_composition_ids: set[str] | None = None
         try:
             parent_session = self._owner._session_store.get_session(parent_session_id)
             if parent_session is not None:
-                _, allowed_composition_ids = parent_session.parse_tool_ids()
+                _, parent_composition_ids = parent_session.parse_tool_ids()
         except Exception:
             logger.debug(
                 "composition_ids resolution skipped for parent=%s",
                 parent_session_id,
                 exc_info=True,
             )
+
+        assigned_composition_ids = set(
+            parse_composition_ids(getattr(specialist, "composition_ids", "[]"))
+        )
+        allowed_composition_ids: set[str] = set()
+        role_kind = getattr(specialist, "role_kind", "executor") or "executor"
+        effective_composition_ids = assigned_composition_ids if role_kind == "executor" else set()
+        for composition_id in effective_composition_ids:
+            composition = self._owner._composition_service.get_execution_snapshot(composition_id)
+            if composition is None:
+                continue
+            if getattr(composition, "is_builtin", False):
+                if (
+                    composition_id == EXTERNAL_CODING_COMPOSITION_ID
+                    and current_task_id
+                    and role_kind == "executor"
+                ):
+                    allowed_composition_ids.add(composition_id)
+                continue
+            if parent_composition_ids is not None and composition_id not in parent_composition_ids:
+                continue
+            member_tool_ids = {member.tool_id for member in composition.members}
+            resolved_member_ids = self._owner._resolve_user_tool_ids(
+                parent_session_id=parent_session_id,
+                tool_whitelist=list(member_tool_ids),
+            )
+            if resolved_member_ids is None or not member_tool_ids.issubset(resolved_member_ids):
+                continue
+            allowed_composition_ids.add(composition_id)
+            if allowed_tool_ids is not None:
+                allowed_tool_ids.update(resolved_member_ids)
         try:
             equipped_skills_snapshot = self._owner._specialist_equipped_skills_snapshot(specialist)
         except RuntimeError as exc:
@@ -281,12 +320,13 @@ class DelegationOrchestrator:
         try:
             capability_catalog_section = self._owner._prompt_builder.format_capability_catalog(
                 allowed_tool_ids,
+                allowed_composition_ids=allowed_composition_ids,
                 agent_type=AgentType.SPECIALIST.value,
                 include_descriptions=True,
             )
             system_prompt = self._owner._build_specialist_prompt(
                 specialist,
-                tool_whitelist,
+                effective_whitelist,
                 equipped_skills=equipped_skills_snapshot,
                 capability_catalog_section=capability_catalog_section,
             )
@@ -311,13 +351,13 @@ class DelegationOrchestrator:
             user_input=self._owner._format_delegated_task_input(task),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
-            tool_whitelist=tool_whitelist,
+            tool_whitelist=effective_whitelist,
             specialist_id=specialist.specialist_id,
             allowed_methodology_skill_ids=allowed_methodology_skill_ids,
             methodology_equipment_snapshot=methodology_snapshot,
             current_task_id=current_task_id,
             # 024 C4: 透传 specialist.role_kind，planner 拿 build_task_graph 不拿执行器工具
-            role_kind=getattr(specialist, "role_kind", "executor") or "executor",
+            role_kind=role_kind,
             workspace_root=workspace_root,
             allowed_composition_ids=allowed_composition_ids,
         )

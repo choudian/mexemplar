@@ -884,6 +884,10 @@ class BrainCreateSpecialistRequest(BaseModel):
     description: str = Field(..., min_length=1)
     role_definition: str = Field(..., min_length=1)
     tool_whitelist: list[str] = Field(default_factory=list, max_length=MAX_TOOL_WHITELIST_LENGTH)
+    composition_ids: list[str] = Field(
+        default_factory=list,
+        max_length=MAX_TOOL_WHITELIST_LENGTH,
+    )
 
     @field_validator("name", "description", "role_definition")
     @classmethod
@@ -892,7 +896,7 @@ class BrainCreateSpecialistRequest(BaseModel):
             raise ValueError("must not be blank")
         return value
 
-    @field_validator("tool_whitelist")
+    @field_validator("tool_whitelist", "composition_ids")
     @classmethod
     def whitelist_items_not_empty(cls, value: list[str]) -> list[str]:
         return [item.strip() for item in value if item.strip()]
@@ -906,6 +910,10 @@ class BrainUpdateSpecialistRequest(BaseModel):
         default=None,
         max_length=MAX_TOOL_WHITELIST_LENGTH,
     )
+    composition_ids: list[str] | None = Field(
+        default=None,
+        max_length=MAX_TOOL_WHITELIST_LENGTH,
+    )
     change_reason: str | None = None
 
     @field_validator("name", "description", "role_definition")
@@ -915,7 +923,7 @@ class BrainUpdateSpecialistRequest(BaseModel):
             raise ValueError("must not be blank")
         return value.strip() if value is not None else None
 
-    @field_validator("tool_whitelist")
+    @field_validator("tool_whitelist", "composition_ids")
     @classmethod
     def optional_whitelist_items_not_empty(cls, value: list[str] | None) -> list[str] | None:
         if value is None:
@@ -1078,8 +1086,12 @@ class CompositionSummary(BaseModel):
     status: Literal["draft", "published", "offline"]
     displayStatus: Literal["draft", "published", "offline", "needs_review"] | None = None
     needsReview: bool = False
+    assistantEnabled: bool = True
     members: list[dict[str, Any]] = Field(default_factory=list)
     applicability: str = ""
+    isBuiltin: bool = False
+    readOnly: bool = False
+    trialSupported: bool = True
 
 
 class SkillMetadataUpdateRequest(BaseModel):

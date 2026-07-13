@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { configureDesktopApi } from "../../../src/api/client";
 import SpecialistScreen from "../../../src/screens/SpecialistScreen";
 import { useBrainStore } from "../../../src/state/brainStore";
+import { useCompositionsStore } from "../../../src/state/compositionsStore";
 import { useSpecialistStore } from "../../../src/state/specialistStore";
 
 function jsonResponse(payload: unknown): Response {
@@ -24,6 +25,7 @@ const specialist = {
   description: "处理周期报表",
   role_definition: "你负责处理报表。",
   tool_whitelist: ["tool-1"],
+  composition_ids: [],
   origin: "auto_recruitment",
   reason: "检测到持续报表委托",
   current_version: 1,
@@ -45,6 +47,7 @@ describe("SpecialistScreen", () => {
         description: "",
         role_definition: "",
         tool_whitelist: [],
+        composition_ids: [],
         change_reason: "",
       },
       versions: [],
@@ -57,6 +60,14 @@ describe("SpecialistScreen", () => {
     useBrainStore.setState({
       skillPool: [{ tool_id: "tool-1", name: "报表分析", description: "分析报表" }],
       loadingSkillPool: false,
+    });
+    useCompositionsStore.setState({
+      hydrated: false,
+      items: [],
+      selectedId: null,
+      draft: { name: "", description: "", mode: "range", applicability: "", members: [] },
+      busy: false,
+      lastError: null,
     });
   });
 
@@ -72,6 +83,37 @@ describe("SpecialistScreen", () => {
       }
       if (url.endsWith("/api/brain/skill-pool")) {
         return jsonResponse({ skills: [{ tool_id: "tool-1", name: "报表分析", description: "分析报表" }] });
+      }
+      if (url.endsWith("/api/compositions")) {
+        return jsonResponse({
+          items: [
+            {
+              compositionId: "comp_builtin_external_coding",
+              name: "外部 Coding",
+              description: "把外部 Coding 会话能力作为范围授权",
+              mode: "range",
+              status: "published",
+              needsReview: false,
+              assistantEnabled: true,
+              applicability: "正式编码任务",
+              isBuiltin: true,
+              readOnly: true,
+              trialSupported: false,
+              members: [],
+            },
+            {
+              compositionId: "comp_disabled",
+              name: "已禁用组合",
+              description: "不允许分配给助理或专员",
+              mode: "range",
+              status: "published",
+              needsReview: false,
+              assistantEnabled: false,
+              applicability: "不应显示",
+              members: [],
+            },
+          ],
+        });
       }
       if (url.endsWith("/api/brain/specialists/spec-1/versions?limit=20&offset=0")) {
         return jsonResponse({
@@ -92,9 +134,11 @@ describe("SpecialistScreen", () => {
     fireEvent.click(screen.getByText("报表专员"));
     await settleAsyncUpdates();
     await waitFor(() => expect(screen.getByText("初始创建")).toBeInTheDocument());
+    expect(screen.queryByLabelText("技能组合 已禁用组合")).not.toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("专员描述"), { target: { value: "更新后的描述" } });
     fireEvent.click(screen.getByLabelText(/报表分析/));
+    fireEvent.click(screen.getByLabelText("技能组合 外部 Coding"));
     fireEvent.click(screen.getByRole("button", { name: "保存专员" }));
     await settleAsyncUpdates();
     fireEvent.click(screen.getByRole("button", { name: "删除专员" }));
@@ -103,6 +147,13 @@ describe("SpecialistScreen", () => {
     expect(fetchMock).toHaveBeenCalledWith(
       "http://desktop.test/api/brain/specialists/spec-1",
       expect.objectContaining({ method: "PUT" }),
+    );
+    const updateCall = fetchMock.mock.calls.find(
+      ([input, init]) =>
+        String(input).endsWith("/api/brain/specialists/spec-1") && init?.method === "PUT",
+    );
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual(
+      expect.objectContaining({ composition_ids: ["comp_builtin_external_coding"] }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       "http://desktop.test/api/brain/specialists/spec-1",
@@ -117,6 +168,7 @@ describe("SpecialistScreen", () => {
         return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
       }
       if (url.endsWith("/api/brain/skill-pool")) return jsonResponse({ skills: [] });
+      if (url.endsWith("/api/compositions")) return jsonResponse({ items: [] });
       if (url.endsWith("/api/brain/specialists") && init?.method === "POST") {
         return jsonResponse(specialist);
       }

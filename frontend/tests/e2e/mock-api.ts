@@ -738,6 +738,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         status: "draft",
         displayStatus: "draft",
         needsReview: false,
+        assistantEnabled: true,
         ...body,
       });
     }
@@ -753,6 +754,7 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
         status: "published",
         displayStatus: "published",
         needsReview: false,
+        assistantEnabled: true,
         applicability: "When fixture applies",
         members: [{ toolId: "tool_a", selectedOrder: 1, executionOrder: 1 }],
       });

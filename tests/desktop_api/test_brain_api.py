@@ -272,6 +272,7 @@ class TestCreateSpecialist:
                 "description": "天气查询专员",
                 "role_definition": "你负责查询天气",
                 "tool_whitelist": ["get_weather"],
+                "composition_ids": ["comp_builtin_external_coding"],
                 "origin": "user_management_ui",
                 "reason": "通过管理界面创建",
                 "current_version": 1,
@@ -285,6 +286,7 @@ class TestCreateSpecialist:
                     "description": "天气查询专员",
                     "role_definition": "你负责查询天气",
                     "tool_whitelist": ["get_weather"],
+                    "composition_ids": ["comp_builtin_external_coding"],
                 },
             )
 
@@ -296,6 +298,7 @@ class TestCreateSpecialist:
                 description="天气查询专员",
                 role_definition="你负责查询天气",
                 tool_whitelist=["get_weather"],
+                composition_ids=["comp_builtin_external_coding"],
                 caller_type="user_management_ui",
             )
 
@@ -328,6 +331,27 @@ class TestCreateSpecialist:
             assert response.status_code == 409
             assert response.json()["detail"] == {"error": "conflict"}
             assert "专员名称已存在" not in response.text
+
+    def test_create_rejects_invalid_composition_assignment(self, desktop_api_client):
+        from src.business.brain.specialist_service import CompositionValidationError
+
+        with patch("src.desktop_api.routers.brain.SpecialistService") as MockService:
+            MockService.return_value.create_specialist.side_effect = CompositionValidationError(
+                "技能组合不存在或未发布/不可用: comp_missing"
+            )
+
+            response = desktop_api_client.post(
+                "/api/brain/specialists",
+                json={
+                    "name": "代码专员",
+                    "description": "执行编码任务",
+                    "role_definition": "只使用授权组合",
+                    "composition_ids": ["comp_missing"],
+                },
+            )
+
+        assert response.status_code == 400
+        assert response.json()["detail"]["error"] == "invalid_compositions"
 
 
 class TestListSpecialists:
@@ -413,6 +437,7 @@ class TestUpdateSpecialist:
                 description=None,
                 role_definition=None,
                 tool_whitelist=None,
+                composition_ids=None,
                 caller_type="user_management_ui",
                 change_reason=None,
             )

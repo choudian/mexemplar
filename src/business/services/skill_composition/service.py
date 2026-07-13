@@ -18,6 +18,10 @@ from src.data.repositories import (
 from src.data.unified_config import get_unified_config
 
 from .composition_llm_helper import CompositionLLMHelper
+from .builtin_compositions import (
+    external_coding_composition,
+    list_builtin_compositions,
+)
 from .composition_normalizer import (
     VALID_MODES,
     VALID_STATUSES,
@@ -131,9 +135,14 @@ class SkillCompositionService:
         ]
 
     def list_compositions(self) -> List[SkillComposition]:
-        return self._hydrate_compositions(self._composition_repo.get_all())
+        return list_builtin_compositions() + self._hydrate_compositions(
+            self._composition_repo.get_all()
+        )
 
     def get_composition(self, composition_id: str) -> Optional[SkillComposition]:
+        builtin = self._get_builtin_composition(composition_id=composition_id)
+        if builtin is not None:
+            return builtin
         composition = self._composition_repo.get_by_id(composition_id)
         if composition is None:
             return None
@@ -145,6 +154,9 @@ class SkillCompositionService:
         name: str,
         require_published: bool = False,
     ) -> Optional[SkillComposition]:
+        builtin = self._get_builtin_composition(name=name)
+        if builtin is not None:
+            return builtin
         composition = self._composition_repo.get_by_name(name)
         if composition is None:
             return None
@@ -158,7 +170,21 @@ class SkillCompositionService:
         members_by_comp = self._composition_repo.get_members_for_compositions(
             [composition.composition_id for composition in compositions]
         )
-        summaries = []
+        summaries = [
+            {
+                "composition_id": composition.composition_id,
+                "composition_name": composition.composition_name,
+                "description": composition.description or "",
+                "applicability": composition.applicability,
+                "mode": composition.mode,
+                "member_tool_ids": [member.tool_id for member in composition.members],
+                "is_builtin": True,
+                "is_read_only": True,
+                "trial_supported": False,
+            }
+            for composition in list_builtin_compositions()
+            if is_published_available(composition) and composition.assistant_enabled
+        ]
         for composition in compositions:
             members = members_by_comp.get(composition.composition_id, [])
             summaries.append(
@@ -169,6 +195,9 @@ class SkillCompositionService:
                     "applicability": composition.applicability,
                     "mode": composition.mode,
                     "member_tool_ids": [member.tool_id for member in members],
+                    "is_builtin": False,
+                    "is_read_only": False,
+                    "trial_supported": True,
                 }
             )
         return summaries
@@ -192,6 +221,7 @@ class SkillCompositionService:
         assistant_enabled: bool = True,
         recommend_order: bool = False,
     ) -> SkillComposition:
+        self._ensure_unique_name(composition_name)
         normalized_members = self._normalize_members(mode, members)
         orm_model = self._build_composition_orm(
             composition_id=f"comp_{uuid.uuid4().hex[:12]}",
@@ -219,6 +249,7 @@ class SkillCompositionService:
         assistant_enabled: bool = True,
         recommend_order: bool = False,
     ) -> SkillComposition:
+        self._assert_builtin_mutable(composition_id)
         composition = self._composition_repo.get_by_id(composition_id)
         if composition is None:
             raise SkillCompositionError("技能组合不存在")
@@ -246,6 +277,7 @@ class SkillCompositionService:
         return self.get_composition(composition_id)
 
     def publish_composition(self, composition_id: str) -> SkillComposition:
+        self._assert_builtin_mutable(composition_id)
         composition = self._composition_repo.get_by_id(composition_id)
         if composition is None:
             raise SkillCompositionError("技能组合不存在")
@@ -295,9 +327,11 @@ class SkillCompositionService:
         task: str,
         context: str = "",
     ) -> SkillCompositionTrialResult:
+        self._assert_trial_supported(composition_id)
         return self._trial_sessions.run_trial(composition_id, task, context=context)
 
     def start_trial_session(self, composition_id: str) -> SkillCompositionTrialSessionStart:
+        self._assert_trial_supported(composition_id)
         return self._trial_sessions.start_trial_session(composition_id)
 
     @staticmethod
@@ -310,6 +344,7 @@ class SkillCompositionService:
         session_id: str,
         user_input: Any,
     ) -> SkillCompositionTrialResult:
+        self._assert_trial_supported(composition_id)
         return self._trial_sessions.continue_trial(
             composition_id,
             session_id,
@@ -322,22 +357,54 @@ class SkillCompositionService:
         require_published: bool = True,
         require_assistant_enabled: bool = True,
     ) -> Optional[SkillComposition]:
+        builtin = self._get_builtin_composition(composition_id=composition_id)
+        if builtin is not None:
+            if require_published and not is_published_available(builtin):
+                return None
+            if require_assistant_enabled and not builtin.assistant_enabled:
+                return None
+            return builtin
         return self._trial_sessions.get_execution_snapshot(
             composition_id,
             require_published=require_published,
             require_assistant_enabled=require_assistant_enabled,
         )
 
+    @staticmethod
+    def _get_builtin_composition(
+        *,
+        composition_id: str | None = None,
+        name: str | None = None,
+    ) -> SkillComposition | None:
+        builtin = external_coding_composition()
+        if composition_id is not None and builtin.composition_id == composition_id:
+            return builtin
+        if name is not None and builtin.composition_name.casefold() == name.strip().casefold():
+            return builtin
+        return None
+
     def _ensure_unique_name(
         self,
         composition_name: str,
         composition_id: Optional[str] = None,
     ) -> None:
+        builtin = self._get_builtin_composition(name=composition_name.strip())
+        if builtin is not None and builtin.composition_id != composition_id:
+            raise SkillCompositionError("技能组合名称已存在")
         if self._composition_repo.has_name_conflict(
             composition_name,
             exclude_composition_id=composition_id,
         ):
             raise SkillCompositionError("技能组合名称已存在")
+
+    def _assert_builtin_mutable(self, composition_id: str) -> None:
+        if self._get_builtin_composition(composition_id=composition_id) is not None:
+            raise SkillCompositionError("系统内置技能组合不可修改")
+
+    def _assert_trial_supported(self, composition_id: str) -> None:
+        builtin = self._get_builtin_composition(composition_id=composition_id)
+        if builtin is not None and not builtin.trial_supported:
+            raise SkillCompositionError("该系统内置技能组合仅供正式任务中的专员使用")
 
     def _normalize_members(self, mode: str, members: List[dict]) -> List[dict]:
         return normalize_members(mode, members, self._tool_repo)
