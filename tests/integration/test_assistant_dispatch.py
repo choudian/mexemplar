@@ -134,8 +134,8 @@ class TestReplyToUserIsInterrupting:
         assert tool is not None, "reply_to_user tool not found"
         assert tool.is_interrupting is True
 
-    def test_other_dispatch_tools_not_interrupting(self):
-        """delegate_to_subagent, delegate_to_specialist, create_specialist 不是中断型"""
+    def test_dispatch_tools_are_non_interrupting_and_delegation_tools_are_serial(self):
+        """委派工具必须在 caller thread 串行执行，才能读取本轮 contextvar 快照。"""
         from tests.conftest import MockLLMClient
 
         with (
@@ -176,6 +176,8 @@ class TestReplyToUserIsInterrupting:
                     "create_specialist",
                 ):
                     assert t.is_interrupting is False, f"{t.name} 不应是中断型工具"
+                if t.name in ("delegate_to_subagent", "delegate_to_specialist"):
+                    assert t.is_concurrency_safe is False, f"{t.name} 不得进入并发 worker"
 
 
 # ═══════════════════════════════════════════════

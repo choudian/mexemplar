@@ -700,6 +700,17 @@ class TestSeedPresetServers:
                 service.seed_preset_servers()
 
 
+# ─── process shutdown ───
+
+
+class TestProcessShutdown:
+    def test_shutdown_delegates_to_process_manager(self, service, mock_process_manager):
+        """Service facade 必须兑现 loop drain/close/join，而不只 stop running server。"""
+        service.shutdown()
+
+        mock_process_manager.shutdown.assert_called_once_with()
+
+
 # ─── tools.changed 事件发射 ───
 
 

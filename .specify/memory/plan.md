@@ -1731,3 +1731,120 @@ Task collaboration 只持有 owner/task snapshot 关联，不接管外部 sessio
 - **API/UI**: typed endpoints and 409 behavior、review outcome、task snapshot batch query、event parser/store refresh、TaskNodeCard 全 action 流。
 
 Feature tasks: 45/45 completed。Final verification: Python `2741 passed, 3 skipped`; frontend unit `392 passed`; Black、Flake8、ESLint、TypeScript 与 `git diff --check` 均通过。
+
+## 委派上下文交接 [Source: specs/032-delegation-context-handoff]
+
+**Revision note (2026-07-18)**: Archived 032 for merge into `prepare-github`。委派工具新增 `context_message_indexes`，AgentLoop LLM 路径 contextvar 快照在委派时刻逐字展开注入 execution_context，异步路径落库前展开进 `task.description`；fail-closed 边界由行为测试硬保证。T019 相邻修复加固 MCP server 启停竞争（startup attempt fence、有界 shutdown、SDK stack cleanup 失败传播），Desktop API lifespan 收口到 service facade。无新依赖、0 新表 / 0 migration / 0 新 secret。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）。
+- **Primary Dependencies**: 复用自研 AgentLoop、blinker、SQLAlchemy、asyncio、既有 MCP SDK/FastAPI lifespan；无新依赖。
+- **Storage**: SQLite——复用 `assistant_tasks.description`（v15 既有列）；0 新表 / 0 migration。
+- **Testing**: pytest（`uv run python -m pytest`）；委派 resolver / 快照生命周期 / schema+handler / 同步+异步链路 / 隔离 / 兼容、MCP 生命周期并发与清理（含 SDK stack close 超时/异常传播）、Desktop API lifespan facade、guardrails。
+- **Constraints**: 快照仅 LLM 路径；system 禁止展开；展开总量可配置上限（默认 30000）超限整体报错；委派工具 `is_concurrency_safe=False`（contextvar 依赖 caller thread）；MCP startup attempt 必须 current + 未取消才可发布，shutdown 有界收口且失败可观察、SDK stack close 失败传播。
+- **Scale/Scope**: 单用户桌面应用；改动集中在 AgentLoop、委派工具/编排、ContextManager 会话引用门卫、统一配置；T019 另覆盖 `src/business/mcp/`、`src/desktop_api/app.py`、027 lifecycle contract。
+
+### Source Code Structure
+
+```text
+src/business/
+├── agents/
+│   ├── agent_loop.py              # [改] LLM 路径工具批次外包 use_llm_messages_snapshot
+│   ├── builtin_tools.py           # [改] load_reference 按执行角色授权
+│   ├── delegation_context.py      # [新] 快照 contextvar + 下标解析/展开/上限校验
+│   └── tools/assistant_tools.py   # [改] 两个委派工具 schema+handler、build_task_graph node 描述
+├── memory/
+│   └── context_manager.py         # [改] load_reference message ID 按 Agent 角色授权
+├── orchestration/agent/
+│   ├── delegation_orchestrator.py # [改] specialist 链路补 execution_context 透传
+│   ├── orchestrator.py            # [改] specialist wrapper 透传 execution_context；formatter 保留原文空白
+│   ├── task_executor_adapter.py   # [改] _run_specialist description→execution_context（修既有丢失）
+│   └── tool_registry.py           # [改] delegation facade execution_context 协议
+└── mcp/
+    ├── mcp_process_manager.py     # [改] startup attempt fence、迟到成功隔离、有界 shutdown/drain、stack cleanup 失败传播
+    └── mcp_server_service.py      # [改] business shutdown facade
+
+src/data/
+├── config_models.py               # [改] delegation 配置模型
+└── unified_config.py              # [改] 上限 getter
+
+src/desktop_api/
+└── app.py                         # [改] lifespan 只经 McpServerService.shutdown() 关停
+```
+
+委派运行语义落在 `src/business/` 既有模块，新模块 `delegation_context.py` 与 AgentLoop 同层（被 tools 与 loop 共用，不反向依赖 orchestration）。父消息引用隔离收敛在既有 `ContextManager.load_reference` seam，调用方无需新增参数或复制授权逻辑。T019 MCP 生命周期语义留在 `src/business/mcp/`；Desktop API 只调 service facade，不承载进程或取消规则。
+
+### Configuration
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `agent_tools.delegation.context_expansion_max_chars` | `30000` | 展开块总字符上限（含标记行）；经 `get_unified_config()` 读取；非 secret |
+
+### Architecture Decisions (from research.md)
+
+- **R1 快照通道 = contextvar**：复用 `use_tool_runtime` 先例，仅 LLM 路径设置；恢复（pending tool calls）与 `initial_tool_calls` 路径无快照，带下标委派 fail-closed，避免重新 assemble 导致位置漂移。
+- **R2 下标语义**：1-based 按完整可见数组计数（system 占位但禁止选择），避免"先过滤再计数"的两侧漂移。
+- **R3 展开合并点 = 委派 handler**：展开块追加进 execution_context，同步/异步两条链零改动；provenance 标记由最终格式化边界消费并移除，避免异步中间层二次 `.strip()` 破坏原文。
+- **R4 专员链路补齐**：`delegate_to_specialist` 加 execution_context + indexes；`TaskExecutorAdapter._run_specialist` 把非兜底 `task.description` 作为 execution_context 传递（修既有静默丢失），统一派发 title 兜底时保持旧输入形态。
+- **R5 fail-closed + 上限**：system/非法/无快照/超限整体报错，不部分展开、不截断；错误经既有 tool result 通道回主助理下一轮重填。
+- **R6 约束落点 = 工具 schema description**：不改 system prompt；`build_task_graph` node 描述同步加强"自包含 + 看不到对话历史"。
+- **R7 父消息隔离 = ContextManager 角色授权**：message ID 路径允许主助理跨会话下钻，其他 Agent 必须 `message.session_id == current session_id`；summary ID 路径保持既有显式跨会话摘要能力；越权与不存在共用不泄露存在性的错误文案。
+- **R8 下标持久化边界**：数字下标不进 `assistant_tasks.description`，只保展开全文；原始参数仍存 `messages.tool_calls`，崩溃恢复时因快照缺失而 fail-closed，不静默降级为无上下文委派。
+- **R9 MCP 相邻修复 = startup attempt fence + 有界 shutdown**：每 server 唯一 attempt，资源构造前 bind，current + 未取消才原子发布；bridge/stop/shutdown 先使 attempt 失效再两轮有界取消/收割；SDK `AsyncExitStack.aclose()` 超时/异常始终清空本地 session/stack/stderr/name 缓存后向 `stop_server()`/`shutdown()` 传播失败；owner thread 关 loop；Desktop API 只经 service facade。
+
+### Testing Strategy
+
+- **Resolver 单元**：合法下标逐字展开（含 role 标记格式）、完整数组 1-based 计数但 system 拒绝、越界/非正整数/非法类型/重复/空数组/无快照/超限（不截断）整体拒绝、上限从 `get_unified_config` 读取且缺省 30000。
+- **快照生命周期**：LLM 路径批次内可见、批次结束不可见、pending tool calls 与 initial_tool_calls 路径无快照且带下标委派 fail-closed。
+- **Handler/schema**：合法 indexes 合并进 execution_context 且逐字一致；不带 indexes 向后兼容；system/越界/无快照/超限返回 error JSON 且不创建子会话；schema description 含禁止指代/必须携带/system 不得引用；双线程 contextvar 会话隔离；两委派工具 `is_concurrency_safe=False` 门卫。
+- **同步/异步链路**：simple 委派子会话首条 user 消息含原文；complex 落库 task.description 含原文无下标残留；快照消亡后经 adapter 执行仍含全文；specialist 同步/异步均收 execution_context；非兜底 description 不丢失、title 兜底兼容。
+- **隔离**：`load_reference` 主助理跨会话下钻保留，执行体按父消息 ID 读取被角色门卫拒绝；不存在/越权同文案。
+- **MCP 生命周期**：startup attempt 唯一围栏、资源构造前 bind、current+未取消原子发布、bridge/stop 迟到成功隔离、starting/running 全覆盖关停、两轮有界取消/收割、owner-thread loop close、失败观察、`McpServerService.shutdown()` facade 接线、SDK stack close 超时/异常经公开 stop/shutdown 传播且失败后缓存清空。
+- **配置/回归**：真实 UnifiedConfigManager 覆盖默认 30000、嵌套文件值、runtime override 与 1000..1000000 边界；既有委派回归保持通过。
+
+Feature tasks: 23/23 completed。Final verification: 全量 `tests/` `2951 passed, 3 skipped, 1 failed`（唯一失败为既有 SQLite 并发抖动/批内时间抖动，隔离重跑通过）；Black、Flake8、`git diff --check` 通过。
+
+## 外部 Coding 技能组合与专员授权 [Source: specs/031-external-coding-skill-composition]
+
+**Revision note (2026-07-18)**: Archived 031 for merge into `prepare-github`。在既有 Skill Composition 深模块增加无 DB 主记录的系统内置组合（组合服务只读投影给 API/目录/运行时），专员配置增加版本化 `composition_ids`（v29），委派编排从持久专员配置推导授权并在工具注册边界校验执行型固定专员 + 持久 Task。0 新公开 UI event / 0 新 secret；复用 030 全部 external coding 契约。
+
+### Technical Context
+
+- **Backend**: Python、SQLAlchemy、FastAPI/Pydantic、既有 AgentLoop / DynamicToolManager。
+- **Frontend**: React 18、TypeScript、Zustand、Vitest/RTL。
+- **Storage**: SQLite v29 为 `brain_specialists` 当前记录与 `brain_specialist_versions` 增加 JSON 文本 `composition_ids`；内置组合定义不落普通组合表。
+- **Events/Secrets**: 复用既有 `tools.changed` / 组合刷新；0 新公开 UI event，0 新 secret。
+
+### Source Code Structure
+
+```text
+src/business/
+├── services/skill_composition/    # [改] 内置组合定义、只读服务投影、API DTO
+├── brain/                          # [改] 专员组合校验
+├── orchestration/agent/            # [改] 授权推导、目录过滤、范围激活与工具门卫
+└── agents/tools/                   # [改] external coding 成员 ToolDefinition 延迟构造
+src/data/                           # [改] v29 composition_ids migration + ORM 字段
+src/desktop_api/                    # [改] 专员/组合 typed contracts（builtin/read-only/trial/assistant-enabled）
+frontend/                           # [改] 组合只读呈现 + 专员单项配置
+docs/ARCHITECTURE.md、docs/PROJECT_CONSTRAINTS.md  # [改] 活文档同步
+```
+
+内置组合是组合服务的只读投影（固定定义不写可编辑 `skill_compositions` 表）；授权与激活分离（专员持久配置决定"能否看到组合"，DynamicToolManager 决定"何时激活组合与成员"）；成员 ToolDefinition 延迟构造（仅正式 Task 的固定 executor 专员过门卫后才调 030 factory）。
+
+### Architecture Decisions (from plan.md)
+
+- **R1 内置组合是只读投影**：固定定义不写可编辑表，避免用户更新和成员漂移；调用方只依赖 `SkillCompositionService`。
+- **R2 授权与激活分离**：专员持久配置决定"能否看到组合"，DynamicToolManager 决定"何时激活"；目录快照不是授权事实。
+- **R3 成员延迟构造**：只有正式 Task 的固定 executor 专员过门卫后才调用 030 factory，绑定 parent session 与 task ID。
+- **R4 普通组合维持父会话能力交集**：用户组合成员仍要通过父会话授权重校验；内置 external coding 用专员组合配置 + 正式 Task 专用边界。
+- **R5 陈旧配置可移除不可新增**：前端隐藏不可分配组合，但已分配仍展示；后端保存按当前状态 fail-closed。
+
+### Testing Strategy
+
+- **组合域**：稳定 ID、11 个同源成员、内置只读元数据；list/get/execution snapshot/assistant summary 接入；拒绝修改/发布/试用/同名创建；DynamicToolManager 激活。
+- **专员持久化**：v29 migration + ORM + downgrade；Repository 同步写当前记录与版本记录；Service 校验 published/非待复核/assistant-enabled；typed API + 前端 store + 管理屏只保存组合 ID。
+- **运行时授权矩阵**：持久专员配置推导允许组合；普通组合成员重校验父会话授权；仅固定 executor + 非空 Task + 显式授权构造 ToolDefinition；range 延迟激活（初始无成员）；main/ephemeral/planner/sync/unassigned/no-identity/guessed-ID 全部 fail-closed 门卫。
+- **回归**：既有 external coding 业务/API/UI 测试保持通过。
+
+Feature tasks: 18/18 completed。Final verification: 后端相关闭环 `280 passed`；前端全量 `48 files / 393 tests passed`；ESLint、changed-file Black/flake8、`git diff --check` 通过；TypeScript + Vite 生产构建通过。完整 `tests/` 后端套件两次在 120s/600s 执行上限内未结束（无失败摘要），以覆盖所有改动边界的 280 项闭环套件作为交付门卫。

@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
 from src.business.agents.config import AgentType
+from src.business.agents.delegation_context import prepare_delegated_execution_context
 from src.business.task_collaboration.models import SuspendReason
 
 if TYPE_CHECKING:
@@ -140,10 +141,22 @@ class TaskExecutorAdapter:
             return {"success": False, "message": f"专员不可用: {task.assignee_id}"}
         if not getattr(specialist, "is_active", 1):
             return {"success": False, "message": f"专员已停用: {task.assignee_id}"}
+        # 032: 与 _run_ephemeral 对称——task.description(可能含委派时展开的
+        # "主对话相关原文"全文)作为 execution_context 传递,不再被静默丢弃;
+        # checkpoint 提示随 execution_context 一并进入"补充上下文"段。
+        # 统一派发会在 context 为空时把 title 兜底写进 description；专员在 032
+        # 之前忽略 description，因此空值和 title 兜底都不得新增“补充上下文”重复。
+        effective_context = (
+            task.description if task.description and task.description != task.title else ""
+        )
         return orchestrator.delegation_orchestrator.run_specialist_via_delegated_executor(
             parent_session_id=parent_session_id,
             specialist=specialist,
-            task=_execution_context_with_checkpoint(task.title, checkpoint_ref),
+            task=task.title,
+            execution_context=_execution_context_with_checkpoint(
+                effective_context,
+                checkpoint_ref,
+            ),
             tool_whitelist=tool_whitelist,
             current_task_id=task.task_id,
             workspace_root=workspace_root,
@@ -279,13 +292,15 @@ def _subagent_id_from_checkpoint(checkpoint_ref: str | None) -> str | None:
 
 
 def _execution_context_with_checkpoint(text: str, checkpoint_ref: str | None) -> str:
-    base = (text or "").strip()
+    # 普通上下文沿用旧 strip 语义；系统逐字展开块的 provenance 在中间层保留，
+    # 只由最终执行体格式化边界消费，避免异步链路二次 strip 原文。
+    base = prepare_delegated_execution_context(text)
     if not checkpoint_ref:
         return base
     checkpoint = str(checkpoint_ref).strip()
     if not checkpoint:
         return base
-    return f"{base}\n\n恢复检查点:\n{checkpoint}" if base else f"恢复检查点:\n{checkpoint}"
+    return f"{base}\n\n恢复检查点:\n{checkpoint}" if base.strip() else f"恢复检查点:\n{checkpoint}"
 
 
 def _close_orchestrator_resources(orchestrator) -> None:

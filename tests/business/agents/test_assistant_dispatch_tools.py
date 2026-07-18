@@ -182,6 +182,7 @@ class TestDelegateToSpecialist:
             parent_session_id=SESSION_ID,
             specialist_name="天气专家",
             task="查北京天气",
+            execution_context="",
         )
 
     def test_rejects_nonexistent_specialist(self):

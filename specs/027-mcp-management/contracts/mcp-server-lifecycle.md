@@ -2,7 +2,7 @@
 
 **Feature**: 027-mcp-management
 **Date**: 2026-07-04
-**Updated**: 2026-07-04 (R2 critique fixes: N1/N2/N3/N4/N7/N15 — 对齐 SDK 实际 API)
+**Updated**: 2026-07-18（启动 attempt fence、SDK stack 清理失败传播与可观察 shutdown 语义）
 
 ## 概述
 
@@ -20,7 +20,7 @@ MCP server 子进程的完整生命周期管理，包括启动、连接、健康
 基于 `mcp v1.28.1` 实际源码（`.venv/.../mcp/client/stdio/__init__.py` + `session.py` + `os/win32/utilities.py`）：
 
 1. **SDK 拥有子进程完整生命周期**：`stdio_client(StdioServerParameters(command, args, env))` 内部自己 spawn 子进程，**不接受外部 subprocess**（N1）。我们只传 `StdioServerParameters`，不调 `create_subprocess_exec`。
-2. **Windows 进程清理依赖 SDK Job Object**：SDK 在 spawn 前创建 Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`），`stdio_client.__aexit__` 内部调 `TerminateJobObject`（N2）。我们的 `_terminate_tree` 仅作 `stack.aclose()` 失败时的 fallback。
+2. **Windows 进程清理依赖 SDK Job Object**：SDK 在 spawn 前创建 Job Object（`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`），`stdio_client.__aexit__` 内部调 `TerminateJobObject`（N2）。~~我们的 `_terminate_tree` 仅作 `stack.aclose()` 失败时的 fallback。~~ 当前 SDK adapter 不暴露稳定 PID，项目也没有安全的 out-of-band 进程树兜底；`stack.aclose()` 失败必须作为 stop/shutdown 失败显式传播，不能伪装为成功。
 3. **stderr 通过 `errlog` TextIO 接收**：`stdio_client(server, errlog=...)` 接受一个 TextIO-like 对象转发子进程 stderr，**不暴露 stderr 管道**（N3）。我们传入自定义 `_StderrCapture` 对象，不读管道。
 4. **进程死亡检测靠 ping + call_tool 失败**：`stdio_client.__aexit__` 只在 `event.set()` 让控制流离开 `async with` 块时才执行，进程死了我们感知不到（N4）。改为 ping 60s + call_tool 失败即时标记。
 5. **`read_timeout_seconds` 接受 `timedelta`**：`ClientSession.__init__` 和 `call_tool` 的 `read_timeout_seconds: timedelta | None`，传 int 会 raise TypeError（N7）。
@@ -67,81 +67,83 @@ MCP server 子进程的完整生命周期管理，包括启动、连接、健康
 ### 启动 Server
 
 ```python
-from datetime import timedelta
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from mcp.client.session import ClientSession
-
-async def _start_server_coro(self, server_id: str, public_config: McpServerConfigPublic):
+async def _start_server_coro(self, server_id, public_config, *, _attempt=None):
     """在 MCP 事件循环上执行的实际启动逻辑。"""
-    # 1. 在 McpProcessManager 内部完成 public config → launch payload 转换（N17）
-    launch_payload = self._build_launch_payload(public_config)
-
-    # 2. 构造 StdioServerParameters（SDK 自己 spawn 子进程，N1）
-    params = StdioServerParameters(
-        command=launch_payload.command,
-        args=launch_payload.args,
-        env=launch_payload.merged_env,  # 含 secret 的合并 env
-        encoding="utf-8",
-        encoding_error_handler="replace",  # N3/R6: Windows 中文容错
-    )
-
-    # RC1: stderr 用 tempfile（有 fileno，subprocess 接受），不用纯 TextIO
-    stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
-    stop_event = asyncio.Event()
-    stack = AsyncExitStack()
+    attempt = _attempt or self._begin_startup_attempt(server_id)
+    # bind 在任何 SDK import、配置解析、tempfile 或 spawn 之前原子校验
+    # current + not-cancelled；stop/bridge 已退休的旧 attempt 在此直接退出。
+    if not self._bind_startup_task(server_id, attempt, asyncio.current_task()):
+        self._finish_startup_attempt(server_id, attempt)
+        raise asyncio.CancelledError()
 
     try:
-        # 3. stdio_client 自己 spawn 子进程 + 提供 read/write 流（N1）
-        #    RC1: errlog=stderr_file（必须是 file-like with fileno()）
-        read_stream, write_stream = await stack.enter_async_context(
-            stdio_client(params, errlog=stderr_file)
+        # 仍是函数内延迟 import；部分安装/版本漂移失败也由 finally 退休 attempt。
+        ClientSession, stdio_client, StdioServerParameters = _load_sdk_client_types()
+        launch_payload = self._build_launch_payload(public_config)
+        params = StdioServerParameters(
+            command=launch_payload.command,
+            args=launch_payload.args,
+            env=launch_payload.merged_env or None,
+            encoding="utf-8",
+            encoding_error_handler="replace",
         )
-        # 4. RC2: ClientSession MUST 进 async with（__aenter__ 才 start_soon receive_loop）
-        #    不进 async with → receive_loop 不启动 → send_request hang → initialize() timeout
-        session = await stack.enter_async_context(
-            ClientSession(
-                read_stream, write_stream,
-                read_timeout_seconds=timedelta(seconds=30),  # N7: timedelta
+        stderr_file = tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace")
+        stop_event = asyncio.Event()
+        stack = AsyncExitStack()
+    except BaseException:
+        self._finish_startup_attempt(server_id, attempt)
+        raise
+
+    try:
+        async with asyncio.timeout(60):
+            read_stream, write_stream = await stack.enter_async_context(
+                stdio_client(params, errlog=stderr_file)
             )
-        )
-        await session.initialize()
+            session = await stack.enter_async_context(
+                ClientSession(
+                    read_stream,
+                    write_stream,
+                    read_timeout_seconds=timedelta(seconds=60),
+                )
+            )
+            await session.initialize()
+            adapter = _SdkSessionAdapter(session)
+            tools = await adapter.list_tools()
 
-        # 5. RC4: 用 _SdkSessionAdapter 包装，存 Protocol 类型（测试可注入 FakeMcpSession）
-        adapter = _SdkSessionAdapter(session)
-        sdk_tools_result = await adapter.list_tools()
-        tools = [_convert_sdk_tool(t) for t in sdk_tools_result]  # RC9: SDK → 业务 McpToolInfo
-
-        # 6. 缓存 adapter（Protocol 类型）+ stack + stop_event
-        self._sessions[server_id] = adapter  # dict[str, McpSessionProtocol]
-        self._stacks[server_id] = stack
-        self._stop_events[server_id] = stop_event
-        self._stderr_files[server_id] = stderr_file
-
-        # 7. 更新 DB 状态 + 注册工具
-        await self._on_server_started(server_id, tools)
-        await self._registry.register_server_tools(server_id, slug, tools, is_preset)
-
-        # 8. 启动 stderr 定时读取任务（RC1: 从 tempfile 提取脱敏记日志）
-        self._event_loop.create_task(self._stderr_reader(server_id))
-
-        # 9. 阻塞保持上下文（长连接）
-        await stop_event.wait()
+            # session/stack/cache 必须在同一锁内由当前未取消 attempt 原子发布。
+            if not self._publish_started_server(
+                server_id,
+                attempt,
+                session=adapter,
+                stack=stack,
+                stop_event=stop_event,
+                stderr_file=stderr_file,
+                server_name=public_config.name,
+            ):
+                raise asyncio.CancelledError()
+            self._event_loop.create_task(self._stderr_reader(server_id))
+            return tools
+    except asyncio.CancelledError:
+        try:
+            await self._stop_server_coro(server_id)
+        finally:
+            await self._cleanup_startup_resources(server_id, stack, stderr_file)
+        raise
     except Exception as exc:
-        # N15: task group 内部异常（server 崩溃/主动关 stdout）→ 标 disconnected
-        await self._mark_disconnected(server_id, exc)
+        try:
+            await self._mark_disconnected(server_id, exc)
+        finally:
+            await self._cleanup_startup_resources(server_id, stack, stderr_file)
+        raise
     finally:
-        # 退出时清理 stack（SDK Job Object 终止子进程，N2）
-        await stack.aclose()
-        self._sessions.pop(server_id, None)
-        self._stacks.pop(server_id, None)
-        self._stop_events.pop(server_id, None)
-        self._stderr_files.pop(server_id, None)
-        stderr_file.close()
+        self._finish_startup_attempt(server_id, attempt)
 ```
 
 **前置条件**: server 存在且 enabled=True，无"待补"占位符
 **后置条件**: 子进程运行（SDK 管理），ClientSession 已初始化（RC2 async with），工具已注册
 **失败模式**: `initialize()` 失败 → status=failed + last_error_message + suggestion + emit `tools.changed`（RC11）；${VAR} 未填 → 拦截不启动
+
+**启动 deadline 与 attempt fence**: spawn、`initialize()` 与 `list_tools()` 共享 60s 整体预算；同步桥为失败清理预留有界余量。每个 `server_id` 同时只能有一个权威 startup attempt，重复启动或覆盖 running session 必须拒绝。桥超时、显式 stop 或 shutdown 必须先把该 attempt 标记为 cancelled，再取消/等待启动 Task；只有仍为当前、未取消的 attempt 才能在同一把锁内原子发布 session/stack/cache。即使第三方 SDK 吞掉 `CancelledError` 并迟到返回成功，旧 attempt 也不得发布 running 状态。SDK context 清理使用不被观察超时取消的强引用任务；超出清理窗口时必须显式记录 orphan-process risk，并由 shutdown 再做有界等待。该预算不同于工具调用的 30s 超时。
 
 **SDK import 隔离**：所有 `from mcp import ...` 必须在函数内部延迟导入。如果 import 失败，`McpProcessManager` 初始化标记 `sdk_available=False`，CRUD API 仍可工作（只不能启动/测试连接），UI 显示"MCP 运行时不可用"。
 
@@ -150,23 +152,66 @@ async def _start_server_coro(self, server_id: str, public_config: McpServerConfi
 ```python
 async def _stop_server_coro(self, server_id: str):
     """在 MCP 事件循环上执行的实际停止逻辑。"""
-    stop_event = self._stop_events.get(server_id)
-    stack = self._stacks.get(server_id)
+    # 先在锁内使 starting attempt 失效。尚未 bind 的 attempt 立即退休；
+    # 已 bind 的 Task 最多接受两轮取消与有界等待，它的 cleanup/finally
+    # 负责收口局部资源；连续拒绝退出会被保存为显式 stop failure。
+    current_task = asyncio.current_task()
+    stop_errors = []
+    with self._lock:
+        startup_attempt = self._startup_attempts.get(server_id)
+        if startup_attempt is not None:
+            startup_attempt.cancelled = True
+            startup_task = startup_attempt.task
+        else:
+            startup_task = None
+    if startup_attempt is not None and startup_task is None:
+        self._retire_unbound_startup_attempt(server_id, startup_attempt)
+    if startup_task is not None and startup_task is not asyncio.current_task():
+        survivors = {startup_task}
+        for _ in range(2):
+            survivors = await self._cancel_tasks_with_deadline(
+                survivors,
+                timeout=_MCP_SHUTDOWN_CLEANUP_WAIT_SECONDS,
+            )
+            if not survivors:
+                break
+        if survivors:
+            stop_errors.append(RuntimeError("startup task 拒绝在 deadline 内退出"))
+
+    stop_event = self._stop_events.pop(server_id, None)
+    stack = self._stacks.pop(server_id, None)
     if stop_event is not None:
-        stop_event.set()  # 让 _start_server_coro 的 event.wait() 解除阻塞
+        stop_event.set()
     if stack is not None:
-        # SDK 的 stdio_client.__aexit__ 内部走 terminate_windows_process_tree（Job Object，N2）
-        await stack.aclose()
-    # 注销工具 + 更新状态
-    await self._registry.unregister_server_tools(server_id)
-    await self._on_server_stopped(server_id)
-    # stderr_file 由 _start_server_coro 的 finally 关闭，这里不重复
+        try:
+            await asyncio.wait_for(stack.aclose(), timeout=15)
+        except asyncio.TimeoutError as exc:
+            cleanup_error = RuntimeError("SDK 资源清理超时")
+            cleanup_error.__cause__ = exc
+            stop_errors.append(cleanup_error)
+        except Exception as exc:
+            stop_errors.append(exc)
+    # 无论 stack cleanup 是否成功，都先清空本地缓存，防止失效 session 被复用。
+    with self._lock:
+        self._sessions.pop(server_id, None)
+    self._stop_events.pop(server_id, None)
+    self._stacks.pop(server_id, None)
+    self._stderr_files.pop(server_id, None)
+    self._stderr_read_pos.pop(server_id, None)
+    self._server_names.pop(server_id, None)
+    if len(stop_errors) == 1:
+        raise stop_errors[0]
+    if stop_errors:
+        # 记录其余失败，以首个失败为 cause 抛出聚合错误。
+        raise RuntimeError(f"{len(stop_errors)} 个清理阶段失败") from stop_errors[0]
 ```
 
 **进程清理策略（N2）**：
 - **主要**：`stack.aclose()` 触发 SDK `stdio_client.__aexit__` → Windows Job Object `TerminateJobObject` / POSIX 进程组终止
-- **Fallback**：仅当 `stack.aclose()` 自身超时（15s）或抛异常时，用 SDK 暴露的 process.pid 调 `_terminate_tree`（taskkill /T /F）兜底
+- ~~**Fallback**：仅当 `stack.aclose()` 自身超时（15s）或抛异常时，用 SDK 暴露的 process.pid 调 `_terminate_tree`（taskkill /T /F）兜底~~
+- **当前失败语义**：SDK adapter 没有可依赖的 PID，无法安全执行进程树 fallback。`stack.aclose()` 超时/异常时先清空 manager 的 session/stack/stderr/name 缓存，再让 stop 失败；该失败经 `stop_all()` 汇总并由同步 `shutdown()` 传播，明确提示 orphan-process risk
 - **幂等性**：已停止的 server 重复调用不报错
+- **启动中 stop**：先使 startup attempt 失效，再对其 Task 做两轮有界取消/等待并清理已发布资源；连续拒绝退出必须让 stop 失败。`stop_all()` 的集合覆盖 running 与 starting server，并在并发收口全部目标后汇总抛出失败，供 shutdown 观察
 
 **stop_server 时序（N5）**：
 ```python
@@ -178,8 +223,9 @@ def stop_server(self, server_id: str) -> None:
         )
         future.result(timeout=15)  # N5: 明确超时
     except Exception as exc:
-        # stack.aclose() 超时/失败：标 failed + 记 warning，不强制 taskkill（SDK 会自清理）
+        # stack.aclose() 超时/失败：本地缓存已清空，但 SDK 资源可能残留。
         logger.warning("[MCP] stop_server %s timed out/failed: %s", server_id, exc)
+        raise RuntimeError(f"停止 MCP server {server_id} 失败") from exc
 ```
 
 ### 健康检查
@@ -296,11 +342,16 @@ except Exception:
 ## Sidecar 关闭时行为
 
 ```python
-# FastAPI lifespan shutdown
-async def shutdown():
-    # 并发停止所有 running server，超时 10s
-    await asyncio.wait_for(mcp_service.stop_all(), timeout=10)
+# FastAPI lifespan shutdown 只调用 business facade
+mcp_service.shutdown()
 ```
+
+**关闭契约**：
+
+- 普通线程触发时，向 MCP loop 提交有序 shutdown：对所有 running/starting server 做有界停止，等待已跟踪 startup cleanup，再对其余后台 Task 最多做两轮有界取消/收割，最后停止 loop；调用方有界等待线程退出。
+- MCP loop 线程内触发时不得同步等待自身；只能调度同一有序 shutdown 协程，由 `_run_loop` 在 `run_forever()` 返回后由 owner thread 关闭 loop。
+- 普通线程上的有序 drain 抛错或 join 后线程仍存活时必须记录并抛出 `RuntimeError`，不得仅写 debug 日志后伪装成成功；loop 线程内无法同步返回的 shutdown Task 失败必须由 done callback 观察并记录。单个 startup cleanup 超出观察窗口仍按上文记录 orphan-process risk，并继续由 drain 的有界收割流程处理。
+- 正常返回的后置条件是事件循环线程已退出且 loop 已关闭，不遗留 pending Task。
 
 ## stderr 收集（RC1 修正：tempfile 方案）
 

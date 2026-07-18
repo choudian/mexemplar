@@ -123,6 +123,59 @@ def test_agent_tools_discovery_defaults_and_bounds(tmp_path):
     assert config.get_agent_tools_discovery_result_description_max_chars() == 500
 
 
+def test_agent_tools_delegation_context_expansion_defaults_and_bounds(tmp_path):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
+    config._sa = _SettingsStore()
+
+    assert config.get_agent_tools_delegation_context_expansion_max_chars() == 30000
+
+    config.set(
+        "agent_tools.delegation.context_expansion_max_chars",
+        1000,
+        persist="runtime",
+    )
+    assert config.get_agent_tools_delegation_context_expansion_max_chars() == 1000
+
+    config.set(
+        "agent_tools.delegation.context_expansion_max_chars",
+        45000,
+        persist="runtime",
+    )
+    assert config.get_agent_tools_delegation_context_expansion_max_chars() == 45000
+
+    config.set(
+        "agent_tools.delegation.context_expansion_max_chars",
+        999,
+        persist="runtime",
+    )
+    assert config.get_agent_tools_delegation_context_expansion_max_chars() == 30000
+
+    config.set(
+        "agent_tools.delegation.context_expansion_max_chars",
+        1000001,
+        persist="runtime",
+    )
+    assert config.get_agent_tools_delegation_context_expansion_max_chars() == 1000000
+
+
+def test_agent_tools_delegation_context_expansion_loads_nested_config(tmp_path):
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "agent_tools": {
+                    "delegation": {"context_expansion_max_chars": 64000},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = UnifiedConfigManager(config_path=str(config_path))
+    config._sa = _SettingsStore()
+
+    assert config.get_agent_tools_delegation_context_expansion_max_chars() == 64000
+
+
 def test_agent_tools_discovery_nested_config_loads(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(

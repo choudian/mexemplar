@@ -612,6 +612,14 @@ class UnifiedConfigManager:
             maximum=5000,
         )
 
+    def get_agent_tools_delegation_context_expansion_max_chars(self) -> int:
+        return self._get_bounded_positive_int(
+            "agent_tools.delegation.context_expansion_max_chars",
+            30000,
+            minimum=1000,
+            maximum=1000000,
+        )
+
     def get_agent_tools_file_default_max_lines(self) -> int:
         return self._get_bounded_positive_int(
             "agent_tools.file.default_max_lines", 200, maximum=1000

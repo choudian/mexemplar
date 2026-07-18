@@ -32,6 +32,7 @@ from .config import (
     ToolSignal,
 )
 from .builtin_tools import LOAD_REFERENCE_SCHEMA
+from .delegation_context import use_llm_messages_snapshot
 from .hook_models import ToolCallContext, ToolExecutionOutcome, freeze_tool_args
 from .tool_helpers import is_standardized_error, make_error_result
 from .tools.builtin_contracts import (
@@ -1355,8 +1356,12 @@ class AgentLoop:
             if cancelled is not None:
                 return cancelled
 
-            # 多工具调用：执行列表中的所有工具调用
-            signal = self._execute_tool_batch(tool_call_list, ctx, session_id, iteration)
+            # 多工具调用：执行列表中的所有工具调用。
+            # 快照仅在此 LLM 响应路径设置：下标引用（context_message_indexes）必须
+            # 对着模型产生本批 tool_calls 时看到的 messages 解析；恢复/initial 路径
+            # 原快照不可复现，不设快照（委派 fail-closed）。
+            with use_llm_messages_snapshot(messages):
+                signal = self._execute_tool_batch(tool_call_list, ctx, session_id, iteration)
             if signal is not None:
                 return signal
 

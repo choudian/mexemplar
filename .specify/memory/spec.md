@@ -2127,3 +2127,109 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - 中途切换 Claude/Codex——拒绝；放弃或完成旧 session 后另建 session。
 - rollback intent 不清或 merge/HEAD 已变化——拒绝陈旧 proposal，先澄清并重新分析；不得用 reset/clean 覆盖后续工作。
 - UI event gap 或 session mismatch——触发 `backend.resync_required` 并拉 task/session 权威 snapshot。
+
+## 委派上下文交接 [Source: specs/032-delegation-context-handoff]
+
+**Revision note (2026-07-18)**: Archived 032 for merge into `prepare-github`。主助理委派子代理/专员时新增 `context_message_indexes`（1-based，按本轮完整可见消息数组计数，system 占位但禁止引用），委派时刻按 AgentLoop LLM 路径 contextvar 快照逐字展开为「主对话相关原文」段并入 execution_context；异步路径落库前展开持久化进 `task.description`。system/非法下标/无快照/超限整体 fail-closed。同时补齐 `delegate_to_specialist` 的 execution_context 字段并修复异步 specialist description 静默丢弃；`load_reference` message ID 路径按 Agent 角色授权。相邻 T019 MCP 生命周期加固（startup attempt fence、迟到成功隔离、有界 shutdown、SDK stack cleanup 失败传播）作为综合审查修复保留在本 feature 内。0 新公开 UI 事件 / 0 新表 / 0 新 migration / 0 新 secret。
+
+> ID mapping: 031（external-coding-skill-composition）尚未归档；为保 memory 既有 ID 不重排，032 编号续在当前最高号之后（US-108~110 / FR-490~501 / CC-182~187 / SC-211~217），与未来 031 归档段号不连续，属预期（同 025 先例）。
+
+### User Stories
+
+- **US-108 (P1)**: 委派时携带对话中已产生的内容——主助理委派执行体时通过消息引用把方案/清单/结论/代码片段所在的历史消息一并交接；执行体启动时初始输入已含原文，忠实执行而非凭"之前讨论的方案"指代编造。
+- **US-109 (P1)**: 异步任务稍后执行仍拿到全文——复杂任务建图落库前就地展开引用为原文并持久化；进程重启、快照消失后 worker 执行时仍拿展开全文。
+- **US-110 (P2)**: 固定专员获得同等交接能力——专员委派入口补齐 execution_context 字段并获得与子代理同等的消息引用能力。
+
+> Adjacent Review Repair（MCP 生命周期竞争加固，Verification Gate）：综合审查发现既有 MCP server 启停存在竞争窗口（同步桥超时/stop/shutdown 后旧启动协程迟到发布 session、关停遗漏 starting server 或残留 Task、非 owner thread 关闭 loop）。T019 为每个 server 建立唯一 startup attempt 围栏、隔离迟到成功、有界 shutdown 覆盖 running/starting + 残留 Task，Desktop API lifespan 收口到 `McpServerService.shutdown()` facade。该修复不扩展 032 委派产品能力，作为相邻可靠性修复声明；权威协议以 `specs/027-mcp-management/contracts/mcp-server-lifecycle.md` 为准。
+
+### Functional Requirements
+
+- **FR-490**: 临时子代理委派入口 MUST 支持可选 `context_message_indexes`：主助理按当前可见对话消息顺序指定要携带的历史消息；不提供时行为与现状一致。
+- **FR-491**: 固定专员委派入口 MUST 补齐 execution_context 字段并支持与 FR-490 同等的 `context_message_indexes`。
+- **FR-492**: 引用解析与原文展开 MUST 由委派链路在委派时刻完成，基于本轮喂给主助理的消息数组快照；展开结果作为独立「主对话相关原文」段注入执行体初始输入。
+- **FR-493**: 展开 MUST 逐字保真：原文由系统拷贝，不经任何模型改写、摘要或截断（超上限时整体报错而非截断）。
+- **FR-494**: 异步/建图路径 MUST 在任务持久化之前完成展开，持久化内容为全文；任务执行 MUST NOT 依赖委派轮的内存快照。
+- **FR-495**: 非法引用（system 消息、越界、重复、非法值）MUST fail-closed：整次委派失败并把可理解错误返回主助理供其重填；MUST NOT 部分展开或静默丢弃。system 消息 MUST NOT 下放，避免泄漏只对父 Agent 授权的能力目录。
+- **FR-496**: 展开原文总量 MUST 有可配置上限，超限整体报错；上限走统一配置入口。
+- **FR-497**: 执行体 MUST 保持纯接收方：不新增任何读取父会话消息的工具或接口，子会话与父会话隔离边界不变。
+- **FR-498**: 填参硬约束 MUST 写在委派工具 schema description 中（凡任务引用对话已产生内容必须用消息引用携带，禁止只写指代）；MUST NOT 通过修改主助理 system prompt 实现。任务图建图入口节点描述字段 MUST 同步加强"自包含"表述。
+- **FR-499**: 本 feature MUST NOT 新增公开 UI 事件、secret、数据库表或 migration；省略 `context_message_indexes` 时不得触发下标解析或自动展开。兼容性例外是 FR-491/FR-494 所需异步 specialist 交接修复：非兜底 `task.description` 不再静默丢弃，恢复 checkpoint 改由 execution_context 补充上下文段传递；description 为空/等于 title 且无 checkpoint 时保持原输入形态。
+- **FR-500**: 相邻 MCP 审查修复 MUST 为每个 `server_id` 保持至多一个权威 startup attempt；attempt MUST 在 SDK import、配置解析、临时资源和进程构造前绑定，且只有仍为 current、未取消的 attempt 才能在同一锁内原子发布 session/stack/cache。bridge 超时、stop 或 shutdown 后的迟到成功 MUST NOT 发布 running 状态。
+- **FR-501**: Sidecar shutdown MUST 只经 `McpServerService.shutdown()` business facade 进入进程管理器；关停 MUST 覆盖 running/starting server、已跟踪 startup cleanup 与残留后台 Task，按有界取消/收割协议由 owner thread 关闭事件循环。无法在边界内收口时 MUST 显式记录并向同步调用方报告失败；running server 的 SDK stack close 超时/异常不得被吞掉，内部缓存清理完成后仍 MUST 传播失败。
+
+### Key Entities
+
+- **LlmMessagesSnapshot（内存态，新）**: 主助理本轮送入 LLM 的消息数组的不可变解析投影（`tuple[SnapshotMessage, ...]`，frozen role/content 拷贝），经 contextvar 在工具执行期间可见；仅 AgentLoop LLM 路径设置，批次结束清除；恢复/initial 路径不设置。源数组在工具执行期间被误改也不影响解析。
+- **ContextMessageIndexes（工具参数，新）**: `list[int]` 可选；每项 1-based 正整数，≤ 快照长度，不得重复，不得指向 system，提供时不得为空；只在委派工具执行瞬间按快照解析，不进入下游 Task 语义。原始 tool-call 参数仍按既有机制保存在 `messages.tool_calls` 供 function-call 配对、审计与崩溃恢复。
+- **ExpandedContextBlock（派生文本，新）**: 按下标取出的消息原文组成的标记文本块（`【主对话相关原文】` + 逐条 `--- 消息 #<idx>（<role>）---` + 原文），追加进 execution_context；同步路径经 `_format_delegated_task_input` 渲染，异步路径随 `task.description` 落库。handler 附不可见内部 provenance 标记并随 Task 描述持久化，仅最终执行体格式化边界识别"header + provenance"、移除标记并逐字保留该块，避免异步中间层二次消费；普通用户文本同名 header 不触发保真分支。
+- **复用 `assistant_tasks.description`（v15 既有列）**: 异步路径展开后的 execution_context 经 `_dispatch_task_via_unified_model(context=...)` → `dispatcher.create_child_task(description=...)` 原样落库，执行时由 TaskExecutorAdapter 回填；落库内容为展开后全文，不含未解析下标。
+
+### Constraints & Compatibility
+
+- **CC-182**: "主助理会正确携带所需上下文"是模型软约束（靠工具 description 指导），MUST NOT 描述为硬保证；系统硬保证的是"给了合法引用就逐字展开、给了非法引用就整体报错"。
+- **CC-183**: 子会话与父会话隔离是既有安全边界，本 feature 不得为交接便利开任何执行体侧读取父会话的口子。
+- **CC-184**: 展开内容随任务描述落库属既有存储面（会话内容本就持久化于消息表），不新增 secret 暴露面；引用解析过程不进普通日志。
+- **CC-185**: 配置（展开总量上限）统一走 `get_unified_config()`，不硬编码。
+- **CC-186**: MCP 生命周期相邻修复只加固 027 既有 stdio server 启停契约；MUST NOT 新增公开 API、UI 事件、secret、表、migration 或传输类型；权威细节以 `specs/027-mcp-management/contracts/mcp-server-lifecycle.md` 为准。
+- **CC-187**: startup attempt fence、迟到成功隔离和 shutdown drain 是确定性并发边界，MUST 由行为测试硬保证，MUST NOT 依赖第三方 SDK 总会及时响应取消。
+
+### Success Criteria
+
+- **SC-211**: 典型场景（上一轮产出方案、本轮委派写文件）下执行体初始输入包含方案原文且与父会话原文逐字一致，自动化测试可验证。
+- **SC-212**: 100% 的非法引用委派整体报错并可被主助理重试，不存在部分展开或静默丢弃用例。
+- **SC-213**: 异步任务在委派轮内存快照消失（含进程重启）后执行，执行体输入仍包含展开全文。
+- **SC-214**: 不使用 `context_message_indexes` 的既有委派回归测试保持通过；异步 specialist 的 description/checkpoint 兼容性例外由专门回归测试覆盖。
+- **SC-215**: 专员委派入口与子代理委派入口的上下文交接能力对齐（补充上下文 + 消息引用均可用）。
+- **SC-216**: MCP 并发启动、资源构造前 stop、bridge 超时/取消、迟到成功与失败清理测试全部通过；不存在已失效 startup attempt 发布 running session 的用例。
+- **SC-217**: MCP shutdown 测试证明 running/starting server 与后台 Task 均进入有界收口，Desktop API lifespan 只经 service facade 关停；startup Task 拒绝取消、SDK stack close 超时/异常及 drain/join 失败都可观察并向同步调用方传播，不会静默成功。
+
+### Edge Cases
+
+- 引用指向 system 消息、下标越界/重复/非法（负数、非整数）——整次委派 fail-closed 报错，错误回主助理重填；不部分展开、不静默忽略。
+- 被引用内容已被压缩归档（可见数组里只剩摘要）——主助理数不到原文位置，不在 V1 范围；先用既有原文取回机制恢复再委派。
+- 展开总量过大（引用多条超长消息）——超配置上限时整次报错并提示缩小范围，不截断。
+- 被引用消息是工具结果（如文件读取输出）——允许引用，按原文展开不做二次加工。
+- 同轮并发/连续多次委派——每次独立解析各自引用，互不影响。
+- MCP 启动 Task 在 bridge/stop/shutdown 取消期限内拒绝退出——旧 attempt 仍必须先失去发布资格；stop/shutdown 显式报告未收口风险，不得把迟到 session 写回 running。
+- MCP running server 的 SDK `AsyncExitStack.aclose()` 超时或抛错——内部 session/stack/cache 仍必须清除，但 `stop_server()`/`shutdown()` 必须向同步调用方传播失败，不得只记 warning 后伪装成功。
+
+## 外部 Coding 技能组合与专员授权 [Source: specs/031-external-coding-skill-composition]
+
+**Revision note (2026-07-18)**: Archived 031 for merge into `prepare-github`。030 的 11 个 external coding 工具收口为系统内置、只读、已发布的范围型技能组合「外部 Coding」；Specialist Management 按组合配置并把 `composition_ids` 版本化持久化到 SQLite v29（`brain_specialists` + `brain_specialist_versions`）。只有已配置组合的固定 executor 专员在正式 Task 中可经组合按需激活成员工具；主助理、ephemeral、planner、同步专员和试用路径均 fail-closed。0 新公开 UI 事件 / 0 新 secret；复用 030 全部 owner/task 绑定、PLAN/RESULT、quota、merge/rollback 与安全门卫。
+
+> ID mapping: 031 时序早于 032（2026-07-13 vs 07-14）但归档滞后；为保 memory 既有 ID 不重排，031 编号续在 032 之后（US-111~113 / FR-502~510 / CC-188~189 / SC-218~221），故 031 段号高于 032，属预期（同 025 先例）。本 feature 直接在 `prepare-github` 集成分支实施（非 feature 分支），spec/plan/tasks 为可审查性在提交前补录。
+
+### User Stories
+
+- **US-111 (P1)**: 用一个组合配置外部 Coding 能力——用户在技能组合列表看到系统内置、已发布、只读的范围型组合「外部 Coding」；在专员管理页只勾选这一个组合，不再逐项选择 11 个底层动作；保存后只存组合 ID（不复制成员进 `tool_whitelist`）并形成可审计专员版本。
+- **US-112 (P1)**: 仅在正式 Task 中按需激活——配置了组合的固定 executor 专员在持久 Task 节点执行代码任务时先看到组合目录；调用组合后 11 个成员工具才进入其能力集合（range 延迟激活），初始不预注入成员 schema。
+- **US-113 (P1)**: 非授权执行体无法猜 ID 绕过——主助理、临时子代理、planner 专员、无固定专员身份的委派会话以及未配置组合的专员都不能通过猜测内置组合 ID 获得 external coding 工具。
+
+### Functional Requirements
+
+- **FR-502**: 系统 MUST 以代码定义的稳定 ID 提供「外部 Coding」内置组合；其 11 个成员 MUST 与 030 的 external coding tool factory 保持同源。
+- **FR-503**: 内置组合 MUST 固定为 `range + published + assistant_enabled + read-only + trial-disabled`。
+- **FR-504**: 组合服务和 Desktop API MUST 返回 builtin/read-only/试用支持/assistant-enabled 元数据。
+- **FR-505**: 专员配置 MUST 只保存组合 ID，并通过 `SpecialistService` 校验组合当前可分配状态（published、非待复核、assistant-enabled）。
+- **FR-506**: `composition_ids` MUST 同时持久化到 `brain_specialists` 和 `brain_specialist_versions`，使用 SQLite v29 migration（JSON 文本列 + downgrade）。
+- **FR-507**: external coding 成员工具 MUST 仅在 `AgentType.SPECIALIST` + `role_kind=executor` + 固定 `specialist_id` + 非空 `current_task_id` + 组合已显式授权五项条件同时成立时构造。
+- **FR-508**: 范围型组合 MUST 先激活虚拟组合工具，再由组合调用激活成员；MUST NOT 在初始 delegated executor 工具集中直接注入成员。
+- **FR-509**: main assistant、ephemeral、planner、同步 specialist、试用和未配置路径 MUST fail-closed（不展示、不激活、成员工具始终不存在）。
+- **FR-510**: 本 feature MUST 复用 030 的 owner/task 绑定、PLAN/RESULT、quota、merge/rollback 和安全门卫；MUST NOT 新增 secret、公开 UI event 或外部 CLI 协议。
+
+### Key Entities
+
+- **内置「外部 Coding」组合（code-defined）**: 固定 ID 的系统内置范围型组合，11 个成员与 030 tool factory 同源；只读投影，不写入可编辑 `skill_compositions` 表，避免用户更新和成员漂移；调用方只依赖 `SkillCompositionService`。
+- **`composition_ids`（SQLite v29）**: `brain_specialists` 与 `brain_specialist_versions` 上的 JSON 文本列，记录专员已配置的组合 ID；专员版本化保证当前记录与版本历史一致。
+
+### Constraints & Compatibility
+
+- **CC-188**: 本 feature MUST NOT 新增 secret、公开 UI event 或外部 CLI 协议；全部 owner/task 绑定、PLAN/RESULT、quota、merge/rollback 与安全门卫复用 030。
+- **CC-189**: 授权矩阵（main/ephemeral/planner/同步 specialist/试用/未配置/猜 ID 全部 fail-closed）是确定性代码门卫硬保证；组合目录快照不是授权事实——运行时激活 MUST 重校验固定 executor 身份 + 持久 Task + 显式组合授权（与既有「能力目录快照不能成为授权事实」一致）。
+
+### Success Criteria
+
+- **SC-218**: 用户配置外部 Coding 能力时只操作 1 个组合项，而不是 11 个工具项。
+- **SC-219**: 自动测试证明所有非授权矩阵均无法看到或激活组合成员。
+- **SC-220**: 专员配置更新后，当前记录与版本历史中的 `composition_ids` 一致。
+- **SC-221**: 既有 external coding 业务、API 和 UI 相关回归测试保持通过。

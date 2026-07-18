@@ -88,7 +88,9 @@
   },
   "ui": {
     "theme": "light",
-    "density": "comfy"
+    "density": "comfy",
+    "accent": "",
+    "radius": "medium"
   },
   "web": {
     "search_backend": "auto",
@@ -242,6 +244,9 @@
       "search_default_limit": 10,
       "search_max_limit": 25,
       "result_description_max_chars": 500
+    },
+    "delegation": {
+      "context_expansion_max_chars": 30000
     },
     "max_parallel_workers": 4
   },

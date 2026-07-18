@@ -557,6 +557,13 @@ class AgentToolsDiscoveryConfig:
 
 
 @dataclass
+class AgentToolsDelegationConfig:
+    """Delegation context handoff limits (032)."""
+
+    context_expansion_max_chars: int = 30000
+
+
+@dataclass
 class AgentToolsConfig:
     """Agent built-in foundational tool configuration."""
 
@@ -565,6 +572,7 @@ class AgentToolsConfig:
     search: AgentToolsSearchConfig = field(default_factory=AgentToolsSearchConfig)
     process: AgentToolsProcessConfig = field(default_factory=AgentToolsProcessConfig)
     discovery: AgentToolsDiscoveryConfig = field(default_factory=AgentToolsDiscoveryConfig)
+    delegation: AgentToolsDelegationConfig = field(default_factory=AgentToolsDelegationConfig)
     max_parallel_workers: int = 4
 
 
@@ -727,6 +735,7 @@ class AppConfig:
                 ("search", AgentToolsSearchConfig),
                 ("process", AgentToolsProcessConfig),
                 ("discovery", AgentToolsDiscoveryConfig),
+                ("delegation", AgentToolsDelegationConfig),
             ):
                 val = agent_tools_data.get(key)
                 if isinstance(val, dict):

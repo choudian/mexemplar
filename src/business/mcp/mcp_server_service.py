@@ -364,6 +364,10 @@ class McpServerService:
         except Exception as exc:
             logger.warning("[MCP] stop_all failed: %s", exc)
 
+    def shutdown(self) -> None:
+        """关闭 MCP 进程运行时；失败向上传播给应用生命周期记录。"""
+        self._process_manager.shutdown()
+
     # ─── 工具调用 ───
 
     def call_tool_sync(self, server_id: str, tool_name: str, args: dict) -> McpCallResult:

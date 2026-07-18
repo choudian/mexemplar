@@ -21,6 +21,7 @@ from src.business.agents.config import (
     ToolDefinition,
     subagent_label,
 )
+from src.business.agents.delegation_context import normalize_delegated_execution_context
 from src.business.agents.prompts.desktop_prompts import build_pm_prompt, build_programmer_prompt
 from src.business.ai.llm_client import LangChainLLMClient, ToolCallInfo
 from src.business.memory.compression_handler import CompressionHandler
@@ -779,11 +780,13 @@ class AgentOrchestrator:
         parent_session_id: str,
         specialist_name: str,
         task: str,
+        execution_context: str = "",
     ) -> dict:
         return self._get_delegation_orchestrator().delegate_to_specialist(
             parent_session_id=parent_session_id,
             specialist_name=specialist_name,
             task=task,
+            execution_context=execution_context,
         )
 
     def _run_delegated_executor(
@@ -1522,13 +1525,14 @@ class AgentOrchestrator:
 
     @staticmethod
     def _format_delegated_task_input(task: str, execution_context: str = "") -> str:
+        normalized_context = normalize_delegated_execution_context(execution_context)
         lines = [
             "主助理委派给你的任务如下：",
             "",
             task,
         ]
-        if execution_context.strip():
-            lines.extend(["", "补充上下文：", execution_context.strip()])
+        if normalized_context:
+            lines.extend(["", "补充上下文：", normalized_context])
         lines.extend(
             [
                 "",

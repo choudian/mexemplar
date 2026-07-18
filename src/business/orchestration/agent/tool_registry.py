@@ -60,6 +60,7 @@ class _DelegationFacade(Protocol):
         parent_session_id: str,
         specialist_name: str,
         task: str,
+        execution_context: str = "",
     ) -> dict: ...
 
     def run_sync_ephemeral_subagent(

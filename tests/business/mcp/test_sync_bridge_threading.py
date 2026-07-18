@@ -155,6 +155,9 @@ class TestConcurrentCallToolSync:
         mgr._server_names = {}
         mgr._lock = threading.Lock()
         mgr._ping_task = None
+        mgr._shutdown_task = None
+        mgr._startup_attempts = {}
+        mgr._startup_cleanup_tasks = set()
 
         # 手动启动事件循环
         mgr._event_loop = asyncio.new_event_loop()

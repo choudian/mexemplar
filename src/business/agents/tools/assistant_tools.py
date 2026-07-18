@@ -1453,7 +1453,14 @@ BUILD_TASK_GRAPH_SCHEMA = make_tool_schema(
                         "description": "节点稳定标识，用于 dependencies 引用",
                     },
                     "title": {"type": "string", "description": "节点标题"},
-                    "description": {"type": "string", "description": "自包含的执行指令"},
+                    "description": {
+                        "type": "string",
+                        "description": (
+                            "自包含的执行指令。执行体看不到对话历史，"
+                            "所有执行所需的内容（含对话中已产生的方案/清单/代码原文）"
+                            "必须写入本字段，禁止只写指代"
+                        ),
+                    },
                     "assigneeHint": {
                         "type": "string",
                         "enum": ["specialist", "ephemeral_subagent"],
@@ -1756,6 +1763,9 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
     name="delegate_to_subagent",
     description=(
         "将任务委托给一个临时子代理执行。"
+        "子代理在全新会话启动，看不到你与用户的任何对话历史；"
+        "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
+        "必须用 context_message_indexes 把内容所在消息带上，禁止只写『之前讨论的方案』这类指代。"
         "简单任务（1-2 步单领域）设 complexity=simple 走快速委派，不建任务图；"
         "复杂任务（多步/跨领域/有依赖）默认走统一任务图，返回受理回执（accepted+taskId），"
         "结果完成后经「任务结果回流提示」送达，由你用 decide_task_adjudication 裁定。"
@@ -1763,11 +1773,31 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
     properties={
         "task_description": {
             "type": "string",
-            "description": "要委托给子代理执行的任务描述",
+            "description": (
+                "要委托给子代理执行的任务描述。子代理看不到对话历史，描述必须自包含；"
+                "引用对话中已产生的内容时必须配合 context_message_indexes 携带原文"
+            ),
         },
         "execution_context": {
             "type": "string",
-            "description": "补充给子代理的执行上下文，例如用户约束、已知背景或输出格式要求",
+            "description": (
+                "补充给子代理的执行上下文，例如用户约束、已知背景或输出格式要求。"
+                "子代理看不到对话历史；引用对话中已产生的内容时必须使用 "
+                "context_message_indexes 携带原文，禁止只写指代。"
+                "被 context_message_indexes 引用的消息原文会由系统自动附加在本字段之后"
+            ),
+        },
+        "context_message_indexes": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": (
+                "要携带给子代理的历史消息下标（1-based，按你本轮收到的消息顺序计数）；"
+                "不得引用 system 消息（其中可能含当前 Agent 专属能力目录）。"
+                "子代理看不到任何对话历史；"
+                "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
+                "必须用本参数把内容所在消息带上，禁止只写指代。"
+                "系统会把被引用消息的原文逐字附给子代理"
+            ),
         },
         "tool_whitelist": {
             "type": "array",
@@ -1788,6 +1818,26 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
 )
 
 
+def _merge_context_message_indexes(execution_context: str, context_message_indexes) -> str:
+    """解析下标并把展开块追加进 execution_context。
+
+    非法输入/无快照/超限由 resolve_context_message_indexes 抛
+    DelegationContextError,调用方整体拒绝本次委派(fail-closed,不部分展开)。
+    """
+    from src.business.agents.delegation_context import (
+        attach_expanded_context_provenance,
+        resolve_context_message_indexes,
+    )
+
+    if context_message_indexes is None:
+        return execution_context or ""
+    block = attach_expanded_context_provenance(
+        resolve_context_message_indexes(context_message_indexes)
+    )
+    base = (execution_context or "").rstrip()
+    return f"{base}\n\n{block}" if base else block
+
+
 def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None):
     """工厂函数：创建 delegate_to_subagent handler。"""
 
@@ -1796,23 +1846,35 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
         complexity: str = "complex",
+        context_message_indexes: list[int] | None = None,
     ) -> str:
         """将任务委托给临时子代理"""
+        from src.business.agents.delegation_context import DelegationContextError
+
         try:
+            try:
+                merged_context = _merge_context_message_indexes(
+                    execution_context, context_message_indexes
+                )
+            except DelegationContextError as exc:
+                # fail-closed：下标非法/无快照/超限整体拒绝，不部分展开；
+                # 错误经 tool result 回主助理，由其重填。
+                return error_json(str(exc))
             logger.info(
-                "[delegate_to_subagent] session=%s task_chars=%d context_chars=%d whitelist_count=%d complexity=%s",
+                "[delegate_to_subagent] session=%s task_chars=%d context_chars=%d whitelist_count=%d complexity=%s ctx_indexes=%d",
                 session_id,
                 len(task_description or ""),
-                len(execution_context or ""),
+                len(merged_context),
                 len(tool_whitelist or []),
                 complexity,
+                len(context_message_indexes or []),
             )
             if dispatch_callback is not None:
                 return to_json(
                     dispatch_callback(
                         parent_session_id=session_id,
                         task_description=task_description,
-                        execution_context=execution_context or "",
+                        execution_context=merged_context,
                         tool_whitelist=tool_whitelist,
                         complexity=complexity,
                     )
@@ -2092,7 +2154,12 @@ def create_inspect_subagent_handler(session_id: str, inspect_callback=None):
 
 DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
     name="delegate_to_specialist",
-    description="将任务委托给一个已命名的固定专员。专员拥有特定角色定义和工具白名单。",
+    description=(
+        "将任务委托给一个已命名的固定专员。专员拥有特定角色定义和工具白名单。"
+        "专员在全新会话启动，看不到你与用户的任何对话历史；"
+        "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
+        "必须用 context_message_indexes 把内容所在消息带上，禁止只写指代。"
+    ),
     properties={
         "specialist_name": {
             "type": "string",
@@ -2100,7 +2167,31 @@ DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
         },
         "task": {
             "type": "string",
-            "description": "要委托给专员的任务描述",
+            "description": (
+                "要委托给专员的任务描述。专员看不到对话历史，描述必须自包含；"
+                "引用对话中已产生的内容时必须配合 context_message_indexes 携带原文"
+            ),
+        },
+        "execution_context": {
+            "type": "string",
+            "description": (
+                "补充给专员的执行上下文，例如用户约束、已知背景或输出格式要求。"
+                "专员看不到对话历史；引用对话中已产生的内容时必须使用 "
+                "context_message_indexes 携带原文，禁止只写指代。"
+                "被 context_message_indexes 引用的消息原文会由系统自动附加在本字段之后"
+            ),
+        },
+        "context_message_indexes": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": (
+                "要携带给专员的历史消息下标（1-based，按你本轮收到的消息顺序计数）；"
+                "不得引用 system 消息（其中可能含当前 Agent 专属能力目录）。"
+                "专员看不到任何对话历史；"
+                "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
+                "必须用本参数把内容所在消息带上，禁止只写指代。"
+                "系统会把被引用消息的原文逐字附给专员"
+            ),
         },
     },
     required=["specialist_name", "task"],
@@ -2110,14 +2201,30 @@ DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
 def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=None):
     """工厂函数：创建 delegate_to_specialist handler。"""
 
-    def delegate_to_specialist_handler(specialist_name: str, task: str) -> str:
+    def delegate_to_specialist_handler(
+        specialist_name: str,
+        task: str,
+        execution_context: str = "",
+        context_message_indexes: list[int] | None = None,
+    ) -> str:
         """将任务委托给固定专员"""
+        from src.business.agents.delegation_context import DelegationContextError
+
         try:
+            try:
+                merged_context = _merge_context_message_indexes(
+                    execution_context, context_message_indexes
+                )
+            except DelegationContextError as exc:
+                # fail-closed：与 delegate_to_subagent 同款语义，整体拒绝、回主助理重填。
+                return error_json(str(exc))
             logger.info(
-                "[delegate_to_specialist] session=%s specialist=%s task_chars=%d",
+                "[delegate_to_specialist] session=%s specialist=%s task_chars=%d context_chars=%d ctx_indexes=%d",
                 session_id,
                 specialist_name,
                 len(task or ""),
+                len(merged_context),
+                len(context_message_indexes or []),
             )
             if dispatch_callback is not None:
                 return to_json(
@@ -2125,6 +2232,7 @@ def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=Non
                         parent_session_id=session_id,
                         specialist_name=specialist_name,
                         task=task,
+                        execution_context=merged_context,
                     )
                 )
             # 无 dispatch_callback（仅测试场景）时只返回占位结果；统一任务派发由

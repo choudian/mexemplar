@@ -286,7 +286,7 @@ class ContextManager:
 
         根据 ID 前缀路由到不同的存储：
         - ss_* / gs_* / global_* → assistant_summaries 表（跨会话记忆摘要）
-        - 其他（msg_* 等） → messages 表（会话内消息）
+        - 其他（msg_* 等） → messages 表（执行体限当前会话；主助理可跨会话下钻）
 
         Args:
             reference_id: 引用 ID（消息 ID 或摘要 ID）
@@ -295,7 +295,9 @@ class ContextManager:
             原始内容文本
 
         Raises:
-            ValueError: 如果引用不存在
+            ValueError: 引用类型不受支持、引用不存在，或当前会话无权访问。
+                消息引用的“不存在”和“无权访问”故意使用同一错误文案，
+                避免向权限较窄的执行体泄露其他会话中的消息是否存在。
         """
         # load_reference 复用共享 MessageRepository session（见 __init__），
         # 并发工具调用时必须串行化访问。
@@ -329,8 +331,16 @@ class ContextManager:
 
             # 消息 ID 路由（默认路径）
             msg = self._msg_repo.get_by_id(reference_id)
-            if not msg:
-                raise ValueError(f"消息不存在: {reference_id}")
+            can_read_cross_session = False
+            if msg and msg.session_id != self.session_id:
+                current_session = self._session_repo.get_by_id(self.session_id)
+                can_read_cross_session = bool(
+                    current_session and current_session.agent_type == "assistant"
+                )
+            if not msg or (msg.session_id != self.session_id and not can_read_cross_session):
+                # 主助理保留既有跨会话记忆下钻；权限更窄的执行体严格限当前会话。
+                # 错误文案不区分“不存在”和“属于其他会话”，避免泄露消息存在性。
+                raise ValueError(f"消息引用不存在或无权访问: {reference_id}")
 
             logger.info(f"[引用加载] {reference_id}: {len(msg.content or '')} 字符")
             return msg.content or ""

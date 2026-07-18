@@ -1,7 +1,61 @@
 # Merged Features Log
 
-**Last Updated:** 2026-07-10
-**Revision:** 2026-07-10 — Archived 030 外部 Coding Session
+**Last Updated:** 2026-07-18
+**Revision:** 2026-07-18 — Archived 031 外部 Coding 技能组合与专员授权（同日继 032 之后）
+
+## 外部 Coding 技能组合与专员授权 — 2026-07-18
+
+**Branch:** `prepare-github`
+**Spec:** `specs/031-external-coding-skill-composition`
+**Revision note:** Archived for merge into `prepare-github`; no unresolved conflicts or constitution exceptions。本 feature 时序早于 032（2026-07-13 vs 07-14）但归档滞后，US/FR/CC/SC 编号续在 032 之后（US-111~113 / FR-502~510 / CC-188~189 / SC-218~221），故 031 段号高于 032（同 025 先例）。直接在 `prepare-github` 集成分支实施，spec/plan/tasks 为可审查性补录。
+
+**What was added:**
+- US-111 (P1): 用一个系统内置、只读、已发布的范围型组合「外部 Coding」配置专员，不再逐项勾选 11 个底层动作；只保存组合 ID 并形成可审计专员版本。
+- US-112 (P1): 配置组合的固定 executor 专员在正式 Task 中经 range 延迟激活按需获得 11 个成员工具，初始不预注入成员 schema。
+- US-113 (P1): 主助理、ephemeral、planner、同步专员、无身份委派会话和未配置专员全部 fail-closed，无法猜组合 ID 绕过。
+- `composition_ids` 版本化持久化到 SQLite v29（`brain_specialists` + `brain_specialist_versions`）；复用 030 全部 owner/task 绑定、PLAN/RESULT、quota、merge/rollback 与安全门卫；0 新公开 UI 事件 / 0 新 secret。
+
+**New Components:**
+- 无新模块；内置「外部 Coding」组合为 `src/business/services/skill_composition/` 内的 code-defined 只读投影（不落普通组合表）
+
+**Modified Components:**
+- `src/business/services/skill_composition/`（内置定义、只读服务投影、API DTO）
+- `src/business/brain/`（专员组合校验）、`src/data/`（v29 `composition_ids` migration + ORM）
+- `src/business/orchestration/agent/`、`src/business/agents/tools/`（授权推导、目录过滤、范围激活、成员延迟构造门卫）
+- `src/desktop_api/`（专员/组合 typed contracts）、`frontend/`（组合只读呈现 + 专员单项配置）
+- `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、根/src AI 入口镜像
+
+**Verification:** 后端闭环 `280 passed`；前端全量 `393 passed`；ESLint、changed-file Black/flake8、`git diff --check`、TypeScript + Vite build 通过。
+
+**Tasks Completed:** 18/18 tasks
+
+## 委派上下文交接 — 2026-07-18
+
+**Branch:** `032-delegation-context-handoff`
+**Spec:** `specs/032-delegation-context-handoff`
+**Revision note:** Archived on the verified feature branch for merge into `prepare-github`; no unresolved conflicts or constitution exceptions. 注：031（external-coding-skill-composition）尚未归档，032 US/FR/CC/SC 编号续在当前最高号之后（US-108~110 / FR-490~501 / CC-182~187 / SC-211~217），031 已于同日归档，编号续在 032 之后（US-111~113 / FR-502~510 / CC-188~189 / SC-218~221，见上一条目；同 025 先例）。
+
+**What was added:**
+- US-108 (P1): 委派子代理时用 `context_message_indexes` 携带对话中已产生的内容（方案/清单/结论/代码片段），AgentLoop LLM 路径 contextvar 快照在委派时刻逐字展开为「主对话相关原文」段注入执行体初始输入。
+- US-109 (P1): 异步建图任务落库前就地展开引用为原文并持久化进 `task.description`；进程重启、快照消亡后 worker 执行仍拿全文，不依赖委派轮内存快照。
+- US-110 (P2): 固定专员委派入口补齐 execution_context 字段并获得同等消息引用能力；顺带修复异步 specialist `task.description` 静默丢失。
+- system/非法下标/无快照/超限整体 fail-closed；填参约束写工具 schema description 不改 system prompt；`load_reference` message ID 路径按 Agent 角色授权（主助理跨会话下钻、执行体只读当前会话）。
+- 相邻 T019 MCP 生命周期加固：每 server 唯一 startup attempt 围栏、迟到成功隔离、有界 shutdown 覆盖 running/starting + 残留 Task、SDK stack cleanup 失败传播、Desktop API lifespan 收口到 `McpServerService.shutdown()` facade。
+
+**New Components:**
+- `src/business/agents/delegation_context.py`（快照 contextvar + 下标解析/展开/上限校验）
+
+**Modified Components:**
+- `src/business/agents/{agent_loop,builtin_tools}.py`、`tools/assistant_tools.py`（委派工具 schema+handler、build_task_graph node 描述、load_reference 角色授权）
+- `src/business/memory/context_manager.py`（message ID 角色授权）
+- `src/business/orchestration/agent/{delegation_orchestrator,orchestrator,task_executor_adapter,tool_registry}.py`（execution_context 透传 + 异步 specialist 丢失修复）
+- `src/business/mcp/{mcp_process_manager,mcp_server_service}.py`（startup attempt fence、有界 shutdown、stack cleanup 失败传播、shutdown facade）
+- `src/data/{config_models,unified_config}.py`（`agent_tools.delegation.context_expansion_max_chars`）、`src/desktop_api/app.py`（lifespan facade）
+- `docs/ARCHITECTURE.md`、`specs/027-mcp-management/contracts/mcp-server-lifecycle.md`、根/src AI 入口镜像、`config.example.json`
+
+**Verification:** 全量 `tests/` `2951 passed, 3 skipped, 1 failed`（唯一失败为既有 SQLite/批内时间抖动，隔离重跑通过）；Black、Flake8、`git diff --check` 通过。
+
+**Tasks Completed:** 23/23 tasks
 
 ## 外部 Coding Session（Claude Code / Codex CLI） — 2026-07-10
 

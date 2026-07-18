@@ -165,6 +165,7 @@ class DelegationOrchestrator:
         parent_session_id: str,
         specialist_name: str,
         task: str,
+        execution_context: str = "",
     ) -> dict:
         name = (specialist_name or "").strip()
         task_text = (task or "").strip()
@@ -197,7 +198,7 @@ class DelegationOrchestrator:
         unified = self._owner._dispatch_task_via_unified_model(
             parent_session_id=parent_session_id,
             task=task_text,
-            context=task_text,
+            context=execution_context or task_text,
             assignee_type=AgentType.SPECIALIST.value,
             assignee_id=specialist.specialist_id,
             capability_scope=whitelist,
@@ -215,6 +216,7 @@ class DelegationOrchestrator:
             parent_session_id=parent_session_id,
             specialist=specialist,
             task=task_text,
+            execution_context=execution_context,
             tool_whitelist=whitelist,
         )
         result["delegation_type"] = "specialist"
@@ -252,6 +254,7 @@ class DelegationOrchestrator:
         parent_session_id: str,
         specialist,
         task: str,
+        execution_context: str = "",
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
         workspace_root: str | None = None,
@@ -348,7 +351,7 @@ class DelegationOrchestrator:
             session_id=child_session_id,
             workflow_id=workflow_id,
             parent_session_id=parent_session_id,
-            user_input=self._owner._format_delegated_task_input(task),
+            user_input=self._owner._format_delegated_task_input(task, execution_context),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
             tool_whitelist=effective_whitelist,

@@ -144,10 +144,10 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 brain_worker.stop()
             if task_worker is not None:
                 task_worker.stop()
-            # MCP shutdown: stop all running servers with 10s timeout
+            # MCP shutdown 走业务 facade：stop running/starting、drain、join 并关闭 loop。
             if mcp_service is not None:
                 try:
-                    mcp_service.stop_all()
+                    mcp_service.shutdown()
                 except Exception:
                     logger.warning("[MCP] MCP service shutdown failed", exc_info=True)
             # 关闭前把所有仍 pending 的澄清结算为 shutdown 并唤醒阻塞 worker（FR-013）。

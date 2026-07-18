@@ -261,10 +261,11 @@ React SkillListScreen MCP tab
 - 以独立子进程运行 MCP server（stdio 传输），不嵌入 FastAPI sidecar（CC-001）。
 - 使用 `stdio_client(StdioServerParameters)` + `AsyncExitStack` 管理长连接；SDK 拥有子进程完整生命周期（spawn + Job Object 清理）。
 - `_SdkSessionAdapter` 将 SDK `ClientSession` 包装为业务层 `McpSessionProtocol`（RC4），`_sessions: dict[str, McpSessionProtocol]` 存 Protocol 类型，测试可注入 `FakeMcpSession`。
-- 事件循环线程自包含：只做 asyncio I/O，绝不回调到主线程。崩溃后自动重建循环（E6）。
+- 每个 server 同时只有一个权威 startup attempt；Task 必须在 SDK import、配置解析、tempfile 和 spawn 前完成绑定。bridge 超时、stop 或 shutdown 会先使 attempt 失效，只有仍为 current 且未取消的 attempt 才能在同一把锁内原子发布 session，第三方 SDK 吞掉取消后迟到成功也不能写入 running 状态。
+- 事件循环线程自包含：只做 asyncio I/O，绝不回调到主线程。崩溃后自动重建循环（E6）；loop 只由 owner thread 在有界收割残留 Task 后关闭。
 - 断路器（E8）：每个 server 连续失败超 3 次直接返回错误，手动 reconnect 重置。
 - 健康检查：call_tool 失败即时标记 disconnected；60s 定时 ping 兜底。
-- Sidecar 启动时 `start_all_enabled()` 后台异步执行，不阻塞主界面；关闭时 10s 超时并发停止。
+- Sidecar 启动时 `start_all_enabled()` 后台异步执行，不阻塞主界面；关闭时经 `McpServerService.shutdown()` 业务 facade 停止 running/starting server，对启动 Task 和后台 Task 做两轮有界取消与收割，再 join 线程并由 owner thread 关闭 loop。`AsyncExitStack.aclose()` 超时/异常时仍先清空 manager 的 session/stack/stderr/name 缓存，再经 stop/stop_all/shutdown 显式传播；普通线程上的 drain/join 失败同样向调用方抛出，loop 线程内无法同步抛出的失败由 shutdown Task 的 done callback 明确记录。
 
 **凭证流**：secret env/header 值走 `UnifiedConfigManager` → SQLite `app_settings`，键格式 `mcp.servers.<server_id>.env.<key>` / `mcp.servers.<server_id>.headers.<key>`。`McpServerConfigPublic`（不含 secret）可安全缓存/日志/序列化；`McpLaunchPayload`（含合并 secret）仅在 `McpProcessManager.start_server` 内部构造、用完丢弃，`repr` 遮罩（RC5）。`${VAR}` 占位符每次 start/reconnect 时重新解析系统环境变量。
 
@@ -439,7 +440,9 @@ pre_hook 只做放行、拒绝和观测，不能改写 handler 入参；`ToolCal
 
 并发分区内单个读取失败只保存该调用的错误，不取消同分区其他调用，也不阻断后续串行分区。串行路径继续按 `ToolDefinition.has_side_effects` 级联：副作用工具（write_file、exec）失败时后续调用写 `not_executed`；未标记并发安全的无副作用工具仍串行执行且失败后可继续。合法单中断工具可以执行 pre_hook，但返回 `ToolSignal` 后跳过 post_hook 并保持原有暂停或完成语义。当前并发白名单只包含确认线程安全的 web/file/search/raw-output 读取工具、`search_tools` 和 `load_reference`；会修改激活缓存的 `get_tool_detail`、增加加载计数的 `load_skill_methodology`、用户工具、组合工具、process 系列及所有写入/执行/委派工具保持串行。
 
-`load_reference` 是 AgentLoop 唯一的内建注入工具，用于上下文引用下钻，不进入 tool/global hook 管线。`talk_to_user` 已整体移除：主助理给用户回复统一走 `reply_to_user` 显式中断型工具，PM/Trial 走 `text_as_user_input=True` 的纯文本对话（无工具调用的文本输出转 NEEDS_USER_INPUT），子代理/专员向上沟通走 `ask_parent`；主助理的纯文本输出仍落库展示但按 COMPLETED 结束本轮。历史会话中已存的 `talk_to_user` tool_calls 由展示层反查兼容。
+委派上下文交接在上述串行委派边界内完成。AgentLoop 只在 LLM 响应产生的当前工具批次外层用 contextvar 暴露本轮 assembled messages；pending tool-call 恢复与 `initial_tool_calls` 没有原快照。`delegate_to_subagent` / `delegate_to_specialist` 的 `context_message_indexes` 按完整可见数组 1-based 定位，但 system 消息因可能含父 Agent 专属能力目录而禁止引用；system、越界、重复、非法类型、无快照和展开超限均在派发前整体 fail-closed。合法引用在 handler 内逐字拼成「主对话相关原文」块：同步路径直接进入执行体首条输入，复杂任务路径在落库前合并进 `assistant_tasks.description`，之后由 `TaskExecutorAdapter` 送入执行体，调度/恢复不再依赖快照。handler 在展示标题后附不可见内部 provenance；Task 持久化、adapter 与 checkpoint 拼接等中间层必须原样保留该标记，只有最终 `_format_delegated_task_input` 执行体输入边界识别“标题 + provenance”后才移除标记并保留展开块原文空白，避免异步链路重复规范化；普通 `execution_context` 即使含同名标题也保持既有首尾空白规范化。AgentLoop 仍按既有消息协议保存原始 tool-call 参数用于配对、审计和崩溃恢复，但数字下标不进入 Task 描述；恢复时带下标的旧调用因无快照而拒绝，不能静默降级成无上下文委派。
+
+`load_reference` 是 AgentLoop 唯一的内建注入工具，用于上下文引用下钻，不进入 tool/global hook 管线。summary ID 保持显式跨会话摘要下钻；message ID 按当前 session 的 Agent 角色授权：主助理保留既有跨会话记忆下钻，临时子代理/固定专员等执行体只允许读取当前 `ContextManager.session_id` 的消息。不存在与越权统一拒绝，执行体不能借此回读父会话消息。`talk_to_user` 已整体移除：主助理给用户回复统一走 `reply_to_user` 显式中断型工具，PM/Trial 走 `text_as_user_input=True` 的纯文本对话（无工具调用的文本输出转 NEEDS_USER_INPUT），子代理/专员向上沟通走 `ask_parent`；主助理的纯文本输出仍落库展示但按 COMPLETED 结束本轮。历史会话中已存的 `talk_to_user` tool_calls 由展示层反查兼容。
 
 ### 内置通用工具运行结构
 
@@ -919,3 +922,4 @@ assistant session 启动时，`BrainContextBuilder` 取代旧的 summary 注入�
 *更新：2026-06-17 — 新增 Assistant Task Collaboration：持久 Task 图、TaskAttempt 围栏恢复、父侧裁定、看板/会议/问题路由、私人 Todo 和 task collaboration UI event/snapshot 边界*
 *更新：2026-06-29 — 新增 Self-Improvement Proposals 自动实施闭环：审批后隔离 worktree + Task 图实施、后台 recovery 写回和 proposal executor 硬门卫*
 *更新：2026-07-04 — 新增 MCP Server Management：MCP 协议接入第三方工具、双轨注册（预置全量注入 + 自定义独立 LRU）、McpProcessManager 子进程生命周期、凭证走 UnifiedConfigManager、tools.changed 集成、SDK 延迟导入和业务类型隔离*
+*更新：2026-07-17 — 收紧 MCP 生命周期：startup attempt 原子发布围栏、迟到成功隔离、业务 facade 关停、有界 Task 收割、owner-thread loop close 与可观察失败语义*
