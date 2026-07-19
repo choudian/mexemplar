@@ -1,10 +1,11 @@
-import { BookOpenCheck, Brain, ListTodo, MessageSquare, Network, Settings, Sparkles, UserCog, Workflow } from "lucide-react";
+import { BookOpenCheck, Brain, CalendarClock, ListTodo, MessageSquare, Network, Settings, Sparkles, UserCog, Workflow } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import AssistantScreen from "../screens/assistant/AssistantScreen";
 import BrainScreen from "../screens/BrainScreen";
 import CompositionListScreen from "../screens/compositions/CompositionListScreen";
 import DebugScreen from "../screens/debug/DebugScreen";
+import ScheduledScreen from "../screens/ScheduledScreen/ScheduledScreen";
 import SettingsScreen from "../screens/settings/SettingsScreen";
 import SkillMethodologyScreen from "../screens/SkillMethodologyScreen";
 import SkillListScreen from "../screens/skills/SkillListScreen";
@@ -58,6 +59,13 @@ export const routes: RouteDefinition[] = [
     render: () => <UserTodoScreen />,
   },
   {
+    id: "scheduled",
+    label: "调度中心",
+    shortLabel: "调度",
+    icon: CalendarClock,
+    render: () => <ScheduledScreen />,
+  },
+  {
     id: "brain",
     label: "大脑管理",
     shortLabel: "大脑",
@@ -97,6 +105,7 @@ export const routePaths: Record<RouteId, string> = {
   skills: "/tools/list",
   compositions: "/tools/compositions",
   "user-todos": "/todos",
+  scheduled: "/scheduled",
   brain: "/brain",
   "brain-specialists": "/brain/specialists",
   "skill-methodology": "/skills/methodology",

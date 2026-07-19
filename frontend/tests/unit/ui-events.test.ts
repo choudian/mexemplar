@@ -44,6 +44,11 @@ const EXAMPLE_SCOPES: Partial<Record<UiEventType, Record<string, string>>> = {
   "trial.progress": { workflowId: "rec_1" },
   "trial.preview_requested": { workflowId: "rec_1" },
   "trial.preview_resolved": { workflowId: "rec_1" },
+  "scheduled_task.completed": { sessionId: "ast_001" },
+  "scheduled_task.needs_takeover": { sessionId: "ast_001" },
+  "scheduled_task.changed": { sessionId: "ast_001" },
+  "scheduling.confirmation_requested": { sessionId: "ast_001" },
+  "scheduling.confirmation_resolved": { sessionId: "ast_001" },
 };
 
 function enveloped(type: UiEventType, payload: Record<string, unknown>, scope: Record<string, string> = {}) {
@@ -458,5 +463,8 @@ describe("uiEvents", () => {
     expect(new Set(Object.keys(UI_EVENT_HANDLER_DOMAINS))).toEqual(new Set(UI_EVENT_TYPES));
     expect(UI_EVENT_PAYLOAD_ENUMS["teaching.stage_changed"].stage).toContain("trial_validation");
     expect(UI_EVENT_PAYLOAD_ENUMS["trial.preview_resolved"].status).toContain("timeout");
+    expect(UI_EVENT_PAYLOAD_ENUMS["scheduling.confirmation_resolved"].status).toContain(
+      "shutdown",
+    );
   });
 });

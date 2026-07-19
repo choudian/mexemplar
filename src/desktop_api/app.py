@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.responses import StreamingResponse
 
+from src.business.services.desktop_health_service import DesktopHealthCheck
 from src.business.services.recording_startup_service import RecordingStartupService
 from src.desktop_api.confirmations import install_confirmation_signal
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
@@ -26,6 +27,7 @@ from src.desktop_api.routers import (
     health,
     mcp_servers,
     proposals,
+    scheduled_tasks,
     settings,
     skill_store,
     skills,
@@ -137,6 +139,108 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 logger.info("[MCP] MCP service started, SDK available")
             elif mcp_service:
                 logger.info("[MCP] MCP service started, SDK unavailable (NullRegistry)")
+        # 033 调度中心：SessionLauncher + SchedulerWorker + RunCompletionMonitor
+        scheduler_worker = None
+        scheduler_launcher = None
+        _app.state.scheduling_health_check = DesktopHealthCheck(
+            name="scheduling",
+            status="degraded",
+            message="Scheduling runtime is still initializing.",
+            critical=False,
+        )
+        try:
+            from src.business.scheduling.run_completion_monitor import (
+                install_run_completion_monitor,
+            )
+            from src.business.scheduling.scheduler_service import (
+                configure_default_scheduler_launcher,
+            )
+            from src.business.scheduling.scheduler_worker import SchedulerWorker
+            from src.business.scheduling.session_launcher import SessionLauncher
+            from src.business.scheduling.unattended_confirmation_manager import (
+                get_unattended_confirmation_manager,
+            )
+
+            runtime = assistant.get_assistant_runtime()
+            scheduler_launcher = SessionLauncher(
+                dispatch_callback=lambda sid, instr: bool(runtime.dispatch_message(sid, instr))
+            )
+            configure_default_scheduler_launcher(scheduler_launcher)
+            # per-task 免确认授权集：启动时全量加载（CC-005；独立于进程级
+            # ``_auto_approve_enabled``，纯内存，shutdown 无特殊处理）
+            get_unattended_confirmation_manager().load_all()
+            # 授权与完成监听器必须先就绪，最后才允许 worker 处理启动即到期的 misfire。
+            run_completion_monitor = install_run_completion_monitor(
+                has_active_worker=runtime.has_active_worker,
+                has_pending_reentry=runtime.has_pending_reentry,
+            )
+            scheduler_worker = SchedulerWorker(
+                None,
+                scheduler_launcher,
+                retry_terminal_events=run_completion_monitor.retry_pending_terminal_events,
+            )
+            scheduler_worker.start()
+            _app.state.scheduling_health_check = DesktopHealthCheck(
+                name="scheduling",
+                status="ok",
+                message="Scheduling runtime is available.",
+                critical=False,
+            )
+        except Exception:
+            if scheduler_worker is not None:
+                try:
+                    scheduler_worker.stop()
+                except Exception:
+                    logger.warning(
+                        "SchedulerWorker cleanup after startup failure failed",
+                        exc_info=True,
+                    )
+            try:
+                from src.business.scheduling.scheduler_service import (
+                    clear_default_scheduler_launcher,
+                )
+
+                clear_default_scheduler_launcher(scheduler_launcher)
+            except Exception:
+                logger.warning(
+                    "Scheduler launcher cleanup after startup failure failed",
+                    exc_info=True,
+                )
+            try:
+                from src.business.scheduling.run_completion_monitor import (
+                    shutdown_run_completion_monitor,
+                )
+
+                shutdown_run_completion_monitor()
+            except Exception:
+                logger.warning(
+                    "RunCompletionMonitor cleanup after startup failure failed",
+                    exc_info=True,
+                )
+            if scheduler_launcher is not None:
+                try:
+                    scheduler_launcher.close()
+                except Exception:
+                    logger.warning(
+                        "Scheduler launcher cleanup after startup failure failed",
+                        exc_info=True,
+                    )
+                scheduler_launcher = None
+            scheduler_worker = None
+            _app.state.scheduling_health_check = DesktopHealthCheck(
+                name="scheduling",
+                status="degraded",
+                message=(
+                    "Scheduling runtime is unavailable; automatic triggers are disabled. "
+                    "Restart the desktop app to retry initialization."
+                ),
+                critical=False,
+            )
+            logger.error(
+                "SchedulerWorker / RunCompletionMonitor failed to start; "
+                "scheduled task triggering is DISABLED for this process",
+                exc_info=True,
+            )
         try:
             yield
         finally:
@@ -144,6 +248,41 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 brain_worker.stop()
             if task_worker is not None:
                 task_worker.stop()
+            # 033 调度中心：worker 停 + monitor 断开 + pending 确认卡 fail-closed
+            if scheduler_worker is not None:
+                try:
+                    scheduler_worker.stop()
+                except Exception:
+                    logger.warning("SchedulerWorker stop failed", exc_info=True)
+            try:
+                from src.business.scheduling.run_completion_monitor import (
+                    shutdown_run_completion_monitor,
+                )
+
+                shutdown_run_completion_monitor()
+            except Exception:
+                logger.warning("RunCompletionMonitor shutdown failed", exc_info=True)
+            try:
+                from src.business.scheduling.scheduling_confirmation_manager import (
+                    get_scheduling_confirmation_manager,
+                )
+
+                get_scheduling_confirmation_manager().settle_all_for_shutdown()
+            except Exception:
+                logger.warning("Scheduling confirmation shutdown settle failed", exc_info=True)
+            try:
+                from src.business.scheduling.scheduler_service import (
+                    clear_default_scheduler_launcher,
+                )
+
+                clear_default_scheduler_launcher(scheduler_launcher)
+            except Exception:
+                logger.warning("Scheduler launcher unregister failed", exc_info=True)
+            if scheduler_launcher is not None:
+                try:
+                    scheduler_launcher.close()
+                except Exception:
+                    logger.warning("Scheduler launcher shutdown close failed", exc_info=True)
             # MCP shutdown 走业务 facade：stop running/starting、drain、join 并关闭 loop。
             if mcp_service is not None:
                 try:
@@ -198,6 +337,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(user_todos.router)
     app.include_router(mcp_servers.router)
     app.include_router(skill_store.router)
+    app.include_router(scheduled_tasks.router)
     app.include_router(debug.router)
 
     @app.get("/api/events", tags=["events"])

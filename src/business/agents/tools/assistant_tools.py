@@ -574,6 +574,16 @@ __all__ = [
     "create_complete_user_todo_handler",
     "DELETE_USER_TODO_SCHEMA",
     "create_delete_user_todo_handler",
+    "CREATE_SCHEDULED_TASK_SCHEMA",
+    "create_create_scheduled_task_handler",
+    "LIST_SCHEDULED_TASKS_SCHEMA",
+    "create_list_scheduled_tasks_handler",
+    "UPDATE_SCHEDULED_TASK_SCHEMA",
+    "create_update_scheduled_task_handler",
+    "PAUSE_SCHEDULED_TASK_SCHEMA",
+    "create_pause_scheduled_task_handler",
+    "DELETE_SCHEDULED_TASK_SCHEMA",
+    "create_delete_scheduled_task_handler",
     "BUILD_TASK_GRAPH_SCHEMA",
     "create_build_task_graph_handler",
     "MUTATE_TASK_GRAPH_SCHEMA",
@@ -1423,6 +1433,358 @@ def create_delete_user_todo_handler(
         )
 
     return delete_user_todo
+
+
+# ===== 033 Scheduling Center 工具（主助理独占，不进 delegated executor）=====
+
+
+CREATE_SCHEDULED_TASK_SCHEMA = make_tool_schema(
+    name="create_scheduled_task",
+    description=(
+        "创建一个定时/周期/立即唤醒主助理执行的任务。创建后须经用户确认卡核对"
+        "（标题/人话时间/指令）后才落库；调用本工具不会直接落库。待办来源"
+        "(source_type='todo')的任务恒为一次性(one_shot)，不支持周期。"
+        "立即执行 = 创建 one_shot 且 schedule_payload.run_at='now'（系统自动解析为当前时刻）。"
+        "一次性定时 = one_shot 且 run_at 为用户本地时区的 ISO 时刻（如 '2026-07-19T17:00:00'）。"
+        "时间字段以用户本地时区语义理解(如「每天9点」=本地9点)，并转成 ISO 字符串填入 schedule_payload。"
+    ),
+    properties={
+        "source_type": {
+            "type": "string",
+            "enum": ["direct", "todo"],
+            "description": "direct=直接指令文本；todo=引用某条待办",
+        },
+        "instruction": {
+            "type": "string",
+            "description": (
+                "任务指令原文(direct 必填；todo 时预填待办 title+description，可被用户在确认卡编辑)。"
+                "给 AI 当指令需足够具体。"
+            ),
+        },
+        "todo_id": {
+            "type": "string",
+            "description": "source_type='todo' 时填待办 id；direct 时省略",
+        },
+        "title": {"type": "string", "description": "展示标题"},
+        "schedule_kind": {
+            "type": "string",
+            "enum": ["one_shot", "recurring"],
+            "description": "todo 来源强制 one_shot",
+        },
+        "schedule_payload": {
+            "type": "object",
+            "description": (
+                "one_shot: {run_at:'now'(立即) | '<本地 ISO 时刻>'(一次性定时)}; "
+                "recurring: {kind:'interval'|'daily'|'weekly'|'weekdays', "
+                "interval_seconds?, time_of_day?, weekdays?, tz?}. "
+                "时间用本地时区语义并转 ISO；tz 为 IANA 名(如 Asia/Shanghai)。"
+            ),
+        },
+    },
+    required=["source_type", "schedule_kind", "schedule_payload"],
+)
+
+
+LIST_SCHEDULED_TASKS_SCHEMA = make_tool_schema(
+    name="list_scheduled_tasks",
+    description=(
+        "列出当前用户的定时任务(供主助理回答用户查询)。"
+        "返回标题/状态/调度描述/下次触发/上次结果；含是否开启无人值守免确认的标记。"
+    ),
+    properties={
+        "statusFilter": {
+            "type": "string",
+            "enum": ["active", "paused", "completed", "expired"],
+            "description": "可选状态过滤",
+        },
+        "limit": {"type": "integer", "description": "最多返回数量，默认 20"},
+        "offset": {"type": "integer", "description": "分页偏移，默认 0"},
+    },
+    required=[],
+)
+
+
+UPDATE_SCHEDULED_TASK_SCHEMA = make_tool_schema(
+    name="update_scheduled_task",
+    description=(
+        "更新定时任务的非核心字段。调度核心(schedule_kind/schedule_payload/source_type/source_ref)"
+        "不可经此工具修改——改时间/改周期/改指令须删除后重新创建(经确认卡)。"
+        "本工具仅允许改 title 等展示字段。"
+    ),
+    properties={
+        "scheduledTaskId": {"type": "string", "description": "定时任务 ID"},
+        "title": {"type": "string", "description": "仅展示字段可改"},
+    },
+    required=["scheduledTaskId"],
+)
+
+
+PAUSE_SCHEDULED_TASK_SCHEMA = make_tool_schema(
+    name="pause_scheduled_task",
+    description=(
+        "暂停或恢复一个定时任务。暂停期间过点的触发不补跑"
+        "(one_shot 置 expired，recurring 滚动到下个未来时点)。"
+    ),
+    properties={
+        "scheduledTaskId": {"type": "string", "description": "定时任务 ID"},
+        "resume": {
+            "type": "boolean",
+            "default": False,
+            "description": "false=暂停, true=恢复启用",
+        },
+    },
+    required=["scheduledTaskId"],
+)
+
+
+DELETE_SCHEDULED_TASK_SCHEMA = make_tool_schema(
+    name="delete_scheduled_task",
+    description="软删定时任务(保留历史 runs 可追溯)。删除后不再触发。",
+    properties={
+        "scheduledTaskId": {"type": "string", "description": "定时任务 ID"},
+    },
+    required=["scheduledTaskId"],
+)
+
+
+def _make_scheduler_service(service_factory=None):
+    if service_factory is not None:
+        return service_factory()
+    from src.business.scheduling.scheduler_service import SchedulerService
+
+    return SchedulerService()
+
+
+def _make_scheduling_confirmation_manager():
+    from src.business.scheduling.scheduling_confirmation_manager import (
+        get_scheduling_confirmation_manager,
+    )
+
+    return get_scheduling_confirmation_manager()
+
+
+def create_create_scheduled_task_handler(
+    session_id: str,
+    *,
+    service_factory=None,
+    confirmation_manager_factory=None,
+):
+    """``create_scheduled_task`` handler factory。
+
+    组装 draft（含 scheduleDescription 人话、next_fire_at 试算）→ 提交确认卡 manager
+    → emit scheduling.confirmation_requested（manager 内部做）→ 返回「已弹确认卡」。
+
+    handler 签名**不接**该免确认字段（CC-005 三重不暴露之一）：该字段
+    只能经确认卡勾选或详情页开关写入。
+    """
+
+    def create_scheduled_task(
+        source_type: str,
+        schedule_kind: str,
+        schedule_payload: dict,
+        instruction: str = "",
+        todo_id: str = "",
+        title: str = "",
+    ) -> str:
+        def _action():
+            from src.business.scheduling.schedule_calc import (
+                describe_schedule,
+                validate_schedule_payload,
+            )
+            from src.utils.timezone import utc_now_naive
+
+            normalized_source = str(source_type or "").strip().lower()
+            normalized_kind = str(schedule_kind or "").strip().lower()
+            if normalized_source == "todo" and normalized_kind != "one_shot":
+                raise ValueError("todo-sourced scheduled tasks must be one_shot")
+            payload = schedule_payload
+            if payload is None:
+                payload = {}
+            if not isinstance(payload, dict):
+                raise ValueError("schedule_payload must be an object")
+
+            todo_id_text = str(todo_id or "").strip()
+            instruction_text = str(instruction or "").strip()
+            title_text = str(title or "").strip()
+            # T059：todo 来源预填指令底稿——取待办 title + description（可被用户在确认卡编辑）。
+            # 只读 user_todos；待办不存在则 fail-fast（worker 触发时 expire 处理后续悬空）。
+            if normalized_source == "todo" and todo_id_text:
+                try:
+                    from src.data.repos.user_todo_repository import UserTodoRepository
+
+                    with UserTodoRepository() as ut_repo:
+                        todo = ut_repo.get(todo_id_text)
+                    if todo is None:
+                        raise ValueError("referenced todo not found")
+                    todo_desc = (todo.description or "").strip()
+                    if not instruction_text:
+                        instruction_text = (
+                            f"{todo.title}{('：' + todo_desc) if todo_desc else ''}".strip()
+                        )
+                    if not title_text:
+                        title_text = todo.title
+                except ValueError:
+                    raise
+                except Exception:
+                    logger.error(
+                        "create_scheduled_task: prefetch todo %s failed",
+                        todo_id_text,
+                        exc_info=True,
+                    )
+                    # 待办读取失败时不能继续生成一张空指令确认卡；用户即使确认也会在
+                    # create_from_draft 阶段失败。显式上抛给统一工具错误包装，等待下次重试。
+                    raise
+            if not title_text:
+                title_text = (instruction_text or "").strip()[:60] or "定时任务"
+
+            tz_name = payload.get("tz") if isinstance(payload, dict) else None
+            schedule_description = describe_schedule(normalized_kind, payload, tz_name)
+            next_fire = validate_schedule_payload(
+                normalized_kind,
+                payload,
+                after=utc_now_naive(),
+            )
+
+            draft = {
+                "source_type": normalized_source,
+                "schedule_kind": normalized_kind,
+                "schedule_payload": payload,
+                "instruction": instruction_text,
+                "title": title_text,
+                "todo_id": todo_id_text,
+                "scheduleDescription": schedule_description,
+                "next_fire_at": next_fire,
+            }
+
+            manager = (
+                confirmation_manager_factory()
+                if confirmation_manager_factory is not None
+                else _make_scheduling_confirmation_manager()
+            )
+            request_id = manager.create(draft, session_id)
+            return to_json(
+                {
+                    "success": True,
+                    "message": "已弹出确认卡等待用户核对（标题/时间/指令），用户确认后才会落库。",
+                    "requestId": request_id,
+                    "scheduleDescription": schedule_description,
+                }
+            )
+
+        return _run_task_service(
+            "create_scheduled_task",
+            "创建定时任务时发生内部错误，请稍后重试。",
+            _action,
+        )
+
+    return create_scheduled_task
+
+
+def create_list_scheduled_tasks_handler(service_factory=None):
+    def list_scheduled_tasks(
+        statusFilter: str = "",
+        limit: int = 20,
+        offset: int = 0,
+    ) -> str:
+        def _action():
+            with _make_scheduler_service(service_factory) as service:
+                items, total = service.list_tasks(
+                    status_filter=statusFilter or None,
+                    limit=limit,
+                    offset=offset,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "items": items,
+                        "total": total,
+                        "message": "未找到定时任务。" if not items else "",
+                    }
+                )
+
+        return _run_task_service(
+            "list_scheduled_tasks",
+            "查询定时任务时发生内部错误，请稍后重试。",
+            _action,
+        )
+
+    return list_scheduled_tasks
+
+
+def create_update_scheduled_task_handler(service_factory=None):
+    def update_scheduled_task(
+        scheduledTaskId: str,
+        title: str | None = None,
+    ) -> str:
+        def _action():
+            # 字段白名单：显式拒收 schedule_* / source_* / 免确认字段 / status
+            # （handler 签名只有 title，schema 也只有 title，静态断言守）
+            with _make_scheduler_service(service_factory) as service:
+                task = service.update_display(scheduledTaskId, title=title)
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已更新定时任务。",
+                        "task": task,
+                    }
+                )
+
+        return _run_task_service(
+            "update_scheduled_task",
+            "更新定时任务时发生内部错误，请稍后重试。",
+            _action,
+        )
+
+    return update_scheduled_task
+
+
+def create_pause_scheduled_task_handler(service_factory=None):
+    def pause_scheduled_task(scheduledTaskId: str, resume: bool = False) -> str:
+        def _action():
+            with _make_scheduler_service(service_factory) as service:
+                if resume:
+                    task = service.resume(scheduledTaskId)
+                    message = "已恢复定时任务。"
+                else:
+                    task = service.pause(scheduledTaskId)
+                    message = "已暂停定时任务。"
+                return to_json(
+                    {
+                        "success": True,
+                        "message": message,
+                        "task": task,
+                    }
+                )
+
+        return _run_task_service(
+            "pause_scheduled_task",
+            "暂停/恢复定时任务时发生内部错误，请稍后重试。",
+            _action,
+        )
+
+    return pause_scheduled_task
+
+
+def create_delete_scheduled_task_handler(service_factory=None):
+    def delete_scheduled_task(scheduledTaskId: str) -> str:
+        def _action():
+            with _make_scheduler_service(service_factory) as service:
+                service.soft_delete(scheduledTaskId)
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已删除定时任务（历史 runs 保留）。",
+                        "scheduledTaskId": scheduledTaskId,
+                    }
+                )
+
+        return _run_task_service(
+            "delete_scheduled_task",
+            "删除定时任务时发生内部错误，请稍后重试。",
+            _action,
+        )
+
+    return delete_scheduled_task
 
 
 # ===== 024 Task Graph Scheduling 工具 =====

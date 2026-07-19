@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BackendStatus = Literal["starting", "ready", "degraded", "failed", "shutting_down"]
 SessionStatus = Literal["active", "suspended", "completed", "failed", "archived"]
@@ -84,8 +84,8 @@ class AssistantSessionSummary(BaseModel):
     title: str
     preview: str = ""
     status: SessionStatus = "active"
-    createdAt: datetime | None = None
-    updatedAt: datetime | None = None
+    createdAt: datetime
+    updatedAt: datetime
     dateLabel: str = ""
 
 
@@ -1296,3 +1296,124 @@ class DebugReferenceResponse(BaseModel):
     available: bool
     truncated: bool = False
     nextChunk: str | None = None
+
+
+# ============================================================================
+# 033 Scheduling Center DTOs（camelCase，对齐 contracts/rest-api.md）
+# ============================================================================
+
+ScheduledTaskStatusLiteral = Literal["active", "paused", "completed", "expired"]
+ScheduleKindLiteral = Literal["one_shot", "recurring"]
+ScheduledTaskSourceLiteral = Literal["direct", "todo"]
+ScheduledRunStatusLiteral = Literal["running", "succeeded", "failed", "waiting_user", "skipped"]
+
+
+class ScheduledTaskItem(BaseModel):
+    scheduledTaskId: str
+    sourceType: ScheduledTaskSourceLiteral
+    sourceRef: str
+    title: str
+    scheduleKind: ScheduleKindLiteral
+    scheduleDescription: str = ""
+    status: ScheduledTaskStatusLiteral
+    unattendedAutoApprove: bool = False
+    nextFireAt: datetime | None = None
+    lastFireAt: datetime | None = None
+    lastRunOutcome: ScheduledRunStatusLiteral | None = None
+    lastRunAt: datetime | None = None
+    createdAt: datetime | None = None
+    updatedAt: datetime | None = None
+
+
+class ScheduledTaskListResponse(BaseModel):
+    items: list[ScheduledTaskItem] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 100
+    offset: int = 0
+
+
+class ScheduledTaskPatchRequest(BaseModel):
+    """PATCH 仅允许 status（active/paused 切换）与 unattendedAutoApprove 开关。
+
+    严禁接受 scheduleKind / schedulePayload / sourceType / sourceRef / title —— 防止
+    绕过确认卡改调度核心。status 字段值固定 active/paused 两个可切态。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["active", "paused"] | None = None
+    unattendedAutoApprove: bool | None = None
+
+
+class ScheduledTaskRunItem(BaseModel):
+    runId: str
+    scheduledTaskId: str
+    sessionId: str | None
+    startedAt: datetime
+    finishedAt: datetime | None = None
+    status: ScheduledRunStatusLiteral
+    summary: str | None = None
+    failureReason: str | None = None
+
+    @model_validator(mode="after")
+    def session_matches_status(self) -> "ScheduledTaskRunItem":
+        if self.status == "skipped":
+            if self.sessionId is not None:
+                raise ValueError("skipped runs must not expose a sessionId")
+        elif not self.sessionId:
+            raise ValueError("non-skipped runs require a sessionId")
+        return self
+
+
+class ScheduledTaskStartedRunItem(ScheduledTaskRunItem):
+    """Successful ``fire-now`` response: a real session is already running."""
+
+    sessionId: str
+    status: Literal["running"]
+
+
+class ScheduledTaskRunListResponse(BaseModel):
+    items: list[ScheduledTaskRunItem] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
+class TakeoverResponse(BaseModel):
+    sessionId: str
+    recoveryDraft: str | None = None
+
+
+class ScheduledConfirmationDraftItem(BaseModel):
+    """确认卡可见、可编辑的安全草稿；调度 payload 始终保留在后端 pending 中。"""
+
+    title: str = Field(min_length=1, max_length=120)
+    scheduleDescription: str
+    instruction: str = Field(min_length=1, max_length=4000)
+    scheduleKind: ScheduleKindLiteral
+    sourceType: ScheduledTaskSourceLiteral
+
+
+class ScheduledConfirmationDecisionRequest(BaseModel):
+    """创建确认卡决策提交（confirm / cancel / 编辑后 confirm）。
+
+    ``unattendedAutoApprove`` 是勾选框值（确认卡 UI 唯一写入该字段路径之一）；handler
+    入参层（assistant_tools）三重不暴露，REST 层只在此处接受。
+    """
+
+    decision: Literal["confirm", "cancel"]
+    editedDraft: ScheduledConfirmationDraftItem | None = None
+    unattendedAutoApprove: bool = False
+
+
+class ScheduledConfirmationPendingItem(BaseModel):
+    requestId: str
+    sessionId: str
+    draft: ScheduledConfirmationDraftItem
+    unattendedAutoApprove: bool = False
+    expiresAt: datetime
+    status: Literal["pending"] = "pending"
+
+
+class ScheduledConfirmationPendingResponse(BaseModel):
+    items: list[ScheduledConfirmationPendingItem] = Field(default_factory=list)

@@ -6,6 +6,7 @@
   ],
   "permissions": [
     "core:default",
+    "notification:default",
     {
       "identifier": "http:default",
       "allow": [

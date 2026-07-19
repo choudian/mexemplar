@@ -130,6 +130,11 @@ class Session(Base):
     tool_ids: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    # v30（033 调度中心）：会话来源——区分「用户手动开」与「定时任务触发」。
+    # 聊天屏列表按 source='scheduled' 排除（FR-021）；Segment opt-out 用 is_scheduled 廉价判定。
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
+    scheduled_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    is_scheduled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     def get_tool_id_set(self) -> Optional[set]:
         """解析 tool_ids JSON 字段为 set。None 表示全部工具。"""
@@ -654,6 +659,120 @@ class UserTodo(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class ScheduledTask(Base):
+    """定时任务主表（033 调度中心）——用户埋下的「到点让 AI 做某事」的派工单。
+
+    软删（``is_deleted=1``）保留历史可追溯；``unattended_auto_approve`` 是 CC-005
+    受控破例持久化的 per-task 免确认开关，只能经确认卡勾选或详情页开关写入。
+    不建 FK：``source_ref``（todo 来源时为 todo_id）与外部表解耦，悬空由业务层惰性自愈；
+    ``instruction`` 保存用户在确认卡核定后的实际执行指令，避免 todo 引用与指令文本混用。
+    """
+
+    __tablename__ = "scheduled_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "source_type IN ('direct', 'todo')",
+            name="ck_scheduled_tasks_source_type",
+        ),
+        CheckConstraint(
+            "schedule_kind IN ('one_shot', 'recurring')",
+            name="ck_scheduled_tasks_schedule_kind",
+        ),
+        CheckConstraint(
+            "status IN ('active', 'paused', 'completed', 'expired')",
+            name="ck_scheduled_tasks_status",
+        ),
+        CheckConstraint(
+            "unattended_auto_approve IN (0, 1)",
+            name="ck_scheduled_tasks_unattended_auto_approve",
+        ),
+        CheckConstraint(
+            "is_deleted IN (0, 1)",
+            name="ck_scheduled_tasks_is_deleted",
+        ),
+        Index(
+            "idx_scheduled_tasks_fire",
+            "next_fire_at",
+            sqlite_where=text("status = 'active' AND is_deleted = 0"),
+        ),
+        Index(
+            "idx_scheduled_tasks_source_todo",
+            "source_ref",
+            sqlite_where=text("source_type = 'todo' AND is_deleted = 0"),
+        ),
+    )
+
+    scheduled_task_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    source_ref: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    instruction: Mapped[str] = mapped_column(Text, nullable=False)
+    schedule_kind: Mapped[str] = mapped_column(String(20), nullable=False)
+    schedule_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
+    unattended_auto_approve: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    executor_hint: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    next_fire_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    last_fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    is_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+
+    def __repr__(self) -> str:
+        return (
+            f"<ScheduledTask(scheduled_task_id={self.scheduled_task_id!r}, "
+            f"status={self.status!r}, schedule_kind={self.schedule_kind!r})>"
+        )
+
+
+class ScheduledTaskRun(Base):
+    """定时任务执行账目（033 调度中心）——一次触发产生的一条 append-only 执行记录。
+
+    关联的 scheduled 主助理会话复用既有 sessions 表（只加 ``source`` 列），会话细节
+    不重复存储。终态 succeeded/failed/skipped 不可逆；waiting_user ⇄ running 可逆。
+    """
+
+    __tablename__ = "scheduled_task_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'waiting_user', 'skipped')",
+            name="ck_scheduled_task_runs_status",
+        ),
+        Index("idx_runs_task_started", "scheduled_task_id", "started_at"),
+        Index("idx_runs_session", "session_id"),
+        Index(
+            "uq_runs_active_per_task",
+            "scheduled_task_id",
+            unique=True,
+            sqlite_where=text("status IN ('running', 'waiting_user')"),
+        ),
+    )
+
+    run_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    scheduled_task_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=func.now())
+    finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # v31：终态 UI 通知投递账本。终态先提交、事件成功后再确认；NULL 会由 worker 重试。
+    terminal_event_delivered_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime,
+        nullable=True,
+    )
+    # 每次进入可投递状态都递增；ack 必须绑定该代次，避免旧事件吞掉后续终态。
+    terminal_event_version: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+    def __repr__(self) -> str:
+        return f"<ScheduledTaskRun(run_id={self.run_id!r}, status={self.status!r})>"
 
 
 class TeachingFailureRecord(Base):

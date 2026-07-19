@@ -1,18 +1,16 @@
 <!--
 Sync Impact Report
-Version change: 2.0.0 -> 3.0.0
+Version change: 3.0.0 -> 3.1.0
 Modified principles:
-- III. Unified Config & Secret Handling: removed the external credential-store
-  contract; all credentials now use UnifiedConfigManager
+- Engineering Guardrails: registered the 033 Scheduling Center CC-005 controlled
+  exception for persistent per-task unattended approval, including its scope,
+  UI-only activation, tool non-exposure, and fail-closed decision ordering
 Added sections:
 - None
 Removed sections:
 - None
 Templates requiring updates:
-- UPDATED .specify/templates/plan-template.md
-- UPDATED .specify/templates/spec-template.md
-- UPDATED .specify/templates/tasks-template.md
-- UPDATED .specify/templates/checklist-template.md
+- None (existing templates remain compatible)
 Follow-up TODOs:
 - None
 -->
@@ -84,6 +82,17 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
 - Reviewer MUST 拒绝以下提交：向上层反向依赖、绕过过滤边界读取录制数据、硬编码密钥、
   在 `UnifiedConfigManager` 外直接读写配置文件或配置表、明文泄漏 secret、以及未记录
   例外原因的测试/文档缺口。
+- **受控例外登记（033，CC-005）**：调度中心 per-task 无人值守免确认
+  （`scheduled_tasks.unattended_auto_approve`，SQLite v30 持久化）是对「全部允许/免确认
+  只允许进程会话级内存、不得写入 SQLite」规则的**唯一显式受控破例**，由用户显式拍板。
+  它 MUST 满足四重限定（仅 `source='scheduled'` 会话 / 仅该 `scheduled_task_id` / 默认关闭 /
+  只能用户显式 UI 操作开启）+ 工具参数三重不暴露（schema properties / handler / router
+  create-update 源码均不含该字段，门卫测试 `test_scheduled_task_unattended_field_isolated`
+  守）+ 独立 `UnattendedConfirmationManager`（绝不读写进程级 `_auto_approve_enabled`）+
+  D7 立即拒（scheduled 来源与 per-task 授权判定 MUST 先于进程级「全部允许」；
+  未授权高危动作立即按拒绝处理，不空等超时且不得被全局开关越权，FR-023）。爆炸半径焊死
+  在「仅该 scheduled 会话的高危动作」，列表层一眼可见、详情页可显式开启或回收。详见
+  `docs/PROJECT_CONSTRAINTS.md` CC-005 与 `specs/033-scheduling-center/`。
 
 ## Workflow & Review
 
@@ -105,4 +114,4 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
 MINOR；文字澄清与非语义修订使用 PATCH。每次计划评审和合并评审都 MUST 做合规检查；
 如存在例外，必须在计划或 PR 中明示，而不是默默绕过。
 
-**Version**: 3.0.0 | **Ratified**: 2026-04-21 | **Last Amended**: 2026-06-12
+**Version**: 3.1.0 | **Ratified**: 2026-04-21 | **Last Amended**: 2026-07-19

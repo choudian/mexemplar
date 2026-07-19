@@ -2268,6 +2268,154 @@ def downgrade_v29(engine):
     logger.info("回退版本 29 完成：specialist composition_ids 已删除")
 
 
+def migrate_to_v30(engine):
+    """迁移到版本 30：调度中心——scheduled_tasks / scheduled_task_runs 两张新表，
+    sessions 加 source / scheduled_task_id / is_scheduled 三列。
+
+    与 ``models_sqlite.py`` 的 ``ScheduledTask`` / ``ScheduledTaskRun`` / ``Session``
+    ORM 同步（ORM 头注释要求一致）。不碰 ``user_todos``（CC-001）。
+    """
+    try:
+        with engine.begin() as conn:
+            # 1) scheduled_tasks 主表（仿 v18/v21：CREATE TABLE IF NOT EXISTS + 内联 CHECK）
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                    scheduled_task_id TEXT PRIMARY KEY,
+                    source_type TEXT NOT NULL CHECK (source_type IN ('direct', 'todo')),
+                    source_ref TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    instruction TEXT NOT NULL,
+                    schedule_kind TEXT NOT NULL CHECK (schedule_kind IN ('one_shot', 'recurring')),
+                    schedule_payload TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active', 'paused', 'completed', 'expired')),
+                    unattended_auto_approve INTEGER NOT NULL DEFAULT 0
+                        CHECK (unattended_auto_approve IN (0, 1)),
+                    executor_hint TEXT,
+                    next_fire_at DATETIME,
+                    last_fired_at DATETIME,
+                    is_deleted INTEGER NOT NULL DEFAULT 0 CHECK (is_deleted IN (0, 1)),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            # 调度扫描主索引（仅活跃未软删）+ 待办悬空反查索引
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_fire "
+                    "ON scheduled_tasks(next_fire_at) "
+                    "WHERE status = 'active' AND is_deleted = 0"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_scheduled_tasks_source_todo "
+                    "ON scheduled_tasks(source_ref) "
+                    "WHERE source_type = 'todo' AND is_deleted = 0"
+                )
+            )
+
+            # 2) scheduled_task_runs 执行账目（append-only）
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS scheduled_task_runs (
+                    run_id TEXT PRIMARY KEY,
+                    scheduled_task_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    started_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    finished_at DATETIME,
+                    status TEXT NOT NULL DEFAULT 'running'
+                        CHECK (status IN ('running', 'succeeded', 'failed', 'waiting_user', 'skipped')),
+                    summary TEXT,
+                    failure_reason TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_task_started "
+                    "ON scheduled_task_runs(scheduled_task_id, started_at DESC)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_runs_session ON scheduled_task_runs(session_id)"
+                )
+            )
+            # FR-011 硬门卫：同一 task 同时最多一个 active run。业务层的预读只用于
+            # 快速路径，真正的并发正确性由该 partial unique index 保证。
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_runs_active_per_task "
+                    "ON scheduled_task_runs(scheduled_task_id) "
+                    "WHERE status IN ('running', 'waiting_user')"
+                )
+            )
+
+            # 3) sessions 加三列（仿 v10：先验表存在再 ALTER；幂等；DEFAULT 自动 backfill）。
+            #    旧 baseline 测试可能从无 sessions 表的版本起步，此时跳过列变更仅推进版本号。
+            sessions_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master " "WHERE type = 'table' AND name = 'sessions'")
+            ).fetchone()
+            if sessions_exists is not None:
+                _add_column_if_missing(
+                    conn,
+                    "sessions",
+                    "source",
+                    "TEXT NOT NULL DEFAULT 'user' CHECK (source IN ('user', 'scheduled'))",
+                )
+                _add_column_if_missing(conn, "sessions", "scheduled_task_id", "TEXT")
+                _add_column_if_missing(
+                    conn, "sessions", "is_scheduled", "INTEGER NOT NULL DEFAULT 0"
+                )
+            else:
+                logger.info("迁移到版本 30：sessions 表不存在，跳过 source 等列")
+
+            conn.execute(text("UPDATE schema_version SET version = 30"))
+    except Exception as e:
+        logger.error(f"迁移到版本 30 失败: {e}")
+        raise
+    logger.info("迁移到版本 30 完成：scheduled_tasks / scheduled_task_runs / sessions.source")
+
+
+def migrate_to_v31(engine):
+    """迁移到版本 31：scheduled run 终态事件的持久投递确认。"""
+    try:
+        with engine.begin() as conn:
+            runs_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'scheduled_task_runs'"
+                )
+            ).fetchone()
+            if runs_exists is not None:
+                _add_column_if_missing(
+                    conn,
+                    "scheduled_task_runs",
+                    "terminal_event_delivered_at",
+                    "DATETIME",
+                )
+                _add_column_if_missing(
+                    conn,
+                    "scheduled_task_runs",
+                    "terminal_event_version",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS idx_runs_terminal_event_pending "
+                        "ON scheduled_task_runs(terminal_event_delivered_at, started_at) "
+                        "WHERE status IN ('succeeded', 'failed', 'waiting_user')"
+                    )
+                )
+            else:
+                logger.info("迁移到版本 31：scheduled_task_runs 表不存在，跳过终态投递列")
+            conn.execute(text("UPDATE schema_version SET version = 31"))
+    except Exception as e:
+        logger.error(f"迁移到版本 31 失败: {e}")
+        raise
+    logger.info("迁移到版本 31 完成：scheduled run 终态事件按代次可恢复投递")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -2297,6 +2445,8 @@ _MIGRATIONS = [
     (27, migrate_to_v27),
     (28, migrate_to_v28),
     (29, migrate_to_v29),
+    (30, migrate_to_v30),
+    (31, migrate_to_v31),
 ]
 
 

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   CheckCircle2,
   ChevronDown,
@@ -10,12 +10,17 @@ import {
   RefreshCcw,
   Save,
   Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 
 import { Button, IconButton, Badge } from "../../components/primitives";
 import { listUserTodos } from "../../api/userTodos";
+import { useAssistantStore } from "../../state/assistantStore";
+import { useScheduledStore } from "../../state/scheduledStore";
+import { useShellStore } from "../../state/shellStore";
+import { useToastStore } from "../../state/toastStore";
 import { useUserTodoStore } from "../../state/userTodoStore";
 import type { UserTodoItem, UserTodoPriority, UserTodoStatus } from "../../state/userTodoStore";
 
@@ -45,6 +50,16 @@ const STATUS_LABELS: Record<UserTodoStatus, string> = {
   pending: "待办",
   in_progress: "进行中",
   done: "已完成",
+};
+
+// 调度中心 last_run_outcome → 用户文案（仅展示，不写待办状态，FR-017）。
+// key 是 ScheduledRunStatus 的字面量；succeeded/failed/waiting_user 是用户能感知的结局。
+const RUN_OUTCOME_LABEL: Record<string, string> = {
+  running: "进行中",
+  succeeded: "成功",
+  failed: "失败",
+  waiting_user: "需要你的帮助",
+  skipped: "本次跳过",
 };
 
 function toEditDraft(todo: UserTodoItem): EditDraft {
@@ -135,14 +150,32 @@ export function UserTodoScreen(): JSX.Element {
   const completeTodo = useUserTodoStore((state) => state.complete);
   const removeTodo = useUserTodoStore((state) => state.remove);
 
+  // 调度中心集成：为「让 AI 做」按钮预填助手输入，并展示待办的「上次执行」结果。
+  // 注意：待办表本身不写调度状态（FR-017 / CC-001），这里只读 scheduledStore 派生。
+  const scheduledTasks = useScheduledStore((state) => state.tasks);
+  const scheduledHydrated = useScheduledStore((state) => state.hydrated);
+  const scheduledLoad = useScheduledStore((state) => state.load);
+  const setAssistantDraft = useAssistantStore((state) => state.setDraft);
+  const setRoute = useShellStore((state) => state.setRoute);
+  const notifyInfo = useToastStore((state) => state.notifyInfo);
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [descOpen, setDescOpen] = useState(false);
   const [progress, setProgress] = useState({ total: 0, done: 0 });
+  const [schedulingTodoId, setSchedulingTodoId] = useState<string | null>(null);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // 拉一次调度任务列表，用于展示「上次执行」。后续 scheduled_task.changed/completed
+  // 事件会自动刷新列表（scheduledStore.applyEvent），无需这里订阅。
+  useEffect(() => {
+    if (!scheduledHydrated) {
+      void scheduledLoad().catch(() => undefined);
+    }
+  }, [scheduledHydrated, scheduledLoad]);
 
   // 进度环口径是「全部待办」的完成度，独立于当前筛选视图拉一次轻量计数。
   useEffect(() => {
@@ -162,6 +195,21 @@ export function UserTodoScreen(): JSX.Element {
       cancelled = true;
     };
   }, [items, hydrated]);
+
+  // 派生：每个待办对应的「上次执行」结果（sourceType='todo' && sourceRef===todoId）。
+  // 多条历史时取 lastRunAt 最新一条；无关联任务时返回 null。
+  const lastExecutionByTodo = useMemo(() => {
+    const map = new Map<string, { at: string; outcome: string | null }>();
+    for (const task of scheduledTasks) {
+      if (task.sourceType !== "todo") continue;
+      if (!task.lastRunAt) continue;
+      const prev = map.get(task.sourceRef);
+      if (!prev || new Date(task.lastRunAt).getTime() > new Date(prev.at).getTime()) {
+        map.set(task.sourceRef, { at: task.lastRunAt, outcome: task.lastRunOutcome });
+      }
+    }
+    return map;
+  }, [scheduledTasks]);
 
   const remaining = Math.max(0, progress.total - progress.done);
   const pct = progress.total > 0 ? progress.done / progress.total : 0;
@@ -193,6 +241,28 @@ export function UserTodoScreen(): JSX.Element {
       setEditingId(null);
       setEditDraft(null);
     });
+  };
+
+  // 「让 AI 做」：把待办标题/描述填进助手输入框并切到 AI 助手屏。
+  // 创建入口仍由主助理工具承担（FR-005），前端只做"把用户的意图塞进对话"的中转。
+  // 一次性任务（FR-016）和时间由用户在对话里编辑决定，确认卡再核对。
+  const handToAssistant = async (todo: UserTodoItem) => {
+    if (schedulingTodoId) return;
+    setSchedulingTodoId(todo.todoId);
+    try {
+      const descriptionPart = todo.description?.trim()
+        ? `\n待办说明：${todo.description.trim()}`
+        : "";
+      // 提示语明确"一次性"并要求用户补时间，FR-016 在源头引导。
+      const prompt =
+        `帮我把「${todo.title.trim()}」这件事安排成一次性定时任务，` +
+        `什么时候执行你问一下我。${descriptionPart}`.trim();
+      setAssistantDraft(prompt);
+      setRoute("assistant");
+      notifyInfo("已切到 AI 助手，补一下时间后发送即可。");
+    } finally {
+      setSchedulingTodoId(null);
+    }
   };
 
   const heroSubtitle = (() => {
@@ -311,9 +381,29 @@ export function UserTodoScreen(): JSX.Element {
                 {todo.completedAt ? (
                   <span>完成 {formatDate(todo.completedAt)}</span>
                 ) : null}
+                {lastExecutionByTodo.has(todo.todoId) ? (
+                  <span
+                    className="user-todo-last-exec"
+                    data-outcome={lastExecutionByTodo.get(todo.todoId)?.outcome ?? ""}
+                    title="来自调度中心的最近一次执行结果，待办本身不会被自动标记完成"
+                  >
+                    上次让 AI 做：{formatDate(lastExecutionByTodo.get(todo.todoId)?.at ?? null) || "—"}
+                    {lastExecutionByTodo.get(todo.todoId)?.outcome
+                      ? ` · ${RUN_OUTCOME_LABEL[lastExecutionByTodo.get(todo.todoId)!.outcome!] ?? "已结束"}`
+                      : ""}
+                  </span>
+                ) : null}
               </div>
             </div>
             <div className="user-todo-row-actions">
+              <IconButton
+                label="让 AI 做"
+                onClick={() => void handToAssistant(todo)}
+                disabled={busy || schedulingTodoId !== null}
+                title="把这条待办交给 AI 安排成一次性定时任务"
+              >
+                <Sparkles size={15} />
+              </IconButton>
               <IconButton label="编辑待办" onClick={() => startEditing(todo)}>
                 <Pencil size={15} />
               </IconButton>

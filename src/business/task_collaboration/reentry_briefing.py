@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections import Counter
 
+from src.business.task_collaboration.graph_terminal import compute_graph_terminal_state
 from src.business.task_collaboration.models import (
     TERMINAL_TASK_STATUSES,
     TaskEdgeType,
@@ -240,9 +241,12 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
         if t.status == TaskStatus.FAILED:
             failed_tasks.append(t.title or t.task_id)
 
-    # 判断全图是否完成
-    all_terminal = all(t.status in TERMINAL_TASK_STATUSES for t in real_tasks)
-    all_completed = all(t.status == TaskStatus.COMPLETED for t in real_tasks)
+    # 判断全图是否完成——统一复用 task_collaboration 的公共终态函数。
+    all_terminal, all_completed = compute_graph_terminal_state(
+        real_tasks,
+        terminal_statuses=TERMINAL_TASK_STATUSES,
+        completed_status=TaskStatus.COMPLETED,
+    )
 
     lines: list[str] = []
     lines.append("【任务图进度】")

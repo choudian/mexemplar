@@ -7,6 +7,7 @@ import { useAssistantStore } from "../../src/state/assistantStore";
 import { useSkillsStore } from "../../src/state/skillsStore";
 import { useShellStore } from "../../src/state/shellStore";
 import { useBrainStore } from "../../src/state/brainStore";
+import { useScheduledStore } from "../../src/state/scheduledStore";
 import { useTeachingStore } from "../../src/state/teachingStore";
 
 const bootstrapPayload = {
@@ -140,6 +141,7 @@ describe("AppShell", () => {
       busy: false,
       lastError: null,
     });
+    useScheduledStore.getState().reset();
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -824,6 +826,47 @@ describe("AppShell", () => {
 
     await waitFor(() => expect(useShellStore.getState().backend?.status).toBe("degraded"));
     expect(useTeachingStore.getState().stage).toBe("recording");
+  });
+
+  test("retries and degrades when scheduled list resync fails but pending refresh succeeds", async () => {
+    const streamFrames = [
+      eventFrame({
+        eventId: "evt_scheduled_resync_failed",
+        sequence: 1,
+        sessionId: "ui_sess_test",
+        causationId: null,
+        type: "backend.resync_required",
+        scope: {},
+        payload: {
+          reason: "replay_gap",
+          domains: ["scheduled"],
+          eventSessionId: "ui_sess_test",
+        },
+        createdAt: "2026-05-10T00:00:00Z",
+      }),
+    ];
+    let scheduledListAttempts = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/events")) {
+        return eventStreamResponse(streamFrames);
+      }
+      if (url.includes("/api/scheduled-tasks?")) {
+        scheduledListAttempts += 1;
+        throw new Error("scheduled list unavailable");
+      }
+      if (url.endsWith("/api/scheduled-tasks/confirmations/pending")) {
+        return jsonResponse({ items: [] });
+      }
+      return jsonResponse(bootstrapPayload);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<AppShell />);
+
+    await waitFor(() => expect(scheduledListAttempts).toBe(3));
+    await waitFor(() => expect(useShellStore.getState().backend?.status).toBe("degraded"));
+    expect(useScheduledStore.getState().needsResync).toBe(true);
   });
 
   test("reconnects event stream with the last seen cursor", async () => {

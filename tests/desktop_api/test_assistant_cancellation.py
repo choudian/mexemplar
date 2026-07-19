@@ -12,6 +12,7 @@ from src.business.agents.tools import builtin_general_tools as general_tools
 from src.desktop_api.assistant_runtime import AssistantRuntime
 from src.desktop_api.confirmations import install_confirmation_signal
 from src.desktop_api.events import event_queue
+from src.desktop_api import assistant_runtime as assistant_runtime_module
 from src.desktop_api.routers import assistant as assistant_router
 
 
@@ -115,6 +116,30 @@ def test_cancel_session_running_turn_emits_cancelled_progress() -> None:
     statuses = [(event.type, event.payload.get("status")) for event in _collect_events()]
     assert ("assistant.progress", "cancelled") in statuses
     assert ("assistant.progress", "succeeded") not in statuses
+    run_context.reset_for_tests()
+
+
+def test_cancel_session_settles_scheduling_confirmation(monkeypatch) -> None:
+    """033 FR-006：停止主助理回合同时结算该会话的创建确认卡。"""
+    run_context.reset_for_tests()
+    settled: list[str] = []
+    monkeypatch.setattr(
+        assistant_runtime_module,
+        "settle_scheduling_confirmations_for_session_stopped",
+        lambda session_id: settled.append(session_id),
+    )
+    orch = CancellableOrchestrator()
+    runtime = AssistantRuntime(orchestrator_factory=lambda: orch, chat_service=FakeChatService())
+    assert runtime.dispatch_message("sess-scheduling-stop", "hello") is True
+    assert orch.entered.wait(timeout=2)
+
+    assert runtime.cancel_session("sess-scheduling-stop") is True
+
+    with runtime._workers_lock:
+        worker = runtime._workers.get("sess-scheduling-stop")
+    if worker is not None:
+        worker.join(timeout=2)
+    assert settled == ["sess-scheduling-stop"]
     run_context.reset_for_tests()
 
 

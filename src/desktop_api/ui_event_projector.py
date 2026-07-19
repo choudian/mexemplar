@@ -37,6 +37,11 @@ from src.desktop_api.ui_events import (
     EVENT_TYPE_TOOLS_CHANGED,
     EVENT_TYPE_TRIAL_PROGRESS,
     EVENT_TYPE_BACKEND_RESYNC_REQUIRED,
+    EVENT_TYPE_SCHEDULED_TASK_CHANGED,
+    EVENT_TYPE_SCHEDULED_TASK_COMPLETED,
+    EVENT_TYPE_SCHEDULED_TASK_NEEDS_TAKEOVER,
+    EVENT_TYPE_SCHEDULING_CONFIRMATION_REQUESTED,
+    EVENT_TYPE_SCHEDULING_CONFIRMATION_RESOLVED,
 )
 
 logger = logging.getLogger(__name__)
@@ -805,6 +810,114 @@ def _project_external_coding_session_changed(payload, scope, causation_id):
     ]
 
 
+def _project_scheduler_run_terminal(payload, scope, causation_id):
+    """Project ``scheduler_run_terminal`` blinker → completed / needs_takeover UI event.
+
+    run 终态 succeeded/failed → ``scheduled_task.completed``（按 outcome 分流）；
+    waiting_user → ``scheduled_task.needs_takeover``。skipped 不投影（不打扰用户）。
+    """
+    status = _string_or_none(payload.get("status"))
+    if status not in {"succeeded", "failed", "waiting_user", "skipped"}:
+        logger.error(
+            "projector: invalid scheduler_run_terminal status %r; event dropped",
+            status,
+        )
+        return []
+    if status == "skipped":
+        return []
+    base = {
+        "taskId": _string_or_none(payload.get("scheduled_task_id")),
+        "taskTitle": _string_or_none(payload.get("task_title")),
+        "runId": _string_or_none(payload.get("run_id")),
+        "sessionId": _string_or_none(payload.get("session_id")),
+    }
+    if status == "waiting_user":
+        return [
+            UiEventDraft(
+                EVENT_TYPE_SCHEDULED_TASK_NEEDS_TAKEOVER,
+                {
+                    **base,
+                    "reason": _string_or_none(payload.get("reason")) or "needs_user_input",
+                },
+                scope,
+                causation_id,
+            )
+        ]
+    outcome = "succeeded" if status == "succeeded" else "failed"
+    return [
+        UiEventDraft(
+            EVENT_TYPE_SCHEDULED_TASK_COMPLETED,
+            {
+                **base,
+                "outcome": outcome,
+                "summary": _string_or_none(payload.get("summary")),
+                "failureReason": _string_or_none(payload.get("failure_reason")),
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
+def _project_scheduler_task_changed(payload, scope, causation_id):
+    """Project ``scheduler_task_changed`` blinker → ``scheduled_task.changed`` UI event."""
+    return [
+        UiEventDraft(
+            EVENT_TYPE_SCHEDULED_TASK_CHANGED,
+            {
+                "taskId": _string_or_none(payload.get("scheduled_task_id")),
+                "changeType": _string_or_none(payload.get("change_type")),
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
+def _project_scheduling_confirmation_requested(payload, scope, causation_id):
+    """Project ``scheduling_confirmation_requested`` blinker → ``scheduling.confirmation_requested``."""
+    draft = payload.get("draft")
+    if not isinstance(draft, dict):
+        draft = {}
+    return [
+        UiEventDraft(
+            EVENT_TYPE_SCHEDULING_CONFIRMATION_REQUESTED,
+            {
+                "requestId": _string_or_none(payload.get("request_id")),
+                "sessionId": _string_or_none(payload.get("session_id")),
+                "draft": {
+                    "title": _string_or_none(draft.get("title")),
+                    "scheduleDescription": _string_or_none(draft.get("scheduleDescription")),
+                    "instruction": _string_or_none(draft.get("instruction")),
+                    "scheduleKind": _string_or_none(draft.get("schedule_kind")),
+                    "sourceType": _string_or_none(draft.get("source_type")),
+                },
+                "unattendedAutoApprove": _value_or_false(payload.get("unattended_auto_approve")),
+                "expiresAt": _string_or_none(payload.get("expires_at")),
+                "status": "pending",
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
+def _project_scheduling_confirmation_resolved(payload, scope, causation_id):
+    """Project ``scheduling_confirmation_resolved`` blinker → ``scheduling.confirmation_resolved``."""
+    return [
+        UiEventDraft(
+            EVENT_TYPE_SCHEDULING_CONFIRMATION_RESOLVED,
+            {
+                "requestId": _string_or_none(payload.get("request_id")),
+                "sessionId": _string_or_none(payload.get("session_id")),
+                "status": _string_or_none(payload.get("status")),
+            },
+            scope,
+            causation_id,
+        )
+    ]
+
+
 def _make_task_projection(public_type: str, field_map: dict[str, tuple[str, Any]]):
     def _project(payload, scope, causation_id):
         projected = {
@@ -863,6 +976,10 @@ _PROJECTIONS: dict[str, ProjectionHandler] = {
     "brain_context_ready": _project_brain_context_ready,
     "improvement_proposal_changed": _project_improvement_proposal_changed,
     "external_coding_session_changed": _project_external_coding_session_changed,
+    "scheduler_task_changed": _project_scheduler_task_changed,
+    "scheduler_run_terminal": _project_scheduler_run_terminal,
+    "scheduling_confirmation_requested": _project_scheduling_confirmation_requested,
+    "scheduling_confirmation_resolved": _project_scheduling_confirmation_resolved,
     "backend_resync_required": _project_backend_resync_required,
 }
 

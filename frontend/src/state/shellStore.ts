@@ -8,6 +8,7 @@ export type RouteId =
   | "skills"
   | "compositions"
   | "user-todos"
+  | "scheduled"
   | "brain"
   | "brain-specialists"
   | "skill-methodology"

@@ -51,11 +51,14 @@ export function ErrorToastHost(): JSX.Element | null {
     return () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   }, []);
 
-  if (toasts.length === 0) return null;
+  // 只渲染 error tone；success/info/warning 由 InfoToastHost 承载。
+  const errorToasts = toasts.filter((toast) => toast.tone === "error");
+
+  if (errorToasts.length === 0) return null;
 
   return (
     <div className="error-toast-stack" role="region" aria-label="错误提示">
-      {toasts.map((toast) => (
+      {errorToasts.map((toast) => (
         <ErrorToastItem key={toast.id} id={toast.id} message={toast.message} onDismiss={dismiss} />
       ))}
     </div>

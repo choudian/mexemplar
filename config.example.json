@@ -250,6 +250,10 @@
     },
     "max_parallel_workers": 4
   },
+  "scheduler": {
+    "scan_interval_seconds": 30,
+    "confirmation_timeout_seconds": 300
+  },
   "self_improvement": {
     "max_prompt_supplements_per_day": 3,
     "max_tool_creations_per_day": 1,

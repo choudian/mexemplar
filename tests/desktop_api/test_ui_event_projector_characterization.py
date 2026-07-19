@@ -13,6 +13,23 @@ _S = {"sessionId": "s1"}
 _C = "s1"
 
 
+# ===== scheduling 域 =====
+
+
+def test_scheduler_terminal_rejects_unknown_status_instead_of_fabricating_failure():
+    drafts = project_internal_event(
+        "scheduler_run_terminal",
+        {
+            "scheduled_task_id": "sch_1",
+            "run_id": "schr_1",
+            "session_id": "s1",
+            "status": "running",
+        },
+    )
+
+    assert drafts == []
+
+
 # ===== recording 域 =====
 
 

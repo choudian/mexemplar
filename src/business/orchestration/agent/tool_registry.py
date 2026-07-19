@@ -432,40 +432,50 @@ class ToolRegistry:
             BUILD_TASK_GRAPH_SCHEMA,
             CODIFY_AS_TOOL_SCHEMA,
             CONTINUE_SUBAGENT_SCHEMA,
+            CREATE_SCHEDULED_TASK_SCHEMA,
             CREATE_SPECIALIST_SCHEMA,
             DECIDE_ADJUDICATION_SCHEMA,
+            DELETE_SCHEDULED_TASK_SCHEMA,
             DELEGATE_TO_SPECIALIST_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
             DISMISS_SUGGESTION,
             INSPECT_SUBAGENT_SCHEMA,
             INVALIDATE_MEMORY_ENTRY_SCHEMA,
+            LIST_SCHEDULED_TASKS_SCHEMA,
             LOAD_TASK_RESULT_SCHEMA,
             MUTATE_TASK_GRAPH_SCHEMA,
             OPEN_MEETING_CHANNEL_SCHEMA,
+            PAUSE_SCHEDULED_TASK_SCHEMA,
             REPLY_TO_USER_SCHEMA,
             REPORT_TOOL_BUG,
             RETRIEVE_ARCHIVE_SCHEMA,
             RETRIEVE_FAILURE_ZONE_SCHEMA,
             SAVE_PROFILE_SCHEMA,
+            UPDATE_SCHEDULED_TASK_SCHEMA,
             create_abandon_request_graph_handler,
             create_answer_task_question_handler,
             create_ask_user_question_handler,
             create_build_task_graph_handler,
             create_codify_as_tool_handler,
             create_continue_subagent_handler,
+            create_create_scheduled_task_handler,
             create_create_specialist_handler,
             create_decide_task_adjudication_handler,
+            create_delete_scheduled_task_handler,
             create_delegate_to_specialist_handler,
             create_delegate_to_subagent_handler,
             create_inspect_subagent_handler,
             create_invalidate_memory_entry_handler,
+            create_list_scheduled_tasks_handler,
             create_load_task_result_handler,
             create_mutate_task_graph_handler,
             create_open_meeting_channel_handler,
+            create_pause_scheduled_task_handler,
             create_reply_to_user_handler,
             create_retrieve_archive_handler,
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
+            create_update_scheduled_task_handler,
         )
         from src.business.agents.tools.proposal_source_tools import (
             create_inspect_proposal_source_tool,
@@ -623,6 +633,33 @@ class ToolRegistry:
             schema=MUTATE_TASK_GRAPH_SCHEMA,
             handler=create_mutate_task_graph_handler(session_id),
         )
+        # 033 调度中心：5 个主助理独占工具（不进 delegated executor）
+        create_scheduled_task_tool = ToolDefinition(
+            name="create_scheduled_task",
+            schema=CREATE_SCHEDULED_TASK_SCHEMA,
+            handler=create_create_scheduled_task_handler(session_id),
+        )
+        list_scheduled_tasks_tool = ToolDefinition(
+            name="list_scheduled_tasks",
+            schema=LIST_SCHEDULED_TASKS_SCHEMA,
+            handler=create_list_scheduled_tasks_handler(),
+            has_side_effects=False,
+        )
+        update_scheduled_task_tool = ToolDefinition(
+            name="update_scheduled_task",
+            schema=UPDATE_SCHEDULED_TASK_SCHEMA,
+            handler=create_update_scheduled_task_handler(),
+        )
+        pause_scheduled_task_tool = ToolDefinition(
+            name="pause_scheduled_task",
+            schema=PAUSE_SCHEDULED_TASK_SCHEMA,
+            handler=create_pause_scheduled_task_handler(),
+        )
+        delete_scheduled_task_tool = ToolDefinition(
+            name="delete_scheduled_task",
+            schema=DELETE_SCHEDULED_TASK_SCHEMA,
+            handler=create_delete_scheduled_task_handler(),
+        )
         inspect_proposal_source_tool = create_inspect_proposal_source_tool(session_id)
 
         # 027: MCP 工具注入 — 预置全量 + 自定义激活
@@ -660,6 +697,11 @@ class ToolRegistry:
             load_skill_methodology_tool,
             build_task_graph_tool,
             mutate_task_graph_tool,
+            create_scheduled_task_tool,
+            list_scheduled_tasks_tool,
+            update_scheduled_task_tool,
+            pause_scheduled_task_tool,
+            delete_scheduled_task_tool,
         ]
 
         def tool_factory() -> list[ToolDefinition]:

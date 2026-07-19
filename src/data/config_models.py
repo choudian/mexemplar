@@ -577,6 +577,14 @@ class AgentToolsConfig:
 
 
 @dataclass
+class SchedulerConfig:
+    """调度中心配置（033）——扁平键，避免嵌套 dataclass 解析。"""
+
+    scan_interval_seconds: int = 30
+    confirmation_timeout_seconds: int = 300
+
+
+@dataclass
 class AppConfig:
     """应用配置"""
 
@@ -592,6 +600,7 @@ class AppConfig:
     external_coding: ExternalCodingConfig = field(default_factory=ExternalCodingConfig)
     self_improvement: SelfImprovementConfig = field(default_factory=SelfImprovementConfig)
     agent_tools: AgentToolsConfig = field(default_factory=AgentToolsConfig)
+    scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
 
     def to_dict(self) -> Dict[str, Any]:
         """转换为可写配置字典（不含密钥等敏感信息）。"""
@@ -701,6 +710,11 @@ class AppConfig:
                 if isinstance(value, dict):
                     external_data[key] = sub_cls(**_filter_dataclass_fields(value, sub_cls))
             config.external_coding = ExternalCodingConfig(**external_data)
+
+        if "scheduler" in data:
+            config.scheduler = SchedulerConfig(
+                **_filter_dataclass_fields(data["scheduler"], SchedulerConfig)
+            )
 
         if "self_improvement" in data:
             si_data = _filter_dataclass_fields(data["self_improvement"], SelfImprovementConfig)

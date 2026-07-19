@@ -96,12 +96,28 @@ class AssistantPromptBuilder:
         except Exception as exc:
             self._logger.debug("[Orchestrator] 加载活跃 Prompt 补充失败，继续无补充: %s", exc)
 
+        # 033 调度中心：scheduled 会话注入无人值守 advisory（FR-003）。单点读 session.is_scheduled
+        # 判定，不跨层透传 unattended 参数——session.source='scheduled' ⟺ 无人值守会话，
+        # 等价且不触碰 dispatch_message / run_agent 签名（CC-003 零回归）。
+        unattended_advisory = None
+        if session is not None and getattr(session, "is_scheduled", 0):
+            unattended_advisory = (
+                "## 无人值守模式（定时任务触发）\n\n"
+                "本次会话由定时任务在用户不在场时自动触发。请遵循：\n"
+                "- 自主完成整个任务，尽量不触发需要用户当场回答的动作（如反问、澄清）。\n"
+                "- 高危动作（文件删除、命令执行、对外发送）默认会被立即拒绝；除非用户已为该任务"
+                "显式开启「无人值守免确认」。\n"
+                "- 若确实必须等待用户输入，会话会进入「需接管」状态并通知用户，用户可稍后从调度中心继续。\n"
+                "- 完成后把结论作为最终回复呈现给用户。"
+            )
+
         return format_assistant_prompt(
             profile=profile,
             memory_summary=memory_summary,
             brain_context=brain_context_text if brain_context_text else None,
             capability_catalog_section=capability_catalog_section,
             prompt_supplements=supplements,
+            unattended_advisory=unattended_advisory,
         )
 
     def format_capability_catalog(

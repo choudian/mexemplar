@@ -1,0 +1,658 @@
+"""T022: RunCompletionMonitor 完成判定三条件测试（033 US1）。
+
+验证 FR-012 静默三条件（worker 退出 ∧ 无 pending 回流 ∧ 图全终态）：
+
+1. **首轮 durable accepted 不误报完成**：run running + worker 仍活跃 → 不置终态；
+   worker 退出但图未全终态 → 仍不置终态（必须等真正静默）。
+2. **含失败/取消图不漏报**（不依赖 root=completed）：执行节点有 failed/cancelled
+   时 all_terminal=True / all_completed=False → run → failed（而不是看 root status）。
+3. **回流续跑轮后置终态**：waiting_user 接管回 running 后，需等下一轮静默才置终态。
+
+用 ``compute_graph_terminal_state`` + 注入 mock callbacks 驱动 evaluate_session。
+"""
+
+from __future__ import annotations
+
+import logging
+from types import SimpleNamespace
+
+import pytest
+
+from src.business.task_collaboration.graph_terminal import compute_graph_terminal_state
+from src.business.task_collaboration.models import TERMINAL_TASK_STATUSES, TaskStatus
+
+# 终态集合与完成态字符串（与 monitor 内部使用一致）
+_TERM = TERMINAL_TASK_STATUSES
+_DONE = str(TaskStatus.COMPLETED)
+
+
+def _executor(task_id, status, parent_id="root"):
+    """构造一个执行节点（parent_task_id 非 None）。"""
+    return SimpleNamespace(task_id=task_id, parent_task_id=parent_id, status=status)
+
+
+def _root(status="pending_dispatch"):
+    """根容器节点（parent_task_id is None）—— 不参与终态统计。"""
+    return SimpleNamespace(task_id="root", parent_task_id=None, status=status)
+
+
+# ---------------------------------------------------------------------------
+# 纯函数层：compute_graph_terminal_state 的三条件语义
+# ---------------------------------------------------------------------------
+
+
+def test_graph_all_completed_returns_terminal_and_completed():
+    tasks = [
+        _root(),
+        _executor("t1", "completed"),
+        _executor("t2", "completed"),
+    ]
+    all_terminal, all_completed = compute_graph_terminal_state(
+        tasks, terminal_statuses=_TERM, completed_status=_DONE
+    )
+    assert all_terminal is True
+    assert all_completed is True
+
+
+def test_graph_with_failed_executor_terminal_but_not_completed():
+    """含 failed 执行节点：all_terminal=True 但 all_completed=False（不依赖 root=completed）。"""
+    tasks = [
+        _root(status="completed"),  # 即使 root completed，含 failed 子节点也不算全成功
+        _executor("t1", "completed"),
+        _executor("t2", "failed"),
+    ]
+    all_terminal, all_completed = compute_graph_terminal_state(
+        tasks, terminal_statuses=_TERM, completed_status=_DONE
+    )
+    assert all_terminal is True
+    assert all_completed is False
+
+
+def test_graph_with_cancelled_executor_terminal_but_not_completed():
+    tasks = [
+        _root(),
+        _executor("t1", "cancelled"),
+    ]
+    all_terminal, all_completed = compute_graph_terminal_state(
+        tasks, terminal_statuses=_TERM, completed_status=_DONE
+    )
+    assert all_terminal is True
+    assert all_completed is False
+
+
+def test_graph_non_terminal_running_does_not_qualify():
+    """首轮 durable accepted：还有 running 执行节点 → all_terminal=False（不误报完成）。"""
+    tasks = [
+        _root(),
+        _executor("t1", "completed"),
+        _executor("t2", "in_progress"),  # 仍在跑
+    ]
+    all_terminal, all_completed = compute_graph_terminal_state(
+        tasks, terminal_statuses=_TERM, completed_status=_DONE
+    )
+    assert all_terminal is False
+    assert all_completed is False
+
+
+def test_graph_root_only_degenerates_to_terminal_completed():
+    """无执行节点（退化 root-only 图）→ (True, True)，与 all([]) 语义一致。"""
+    tasks = [_root()]
+    all_terminal, all_completed = compute_graph_terminal_state(
+        tasks, terminal_statuses=_TERM, completed_status=_DONE
+    )
+    assert all_terminal is True
+    assert all_completed is True
+
+
+# ---------------------------------------------------------------------------
+# Monitor 行为层：evaluate_session 三条件
+# ---------------------------------------------------------------------------
+
+
+def _make_monitor(
+    *,
+    has_active_worker,
+    has_pending_reentry,
+    snapshot_tasks,
+    run_repo,
+    message_repo=None,
+):
+    """构造 monitor（注入全部 callback，避开 desktop_api 依赖）。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+
+    snapshot = SimpleNamespace(tasks=snapshot_tasks) if snapshot_tasks is not None else None
+
+    def _get_snapshot(_session_id):
+        return snapshot
+
+    monitor = RunCompletionMonitor(
+        has_active_worker=has_active_worker,
+        has_pending_reentry=has_pending_reentry,
+        get_graph_snapshot=_get_snapshot,
+        run_repo=run_repo,
+        message_repo=message_repo,
+    )
+    return monitor
+
+
+def _seed_run(run_repo, *, run_id="schr_x", session_id="ast_x", task_id="sch_x", status="running"):
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.utils.timezone import utc_now_naive
+
+    assert isinstance(run_repo, ScheduledTaskRunRepository)
+    run = run_repo.create(
+        scheduled_task_id=task_id, session_id=session_id, started_at=utc_now_naive()
+    )
+    if status != "running":
+        run_repo.cas_transition(run.run_id, from_status="running", to_status=status)
+    return run
+
+
+@pytest.mark.parametrize(
+    ("event_name", "payload"),
+    [
+        (
+            "graph_scheduler_terminal",
+            {
+                "graph_id": "tg_event_failure",
+                "session_id": "ast_event_failure",
+                "all_terminal": True,
+                "all_completed": True,
+            },
+        ),
+        (
+            "assistant_subagent_finished",
+            {
+                "session_id": "ast_event_failure",
+                "subagent_id": "sub_event_failure",
+                "status": "completed",
+                "last_output": "done",
+            },
+        ),
+        (
+            "assistant_task_root_failed",
+            {
+                "session_id": "ast_event_failure",
+                "graph_id": "tg_event_failure",
+                "task_id": "task_event_failure",
+                "change_type": "failed",
+                "status": "failed",
+                "display_phase": "failed",
+                "safe_explanation": "task failed",
+            },
+        ),
+    ],
+)
+def test_event_receivers_isolate_completion_evaluation_failures(
+    monkeypatch,
+    caplog,
+    event_name,
+    payload,
+):
+    """同步 observer 失败不得反向打断 task collaboration 核心事件发送方。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.utils import events
+
+    monitor = RunCompletionMonitor()
+    monkeypatch.setattr(monitor, "retry_pending_terminal_events", lambda: 0)
+
+    def _raise(_session_id):
+        raise RuntimeError("completion store unavailable")
+
+    monkeypatch.setattr(monitor, "evaluate_session", _raise)
+    monitor.connect()
+    try:
+        with caplog.at_level(
+            logging.ERROR,
+            logger="src.business.scheduling.run_completion_monitor",
+        ):
+            events.emit(event_name, object(), **payload)
+    finally:
+        monitor.disconnect()
+
+    assert event_name in caplog.text
+    assert "ast_event_failure" in caplog.text
+    assert "completion store unavailable" in caplog.text
+
+
+def test_evaluate_does_not_finalize_when_worker_still_active():
+    """条件 1：worker 仍活跃 → 不置终态（首轮 durable accepted 不误报完成）。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, run_id="schr_active", session_id="ast_active")
+        monitor = _make_monitor(
+            has_active_worker=lambda sid: True,  # worker 仍在跑
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            run_repo=rr,
+        )
+        result = monitor.evaluate_session("ast_active")
+        assert result is None  # 未静默，不写终态
+        # run 仍 running
+        refreshed = rr.get_by_session("ast_active")
+        assert refreshed.status == "running"
+
+
+def test_evaluate_does_not_finalize_when_graph_not_terminal():
+    """条件 1：worker 退出但图未全终态 → 仍不置终态（等回流 / 续跑）。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_graph_not_term")
+        monitor = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[
+                _root(),
+                _executor("t1", "completed"),
+                _executor("t2", "in_progress"),  # 仍在跑
+            ],
+            run_repo=rr,
+        )
+        result = monitor.evaluate_session("ast_graph_not_term")
+        assert result is None
+        assert rr.get_by_session("ast_graph_not_term").status == "running"
+
+
+def test_evaluate_marks_failed_when_graph_has_failed_executor():
+    """条件 2：含 failed 执行节点（worker 退出 + 图全终态 + 非全 completed）→ failed。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_failed")
+        monitor = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[
+                _root(status="completed"),
+                _executor("t1", "completed"),
+                _executor("t2", "failed"),  # 含失败
+            ],
+            run_repo=rr,
+        )
+        result = monitor.evaluate_session("ast_failed")
+        assert result is not None
+        assert result["status"] == "failed"
+        assert rr.get_by_session("ast_failed").status == "failed"
+
+
+def test_evaluate_marks_succeeded_when_all_completed_and_quiescent():
+    """happy path：全 completed + 静默 → succeeded（含 summary 抽取）。"""
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+    from src.data.repos.session_repository import SessionRepository
+    from src.data.models_sqlite import Message, Session
+    from src.business.agents.config import AgentType
+
+    with ScheduledTaskRunRepository() as rr, MessageRepository() as mr:
+        # 建会话 + 一条 assistant 消息供 summary 抽取
+        SessionRepository().create(
+            Session(
+                session_id="ast_ok",
+                workflow_id=None,
+                agent_type=AgentType.ASSISTANT,
+                status="active",
+            )
+        )
+        mr.session.add(
+            Message(
+                message_id="msg_1",
+                session_id="ast_ok",
+                role="assistant",
+                content="已完成：竞品 A 价格 99 元",
+                sequence=1,
+            )
+        )
+        mr.session.commit()
+        _seed_run(rr, session_id="ast_ok")
+        monitor = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            run_repo=rr,
+            message_repo=mr,
+        )
+        result = monitor.evaluate_session("ast_ok")
+        assert result is not None
+        assert result["status"] == "succeeded"
+        assert "99 元" in result["summary"]
+
+
+def test_evaluate_reads_graph_snapshot_only_once() -> None:
+    """同一次静默落账必须复用图状态，不能在判静默后再次读取权威快照。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    snapshot_reads: list[str] = []
+    snapshot = SimpleNamespace(tasks=[_root(), _executor("t1", "completed")])
+
+    def get_snapshot(session_id: str):
+        snapshot_reads.append(session_id)
+        return snapshot
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_single_snapshot")
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            get_graph_snapshot=get_snapshot,
+            run_repo=rr,
+        )
+
+        result = monitor.evaluate_session("ast_single_snapshot")
+
+    assert result is not None
+    assert result["status"] == "succeeded"
+    assert snapshot_reads == ["ast_single_snapshot"]
+
+
+def test_evaluate_defers_when_pending_reentry():
+    """回流续跑轮：有 pending 回流 → 不置终态（等 drain briefing 续跑）。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_reentry")
+        monitor = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: True,  # 有 pending 回流
+            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            run_repo=rr,
+        )
+        result = monitor.evaluate_session("ast_reentry")
+        assert result is None
+        assert rr.get_by_session("ast_reentry").status == "running"
+
+
+def test_evaluate_skips_already_terminal_run():
+    """已终态 run 不再推进（幂等）。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        run = _seed_run(rr, session_id="ast_done")
+        rr.cas_transition(run.run_id, from_status="running", to_status="succeeded", summary="ok")
+        monitor = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            run_repo=rr,
+        )
+        result = monitor.evaluate_session("ast_done")
+        assert result is None
+
+
+def test_terminal_event_failure_remains_pending_and_next_evaluation_retries(
+    monkeypatch,
+):
+    """业务终态已提交但 emit 失败时，后续评估必须补投且确认后不重复。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.utils import events
+
+    attempts = 0
+    delivered: list[dict] = []
+
+    def fail_once(event_name, _sender, **payload):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("projector temporarily unavailable")
+        delivered.append({"event_name": event_name, **payload})
+
+    monkeypatch.setattr(events, "emit", fail_once)
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_retry_terminal")
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            get_graph_snapshot=lambda _sid: None,
+            run_repo=rr,
+        )
+
+        first = monitor.evaluate_session("ast_retry_terminal")
+        pending = rr.get_fresh(first["runId"])
+        assert first["status"] == "succeeded"
+        assert pending.terminal_event_delivered_at is None
+
+        assert monitor.evaluate_session("ast_retry_terminal") is None
+        acknowledged = rr.get_fresh(first["runId"])
+        assert acknowledged.terminal_event_delivered_at is not None
+
+        assert monitor.evaluate_session("ast_retry_terminal") is None
+
+    assert attempts == 2
+    assert [item["status"] for item in delivered] == ["succeeded"]
+
+
+def test_waiting_user_takeover_resets_delivery_ack_for_next_terminal_event(
+    monkeypatch,
+):
+    """waiting_user 通知已确认后，接管续跑必须为下一终态开启新的投影周期。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.utils import events
+
+    emitted: list[str] = []
+    monkeypatch.setattr(
+        events,
+        "emit",
+        lambda _event_name, _sender, **payload: emitted.append(payload["status"]),
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        run = _seed_run(rr, session_id="ast_delivery_cycle")
+        monitor = RunCompletionMonitor(run_repo=rr)
+
+        monitor.mark_waiting_user("ast_delivery_cycle")
+        waiting = rr.get_fresh(run.run_id)
+        assert waiting.terminal_event_delivered_at is not None
+        assert waiting.terminal_event_version == 1
+
+        resumed = rr.cas_transition(
+            run.run_id,
+            from_status="waiting_user",
+            to_status="running",
+        )
+        assert resumed.terminal_event_delivered_at is None
+        assert resumed.terminal_event_version == 1
+        finished = rr.cas_transition(
+            run.run_id,
+            from_status="running",
+            to_status="failed",
+            failure_reason="safe failure",
+        )
+        assert finished.terminal_event_delivered_at is None
+        assert finished.terminal_event_version == 2
+
+        assert monitor.retry_pending_terminal_events() == 1
+        assert rr.get_fresh(run.run_id).terminal_event_delivered_at is not None
+
+    assert emitted == ["waiting_user", "failed"]
+
+
+def test_stale_terminal_ack_cannot_swallow_newer_terminal_generation(monkeypatch):
+    """emit 与 ack 之间状态变化时，旧代次不得确认掉新的终态通知。"""
+    from src.business.scheduling.terminal_event_delivery import deliver_terminal_event
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.utils import events
+
+    emitted: list[str] = []
+
+    with ScheduledTaskRunRepository() as rr:
+        run = _seed_run(rr, session_id="ast_generation_race")
+        waiting = rr.cas_transition(
+            run.run_id,
+            from_status="running",
+            to_status="waiting_user",
+        )
+        assert waiting.terminal_event_version == 1
+
+        def transition_during_first_emit(_event_name, _sender, **payload):
+            emitted.append(payload["status"])
+            if payload["status"] != "waiting_user":
+                return
+            resumed = rr.cas_transition(
+                run.run_id,
+                from_status="waiting_user",
+                to_status="running",
+            )
+            assert resumed is not None
+            finished = rr.cas_transition(
+                run.run_id,
+                from_status="running",
+                to_status="failed",
+                failure_reason="safe failure",
+            )
+            assert finished is not None
+
+        monkeypatch.setattr(events, "emit", transition_during_first_emit)
+
+        assert deliver_terminal_event(run.run_id, run_repo=rr) is False
+        pending = rr.get_fresh(run.run_id)
+        assert pending.status == "failed"
+        assert pending.terminal_event_version == 2
+        assert pending.terminal_event_delivered_at is None
+
+        assert deliver_terminal_event(run.run_id, run_repo=rr) is True
+        acknowledged = rr.get_fresh(run.run_id)
+        assert acknowledged.terminal_event_version == 2
+        assert acknowledged.terminal_event_delivered_at is not None
+
+    assert emitted == ["waiting_user", "failed"]
+
+
+def test_evaluate_marks_succeeded_after_takeover_round():
+    """条件 3：waiting_user 接管回 running 后，下一轮静默才置 succeeded（后置终态）。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        run = _seed_run(rr, session_id="ast_takeover")
+        # 落 waiting_user（反问）
+        rr.cas_transition(run.run_id, from_status="running", to_status="waiting_user")
+        monitor_for_waiting = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[_root(), _executor("t1", "in_progress")],
+            run_repo=rr,
+        )
+        # waiting_user 状态：evaluate 不覆盖（emit needs_takeover 由 projector 处理）
+        assert monitor_for_waiting.evaluate_session("ast_takeover") is None
+        # 接管 → 回 running
+        rr.cas_transition(run.run_id, from_status="waiting_user", to_status="running")
+        # 续跑轮：图仍 in_progress → 不置终态
+        monitor_inprogress = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[_root(), _executor("t1", "in_progress")],
+            run_repo=rr,
+        )
+        assert monitor_inprogress.evaluate_session("ast_takeover") is None
+        # 下一轮：图全 completed + 静默 → succeeded
+        monitor_final = _make_monitor(
+            has_active_worker=lambda sid: False,
+            has_pending_reentry=lambda sid: False,
+            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            run_repo=rr,
+        )
+        result = monitor_final.evaluate_session("ast_takeover")
+        assert result is not None
+        assert result["status"] == "succeeded"
+
+
+def test_evaluate_fails_closed_when_pending_reentry_callback_is_missing():
+    """缺失 pending-reentry 权威查询时，不能把未知状态当作静默成功。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_pending_unknown")
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            get_graph_snapshot=lambda _sid: None,
+            run_repo=rr,
+        )
+
+        assert monitor.evaluate_session("ast_pending_unknown") is None
+        assert rr.get_by_session("ast_pending_unknown").status == "running"
+
+
+def test_evaluate_fails_closed_when_graph_snapshot_query_raises():
+    """图查询异常与权威“无图”不同：未知时不得误报简单会话成功。"""
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    def _raise(_session_id):
+        raise RuntimeError("graph database unavailable")
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_graph_unknown")
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            get_graph_snapshot=_raise,
+            run_repo=rr,
+        )
+
+        assert monitor.evaluate_session("ast_graph_unknown") is None
+        assert rr.get_by_session("ast_graph_unknown").status == "running"
+
+
+def test_mark_waiting_user_is_atomic_and_emits_once(monkeypatch):
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.utils import events
+
+    emitted: list[dict] = []
+    monkeypatch.setattr(
+        events,
+        "emit",
+        lambda event_name, _sender, **payload: emitted.append(
+            {"event_name": event_name, **payload}
+        ),
+    )
+
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_needs_user")
+        monitor = RunCompletionMonitor(run_repo=rr)
+
+        result = monitor.mark_waiting_user("ast_needs_user")
+        duplicate = monitor.mark_waiting_user("ast_needs_user")
+
+        assert result is not None
+        assert result["status"] == "waiting_user"
+        assert duplicate is None
+        assert rr.get_by_session("ast_needs_user").status == "waiting_user"
+        assert [item["status"] for item in emitted] == ["waiting_user"]
+
+
+def test_mark_failed_can_finish_waiting_user_run():
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as rr:
+        run = _seed_run(rr, session_id="ast_waiting_then_stopped")
+        rr.cas_transition(run.run_id, from_status="running", to_status="waiting_user")
+        monitor = RunCompletionMonitor(run_repo=rr)
+
+        result = monitor.mark_failed("ast_waiting_then_stopped")
+
+        assert result is not None
+        assert result["status"] == "failed"
+        row = rr.get_by_session("ast_waiting_then_stopped")
+        assert row.status == "failed"
+        assert row.finished_at is not None

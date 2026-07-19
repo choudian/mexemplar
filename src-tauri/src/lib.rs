@@ -8,6 +8,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let state = sidecar::launch_sidecar(app.handle())?;
             app.manage(state);

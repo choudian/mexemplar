@@ -1,7 +1,44 @@
 # Merged Features Log
 
-**Last Updated:** 2026-07-18
-**Revision:** 2026-07-18 — Archived 031 外部 Coding 技能组合与专员授权（同日继 032 之后）
+**Last Updated:** 2026-07-20
+**Revision:** 2026-07-20 — Archived 033 Scheduling Center（调度中心）
+
+## Scheduling Center（调度中心） — 2026-07-20
+
+**Branch:** `033-scheduling-center`
+**Spec:** `specs/033-scheduling-center`
+**Revision note:** Archived on the verified feature branch for merge into `prepare-github`.
+Feature-local IDs were mapped without collisions to US-114~119 / FR-511~535 / CC-190~199 /
+SC-222~229。CC-005 的 per-task 无人值守免确认持久化已作为 constitution 3.1.0 唯一显式
+受控例外登记；无未解决宪法冲突，0 新 secret。
+
+**What was added:**
+- US-114 (P1): 经主助理工具 + 全局确认卡创建立即任务，确认后点燃 scheduled 会话；取消、超时、停止和发布失败均不落库。
+- US-115 (P1): one-shot 到点只执行一次，成功触发后进入 completed。
+- US-116 (P2): interval/daily/weekly/weekdays 周期调度，misfire 只补最近一次，同 task reentry 记 skipped。
+- US-117 (P2): 待办行内接入，独立保存用户核定指令；只读 todo，不改表、不自动完成，来源恒 one-shot。
+- US-118 (P2): 未授权 scheduled 高危动作立即拒绝；per-task UI 显式授权受控放行；`waiting_user` 可通知并接管。
+- US-119 (P2): 第十个主屏 `/scheduled` 提供任务/历史、授权可见回收、暂停/启用/fire-now/软删和会话接管。
+
+**New Components:**
+- `src/business/scheduling/` — SchedulerService/Worker、schedule_calc、SessionLauncher、RunCompletionMonitor、TerminalEventDelivery、创建确认和无人值守确认 manager。
+- `src/data/scheduling_types.py`、`ScheduledTaskRepository`、`ScheduledTaskRunRepository`；
+  SQLite v30 `scheduled_tasks` / `scheduled_task_runs` + sessions 来源三列，v31 终态投递确认代次。
+- `/api/scheduled-tasks` typed API、5 个主助理专用工具、5 类注册公开 UI 事件。
+- 前端 `scheduledTasks.ts`、`scheduledStore.ts`、`ScheduledScreen`、
+  `StructuredConfirmationCard`、桌面通知封装；Tauri notification plugin 最小 capability。
+
+**Modified Components:**
+- `ChatService` / SessionRepository / AssistantRuntime / task collaboration 图终态观察接缝，
+  保持既有执行、通信、恢复与父侧回流语义。
+- `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、constitution 3.1.0 与根/src/frontend/Tauri AI 入口镜像。
+- `config.example.json` 与 UnifiedConfigManager：scheduler 扫描/确认超时；新增 `tzlocal` 与 Tauri notification 依赖。
+
+**Verification:** 归档时 033 聚焦 Python 套件 `310 passed`；7 个相关 frontend unit 文件
+`84 passed`。另一次 frontend 全量单测在 180 秒命令上限内未返回 verdict，未计为通过。
+T075 Windows NSIS/AUMID 桌面通知实机验收与 T080 quickstart 五场景实机冒烟仍待人工执行。
+
+**Tasks Completed:** 94/96 tasks
 
 ## 外部 Coding 技能组合与专员授权 — 2026-07-18
 

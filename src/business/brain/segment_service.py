@@ -41,6 +41,18 @@ class SegmentService:
         Returns:
             segment_id，如果成功封存
         """
+        # CC-006（033）：scheduled 会话不参与 brain Segment 沉淀——周期任务大量重复会话
+        # 会污染大脑记忆与招募信号。单点 early-return 收口（guard 测试守住）。
+        from src.data.repos.session_repository import SessionRepository
+
+        session = SessionRepository().get_by_id(session_id)
+        if session is not None and getattr(session, "is_scheduled", 0):
+            logger.info(
+                "Segment seal skipped: scheduled session=%s (CC-006 opt-out)",
+                session_id,
+            )
+            return None
+
         repo = self._get_repo()
         if message_id_start is None or message_id_end is None:
             inferred_start, inferred_end = self._infer_message_range(session_id)

@@ -140,6 +140,62 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     };
   }
 
+  // ── Scheduling Center fixtures ──
+  function scheduledTasks() {
+    return [
+      {
+        scheduledTaskId: "sch_e2e_1",
+        sourceType: "direct",
+        sourceRef: null,
+        title: "每天查竞品价格",
+        scheduleKind: "recurring",
+        scheduleDescription: "每天 09:00",
+        status: "active",
+        unattendedAutoApprove: false,
+        nextFireAt: "2026-07-20T01:00:00Z",
+        lastFireAt: "2026-07-19T01:00:00Z",
+        lastRunOutcome: "succeeded",
+        lastRunAt: "2026-07-19T01:30:00Z",
+        createdAt: "2026-07-18T10:00:00Z",
+        updatedAt: "2026-07-19T01:30:00Z",
+      },
+      {
+        scheduledTaskId: "sch_e2e_2",
+        sourceType: "direct",
+        sourceRef: null,
+        title: "整理周报",
+        scheduleKind: "one_shot",
+        scheduleDescription: "一次性 7月20日 17:00",
+        status: "active",
+        unattendedAutoApprove: true,
+        nextFireAt: "2026-07-20T09:00:00Z",
+        lastFireAt: null,
+        lastRunOutcome: null,
+        lastRunAt: null,
+        createdAt: "2026-07-19T10:00:00Z",
+        updatedAt: "2026-07-19T10:00:00Z",
+      },
+    ];
+  }
+
+  function scheduledRuns(taskId: string) {
+    if (taskId === "sch_e2e_1") {
+      return [
+        {
+          runId: "schr_e2e_1",
+          scheduledTaskId: taskId,
+          sessionId: "ast_e2e_1",
+          status: "succeeded",
+          startedAt: "2026-07-19T01:00:00Z",
+          finishedAt: "2026-07-19T01:30:00Z",
+          summary: "竞品 X 价格 99 元",
+          failureReason: null,
+        },
+      ];
+    }
+    return [];
+  }
+
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -1107,6 +1163,36 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     }
     if (path.startsWith("/api/settings/actions/")) {
       return json(route, { actionName: path.split("/").pop(), status: "completed", message: "已完成。", details: {} });
+    }
+
+    // ── Scheduling Center ──
+    if (path === "/api/scheduled-tasks" && method === "GET") {
+      return json(route, { items: scheduledTasks(), total: scheduledTasks().length, limit: 200, offset: 0 });
+    }
+    if (path.startsWith("/api/scheduled-tasks/sch_") && path.includes("/runs") && method === "GET") {
+      const taskId = path.split("/")[3];
+      return json(route, { items: scheduledRuns(taskId), total: scheduledRuns(taskId).length, limit: 50, offset: 0 });
+    }
+    if (path.startsWith("/api/scheduled-tasks/sch_") && path.endsWith("/fire-now") && method === "POST") {
+      return json(route, {});
+    }
+    if (path.startsWith("/api/scheduled-tasks/sch_") && method === "PATCH") {
+      const taskId = path.split("/")[3];
+      const existing = scheduledTasks().find((t) => t.scheduledTaskId === taskId);
+      if (existing) {
+        const patch = request.postDataJSON() as Record<string, unknown>;
+        return json(route, { ...existing, ...patch, updatedAt: new Date().toISOString() });
+      }
+      return json(route, { error: "not_found" }, 404);
+    }
+    if (path.startsWith("/api/scheduled-tasks/sch_") && method === "DELETE") {
+      return route.fulfill({ status: 204, body: "" });
+    }
+    if (path.startsWith("/api/scheduled-tasks/sch_") && path.includes("/takeover") && method === "POST") {
+      return json(route, { sessionId: "ast_takeover_1" });
+    }
+    if (path === "/api/scheduled-tasks/confirmations/pending" && method === "GET") {
+      return json(route, { items: [] });
     }
 
     return json(route, {});

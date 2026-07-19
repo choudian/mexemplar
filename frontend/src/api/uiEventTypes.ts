@@ -29,6 +29,11 @@ export const UI_EVENT_TYPES = [
   "brain_specialist_changed",
   "brain_context_ready",
   "improvement_proposal.changed",
+  "scheduled_task.completed",
+  "scheduled_task.needs_takeover",
+  "scheduled_task.changed",
+  "scheduling.confirmation_requested",
+  "scheduling.confirmation_resolved",
   "backend.resync_required",
 ] as const;
 
@@ -156,6 +161,11 @@ export const UI_EVENT_EXAMPLES = {
   "brain_specialist_changed": { "specialistId": "spec_1", "changeType": "update" },
   "brain_context_ready": { "sessionId": "sess_1" },
   "improvement_proposal.changed": { "proposalId": "prop_abc", "sourceReviewId": "rev_1", "status": "pending_review", "severity": "med", "changeType": "created" },
+  "scheduled_task.completed": { "taskId": "sch_abc", "taskTitle": "查竞品价格", "runId": "schr_xyz", "sessionId": "ast_001", "outcome": "succeeded", "summary": "竞品 A 价格 99 元", "failureReason": null },
+  "scheduled_task.needs_takeover": { "taskId": "sch_abc", "taskTitle": "查竞品价格", "runId": "schr_xyz", "sessionId": "ast_001", "reason": "needs_user_input" },
+  "scheduled_task.changed": { "taskId": "sch_abc", "changeType": "created" },
+  "scheduling.confirmation_requested": { "requestId": "scf_abc", "sessionId": "ast_001", "draft": { "title": "查竞品价格", "scheduleDescription": "每天 09:00", "instruction": "查询竞品价格并汇总", "scheduleKind": "recurring", "sourceType": "direct" }, "unattendedAutoApprove": false, "expiresAt": "2026-07-19T12:00:00" },
+  "scheduling.confirmation_resolved": { "requestId": "scf_abc", "sessionId": "ast_001", "status": "confirmed" },
   "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"] },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;
 
@@ -352,6 +362,21 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
     "status": ["approved", "done", "failed", "in_progress", "pending_review", "rejected"],
     "changeType": ["approved", "created", "done", "failed", "in_progress", "rejected"],
   },
+  "scheduled_task.completed": {
+    "outcome": ["failed", "succeeded"],
+  },
+  "scheduled_task.needs_takeover": {
+    "reason": ["failed_takeover", "needs_user_input"],
+  },
+  "scheduled_task.changed": {
+    "changeType": ["created", "deleted", "fired", "paused", "resumed", "status_changed"],
+  },
+  "scheduling.confirmation_resolved": {
+    "status": ["cancelled", "confirmed", "shutdown", "stopped", "timeout"],
+  },
+  "scheduling.confirmation_requested": {
+    "status": ["pending"],
+  },
 } as const satisfies Partial<Record<UiEventType, Record<string, readonly string[]>>>;
 
 export type UiEventHandlerDomain =
@@ -362,6 +387,7 @@ export type UiEventHandlerDomain =
   | "compositions"
   | "settings"
   | "brain"
+  | "scheduled"
   | "resync";
 
 export const UI_EVENT_HANDLER_DOMAINS = {
@@ -395,6 +421,11 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "brain_specialist_changed": "brain",
   "brain_context_ready": "brain",
   "improvement_proposal.changed": "brain",
+  "scheduled_task.completed": "scheduled",
+  "scheduled_task.needs_takeover": "scheduled",
+  "scheduled_task.changed": "scheduled",
+  "scheduling.confirmation_requested": "scheduled",
+  "scheduling.confirmation_resolved": "scheduled",
   "backend.resync_required": "resync",
 } as const satisfies Record<UiEventType, UiEventHandlerDomain>;
 
@@ -646,6 +677,80 @@ export type ImprovementProposalChangedEvent = UiEventEnvelope<
   }
 >;
 
+export type ScheduledTaskCompletedOutcome =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["scheduled_task.completed"]["outcome"][number];
+export type ScheduledTaskNeedsTakeoverReason =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["scheduled_task.needs_takeover"]["reason"][number];
+export type ScheduledTaskChangeType =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["scheduled_task.changed"]["changeType"][number];
+export type SchedulingConfirmationStatus =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["scheduling.confirmation_resolved"]["status"][number];
+export type SchedulingConfirmationRequestStatus =
+  (typeof UI_EVENT_PAYLOAD_ENUMS)["scheduling.confirmation_requested"]["status"][number];
+export type SchedulingDraftKind = "one_shot" | "recurring";
+export type SchedulingDraftSource = "direct" | "todo";
+
+export interface SchedulingConfirmationDraftPayload {
+  title: string;
+  scheduleDescription: string;
+  instruction: string;
+  scheduleKind: SchedulingDraftKind;
+  sourceType: SchedulingDraftSource;
+}
+
+export type ScheduledTaskCompletedEvent = UiEventEnvelope<
+  "scheduled_task.completed",
+  {
+    taskId: string;
+    taskTitle?: string | null;
+    runId: string;
+    sessionId: string;
+    outcome: ScheduledTaskCompletedOutcome;
+    summary?: string | null;
+    failureReason?: string | null;
+  }
+>;
+
+export type ScheduledTaskNeedsTakeoverEvent = UiEventEnvelope<
+  "scheduled_task.needs_takeover",
+  {
+    taskId: string;
+    taskTitle?: string | null;
+    runId: string;
+    sessionId: string;
+    reason: ScheduledTaskNeedsTakeoverReason;
+  }
+>;
+
+export type ScheduledTaskChangedEvent = UiEventEnvelope<
+  "scheduled_task.changed",
+  {
+    taskId: string;
+    changeType: ScheduledTaskChangeType;
+  }
+>;
+
+export type SchedulingConfirmationRequestedEvent = UiEventEnvelope<
+  "scheduling.confirmation_requested",
+  {
+    requestId: string;
+    sessionId: string;
+    draft: SchedulingConfirmationDraftPayload;
+    unattendedAutoApprove?: boolean;
+    expiresAt: string;
+    status: SchedulingConfirmationRequestStatus;
+  }
+>;
+
+export type SchedulingConfirmationResolvedEvent = UiEventEnvelope<
+  "scheduling.confirmation_resolved",
+  {
+    requestId: string;
+    sessionId: string;
+    status: SchedulingConfirmationStatus;
+  }
+>;
+
 export type SkillChangedReason = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["reason"][number];
 export type SkillChangedCallerType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.changed"]["callerType"][number];
 export type SkillEquipmentChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["skill.equipment.changed"]["changeType"][number];
@@ -798,6 +903,11 @@ export type UiEvent =
   | MeetingChangedEvent
   | TodoChangedEvent
   | ExternalCodingChangedEvent
+  | ScheduledTaskCompletedEvent
+  | ScheduledTaskNeedsTakeoverEvent
+  | ScheduledTaskChangedEvent
+  | SchedulingConfirmationRequestedEvent
+  | SchedulingConfirmationResolvedEvent
   | UiEventEnvelope<
       Exclude<
         UiEventType,
@@ -824,5 +934,10 @@ export type UiEvent =
         | "assistant.meeting.changed"
         | "assistant.todo.changed"
         | "assistant.external_coding.changed"
+        | "scheduled_task.completed"
+        | "scheduled_task.needs_takeover"
+        | "scheduled_task.changed"
+        | "scheduling.confirmation_requested"
+        | "scheduling.confirmation_resolved"
       >
     >;

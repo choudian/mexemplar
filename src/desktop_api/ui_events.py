@@ -90,6 +90,12 @@ EVENT_TYPE_BRAIN_SPECIALIST_RECRUITED = "brain_specialist_recruited"
 EVENT_TYPE_BRAIN_SPECIALIST_CHANGED = "brain_specialist_changed"
 EVENT_TYPE_BRAIN_CONTEXT_READY = "brain_context_ready"
 EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED = "improvement_proposal.changed"
+# 033 调度中心公开 UI 事件（经 UI Event Registry 注册的 typed envelope）
+EVENT_TYPE_SCHEDULED_TASK_COMPLETED = "scheduled_task.completed"
+EVENT_TYPE_SCHEDULED_TASK_NEEDS_TAKEOVER = "scheduled_task.needs_takeover"
+EVENT_TYPE_SCHEDULED_TASK_CHANGED = "scheduled_task.changed"
+EVENT_TYPE_SCHEDULING_CONFIRMATION_REQUESTED = "scheduling.confirmation_requested"
+EVENT_TYPE_SCHEDULING_CONFIRMATION_RESOLVED = "scheduling.confirmation_resolved"
 
 UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
     EVENT_TYPE_ASSISTANT_MESSAGE: UiEventDefinition(
@@ -795,6 +801,97 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             (
                 "changeType",
                 frozenset({"created", "approved", "rejected", "in_progress", "done", "failed"}),
+            ),
+        ),
+    ),
+    EVENT_TYPE_SCHEDULED_TASK_COMPLETED: UiEventDefinition(
+        EVENT_TYPE_SCHEDULED_TASK_COMPLETED,
+        "notification",
+        frozenset(
+            {"taskId", "taskTitle", "runId", "sessionId", "outcome", "summary", "failureReason"}
+        ),
+        frozenset({"sessionId"}),
+        {
+            "taskId": "sch_abc",
+            "taskTitle": "查竞品价格",
+            "runId": "schr_xyz",
+            "sessionId": "ast_001",
+            "outcome": "succeeded",
+            "summary": "竞品 A 价格 99 元",
+            "failureReason": None,
+        },
+        required_payload_keys=frozenset({"taskId", "runId", "sessionId", "outcome"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(("outcome", frozenset({"succeeded", "failed"})),),
+        unredacted_payload_keys=frozenset({"taskTitle", "summary"}),
+    ),
+    EVENT_TYPE_SCHEDULED_TASK_NEEDS_TAKEOVER: UiEventDefinition(
+        EVENT_TYPE_SCHEDULED_TASK_NEEDS_TAKEOVER,
+        "notification",
+        frozenset({"taskId", "taskTitle", "runId", "sessionId", "reason"}),
+        frozenset({"sessionId"}),
+        {
+            "taskId": "sch_abc",
+            "taskTitle": "查竞品价格",
+            "runId": "schr_xyz",
+            "sessionId": "ast_001",
+            "reason": "needs_user_input",
+        },
+        required_payload_keys=frozenset({"taskId", "runId", "sessionId", "reason"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(("reason", frozenset({"needs_user_input", "failed_takeover"})),),
+        unredacted_payload_keys=frozenset({"taskTitle"}),
+    ),
+    EVENT_TYPE_SCHEDULED_TASK_CHANGED: UiEventDefinition(
+        EVENT_TYPE_SCHEDULED_TASK_CHANGED,
+        "notification",
+        frozenset({"taskId", "changeType"}),
+        frozenset(),
+        {"taskId": "sch_abc", "changeType": "created"},
+        required_payload_keys=frozenset({"taskId", "changeType"}),
+        payload_enum_values=(
+            (
+                "changeType",
+                frozenset({"created", "paused", "resumed", "deleted", "fired", "status_changed"}),
+            ),
+        ),
+    ),
+    EVENT_TYPE_SCHEDULING_CONFIRMATION_REQUESTED: UiEventDefinition(
+        EVENT_TYPE_SCHEDULING_CONFIRMATION_REQUESTED,
+        "interactive",
+        frozenset(
+            {"requestId", "sessionId", "draft", "unattendedAutoApprove", "expiresAt", "status"}
+        ),
+        frozenset({"sessionId"}),
+        {
+            "requestId": "scf_abc",
+            "sessionId": "ast_001",
+            "draft": {
+                "title": "查竞品价格",
+                "scheduleDescription": "每天 09:00",
+                "instruction": "查询竞品价格并汇总",
+                "scheduleKind": "recurring",
+                "sourceType": "direct",
+            },
+            "unattendedAutoApprove": False,
+            "expiresAt": "2026-07-19T12:00:00",
+        },
+        required_payload_keys=frozenset({"requestId", "sessionId", "draft", "expiresAt"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(("status", frozenset({"pending"})),),
+    ),
+    EVENT_TYPE_SCHEDULING_CONFIRMATION_RESOLVED: UiEventDefinition(
+        EVENT_TYPE_SCHEDULING_CONFIRMATION_RESOLVED,
+        "interactive",
+        frozenset({"requestId", "sessionId", "status"}),
+        frozenset({"sessionId"}),
+        {"requestId": "scf_abc", "sessionId": "ast_001", "status": "confirmed"},
+        required_payload_keys=frozenset({"requestId", "sessionId", "status"}),
+        required_scope_keys=frozenset({"sessionId"}),
+        payload_enum_values=(
+            (
+                "status",
+                frozenset({"confirmed", "cancelled", "timeout", "stopped", "shutdown"}),
             ),
         ),
     ),

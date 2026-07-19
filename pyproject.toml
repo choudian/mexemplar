@@ -41,6 +41,8 @@ dependencies = [
     "pywinauto>=0.6.9",
     "sqlglot>=23.0.0,<30.0.0",
     "tldextract>=5.0.0,<6.0.0",
+    "tzdata>=2024.1; platform_system == 'Windows'",
+    "tzlocal>=5.3",
     "uiautomation>=2.0.29; platform_system == 'Windows'",
     "uvicorn>=0.34.0",
     "websockets>=14.0.0",

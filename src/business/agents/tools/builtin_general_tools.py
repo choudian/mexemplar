@@ -90,6 +90,9 @@ CONFIRM_SOURCE_TOP_TOGGLE = "top_toggle"
 CONFIRM_SOURCE_AUTO_SCOPE = "auto_scope"
 CONFIRM_SOURCE_SYSTEM_ERROR = "system_error"
 CONFIRM_SOURCE_NEW_CHAT_RESET = "new_chat_reset"
+# 033 US5 per-task 免确认：scheduled 会话 + 该 task 在授权集 → 放行（四重限定 / CC-005）。
+# 与进程级 ``CONFIRM_SOURCE_AUTO_SCOPE`` 平级独立，不读写 ``_auto_approve_enabled``。
+CONFIRM_SOURCE_UNATTENDED_TASK = "unattended_task"
 
 _SUMMARY_SNIPPET_MAX = 80
 _SUMMARY_TOTAL_MAX = 240
@@ -378,6 +381,7 @@ def _decision_from_result_source(result: bool, source: str) -> str:
         CONFIRM_SOURCE_TOAST_ALLOW_ALL,
         CONFIRM_SOURCE_TOP_TOGGLE,
         CONFIRM_SOURCE_AUTO_SCOPE,
+        CONFIRM_SOURCE_UNATTENDED_TASK,
     }:
         return CONFIRM_DECISION_AUTO_APPROVED if result else CONFIRM_DECISION_REJECTED
     return CONFIRM_DECISION_ACCEPTED if result else CONFIRM_DECISION_REJECTED
@@ -1130,7 +1134,106 @@ def _resolve_path_arg(ctx: ToolCallContext, key: str = "path", default: str | No
         return candidate.absolute()
 
 
+def _unattended_auto_approve_for(session_id: str | None) -> str:
+    """per-task 免确认判定（033 US5，四重限定 / CC-005）。
+
+    Args:
+        session_id: 当前高危确认归属的 session（``run_context.root_session_id``，
+            主助理与其子代理共享 root）。空值表示没有可判定的 session 上下文；非空
+            id 必须能查到权威会话，否则立即拒绝。
+
+    Returns:
+        - ``"authorized"``：``source='scheduled'`` 且该 ``scheduled_task_id`` 在
+          ``UnattendedConfirmationManager`` 授权集 → 放行（``_confirm_or_reject`` 据此
+          记 ``CONFIRM_SOURCE_UNATTENDED_TASK`` 审计 + 返回 None）。
+        - ``"reject_immediately"``：``source='scheduled'`` 但未授权 → **D7 立即拒**
+          （``_confirm_or_reject`` 据此直接返回拒绝 ``PreHookResult``，不等
+          ``_CONFIRM_TIMEOUT`` 120s 空等，fail-closed 靠机制不靠 prompt）。
+        - ``"passthrough"``：没有 session 上下文，或已确认是非 scheduled 会话
+          （用户会话 ``source='user'``）→ 走原逻辑（``_ask_user_confirm``），用户会话
+          完全不受影响。
+
+    对非空 root session id，查询异常或查不到行都无法证明它不是 scheduled，必须
+    fail-closed 返回 ``"reject_immediately"``，不能退回进程级「全部允许」或交互确认。
+    一旦已确认是 scheduled，会话授权查询异常同样按未授权立即拒绝。
+    """
+    sid = (session_id or "").strip()
+    if not sid:
+        return "passthrough"
+    try:
+        from src.data.repos.session_repository import SessionRepository
+
+        with SessionRepository() as repo:
+            session = repo.get_by_id(sid)
+    except Exception:
+        logger.debug(
+            "[builtin_tools] _unattended_auto_approve_for: session lookup failed for %s",
+            sid,
+            exc_info=True,
+        )
+        return "reject_immediately"
+    if session is None:
+        return "reject_immediately"
+    if str(getattr(session, "source", "") or "") != "scheduled":
+        return "passthrough"
+    task_id = getattr(session, "scheduled_task_id", None)
+    if not task_id:
+        # source=scheduled 但 scheduled_task_id 缺失（数据异常）→ 按未授权 D7 立即拒
+        return "reject_immediately"
+    try:
+        from src.business.scheduling.unattended_confirmation_manager import (
+            get_unattended_confirmation_manager,
+        )
+
+        if get_unattended_confirmation_manager().is_authorized(str(task_id)):
+            return "authorized"
+    except Exception:
+        logger.error(
+            "[builtin_tools] _unattended_auto_approve_for: authorization check failed "
+            "for scheduled task %s; rejecting fail-closed",
+            task_id,
+            exc_info=True,
+        )
+        return "reject_immediately"
+    return "reject_immediately"
+
+
 def _confirm_or_reject(tool_name: str, summary: str) -> PreHookResult | None:
+    # 033 US5 per-task 免确认（CC-005，完全独立于进程级 ``_auto_approve_enabled``）：
+    # 必须先于进程级「全部允许」判定当前 root session。scheduled+授权 → 仅按 per-task
+    # 授权放行；scheduled+未授权 → **D7 立即拒**（不空等 120s，也不允许进程级开关越权）；
+    # 只有非 scheduled 会话才继续走既有进程级 auto-approve / 交互确认路径。
+    current_session_id = None
+    try:
+        from src.business.agents import run_context
+
+        _run_ctx = run_context.get_current()
+        current_session_id = _run_ctx.root_session_id if _run_ctx is not None else None
+    except Exception:
+        current_session_id = None
+    unattended_decision = _unattended_auto_approve_for(current_session_id)
+    if unattended_decision == "authorized":
+        pending = PendingConfirmation(
+            request_id=str(uuid.uuid4()),
+            tool_name=tool_name,
+            summary=summary,
+            created_at=time.monotonic(),
+            event=threading.Event(),
+            result=True,
+            decision=CONFIRM_DECISION_AUTO_APPROVED,
+            source=CONFIRM_SOURCE_UNATTENDED_TASK,
+        )
+        _log_confirmation_decision(pending)
+        _last_confirmation_source.set(CONFIRM_SOURCE_UNATTENDED_TASK)
+        return None
+    if unattended_decision == "reject_immediately":
+        increment_agent_tool_health(confirmation_fail_closed=1)
+        _last_confirmation_source.set(CONFIRM_SOURCE_SYSTEM_ERROR)
+        return PreHookResult(
+            error="无人值守 scheduled 会话未开启免确认，已立即拒绝该高危操作",
+            error_code="confirmation_failed_closed",
+        )
+
     if is_auto_approve_enabled():
         pending = PendingConfirmation(
             request_id=str(uuid.uuid4()),
@@ -1958,6 +2061,7 @@ __all__ = [
     "CONFIRM_SOURCE_TOAST_REJECT",
     "CONFIRM_SOURCE_TOAST_TIMEOUT",
     "CONFIRM_SOURCE_TOP_TOGGLE",
+    "CONFIRM_SOURCE_UNATTENDED_TASK",
     "CONFIRM_TIMEOUT_MS",
     "PendingConfirmation",
     "get_confirmation_remaining_timeout_ms",

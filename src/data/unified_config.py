@@ -620,6 +620,22 @@ class UnifiedConfigManager:
             maximum=1000000,
         )
 
+    # ----------------------------------------------------------------------
+    # 调度中心（scheduling）配置——033
+    # ----------------------------------------------------------------------
+
+    def get_scheduler_scan_interval_seconds(self) -> int:
+        """SchedulerWorker 周期扫描兜底间隔（动态 wait 会按最近 next_fire_at 缩短）。"""
+        return self._get_bounded_positive_int(
+            "scheduler.scan_interval_seconds", 30, minimum=5, maximum=600
+        )
+
+    def get_scheduler_confirmation_timeout_seconds(self) -> int:
+        """创建确认卡超时；超时/取消/停止/关闭一律 fail-closed 不创建任务。"""
+        return self._get_bounded_positive_int(
+            "scheduler.confirmation_timeout_seconds", 300, minimum=30, maximum=3600
+        )
+
     def get_agent_tools_file_default_max_lines(self) -> int:
         return self._get_bounded_positive_int(
             "agent_tools.file.default_max_lines", 200, maximum=1000

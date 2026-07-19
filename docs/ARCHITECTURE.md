@@ -322,6 +322,32 @@ React UserTodoScreen
 - AI 对话管理个人待办时，主助理按任务型消息委派临时执行体；`create_user_todo`、`list_user_todos`、`update_user_todo`、`complete_user_todo`、`delete_user_todo` 只进入 delegated executor 工具集，不进入主助理工具集。
 - V1 不新增公开 UI event；UI 操作后直接刷新 `/api/user-todos` 权威列表，AI 操作由助手回复确认。
 
+### Scheduling Center 调度中心（033）
+
+调度中心是办公助理的**时间维度触发中枢**：用户在对话中创建「立即 / 一次性定时 / 周期」任务，到点新建一个标记为 `source=scheduled` 的主助理会话，把任务指令作为消息投递进去，主助理像处理用户消息一样全权处理（判复杂度、拆任务图、协作、回流），跑完记账、喊用户。它**不另起新系统**，复用既有任务协作内核推进执行，只在外层加「触发 + 完成判定 + 通知」。
+
+```text
+对话 create_scheduled_task → SchedulingConfirmationManager（确认卡 first-decision-wins）
+  → SchedulerService.create_from_draft → scheduled_tasks
+SchedulerWorker（双 Event 值守：周期扫描 + 立即唤醒）
+  → list_due(now) → SessionLauncher（构造 detached session → session + active run 同事务
+      first-wins 提交 → dispatch；原子创建失败零 run）
+  → 主助理会话（复用 100% 调度 + task_collaboration 内核执行）
+  → RunCompletionMonitor（runtime 直调 + 内部图/任务事件；静默 ∧ 图全终态 → run 终态）
+  → terminal_event_version + delivered_at（按代次投影确认；失败由启动恢复 + worker tick 重试）
+  → scheduled_task.completed / needs_takeover / changed（公开 UI 事件）→ Toast + 桌面通知
+```
+
+- **命名区隔**（三处「调度」词汇重叠，靠文档点明，不改既有命名）：调度中心（scheduling）= 时间维度触发中枢；`task_collaboration.graph_scheduler` = 依赖维度推进器（DAG 按依赖就绪推进节点）；「100% 调度」（dispatch）= 任务派发机制（主助理派活给执行体）。
+- 数据：SQLite v30 新增 `scheduled_tasks`（软删、来源/调度参数/用户核定后的独立 `instruction`/状态/per-task 免确认/触发时刻）/ `scheduled_task_runs`（append-only 执行账目，partial unique index 硬保证每个 task 同时最多一个 `running|waiting_user`）+ `sessions` 加 `source`（user/scheduled）/ `scheduled_task_id` / `is_scheduled` 三列；v31 为 run 增加 `terminal_event_delivered_at`、单调 `terminal_event_version` 与待投递索引，既避免业务终态已提交后通知异常永久丢失，也防止旧事件 ack 吞掉并发产生的新终态；**不改 `user_todos`**（待办仅以 `todo_id` 字符串外部引用，worker 与 `fire_now` 每次触发前只读校验，悬空或已完成则任务惰性过期且不建 run）。
+- 时区：无 offset 的 one-shot ISO 与日历时刻按显式 IANA `tz` 或 `tzlocal` 权威发现的桌面系统本地时区解释，再转 UTC naive 持久化；本地时区依赖缺失/发现失败会拒绝创建而非静默回退 UTC。DST ambiguous 取 `fold=0`，nonexistent 按 gap 向后推进，两者均记录 warning。
+- `SchedulerWorker` 双 Event：周期扫描（`scheduler.scan_interval_seconds`，bounded `[5,600]`，默认 30）+ 动态缩短到最近 `next_fire_at` + `notify_scheduler_worker()` 立即唤醒；misfire 补跑最近一次（不补全部历史），interval 从原 `next_fire_at` 节拍锚点跳到首个未来格点（扫描延迟不永久平移周期），reentry 走独立 `create_skipped()` 建账（不启动会话，真实 running run 不可转 skipped，不堆积并发）。
+- lifespan 装配顺序固定为：注册 runtime launcher → 加载 per-task 授权 → 安装 completion monitor（先补投未确认终态事件）→ 最后启动 worker，避免启动即到期的 misfire 抢在安全/终态接线之前运行；关闭时先停 worker 再撤销 monitor/launcher。任一步初始化失败会清理半初始化组件，并把 `/api/health` / bootstrap connection 标记为 `scheduling=degraded`，不得继续承诺自动触发可用。
+- 完成判定（FR-012）：「会话静默 = 无活跃主助理 worker ∧ 无未消费回流 ∧ 图全终态」；首轮主助理回合 completed ≠ 完成（委派 durable 非阻塞），含失败/取消的图不漏报，任何 runtime/图查询未知都 fail-closed。普通/reentry worker 退出后确定性重评，`graph_scheduler_terminal(session_id=...)` 与既有任务活动事件提供较早观察；业务层不订阅公开 `assistant.progress` 推导终态。`compute_graph_terminal_state` 归属内核自有 `task_collaboration/graph_terminal.py`。
+- scheduled 会话从 AI Assistant 聊天屏列表排除（`exclude_sources=["scheduled"]`）、不沉淀 brain Segment（CC-006）。
+- **per-task 无人值守免确认（CC-005 显式受控破例）**：`scheduled_tasks.unattended_auto_approve` 持久化到 SQLite，是对「免确认只允许进程会话级内存」规则的唯一显式受控破例。四重限定（仅 scheduled 会话 / 仅该 task / 默认关闭 / 只能用户显式 UI 操作开启）+ 工具参数三重不暴露（schema/handler/router create-update 源码均不含该字段）+ 独立 `UnattendedConfirmationManager`（不碰进程级 `_auto_approve_enabled`）+ D7 立即拒（scheduled 来源判定先于进程级「全部允许」；未授权高危立即按拒绝处理，不空等超时且不能被全局开关越权）。开启该例外的任务在调度中心列表层带醒目标记、可在详情页显式开启或随时回收。
+- 创建经对话工具 + 全局确认卡（`scheduling.confirmation_requested/resolved` interactive 事件，内存态 first-decision-wins + 后端权威 `expires_at`；周期过期、取消、session stop、关闭或 requested 事件发布失败均 fail-closed 不创建；重连可拉不含内部调度 payload 的全局可渲染 pending 快照）；编辑确认只合并公开 `title`/`instruction`，调度/source 字段仍以后端原 draft 为权威。5 个主助理独占工具（不进 executor 路径）；`/api/scheduled-tasks` typed API 承载管理/行内操作/历史/接管。
+
 ### PM → 程序员的交接
 
 交接数据为结构化 JSON：

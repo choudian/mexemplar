@@ -23,8 +23,10 @@ service 的 identity-map stale，与 dispatcher/adjudication 的 per-operation s
 from __future__ import annotations
 
 import logging
+import threading
 from typing import TYPE_CHECKING, Callable
 
+from src.business.task_collaboration.graph_terminal import compute_graph_terminal_state
 from src.business.task_collaboration.models import (
     TERMINAL_TASK_STATUSES,
     AdjudicationDecision,
@@ -55,6 +57,8 @@ class GraphScheduler:
     ) -> None:
         self._dispatcher = dispatcher
         self._reentry_sink = reentry_sink
+        self._terminal_observation_lock = threading.Lock()
+        self._terminal_observation_versions: dict[str, int] = {}
 
     def set_reentry_sink(self, sink: "ParentReentrySink | None") -> None:
         """后续注入 reentry_sink（runtime 安装 sink 晚于 scheduler 构造时用）。"""
@@ -142,12 +146,10 @@ class GraphScheduler:
             logger.warning("GraphScheduler._advance: snapshot not found for %s", graph_id)
             return
 
-        # 单次遍历：区分 root / 执行节点 + 收集 completed_ids + 终态统计
+        # 单次遍历：区分 root / 执行节点 + 收集 completed_ids（终态统计已抽到公共函数）
         root = None
         real_nodes: list = []
         completed_ids: set[str] = set()
-        all_terminal = True
-        all_completed = True
         for t in snapshot.tasks:
             if t.parent_task_id is None:
                 root = t
@@ -155,12 +157,14 @@ class GraphScheduler:
                 real_nodes.append(t)
             if t.status == TaskStatus.COMPLETED:
                 completed_ids.add(t.task_id)
-            if t.parent_task_id is not None:
-                # 只统计执行节点的终态（root 容器不参与）
-                if t.status not in TERMINAL_TASK_STATUSES:
-                    all_terminal = False
-                if t.status != TaskStatus.COMPLETED:
-                    all_completed = False
+
+        # 全图终态判定（只看执行节点，root 容器不参与）——抽到
+        # task_collaboration.graph_terminal.compute_graph_terminal_state 统一复用。
+        all_terminal, all_completed = compute_graph_terminal_state(
+            snapshot.tasks,
+            terminal_statuses=TERMINAL_TASK_STATUSES,
+            completed_status=TaskStatus.COMPLETED,
+        )
 
         # 全图完成判定：所有执行节点已终态（全成功 或 含失败/取消）。
         # 契约 §2 规定 all_nodes_terminal → notify：含失败/取消也必须通知主助理裁定后续，
@@ -172,15 +176,35 @@ class GraphScheduler:
             if not already_closed:
                 if all_completed and root is not None:
                     # 全成功 → root 容器收口 completed
+                    # 必须先完成原有状态副作用，再 claim 新增 observer；否则瞬时 DB
+                    # 失败会消费 claim，后续推进永久失去收口重试机会（CC-003）。
                     svc.update_task_status(task_id=root.task_id, status=TaskStatus.COMPLETED)
                 # 含失败/取消时不收口 root（保留非终态供主助理裁定 replan/abandon）；
-                # 重复触发 _advance 的堆积由 sink 的 graph 级去重兜底（未消费的
-                # graph_completed 不重复入队，drain 清除后允许下次再通知）
+                # 父侧回流保持原有可重试语义，其 sink 自己负责已入队通知的幂等。
                 logger.info(
                     "GraphScheduler: graph %s terminal (all_completed=%s)",
                     graph_id,
                     all_completed,
                 )
+                if self._claim_terminal_observation(graph_id, snapshot.version):
+                    try:
+                        from src.utils.events import emit
+
+                        emit(
+                            "graph_scheduler_terminal",
+                            self,
+                            graph_id=graph_id,
+                            session_id=snapshot.session_id,
+                            all_terminal=True,
+                            all_completed=all_completed,
+                        )
+                    except Exception:
+                        # 完成监视是观察者，绝不能因其回调失败阻断父侧回流收口。
+                        logger.error(
+                            "GraphScheduler: graph terminal event failed for %s",
+                            graph_id,
+                            exc_info=True,
+                        )
                 self._notify_graph_complete(svc, graph_id, snapshot.session_id)
             return
 
@@ -312,6 +336,20 @@ class GraphScheduler:
                     exc_info=True,
                 )
         logger.info("GraphScheduler: graph %s complete notification sent", graph_id)
+
+    def _claim_terminal_observation(self, graph_id: str, graph_version: int) -> bool:
+        """同一进程内对 ``(graph_id, graph_version)`` 做 first-wins 终态观察。
+
+        graph scheduler 是进程级单例；内部 blinker 事件本身也是进程内观察接缝，因此
+        这里用锁只保证新增 observer event 在并发 ``_advance`` 中 emit 一次。它不得
+        门控 root 收口或父侧 reentry：这些既有副作用必须保留瞬时失败后的重试语义。
+        replan 会 bump ``graph_version``，新的图形态可再次产生一次终态观察。
+        """
+        with self._terminal_observation_lock:
+            if self._terminal_observation_versions.get(graph_id) == graph_version:
+                return False
+            self._terminal_observation_versions[graph_id] = graph_version
+            return True
 
     def _resolve_session_id(self, svc: "TaskCollaborationService", graph_id: str) -> str:
         """从 graph_id 解析 session_id（经 service 公共表面，不访问私有属性）。"""

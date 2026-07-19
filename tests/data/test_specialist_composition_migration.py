@@ -49,4 +49,5 @@ def test_v29_adds_versioned_specialist_composition_ids_idempotently() -> None:
 
 def test_v29_is_registered_after_external_coding_baseline() -> None:
     versions = [version for version, _ in migrations._MIGRATIONS]
-    assert versions[-2:] == [28, 29]
+    # 只守本 feature 的顺序不变量；后续迁移可以继续追加，不能让本测试腐烂。
+    assert versions.index(29) == versions.index(28) + 1

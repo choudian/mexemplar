@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-07-10
-**Revision**: 2026-07-10 — Archived feature 030 (外部 Coding Session)
+**Last Updated**: 2026-07-20
+**Revision**: 2026-07-20 — Archived feature 033 (Scheduling Center / 调度中心)
 
 ---
 
@@ -2233,3 +2233,119 @@ remains explicitly incomplete; automated implementation and regression tasks are
 - **SC-219**: 自动测试证明所有非授权矩阵均无法看到或激活组合成员。
 - **SC-220**: 专员配置更新后，当前记录与版本历史中的 `composition_ids` 一致。
 - **SC-221**: 既有 external coding 业务、API 和 UI 相关回归测试保持通过。
+
+## Scheduling Center（调度中心） [Source: specs/033-scheduling-center]
+
+**Revision note (2026-07-20)**: Archived 033 on the verified feature branch for merge into
+`prepare-github`。新增时间维度触发中枢：立即 / 一次性定时 / 周期任务到点后新建
+`source=scheduled` 主助理会话，复用既有 100% 调度与 task collaboration 内核执行，
+并提供执行记账、完成/接管通知、管理屏和待办来源接入。CC-005 的 per-task 无人值守
+免确认持久化已作为 constitution 3.1.0 唯一显式受控例外登记；0 新 secret。任务账本
+94/96，剩余 T075/T080 均为 Windows NSIS / 实机 quickstart 人工验收。
+
+> ID mapping: 033 feature-local US1~6 / FR-001~025 / CC-001~010 / SC-001~008
+> 归档时顺延为 US-114~119 / FR-511~535 / CC-190~199 / SC-222~229；
+> 不复用或重排既有全局编号。
+
+### User Stories
+
+- **US-114 (P1)**: 立即触发——用户在对话中提出现在执行的任务，主助理通过创建工具弹出
+  全局确认卡；确认后任务落库并立即点燃 scheduled 会话，取消、超时、停止或发布失败均
+  fail-closed 不创建。验收：完成后有 Toast + 桌面通知和 succeeded 历史，聊天列表不出现
+  该 scheduled 会话。
+- **US-115 (P1)**: 一次性定时——用户核对人类可读时刻与指令后创建 one-shot 任务；
+  app 运行且到点时只触发一次，成功触发后任务进入 completed，不再重复执行。
+- **US-116 (P2)**: 周期任务——支持每隔 N 分钟/小时、每天、每周和工作日规则；
+  app 重启只补跑最近一次 misfire，同任务上次未静默时本次记 skipped 且不并发堆积。
+- **US-117 (P2)**: 待办接入——待办行内动作以标题 + 描述预填可编辑指令，经确认后创建
+  one-shot 任务；执行只读校验待办仍存在且未完成，结果可回显但绝不自动修改待办状态或表结构。
+- **US-118 (P2)**: 无人值守安全与人工接管——未授权 scheduled 会话的高危动作立即拒绝；
+  用户可仅为单个任务通过 UI 显式开启免确认；需要补充信息时 run 进入 `waiting_user` 并通知，
+  用户可从历史进入会话继续处理。
+- **US-119 (P2)**: 调度中心管理屏——`/scheduled` 一览任务状态、调度描述、下次触发和
+  上次结果，支持暂停/启用/现在跑/软删；免确认授权列表层醒目可回收，scheduled 会话仅在
+  调度历史可见并可导航接管。
+
+### Functional Requirements
+
+- **FR-511**: 系统 MUST 支持立即动作、一次性定时和周期三种触发；立即是可作用于既有任务的动作，不是第三种持久任务类型。
+- **FR-512**: 每次触发 MUST 新建 `source=scheduled` 的主助理会话并投递用户核定后的指令；调度中心不得自行拆任务或派执行体。
+- **FR-513**: scheduled 会话 MUST 获得无人值守 advisory；安全边界仍由确定性机制 fail-closed 保证。
+- **FR-514**: 执行、通信、恢复和任务图推进 MUST 复用既有 task collaboration 内核；只允许登记的公共图终态函数与观察事件接缝。
+- **FR-515**: 定时任务创建入口 MUST 是主助理专用工具 + 用户确认卡；调度中心 UI 不提供绕过确认的创建表单。
+- **FR-516**: 创建 MUST 等用户核对标题、时刻和指令后才落库；取消、超时、停止、关闭和事件发布失败均不得创建。
+- **FR-517**: 创建确认卡 MUST 以默认关闭的复选框让用户显式决定 per-task 无人值守免确认，且详情页可事后回收。
+- **FR-518**: 第一批周期规则 MUST 至少支持 interval、daily、weekly 和 weekdays；不得引入完整 cron/rrule。
+- **FR-519**: `SchedulerWorker` MUST 随 sidecar 生命周期启动/停止，使用周期扫描 + 事件唤醒，并动态等待最近 `next_fire_at`。
+- **FR-520**: app 未运行导致的 misfire MUST 只补跑最近一次；暂停期间错过不补跑，one-shot 过点后 expired，周期滚到下个未来时点。
+- **FR-521**: worker 与 fire-now 并发时，同一 task 同时最多一个 `running|waiting_user` run；数据库 partial unique index 是 first-wins 权威门卫，冲突记 skipped 且不建会话。
+- **FR-522**: 完成 MUST 定义为无活跃主助理 worker、无未消费回流且任务图全终态；任一查询未知时 MUST 延后，不得把首轮 completed 或 root 状态误当完成。
+- **FR-523**: 静默且全成功标 succeeded，含失败/取消标 failed，需要用户回答标 `waiting_user`；前三类按契约通知，skipped 只记历史。
+- **FR-524**: app 运行时终态通知 MUST 同时提供应用内 Toast 与桌面通知；app 未运行时既不触发也不通知。
+- **FR-525**: 待办来源 MUST 只保存 `todo_id` 外部引用和用户核定后的独立 `instruction`，触发前只读校验待办；不得修改 `user_todos` schema。
+- **FR-526**: `source_type=todo` MUST 恒为 one-shot；待办删除或完成后任务 MUST 惰性 expired，Repository 读取异常不得误判为悬空。
+- **FR-527**: 待办来源任务执行后 MUST NOT 自动改变待办状态；是否标记完成仍由用户决定。
+- **FR-528**: `/scheduled` MUST 展示任务及历史，并提供暂停、启用、fire-now、软删和接管入口。
+- **FR-529**: `unattended_auto_approve=true` 的任务 MUST 在列表层醒目标识并可在详情页显式回收。
+- **FR-530**: 调度中心空态 MUST 提供去对话创建的示例与指引。
+- **FR-531**: scheduled 会话 MUST 从普通 AI Assistant 会话列表排除，仅通过调度历史查看或继续。
+- **FR-532**: 定时任务删除 MUST 走软删；历史 run 与真实关联会话保留可追溯。
+- **FR-533**: 未开启 per-task 免确认的 scheduled 会话遇高危确认 MUST 立即拒绝，不得等待普通超时，也不得被进程级“全部允许”越权放行。
+- **FR-534**: per-task 免确认 MUST 同时限定为仅 scheduled 会话、仅该 task、默认关闭、仅用户显式 UI 操作开启；不得改变进程级 `_auto_approve_enabled` 或其他会话。
+- **FR-535**: `unattended_auto_approve` MUST NOT 出现在创建/更新定时任务的 Agent 工具 schema、handler 参数或通用创建/更新路由中；唯一写路径是确认卡和详情 PATCH。
+
+### Key Entities
+
+- **ScheduledTask**: SQLite v30 `scheduled_tasks`；保存来源、`source_ref`、用户核定后的独立
+  `instruction`、调度规则、状态、per-task 授权、`next_fire_at`/`last_fired_at` 与软删标记。
+  `source_type=todo` 只保存外部引用，不建 FK。
+- **ScheduledTaskRun**: SQLite v30 append-only `scheduled_task_runs`；记录 task/session、
+  起止时间、`running|succeeded|failed|waiting_user|skipped`、安全摘要与失败投影；
+  partial unique index 保证每 task 仅一个 active run。v31 增加
+  `terminal_event_delivered_at` 与单调 `terminal_event_version`，按代次确认终态事件投影。
+- **Session 来源**: 既有 `sessions` 表在 v30 增加 `source`、`scheduled_task_id`、
+  `is_scheduled`；既有行回填为 user，Repository 强制 scheduled 三字段关系一致。
+
+### Data Flow / Architecture
+
+`create_scheduled_task` → `SchedulingConfirmationManager` → `SchedulerService` →
+`scheduled_tasks`；`SchedulerWorker` 到点后调用 `SessionLauncher`，在同一事务提交 detached
+session + active run，再经 desktop lifespan 注入的 callback 调用权威 `AssistantRuntime`。
+`RunCompletionMonitor` 由 runtime worker 退出直调和内部图/任务事件双路径重评静默条件，
+写入 run 终态后通过 `TerminalEventDelivery` 发布注册过的 UI 事件；v31 对未确认投影在启动
+与 worker tick 有界重试。business 层不反向 import desktop API。
+
+### Constraints & Compatibility
+
+- **CC-190**: 调度路径 MUST NOT 修改 `user_todos` 表或结构；待办仅作外部只读引用。
+- **CC-191**: todo 来源 MUST 恒为 one-shot，防止周期语义污染个人待办。
+- **CC-192**: task collaboration 执行/通信/恢复决策保持不变；公共图终态函数和首次全终态 observer emit 不得门控既有 root 收口或父侧 reentry，观察者失败不得阻断原路径。
+- **CC-193**: 无人值守安全 MUST 由立即拒绝和权威 session/task 判定硬保证，不得退回 prompt 或乐观超时。
+- **CC-194**: `unattended_auto_approve` 持久化是 constitution 3.1.0 登记的唯一受控例外，必须保持四重限定、三重不暴露、独立 manager 和列表层可回收。
+- **CC-195**: scheduled 会话第一批 MUST NOT 参与 brain Segment 沉淀。
+- **CC-196**: 5 个 scheduled task Agent 工具 MUST 仅对主助理开放，不得进入 delegated executor 工具集。
+- **CC-197**: 面向前端的 5 类 scheduling 事件 MUST 经 UI Event Registry typed envelope 发布；内部通知走 blinker。
+- **CC-198**: scheduler 配置与本地时区发现 MUST 经 `UnifiedConfigManager`/权威依赖；不得新增明文 secret 或静默回退 UTC。
+- **CC-199**: Tauri notification plugin MUST 只申请 `notification:default` 最小权限；业务终态规则不得下沉 Rust。
+
+### Success Criteria
+
+- **SC-222**: 自然语言创建后，确认卡展示的时间/指令与实际持久化、触发行为一致。
+- **SC-223**: 立即、one-shot 和 recurring 均按规则触发，短周期可在分钟级验证。
+- **SC-224**: succeeded、failed、waiting_user 在 app 运行时产生可区分通知，skipped 不打扰用户。
+- **SC-225**: 调度中心完整展示任务与历史，免确认任务可一览并显式回收。
+- **SC-226**: app 重启只补最近一次 misfire，一次性用户意图不会静默丢失。
+- **SC-227**: 未由用户显式授权的 scheduled 高危动作不会执行，且不污染其他会话的确认状态。
+- **SC-228**: failed 或 waiting_user run 可从历史进入真实会话继续沟通和接管。
+- **SC-229**: 待办接入不改变待办 schema 或完成状态，也不引入周期待办语义。
+
+### Edge Cases
+
+- app 关闭期间不触发、不通知；启动后按 misfire 规则补最近一次。
+- paused 期间过点不补跑；one-shot expired，recurring 滚到未来。
+- 同 task 重入或并发抢占 active-run 槽时只记 skipped，不启动第二个会话。
+- todo 被删除/完成时 task expired；todo Repository 暂时失败时保留任务重试。
+- 首轮主助理 completed 但 durable 子任务仍在执行时不得误报终态。
+- 图含失败/取消或图/runtime 查询未知时不得误报全成功。
+- 终态事件采用持久 at-least-once 投递；发布后、确认前退出的极窄窗口允许重复提醒，但不得永久丢失。
+- 无 offset 时间按显式 IANA 时区或 `tzlocal` 发现的系统时区解释；发现失败拒绝创建，DST ambiguous/nonexistent 按已登记规则处理并记录 warning。

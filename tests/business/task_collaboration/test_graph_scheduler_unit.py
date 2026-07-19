@@ -62,6 +62,20 @@ class FakeReentrySink:
         self.completed.append(graph_id)
 
 
+class FlakyReentrySink(FakeReentrySink):
+    """首次回流失败，后续调用恢复。"""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    def notify_graph_complete(self, graph_id: str, session_id: str) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("temporary reentry failure")
+        super().notify_graph_complete(graph_id, session_id)
+
+
 @pytest.fixture(autouse=True)
 def _reset_scheduler_singleton():
     """隔离全局单例，防跨测试污染。"""
@@ -383,6 +397,96 @@ class TestGraphCompletion:
         assert graph_id in sink.completed
         assert _status(root_id) == "completed"
 
+    def test_root_close_retries_after_transient_status_update_failure(self, monkeypatch):
+        """终态观察去重不能吞掉 root 收口的下一次重试。"""
+        graph_id, node_ids, root_id, _ = _build_graph(
+            [{"nodeId": "n1", "title": "A", "description": "x"}]
+        )
+        sink = FakeReentrySink()
+        scheduler = GraphScheduler(dispatcher=FakeDispatcher(), reentry_sink=sink)
+        scheduler.start_graph(graph_id)
+        _mark_completed(node_ids["n1"])
+
+        original_update = TaskCollaborationService.update_task_status
+        root_updates = 0
+
+        def _fail_once(service, *, task_id, status, **kwargs):
+            nonlocal root_updates
+            if task_id == root_id:
+                root_updates += 1
+                if root_updates == 1:
+                    raise RuntimeError("temporary database failure")
+            return original_update(
+                service,
+                task_id=task_id,
+                status=status,
+                **kwargs,
+            )
+
+        monkeypatch.setattr(TaskCollaborationService, "update_task_status", _fail_once)
+
+        scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
+        assert _status(root_id) != "completed"
+        assert sink.completed == []
+
+        scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
+        assert _status(root_id) == "completed"
+        assert sink.completed == [graph_id]
+        assert root_updates == 2
+
+    def test_terminal_event_includes_session_id(self, monkeypatch):
+        from src.utils import events
+
+        graph_id, node_ids, _, session_id = _build_graph(
+            [{"nodeId": "n1", "title": "A", "description": "x"}]
+        )
+        emitted: list[tuple[str, dict]] = []
+        monkeypatch.setattr(
+            events,
+            "emit",
+            lambda event_name, _sender, **payload: emitted.append((event_name, payload)),
+        )
+        scheduler = GraphScheduler(
+            dispatcher=FakeDispatcher(),
+            reentry_sink=FakeReentrySink(),
+        )
+        scheduler.start_graph(graph_id)
+
+        _mark_completed(node_ids["n1"])
+        scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
+
+        terminal_events = [
+            payload for event_name, payload in emitted if event_name == "graph_scheduler_terminal"
+        ]
+        assert terminal_events == [
+            {
+                "graph_id": graph_id,
+                "session_id": session_id,
+                "all_terminal": True,
+                "all_completed": True,
+            }
+        ]
+
+    def test_terminal_event_failure_does_not_block_success_reentry(self, monkeypatch):
+        from src.utils import events
+
+        graph_id, node_ids, root_id, _ = _build_graph(
+            [{"nodeId": "n1", "title": "A", "description": "x"}]
+        )
+        sink = FakeReentrySink()
+        scheduler = GraphScheduler(dispatcher=FakeDispatcher(), reentry_sink=sink)
+        scheduler.start_graph(graph_id)
+
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("observer unavailable")
+
+        monkeypatch.setattr(events, "emit", _raise)
+        _mark_completed(node_ids["n1"])
+        scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
+
+        assert sink.completed == [graph_id]
+        assert _status(root_id) == "completed"
+
     def test_no_notify_until_all_completed(self):
         graph_id, node_ids, _, _ = _build_graph(
             [
@@ -423,6 +527,95 @@ class TestGraphCompletion:
         # 含失败也必须通知主助理裁定后续
         assert graph_id in sink.completed
         # 含失败不收口 root（保留非终态供主助理 replan/abandon 裁定）
+        assert _status(root_id) not in ("completed", "failed", "cancelled")
+
+    def test_failed_terminal_graph_emits_only_once_per_graph_version(self, monkeypatch):
+        """失败图重复推进时 observer 去重，父侧回流仍保持可重试。"""
+        from src.utils import events
+
+        graph_id, node_ids, _, _ = _build_graph(
+            [
+                {"nodeId": "n1", "title": "A", "description": "x"},
+                {"nodeId": "n2", "title": "B", "description": "y"},
+            ]
+        )
+        emitted: list[str] = []
+        monkeypatch.setattr(
+            events,
+            "emit",
+            lambda event_name, _sender, **_payload: emitted.append(event_name),
+        )
+        sink = FakeReentrySink()
+        scheduler = GraphScheduler(dispatcher=FakeDispatcher(), reentry_sink=sink)
+        scheduler.start_graph(graph_id)
+        _mark_completed(node_ids["n1"])
+        with TaskCollaborationService() as svc:
+            svc.update_task_status(task_id=node_ids["n2"], status="failed")
+
+        scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
+        scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
+
+        assert emitted.count("graph_scheduler_terminal") == 1
+        assert sink.completed == [graph_id, graph_id]
+
+    def test_failed_graph_reentry_retries_after_transient_sink_failure(self, monkeypatch):
+        """失败图 root 不收口，sink 首次失败后下次推进必须重试。"""
+        from src.utils import events
+
+        graph_id, node_ids, _, _ = _build_graph(
+            [
+                {"nodeId": "n1", "title": "A", "description": "x"},
+                {"nodeId": "n2", "title": "B", "description": "y"},
+            ]
+        )
+        emitted: list[str] = []
+        monkeypatch.setattr(
+            events,
+            "emit",
+            lambda event_name, _sender, **_payload: emitted.append(event_name),
+        )
+        sink = FlakyReentrySink()
+        scheduler = GraphScheduler(dispatcher=FakeDispatcher(), reentry_sink=sink)
+        scheduler.start_graph(graph_id)
+        _mark_completed(node_ids["n1"])
+        with TaskCollaborationService() as svc:
+            svc.update_task_status(task_id=node_ids["n2"], status="failed")
+
+        scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
+        assert sink.calls == 1
+        assert sink.completed == []
+
+        scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
+        assert sink.calls == 2
+        assert sink.completed == [graph_id]
+        assert emitted.count("graph_scheduler_terminal") == 1
+
+    def test_terminal_event_failure_does_not_block_failed_graph_reentry(
+        self,
+        monkeypatch,
+    ):
+        from src.utils import events
+
+        graph_id, node_ids, root_id, _ = _build_graph(
+            [
+                {"nodeId": "n1", "title": "A", "description": "x"},
+                {"nodeId": "n2", "title": "B", "description": "y"},
+            ]
+        )
+        sink = FakeReentrySink()
+        scheduler = GraphScheduler(dispatcher=FakeDispatcher(), reentry_sink=sink)
+        scheduler.start_graph(graph_id)
+        _mark_completed(node_ids["n1"])
+        with TaskCollaborationService() as svc:
+            svc.update_task_status(task_id=node_ids["n2"], status="failed")
+
+        def _raise(*_args, **_kwargs):
+            raise RuntimeError("observer unavailable")
+
+        monkeypatch.setattr(events, "emit", _raise)
+        scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
+
+        assert sink.completed == [graph_id]
         assert _status(root_id) not in ("completed", "failed", "cancelled")
 
     def test_terminal_notify_not_repeated_after_root_closed(self):

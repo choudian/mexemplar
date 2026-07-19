@@ -13,10 +13,12 @@ import {
 } from "../api/debug";
 import { getUiEventHandlerDomain, isResyncRequiredEvent } from "../api/uiEvents";
 import BrainToast from "../components/BrainToast";
+import StructuredConfirmationCard from "../components/StructuredConfirmationCard";
 import { useAssistantStore } from "../state/assistantStore";
 import { useAssistantTaskStore } from "../state/assistantTaskStore";
 import { useBrainStore } from "../state/brainStore";
 import { useCompositionsStore } from "../state/compositionsStore";
+import { useScheduledStore } from "../state/scheduledStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { useShellStore } from "../state/shellStore";
 import { useSkillMethodologyStore } from "../state/skillMethodologyStore";
@@ -27,6 +29,7 @@ import { useTeachingStore } from "../state/teachingStore";
 import { BackendGate } from "./BackendGate";
 import { BackendStatus } from "./BackendStatus";
 import { ErrorToastHost } from "./ErrorToastHost";
+import { InfoToastHost } from "./InfoToastHost";
 import { CustomTitlebar } from "./CustomTitlebar";
 import { NavRail } from "./NavRail";
 import { applyTheme, writeAppearanceMirror } from "./applyTheme";
@@ -38,6 +41,7 @@ const BOOTSTRAP_RETRY_DELAYS_MS = [250, 500, 1000, 1500, 2000, 3000, 4000, 5000,
 const TOAST_AUTO_DISMISS_MS = 8000;
 const SEEN_EVENT_ID_LIMIT = 500;
 const TEACHING_STAGE_REDIRECT_MS = 3000;
+const AUTHORITATIVE_RESYNC_MAX_ATTEMPTS = 3;
 
 const FAILED_BACKEND: BackendConnectionState = {
   status: "failed",
@@ -115,6 +119,9 @@ export function AppShell(): JSX.Element {
   const refreshBrainSkillPool = useBrainStore((state) => state.loadSkillPool);
   const applySpecialistEvent = useSpecialistStore((state) => state.applyEvent);
   const refreshSpecialists = useSpecialistStore((state) => state.load);
+  const applyScheduledEvent = useScheduledStore((state) => state.applyEvent);
+  const refreshScheduled = useScheduledStore((state) => state.load);
+  const refreshScheduledPending = useScheduledStore((state) => state.refreshPendingConfirmation);
   const [debugTraceActive, setDebugTraceActive] = useState(false);
   const [retryNonce, setRetryNonce] = useState(0);
   const [pathname, setPathname] = useState(() => window.location.pathname);
@@ -218,7 +225,27 @@ export function AppShell(): JSX.Element {
         refreshes.push(refreshBrainSkillPool());
         refreshes.push(refreshSpecialists());
       }
+      if (!domains || domains.includes("scheduled") || domains.includes("scheduling")) {
+        refreshes.push(refreshScheduled());
+        refreshes.push(refreshScheduledPending());
+      }
       await Promise.all(refreshes);
+    };
+
+    const refreshAuthoritativeStateWithRetry = async (domains?: string[]) => {
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= AUTHORITATIVE_RESYNC_MAX_ATTEMPTS; attempt += 1) {
+        try {
+          await refreshAuthoritativeState(domains);
+          return;
+        } catch (error) {
+          lastError = error;
+          if (cancelled || controller.signal.aborted) {
+            throw error;
+          }
+        }
+      }
+      throw lastError;
     };
 
     const dispatchUiEvent = (event: UiEvent) => {
@@ -249,6 +276,9 @@ export function AppShell(): JSX.Element {
           applyBrainEvent(event);
           applySpecialistEvent(event);
           break;
+        case "scheduled":
+          applyScheduledEvent(event);
+          break;
         case "resync":
           break;
       }
@@ -260,7 +290,7 @@ export function AppShell(): JSX.Element {
         .then(async () => {
           if (isResyncRequiredEvent(event)) {
             try {
-              await refreshAuthoritativeState(event.payload.domains);
+              await refreshAuthoritativeStateWithRetry(event.payload.domains);
               resyncBlocked = false;
             } catch {
               resyncBlocked = true;
@@ -310,6 +340,11 @@ export function AppShell(): JSX.Element {
           // FR-020：启动即加载改进提案，使全局大脑导航的 pending_review 徽标在用户
           // 进入 Brain 屏之前就可见，避免提案静悄悄躺在管理屏无人知。
           void useBrainStore.getState().loadImprovementProposals();
+          // 调度确认卡是跨屏全局挂载：启动即拉 pending，断连/重启后用户仍能看到待确认任务。
+          void useScheduledStore
+            .getState()
+            .refreshPendingConfirmation()
+            .catch(() => undefined);
           void (async () => {
             while (!cancelled && !controller.signal.aborted) {
               try {
@@ -374,6 +409,7 @@ export function AppShell(): JSX.Element {
     applyTeachingEvent,
     applyBrainEvent,
     applySpecialistEvent,
+    applyScheduledEvent,
     hydrate,
     refreshBrainEntries,
     refreshBrainSegments,
@@ -387,6 +423,8 @@ export function AppShell(): JSX.Element {
     refreshSkills,
     refreshSpecialists,
     refreshTeaching,
+    refreshScheduled,
+    refreshScheduledPending,
     setBackend,
     setAssistantIdleThresholdSeconds,
     loadSkillBootstrapStatus,
@@ -608,7 +646,39 @@ export function AppShell(): JSX.Element {
         }}
         toast={recruitmentToast}
       />
+      <ScheduledConfirmationOverlay />
       <ErrorToastHost />
+      <InfoToastHost />
     </>
+  );
+}
+
+/**
+ * 调度确认卡全局浮层。创建定时任务的确认可能发生在任意路由（用户正对话时跨屏），
+ * 因此挂到 AppShell 而不是具体屏；payload 与提交决策都走 scheduledStore。
+ */
+function ScheduledConfirmationOverlay(): JSX.Element | null {
+  const pendingConfirmation = useScheduledStore((state) => state.pendingConfirmation);
+  const submitting = useScheduledStore((state) => state.submittingConfirmation);
+  const submitConfirmation = useScheduledStore((state) => state.submitConfirmation);
+  const cancelConfirmation = useScheduledStore((state) => state.cancelConfirmation);
+
+  if (!pendingConfirmation) return null;
+  const { requestId, draft, expiresAt, unattendedAutoApprove } = pendingConfirmation;
+
+  return (
+    <div className="scheduled-confirmation-overlay" aria-live="polite">
+      <StructuredConfirmationCard
+        requestId={requestId}
+        draft={draft}
+        expiresAt={expiresAt}
+        unattendedAutoApprove={unattendedAutoApprove}
+        submitting={submitting}
+        onSubmit={(editedDraft, autoApprove) =>
+          void submitConfirmation(requestId, "confirm", editedDraft, autoApprove)
+        }
+        onCancel={() => void cancelConfirmation(requestId)}
+      />
+    </div>
   );
 }

@@ -29,6 +29,17 @@ import type {
   MeetingChangedEvent,
   RecordingProgressEvent,
   ResyncRequiredEvent,
+  ScheduledTaskChangedEvent,
+  ScheduledTaskChangeType,
+  ScheduledTaskCompletedEvent,
+  ScheduledTaskCompletedOutcome,
+  ScheduledTaskNeedsTakeoverEvent,
+  ScheduledTaskNeedsTakeoverReason,
+  SchedulingConfirmationDraftPayload,
+  SchedulingConfirmationRequestedEvent,
+  SchedulingConfirmationResolvedEvent,
+  SchedulingDraftKind,
+  SchedulingDraftSource,
   SkillChangedCallerType,
   SkillChangedEvent,
   SkillChangedReason,
@@ -114,6 +125,20 @@ const IMPROVEMENT_PROPOSAL_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["
 const IMPROVEMENT_PROPOSAL_CHANGE_TYPE_SET = new Set<string>(
   UI_EVENT_PAYLOAD_ENUMS["improvement_proposal.changed"].changeType,
 );
+const SCHEDULED_TASK_COMPLETED_OUTCOME_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["scheduled_task.completed"].outcome,
+);
+const SCHEDULED_TASK_NEEDS_TAKEOVER_REASON_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["scheduled_task.needs_takeover"].reason,
+);
+const SCHEDULED_TASK_CHANGE_TYPE_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["scheduled_task.changed"].changeType,
+);
+const SCHEDULING_CONFIRMATION_RESOLVED_STATUS_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["scheduling.confirmation_resolved"].status,
+);
+const SCHEDULING_DRAFT_KIND_SET = new Set<string>(["one_shot", "recurring"]);
+const SCHEDULING_DRAFT_SOURCE_SET = new Set<string>(["direct", "todo"]);
 
 function isUiEventType(value: string): value is UiEventType {
   return UI_EVENT_TYPE_SET.has(value);
@@ -664,6 +689,126 @@ function requireSessionScopedEvent<TEvent extends UiEvent>(
   return withParsedPayload<TEvent>(event, parsePayload);
 }
 
+const isScheduledTaskCompletedOutcome = makeEnumGuard<ScheduledTaskCompletedOutcome>(
+  SCHEDULED_TASK_COMPLETED_OUTCOME_SET,
+);
+const isScheduledTaskNeedsTakeoverReason = makeEnumGuard<ScheduledTaskNeedsTakeoverReason>(
+  SCHEDULED_TASK_NEEDS_TAKEOVER_REASON_SET,
+);
+const isScheduledTaskChangeType = makeEnumGuard<ScheduledTaskChangeType>(SCHEDULED_TASK_CHANGE_TYPE_SET);
+const isSchedulingDraftKind = makeEnumGuard<SchedulingDraftKind>(SCHEDULING_DRAFT_KIND_SET);
+const isSchedulingDraftSource = makeEnumGuard<SchedulingDraftSource>(SCHEDULING_DRAFT_SOURCE_SET);
+
+function parseScheduledTaskCompletedPayload(
+  payload: Record<string, unknown>,
+): ScheduledTaskCompletedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["taskId", "runId", "sessionId", "outcome"]) ||
+    !isScheduledTaskCompletedOutcome(payload.outcome) ||
+    !isOptionalNullableString(payload.taskTitle) ||
+    !isOptionalNullableString(payload.summary) ||
+    !isOptionalNullableString(payload.failureReason)
+  ) {
+    return null;
+  }
+  return {
+    taskId: payload.taskId as string,
+    taskTitle: payload.taskTitle ?? null,
+    runId: payload.runId as string,
+    sessionId: payload.sessionId as string,
+    outcome: payload.outcome,
+    summary: payload.summary ?? null,
+    failureReason: payload.failureReason ?? null,
+  };
+}
+
+function parseScheduledTaskNeedsTakeoverPayload(
+  payload: Record<string, unknown>,
+): ScheduledTaskNeedsTakeoverEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["taskId", "runId", "sessionId", "reason"]) ||
+    !isScheduledTaskNeedsTakeoverReason(payload.reason) ||
+    !isOptionalNullableString(payload.taskTitle)
+  ) {
+    return null;
+  }
+  return {
+    taskId: payload.taskId as string,
+    taskTitle: payload.taskTitle ?? null,
+    runId: payload.runId as string,
+    sessionId: payload.sessionId as string,
+    reason: payload.reason,
+  };
+}
+
+function parseScheduledTaskChangedPayload(
+  payload: Record<string, unknown>,
+): ScheduledTaskChangedEvent["payload"] | null {
+  if (!hasStringPayloadFields(payload, ["taskId"]) || !isScheduledTaskChangeType(payload.changeType)) {
+    return null;
+  }
+  return {
+    taskId: payload.taskId as string,
+    changeType: payload.changeType,
+  };
+}
+
+function parseSchedulingConfirmationDraft(value: unknown): SchedulingConfirmationDraftPayload | null {
+  if (!isRecord(value)) return null;
+  if (
+    !hasStringPayloadFields(value, ["title", "scheduleDescription", "instruction"]) ||
+    !isSchedulingDraftKind(value.scheduleKind) ||
+    !isSchedulingDraftSource(value.sourceType)
+  ) {
+    return null;
+  }
+  return {
+    title: value.title as string,
+    scheduleDescription: value.scheduleDescription as string,
+    instruction: value.instruction as string,
+    scheduleKind: value.scheduleKind,
+    sourceType: value.sourceType,
+  };
+}
+
+function parseSchedulingConfirmationRequestedPayload(
+  payload: Record<string, unknown>,
+): SchedulingConfirmationRequestedEvent["payload"] | null {
+  if (
+    !hasStringPayloadFields(payload, ["requestId", "sessionId", "expiresAt"]) ||
+    !isValidDateString(payload.expiresAt)
+  ) {
+    return null;
+  }
+  // status 默认 "pending"（contract 允许缺省；非 pending 一律拒绝）。
+  if (payload.status !== undefined && payload.status !== "pending") return null;
+  const draft = parseSchedulingConfirmationDraft(payload.draft);
+  if (!draft) return null;
+  if (payload.unattendedAutoApprove !== undefined && typeof payload.unattendedAutoApprove !== "boolean") {
+    return null;
+  }
+  return {
+    requestId: payload.requestId as string,
+    sessionId: payload.sessionId as string,
+    draft,
+    unattendedAutoApprove: typeof payload.unattendedAutoApprove === "boolean" ? payload.unattendedAutoApprove : false,
+    expiresAt: payload.expiresAt as string,
+    status: "pending",
+  };
+}
+
+function parseSchedulingConfirmationResolvedEvent(
+  event: ParsedUiEventCandidate,
+): SchedulingConfirmationResolvedEvent | null {
+  if (
+    !hasStringPayloadFields(event.payload, ["requestId", "sessionId"]) ||
+    !SCHEDULING_CONFIRMATION_RESOLVED_STATUS_SET.has(String(event.payload.status))
+  ) {
+    return null;
+  }
+  return event as SchedulingConfirmationResolvedEvent;
+}
+
 const UI_EVENT_MAPPERS: Partial<Record<UiEventType, UiEventMapper>> = {
   "assistant.message": (event) => withParsedPayload<AssistantMessageEvent>(event, parseAssistantMessagePayload),
   "assistant.confirmation": (event) =>
@@ -697,6 +842,18 @@ const UI_EVENT_MAPPERS: Partial<Record<UiEventType, UiEventMapper>> = {
   "assistant.todo.changed": (event) => requireSessionScopedEvent<TodoChangedEvent>(event, parseTodoChangedPayload),
   "assistant.external_coding.changed": (event) =>
     requireSessionScopedEvent<ExternalCodingChangedEvent>(event, parseExternalCodingChangedPayload),
+  "scheduled_task.completed": (event) =>
+    withParsedPayload<ScheduledTaskCompletedEvent>(event, parseScheduledTaskCompletedPayload),
+  "scheduled_task.needs_takeover": (event) =>
+    withParsedPayload<ScheduledTaskNeedsTakeoverEvent>(event, parseScheduledTaskNeedsTakeoverPayload),
+  "scheduled_task.changed": (event) =>
+    withParsedPayload<ScheduledTaskChangedEvent>(event, parseScheduledTaskChangedPayload),
+  "scheduling.confirmation_requested": (event) =>
+    requireSessionScopedEvent<SchedulingConfirmationRequestedEvent>(
+      event,
+      parseSchedulingConfirmationRequestedPayload,
+    ),
+  "scheduling.confirmation_resolved": parseSchedulingConfirmationResolvedEvent,
 };
 
 export function parseUiEvent(value: unknown): UiEvent | null {
@@ -752,6 +909,17 @@ export function getUiEventHandlerDomain(event: UiEvent): UiEventHandlerDomain {
 
 export function isResyncRequiredEvent(event: UiEvent): event is ResyncRequiredEvent {
   return event.type === "backend.resync_required";
+}
+
+export type ScheduledUiEvent =
+  | ScheduledTaskCompletedEvent
+  | ScheduledTaskNeedsTakeoverEvent
+  | ScheduledTaskChangedEvent
+  | SchedulingConfirmationRequestedEvent
+  | SchedulingConfirmationResolvedEvent;
+
+export function isScheduledUiEvent(event: UiEvent): event is ScheduledUiEvent {
+  return getUiEventHandlerDomain(event) === "scheduled";
 }
 
 export type TeachingUiEvent =

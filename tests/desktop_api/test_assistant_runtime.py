@@ -191,6 +191,23 @@ def drain_events() -> None:
             return
 
 
+def test_pending_reentry_lookup_fails_closed_until_sink_is_installed() -> None:
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: CompletingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+
+    assert runtime.has_pending_reentry("ast_before_sink") is True
+
+    class EmptySink:
+        @staticmethod
+        def has_pending(_session_id: str) -> bool:
+            return False
+
+    runtime._reentry_sink = EmptySink()
+    assert runtime.has_pending_reentry("ast_after_sink") is False
+
+
 def test_assistant_runtime_does_not_publish_success_after_agent_error() -> None:
     drain_events()
     runtime = AssistantRuntime(
@@ -568,6 +585,104 @@ def test_retry_waiting_for_user_resolves_source_failure() -> None:
     )
 
     assert AssistantRunFailureRepository().get_current("ast_retry_waiting") is None
+
+
+def test_needs_user_input_updates_scheduled_run_before_completion_check(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def mark_waiting(session_id: str) -> bool:
+        calls.append(("waiting", session_id))
+        return True
+
+    monkeypatch.setattr(
+        AssistantRuntime,
+        "_mark_scheduled_waiting_user",
+        staticmethod(mark_waiting),
+    )
+    monkeypatch.setattr(
+        AssistantRuntime,
+        "_evaluate_scheduled_completion",
+        staticmethod(lambda session_id: calls.append(("evaluate", session_id))),
+    )
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: ResultOrchestrator(
+            AgentResult(
+                result_type=ResultType.NEEDS_USER_INPUT,
+                question="请补充范围",
+            )
+        ),
+        chat_service=FakeChatService(),
+    )
+
+    runtime._run_assistant("ast_scheduled_waiting", "执行任务", 0)
+
+    assert calls == [
+        ("waiting", "ast_scheduled_waiting"),
+        ("evaluate", "ast_scheduled_waiting"),
+    ]
+
+
+def test_terminal_error_updates_scheduled_run_before_completion_check(monkeypatch) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def mark_failed(session_id: str) -> bool:
+        calls.append(("failed", session_id))
+        return True
+
+    monkeypatch.setattr(
+        AssistantRuntime,
+        "_mark_scheduled_failed",
+        staticmethod(mark_failed),
+    )
+    monkeypatch.setattr(
+        AssistantRuntime,
+        "_evaluate_scheduled_completion",
+        staticmethod(lambda session_id: calls.append(("evaluate", session_id))),
+    )
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: ResultOrchestrator(
+            AgentResult(result_type=ResultType.ERROR, error="provider unavailable")
+        ),
+        chat_service=FakeChatService(),
+    )
+
+    runtime._run_assistant("ast_scheduled_failed", "执行任务", 0)
+
+    assert calls == [
+        ("failed", "ast_scheduled_failed"),
+        ("evaluate", "ast_scheduled_failed"),
+    ]
+
+
+def test_terminal_write_failure_does_not_fall_through_to_success_evaluation(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def mark_failed(session_id: str) -> bool:
+        calls.append(("failed", session_id))
+        return False
+
+    monkeypatch.setattr(
+        AssistantRuntime,
+        "_mark_scheduled_failed",
+        staticmethod(mark_failed),
+    )
+    monkeypatch.setattr(
+        AssistantRuntime,
+        "_evaluate_scheduled_completion",
+        staticmethod(lambda session_id: calls.append(("evaluate", session_id))),
+    )
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: ResultOrchestrator(
+            AgentResult(result_type=ResultType.ERROR, error="provider unavailable")
+        ),
+        chat_service=FakeChatService(),
+    )
+
+    runtime._run_assistant("ast_scheduled_failed_write", "执行任务", 0)
+
+    assert calls == [("failed", "ast_scheduled_failed_write")]
 
 
 def test_edited_retry_failure_moves_card_to_new_user_message() -> None:

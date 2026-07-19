@@ -14,6 +14,9 @@ from src.business.services.assistant_failure_service import (
     AssistantFailureService,
     AssistantRetryConflict,
 )
+from src.business.scheduling.scheduling_confirmation_manager import (
+    settle_for_session_stopped as settle_scheduling_confirmations_for_session_stopped,
+)
 from src.business.task_collaboration.reentry_briefing import (
     build_reentry_briefing,
     filter_pending_entries,
@@ -83,13 +86,15 @@ class AssistantRuntime:
 
     def _get_orchestrator(self) -> AgentOrchestrator:
         with self._orchestrator_lock:
-            if self._orchestrator is None:
-                self._orchestrator = self._orchestrator_factory()
+            orchestrator = self._orchestrator
+            if orchestrator is None:
+                orchestrator = self._orchestrator_factory()
+                self._orchestrator = orchestrator
                 self._ensure_planner_specialist()
-                self._orchestrator.task_worker.start()
-                self._install_reentry_sink()
-                self._ensure_task_scheduler_for_orchestrator(self._orchestrator)
-            return self._orchestrator
+                orchestrator.task_worker.start()
+                self._install_reentry_sink(orchestrator)
+                self._ensure_task_scheduler_for_orchestrator(orchestrator)
+            return orchestrator
 
     def ensure_task_scheduler(self) -> None:
         """Ensure the process-level task graph scheduler is wired."""
@@ -116,7 +121,7 @@ class AssistantRuntime:
         except Exception:
             logger.warning("Failed to ensure planner specialist", exc_info=True)
 
-    def _install_reentry_sink(self) -> None:
+    def _install_reentry_sink(self, orchestrator: AgentOrchestrator) -> None:
         """创建父侧回流 sink 并注入 orchestrator 的 dispatcher。
 
         sink 通过本 runtime 的 has_active_worker / kick_reentry_run 与 worker 池协作，
@@ -129,8 +134,8 @@ class AssistantRuntime:
             kick_reentry_run=self.kick_reentry_run,
         )
         self._reentry_sink = sink
-        self._orchestrator.set_parent_reentry_callback(sink.dispatch)
-        set_reentry_sink = getattr(self._orchestrator, "set_reentry_sink", None)
+        orchestrator.set_parent_reentry_callback(sink.dispatch)
+        set_reentry_sink = getattr(orchestrator, "set_reentry_sink", None)
         if callable(set_reentry_sink):
             set_reentry_sink(sink)
 
@@ -138,6 +143,72 @@ class AssistantRuntime:
         with self._workers_lock:
             worker = self._workers.get(session_id)
             return worker is not None and worker.is_alive()
+
+    def has_pending_reentry(self, session_id: str) -> bool:
+        """Return whether reentry work is pending, failing closed before sink setup.
+
+        ``RunCompletionMonitor`` treats ``True`` as "not quiescent".  The sink is
+        installed lazily with the orchestrator, so an absent sink means the runtime
+        cannot yet prove that the queue is empty; it must not be projected as a
+        successful scheduled run.
+        """
+        sink = self._reentry_sink
+        if sink is None:
+            logger.warning(
+                "Reentry sink is not installed; cannot confirm quiescence for session %s",
+                session_id,
+            )
+            return True
+        return bool(sink.has_pending(session_id))
+
+    @staticmethod
+    def _mark_scheduled_waiting_user(session_id: str) -> bool:
+        try:
+            from src.business.scheduling.run_completion_monitor import (
+                get_run_completion_monitor,
+            )
+
+            get_run_completion_monitor().mark_waiting_user(session_id)
+            return True
+        except Exception:
+            logger.error(
+                "Failed to mark scheduled run waiting_user for session %s",
+                session_id,
+                exc_info=True,
+            )
+            return False
+
+    @staticmethod
+    def _mark_scheduled_failed(session_id: str) -> bool:
+        try:
+            from src.business.scheduling.run_completion_monitor import (
+                get_run_completion_monitor,
+            )
+
+            get_run_completion_monitor().mark_failed(session_id)
+            return True
+        except Exception:
+            logger.error(
+                "Failed to mark scheduled run failed for session %s",
+                session_id,
+                exc_info=True,
+            )
+            return False
+
+    @staticmethod
+    def _evaluate_scheduled_completion(session_id: str) -> None:
+        try:
+            from src.business.scheduling.run_completion_monitor import (
+                get_run_completion_monitor,
+            )
+
+            get_run_completion_monitor().evaluate_session(session_id)
+        except Exception:
+            logger.error(
+                "Failed to evaluate scheduled completion for session %s",
+                session_id,
+                exc_info=True,
+            )
 
     def set_auto_approve(self, enabled: bool) -> bool:
         """开启/关闭"全部允许"免确认，并结算挂起确认（router 编排下沉）。
@@ -229,6 +300,7 @@ class AssistantRuntime:
         )
         entries: list[dict] = []
         re_enqueued = False
+        can_evaluate_scheduled_completion = True
         try:
             entries = self._reentry_sink.drain(session_id) if self._reentry_sink else []
             # 024: drain 后查一次 graph snapshot 传入 briefing（DEC-H）
@@ -260,15 +332,19 @@ class AssistantRuntime:
                 session_id=session_id,
             )
             self._publish_display_messages(session_id, after_sequence)
-            if result is not None and result.result_type in (
-                ResultType.COMPLETED,
-                ResultType.NEEDS_USER_INPUT,
-            ):
+            if result is not None and result.result_type == ResultType.COMPLETED:
                 event_queue.publish_nowait(
                     "assistant.progress",
                     {"status": "succeeded", "headline": "子任务结果已处理"},
                     {"sessionId": session_id},
                 )
+            elif result is not None and result.result_type == ResultType.NEEDS_USER_INPUT:
+                event_queue.publish_nowait(
+                    "assistant.progress",
+                    {"status": "waiting_for_user", "headline": result.question or ""},
+                    {"sessionId": session_id},
+                )
+                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(session_id)
             else:
                 # ERROR / 异常结果：续跑未成功，必须发 failed（不能照发 succeeded 让
                 # 前端卡在成功）。reentry 失败不接 AssistantFailureService——它没有
@@ -285,6 +361,7 @@ class AssistantRuntime:
                 if entries and self._reentry_sink is not None:
                     self._reentry_sink.re_enqueue(session_id, entries)
                     re_enqueued = True
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
         except Exception:
             logger.error("[reentry] session %s reentry run failed", session_id, exc_info=True)
             # drain 已取走的回流回填队列，避免 run_agent 异常导致条目永久丢失。
@@ -294,6 +371,7 @@ class AssistantRuntime:
                 self._reentry_sink.re_enqueue(session_id, entries)
                 re_enqueued = True
             self._publish_reentry_failure(session_id)
+            can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
         finally:
             run_context.end()
             clear_confirmation_session_context()
@@ -308,6 +386,11 @@ class AssistantRuntime:
                 and self._reentry_sink.has_pending(session_id)
             ):
                 self.kick_reentry_run(session_id, graph_id)
+            # ``mark_failed`` / ``mark_waiting_user`` 写入失败时绝不能继续走静默成功
+            # 判定，否则简单 scheduled 会话会被误标为 succeeded。保留 running，
+            # 等后续权威事件或恢复路径重试，比伪造成功更安全。
+            if can_evaluate_scheduled_completion:
+                self._evaluate_scheduled_completion(session_id)
 
     def _drop_decided_entries(self, graph_id: str, entries: list[dict], service) -> list[dict]:
         """剔除已决定的回流条目，避免 briefing 重提已 decide 的裁定。
@@ -440,6 +523,8 @@ class AssistantRuntime:
             fail_closed_confirmations_for_session(sid)
             # 同理结算该会话仍 pending 的澄清为 stopped 并唤醒阻塞 worker（FR-013）。
             settle_clarifications_for_session_stopped(sid)
+            # 033 创建确认卡同样遵守“停止即 fail-closed”：停止后迟到 confirm 不得落库。
+            settle_scheduling_confirmations_for_session_stopped(sid)
         return accepted
 
     def stop_task_graph(self, session_id: str, graph_id: str, run_id: str | None = None) -> dict:
@@ -455,6 +540,7 @@ class AssistantRuntime:
         if signaled:
             fail_closed_confirmations_for_session(session_id)
             settle_clarifications_for_session_stopped(session_id)
+            settle_scheduling_confirmations_for_session_stopped(session_id)
         return {"affected": affected, "cancel_signal_accepted": signaled}
 
     def continue_task_graph(self, session_id: str, graph_id: str) -> dict:
@@ -681,6 +767,7 @@ class AssistantRuntime:
             {"status": "running", "headline": "Assistant is working", "runId": run_ctx.run_id},
             {"sessionId": session_id},
         )
+        can_evaluate_scheduled_completion = True
         try:
             result = self._get_orchestrator().run_agent(
                 AgentType.ASSISTANT,
@@ -708,6 +795,7 @@ class AssistantRuntime:
                     exception=None,
                     retry_directive=retry_directive,
                 )
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if result.result_type == ResultType.ERROR:
@@ -719,6 +807,7 @@ class AssistantRuntime:
                     exception=None,
                     retry_directive=retry_directive,
                 )
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if result.result_type == ResultType.CANCELLED:
@@ -731,6 +820,7 @@ class AssistantRuntime:
                     {"status": "cancelled", "headline": "已停止"},
                     {"sessionId": session_id},
                 )
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
                 return
             if result.result_type == ResultType.NEEDS_USER_INPUT:
                 if retry_directive is not None:
@@ -741,6 +831,7 @@ class AssistantRuntime:
                     {"status": "waiting_for_user", "headline": result.question or ""},
                     {"sessionId": session_id},
                 )
+                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(session_id)
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if retry_directive is not None:
@@ -765,9 +856,12 @@ class AssistantRuntime:
                 exception=exc,
                 retry_directive=retry_directive,
             )
+            can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
         finally:
             run_context.end()
             clear_confirmation_session_context()
             with self._workers_lock:
                 if self._workers.get(session_id) is threading.current_thread():
                     self._workers.pop(session_id, None)
+            if can_evaluate_scheduled_completion:
+                self._evaluate_scheduled_completion(session_id)

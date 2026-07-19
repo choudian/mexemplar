@@ -9,16 +9,17 @@ import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional, overload
 
 from src.business.agents.config import AgentType
-from src.data.models_sqlite import Session
-from src.data.repositories import AssistantProfileRepository, MessageRepository, SessionRepository
 from src.business.services.assistant_failure_service import (
     AssistantFailureService,
     AssistantFailureSummary,
 )
 from src.business.services.session_lifecycle import AssistantSessionLifecycle
+from src.data.models_sqlite import Session
+from src.data.repositories import AssistantProfileRepository, MessageRepository, SessionRepository
+from src.data.scheduling_types import SessionSource
 from src.utils.timezone import format_local
 
 logger = logging.getLogger(__name__)
@@ -69,6 +70,7 @@ class ChatService:
             AgentType.ASSISTANT,
             limit=limit,
             statuses=statuses,
+            exclude_sources=["scheduled"],
         )
 
         result = []
@@ -230,34 +232,190 @@ class ChatService:
     def generate_session_id() -> str:
         return f"ast_{uuid.uuid4().hex[:12]}"
 
-    def create_session(self, tool_ids: Optional[list] = None, title: Optional[str] = None) -> str:
+    @overload
+    def create_session(
+        self,
+        tool_ids: Optional[list] = None,
+        title: Optional[str] = None,
+        *,
+        source: Literal["user"] = "user",
+        scheduled_task_id: None = None,
+        session_id: Optional[str] = None,
+    ) -> str: ...
+
+    @overload
+    def create_session(
+        self,
+        tool_ids: Optional[list] = None,
+        title: Optional[str] = None,
+        *,
+        source: Literal["scheduled"],
+        scheduled_task_id: str,
+        session_id: Optional[str] = None,
+    ) -> str: ...
+
+    def create_session(
+        self,
+        tool_ids: Optional[list] = None,
+        title: Optional[str] = None,
+        *,
+        source: str | SessionSource = SessionSource.USER,
+        scheduled_task_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> str:
         """
         创建一个新的 assistant 会话。
 
         Args:
             tool_ids: 限定可用工具 ID 列表；None 表示全部工具。
+            source: 会话来源（033）—— ``user``（默认，用户手动开）或 ``scheduled``
+                （定时任务触发）。``scheduled`` 会话从聊天屏列表排除、不沉淀 Segment。
+            scheduled_task_id: ``source='scheduled'`` 时关联的定时任务 id。
+            session_id: 可选预分配 id；调度启动器用它先原子占用 active-run 槽，再创建会话。
 
         Returns:
             新会话的 session_id。
         """
-        session_id = self.generate_session_id()
+        model = self._build_session_model(
+            tool_ids=tool_ids,
+            title=title,
+            source=source,
+            scheduled_task_id=scheduled_task_id,
+            session_id=session_id,
+        )
+        resolved_source = SessionSource(model.source)
+        # 只有用户显式新开聊天才重置进程级确认状态。scheduled 后台会话与正在聊的
+        # 用户会话必须严格隔离（033 FR-024 / CC-005），不得清空全局 auto-approve
+        # 或 fail-close 用户当前 pending 的高危确认。
+        if resolved_source is SessionSource.USER:
+            AssistantSessionLifecycle().reset_confirmation_state_for_new_chat()
+        SessionRepository().create(model)
+        logger.info(
+            "创建助理会话: %s, tool_ids=%s, source=%s",
+            model.session_id,
+            tool_ids,
+            resolved_source,
+        )
+        return model.session_id
+
+    def _build_session_model(
+        self,
+        *,
+        tool_ids: Optional[list],
+        title: Optional[str],
+        source: str | SessionSource,
+        scheduled_task_id: Optional[str],
+        session_id: Optional[str],
+    ) -> Session:
+        """Validate and build a detached assistant session model."""
+        try:
+            resolved_source = SessionSource(source)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("source must be 'user' or 'scheduled'") from exc
+        normalized_task_id = (
+            (scheduled_task_id or "").strip() if scheduled_task_id is not None else None
+        )
+        if resolved_source is SessionSource.SCHEDULED and not normalized_task_id:
+            raise ValueError("scheduled sessions require scheduled_task_id")
+        if resolved_source is SessionSource.USER and scheduled_task_id is not None:
+            raise ValueError("user sessions must not have scheduled_task_id")
+
+        resolved_session_id = session_id or self.generate_session_id()
         tool_ids_str = json.dumps(tool_ids) if tool_ids is not None else None
         normalized_title = self._normalize_title(title) if title is not None else None
         if title is not None and not normalized_title:
             raise ValueError("title must not be empty")
-        AssistantSessionLifecycle().reset_confirmation_state_for_new_chat()
-        SessionRepository().create(
-            Session(
-                session_id=session_id,
-                workflow_id=None,
-                agent_type=AgentType.ASSISTANT,
-                status="active",
-                title=normalized_title,
-                tool_ids=tool_ids_str,
-            )
+        return Session(
+            session_id=resolved_session_id,
+            workflow_id=None,
+            agent_type=AgentType.ASSISTANT,
+            status="active",
+            title=normalized_title,
+            tool_ids=tool_ids_str,
+            source=str(resolved_source),
+            scheduled_task_id=normalized_task_id,
+            is_scheduled=1 if resolved_source is SessionSource.SCHEDULED else 0,
         )
-        logger.info(f"创建助理会话: {session_id}, tool_ids={tool_ids}")
-        return session_id
+
+    def build_scheduled_session(
+        self,
+        scheduled_task_id: str,
+        tool_ids: Optional[list] = None,
+        title: Optional[str] = None,
+        *,
+        session_id: Optional[str] = None,
+    ) -> Session:
+        """Build, but do not persist, a relation-complete scheduled session.
+
+        ``SessionLauncher`` hands this model to the run Repository so the session
+        and run can be committed atomically.
+        """
+        return self._build_session_model(
+            tool_ids=tool_ids,
+            title=title,
+            source=SessionSource.SCHEDULED,
+            scheduled_task_id=scheduled_task_id,
+            session_id=session_id,
+        )
+
+    def create_scheduled_session(
+        self,
+        scheduled_task_id: str,
+        tool_ids: Optional[list] = None,
+        title: Optional[str] = None,
+        *,
+        session_id: Optional[str] = None,
+    ) -> str:
+        """创建关系完整的 scheduled 会话；供调度启动器使用。"""
+        return self.create_session(
+            tool_ids,
+            title,
+            source="scheduled",
+            scheduled_task_id=scheduled_task_id,
+            session_id=session_id,
+        )
+
+    def ensure_scheduled_takeover_session(
+        self,
+        scheduled_task_id: str,
+        *,
+        session_id: str,
+        title: str,
+    ) -> bool:
+        """Repair a legacy missing scheduled session and report whether draft context is needed.
+
+        Returns ``True`` when the session has no persisted user message, allowing
+        the caller to return the task instruction as an editable recovery draft
+        without writing a synthetic message ahead of the system prompt.
+        """
+        session_repo = SessionRepository()
+        session = session_repo.get_by_id(session_id)
+        if session is None:
+            try:
+                self.create_scheduled_session(
+                    scheduled_task_id,
+                    title=title,
+                    session_id=session_id,
+                )
+            except Exception:
+                # A concurrent takeover may have won the create race.
+                session = session_repo.get_by_id(session_id)
+                if session is None:
+                    raise
+            else:
+                session = session_repo.get_by_id(session_id)
+
+        if (
+            session is None
+            or session.agent_type != AgentType.ASSISTANT
+            or SessionSource(session.source) is not SessionSource.SCHEDULED
+            or session.scheduled_task_id != scheduled_task_id
+            or session.is_scheduled not in (1, True)
+        ):
+            raise ValueError("scheduled takeover session relationship is invalid")
+        if session.status == "archived":
+            session_repo.update_status(session_id, "active")
+        return not bool(MessageRepository().get_first_user_message(session_id).strip())
 
     @staticmethod
     def _normalize_title(title: str) -> str:

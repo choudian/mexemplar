@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from typing import List, Optional
 
+from src.data.scheduling_types import SessionSource
+
 from ..models_sqlite import Session
 from .base_repository import BaseRepository
 from src.data.helpers import build_like_pattern
@@ -22,6 +24,28 @@ class SessionRepository(BaseRepository):
         """创建会话"""
         if model.status not in SESSION_STATUSES:
             raise ValueError(f"invalid session status: {model.status}")
+        try:
+            source = SessionSource(model.source or SessionSource.USER)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("invalid session source") from exc
+        task_id = (
+            (model.scheduled_task_id or "").strip() if model.scheduled_task_id is not None else None
+        )
+        if source is SessionSource.SCHEDULED:
+            if not task_id:
+                raise ValueError("scheduled sessions require scheduled_task_id")
+            if model.is_scheduled not in (None, 1, True):
+                raise ValueError("scheduled sessions require is_scheduled=1")
+            model.scheduled_task_id = task_id
+            model.is_scheduled = 1
+        else:
+            if model.scheduled_task_id is not None:
+                raise ValueError("user sessions must not have scheduled_task_id")
+            if model.is_scheduled not in (None, 0, False):
+                raise ValueError("user sessions require is_scheduled=0")
+            model.scheduled_task_id = None
+            model.is_scheduled = 0
+        model.source = str(source)
         try:
             self.session.add(model)
             self.session.commit()
@@ -116,9 +140,16 @@ class SessionRepository(BaseRepository):
         agent_type: str,
         limit: int = 50,
         statuses: Optional[list[str]] = None,
+        exclude_sources: Optional[list[str]] = None,
     ) -> List[Session]:
-        """获取指定 agent_type 的会话列表，按最近更新排序"""
+        """获取指定 agent_type 的会话列表，按最近更新排序。
+
+        ``exclude_sources``（033 调度中心）：排除指定来源的会话，聊天屏列表用
+        ``exclude_sources=["scheduled"]`` 隔离定时任务会话（FR-021）。
+        """
         query = self.session.query(Session).filter(Session.agent_type == agent_type)
         if statuses is not None:
             query = query.filter(Session.status.in_(statuses))
+        if exclude_sources:
+            query = query.filter(~Session.source.in_(exclude_sources))
         return query.order_by(Session.updated_at.desc()).limit(limit).all()

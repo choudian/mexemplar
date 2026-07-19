@@ -1,15 +1,15 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-07-10
-**Revision**: 2026-07-10 — Archived feature 030 (外部 Coding Session)
+**Last Updated**: 2026-07-20
+**Revision**: 2026-07-20 — Archived feature 033 (Scheduling Center / 调度中心)
 
 ---
 
 ## Technical Context
 
 **Language/Version**: Python 3.11+ (runtime 3.12), Rust stable/Tauri 2, TypeScript 5.x, React 18
-**Primary Dependencies**: Tauri 2, React 18, Vite, Tailwind CSS, Zustand, FastAPI, Uvicorn, Pydantic, PyInstaller, SQLite (SQLAlchemy/Alembic), DuckDB, Playwright/Vitest, blinker, sqlglot, LangChain, mitmproxy, AgentLoop (自研), pynput, mss, opencv-python, Pillow, comtypes, pywinauto, pywin32
+**Primary Dependencies**: Tauri 2, React 18, Vite, Tailwind CSS, Zustand, FastAPI, Uvicorn, Pydantic, PyInstaller, SQLite (SQLAlchemy/Alembic), DuckDB, Playwright/Vitest, blinker, sqlglot, LangChain, mitmproxy, AgentLoop (自研), pynput, mss, opencv-python, Pillow, comtypes, pywinauto, pywin32, `tzlocal>=5.3`, `tauri-plugin-notification=2`, `@tauri-apps/plugin-notification^2.0.0`
 **Storage**: SQLite (业务数据和 `app_settings` 配置覆盖, via Repository/UnifiedConfigManager); DuckDB (录制分析数据, via FilteredDuckDBConnection/sql_rewriter; desktop_recordings/desktop_actions); local `config.json` defaults; filesystem (`data/recordings/<recording_id>/`, `data/trials/<trial_id>/`, packaged sidecar artifacts)
 **Testing**: pytest (`tests/`), Vitest + React Testing Library (`frontend/tests/unit`), Playwright/Tauri smoke (`frontend/tests/e2e`), guardrail tests (`tests/guardrails`)
 **Target Platform**: Windows desktop first via Tauri/WebView2; desktop recording remains Windows-only
@@ -26,7 +26,7 @@ frontend/
 │   ├── app/                        # App shell, route registry, custom titlebar, backend status
 │   ├── api/                        # typed frontend clients for Python sidecar contracts
 │   ├── components/                 # shared primitives and shell UI controls
-│   ├── screens/                    # assistant, teaching, skills, compositions, settings, BrainScreen, SpecialistScreen, SkillMethodologyScreen, debug
+│   ├── screens/                    # assistant, teaching, skills, compositions, settings, Brain/Specialist/SkillMethodology/Scheduled screens, debug
 │   ├── state/                      # Zustand local UI/session stores
 │   ├── styles/                     # Tailwind/theme tokens and reduced-motion/contrast baseline
 │   └── test/                       # frontend mocks and component helpers
@@ -37,7 +37,7 @@ frontend/
 src-tauri/
 ├── Cargo.toml
 ├── tauri.conf.json                 # custom window + externalBin sidecar config
-├── capabilities/default.json       # scoped shell/http/window permissions
+├── capabilities/default.json       # scoped shell/http/window/notification permissions
 ├── binaries/                       # PyInstaller sidecar output by target triple
 └── src/
     ├── lib.rs                      # plugin/window/sidecar command registration
@@ -48,7 +48,7 @@ src/
 ├── desktop_api/
 │   ├── app.py                      # FastAPI factory, token auth, loopback CORS, router registration
 │   ├── __main__.py                 # sidecar process entrypoint
-│   ├── schemas.py                  # Pydantic DTOs for shell, assistant, teaching, skills, settings
+│   ├── schemas.py                  # Pydantic DTOs for shell, assistant, teaching, skills, settings, scheduling
 │   ├── events.py                   # blinker -> frontend event-stream adapter
 │   ├── assistant_runtime.py        # assistant worker dispatch adapter
 │   ├── confirmations.py            # high-risk confirmation DTO mapping
@@ -59,7 +59,8 @@ src/
 │       ├── teaching.py
 │       ├── skills.py
 │       ├── compositions.py
-│       └── settings.py
+│       ├── settings.py
+│       └── scheduled_tasks.py
 ├── business/
 │   ├── orchestration/agent/        # AgentOrchestrator remains source of truth
 │   ├── services/
@@ -71,7 +72,8 @@ src/
 │   │   ├── skills_service.py
 │   │   └── teaching_service.py
 │   ├── agents/                     # AgentLoop, tools, prompts, assistant memory
-│   └── brain/                      # 大脑业务层：segment, distillation, context, decay, archive, retrieval, specialist, prediction, management, skill
+│   ├── brain/                      # 大脑业务层：segment, distillation, context, decay, archive, retrieval, specialist, prediction, management, skill
+│   └── scheduling/                 # 调度中心：service, worker, launcher, completion/delivery, confirmation managers
 ├── data/                           # repositories, config models, migrations, unified config
 ├── execution/                      # tool execution and desktop trial runner
 ├── recording/                      # browser/extension/desktop recording and DuckDB filtering
@@ -1848,3 +1850,125 @@ docs/ARCHITECTURE.md、docs/PROJECT_CONSTRAINTS.md  # [改] 活文档同步
 - **回归**：既有 external coding 业务/API/UI 测试保持通过。
 
 Feature tasks: 18/18 completed。Final verification: 后端相关闭环 `280 passed`；前端全量 `48 files / 393 tests passed`；ESLint、changed-file Black/flake8、`git diff --check` 通过；TypeScript + Vite 生产构建通过。完整 `tests/` 后端套件两次在 120s/600s 执行上限内未结束（无失败摘要），以覆盖所有改动边界的 280 项闭环套件作为交付门卫。
+
+## Scheduling Center（调度中心） [Source: specs/033-scheduling-center]
+
+**Revision note (2026-07-20)**: Archived 033 on the verified feature branch for merge into
+`prepare-github`。实现立即 / one-shot / recurring 的时间触发中枢、scheduled 主助理会话、
+append-only run 账目、完成/接管通知与 `/scheduled` 管理屏；CC-005 已在 constitution 3.1.0
+和活文档中登记为唯一 per-task 免确认持久化受控例外。完整规格、数据模型和契约保留在
+`specs/033-scheduling-center/`。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（运行时 3.12）、TypeScript 5.x / React 18、Rust stable / Tauri 2。
+- **Dependencies**: 新增 `tzlocal>=5.3`（系统 IANA 时区权威发现）、
+  `tauri-plugin-notification=2` 与 `@tauri-apps/plugin-notification^2.0.0`；
+  与既有 Tauri 2 / Python 3.11+ 约束一致，无版本冲突。
+- **Storage**: SQLite v30 新增 `scheduled_tasks` / `scheduled_task_runs`，并给 `sessions`
+  增加 `source` / `scheduled_task_id` / `is_scheduled`；v31 为 run 终态事件增加按代次投递确认。
+  DuckDB 与 `user_todos` schema 不变。
+- **Configuration**: `scheduler.scan_interval_seconds=30`（bounded 5..600）和
+  `scheduler.confirmation_timeout_seconds=300` 经 `UnifiedConfigManager`；
+  misfire/reentry 是硬不变量，不提供关闭开关。无新增 secret。
+- **Target/Scope**: Windows 11 Tauri 桌面；主屏 9 → 10，新增 `/scheduled`。
+
+### Architecture And Runtime Flow
+
+```text
+Assistant create_scheduled_task
+  → SchedulingConfirmationManager（内存 pending、first-decision-wins、fail-closed）
+  → SchedulerService / ScheduledTaskRepository
+  → SchedulerWorker（周期扫描 + 最近时点动态等待 + Event 唤醒）
+  → SessionLauncher（detached scheduled session + active run 同事务 first-wins）
+  → injected AssistantRuntime.dispatch_message（复用既有 100% 调度）
+  → RunCompletionMonitor（runtime 退出直调 + 内部图/任务事件）
+  → TerminalEventDelivery（v31 按 run/version 确认与补投）
+  → UI Event Registry → scheduledStore → Toast / desktop notification / history refresh
+```
+
+- `SessionLauncher` 位于 business 层，只依赖 desktop lifespan 注入的 dispatch callback；
+  business 不反向 import `desktop_api`。
+- `uq_runs_active_per_task` partial unique index 是 worker/fire-now 并发 first-wins 权威门卫；
+  冲突经 `create_skipped()` 记账且不创建第二个会话。
+- 完成门卫固定为无活跃 runtime worker、无 pending reentry、执行节点图全终态；
+  图/runtime 查询未知时延后。`compute_graph_terminal_state` 归属
+  `task_collaboration/graph_terminal.py`，observer emit 失败不阻断既有父侧回流。
+- 终态业务事实先提交，再发布公开事件并按 `(run_id, terminal_event_version)` 确认；
+  启动和 worker tick 有界补投。语义为 at-least-once，允许极窄重复提醒窗口但不永久丢失。
+
+### Source Code Structure
+
+```text
+src/business/scheduling/
+├── scheduler_service.py                  # CRUD、状态/调度不变量、fire-now
+├── scheduler_worker.py                   # 双 Event 值守、misfire、reentry
+├── schedule_calc.py                      # interval/daily/weekly/weekdays + zoneinfo/DST
+├── session_launcher.py                   # session + active run 原子提交后 dispatch
+├── run_completion_monitor.py             # 三条件静默判定、waiting_user/failed/succeeded
+├── terminal_event_delivery.py            # v31 按代次投递、确认与重试
+├── scheduling_confirmation_manager.py    # 创建确认卡生命周期
+└── unattended_confirmation_manager.py    # per-task 授权与 scheduled 立即拒绝
+
+src/business/task_collaboration/graph_terminal.py
+src/data/scheduling_types.py
+src/data/repos/scheduled_task_repository.py
+src/data/repos/scheduled_task_run_repository.py
+src/desktop_api/routers/scheduled_tasks.py
+frontend/src/api/scheduledTasks.ts
+frontend/src/state/scheduledStore.ts
+frontend/src/screens/ScheduledScreen/ScheduledScreen.tsx
+frontend/src/components/StructuredConfirmationCard.tsx
+frontend/src/utils/desktopNotification.ts
+```
+
+### API, Events, Routing And Navigation
+
+- `/api/scheduled-tasks` typed API 提供列表/详情、暂停/启用、per-task 授权 PATCH、fire-now、
+  软删、run 历史、takeover 与 pending confirmation 决策/恢复；创建仍只经 Assistant 工具 + 确认卡。
+- 5 个主助理专用工具：`create/list/update/pause/delete_scheduled_task`；
+  不进入 delegated executor，`unattended_auto_approve` 不进入 schema/handler/facade。
+- 新公开事件：`scheduled_task.completed`、`scheduled_task.needs_takeover`、
+  `scheduled_task.changed`、`scheduling.confirmation_requested`、
+  `scheduling.confirmation_resolved`；均经 UI Event Registry typed envelope，
+  `backend.resync_required` 拉任务 + pending 卡权威快照。
+- `/scheduled` 是第十个主屏。scheduled 会话按 `source` 从普通聊天列表排除，
+  不沉淀 Brain Segment，只能从 run 历史导航查看/接管。
+- Tauri 仅注册 notification plugin 和 `notification:default` 最小 capability；
+  Python 决定业务终态，前端按公开事件调用桌面通知，Rust 不承载业务规则。
+
+### Data Model And Compatibility
+
+- `ScheduledTask` 软删；todo 来源用无 FK 的 `todo_id` 外部引用并独立保存用户核定后的
+  `instruction`。触发前只读验证 todo 存在且未完成，读取异常保留任务重试。
+- `ScheduledTaskRun` append-only；合法转移与 CAS 在 Repository 最终边界执行。
+  skipped 公开 `sessionId=null`，其他 run 在创建时已指向同事务落库的真实 scheduled session。
+- 既有 sessions 行以 `source='user' / scheduled_task_id=NULL / is_scheduled=0` 兼容；
+  Repository 强制 scheduled 三字段关系，避免调用方独立漂移。
+- per-task `unattended_auto_approve` 的 SQLite 持久化只允许确认卡与详情 PATCH；
+  `UnattendedConfirmationManager` 完全独立于进程级 `_auto_approve_enabled`，
+  未授权 scheduled 会话即使全局“全部允许”已开也立即拒绝。
+
+### Architecture Decisions (from research.md)
+
+- 调度中心 = 时间维度触发中枢；`graph_scheduler` = DAG 依赖推进器；“100% 调度” = 派活机制。
+- 所有数据库 `*_at` 使用 UTC naive；本地日历意图保留在 payload，经显式 IANA `tz`
+  或 `tzlocal` 发现的系统时区换算。发现失败拒绝创建；DST ambiguous 取 `fold=0`，
+  nonexistent 向 gap 后首个真实时刻推进并记录 warning。
+- 第一批不设不同 task 的全局 scheduled session 并发上限，只做数据库保证的 per-task 重入控制。
+- 待办入口采用可发现的行内按钮；创建卡可编辑 title/instruction，但 schedule/source 仍以后端 draft 为权威。
+- 桌面通知只申请 `notification:default`；NSIS/AUMID 行为保留人工打包验证 T075。
+
+### Testing Strategy And Status
+
+- 确定性覆盖包括 schedule_calc/DST、misfire、reentry、session+run 原子创建、
+  完成三条件、终态补投代次、per-task 免确认隔离、todo 悬空和所有 Repository/CAS 状态机。
+- 门卫覆盖工具授权与三重不暴露、`user_todos` 不写、todo only one-shot、
+  scheduled 聊天排除/Segment opt-out、API token、run status、sidecar 打包依赖。
+- Desktop API / integration 覆盖创建确认、立即/one-shot/recurring、管理、接管和公开事件接线；
+  frontend unit/E2E 覆盖 store、resync、全局确认卡、管理屏、待办入口和通知调用。
+- **Archive verification (2026-07-20)**: 033 聚焦 Python 套件 `310 passed`；
+  7 个相关 frontend unit 文件 `84 passed`。另一次 frontend 全量单测在 180 秒命令上限内
+  未返回 verdict，未计为通过。
+- **Feature tasks**: 94/96。未完成 T075（Windows NSIS/AUMID 桌面通知实机验收）和
+  T080（按 quickstart 的五场景完整实机冒烟）；两者均保留为人工验证，不伪造完成。

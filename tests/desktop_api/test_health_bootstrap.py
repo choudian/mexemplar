@@ -8,7 +8,8 @@ from src.business.services.desktop_health_service import DesktopHealthCheck, Des
 
 
 def test_health_returns_ready_connection_state(desktop_api_client: TestClient) -> None:
-    response = desktop_api_client.get("/api/health")
+    with desktop_api_client as client:
+        response = client.get("/api/health")
 
     assert response.status_code == 200
     payload = response.json()
@@ -17,6 +18,7 @@ def test_health_returns_ready_connection_state(desktop_api_client: TestClient) -
         "config",
         "sqlite",
         "events",
+        "scheduling",
         "sidecar",
     }
 
@@ -24,7 +26,8 @@ def test_health_returns_ready_connection_state(desktop_api_client: TestClient) -
 def test_bootstrap_returns_shell_data_without_repository_shape(
     desktop_api_client: TestClient,
 ) -> None:
-    response = desktop_api_client.get("/api/bootstrap")
+    with desktop_api_client as client:
+        response = client.get("/api/bootstrap")
 
     assert response.status_code == 200
     payload = response.json()

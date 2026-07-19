@@ -73,6 +73,11 @@ EventName: TypeAlias = Literal[
     "graph_scheduler_recovery_completed",
     "mcp_server_disconnected",
     "backend_resync_required",
+    "scheduler_task_changed",
+    "scheduler_run_terminal",
+    "graph_scheduler_terminal",
+    "scheduling_confirmation_requested",
+    "scheduling_confirmation_resolved",
 ]
 
 _EVENT_NAMES: tuple[EventName, ...] = get_args(EventName)
@@ -315,6 +320,31 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "server_id",
         "error",
     ),
+    "scheduler_task_changed": ("scheduled_task_id", "change_type"),
+    "scheduler_run_terminal": (
+        "scheduled_task_id",
+        "run_id",
+        "session_id",
+        "status",
+        "summary",
+        "failure_reason",
+        "task_title",
+        "reason",
+    ),
+    "graph_scheduler_terminal": (
+        "graph_id",
+        "session_id",
+        "all_terminal",
+        "all_completed",
+    ),
+    "scheduling_confirmation_requested": (
+        "request_id",
+        "session_id",
+        "draft",
+        "unattended_auto_approve",
+        "expires_at",
+    ),
+    "scheduling_confirmation_resolved": ("request_id", "session_id", "status"),
 }
 
 
@@ -441,6 +471,13 @@ prompt_supplement_changed = _registry.signal("prompt_supplement_changed")
 tool_gap_detected = _registry.signal("tool_gap_detected")
 avoidance_rule_injected = _registry.signal("avoidance_rule_injected")
 improvement_proposal_changed = _registry.signal("improvement_proposal_changed")
+
+# 调度中心事件（033）
+scheduler_task_changed = _registry.signal("scheduler_task_changed")
+scheduler_run_terminal = _registry.signal("scheduler_run_terminal")
+graph_scheduler_terminal = _registry.signal("graph_scheduler_terminal")
+scheduling_confirmation_requested = _registry.signal("scheduling_confirmation_requested")
+scheduling_confirmation_resolved = _registry.signal("scheduling_confirmation_resolved")
 
 
 # =============================================================================

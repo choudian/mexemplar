@@ -3,6 +3,10 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { configureDesktopApi } from "../../src/api/client";
 import { UserTodoScreen } from "../../src/screens/UserTodoScreen/UserTodoScreen";
+import { useAssistantStore } from "../../src/state/assistantStore";
+import { useScheduledStore } from "../../src/state/scheduledStore";
+import { useShellStore } from "../../src/state/shellStore";
+import { useToastStore } from "../../src/state/toastStore";
 import { useUserTodoStore } from "../../src/state/userTodoStore";
 
 function jsonResponse(payload: unknown) {
@@ -39,6 +43,14 @@ describe("UserTodoScreen", () => {
       busy: false,
       lastError: null,
     });
+    useScheduledStore.setState({
+      hydrated: true,
+      tasks: [],
+      tasksTotal: 0,
+    });
+    useShellStore.setState({ activeRoute: "user-todos" });
+    useAssistantStore.setState({ draft: "" });
+    useToastStore.setState({ toasts: [] });
   });
 
   afterEach(() => {
@@ -161,5 +173,116 @@ describe("UserTodoScreen", () => {
       expect.stringContaining("status=open"),
       expect.any(Object),
     );
+  });
+
+  test("让 AI 做 button prefills assistant draft and switches route", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("http://desktop.test/api/user-todos?")) {
+        return jsonResponse({ items: [baseTodo], total: 1, limit: 200, offset: 0 });
+      }
+      return jsonResponse({ items: [], total: 0, limit: 1, offset: 0 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<UserTodoScreen />);
+    await screen.findByText("准备会议");
+
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 做" }));
+
+    await waitFor(() => {
+      const draft = useAssistantStore.getState().draft;
+      expect(draft).toContain("准备会议");
+      expect(draft).toContain("一次性定时任务");
+    });
+    expect(useShellStore.getState().activeRoute).toBe("assistant");
+    expect(useToastStore.getState().toasts.some((t) => t.message.includes("AI 助手"))).toBe(true);
+  });
+
+  test("让 AI 做 prefills description when todo has one", async () => {
+    const todoWithDesc = { ...baseTodo, description: "整理议程并发给所有人" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("http://desktop.test/api/user-todos?")) {
+          return jsonResponse({ items: [todoWithDesc], total: 1, limit: 200, offset: 0 });
+        }
+        return jsonResponse({ items: [], total: 0, limit: 1, offset: 0 });
+      }),
+    );
+
+    render(<UserTodoScreen />);
+    await screen.findByText("准备会议");
+
+    fireEvent.click(screen.getByRole("button", { name: "让 AI 做" }));
+
+    await waitFor(() => {
+      const draft = useAssistantStore.getState().draft;
+      expect(draft).toContain("整理议程并发给所有人");
+    });
+  });
+
+  test("shows 上次让 AI 做 outcome when a scheduled task references this todo", async () => {
+    useScheduledStore.setState({
+      hydrated: true,
+      tasks: [
+        {
+          scheduledTaskId: "sch_1",
+          sourceType: "todo",
+          sourceRef: "utodo_1",
+          title: "准备会议",
+          scheduleKind: "one_shot",
+          scheduleDescription: "一次性 7月19日 17:00",
+          status: "completed",
+          unattendedAutoApprove: false,
+          nextFireAt: null,
+          lastFireAt: "2026-07-19T09:00:00Z",
+          lastRunOutcome: "succeeded",
+          lastRunAt: "2026-07-19T09:05:00Z",
+          createdAt: "2026-07-18T10:00:00Z",
+          updatedAt: "2026-07-19T09:05:00Z",
+        },
+      ],
+      tasksTotal: 1,
+    });
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("http://desktop.test/api/user-todos?")) {
+          return jsonResponse({ items: [baseTodo], total: 1, limit: 200, offset: 0 });
+        }
+        return jsonResponse({ items: [], total: 0, limit: 1, offset: 0 });
+      }),
+    );
+
+    render(<UserTodoScreen />);
+    await screen.findByText("准备会议");
+
+    // T061：展示上次执行结果，不自动标记完成。
+    expect(screen.getByText(/上次让 AI 做/)).toBeInTheDocument();
+    expect(screen.getByText(/成功/)).toBeInTheDocument();
+    // 待办本身仍处于 pending 状态（不会被调度任务自动改）。
+    expect(screen.getByRole("button", { name: "标记完成" })).toBeInTheDocument();
+  });
+
+  test("does not show 上次让 AI 做 when no scheduled task references the todo", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith("http://desktop.test/api/user-todos?")) {
+          return jsonResponse({ items: [baseTodo], total: 1, limit: 200, offset: 0 });
+        }
+        return jsonResponse({ items: [], total: 0, limit: 1, offset: 0 });
+      }),
+    );
+
+    render(<UserTodoScreen />);
+    await screen.findByText("准备会议");
+
+    expect(screen.queryByText(/上次让 AI 做/)).not.toBeInTheDocument();
   });
 });
