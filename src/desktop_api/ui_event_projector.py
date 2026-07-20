@@ -988,6 +988,11 @@ for _event_name, (_public_type, _field_map) in _TASK_EVENT_PROJECTIONS.items():
     _PROJECTIONS[_event_name] = _make_task_projection(_public_type, _field_map)
 
 
+def projected_internal_event_names() -> tuple[str, ...]:
+    """Return the internal blinker events that have a public UI projection."""
+    return tuple(_PROJECTIONS)
+
+
 def project_internal_event(event_name: str, payload: dict[str, Any]) -> list[UiEventDraft]:
     scope = _scope_from_payload(payload)
     causation_id = _causation_id(scope, payload)

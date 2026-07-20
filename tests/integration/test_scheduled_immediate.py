@@ -14,6 +14,7 @@ US1 MVP 闭环验证（轻量 mock 版，避开完整 FastAPI lifespan / 真实 
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -96,7 +97,11 @@ def test_scheduled_immediate_full_flow():
     request_id = manager.create(draft, session_id="ast_user_main")
     # 确认卡 requested 事件
     assert len(captured["scheduling_confirmation_requested"]) == 1
-    assert captured["scheduling_confirmation_requested"][0]["request_id"] == request_id
+    requested = captured["scheduling_confirmation_requested"][0]
+    assert requested["request_id"] == request_id
+    expires_at = datetime.fromisoformat(requested["expires_at"])
+    assert expires_at.tzinfo is not None
+    assert expires_at.utcoffset() == timedelta(0)
 
     # mock dispatch_callback：记录调用、返回 True
     dispatched: list[tuple[str, str]] = []

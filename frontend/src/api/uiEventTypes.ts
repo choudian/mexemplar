@@ -164,7 +164,7 @@ export const UI_EVENT_EXAMPLES = {
   "scheduled_task.completed": { "taskId": "sch_abc", "taskTitle": "查竞品价格", "runId": "schr_xyz", "sessionId": "ast_001", "outcome": "succeeded", "summary": "竞品 A 价格 99 元", "failureReason": null },
   "scheduled_task.needs_takeover": { "taskId": "sch_abc", "taskTitle": "查竞品价格", "runId": "schr_xyz", "sessionId": "ast_001", "reason": "needs_user_input" },
   "scheduled_task.changed": { "taskId": "sch_abc", "changeType": "created" },
-  "scheduling.confirmation_requested": { "requestId": "scf_abc", "sessionId": "ast_001", "draft": { "title": "查竞品价格", "scheduleDescription": "每天 09:00", "instruction": "查询竞品价格并汇总", "scheduleKind": "recurring", "sourceType": "direct" }, "unattendedAutoApprove": false, "expiresAt": "2026-07-19T12:00:00" },
+  "scheduling.confirmation_requested": { "requestId": "scf_abc", "sessionId": "ast_001", "draft": { "title": "查竞品价格", "scheduleDescription": "每天 09:00", "instruction": "查询竞品价格并汇总", "scheduleKind": "recurring", "sourceType": "direct" }, "unattendedAutoApprove": false, "expiresAt": "2026-07-19T12:00:00+00:00" },
   "scheduling.confirmation_resolved": { "requestId": "scf_abc", "sessionId": "ast_001", "status": "confirmed" },
   "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"] },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;

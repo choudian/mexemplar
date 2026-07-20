@@ -874,7 +874,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                 "sourceType": "direct",
             },
             "unattendedAutoApprove": False,
-            "expiresAt": "2026-07-19T12:00:00",
+            "expiresAt": "2026-07-19T12:00:00+00:00",
         },
         required_payload_keys=frozenset({"requestId", "sessionId", "draft", "expiresAt"}),
         required_scope_keys=frozenset({"sessionId"}),

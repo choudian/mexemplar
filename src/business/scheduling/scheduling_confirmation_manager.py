@@ -16,7 +16,7 @@ import logging
 import threading
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable, Literal, Optional
 
 from src.utils.timezone import utc_now_naive
@@ -65,6 +65,16 @@ def _timedelta_seconds(seconds: int):
     from datetime import timedelta
 
     return timedelta(seconds=seconds)
+
+
+def _public_utc_isoformat(value: datetime) -> str:
+    """Serialize internal naive-UTC datetimes as unambiguous public timestamps."""
+    utc_value = (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
+    return utc_value.isoformat()
 
 
 def create(draft: dict[str, Any], session_id: str) -> str:
@@ -287,7 +297,7 @@ def _pending_snapshot(p: _PendingConfirmation) -> dict[str, Any]:
         "sessionId": p.session_id,
         "draft": _public_draft(p.draft),
         "unattendedAutoApprove": p.unattended_auto_approve,
-        "expiresAt": p.expires_at.isoformat(),
+        "expiresAt": _public_utc_isoformat(p.expires_at),
         "status": "pending",
     }
 
@@ -360,7 +370,7 @@ def _emit_requested(p: _PendingConfirmation) -> None:
             session_id=p.session_id,
             draft=p.draft,
             unattended_auto_approve=p.unattended_auto_approve,
-            expires_at=p.expires_at.isoformat(),
+            expires_at=_public_utc_isoformat(p.expires_at),
         )
     except Exception:
         logger.exception(

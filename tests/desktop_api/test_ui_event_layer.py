@@ -5,6 +5,7 @@ import queue
 import pytest
 
 from src.desktop_api.events import event_queue, install_blinker_event_adapter
+from src.desktop_api.ui_event_projector import projected_internal_event_names
 from src.desktop_api.ui_events import (
     UiEventValidationError,
     exported_registry_examples,
@@ -156,6 +157,19 @@ def test_blinker_event_adapter_reinstalls_after_signal_clear() -> None:
     assert event.type == "settings.changed"
 
 
+def test_blinker_adapter_subscribes_every_public_projection() -> None:
+    backend_events.clear_all()
+    install_blinker_event_adapter()
+
+    missing = [
+        event_name
+        for event_name in projected_internal_event_names()
+        if not backend_events._registry.signal(event_name).receivers
+    ]
+
+    assert missing == []
+
+
 def test_blinker_event_adapter_install_is_idempotent(desktop_api_client) -> None:
     install_blinker_event_adapter()
     install_blinker_event_adapter()
@@ -165,6 +179,50 @@ def test_blinker_event_adapter_install_is_idempotent(desktop_api_client) -> None
     event = event_queue.queue.get_nowait()
     assert event.type == "settings.changed"
     assert event_queue.queue.empty()
+
+
+def test_scheduling_confirmation_request_reaches_public_ui_queue(
+    desktop_api_client,
+) -> None:
+    install_blinker_event_adapter()
+
+    emit(
+        "scheduling_confirmation_requested",
+        sender=None,
+        request_id="scf_regression",
+        session_id="ast_regression",
+        draft={
+            "title": "每日榜单",
+            "scheduleDescription": "每天 15:00",
+            "instruction": "汇总榜单",
+            "schedule_kind": "recurring",
+            "source_type": "direct",
+        },
+        unattended_auto_approve=False,
+        expires_at="2026-07-20T15:05:00+08:00",
+    )
+
+    try:
+        event = event_queue.queue.get_nowait()
+    except queue.Empty:
+        pytest.fail("调度确认内部事件未进入公开 UI 事件队列")
+
+    assert event.type == "scheduling.confirmation_requested"
+    assert event.scope == {"sessionId": "ast_regression"}
+    assert event.payload == {
+        "requestId": "scf_regression",
+        "sessionId": "ast_regression",
+        "draft": {
+            "title": "每日榜单",
+            "scheduleDescription": "每天 15:00",
+            "instruction": "汇总榜单",
+            "scheduleKind": "recurring",
+            "sourceType": "direct",
+        },
+        "unattendedAutoApprove": False,
+        "expiresAt": "2026-07-20T15:05:00+08:00",
+        "status": "pending",
+    }
 
 
 def test_internal_projection_filters_scope_to_public_event_contract(

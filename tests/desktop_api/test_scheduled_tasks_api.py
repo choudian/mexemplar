@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -782,6 +782,33 @@ def test_confirmation_pending_list(desktop_api_client: TestClient):
     assert item["draft"]["scheduleKind"] == "one_shot"
     assert item["draft"]["sourceType"] == "direct"
     assert item["unattendedAutoApprove"] is False
+
+
+def test_confirmation_expiry_is_timezone_aware_for_browser_countdown(
+    desktop_api_client: TestClient,
+):
+    from src.business.scheduling.scheduling_confirmation_manager import create
+
+    create(
+        {
+            "source_type": "direct",
+            "schedule_kind": "one_shot",
+            "schedule_payload": {"run_at": "2026-07-19T10:00:00"},
+            "instruction": "x",
+            "title": "时区测试",
+            "source_ref": "x",
+        },
+        "ast_expiry_timezone",
+    )
+
+    resp = desktop_api_client.get(
+        "/api/scheduled-tasks/confirmations/pending?sessionId=ast_expiry_timezone"
+    )
+
+    assert resp.status_code == 200
+    expires_at = datetime.fromisoformat(resp.json()["items"][0]["expiresAt"])
+    assert expires_at.tzinfo is not None, "浏览器倒计时需要无歧义的带时区过期时间"
+    assert expires_at.utcoffset() == timedelta(0)
 
 
 def test_confirmation_pending_without_session_returns_global_card(

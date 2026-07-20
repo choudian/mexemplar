@@ -11,7 +11,10 @@ from typing import Any
 from uuid import uuid4
 
 from src.desktop_api.schemas import UiEvent
-from src.desktop_api.ui_event_projector import project_internal_event
+from src.desktop_api.ui_event_projector import (
+    project_internal_event,
+    projected_internal_event_names,
+)
 from src.desktop_api.ui_event_types import UiEventDraft
 from src.desktop_api.ui_events import (
     UiEventValidationError,
@@ -307,56 +310,7 @@ _trial_preview_handler: Callable[..., Any] | None = None
 _PERSISTENT_ADAPTER_HANDLERS_ATTR = "_desktop_api_event_adapter_handlers"
 _PERSISTENT_TRIAL_HANDLER_ATTR = "_desktop_api_trial_preview_handler"
 
-_INTERNAL_EVENT_NAMES = [
-    "agent_error",
-    "agent_needs_user_input",
-    "assistant_agent_step",
-    "assistant_subagent_started",
-    "assistant_subagent_finished",
-    "assistant_subagent_paused",
-    "requirement_confirmed",
-    "code_completed",
-    "review_passed",
-    "review_failed",
-    "recording_started",
-    "recording_stopped",
-    "recording_completed",
-    "desktop_action_count_changed",
-    "desktop_recording_degraded",
-    "desktop_recorder_start_failed",
-    "desktop_trial_finished",
-    "tool_saved",
-    "tool_published",
-    "tools_changed",
-    "composition_review_needed",
-    "settings_changed",
-    "trial_requested",
-    "trial_success",
-    "trial_failed",
-    "teaching_failure_updated",
-    "teaching_failure_resolved",
-    "teaching_failure_retrying",
-    "brain_zone_changed",
-    "brain_specialist_changed",
-    "brain_specialist_recruited",
-    "brain_context_ready",
-    "brain_skill_changed",
-    "brain_skill_equipment_changed",
-    "brain_skill_supersede_completed",
-    "brain_skill_bootstrap_fallback_used",
-    # 026 self-improvement proposals
-    "improvement_proposal_changed",
-    # 023 task collaboration
-    "assistant_task_graph_changed",
-    "assistant_task_board_changed",
-    "assistant_task_question_changed",
-    "assistant_meeting_changed",
-    "assistant_todo_changed",
-    "assistant_task_adjudication_changed",
-    "assistant_task_root_failed",
-    # 027 MCP server status change (resync when tool list unchanged)
-    "backend_resync_required",
-]
+_INTERNAL_EVENT_NAMES = projected_internal_event_names()
 
 
 def _make_event_handler(signal_name: str) -> Callable[..., None]:
