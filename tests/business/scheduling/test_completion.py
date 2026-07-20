@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from types import SimpleNamespace
 
@@ -146,6 +147,18 @@ def _seed_run(run_repo, *, run_id="schr_x", session_id="ast_x", task_id="sch_x",
     if status != "running":
         run_repo.cas_transition(run.run_id, from_status="running", to_status=status)
     return run
+
+
+class _MessageRepoStub:
+    def __init__(self, messages, *, summary="执行回合已结束"):
+        self._messages = messages
+        self._summary = summary
+
+    def get_all(self, _session_id):
+        return self._messages
+
+    def get_latest_assistant_text(self, _session_id, max_length=500):
+        return self._summary[:max_length]
 
 
 @pytest.mark.parametrize(
@@ -327,6 +340,86 @@ def test_evaluate_marks_succeeded_when_all_completed_and_quiescent():
         assert "99 元" in result["summary"]
 
 
+def test_no_graph_without_successful_delegation_is_failed_not_false_success():
+    """精确回归：只重复创建定时任务、未委派实际工作，不能记为 succeeded。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    message_repo = _MessageRepoStub(
+        [
+            SimpleNamespace(
+                role="tool",
+                tool_name="create_scheduled_task",
+                content=json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "tool": "create_scheduled_task",
+                        "outcome": "success",
+                        "payload": {"content": '{"success": true}'},
+                    }
+                ),
+            )
+        ],
+        summary="已为你创建新的定时任务。",
+    )
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_false_success")
+        monitor = _make_monitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            snapshot_tasks=None,
+            run_repo=rr,
+            message_repo=message_repo,
+        )
+
+        result = monitor.evaluate_session("ast_false_success")
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert rr.get_by_session("ast_false_success").status == "failed"
+
+
+def test_no_graph_with_successful_sync_delegation_is_succeeded():
+    """简单任务允许不建图，但必须有可审计的成功同步委派结果。"""
+    from src.data.repos.scheduled_task_run_repository import (
+        ScheduledTaskRunRepository,
+    )
+
+    message_repo = _MessageRepoStub(
+        [
+            SimpleNamespace(
+                role="tool",
+                tool_name="delegate_to_subagent",
+                content=json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "tool": "delegate_to_subagent",
+                        "outcome": "success",
+                        "payload": {"content": '{"success": true}'},
+                    }
+                ),
+            )
+        ],
+        summary="报告已经写入知识库。",
+    )
+    with ScheduledTaskRunRepository() as rr:
+        _seed_run(rr, session_id="ast_sync_delegated")
+        monitor = _make_monitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            snapshot_tasks=None,
+            run_repo=rr,
+            message_repo=message_repo,
+        )
+
+        result = monitor.evaluate_session("ast_sync_delegated")
+
+        assert result is not None
+        assert result["status"] == "succeeded"
+        assert result["summary"] == "报告已经写入知识库。"
+
+
 def test_evaluate_reads_graph_snapshot_only_once() -> None:
     """同一次静默落账必须复用图状态，不能在判静默后再次读取权威快照。"""
     from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
@@ -418,7 +511,9 @@ def test_terminal_event_failure_remains_pending_and_next_evaluation_retries(
         monitor = RunCompletionMonitor(
             has_active_worker=lambda _sid: False,
             has_pending_reentry=lambda _sid: False,
-            get_graph_snapshot=lambda _sid: None,
+            get_graph_snapshot=lambda _sid: SimpleNamespace(
+                tasks=[_root(), _executor("t1", "completed")]
+            ),
             run_repo=rr,
         )
 

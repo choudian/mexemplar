@@ -8,7 +8,7 @@
 
 1. ``not has_active_worker(session_id)``：主助理 worker 已退出。
 2. ``not has_pending_reentry(session_id)``：无未消费回流。
-3. 图全终态（无图时视作真）：``compute_graph_terminal_state(...)``。
+3. 图全终态；简单任务无图时，必须存在成功的同步委派工具结果。
 
 静默后按图终态分流：
 
@@ -25,6 +25,7 @@ Blinker receiver 只是同步 observer：评估异常在 receiver 边界记录�
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from contextlib import nullcontext
@@ -45,6 +46,13 @@ logger = logging.getLogger(__name__)
 
 SUMMARY_MAX_CHARS = 500
 FAILURE_REASON_SAFE = "scheduled session failed to complete successfully"
+_SYNC_EXECUTION_TOOL_NAMES = frozenset(
+    {
+        "delegate_to_subagent",
+        "delegate_to_specialist",
+        "continue_subagent",
+    }
+)
 
 
 class RunCompletionMonitor:
@@ -265,7 +273,7 @@ class RunCompletionMonitor:
                 return {"runId": updated.run_id, "status": updated.status}
 
     def is_session_quiescent(self, session_id: str) -> bool:
-        """静默三条件：无活跃 worker ∧ 无 pending 回流 ∧ 图全终态（无图视作真）。"""
+        """静默三条件：无 worker ∧ 无回流 ∧ 图终态/无图同步委派已结束。"""
         return self._quiescent_graph_state(session_id) is not None
 
     def _quiescent_graph_state(self, session_id: str) -> tuple[bool, bool] | None:
@@ -325,8 +333,18 @@ class RunCompletionMonitor:
         if not known:
             return None
         if snapshot is None:
-            # 无图（简单会话）：图条件视作 (True, True)——退化为「worker 退出即静默」
-            return True, True
+            # 无图只允许来自 100% 调度规则中的简单同步委派。仅凭主助理 worker
+            # 退出不能证明任务做过，否则“误调用别的工具后结束”会被记成成功。
+            delegated = self._has_successful_sync_execution(session_id)
+            if delegated is None:
+                return None
+            if not delegated:
+                logger.warning(
+                    "RunCompletionMonitor: scheduled session %s has no graph and "
+                    "no successful synchronous delegation evidence",
+                    session_id,
+                )
+            return True, delegated
         tasks = getattr(snapshot, "tasks", None) or []
         try:
             from src.business.task_collaboration.models import (
@@ -344,6 +362,59 @@ class RunCompletionMonitor:
             terminal_statuses=TERMINAL_TASK_STATUSES,
             completed_status=str(TaskStatus.COMPLETED),
         )
+
+    def _has_successful_sync_execution(self, session_id: str) -> bool | None:
+        """读取持久工具结果；查询未知时 fail-closed，避免误报终态。"""
+        try:
+            with self._message_repo_scope() as message_repo:
+                messages = message_repo.get_all(session_id)
+        except Exception:
+            logger.error(
+                "RunCompletionMonitor: delegation evidence lookup failed for session %s",
+                session_id,
+                exc_info=True,
+            )
+            return None
+
+        return any(
+            getattr(message, "role", None) == "tool"
+            and getattr(message, "tool_name", None) in _SYNC_EXECUTION_TOOL_NAMES
+            and self._tool_result_succeeded(getattr(message, "content", None))
+            for message in messages
+        )
+
+    @staticmethod
+    def _tool_result_succeeded(content: Any) -> bool:
+        """兼容原始 handler JSON 与 output-governance envelope。"""
+        if not isinstance(content, str) or not content.strip():
+            return False
+        try:
+            payload = json.loads(content)
+        except (TypeError, ValueError):
+            return False
+        if not isinstance(payload, dict):
+            return False
+
+        direct_success = payload.get("success")
+        if isinstance(direct_success, bool):
+            return direct_success
+
+        if str(payload.get("outcome") or "").lower() != "success":
+            return False
+
+        # 普通自定义工具的小结果会被 governance 包在 payload.content 中。
+        # 若其中保留了显式 success=false，以内层业务结果为准。
+        envelope_payload = payload.get("payload")
+        if isinstance(envelope_payload, dict):
+            nested_content = envelope_payload.get("content")
+            if isinstance(nested_content, str):
+                try:
+                    nested = json.loads(nested_content)
+                except (TypeError, ValueError):
+                    nested = None
+                if isinstance(nested, dict) and isinstance(nested.get("success"), bool):
+                    return nested["success"]
+        return True
 
     def _get_snapshot(self, session_id: str) -> tuple[bool, Any | None]:
         """返回 ``(known, snapshot)``；查询失败与权威“无图”严格区分。"""

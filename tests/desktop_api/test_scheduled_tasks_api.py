@@ -70,6 +70,46 @@ def test_list_tasks_returns_camelcase_dto(desktop_api_client: TestClient):
     assert "test-session-token" not in resp.text
 
 
+def test_scheduled_api_marks_utc_instants_with_an_explicit_offset(
+    desktop_api_client: TestClient,
+):
+    """UTC naive 存储值必须带时区出 API，避免浏览器把 07:00 当成本地 07:00。"""
+    task_id = _make_task(
+        title="时区契约",
+        next_fire_at=datetime(2099, 7, 21, 7, 0, 0),
+    )
+    with ScheduledTaskRunRepository() as run_repo:
+        run = run_repo.create(
+            scheduled_task_id=task_id,
+            session_id="ast_timezone_contract",
+            started_at=datetime(2099, 7, 20, 7, 0, 0),
+        )
+        run_repo.cas_transition(
+            run.run_id,
+            from_status="running",
+            to_status="succeeded",
+            summary="done",
+        )
+
+    task_response = desktop_api_client.get(f"/api/scheduled-tasks/{task_id}")
+    runs_response = desktop_api_client.get(f"/api/scheduled-tasks/{task_id}/runs")
+
+    assert task_response.status_code == 200
+    assert runs_response.status_code == 200
+    task = task_response.json()
+    run_item = runs_response.json()["items"][0]
+    for value in (
+        task["nextFireAt"],
+        task["lastRunAt"],
+        task["createdAt"],
+        task["updatedAt"],
+        run_item["startedAt"],
+        run_item["finishedAt"],
+    ):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        assert parsed.utcoffset() == timedelta(0), value
+
+
 def test_list_tasks_status_filter(desktop_api_client: TestClient):
     active_id = _make_task(title="活跃")
     paused_id = _make_task(title="暂停")

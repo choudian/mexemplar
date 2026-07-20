@@ -130,6 +130,39 @@ describe("ScheduledScreen", () => {
     expect(screen.getByText(/还没跑过|上次执行/)).toBeInTheDocument();
   });
 
+  test("renders timezone-less UTC API timestamps in the user's local timezone", async () => {
+    const task = {
+      ...baseTask,
+      title: "UTC 时间展示",
+      nextFireAt: "2026-07-21T07:00:00",
+      lastRunAt: "2026-07-20T07:00:00",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({ items: [task], total: 1, limit: 200, offset: 0 }),
+      ),
+    );
+    const formatter = new Intl.DateTimeFormat("zh-CN", {
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    render(<ScheduledScreen />);
+
+    await screen.findByText("UTC 时间展示");
+    expect(
+      screen.getByText(`下次 ${formatter.format(new Date("2026-07-21T07:00:00Z"))}`),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `上次执行 ${formatter.format(new Date("2026-07-20T07:00:00Z"))} · 成功`,
+      ),
+    ).toBeInTheDocument();
+  });
+
   test("marks unattended-auto-approve tasks with a prominent badge in the list (FR-019)", async () => {
     const task = { ...baseTask, unattendedAutoApprove: true };
     vi.stubGlobal(

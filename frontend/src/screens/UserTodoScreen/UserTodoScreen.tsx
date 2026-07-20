@@ -22,6 +22,10 @@ import { useScheduledStore } from "../../state/scheduledStore";
 import { useShellStore } from "../../state/shellStore";
 import { useToastStore } from "../../state/toastStore";
 import { useUserTodoStore } from "../../state/userTodoStore";
+import {
+  formatMonthDayTime,
+  parseApiDateTime,
+} from "../../utils/dates";
 import type { UserTodoItem, UserTodoPriority, UserTodoStatus } from "../../state/userTodoStore";
 
 type EditDraft = {
@@ -69,18 +73,6 @@ function toEditDraft(todo: UserTodoItem): EditDraft {
     status: todo.status,
     priority: todo.priority,
   };
-}
-
-function formatDate(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
 }
 
 function priorityTone(priority: UserTodoPriority): "neutral" | "ok" | "warn" | "danger" {
@@ -204,7 +196,9 @@ export function UserTodoScreen(): JSX.Element {
       if (task.sourceType !== "todo") continue;
       if (!task.lastRunAt) continue;
       const prev = map.get(task.sourceRef);
-      if (!prev || new Date(task.lastRunAt).getTime() > new Date(prev.at).getTime()) {
+      const taskTime = parseApiDateTime(task.lastRunAt)?.getTime() ?? 0;
+      const previousTime = parseApiDateTime(prev?.at)?.getTime() ?? 0;
+      if (!prev || taskTime > previousTime) {
         map.set(task.sourceRef, { at: task.lastRunAt, outcome: task.lastRunOutcome });
       }
     }
@@ -377,9 +371,9 @@ export function UserTodoScreen(): JSX.Element {
               </div>
               {todo.description ? <p>{todo.description}</p> : null}
               <div className="user-todo-meta">
-                <span>创建 {formatDate(todo.createdAt)}</span>
+                <span>创建 {formatMonthDayTime(todo.createdAt)}</span>
                 {todo.completedAt ? (
-                  <span>完成 {formatDate(todo.completedAt)}</span>
+                  <span>完成 {formatMonthDayTime(todo.completedAt)}</span>
                 ) : null}
                 {lastExecutionByTodo.has(todo.todoId) ? (
                   <span
@@ -387,7 +381,8 @@ export function UserTodoScreen(): JSX.Element {
                     data-outcome={lastExecutionByTodo.get(todo.todoId)?.outcome ?? ""}
                     title="来自调度中心的最近一次执行结果，待办本身不会被自动标记完成"
                   >
-                    上次让 AI 做：{formatDate(lastExecutionByTodo.get(todo.todoId)?.at ?? null) || "—"}
+                    上次让 AI 做：
+                    {formatMonthDayTime(lastExecutionByTodo.get(todo.todoId)?.at ?? null) || "—"}
                     {lastExecutionByTodo.get(todo.todoId)?.outcome
                       ? ` · ${RUN_OUTCOME_LABEL[lastExecutionByTodo.get(todo.todoId)!.outcome!] ?? "已结束"}`
                       : ""}

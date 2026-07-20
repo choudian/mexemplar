@@ -29,6 +29,12 @@ def utc_now_naive() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+def to_public_utc_isoformat(dt: datetime) -> str:
+    """把内部 datetime 序列化为带 UTC 偏移的公开 ISO 8601 时间。"""
+    utc_aware = dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+    return utc_aware.astimezone(timezone.utc).isoformat()
+
+
 def to_local(dt: datetime) -> datetime:
     """将存储的 naive UTC 时间转为本地 aware datetime，用于 UI 显示。"""
     if dt is None:

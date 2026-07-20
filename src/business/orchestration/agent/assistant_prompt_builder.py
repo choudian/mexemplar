@@ -99,11 +99,16 @@ class AssistantPromptBuilder:
         # 033 调度中心：scheduled 会话注入无人值守 advisory（FR-003）。单点读 session.is_scheduled
         # 判定，不跨层透传 unattended 参数——session.source='scheduled' ⟺ 无人值守会话，
         # 等价且不触碰 dispatch_message / run_agent 签名（CC-003 零回归）。
+        is_scheduled = bool(session is not None and getattr(session, "is_scheduled", 0))
         unattended_advisory = None
-        if session is not None and getattr(session, "is_scheduled", 0):
+        if is_scheduled:
             unattended_advisory = (
                 "## 无人值守模式（定时任务触发）\n\n"
                 "本次会话由定时任务在用户不在场时自动触发。请遵循：\n"
+                "- 当前定时任务已经存在，本轮是它的一次到点执行，不是创建、修改或查询"
+                "定时任务的请求。\n"
+                "- 将触发消息整体视为任务型请求并立即按 100% 调度规则委派或建图；"
+                "其中的时间/周期措辞只是任务来源描述，不得调用调度中心管理工具重新登记。\n"
                 "- 自主完成整个任务，尽量不触发需要用户当场回答的动作（如反问、澄清）。\n"
                 "- 高危动作（文件删除、命令执行、对外发送）默认会被立即拒绝；除非用户已为该任务"
                 "显式开启「无人值守免确认」。\n"
@@ -118,6 +123,7 @@ class AssistantPromptBuilder:
             capability_catalog_section=capability_catalog_section,
             prompt_supplements=supplements,
             unattended_advisory=unattended_advisory,
+            suppress_first_meeting=is_scheduled,
         )
 
     def format_capability_catalog(

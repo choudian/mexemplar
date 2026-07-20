@@ -4,6 +4,7 @@ import { HelpCircle } from "lucide-react";
 import type { ClarificationQuestion, ClarificationRequest } from "../../api/assistant";
 import type { ClarificationQuestionDraft } from "../../state/assistantStore";
 import { Button } from "../../components/primitives";
+import { parseApiDateTime } from "../../utils/dates";
 
 const OTHER_TEXT_MAX = 1000;
 
@@ -40,7 +41,7 @@ function remainingLabel(expiresAt: string | null | undefined, nowMs: number): st
   if (!expiresAt) {
     return null;
   }
-  const remainingMs = new Date(expiresAt).getTime() - nowMs;
+  const remainingMs = (parseApiDateTime(expiresAt)?.getTime() ?? Number.NaN) - nowMs;
   if (Number.isNaN(remainingMs) || remainingMs <= 0) {
     return "即将超时";
   }

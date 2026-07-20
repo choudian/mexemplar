@@ -60,6 +60,34 @@ def test_false_dispatch_marks_run_failed():
         assert run.failure_reason == "scheduled session could not be started"
 
 
+def test_dispatch_wraps_instruction_as_an_existing_schedule_execution():
+    dispatched: list[tuple[str, str]] = []
+    instruction = "每天下午 3 点执行：整理 GitHub Trending，并把报告写入知识库。"
+
+    with ScheduledTaskRunRepository() as run_repo:
+        launcher = SessionLauncher(
+            dispatch_callback=lambda session_id, message: (
+                dispatched.append((session_id, message)) or True
+            ),
+            run_repo=run_repo,
+            chat_service=_ChatService(),
+        )
+
+        launcher.launch(
+            scheduled_task_id="sch_execution_envelope",
+            instruction=instruction,
+        )
+
+    assert len(dispatched) == 1
+    session_id, dispatched_message = dispatched[0]
+    assert session_id == "ast_dispatch_test"
+    assert dispatched_message != instruction
+    assert dispatched_message.count(instruction) == 1
+    assert "已存在定时任务的一次到点执行" in dispatched_message
+    assert "立即执行" in dispatched_message
+    assert "不得再次创建、修改、暂停或删除定时任务" in dispatched_message
+
+
 def test_dispatch_exception_marks_run_failed():
     def _raise(_session_id, _instruction):
         raise RuntimeError("provider unavailable")

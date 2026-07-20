@@ -30,6 +30,7 @@ import { useAssistantStore } from "../../state/assistantStore";
 import { useBrainStore } from "../../state/brainStore";
 import { useSettingsStore } from "../../state/settingsStore";
 import { useShellStore } from "../../state/shellStore";
+import { formatDateTime } from "../../utils/dates";
 import EntryEvolution from "./EntryEvolution";
 
 const ZONES = [
@@ -482,7 +483,7 @@ function ExecutionReviewList({
                 {firstFinding ? (
                   <Badge tone={severityTone(firstFinding.severity)}>{firstFinding.severity}</Badge>
                 ) : null}
-                <small>{review.reviewedAt || review.createdAt}</small>
+                <small>{formatDateTime(review.reviewedAt || review.createdAt)}</small>
               </span>
               <small>{firstFinding?.what || "没有可操作发现"}</small>
             </button>
@@ -572,7 +573,7 @@ function ImprovementProposalList({
               </Badge>
               {proposal.severity ? <Badge tone={severityTone(proposal.severity)}>{proposal.severity}</Badge> : null}
               {proposal.findingType ? <small>{proposal.findingType}</small> : null}
-              <small>{proposal.createdAt}</small>
+              <small>{formatDateTime(proposal.createdAt)}</small>
             </span>
             <small>{proposal.suggestion || proposal.evidence}</small>
           </button>
@@ -895,7 +896,9 @@ function ProposalSourcePanel({
           <div className="brain-proposal-source-meta">
             <span>复盘 {source.source.sourceReviewId ?? "未知"}</span>
             {source.source.turnSessionId ? <span>会话 {source.source.turnSessionId}</span> : null}
-            {source.source.reviewedAt ? <span>{source.source.reviewedAt}</span> : null}
+            {source.source.reviewedAt ? (
+              <span>{formatDateTime(source.source.reviewedAt)}</span>
+            ) : null}
           </div>
           {source.scopeNote ? <p className="brain-proposal-source-note">{source.scopeNote}</p> : null}
           <div className="brain-proposal-source-tabs" role="tablist" aria-label="来源证据视图">

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -89,7 +89,9 @@ def test_resume_overdue_one_shot_expires_without_catchup() -> None:
         resumed = service.resume(task_id)
 
         assert resumed["status"] == "expired"
-        assert resumed["nextFireAt"] is None or resumed["nextFireAt"] <= utc_now_naive().isoformat()
+        assert resumed["nextFireAt"] is None or datetime.fromisoformat(
+            resumed["nextFireAt"].replace("Z", "+00:00")
+        ) <= datetime.now(timezone.utc)
 
 
 def test_resume_overdue_recurring_rolls_to_future_without_catchup() -> None:

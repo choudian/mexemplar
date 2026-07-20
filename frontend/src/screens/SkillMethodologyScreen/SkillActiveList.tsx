@@ -5,6 +5,7 @@ import type { SkillFilterKey, SkillSortKey, SkillMethodologySummary } from "../.
 import SearchInput from "../../components/SearchInput";
 import { IconButton } from "../../components/primitives";
 import SkillCard from "../../components/SkillCard";
+import { parseApiDateTime } from "../../utils/dates";
 
 const SORT_LABELS: Record<SkillSortKey, string> = {
   recently_changed: "最近变更",
@@ -20,9 +21,7 @@ const FILTER_LABELS: Record<SkillFilterKey, string> = {
 };
 
 function timestamp(value: string | null): number {
-  if (!value) return 0;
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? 0 : parsed;
+  return parseApiDateTime(value)?.getTime() ?? 0;
 }
 
 function isNotReferenced30d(skill: SkillMethodologySummary): boolean {

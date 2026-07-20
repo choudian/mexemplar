@@ -131,6 +131,7 @@ def format_assistant_prompt(
     capability_catalog_section: str | None = None,
     prompt_supplements: list[dict] | None = None,
     unattended_advisory: str | None = None,
+    suppress_first_meeting: bool = False,
 ) -> str:
     """
     格式化助理 Agent 的 system prompt，替换所有占位符。
@@ -141,6 +142,7 @@ def format_assistant_prompt(
         memory_summary: 全局摘要文本（第三层）。None 表示无记忆。
         brain_context: 大脑多分区上下文文本。优先于 memory_summary。
         prompt_supplements: 自优化 prompt 补丁列表。每项含 target_section/content。
+        suppress_first_meeting: 无 profile 时是否跳过首次见面引导（后台定时会话使用）。
 
     Returns:
         格式化后的完整 system prompt
@@ -154,6 +156,8 @@ def format_assistant_prompt(
             profile_section += f"- 沟通风格偏好：{profile['style']}\n"
         if profile.get("notes"):
             profile_section += f"- 特别注意：{profile['notes']}\n"
+    elif suppress_first_meeting:
+        profile_section = ""
     else:
         profile_section = (
             "## 首次见面指引\n\n"

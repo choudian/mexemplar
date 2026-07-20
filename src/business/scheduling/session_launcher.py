@@ -31,6 +31,20 @@ DispatchCallback = Callable[[str, str], bool]
 _FAIL_RUN_MAX_ATTEMPTS = 3
 
 
+def build_scheduled_execution_message(instruction: str) -> str:
+    """把任务原文包成“既有计划到点执行”消息，避免被误解为再次登记计划。"""
+    return (
+        "[系统调度触发：立即执行]\n\n"
+        "这是已存在定时任务的一次到点执行，不是创建或管理定时任务的请求。\n"
+        "调度系统已经处理触发时间与周期；下方指令中的时间、日期或频率措辞只是原任务背景。\n"
+        "请把下方指令视为当前必须执行的任务型请求，立即按 100% 调度规则委派或建图并完成。\n"
+        "不得再次创建、修改、暂停或删除定时任务，也不要把本回合解释为让你登记新计划。\n\n"
+        "<scheduled-task-instruction>\n"
+        f"{instruction}\n"
+        "</scheduled-task-instruction>"
+    )
+
+
 class ScheduledRunAlreadyActive(RuntimeError):
     """同一 scheduled task 的 active-run 槽已被并发触发占用。"""
 
@@ -100,7 +114,7 @@ class SessionLauncher:
 
         Args:
             scheduled_task_id: 关联的定时任务 id（``sch_*``）。
-            instruction: 任务指令原文（给主助理当 user 消息发）。
+            instruction: 任务指令原文（投递前会包装为既有计划的到点执行消息）。
             started_at: 可选触发时刻（默认 ``utc_now_naive``）。
 
         Returns:
@@ -158,7 +172,12 @@ class SessionLauncher:
             )
         else:
             try:
-                dispatched = bool(self._dispatch_callback(session_id, instruction_text))
+                dispatched = bool(
+                    self._dispatch_callback(
+                        session_id,
+                        build_scheduled_execution_message(instruction_text),
+                    )
+                )
             except Exception:
                 logger.exception(
                     "SessionLauncher: dispatch_callback failed for run %s session %s; "

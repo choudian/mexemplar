@@ -19,6 +19,7 @@ import { useAssistantStore } from "../../state/assistantStore";
 import { useScheduledStore } from "../../state/scheduledStore";
 import { useShellStore } from "../../state/shellStore";
 import { useToastStore } from "../../state/toastStore";
+import { formatMonthDayTime } from "../../utils/dates";
 import type {
   ScheduledTaskItem,
   ScheduledTaskRunItem,
@@ -62,21 +63,9 @@ function statusTone(
   return "neutral";
 }
 
-function formatDate(value: string | null): string {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
-}
-
 function lastRunLabel(task: ScheduledTaskItem): string {
   if (!task.lastRunAt) return "还没跑过";
-  const when = formatDate(task.lastRunAt);
+  const when = formatMonthDayTime(task.lastRunAt);
   if (!task.lastRunOutcome) return `上次执行 ${when}`;
   return `上次执行 ${when} · ${RUN_STATUS_LABEL[task.lastRunOutcome] ?? "执行中"}`;
 }
@@ -86,7 +75,7 @@ function nextFireLabel(task: ScheduledTaskItem): string {
   if (task.status === "completed") return "已完成";
   if (task.status === "expired") return "已过期";
   if (!task.nextFireAt) return "未排期";
-  const when = formatDate(task.nextFireAt);
+  const when = formatMonthDayTime(task.nextFireAt);
   return when ? `下次 ${when}` : "未排期";
 }
 
@@ -558,9 +547,9 @@ function RunRow({
       <div className="scheduled-run-body">
         <div className="scheduled-run-time">
           <History size={12} aria-hidden="true" />
-          <span>开始 {formatDate(run.startedAt) || "—"}</span>
+          <span>开始 {formatMonthDayTime(run.startedAt) || "—"}</span>
           {run.finishedAt ? (
-            <span>结束 {formatDate(run.finishedAt)}</span>
+            <span>结束 {formatMonthDayTime(run.finishedAt)}</span>
           ) : null}
         </div>
         {run.summary ? (

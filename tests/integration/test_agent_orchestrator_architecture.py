@@ -166,6 +166,35 @@ def test_assistant_prompt_builder_passes_revived_session_signal():
     )
 
 
+def test_scheduled_assistant_prompt_executes_existing_task_without_onboarding():
+    from src.business.orchestration.agent.assistant_prompt_builder import AssistantPromptBuilder
+
+    session = SimpleNamespace(
+        is_scheduled=1,
+        parse_tool_ids=lambda: (None, None),
+    )
+    session_store = SimpleNamespace(
+        get_session=lambda _session_id: session,
+        count_messages=lambda _session_id: 0,
+    )
+
+    with patch("src.business.brain.context_builder.BrainContextBuilder") as MockBuilder:
+        MockBuilder.return_value.build_context.return_value = MagicMock()
+        MockBuilder.return_value.format_context_for_prompt.return_value = "brain context"
+        prompt = AssistantPromptBuilder(
+            llm_client=SimpleNamespace(),
+            session_store=session_store,
+            tool_repo=SimpleNamespace(get_published_summaries=lambda: []),
+            composition_catalog=SimpleNamespace(get_assistant_published_summaries=lambda: []),
+            profile_repo=SimpleNamespace(get_default=lambda: None),
+        ).format_assistant_prompt("sess-scheduled")
+
+    assert "首次见面指引" not in prompt
+    assert "当前定时任务已经存在" in prompt
+    assert "本轮是它的一次到点执行" in prompt
+    assert "不得调用调度中心管理工具重新登记" in prompt
+
+
 def test_assistant_prompt_builder_defers_large_authorized_catalog_without_leaking_names(
     caplog,
 ):

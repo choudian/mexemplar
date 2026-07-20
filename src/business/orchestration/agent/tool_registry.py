@@ -495,6 +495,7 @@ class ToolRegistry:
             allowed_ids, allowed_composition_ids = session.parse_tool_ids()
         else:
             allowed_ids, allowed_composition_ids = None, None
+        is_scheduled_session = bool(session is not None and getattr(session, "is_scheduled", 0))
 
         dynamic_manager = self._dynamic_manager_cache.get_or_create_dynamic_manager(
             session_id, allowed_ids, allowed_composition_ids
@@ -672,6 +673,17 @@ class ToolRegistry:
 
         search_tools = create_mcp_aware_search_tools(dynamic_manager, mcp_registry)
 
+        scheduled_management_tools = (
+            []
+            if is_scheduled_session
+            else [
+                create_scheduled_task_tool,
+                list_scheduled_tasks_tool,
+                update_scheduled_task_tool,
+                pause_scheduled_task_tool,
+                delete_scheduled_task_tool,
+            ]
+        )
         static_tools = [
             REPORT_TOOL_BUG,
             save_profile_tool,
@@ -697,12 +709,7 @@ class ToolRegistry:
             load_skill_methodology_tool,
             build_task_graph_tool,
             mutate_task_graph_tool,
-            create_scheduled_task_tool,
-            list_scheduled_tasks_tool,
-            update_scheduled_task_tool,
-            pause_scheduled_task_tool,
-            delete_scheduled_task_tool,
-        ]
+        ] + scheduled_management_tools
 
         def tool_factory() -> list[ToolDefinition]:
             proposal_discussion_tools = (

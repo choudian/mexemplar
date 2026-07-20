@@ -3,6 +3,7 @@ import { AlarmClock, ShieldAlert } from "lucide-react";
 
 import { Button } from "./primitives";
 import type { SchedulingConfirmationDraft } from "../api/scheduledTasks";
+import { parseApiDateTime } from "../utils/dates";
 
 const INSTRUCTION_MAX = 4000;
 const TITLE_MAX = 120;
@@ -18,7 +19,7 @@ export interface StructuredConfirmationCardProps {
 }
 
 function remainingLabel(expiresAt: string, nowMs: number): string {
-  const remainingMs = new Date(expiresAt).getTime() - nowMs;
+  const remainingMs = (parseApiDateTime(expiresAt)?.getTime() ?? Number.NaN) - nowMs;
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) {
     return "已超时";
   }

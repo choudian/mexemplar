@@ -28,6 +28,7 @@ import {
   dispatchDebugControlStatus,
   DEBUG_RAW_STATE_PURGE_EVENT,
 } from "../../api/debug";
+import { parseApiDateTime } from "../../utils/dates";
 import { TracePanel } from "./TracePanel";
 import { AgentFlowPanel } from "./AgentFlowPanel";
 import { ReferencePanel } from "./ReferencePanel";
@@ -218,7 +219,11 @@ export default function DebugScreen(): JSX.Element {
         setSessionLookupDone(true);
         const latestFailed = [...traceResult.items]
           .filter((item) => FAILED_TRACE_OUTCOMES.has(item.outcome))
-          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+          .sort(
+            (a, b) =>
+              (parseApiDateTime(b.createdAt)?.getTime() ?? 0) -
+              (parseApiDateTime(a.createdAt)?.getTime() ?? 0),
+          )[0];
         if (latestFailed) {
           const detail = await getTraceDetail(latestFailed.traceId);
           if (!cancelled) setSelectedTrace(detail);

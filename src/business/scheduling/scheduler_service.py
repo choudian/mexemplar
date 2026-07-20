@@ -34,7 +34,7 @@ from src.data.scheduling_types import (
     RUN_TAKEOVER_STATUS_VALUES,
     RUN_TERMINAL_STATUS_VALUES,
 )
-from src.utils.timezone import utc_now_naive
+from src.utils.timezone import to_public_utc_isoformat, utc_now_naive
 
 logger = logging.getLogger(__name__)
 
@@ -554,12 +554,14 @@ class SchedulerService:
             "scheduleDescription": schedule_description,
             "status": row.status,
             "unattendedAutoApprove": bool(row.unattended_auto_approve),
-            "nextFireAt": row.next_fire_at.isoformat() if row.next_fire_at else None,
-            "lastFireAt": row.last_fired_at.isoformat() if row.last_fired_at else None,
+            "nextFireAt": (to_public_utc_isoformat(row.next_fire_at) if row.next_fire_at else None),
+            "lastFireAt": (
+                to_public_utc_isoformat(row.last_fired_at) if row.last_fired_at else None
+            ),
             "lastRunOutcome": last_outcome,
             "lastRunAt": last_run_at,
-            "createdAt": row.created_at.isoformat(),
-            "updatedAt": row.updated_at.isoformat(),
+            "createdAt": to_public_utc_isoformat(row.created_at),
+            "updatedAt": to_public_utc_isoformat(row.updated_at),
         }
 
     def project_run(self, row: ScheduledTaskRun) -> dict[str, Any]:
@@ -569,8 +571,8 @@ class SchedulerService:
             "scheduledTaskId": row.scheduled_task_id,
             # skipped 记录没有启动会话；内部 NOT NULL 占位不得泄漏成可导航 session。
             "sessionId": None if row.status == "skipped" else row.session_id,
-            "startedAt": row.started_at.isoformat(),
-            "finishedAt": row.finished_at.isoformat() if row.finished_at else None,
+            "startedAt": to_public_utc_isoformat(row.started_at),
+            "finishedAt": (to_public_utc_isoformat(row.finished_at) if row.finished_at else None),
             "status": row.status,
             "summary": row.summary,
             "failureReason": row.failure_reason,
@@ -614,7 +616,10 @@ class SchedulerService:
             return None, None
         latest = rows[0]
         outcome = latest.status if latest.status in RUN_TERMINAL_STATUS_VALUES else None
-        return outcome, latest.started_at.isoformat() if latest.started_at else None
+        return (
+            outcome,
+            to_public_utc_isoformat(latest.started_at) if latest.started_at else None,
+        )
 
     def _emit_task_changed(self, scheduled_task_id: str, change_type: str) -> None:
         from src.utils.events import emit

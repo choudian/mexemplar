@@ -6,6 +6,8 @@ delegated executor（专员/子代理不应能创建定时任务）。
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from src.business.agents.config import AgentType
 from src.business.orchestration.agent import AgentOrchestrator
 
@@ -18,8 +20,11 @@ SCHEDULED_TOOL_NAMES = {
 }
 
 
-def _build_assistant_tool_names(orchestrator: AgentOrchestrator) -> set[str]:
-    factory = orchestrator.tool_registry.build_assistant_tools("ast_test_boundaries")
+def _build_assistant_tool_names(
+    orchestrator: AgentOrchestrator,
+    session_id: str = "ast_test_boundaries",
+) -> set[str]:
+    factory = orchestrator.tool_registry.build_assistant_tools(session_id)
     return {t.name for t in factory()}
 
 
@@ -39,6 +44,26 @@ def test_scheduled_tools_in_assistant_tools(orchestrator: AgentOrchestrator):
     names = _build_assistant_tool_names(orchestrator)
     missing = SCHEDULED_TOOL_NAMES - names
     assert not missing, f"missing scheduled tools from assistant: {missing}"
+
+
+def test_scheduled_tools_not_available_inside_triggered_scheduled_session(
+    orchestrator: AgentOrchestrator,
+    monkeypatch,
+):
+    scheduled_session = SimpleNamespace(
+        is_scheduled=1,
+        parse_tool_ids=lambda: (None, None),
+    )
+    monkeypatch.setattr(
+        orchestrator.tool_registry._session_store,
+        "get_session",
+        lambda _session_id: scheduled_session,
+    )
+
+    names = _build_assistant_tool_names(orchestrator, "ast_scheduled_execution")
+
+    leaked = SCHEDULED_TOOL_NAMES & names
+    assert not leaked, f"scheduled tools leaked into triggered scheduled session: {leaked}"
 
 
 def test_scheduled_tools_not_in_ephemeral_subagent(orchestrator: AgentOrchestrator):

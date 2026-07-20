@@ -6,6 +6,7 @@ import { Button } from "../../components/primitives";
 import { useShellStore } from "../../state/shellStore";
 import { useSkillsStore } from "../../state/skillsStore";
 import { useTeachingStore } from "../../state/teachingStore";
+import { parseApiDateTime } from "../../utils/dates";
 import { AgentBubble, AiMessageContent, ChatComposer, CollapsibleChevron, ThinkingIndicator, UserBubble, filterAgentMessages, useScrollToBottom } from "./shared";
 
 const TRIAL_NEED = 3;
@@ -23,7 +24,7 @@ function usePreviewExpired(preview?: TrialPreviewRequest | null): boolean {
 
   useEffect(() => {
     if (!preview) return;
-    const expiresAt = Date.parse(preview.expires_at);
+    const expiresAt = parseApiDateTime(preview.expires_at)?.getTime() ?? Number.NaN;
     if (Number.isNaN(expiresAt) || expiresAt <= Date.now()) {
       setNow(Date.now());
       return;
@@ -34,7 +35,7 @@ function usePreviewExpired(preview?: TrialPreviewRequest | null): boolean {
   }, [preview?.expires_at, preview?.requestId]);
 
   if (!preview) return false;
-  const expiresAt = Date.parse(preview.expires_at);
+  const expiresAt = parseApiDateTime(preview.expires_at)?.getTime() ?? Number.NaN;
   return Number.isNaN(expiresAt) || expiresAt <= now;
 }
 
