@@ -457,6 +457,155 @@ def test_assistant_runtime_only_starts_one_worker_per_session_under_race() -> No
         worker.join(timeout=2)
 
 
+def test_scheduled_session_reservation_blocks_other_worker_starts() -> None:
+    orchestrator = BlockingOrchestrator()
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: orchestrator,
+        chat_service=FakeChatService(),
+    )
+
+    assert runtime.reserve_scheduled_session("ast_reserved", "reservation_1") is True
+    assert runtime.reserve_scheduled_session("ast_reserved", "reservation_2") is False
+    assert runtime.dispatch_message("ast_reserved", "user message") is False
+
+    runtime.release_scheduled_session_reservation("ast_reserved", "reservation_1")
+    assert runtime.dispatch_message("ast_reserved", "user message") is True
+    assert orchestrator.entered.wait(timeout=1)
+
+    orchestrator.release.set()
+    with runtime._workers_lock:
+        worker = runtime._workers.get("ast_reserved")
+    if worker is not None:
+        worker.join(timeout=2)
+
+
+def test_scheduled_session_reservation_rejects_a_nonterminal_prior_graph(
+    monkeypatch,
+) -> None:
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: CompletingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_scheduled_session_graphs_quiescent",
+        lambda _session_id: False,
+        raising=False,
+    )
+
+    assert runtime.reserve_scheduled_session("ast_old_graph", "reservation_1") is False
+    assert "ast_old_graph" not in runtime._session_reservations
+
+
+def test_scheduled_graph_quiescence_uses_task_collaboration_facade(monkeypatch) -> None:
+    from src.business.task_collaboration import service as collaboration_service
+
+    calls: list[str] = []
+
+    class _Service:
+        def __enter__(self):
+            calls.append("enter")
+            return self
+
+        def __exit__(self, *_args):
+            calls.append("exit")
+
+        def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
+            calls.append(session_id)
+            return True
+
+    monkeypatch.setattr(collaboration_service, "TaskCollaborationService", _Service)
+
+    assert AssistantRuntime._scheduled_session_graphs_quiescent("ast_facade") is False
+    assert calls == ["enter", "ast_facade", "exit"]
+
+
+def test_reset_quiescence_rejects_a_worker_or_reservation(monkeypatch) -> None:
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: CompletingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_scheduled_session_graphs_quiescent",
+        lambda _session_id: True,
+        raising=False,
+    )
+    runtime._workers["ast_reset_busy"] = type(
+        "_AliveWorker",
+        (),
+        {"is_alive": staticmethod(lambda: True)},
+    )()
+
+    assert runtime.is_scheduled_session_quiescent("ast_reset_busy") is False
+
+    runtime._workers.clear()
+    runtime._session_reservations["ast_reset_busy"] = "reservation_1"
+    assert runtime.is_scheduled_session_quiescent("ast_reset_busy") is False
+
+
+def test_reserved_dispatch_pins_scheduled_run_id_into_worker(monkeypatch) -> None:
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: CompletingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+    captured: list[tuple[str, str | None]] = []
+    finished = threading.Event()
+
+    def capture(
+        session_id,
+        _content,
+        _after_sequence,
+        _continue_directive,
+        _retry_directive,
+        scheduled_run_id,
+    ):
+        captured.append((session_id, scheduled_run_id))
+        finished.set()
+
+    monkeypatch.setattr(runtime, "_run_assistant", capture)
+    assert runtime.reserve_scheduled_session("ast_reserved_run", "reservation_1") is True
+
+    accepted = runtime.dispatch_reserved_message(
+        "ast_reserved_run",
+        "scheduled message",
+        scheduled_run_id="schr_owned",
+        reservation_id="reservation_1",
+    )
+
+    assert accepted is True
+    assert finished.wait(timeout=1)
+    assert captured == [("ast_reserved_run", "schr_owned")]
+
+
+def test_reserved_worker_start_failure_restores_launcher_reservation() -> None:
+    runtime = AssistantRuntime(
+        orchestrator_factory=lambda: CompletingOrchestrator(),
+        chat_service=FakeChatService(),
+    )
+
+    class _StartFailure:
+        @staticmethod
+        def is_alive() -> bool:
+            return False
+
+        @staticmethod
+        def start() -> None:
+            raise RuntimeError("thread start failed")
+
+    runtime._session_reservations["ast_start_failure"] = "reservation_1"
+
+    with pytest.raises(RuntimeError, match="thread start failed"):
+        runtime._spawn_session_worker(
+            "ast_start_failure",
+            lambda: (_StartFailure(), None),
+            reservation_id="reservation_1",
+        )
+
+    assert runtime._session_reservations["ast_start_failure"] == "reservation_1"
+    assert "ast_start_failure" not in runtime._workers
+
+
 def test_terminal_failure_persists_then_publishes_user_message_before_failed_progress() -> None:
     drain_events()
     seed_assistant_session("ast_order")
@@ -614,11 +763,16 @@ def test_needs_user_input_updates_scheduled_run_before_completion_check(monkeypa
         chat_service=FakeChatService(),
     )
 
-    runtime._run_assistant("ast_scheduled_waiting", "执行任务", 0)
+    runtime._run_assistant(
+        "ast_scheduled_waiting",
+        "执行任务",
+        0,
+        scheduled_run_id="schr_scheduled_waiting",
+    )
 
     assert calls == [
-        ("waiting", "ast_scheduled_waiting"),
-        ("evaluate", "ast_scheduled_waiting"),
+        ("waiting", "schr_scheduled_waiting"),
+        ("evaluate", "schr_scheduled_waiting"),
     ]
 
 
@@ -646,11 +800,16 @@ def test_terminal_error_updates_scheduled_run_before_completion_check(monkeypatc
         chat_service=FakeChatService(),
     )
 
-    runtime._run_assistant("ast_scheduled_failed", "执行任务", 0)
+    runtime._run_assistant(
+        "ast_scheduled_failed",
+        "执行任务",
+        0,
+        scheduled_run_id="schr_scheduled_failed",
+    )
 
     assert calls == [
-        ("failed", "ast_scheduled_failed"),
-        ("evaluate", "ast_scheduled_failed"),
+        ("failed", "schr_scheduled_failed"),
+        ("evaluate", "schr_scheduled_failed"),
     ]
 
 
@@ -680,9 +839,14 @@ def test_terminal_write_failure_does_not_fall_through_to_success_evaluation(
         chat_service=FakeChatService(),
     )
 
-    runtime._run_assistant("ast_scheduled_failed_write", "执行任务", 0)
+    runtime._run_assistant(
+        "ast_scheduled_failed_write",
+        "执行任务",
+        0,
+        scheduled_run_id="schr_scheduled_failed_write",
+    )
 
-    assert calls == [("failed", "ast_scheduled_failed_write")]
+    assert calls == [("failed", "schr_scheduled_failed_write")]
 
 
 def test_edited_retry_failure_moves_card_to_new_user_message() -> None:

@@ -8,6 +8,7 @@ import {
   listScheduledTaskRuns,
   listScheduledTasks,
   patchScheduledTask,
+  resetScheduledTaskSession,
   submitSchedulingConfirmationDecision,
   takeoverScheduledRun,
 } from "../api/scheduledTasks";
@@ -70,6 +71,7 @@ export interface ScheduledState {
   toggleExpanded: (taskId: string, next?: boolean) => void;
   patchTask: (taskId: string, patch: ScheduledTaskPatchInput) => Promise<ScheduledTaskItem | null>;
   fireNow: (taskId: string) => Promise<boolean>;
+  resetSession: (taskId: string) => Promise<ScheduledTaskItem | null>;
   remove: (taskId: string) => Promise<boolean>;
   takeover: (taskId: string, runId: string) => Promise<TakeoverResponse | null>;
   submitConfirmation: (
@@ -229,6 +231,23 @@ export const useScheduledStore = create<ScheduledState>((set, get) => ({
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法立即触发任务。") });
       return false;
+    }
+  },
+  resetSession: async (taskId) => {
+    try {
+      const updated = await resetScheduledTaskSession(taskId);
+      set((state) => ({
+        tasks: replaceTask(state.tasks, updated),
+        taskDetail:
+          state.taskDetail?.scheduledTaskId === taskId
+            ? updated
+            : state.taskDetail,
+        needsResync: false,
+      }));
+      return updated;
+    } catch (error) {
+      set({ lastError: toErrorMessage(error, "当前会话仍在运行，暂时不能重开。") });
+      return null;
     }
   },
   remove: async (taskId) => {

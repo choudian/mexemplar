@@ -70,6 +70,7 @@ class AssistantRuntime:
         self._orchestrator_lock = threading.Lock()
         self._workers: dict[str, threading.Thread] = {}
         self._workers_lock = threading.Lock()
+        self._session_reservations: dict[str, str] = {}
         self._reentry_sink = None
         self._observability: Optional["AssistantObservability"] = None
         install_confirmation_signal()
@@ -144,7 +145,93 @@ class AssistantRuntime:
             worker = self._workers.get(session_id)
             return worker is not None and worker.is_alive()
 
-    def has_pending_reentry(self, session_id: str) -> bool:
+    def reserve_scheduled_session(self, session_id: str, reservation_id: str) -> bool:
+        """预约一个无 worker 的 session；与所有 worker 启动共用 first-wins 锁。"""
+        sid = (session_id or "").strip()
+        token = (reservation_id or "").strip()
+        if not sid or not token:
+            return False
+        # 预约不仅要排除 worker，还必须能证明父侧回流队列已安装且为空。
+        # 初始化 orchestrator 会同步安装 sink；失败时 fail-closed。
+        try:
+            self._get_orchestrator()
+        except Exception:
+            logger.error(
+                "Cannot initialize reentry sink before reserving scheduled session %s",
+                sid,
+                exc_info=True,
+            )
+            return False
+        with self._workers_lock:
+            worker = self._workers.get(sid)
+            if worker is not None and worker.is_alive():
+                return False
+            if sid in self._session_reservations:
+                return False
+            self._session_reservations[sid] = token
+        if self.has_pending_reentry(sid):
+            self.release_scheduled_session_reservation(sid, token)
+            return False
+        if not self._scheduled_session_graphs_quiescent(sid):
+            self.release_scheduled_session_reservation(sid, token)
+            return False
+        return True
+
+    def release_scheduled_session_reservation(
+        self,
+        session_id: str,
+        reservation_id: str,
+    ) -> None:
+        """仅预约 owner 可释放，迟到 release 不得清掉新预约。"""
+        sid = (session_id or "").strip()
+        token = (reservation_id or "").strip()
+        with self._workers_lock:
+            if self._session_reservations.get(sid) == token:
+                self._session_reservations.pop(sid, None)
+
+    def is_scheduled_session_quiescent(self, session_id: str) -> bool:
+        """供显式重置使用：证明 session 当前没有运行态或未收口图。"""
+        sid = (session_id or "").strip()
+        if not sid:
+            return False
+        try:
+            self._get_orchestrator()
+        except Exception:
+            logger.error(
+                "Cannot initialize runtime before checking scheduled session %s",
+                sid,
+                exc_info=True,
+            )
+            return False
+        with self._workers_lock:
+            worker = self._workers.get(sid)
+            if worker is not None and worker.is_alive():
+                return False
+            if sid in self._session_reservations:
+                return False
+        return not self.has_pending_reentry(sid) and self._scheduled_session_graphs_quiescent(sid)
+
+    @staticmethod
+    def _scheduled_session_graphs_quiescent(session_id: str) -> bool:
+        """所有历史图执行节点均终态；查询失败时 fail-closed。"""
+        try:
+            from src.business.task_collaboration.service import TaskCollaborationService
+
+            with TaskCollaborationService() as service:
+                return not service.has_nonterminal_execution_tasks(session_id)
+        except Exception:
+            logger.error(
+                "Cannot confirm graph quiescence for scheduled session %s",
+                session_id,
+                exc_info=True,
+            )
+            return False
+
+    def has_pending_reentry(
+        self,
+        session_id: str,
+        graph_id: str | None = None,
+    ) -> bool:
         """Return whether reentry work is pending, failing closed before sink setup.
 
         ``RunCompletionMonitor`` treats ``True`` as "not quiescent".  The sink is
@@ -159,54 +246,62 @@ class AssistantRuntime:
                 session_id,
             )
             return True
-        return bool(sink.has_pending(session_id))
+        if graph_id is None:
+            return bool(sink.has_pending(session_id))
+        return bool(sink.has_pending(session_id, graph_id))
 
     @staticmethod
-    def _mark_scheduled_waiting_user(session_id: str) -> bool:
+    def _mark_scheduled_waiting_user(run_id: str | None) -> bool:
+        if not run_id:
+            return True
         try:
             from src.business.scheduling.run_completion_monitor import (
                 get_run_completion_monitor,
             )
 
-            get_run_completion_monitor().mark_waiting_user(session_id)
+            get_run_completion_monitor().mark_waiting_user(run_id)
             return True
         except Exception:
             logger.error(
-                "Failed to mark scheduled run waiting_user for session %s",
-                session_id,
+                "Failed to mark scheduled run %s waiting_user",
+                run_id,
                 exc_info=True,
             )
             return False
 
     @staticmethod
-    def _mark_scheduled_failed(session_id: str) -> bool:
+    def _mark_scheduled_failed(run_id: str | None) -> bool:
+        if not run_id:
+            return True
         try:
             from src.business.scheduling.run_completion_monitor import (
                 get_run_completion_monitor,
             )
 
-            get_run_completion_monitor().mark_failed(session_id)
+            get_run_completion_monitor().mark_failed(run_id)
             return True
         except Exception:
             logger.error(
-                "Failed to mark scheduled run failed for session %s",
-                session_id,
+                "Failed to mark scheduled run %s failed",
+                run_id,
                 exc_info=True,
             )
             return False
 
     @staticmethod
-    def _evaluate_scheduled_completion(session_id: str) -> None:
+    def _evaluate_scheduled_completion(run_id: str | None) -> None:
+        if not run_id:
+            return
         try:
             from src.business.scheduling.run_completion_monitor import (
                 get_run_completion_monitor,
             )
 
-            get_run_completion_monitor().evaluate_session(session_id)
+            get_run_completion_monitor().evaluate_run(run_id)
         except Exception:
             logger.error(
-                "Failed to evaluate scheduled completion for session %s",
-                session_id,
+                "Failed to evaluate scheduled completion for run %s",
+                run_id,
                 exc_info=True,
             )
 
@@ -237,6 +332,7 @@ class AssistantRuntime:
         build_worker: "Callable[[], tuple[threading.Thread, Callable[[], None] | None]]",
         *,
         raise_on_conflict: bool = False,
+        reservation_id: str | None = None,
     ) -> bool:
         """单会话 worker 的统一 first-wins 启动协议。
 
@@ -253,12 +349,26 @@ class AssistantRuntime:
                 if raise_on_conflict:
                     raise AssistantRetryConflict("assistant session is already running")
                 return False
+            active_reservation = self._session_reservations.get(session_id)
+            if reservation_id is None:
+                if active_reservation is not None:
+                    if raise_on_conflict:
+                        raise AssistantRetryConflict("assistant session is reserved")
+                    return False
+            elif active_reservation != reservation_id:
+                return False
             worker, on_start_failure = build_worker()
             self._workers[session_id] = worker
+            if reservation_id is not None:
+                self._session_reservations.pop(session_id, None)
             try:
                 worker.start()
             except Exception:
                 self._workers.pop(session_id, None)
+                if reservation_id is not None:
+                    # start 失败时预约所有权仍属于 Launcher；恢复 token，让它先把
+                    # 已落库 run 终结，再显式 release，避免同 session 窄窗抢入。
+                    self._session_reservations[session_id] = reservation_id
                 if on_start_failure is not None:
                     on_start_failure()
                 raise
@@ -274,9 +384,13 @@ class AssistantRuntime:
 
         def build() -> tuple[threading.Thread, None]:
             after_sequence = self._chat_service.get_latest_display_sequence(session_id)
+            scheduled_run_id = self._resolve_scheduled_run_id_for_graph(
+                session_id,
+                graph_id,
+            )
             worker = threading.Thread(
                 target=self._run_assistant_reentry,
-                args=(session_id, graph_id, after_sequence),
+                args=(session_id, graph_id, after_sequence, scheduled_run_id),
                 name=f"AssistantReentry-{session_id}",
                 daemon=True,
             )
@@ -289,6 +403,7 @@ class AssistantRuntime:
         session_id: str,
         graph_id: str,
         after_sequence: int,
+        scheduled_run_id: str | None = None,
     ) -> None:
         """续跑 worker：drain 回流 → 组装摘要注入主助理 → 续跑决策。"""
         set_confirmation_session_context(session_id)
@@ -302,7 +417,7 @@ class AssistantRuntime:
         re_enqueued = False
         can_evaluate_scheduled_completion = True
         try:
-            entries = self._reentry_sink.drain(session_id) if self._reentry_sink else []
+            entries = self._reentry_sink.drain(session_id, graph_id) if self._reentry_sink else []
             # 024: drain 后查一次 graph snapshot 传入 briefing（DEC-H）
             snapshot = None
             if graph_id is not None:
@@ -344,7 +459,9 @@ class AssistantRuntime:
                     {"status": "waiting_for_user", "headline": result.question or ""},
                     {"sessionId": session_id},
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(session_id)
+                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(
+                    scheduled_run_id
+                )
             else:
                 # ERROR / 异常结果：续跑未成功，必须发 failed（不能照发 succeeded 让
                 # 前端卡在成功）。reentry 失败不接 AssistantFailureService——它没有
@@ -361,7 +478,7 @@ class AssistantRuntime:
                 if entries and self._reentry_sink is not None:
                     self._reentry_sink.re_enqueue(session_id, entries)
                     re_enqueued = True
-                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(scheduled_run_id)
         except Exception:
             logger.error("[reentry] session %s reentry run failed", session_id, exc_info=True)
             # drain 已取走的回流回填队列，避免 run_agent 异常导致条目永久丢失。
@@ -371,7 +488,7 @@ class AssistantRuntime:
                 self._reentry_sink.re_enqueue(session_id, entries)
                 re_enqueued = True
             self._publish_reentry_failure(session_id)
-            can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
+            can_evaluate_scheduled_completion = self._mark_scheduled_failed(scheduled_run_id)
         finally:
             run_context.end()
             clear_confirmation_session_context()
@@ -380,17 +497,15 @@ class AssistantRuntime:
                     self._workers.pop(session_id, None)
             # tail-kick：续跑期间到达的回流（当时 has_active=True 未 kick）现在补 kick。
             # 但 except 回填的回流不立即重试（re_enqueued），留待下次 dispatch。
-            if (
-                not re_enqueued
-                and self._reentry_sink is not None
-                and self._reentry_sink.has_pending(session_id)
-            ):
-                self.kick_reentry_run(session_id, graph_id)
+            if not re_enqueued and self._reentry_sink is not None:
+                next_graph_id = self._reentry_sink.next_pending_graph(session_id)
+                if next_graph_id is not None:
+                    self.kick_reentry_run(session_id, next_graph_id)
             # ``mark_failed`` / ``mark_waiting_user`` 写入失败时绝不能继续走静默成功
             # 判定，否则简单 scheduled 会话会被误标为 succeeded。保留 running，
             # 等后续权威事件或恢复路径重试，比伪造成功更安全。
             if can_evaluate_scheduled_completion:
-                self._evaluate_scheduled_completion(session_id)
+                self._evaluate_scheduled_completion(scheduled_run_id)
 
     def _drop_decided_entries(self, graph_id: str, entries: list[dict], service) -> list[dict]:
         """剔除已决定的回流条目，避免 briefing 重提已 decide 的裁定。
@@ -411,6 +526,45 @@ class AssistantRuntime:
             {"sessionId": session_id},
         )
 
+    @staticmethod
+    def _resolve_scheduled_run_id_for_graph(
+        session_id: str,
+        graph_id: str,
+    ) -> str | None:
+        try:
+            from src.business.scheduling.run_completion_monitor import (
+                get_run_completion_monitor,
+            )
+
+            return get_run_completion_monitor().resolve_run_id_for_graph(
+                session_id=session_id,
+                graph_id=graph_id,
+            )
+        except Exception:
+            logger.error(
+                "Failed to resolve scheduled run for graph %s in session %s",
+                graph_id,
+                session_id,
+                exc_info=True,
+            )
+            return None
+
+    @staticmethod
+    def _resolve_active_scheduled_run_id(session_id: str) -> str | None:
+        try:
+            from src.business.scheduling.run_completion_monitor import (
+                get_run_completion_monitor,
+            )
+
+            return get_run_completion_monitor().get_active_run_id_for_session(session_id)
+        except Exception:
+            logger.error(
+                "Failed to resolve active scheduled run for session %s",
+                session_id,
+                exc_info=True,
+            )
+            return None
+
     def dispatch_message(
         self,
         session_id: str,
@@ -424,6 +578,7 @@ class AssistantRuntime:
             session_id,
             continue_subagent,
         )
+        scheduled_run_id = self._resolve_active_scheduled_run_id(session_id)
 
         def build() -> tuple[threading.Thread, None]:
             resolved_sequence = self._failure_service.resolve_current_for_new_message(session_id)
@@ -432,7 +587,14 @@ class AssistantRuntime:
             after_sequence = self._chat_service.get_latest_display_sequence(session_id)
             worker = threading.Thread(
                 target=self._run_assistant,
-                args=(session_id, content, after_sequence, continue_directive, None),
+                args=(
+                    session_id,
+                    content,
+                    after_sequence,
+                    continue_directive,
+                    None,
+                    scheduled_run_id,
+                ),
                 name=f"AssistantRuntime-{session_id}",
                 daemon=True,
             )
@@ -440,12 +602,50 @@ class AssistantRuntime:
 
         return self._spawn_session_worker(session_id, build)
 
+    def dispatch_reserved_message(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        scheduled_run_id: str,
+        reservation_id: str,
+    ) -> bool:
+        """把 scheduled session 预约原子转换成携带 ``run_id`` 的 worker。"""
+        content = content.strip()
+        if not content:
+            raise ValueError("content must not be empty")
+        run_id = (scheduled_run_id or "").strip()
+        token = (reservation_id or "").strip()
+        if not run_id or not token:
+            return False
+
+        def build() -> tuple[threading.Thread, None]:
+            resolved_sequence = self._failure_service.resolve_current_for_new_message(session_id)
+            if resolved_sequence is not None:
+                self._publish_display_message(session_id, resolved_sequence)
+            after_sequence = self._chat_service.get_latest_display_sequence(session_id)
+            worker = threading.Thread(
+                target=self._run_assistant,
+                args=(session_id, content, after_sequence, None, None, run_id),
+                name=f"AssistantRuntime-{session_id}",
+                daemon=True,
+            )
+            return worker, None
+
+        return self._spawn_session_worker(
+            session_id,
+            build,
+            reservation_id=token,
+        )
+
     def retry_message(
         self,
         session_id: str,
         message_sequence: int,
         content: str | None = None,
     ) -> bool:
+        scheduled_run_id = self._resolve_active_scheduled_run_id(session_id)
+
         def build() -> tuple[threading.Thread, Callable[[], None]]:
             preparation = self._failure_service.prepare_retry(
                 session_id,
@@ -460,7 +660,14 @@ class AssistantRuntime:
             )
             worker = threading.Thread(
                 target=self._run_assistant,
-                args=(session_id, preparation.content, after_sequence, None, directive),
+                args=(
+                    session_id,
+                    preparation.content,
+                    after_sequence,
+                    None,
+                    directive,
+                    scheduled_run_id,
+                ),
                 name=f"AssistantRuntime-{session_id}",
                 daemon=True,
             )
@@ -757,6 +964,7 @@ class AssistantRuntime:
         after_sequence: int,
         continue_directive: ContinueSubagentDirective | None = None,
         retry_directive: RetryDirective | None = None,
+        scheduled_run_id: str | None = None,
     ) -> None:
         set_confirmation_session_context(session_id)
         # 在 worker 线程入口登记取消上下文（ContextVar + session→Event）；同线程同步派出的
@@ -795,7 +1003,7 @@ class AssistantRuntime:
                     exception=None,
                     retry_directive=retry_directive,
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(scheduled_run_id)
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if result.result_type == ResultType.ERROR:
@@ -807,7 +1015,7 @@ class AssistantRuntime:
                     exception=None,
                     retry_directive=retry_directive,
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(scheduled_run_id)
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if result.result_type == ResultType.CANCELLED:
@@ -820,7 +1028,7 @@ class AssistantRuntime:
                     {"status": "cancelled", "headline": "已停止"},
                     {"sessionId": session_id},
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
+                can_evaluate_scheduled_completion = self._mark_scheduled_failed(scheduled_run_id)
                 return
             if result.result_type == ResultType.NEEDS_USER_INPUT:
                 if retry_directive is not None:
@@ -831,7 +1039,9 @@ class AssistantRuntime:
                     {"status": "waiting_for_user", "headline": result.question or ""},
                     {"sessionId": session_id},
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(session_id)
+                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(
+                    scheduled_run_id
+                )
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if retry_directive is not None:
@@ -856,7 +1066,7 @@ class AssistantRuntime:
                 exception=exc,
                 retry_directive=retry_directive,
             )
-            can_evaluate_scheduled_completion = self._mark_scheduled_failed(session_id)
+            can_evaluate_scheduled_completion = self._mark_scheduled_failed(scheduled_run_id)
         finally:
             run_context.end()
             clear_confirmation_session_context()
@@ -864,4 +1074,4 @@ class AssistantRuntime:
                 if self._workers.get(session_id) is threading.current_thread():
                     self._workers.pop(session_id, None)
             if can_evaluate_scheduled_completion:
-                self._evaluate_scheduled_completion(session_id)
+                self._evaluate_scheduled_completion(scheduled_run_id)

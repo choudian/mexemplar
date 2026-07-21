@@ -13,7 +13,7 @@ from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunReposit
 
 
 def _service():
-    return SchedulerService(launcher=SessionLauncher(dispatch_callback=lambda sid, instr: True))
+    return SchedulerService(launcher=SessionLauncher(dispatch_callback=lambda *_args: True))
 
 
 def _make_task(service, **kw):

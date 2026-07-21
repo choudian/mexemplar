@@ -51,6 +51,19 @@ def test_notify_graph_complete_independent_per_graph():
     assert {e["graphId"] for e in completed} == {"g1", "g2"}
 
 
+def test_drain_is_scoped_to_one_graph_inside_reused_session():
+    sink = _make_sink(active=True)
+    sink.dispatch({"sessionId": "s1", "graphId": "g1", "taskId": "t1"})
+    sink.dispatch({"sessionId": "s1", "graphId": "g2", "taskId": "t2"})
+
+    first_graph = sink.drain("s1", "g1")
+
+    assert [entry["taskId"] for entry in first_graph] == ["t1"]
+    assert sink.has_pending("s1", "g1") is False
+    assert sink.has_pending("s1", "g2") is True
+    assert [entry["taskId"] for entry in sink.drain("s1", "g2")] == ["t2"]
+
+
 def test_notify_graph_complete_skips_missing_ids():
     """缺 session/graph 的完成通知被丢弃，不入队（与 dispatch 一致语义）。"""
     sink = _make_sink()

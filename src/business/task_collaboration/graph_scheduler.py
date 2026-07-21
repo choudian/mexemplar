@@ -186,6 +186,10 @@ class GraphScheduler:
                     graph_id,
                     all_completed,
                 )
+                # 先把父侧回流放入 graph-scoped 队列，再发布 scheduling observer。
+                # 否则 observer 可在队列仍为空的窄窗口把复用 session 判静默并启动
+                # 下一 run，随后迟到的旧图回流就会跨 run 串台（034 FR-011）。
+                self._notify_graph_complete(svc, graph_id, snapshot.session_id)
                 if self._claim_terminal_observation(graph_id, snapshot.version):
                     try:
                         from src.utils.events import emit
@@ -205,7 +209,6 @@ class GraphScheduler:
                             graph_id,
                             exc_info=True,
                         )
-                self._notify_graph_complete(svc, graph_id, snapshot.session_id)
             return
 
         # 依赖前置映射（O(E)，非 O(T×E)）

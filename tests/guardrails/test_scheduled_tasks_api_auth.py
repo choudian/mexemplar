@@ -26,6 +26,7 @@ PROTECTED_PATHS = [
     ("/api/scheduled-tasks/sch_x", "GET"),
     ("/api/scheduled-tasks/sch_x", "PATCH"),
     ("/api/scheduled-tasks/sch_x/fire-now", "POST"),
+    ("/api/scheduled-tasks/sch_x/reset-session", "POST"),
     ("/api/scheduled-tasks/sch_x", "DELETE"),
     ("/api/scheduled-tasks/sch_x/runs", "GET"),
     ("/api/scheduled-tasks/sch_x/runs/schr_y/takeover", "POST"),

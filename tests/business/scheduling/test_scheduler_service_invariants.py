@@ -8,6 +8,7 @@ import pytest
 
 from src.business.agents.config import AgentType
 from src.business.scheduling.scheduler_service import (
+    ScheduledSessionResetConflict,
     SchedulerRuntimeUnavailable,
     SchedulerService,
     clear_default_scheduler_launcher,
@@ -166,7 +167,7 @@ def test_short_lived_service_uses_lifespan_registered_launcher() -> None:
             )
 
     launcher = SessionLauncher(
-        dispatch_callback=lambda _session_id, _instruction: True,
+        dispatch_callback=lambda _session_id, _instruction, _run_id, _reservation_id: True,
         chat_service=_ChatService(),
     )
     configure_default_scheduler_launcher(launcher)
@@ -209,7 +210,7 @@ def test_fire_now_allows_paused_task_without_resuming_it() -> None:
             )
 
     launcher = SessionLauncher(
-        dispatch_callback=lambda _session_id, _instruction: True,
+        dispatch_callback=lambda _session_id, _instruction, _run_id, _reservation_id: True,
         chat_service=_ChatService(),
     )
     try:
@@ -451,6 +452,91 @@ def test_soft_deleted_task_cannot_be_updated() -> None:
         assert row is not None
         assert row.is_deleted == 1
         assert row.title != "不应复活"
+
+
+class _ResetSessionLauncher:
+    def __init__(self, *, quiescent: bool) -> None:
+        self.quiescent = quiescent
+        self.checked_session_ids: list[str] = []
+
+    def can_reset_session(self, session_id: str) -> bool:
+        self.checked_session_ids.append(session_id)
+        return self.quiescent
+
+
+def test_reset_session_clears_only_the_current_quiescent_binding() -> None:
+    launcher = _ResetSessionLauncher(quiescent=True)
+    with SchedulerService(launcher=launcher) as service:
+        task = service.create_from_draft(
+            _draft(
+                schedule_kind="recurring",
+                schedule_payload={"interval_seconds": 60},
+            )
+        )
+        task_id = task["scheduledTaskId"]
+        service._repo.cas_bind_session(
+            task_id,
+            "ast_reset_current",
+            expected_session_id=None,
+        )
+
+        reset = service.reset_session(task_id)
+
+        assert reset["scheduledTaskId"] == task_id
+        assert service._repo.get(task_id).session_id is None
+        assert launcher.checked_session_ids == ["ast_reset_current"]
+
+
+def test_reset_session_rejects_an_active_run() -> None:
+    launcher = _ResetSessionLauncher(quiescent=True)
+    with SchedulerService(launcher=launcher) as service:
+        task = service.create_from_draft(
+            _draft(
+                schedule_kind="recurring",
+                schedule_payload={"interval_seconds": 60},
+            )
+        )
+        task_id = task["scheduledTaskId"]
+        service._repo.cas_bind_session(
+            task_id,
+            "ast_reset_active",
+            expected_session_id=None,
+        )
+        service._run_repo.create(
+            scheduled_task_id=task_id,
+            session_id="ast_reset_active",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+
+        with pytest.raises(ScheduledSessionResetConflict):
+            service.reset_session(task_id)
+
+        assert service._repo.get(task_id).session_id == "ast_reset_active"
+        assert launcher.checked_session_ids == []
+
+
+def test_reset_session_rejects_nonquiescent_runtime_state() -> None:
+    launcher = _ResetSessionLauncher(quiescent=False)
+    with SchedulerService(launcher=launcher) as service:
+        task = service.create_from_draft(
+            _draft(
+                schedule_kind="recurring",
+                schedule_payload={"interval_seconds": 60},
+            )
+        )
+        task_id = task["scheduledTaskId"]
+        service._repo.cas_bind_session(
+            task_id,
+            "ast_reset_busy",
+            expected_session_id=None,
+        )
+
+        with pytest.raises(ScheduledSessionResetConflict):
+            service.reset_session(task_id)
+
+        assert service._repo.get(task_id).session_id == "ast_reset_busy"
+        assert launcher.checked_session_ids == ["ast_reset_busy"]
 
 
 def test_title_over_persisted_limit_is_rejected_instead_of_silently_truncated() -> None:

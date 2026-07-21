@@ -152,6 +152,13 @@ export function fireScheduledTaskNow(taskId: string): Promise<ScheduledTaskStart
   );
 }
 
+export function resetScheduledTaskSession(taskId: string): Promise<ScheduledTaskItem> {
+  return requestJson<ScheduledTaskItem>(
+    `/api/scheduled-tasks/${encodeURIComponent(taskId)}/reset-session`,
+    { method: "POST" },
+  );
+}
+
 export async function deleteScheduledTask(taskId: string): Promise<void> {
   await requestJson<void>(
     `/api/scheduled-tasks/${encodeURIComponent(taskId)}`,

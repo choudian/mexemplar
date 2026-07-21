@@ -66,8 +66,20 @@ def _patch_scheduler_lifespan(
     created: dict[str, object] = {}
 
     class _Launcher:
-        def __init__(self, dispatch_callback):
+        def __init__(
+            self,
+            dispatch_callback,
+            *,
+            reserve_callback,
+            release_callback,
+            session_quiescent_callback,
+        ):
             self.dispatch_callback = dispatch_callback
+            created["launcher_callbacks"] = {
+                "reserve": reserve_callback,
+                "release": release_callback,
+                "quiescent": session_quiescent_callback,
+            }
             created["launcher"] = self
             calls.append("launcher_init")
 
@@ -203,6 +215,15 @@ def test_scheduler_lifespan_orders_registration_authorization_monitor_and_worker
             assert calls.index("monitor_install") < calls.index("worker_start")
             assert created["monitor_kwargs"]["has_pending_reentry"].__name__ == (
                 "has_pending_reentry"
+            )
+            assert created["launcher_callbacks"]["reserve"].__name__ == (
+                "reserve_scheduled_session"
+            )
+            assert created["launcher_callbacks"]["release"].__name__ == (
+                "release_scheduled_session_reservation"
+            )
+            assert created["launcher_callbacks"]["quiescent"].__name__ == (
+                "is_scheduled_session_quiescent"
             )
 
         assert calls.index("worker_stop") < calls.index("monitor_shutdown")

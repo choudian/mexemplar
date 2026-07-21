@@ -122,3 +122,46 @@ class TestGetDisplayPageValidation:
             repo.get_display_page(session_id, limit=0)
         with pytest.raises(ValueError):
             repo.get_display_page(session_id, limit=-1)
+
+
+def test_latest_assistant_text_can_be_limited_to_a_run_message_window(session_id):
+    seed_message(session_id, sequence=1, role="assistant", content="old run")
+    seed_message(session_id, sequence=2, role="user", content="new trigger")
+    seed_message(session_id, sequence=3, role="assistant", content="new run")
+    repo = MessageRepository()
+
+    assert repo.get_latest_assistant_text(session_id, after_sequence=1) == "new run"
+    assert repo.get_latest_assistant_text(session_id, after_sequence=3) == ""
+
+
+def test_tool_message_query_uses_run_window_and_tool_allowlist(session_id):
+    seed_message(
+        session_id,
+        sequence=1,
+        role="tool",
+        content='{"success": true}',
+        tool_name="delegate_to_subagent",
+    )
+    seed_message(
+        session_id,
+        sequence=3,
+        role="tool",
+        content='{"success": true}',
+        tool_name="delegate_to_specialist",
+    )
+    seed_message(
+        session_id,
+        sequence=4,
+        role="tool",
+        content='{"success": true}',
+        tool_name="unrelated_tool",
+    )
+    repo = MessageRepository()
+
+    rows = repo.list_tool_messages_after(
+        session_id,
+        after_sequence=1,
+        tool_names={"delegate_to_subagent", "delegate_to_specialist"},
+    )
+
+    assert [(row.sequence, row.tool_name) for row in rows] == [(3, "delegate_to_specialist")]

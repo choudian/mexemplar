@@ -64,6 +64,14 @@ def _create_session(
             is_scheduled=1 if source == "scheduled" else 0,
         )
     )
+    if source == "scheduled" and scheduled_task_id:
+        with ScheduledTaskRepository() as repo:
+            bound = repo.cas_bind_session(
+                scheduled_task_id,
+                session_id,
+                expected_session_id=None,
+            )
+        assert bound is not None
     return session_id
 
 
@@ -109,9 +117,7 @@ def test_unauthorized_scheduled_high_risk_rejected_immediately_without_timeout(m
     run_context.begin(sched_session)
     started = time.monotonic()
     try:
-        result = general_tools._confirm_or_reject(
-            "exec", "命令首行: Remove-Item -Recurse build"
-        )
+        result = general_tools._confirm_or_reject("exec", "命令首行: Remove-Item -Recurse build")
     finally:
         run_context.end()
     elapsed = time.monotonic() - started
@@ -133,7 +139,9 @@ def test_waiting_user_takeover_restores_running_and_returns_session_id():
     """run 落 ``waiting_user`` 后 ``takeover`` CAS 回 ``running``，返回 sessionId。"""
     dispatched: list = []
     launcher = SessionLauncher(
-        dispatch_callback=lambda sid, instr: dispatched.append((sid, instr)) or True
+        dispatch_callback=lambda sid, instr, _run_id, _reservation_id: (
+            dispatched.append((sid, instr)) or True
+        )
     )
     with SchedulerService(launcher=launcher) as service:
         task_id = _create_scheduled_task(title="反问接管 task")
@@ -146,9 +154,7 @@ def test_waiting_user_takeover_restores_running_and_returns_session_id():
         from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
 
         with ScheduledTaskRunRepository() as rr:
-            updated = rr.cas_transition(
-                run_id, from_status="running", to_status="waiting_user"
-            )
+            updated = rr.cas_transition(run_id, from_status="running", to_status="waiting_user")
         assert updated is not None
         assert updated.status == "waiting_user"
 
@@ -163,9 +169,7 @@ def test_waiting_user_takeover_restores_running_and_returns_session_id():
 
 def test_takeover_returns_session_for_failed_run_without_resurrecting():
     """接管 failed run：返回原 sessionId 供前端打开，但不复活 failed run。"""
-    launcher = SessionLauncher(
-        dispatch_callback=lambda sid, instr: True
-    )
+    launcher = SessionLauncher(dispatch_callback=lambda *_args: True)
     with SchedulerService(launcher=launcher) as service:
         task_id = _create_scheduled_task(title="failed 接管 task")
         run = service.fire_now(task_id)
@@ -233,9 +237,7 @@ def test_authorized_task_auto_approves_only_for_its_scheduled_session(monkeypatc
     user_session = _create_session("ast_user_e2e_chat", source="user")
     run_context.begin(user_session)
     try:
-        user_result = general_tools._confirm_or_reject(
-            "write_file", "目标文件: user.txt"
-        )
+        user_result = general_tools._confirm_or_reject("write_file", "目标文件: user.txt")
     finally:
         run_context.end()
     assert len(ask_calls) == 1  # 用户会话走原流程
@@ -265,9 +267,7 @@ def test_authorized_task_only_authorizes_its_own_session_not_others(monkeypatch)
     assert manager.is_authorized(task_b) is False
 
     # task B 的 scheduled 会话仍 D7 立即拒
-    sched_b = _create_session(
-        "ast_sched_task_b", source="scheduled", scheduled_task_id=task_b
-    )
+    sched_b = _create_session("ast_sched_task_b", source="scheduled", scheduled_task_id=task_b)
     run_context.begin(sched_b)
     try:
         result = general_tools._confirm_or_reject("exec", "命令首行: del build")
@@ -325,7 +325,9 @@ def test_load_all_pulls_persisted_unauthorized_tasks_and_audit_log_records_sourc
     )
     run_context.begin(sched_session)
     try:
-        with caplog.at_level(logging.INFO, logger="src.business.agents.tools.builtin_general_tools"):
+        with caplog.at_level(
+            logging.INFO, logger="src.business.agents.tools.builtin_general_tools"
+        ):
             result = general_tools._confirm_or_reject("edit_file", "编辑: config.toml")
     finally:
         run_context.end()

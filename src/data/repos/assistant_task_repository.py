@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Iterable
 
 from src.data.models_sqlite import AssistantTask, AssistantTaskEdge
@@ -94,6 +94,68 @@ class AssistantTaskRepository(BaseRepository):
             query = query.filter(AssistantTask.user_message_sequence == user_message_sequence)
         row = query.order_by(AssistantTask.created_at.desc()).first()
         return row[0] if row else None
+
+    def resolve_graph_id_for_run(
+        self,
+        session_id: str,
+        *,
+        after_sequence: int,
+        started_at: datetime,
+    ) -> tuple[bool, str | None]:
+        """解析 run 窗口内的当前图，返回 ``(known, graph_id)``。"""
+        unscoped = (
+            self.session.query(AssistantTask.task_id)
+            .filter(
+                AssistantTask.session_id == session_id,
+                AssistantTask.parent_task_id.is_(None),
+                AssistantTask.user_message_sequence.is_(None),
+                # SQLite CURRENT_TIMESTAMP may truncate fractional seconds while
+                # run.started_at comes from Python. One-second conservative overlap
+                # keeps an unscoped graph fail-closed instead of misclassifying it
+                # as an older graph and falling through to tool evidence success.
+                AssistantTask.created_at >= started_at - timedelta(seconds=1),
+            )
+            .first()
+        )
+        if unscoped is not None:
+            return False, None
+        row = (
+            self.session.query(AssistantTask.graph_id)
+            .filter(
+                AssistantTask.session_id == session_id,
+                AssistantTask.parent_task_id.is_(None),
+                AssistantTask.user_message_sequence > int(after_sequence),
+            )
+            .order_by(AssistantTask.created_at.desc())
+            .first()
+        )
+        return True, (row[0] if row else None)
+
+    def get_graph_user_message_sequence(self, graph_id: str) -> int | None:
+        """返回图根绑定的 user message sequence；缺失/未标记均返回 None。"""
+        row = (
+            self.session.query(AssistantTask.user_message_sequence)
+            .filter(
+                AssistantTask.graph_id == graph_id,
+                AssistantTask.parent_task_id.is_(None),
+            )
+            .order_by(AssistantTask.created_at.asc())
+            .first()
+        )
+        return row[0] if row else None
+
+    def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
+        """返回 session 内是否仍有未终态执行节点；root 容器不参与判定。"""
+        row = (
+            self.session.query(AssistantTask.task_id)
+            .filter(
+                AssistantTask.session_id == session_id,
+                AssistantTask.parent_task_id.is_not(None),
+                AssistantTask.status.notin_(("completed", "failed", "cancelled")),
+            )
+            .first()
+        )
+        return row is not None
 
     def add_edge(
         self,

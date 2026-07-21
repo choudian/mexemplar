@@ -163,7 +163,17 @@ def create_app(session_token: str | None = None) -> FastAPI:
 
             runtime = assistant.get_assistant_runtime()
             scheduler_launcher = SessionLauncher(
-                dispatch_callback=lambda sid, instr: bool(runtime.dispatch_message(sid, instr))
+                dispatch_callback=lambda sid, instr, run_id, reservation_id: bool(
+                    runtime.dispatch_reserved_message(
+                        sid,
+                        instr,
+                        scheduled_run_id=run_id,
+                        reservation_id=reservation_id,
+                    )
+                ),
+                reserve_callback=runtime.reserve_scheduled_session,
+                release_callback=runtime.release_scheduled_session_reservation,
+                session_quiescent_callback=runtime.is_scheduled_session_quiescent,
             )
             configure_default_scheduler_launcher(scheduler_launcher)
             # per-task 免确认授权集：启动时全量加载（CC-005；独立于进程级

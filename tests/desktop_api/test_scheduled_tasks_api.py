@@ -341,6 +341,72 @@ def test_fire_now_returns_503_without_run_when_atomic_session_creation_fails(
     assert total == 0
 
 
+def test_reset_session_clears_current_binding(
+    desktop_api_client: TestClient,
+    monkeypatch,
+):
+    task_id = _make_task(title="重开一轮")
+    with ScheduledTaskRepository() as repo:
+        repo.cas_bind_session(
+            task_id,
+            "ast_reset_api",
+            expected_session_id=None,
+        )
+
+    class _QuiescentLauncher:
+        @staticmethod
+        def can_reset_session(_session_id: str) -> bool:
+            return True
+
+    from src.business.scheduling import scheduler_service as service_module
+
+    monkeypatch.setattr(
+        service_module.SchedulerService,
+        "_require_launcher",
+        lambda self: _QuiescentLauncher(),
+    )
+
+    response = desktop_api_client.post(f"/api/scheduled-tasks/{task_id}/reset-session")
+
+    assert response.status_code == 200
+    assert response.json()["scheduledTaskId"] == task_id
+    with ScheduledTaskRepository() as repo:
+        assert repo.get(task_id).session_id is None
+
+
+def test_reset_session_returns_409_while_session_is_busy(
+    desktop_api_client: TestClient,
+    monkeypatch,
+):
+    task_id = _make_task(title="忙碌时不重开")
+    with ScheduledTaskRepository() as repo:
+        repo.cas_bind_session(
+            task_id,
+            "ast_reset_api_busy",
+            expected_session_id=None,
+        )
+
+    class _BusyLauncher:
+        @staticmethod
+        def can_reset_session(_session_id: str) -> bool:
+            return False
+
+    from src.business.scheduling import scheduler_service as service_module
+
+    monkeypatch.setattr(
+        service_module.SchedulerService,
+        "_require_launcher",
+        lambda self: _BusyLauncher(),
+    )
+
+    response = desktop_api_client.post(f"/api/scheduled-tasks/{task_id}/reset-session")
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "scheduled_task_session_busy"
+    with ScheduledTaskRepository() as repo:
+        assert repo.get(task_id).session_id == "ast_reset_api_busy"
+
+
 def test_delete_soft_deletes_task(desktop_api_client: TestClient):
     task_id = _make_task(title="待删除")
     resp = desktop_api_client.delete(f"/api/scheduled-tasks/{task_id}")

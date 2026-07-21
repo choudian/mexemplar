@@ -106,7 +106,12 @@ def test_scheduled_immediate_full_flow():
     # mock dispatch_callback：记录调用、返回 True
     dispatched: list[tuple[str, str]] = []
 
-    def _dispatch(session_id: str, instruction: str) -> bool:
+    def _dispatch(
+        session_id: str,
+        instruction: str,
+        _run_id: str,
+        _reservation_id: str,
+    ) -> bool:
         dispatched.append((session_id, instruction))
         return True
 
@@ -213,8 +218,10 @@ def test_graph_terminal_event_reaches_connected_completion_monitor(
 ):
     """真实 blinker 接线把终态图推进为单次 run 终态，不靠直接调用 monitor。"""
     from src.utils.events import connect, disconnect, emit
+    from src.data.repos.assistant_task_repository import AssistantTaskRepository
 
     session_id = f"ast_graph_event_{expected_outcome}"
+    graph_id = f"graph_{expected_outcome}"
     with ScheduledTaskRepository() as task_repo:
         task = task_repo.create(
             source_type="direct",
@@ -246,7 +253,18 @@ def test_graph_terminal_event_reaches_connected_completion_monitor(
         run = run_repo.create(
             scheduled_task_id=task.scheduled_task_id,
             session_id=session_id,
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
         )
+        with AssistantTaskRepository() as graph_repo:
+            graph_repo.create_task(
+                graph_id=graph_id,
+                session_id=session_id,
+                task_id=f"tsk_root_{expected_outcome}",
+                title="root",
+                description="root",
+                user_message_sequence=1,
+            )
         monitor = RunCompletionMonitor(
             has_active_worker=lambda _sid: False,
             has_pending_reentry=lambda _sid: False,
@@ -260,7 +278,7 @@ def test_graph_terminal_event_reaches_connected_completion_monitor(
                 emit(
                     "graph_scheduler_terminal",
                     None,
-                    graph_id=f"graph_{expected_outcome}",
+                    graph_id=graph_id,
                     session_id=session_id,
                     all_terminal=True,
                     all_completed=expected_outcome == "succeeded",
@@ -286,7 +304,9 @@ def test_scheduled_immediate_reentry_skip():
     dispatched: list = []
 
     launcher = SessionLauncher(
-        dispatch_callback=lambda sid, instr: dispatched.append((sid, instr)) or True
+        dispatch_callback=lambda sid, instr, _run_id, _reservation_id: (
+            dispatched.append((sid, instr)) or True
+        )
     )
     with SchedulerService(launcher=launcher) as service:
         from src.data.repos.scheduled_task_repository import ScheduledTaskRepository

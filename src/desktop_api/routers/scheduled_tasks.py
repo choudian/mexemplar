@@ -22,6 +22,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from src.business.scheduling.scheduler_service import (
     SchedulerRuntimeUnavailable,
     SchedulerService,
+    ScheduledSessionResetConflict,
     ScheduledTakeoverUnavailable,
 )
 from src.business.scheduling.session_launcher import ScheduledSessionCreationFailed
@@ -142,6 +143,25 @@ def fire_now(
     if status != "running":
         raise HTTPException(status_code=503, detail="scheduled_task_not_started")
     return ScheduledTaskStartedRunItem(**result)
+
+
+@router.post(
+    "/{scheduled_task_id}/reset-session",
+    response_model=ScheduledTaskItem,
+)
+def reset_session(
+    scheduled_task_id: str,
+    service: SchedulerService = Depends(get_scheduler_service),
+) -> ScheduledTaskItem:
+    """显式重开：安全解绑 current session，下一次触发创建新会话。"""
+    try:
+        return ScheduledTaskItem(**service.reset_session(scheduled_task_id))
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="scheduled_task_not_found") from exc
+    except ScheduledSessionResetConflict as exc:
+        raise HTTPException(status_code=409, detail="scheduled_task_session_busy") from exc
+    except SchedulerRuntimeUnavailable as exc:
+        raise HTTPException(status_code=503, detail="scheduler_runtime_unavailable") from exc
 
 
 @router.delete("/{scheduled_task_id}", status_code=204)

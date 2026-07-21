@@ -10329,6 +10329,11 @@ select:focus-visible,
   gap: 10px;
   font-size: 12.5px;
 }
+.scheduled-detail-row + .scheduled-detail-row {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border-1);
+}
 .scheduled-detail-label {
   flex: 0 0 auto;
   color: var(--text-muted);
@@ -10369,6 +10374,15 @@ select:focus-visible,
 .scheduled-detail-toggle:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+.scheduled-detail-reset {
+  border-color: var(--border-2);
+  color: var(--text-2);
+}
+.scheduled-detail-reset:hover:not(:disabled) {
+  background: var(--surface-1);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .scheduled-detail .scheduled-runs {
   border-top: 0;

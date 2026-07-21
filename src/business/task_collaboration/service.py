@@ -1039,6 +1039,10 @@ class TaskCollaborationService(AtomicTaskService):
             adjudications=adjudication_items,
         )
 
+    def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
+        """供上层 adapter 证明 session 图执行已静默，不暴露 Repository。"""
+        return self._tasks.has_nonterminal_execution_tasks(session_id)
+
     def _bulk_transition(
         self,
         *,

@@ -65,6 +65,26 @@ describe("scheduledStore.applyEvent", () => {
     vi.unstubAllGlobals();
   });
 
+  test("resetSession POSTs reset endpoint and replaces the task snapshot", async () => {
+    const updated = { ...baseTask, updatedAt: "later" };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(updated), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await useScheduledStore.getState().resetSession("sch_1");
+
+    expect(result?.updatedAt).toBe("later");
+    expect(useScheduledStore.getState().tasks[0]?.updatedAt).toBe("later");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://desktop.test/api/scheduled-tasks/sch_1/reset-session",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
   test("scheduled_task.changed(deleted) removes task from list", () => {
     useScheduledStore.setState({
       taskDetail: baseTask,

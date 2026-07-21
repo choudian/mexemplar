@@ -394,6 +394,52 @@ describe("ScheduledScreen", () => {
     ).toBe(false);
   });
 
+  test("expanded detail can safely reset the task session", async () => {
+    const fetchMock = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.startsWith("http://desktop.test/api/scheduled-tasks?")) {
+          return jsonResponse({
+            items: [baseTask],
+            total: 1,
+            limit: 200,
+            offset: 0,
+          });
+        }
+        if (url.endsWith("/api/scheduled-tasks/sch_1/runs?limit=50&offset=0")) {
+          return jsonResponse({ items: [], total: 0, limit: 50, offset: 0 });
+        }
+        if (
+          url.endsWith("/api/scheduled-tasks/sch_1/reset-session") &&
+          init?.method === "POST"
+        ) {
+          return jsonResponse({ ...baseTask, updatedAt: "2026-07-21T00:00:00Z" });
+        }
+        return jsonResponse({});
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ScheduledScreen />);
+    await screen.findByText("查竞品价格");
+    fireEvent.click(
+      screen.getByRole("button", { name: "展开任务执行记录" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "重开一轮" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "http://desktop.test/api/scheduled-tasks/sch_1/reset-session",
+        expect.objectContaining({ method: "POST" }),
+      ),
+    );
+    expect(
+      useToastStore
+        .getState()
+        .toasts.some((toast) => toast.message.includes("下一次会使用新会话")),
+    ).toBe(true);
+  });
+
   test("delete button soft-deletes via DELETE and shows toast", async () => {
     vi.stubGlobal(
       "fetch",

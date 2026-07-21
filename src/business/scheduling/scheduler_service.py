@@ -59,6 +59,10 @@ class ScheduledTakeoverUnavailable(RuntimeError):
     """failed/waiting run 的真实 scheduled session 无法恢复。"""
 
 
+class ScheduledSessionResetConflict(RuntimeError):
+    """当前 scheduled session 仍有运行、回流或未终态图，不能重开。"""
+
+
 def configure_default_scheduler_launcher(launcher: Any) -> None:
     """注册供短生命周期 API service 复用的进程级 launcher。"""
     global _default_launcher
@@ -327,6 +331,49 @@ class SchedulerService:
                 if not self._repo.soft_delete(task_id):
                     raise LookupError("scheduled_task_not_found")
         self._emit_task_changed(task_id, "deleted")
+
+    def reset_session(self, scheduled_task_id: str) -> dict[str, Any]:
+        """安全清空 current-session 绑定；下一次触发会创建全新 session。"""
+        task_id = _normalize_id(scheduled_task_id)
+        with scheduler_task_trigger_guard():
+            row = self._repo.get(task_id)
+            if row is None or row.is_deleted:
+                raise LookupError("scheduled_task_not_found")
+            current_session_id = (row.session_id or "").strip()
+            if not current_session_id:
+                return self.project_scheduled_task(row)
+            if self._run_repo.has_active_run(task_id):
+                raise ScheduledSessionResetConflict("scheduled task session is still active")
+
+            launcher = self._require_launcher()
+            reserve_reset = getattr(launcher, "reserve_reset_session", None)
+            if callable(reserve_reset):
+                reset_guard = reserve_reset(current_session_id)
+            else:
+                from contextlib import nullcontext
+
+                can_reset = getattr(launcher, "can_reset_session", None)
+                reset_guard = nullcontext(
+                    bool(can_reset(current_session_id)) if callable(can_reset) else False
+                )
+
+            with reset_guard as acquired:
+                if not acquired or self._run_repo.has_active_run(task_id):
+                    raise ScheduledSessionResetConflict("scheduled task session is still active")
+                cleared = self._repo.cas_clear_session(
+                    task_id,
+                    expected_session_id=current_session_id,
+                )
+                if cleared is None:
+                    latest = self._repo.get(task_id)
+                    if latest is None or latest.is_deleted:
+                        raise LookupError("scheduled_task_not_found")
+                    raise ScheduledSessionResetConflict(
+                        "scheduled task session changed concurrently"
+                    )
+
+            self._emit_task_changed(task_id, "status_changed")
+            return self.project_scheduled_task(cleared)
 
     def expire_task(self, scheduled_task_id: str) -> bool:
         """把 active 任务作废为 ``expired``（待办悬空 / 触发时读不到指令等；FR-016/T058）。

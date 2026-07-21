@@ -18,6 +18,7 @@ from src.data.repos import (
     AssistantTaskRepository,
     AssistantTodoRepository,
 )
+from src.utils.timezone import utc_now_naive
 
 
 @pytest.fixture()
@@ -100,6 +101,107 @@ def test_task_graph_repository_creates_tasks_edges_and_rejects_cycles(db_session
             target_task_id=root.task_id,
             edge_type="dependency",
         )
+
+
+def test_task_graph_repository_resolves_only_graphs_inside_run_message_window(
+    db_session,
+) -> None:
+    repo = AssistantTaskRepository(db_session)
+    repo.create_task(
+        graph_id="tg_previous_run",
+        session_id="ast_reused",
+        task_id="tsk_previous_root",
+        title="old",
+        description="old",
+        user_message_sequence=2,
+    )
+    repo.create_task(
+        graph_id="tg_current_run",
+        session_id="ast_reused",
+        task_id="tsk_current_root",
+        title="current",
+        description="current",
+        user_message_sequence=8,
+    )
+
+    known, graph_id = repo.resolve_graph_id_for_run(
+        "ast_reused",
+        after_sequence=5,
+        started_at=datetime.now() - timedelta(minutes=1),
+    )
+
+    assert known is True
+    assert graph_id == "tg_current_run"
+
+
+def test_task_graph_repository_fails_closed_for_unscoped_graph_created_during_run(
+    db_session,
+) -> None:
+    repo = AssistantTaskRepository(db_session)
+    started_at = utc_now_naive() - timedelta(minutes=1)
+    repo.create_task(
+        graph_id="tg_unknown_owner",
+        session_id="ast_reused",
+        task_id="tsk_unknown_root",
+        title="unknown",
+        description="unknown",
+        user_message_sequence=None,
+    )
+
+    known, graph_id = repo.resolve_graph_id_for_run(
+        "ast_reused",
+        after_sequence=5,
+        started_at=started_at,
+    )
+
+    assert known is False
+    assert graph_id is None
+
+
+def test_task_graph_repository_exposes_root_message_sequence_for_run_mapping(
+    db_session,
+) -> None:
+    repo = AssistantTaskRepository(db_session)
+    repo.create_task(
+        graph_id="tg_owned",
+        session_id="ast_owned",
+        task_id="tsk_owned_root",
+        title="owned",
+        description="owned",
+        user_message_sequence=12,
+    )
+
+    assert repo.get_graph_user_message_sequence("tg_owned") == 12
+    assert repo.get_graph_user_message_sequence("tg_missing") is None
+
+
+def test_repository_detects_nonterminal_execution_nodes_by_session(db_session) -> None:
+    repo = AssistantTaskRepository(db_session)
+    root = repo.create_task(
+        task_id="tsk_root_terminal_scan",
+        graph_id="graph_terminal_scan",
+        session_id="ast_terminal_scan",
+        title="root",
+        description="root",
+        status="running",
+    )
+    child = repo.create_task(
+        task_id="tsk_child_terminal_scan",
+        graph_id="graph_terminal_scan",
+        session_id="ast_terminal_scan",
+        title="child",
+        description="child",
+        parent_task_id=root.task_id,
+        root_task_id=root.task_id,
+        status="running",
+    )
+
+    assert repo.has_nonterminal_execution_tasks("ast_terminal_scan") is True
+
+    repo.update_status(child.task_id, status="completed")
+
+    # Root is a container and may remain nonterminal for mixed-result graphs.
+    assert repo.has_nonterminal_execution_tasks("ast_terminal_scan") is False
 
 
 def test_attempt_operation_question_adjudication_claim_meeting_and_todo_repositories(

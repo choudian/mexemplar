@@ -6,7 +6,7 @@
 ``sink.dispatch``，sink 据此决定是否 kick 一个续跑 worker 让主助理基于回流结果续跑
 （FR-004 非阻塞回流重入）。
 
-本类只做"按 session 的回流队列 + 唤醒协调"，通过注入的 callable 与上层 runtime 解耦，
+本类只做"按 (session, graph) 的回流队列 + 唤醒协调"，通过注入的 callable 与上层 runtime 解耦，
 不 import desktop_api / AssistantRuntime，因此可安全驻留在 business 层。
 """
 
@@ -24,8 +24,8 @@ class ParentReentrySink:
 
     - ``dispatch(payload)``：dispatcher worker 线程调用。按 ``payload["sessionId"]`` 入队；
       若该 session 当前无活跃 assistant worker，kick 一个续跑 worker。
-    - ``drain(session_id)``：续跑 worker 首轮调用，取走并清空该 session 的全部待消费回流。
-    - ``has_pending(session_id)``：worker 退出前的 tail-kick 检查，防续跑中新回流丢失。
+    - ``drain(session_id, graph_id)``：只取走该图的待消费回流。
+    - ``has_pending(session_id, graph_id)``：按图检查；省略 graph 时检查整个 session。
     """
 
     def __init__(
@@ -37,7 +37,7 @@ class ParentReentrySink:
         self._has_active_worker = has_active_worker
         self._kick_reentry_run = kick_reentry_run
         self._lock = threading.Lock()
-        self._pending: dict[str, list[dict]] = {}
+        self._pending: dict[str, dict[str, list[dict]]] = {}
 
     def dispatch(self, payload: dict) -> None:
         session_id = payload.get("sessionId")
@@ -50,7 +50,7 @@ class ParentReentrySink:
             )
             return
         with self._lock:
-            self._pending.setdefault(session_id, []).append(payload)
+            self._pending.setdefault(session_id, {}).setdefault(graph_id, []).append(payload)
             # 锁内决定是否需要 kick：避免多个 dispatcher worker 同时看到"无活跃 worker"
             # 而重复 kick。kick_reentry_run 自身也 first-wins，双保险。
             needs_kick = not self._has_active_worker(session_id)
@@ -60,13 +60,36 @@ class ParentReentrySink:
                 # kick 返回 False=已有活跃 worker（first-wins）；回流留队列，由该 worker drain。
                 logger.debug("[reentry] kick skipped (active worker) session=%s", session_id)
 
-    def drain(self, session_id: str) -> list[dict]:
+    def drain(self, session_id: str, graph_id: str | None = None) -> list[dict]:
         with self._lock:
-            return self._pending.pop(session_id, [])
+            graphs = self._pending.get(session_id)
+            if not graphs:
+                return []
+            if graph_id is None:
+                self._pending.pop(session_id, None)
+                return [entry for entries in graphs.values() for entry in entries]
+            entries = graphs.pop(graph_id, [])
+            if not graphs:
+                self._pending.pop(session_id, None)
+            return entries
 
-    def has_pending(self, session_id: str) -> bool:
+    def has_pending(self, session_id: str, graph_id: str | None = None) -> bool:
         with self._lock:
-            return bool(self._pending.get(session_id))
+            graphs = self._pending.get(session_id)
+            if not graphs:
+                return False
+            if graph_id is None:
+                return any(bool(entries) for entries in graphs.values())
+            return bool(graphs.get(graph_id))
+
+    def next_pending_graph(self, session_id: str) -> str | None:
+        """返回该 session 下一张仍有回流的图（稳定插入顺序）。"""
+        with self._lock:
+            graphs = self._pending.get(session_id) or {}
+            return next(
+                (graph_id for graph_id, entries in graphs.items() if entries),
+                None,
+            )
 
     def notify_graph_complete(self, graph_id: str, session_id: str) -> None:
         """024: 全图终态 → 经 dispatch 通道 kick 续跑，让主助理 drain briefing 裁定/汇报。
@@ -80,7 +103,10 @@ class ParentReentrySink:
             logger.debug("[reentry] notify_graph_complete skipped: missing session/graph")
             return
         with self._lock:
-            pending = self._pending.setdefault(session_id, [])
+            pending = self._pending.setdefault(session_id, {}).setdefault(
+                graph_id,
+                [],
+            )
             if any(
                 e.get("event") == "graph_completed" and e.get("graphId") == graph_id
                 for e in pending
@@ -112,4 +138,13 @@ class ParentReentrySink:
         if not entries:
             return
         with self._lock:
-            self._pending.setdefault(session_id, []).extend(entries)
+            graphs = self._pending.setdefault(session_id, {})
+            for entry in entries:
+                graph_id = entry.get("graphId")
+                if not graph_id:
+                    logger.warning(
+                        "[reentry] cannot re-enqueue payload without graph: task=%s",
+                        entry.get("taskId"),
+                    )
+                    continue
+                graphs.setdefault(graph_id, []).append(entry)

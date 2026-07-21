@@ -130,22 +130,26 @@ class MessageRepository(BaseRepository):
             .all()
         )
 
-    def get_latest_assistant_text(self, session_id: str, max_length: int = 6000) -> str:
-        """获取会话中最后一条 assistant 消息的文本内容。"""
-        row = (
-            self.session.query(Message.content)
-            .filter(
-                and_(
-                    Message.session_id == session_id,
-                    Message.is_archived.is_(False),
-                    Message.role == "assistant",
-                    Message.content.isnot(None),
-                    Message.content != "",
-                )
+    def get_latest_assistant_text(
+        self,
+        session_id: str,
+        max_length: int = 6000,
+        *,
+        after_sequence: int | None = None,
+    ) -> str:
+        """获取最后一条 assistant 文本；可限定在消息水位线之后。"""
+        query = self.session.query(Message.content).filter(
+            and_(
+                Message.session_id == session_id,
+                Message.is_archived.is_(False),
+                Message.role == "assistant",
+                Message.content.isnot(None),
+                Message.content != "",
             )
-            .order_by(Message.sequence.desc())
-            .first()
         )
+        if after_sequence is not None:
+            query = query.filter(Message.sequence > int(after_sequence))
+        row = query.order_by(Message.sequence.desc()).first()
         if not row:
             return ""
         text = str(row[0]).strip()
@@ -199,6 +203,29 @@ class MessageRepository(BaseRepository):
             self.session.query(Message)
             .filter(Message.session_id == session_id)
             .order_by(Message.sequence)
+            .all()
+        )
+
+    def list_tool_messages_after(
+        self,
+        session_id: str,
+        *,
+        after_sequence: int,
+        tool_names: set[str] | frozenset[str],
+    ) -> List[Message]:
+        """读取 run 水位线之后、指定名称集合内的持久 tool result。"""
+        normalized_names = {str(name).strip() for name in tool_names if str(name).strip()}
+        if not normalized_names:
+            return []
+        return (
+            self.session.query(Message)
+            .filter(
+                Message.session_id == session_id,
+                Message.sequence > int(after_sequence),
+                Message.role == "tool",
+                Message.tool_name.in_(normalized_names),
+            )
+            .order_by(Message.sequence.asc())
             .all()
         )
 

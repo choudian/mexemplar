@@ -467,6 +467,35 @@ class TestGraphCompletion:
             }
         ]
 
+    def test_terminal_reentry_is_queued_before_scheduling_observer(self, monkeypatch):
+        from src.utils import events
+
+        graph_id, node_ids, _, _ = _build_graph(
+            [{"nodeId": "n1", "title": "A", "description": "x"}]
+        )
+        order: list[str] = []
+
+        class OrderedSink(FakeReentrySink):
+            def notify_graph_complete(self, graph_id: str, session_id: str) -> None:
+                order.append("reentry")
+                super().notify_graph_complete(graph_id, session_id)
+
+        monkeypatch.setattr(
+            events,
+            "emit",
+            lambda event_name, _sender, **_payload: order.append(event_name),
+        )
+        scheduler = GraphScheduler(
+            dispatcher=FakeDispatcher(),
+            reentry_sink=OrderedSink(),
+        )
+        scheduler.start_graph(graph_id)
+        _mark_completed(node_ids["n1"])
+
+        scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
+
+        assert order == ["reentry", "graph_scheduler_terminal"]
+
     def test_terminal_event_failure_does_not_block_success_reentry(self, monkeypatch):
         from src.utils import events
 

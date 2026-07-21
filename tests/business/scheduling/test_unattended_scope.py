@@ -29,8 +29,10 @@ from src.business.scheduling.unattended_confirmation_manager import (
     get_unattended_confirmation_manager,
     reset_state_for_tests as reset_unattended_state,
 )
-from src.data.models_sqlite import Session
+from src.data.models_sqlite import ScheduledTask, Session
+from src.data.repos.scheduled_task_repository import ScheduledTaskRepository
 from src.data.repos.session_repository import SessionRepository
+from src.utils.timezone import utc_now_naive
 
 # =============================================================================
 # Fixtures
@@ -51,6 +53,7 @@ def _create_session(
     *,
     source: str = "user",
     scheduled_task_id: str | None = None,
+    bind_current: bool = True,
 ) -> str:
     SessionRepository().create(
         Session(
@@ -63,6 +66,28 @@ def _create_session(
             is_scheduled=1 if source == "scheduled" else 0,
         )
     )
+    if source == "scheduled" and scheduled_task_id and bind_current:
+        now = utc_now_naive()
+        with ScheduledTaskRepository() as repo:
+            repo.session.add(
+                ScheduledTask(
+                    scheduled_task_id=scheduled_task_id,
+                    source_type="direct",
+                    source_ref="测试调度任务",
+                    title="测试调度任务",
+                    instruction="测试调度任务",
+                    schedule_kind="recurring",
+                    schedule_payload='{"interval_seconds":60}',
+                    status="active",
+                    unattended_auto_approve=1,
+                    next_fire_at=now,
+                    session_id=session_id,
+                    is_deleted=0,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            repo.session.commit()
     return session_id
 
 
@@ -307,6 +332,25 @@ def test_authorized_scheduled_session_actually_passes_through(monkeypatch):
 
     assert ask_calls == []
     assert result is None  # 放行
+
+
+def test_reset_old_session_cannot_reuse_task_unattended_authorization() -> None:
+    task_id = "sch_rebound_unattended"
+    _create_session(
+        "ast_rebound_old",
+        source="scheduled",
+        scheduled_task_id=task_id,
+        bind_current=False,
+    )
+    _create_session(
+        "ast_rebound_current",
+        source="scheduled",
+        scheduled_task_id=task_id,
+    )
+    get_unattended_confirmation_manager().set(task_id, True)
+
+    assert general_tools._unattended_auto_approve_for("ast_rebound_old") == "reject_immediately"
+    assert general_tools._unattended_auto_approve_for("ast_rebound_current") == "authorized"
 
 
 # =============================================================================

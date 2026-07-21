@@ -1176,6 +1176,13 @@ export async function installMockApi(page: Page, options: MockOptions = {}): Pro
     if (path.startsWith("/api/scheduled-tasks/sch_") && path.endsWith("/fire-now") && method === "POST") {
       return json(route, {});
     }
+    if (path.startsWith("/api/scheduled-tasks/sch_") && path.endsWith("/reset-session") && method === "POST") {
+      const taskId = path.split("/")[3];
+      const existing = scheduledTasks().find((t) => t.scheduledTaskId === taskId);
+      return existing
+        ? json(route, { ...existing, updatedAt: new Date().toISOString() })
+        : json(route, { error: "not_found" }, 404);
+    }
     if (path.startsWith("/api/scheduled-tasks/sch_") && method === "PATCH") {
       const taskId = path.split("/")[3];
       const existing = scheduledTasks().find((t) => t.scheduledTaskId === taskId);

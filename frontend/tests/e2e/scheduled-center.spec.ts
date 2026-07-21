@@ -61,6 +61,28 @@ test("unattended task detail shows close-unattended toggle", async ({
   await expect(page.getByRole("button", { name: "收回授权" })).toBeVisible();
 });
 
+test("resets the reused task session from expanded detail", async ({ page }) => {
+  const api = await installMockApi(page);
+  await page.goto("/scheduled");
+
+  await page
+    .getByRole("button", { name: /展开任务执行记录/ })
+    .first()
+    .click();
+  await page.getByRole("button", { name: "重开一轮" }).click();
+
+  await expect(page.getByText(/下一次会使用新会话/)).toBeVisible();
+  await expect
+    .poll(() =>
+      api.requests.some(
+        (request) =>
+          request.method === "POST" &&
+          request.path === "/api/scheduled-tasks/sch_e2e_1/reset-session",
+      ),
+    )
+    .toBe(true);
+});
+
 test("pause button is visible for active tasks", async ({ page }) => {
   await installMockApi(page);
   await page.goto("/scheduled");

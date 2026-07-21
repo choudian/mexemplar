@@ -67,7 +67,9 @@ def migrate_to_v2(engine):
     """迁移到版本 2：添加意图和试用相关表"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS intents (
                     intent_id TEXT PRIMARY KEY,
                     recording_id TEXT NOT NULL,
@@ -84,8 +86,12 @@ def migrate_to_v2(engine):
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     confirmed_at TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS pending_tools (
                     pending_tool_id TEXT PRIMARY KEY,
                     intent_id TEXT NOT NULL,
@@ -105,8 +111,12 @@ def migrate_to_v2(engine):
                     promoted_at TIMESTAMP,
                     FOREIGN KEY (intent_id) REFERENCES intents(intent_id)
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS tool_trials (
                     trial_id TEXT PRIMARY KEY,
                     pending_tool_id TEXT NOT NULL,
@@ -124,8 +134,12 @@ def migrate_to_v2(engine):
                     finished_at TIMESTAMP,
                     FOREIGN KEY (pending_tool_id) REFERENCES pending_tools(pending_tool_id)
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS trial_data_templates (
                     template_id TEXT PRIMARY KEY,
                     pending_tool_id TEXT NOT NULL,
@@ -138,7 +152,9 @@ def migrate_to_v2(engine):
                     updated_at REAL,
                     FOREIGN KEY (pending_tool_id) REFERENCES pending_tools(pending_tool_id)
                 )
-            """))
+            """
+                )
+            )
 
             # tools 表补充字段（如果不存在）
             for col, definition in [
@@ -177,7 +193,9 @@ def migrate_to_v3(engine):
     """迁移到版本 3：添加 Agent 会话和消息表"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS sessions (
                     session_id TEXT PRIMARY KEY,
                     workflow_id TEXT NOT NULL,
@@ -186,8 +204,12 @@ def migrate_to_v3(engine):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS messages (
                     message_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -203,10 +225,14 @@ def migrate_to_v3(engine):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (session_id) REFERENCES sessions(session_id)
                 )
-            """))
+            """
+                )
+            )
             # DROP + CREATE 修复旧版本中 to_session_id TEXT NOT NULL 的错误约束
             conn.execute(text("DROP TABLE IF EXISTS workflow_transitions"))
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE workflow_transitions (
                     transition_id   TEXT PRIMARY KEY,
                     workflow_id     TEXT NOT NULL,
@@ -216,7 +242,9 @@ def migrate_to_v3(engine):
                     payload         TEXT,
                     created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
             for index_name, index_def in [
                 ("idx_sessions_workflow", "sessions(workflow_id)"),
                 ("idx_sessions_agent_type", "sessions(agent_type)"),
@@ -264,7 +292,9 @@ def migrate_to_v5(engine):
             conn.execute(text("PRAGMA foreign_keys=OFF"))
 
             # 重建 sessions 表：workflow_id nullable + 新增 tool_ids
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS sessions_new (
                     session_id TEXT PRIMARY KEY,
                     workflow_id TEXT,
@@ -274,17 +304,25 @@ def migrate_to_v5(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 INSERT OR IGNORE INTO sessions_new (session_id, workflow_id, agent_type, status, created_at, updated_at)
                 SELECT session_id, workflow_id, agent_type, status, created_at, updated_at FROM sessions
-            """))
+            """
+                )
+            )
             conn.execute(text("DROP TABLE IF EXISTS sessions"))
             conn.execute(text("ALTER TABLE sessions_new RENAME TO sessions"))
 
             conn.execute(text("PRAGMA foreign_keys=ON"))
 
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_profile (
                     profile_id TEXT PRIMARY KEY DEFAULT 'default',
                     display_name TEXT,
@@ -294,8 +332,12 @@ def migrate_to_v5(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS pending_assistant_tasks (
                     task_id TEXT PRIMARY KEY,
                     task_type TEXT NOT NULL,
@@ -304,8 +346,12 @@ def migrate_to_v5(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS tool_suggestion_history (
                     suggestion_id TEXT PRIMARY KEY,
                     task_pattern TEXT NOT NULL,
@@ -313,8 +359,12 @@ def migrate_to_v5(engine):
                     accepted BOOLEAN,
                     times_seen INTEGER DEFAULT 0
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_summaries (
                     summary_id TEXT PRIMARY KEY,
                     level INTEGER NOT NULL,
@@ -324,7 +374,9 @@ def migrate_to_v5(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             for index_name, index_def in [
                 ("idx_pending_tasks_status", "pending_assistant_tasks(status)"),
@@ -334,44 +386,64 @@ def migrate_to_v5(engine):
                 conn.execute(text(f"CREATE INDEX IF NOT EXISTS {index_name} ON {index_def}"))
 
             # FTS5 全文搜索虚拟表 + 同步触发器
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE VIRTUAL TABLE IF NOT EXISTS assistant_summaries_fts
                 USING fts5(summary_id UNINDEXED, content, tokenize='unicode61')
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TRIGGER IF NOT EXISTS trg_summaries_fts_insert
                 AFTER INSERT ON assistant_summaries
                 BEGIN
                     INSERT INTO assistant_summaries_fts(summary_id, content)
                     VALUES (new.summary_id, new.content);
                 END
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TRIGGER IF NOT EXISTS trg_summaries_fts_delete
                 AFTER DELETE ON assistant_summaries
                 BEGIN
                     DELETE FROM assistant_summaries_fts
                     WHERE summary_id = old.summary_id;
                 END
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TRIGGER IF NOT EXISTS trg_summaries_fts_update
                 AFTER UPDATE OF content ON assistant_summaries
                 BEGIN
                     UPDATE assistant_summaries_fts SET content = new.content
                     WHERE summary_id = new.summary_id;
                 END
-            """))
+            """
+                )
+            )
 
             # sqlite-vec 向量搜索（扩展已由 engine 事件监听器加载，直接建表）
             try:
-                conn.execute(text("""
+                conn.execute(
+                    text(
+                        """
                     CREATE VIRTUAL TABLE IF NOT EXISTS assistant_summaries_vec
                     USING vec0(
                         summary_id TEXT,
                         embedding float[1536] distance_metric=cosine
                     )
-                """))
+                """
+                    )
+                )
                 logger.info("sqlite-vec 向量表创建成功")
             except Exception as e:
                 logger.info(f"sqlite-vec 未安装，跳过向量表创建（将使用 FTS-only 模式）: {e}")
@@ -392,7 +464,9 @@ def migrate_to_v6(engine):
     """迁移到版本 6：新增 teaching_failure_records 表"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS teaching_failure_records (
                     record_id TEXT PRIMARY KEY,
                     workflow_id TEXT UNIQUE,
@@ -406,7 +480,9 @@ def migrate_to_v6(engine):
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     resolved_at DATETIME
                 )
-            """))
+            """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_tfr_status ON teaching_failure_records (status)"
@@ -452,7 +528,9 @@ def migrate_to_v8(engine):
     """迁移到版本 8：新增 skill_compositions 与 skill_composition_members 表"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS skill_compositions (
                     composition_id TEXT PRIMARY KEY,
                     composition_name TEXT NOT NULL,
@@ -466,8 +544,12 @@ def migrate_to_v8(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS skill_composition_members (
                     member_id TEXT PRIMARY KEY,
                     composition_id TEXT NOT NULL REFERENCES skill_compositions(composition_id),
@@ -476,7 +558,9 @@ def migrate_to_v8(engine):
                     execution_order INTEGER,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_scm_composition_tool "
@@ -537,11 +621,13 @@ def migrate_to_v9(engine):
                     continue
 
                 conn.execute(
-                    text("""
+                    text(
+                        """
                         UPDATE skill_compositions
                         SET updated_at = :updated_at
                         WHERE composition_id = :composition_id
-                        """),
+                        """
+                    ),
                     {
                         "composition_id": row["composition_id"],
                         "updated_at": normalized,
@@ -565,11 +651,15 @@ def migrate_to_v10(engine):
     """迁移到版本 10：sessions 表新增用户可编辑标题。"""
     with engine.connect() as conn:
         try:
-            table_exists = conn.execute(text("""
+            table_exists = conn.execute(
+                text(
+                    """
                     SELECT 1
                     FROM sqlite_master
                     WHERE type = 'table' AND name = 'sessions'
-                    """)).fetchone()
+                    """
+                )
+            ).fetchone()
             if table_exists is None:
                 conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 10})
                 conn.commit()
@@ -591,7 +681,9 @@ def migrate_to_v11(engine):
     with engine.connect() as conn:
         try:
             # 1. brain_segments 表
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_segments (
                     segment_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -608,10 +700,14 @@ def migrate_to_v11(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 2. brain_memory_entries 表
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_memory_entries (
                     entry_id TEXT PRIMARY KEY,
                     zone TEXT NOT NULL
@@ -635,10 +731,14 @@ def migrate_to_v11(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 3. brain_specialists 表
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_specialists (
                     specialist_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -652,10 +752,14 @@ def migrate_to_v11(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 4. brain_specialist_versions 表
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_specialist_versions (
                     version_id TEXT PRIMARY KEY,
                     specialist_id TEXT NOT NULL,
@@ -669,10 +773,14 @@ def migrate_to_v11(engine):
                     changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT uq_brain_specialist_version UNIQUE (specialist_id, version)
                 )
-            """))
+            """
+                )
+            )
 
             # 5. brain_recruitment_signals 表
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_recruitment_signals (
                     signal_id TEXT PRIMARY KEY,
                     task_pattern TEXT NOT NULL,
@@ -683,10 +791,14 @@ def migrate_to_v11(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 6. feedback_signals 表
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS feedback_signals (
                     signal_id TEXT PRIMARY KEY,
                     zone TEXT NOT NULL,
@@ -695,7 +807,9 @@ def migrate_to_v11(engine):
                     context_summary TEXT NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 索引
             for index_sql in [
@@ -770,13 +884,15 @@ def migrate_to_v11(engine):
 
                         content = "\n".join(parts)
                         conn.execute(
-                            text("""
+                            text(
+                                """
                             INSERT INTO brain_memory_entries
                                 (entry_id, zone, content, status, origin, reason, created_at, updated_at)
                             VALUES (:entry_id, 'persistent', :content, 'active', 'system_migration',
                                     'v11 migration: assistant_profile data backfill',
                                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """),
+                        """
+                            ),
                             {"entry_id": uuid4().hex[:50], "content": content},
                         )
             except Exception as backfill_err:
@@ -819,7 +935,8 @@ def _seed_v12_bootstrap(conn) -> None:
         "body_markdown": _load_v12_bootstrap_body(),
     }
     conn.execute(
-        text("""
+        text(
+            """
             INSERT INTO brain_skills (
                 skill_id, name, description, trigger_conditions, required_tools,
                 body_markdown, status, origin, chain_root_id, version,
@@ -833,11 +950,13 @@ def _seed_v12_bootstrap(conn) -> None:
             WHERE NOT EXISTS (
                 SELECT 1 FROM brain_skills WHERE skill_id = :skill_id
             )
-            """),
+            """
+        ),
         params,
     )
     conn.execute(
-        text("""
+        text(
+            """
             INSERT INTO brain_skill_equipment (
                 equipped_entity_type, equipped_entity_id, skill_id, status,
                 equipped_order, equipped_at, created_at
@@ -854,7 +973,8 @@ def _seed_v12_bootstrap(conn) -> None:
                   AND skill_id = :skill_id
                   AND status = 'active'
             )
-            """),
+            """
+        ),
         params,
     )
 
@@ -863,7 +983,9 @@ def migrate_to_v12(engine):
     """迁移到版本 12：方法论资产层三表 + bootstrap 内置方法论。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_skills (
                     skill_id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
@@ -889,8 +1011,12 @@ def migrate_to_v12(engine):
                     last_referenced_at DATETIME,
                     CHECK ((status = 'superseded') = (superseded_by IS NOT NULL))
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_skill_source_segments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     skill_id TEXT NOT NULL REFERENCES brain_skills(skill_id),
@@ -899,8 +1025,12 @@ def migrate_to_v12(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     CONSTRAINT uq_brain_skill_source_segment UNIQUE (skill_id, segment_id)
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_skill_equipment (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     equipped_entity_type TEXT NOT NULL
@@ -922,7 +1052,9 @@ def migrate_to_v12(engine):
                         (status = 'unequipped' AND unequipped_at IS NOT NULL AND unequipped_reason IS NOT NULL)
                     )
                 )
-            """))
+            """
+                )
+            )
 
             for index_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_brain_skills_status ON brain_skills(status)",
@@ -993,7 +1125,9 @@ def migrate_to_v13(engine):
     """迁移到版本 13：Agent 内建工具 raw output 引用元数据表。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS tool_output_references (
                     reference_id TEXT PRIMARY KEY,
                     kind TEXT NOT NULL,
@@ -1012,7 +1146,9 @@ def migrate_to_v13(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     expires_at DATETIME
                 )
-            """))
+            """
+                )
+            )
             for index_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_tool_output_reference_id ON tool_output_references(reference_id)",
                 "CREATE INDEX IF NOT EXISTS idx_tool_output_session ON tool_output_references(session_id)",
@@ -1034,7 +1170,9 @@ def migrate_to_v14(engine):
     """迁移到版本 14：Assistant 终止失败与手动重试状态。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_run_failures (
                     failure_id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -1057,20 +1195,34 @@ def migrate_to_v14(engine):
                     failed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     resolved_at DATETIME
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE UNIQUE INDEX IF NOT EXISTS uq_assistant_run_failure_current_session
                 ON assistant_run_failures(session_id)
                 WHERE status IN ('failed', 'retrying')
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE INDEX IF NOT EXISTS idx_assistant_run_failure_message
                 ON assistant_run_failures(session_id, message_sequence)
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE INDEX IF NOT EXISTS idx_assistant_run_failure_status
                 ON assistant_run_failures(status)
-            """))
+            """
+                )
+            )
             conn.execute(text("UPDATE schema_version SET version = :v"), {"v": 14})
             conn.commit()
             logger.info("数据库迁移到版本 14 完成：Assistant 失败重试状态表")
@@ -1084,7 +1236,9 @@ def migrate_to_v15(engine):
     """迁移到版本 15：Assistant task collaboration schema。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_tasks (
                     task_id TEXT PRIMARY KEY,
                     graph_id TEXT NOT NULL,
@@ -1120,8 +1274,12 @@ def migrate_to_v15(engine):
                         (status != 'suspended' AND suspend_reason IS NULL)
                     )
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_task_edges (
                     edge_id TEXT PRIMARY KEY,
                     graph_id TEXT NOT NULL,
@@ -1136,8 +1294,12 @@ def migrate_to_v15(engine):
                         CHECK (propagation IN ('blocking', 'cancel_cascade', 'message_only', 'none')),
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_task_questions (
                     question_id TEXT PRIMARY KEY,
                     graph_id TEXT NOT NULL,
@@ -1164,8 +1326,12 @@ def migrate_to_v15(engine):
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     resolved_at DATETIME
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_task_attempts (
                     attempt_id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
@@ -1189,8 +1355,12 @@ def migrate_to_v15(engine):
                     started_at DATETIME,
                     finished_at DATETIME
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_task_operations (
                     operation_id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
@@ -1208,8 +1378,12 @@ def migrate_to_v15(engine):
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     completed_at DATETIME
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_task_adjudications (
                     adjudication_id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
@@ -1227,8 +1401,12 @@ def migrate_to_v15(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     decided_at DATETIME
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_task_claims (
                     claim_id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
@@ -1243,8 +1421,12 @@ def migrate_to_v15(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_meeting_channels (
                     channel_id TEXT PRIMARY KEY,
                     graph_id TEXT NOT NULL,
@@ -1263,8 +1445,12 @@ def migrate_to_v15(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     closed_at DATETIME
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_meeting_messages (
                     message_id TEXT PRIMARY KEY,
                     channel_id TEXT NOT NULL,
@@ -1274,8 +1460,12 @@ def migrate_to_v15(engine):
                     sequence INTEGER NOT NULL,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS assistant_todo_items (
                     todo_id TEXT PRIMARY KEY,
                     task_id TEXT NOT NULL,
@@ -1290,7 +1480,9 @@ def migrate_to_v15(engine):
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     completed_at DATETIME
                 )
-            """))
+            """
+                )
+            )
 
             for index_sql in [
                 "CREATE INDEX IF NOT EXISTS idx_assistant_tasks_graph_status ON assistant_tasks(graph_id, status)",
@@ -1411,7 +1603,9 @@ def migrate_to_v18(engine):
     """迁移到版本 18：用户个人待办列表。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS user_todos (
                     todo_id TEXT PRIMARY KEY,
                     title TEXT NOT NULL,
@@ -1425,7 +1619,9 @@ def migrate_to_v18(engine):
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     completed_at DATETIME
                 )
-            """))
+            """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_user_todos_status_created "
@@ -1461,7 +1657,9 @@ def migrate_to_v19(engine):
         try:
             # 1. 扩展 brain_memory_entries zone CHECK 约束（需重建表）
             conn.execute(text("PRAGMA foreign_keys=OFF"))
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS brain_memory_entries_new (
                     entry_id TEXT PRIMARY KEY,
                     zone TEXT NOT NULL
@@ -1486,8 +1684,12 @@ def migrate_to_v19(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 INSERT OR IGNORE INTO brain_memory_entries_new
                 SELECT entry_id, zone, entry_type, content, status, origin, scope, reason,
                        source_segment_id, source_session_id, superseded_by,
@@ -1495,7 +1697,9 @@ def migrate_to_v19(engine):
                        verification_checkpoint, verification_status, verification_rationale,
                        created_at, updated_at
                 FROM brain_memory_entries
-            """))
+            """
+                )
+            )
             conn.execute(text("DROP TABLE IF EXISTS brain_memory_entries"))
             conn.execute(
                 text("ALTER TABLE brain_memory_entries_new RENAME TO brain_memory_entries")
@@ -1512,7 +1716,9 @@ def migrate_to_v19(engine):
                 conn.execute(text(index_sql))
 
             # 2. prompt_supplements
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS prompt_supplements (
                     supplement_id TEXT PRIMARY KEY,
                     target_section TEXT NOT NULL,
@@ -1529,10 +1735,14 @@ def migrate_to_v19(engine):
                     applied_at DATETIME,
                     retracted_at DATETIME
                 )
-            """))
+            """
+                )
+            )
 
             # 3. tool_gap_reports
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS tool_gap_reports (
                     report_id TEXT PRIMARY KEY,
                     gap_type TEXT NOT NULL
@@ -1548,10 +1758,14 @@ def migrate_to_v19(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 4. tool_fix_proposals
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS tool_fix_proposals (
                     proposal_id TEXT PRIMARY KEY,
                     tool_id TEXT NOT NULL,
@@ -1565,10 +1779,14 @@ def migrate_to_v19(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     applied_at DATETIME
                 )
-            """))
+            """
+                )
+            )
 
             # 5. self_improvement_metrics
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS self_improvement_metrics (
                     metric_id TEXT PRIMARY KEY,
                     metric_type TEXT NOT NULL,
@@ -1578,10 +1796,14 @@ def migrate_to_v19(engine):
                     measured_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     metadata TEXT
                 )
-            """))
+            """
+                )
+            )
 
             # 6. self_improvement_audit_log
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS self_improvement_audit_log (
                     audit_id TEXT PRIMARY KEY,
                     action_type TEXT NOT NULL,
@@ -1594,7 +1816,9 @@ def migrate_to_v19(engine):
                     triggered_by TEXT NOT NULL DEFAULT 'auto',
                     created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
 
             # 索引
             for index_sql in [
@@ -1627,7 +1851,9 @@ def migrate_to_v20(engine):
     """迁移到版本 20：执行复盘报告队列。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS execution_reviews (
                     id TEXT PRIMARY KEY,
                     turn_session_id TEXT NOT NULL,
@@ -1641,7 +1867,9 @@ def migrate_to_v20(engine):
                     created_at TEXT NOT NULL,
                     reviewed_at TEXT
                 )
-            """))
+            """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_execution_reviews_status_priority "
@@ -1661,7 +1889,9 @@ def migrate_to_v21(engine):
     """迁移到版本 21：改进提案表（improvement_proposals）。"""
     with engine.connect() as conn:
         try:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS improvement_proposals (
                     id TEXT PRIMARY KEY,
                     source_review_id TEXT NOT NULL,
@@ -1687,7 +1917,9 @@ def migrate_to_v21(engine):
                     CHECK(status IN ('pending_review','approved','in_progress','done','failed','rejected')),
                     CHECK(result_tests_passed IN (0, 1) OR result_tests_passed IS NULL)
                 )
-            """))
+            """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_improvement_proposals_status "
@@ -1758,7 +1990,9 @@ def migrate_to_v23(engine):
             conn.execute(
                 text("ALTER TABLE improvement_proposals " "RENAME TO improvement_proposals_v22")
             )
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE improvement_proposals (
                     id TEXT PRIMARY KEY,
                     source_review_id TEXT NOT NULL,
@@ -1784,8 +2018,12 @@ def migrate_to_v23(engine):
                     CHECK(status IN ('pending_review','approved','in_progress','done','failed','rejected')),
                     CHECK(result_tests_passed IN (0, 1) OR result_tests_passed IS NULL)
                 )
-            """))
-            conn.execute(text("""
+            """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                 INSERT INTO improvement_proposals (
                     id,
                     source_review_id,
@@ -1833,7 +2071,9 @@ def migrate_to_v23(engine):
                     decided_at,
                     completed_at
                 FROM improvement_proposals_v22
-            """))
+            """
+                )
+            )
             conn.execute(text("DROP TABLE improvement_proposals_v22"))
             conn.execute(
                 text(
@@ -1858,7 +2098,9 @@ def migrate_to_v24(engine):
     """迁移到版本 24：新增 mcp_servers 表。"""
     try:
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS mcp_servers (
                         server_id TEXT PRIMARY KEY,
                         name TEXT NOT NULL,
@@ -1882,7 +2124,9 @@ def migrate_to_v24(engine):
                         created_at DATETIME NOT NULL,
                         updated_at DATETIME NOT NULL
                     )
-                    """))
+                    """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_mcp_servers_name " "ON mcp_servers(name)"
@@ -1973,7 +2217,9 @@ def migrate_to_v26(engine):
     """迁移到版本 26：新增 external_skill_installs 表（029 技能商店）。"""
     try:
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS external_skill_installs (
                         install_id TEXT PRIMARY KEY,
                         skill_id TEXT NOT NULL,
@@ -1985,7 +2231,9 @@ def migrate_to_v26(engine):
                         installed_at TEXT NOT NULL,
                         uninstalled_at TEXT
                     )
-                    """))
+                    """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE UNIQUE INDEX IF NOT EXISTS uq_external_skill_installs_skill_id "
@@ -2021,7 +2269,9 @@ def migrate_to_v27(engine):
     """迁移到版本 27：新增外部 coding session 表（030）。"""
     try:
         with engine.begin() as conn:
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS external_coding_sessions (
                         coding_session_id TEXT PRIMARY KEY,
                         session_id TEXT,
@@ -2061,8 +2311,12 @@ def migrate_to_v27(engine):
                         updated_at TEXT NOT NULL,
                         completed_at TEXT
                     )
-                    """))
-            conn.execute(text("""
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS external_coding_attempts (
                         attempt_id TEXT PRIMARY KEY,
                         coding_session_id TEXT NOT NULL,
@@ -2080,8 +2334,12 @@ def migrate_to_v27(engine):
                         error_category TEXT,
                         error_message TEXT
                     )
-                    """))
-            conn.execute(text("""
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS external_coding_quota_observations (
                         observation_id TEXT PRIMARY KEY,
                         tool TEXT NOT NULL CHECK (tool IN ('claude_code', 'codex_cli')),
@@ -2092,8 +2350,12 @@ def migrate_to_v27(engine):
                         checked_at TEXT NOT NULL,
                         safe_detail TEXT
                     )
-                    """))
-            conn.execute(text("""
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS external_coding_merge_records (
                         merge_record_id TEXT PRIMARY KEY,
                         coding_session_id TEXT NOT NULL,
@@ -2116,8 +2378,12 @@ def migrate_to_v27(engine):
                         created_at TEXT NOT NULL,
                         merged_at TEXT
                     )
-                    """))
-            conn.execute(text("""
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS external_coding_rollback_decisions (
                         rollback_id TEXT PRIMARY KEY,
                         coding_session_id TEXT NOT NULL,
@@ -2132,7 +2398,9 @@ def migrate_to_v27(engine):
                         created_at TEXT NOT NULL,
                         applied_at TEXT
                     )
-                    """))
+                    """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS ix_external_coding_sessions_owner "
@@ -2278,7 +2546,9 @@ def migrate_to_v30(engine):
     try:
         with engine.begin() as conn:
             # 1) scheduled_tasks 主表（仿 v18/v21：CREATE TABLE IF NOT EXISTS + 内联 CHECK）
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS scheduled_tasks (
                     scheduled_task_id TEXT PRIMARY KEY,
                     source_type TEXT NOT NULL CHECK (source_type IN ('direct', 'todo')),
@@ -2298,7 +2568,9 @@ def migrate_to_v30(engine):
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
             # 调度扫描主索引（仅活跃未软删）+ 待办悬空反查索引
             conn.execute(
                 text(
@@ -2316,7 +2588,9 @@ def migrate_to_v30(engine):
             )
 
             # 2) scheduled_task_runs 执行账目（append-only）
-            conn.execute(text("""
+            conn.execute(
+                text(
+                    """
                 CREATE TABLE IF NOT EXISTS scheduled_task_runs (
                     run_id TEXT PRIMARY KEY,
                     scheduled_task_id TEXT NOT NULL,
@@ -2329,7 +2603,9 @@ def migrate_to_v30(engine):
                     failure_reason TEXT,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
-            """))
+            """
+                )
+            )
             conn.execute(
                 text(
                     "CREATE INDEX IF NOT EXISTS idx_runs_task_started "
@@ -2416,6 +2692,148 @@ def migrate_to_v31(engine):
     logger.info("迁移到版本 31 完成：scheduled run 终态事件按代次可恢复投递")
 
 
+def migrate_to_v32(engine):
+    """迁移到版本 32：scheduled task 常驻会话 + run 消息窗口归属。"""
+    try:
+        with engine.begin() as conn:
+            tasks_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'scheduled_tasks'"
+                )
+            ).fetchone()
+            if tasks_exists is not None:
+                _add_column_if_missing(conn, "scheduled_tasks", "session_id", "TEXT")
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_scheduled_tasks_session "
+                        "ON scheduled_tasks(session_id) WHERE session_id IS NOT NULL"
+                    )
+                )
+            else:
+                logger.info("迁移到版本 32：scheduled_tasks 表不存在，跳过常驻会话列")
+
+            runs_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'scheduled_task_runs'"
+                )
+            ).fetchone()
+            if runs_exists is not None:
+                _add_column_if_missing(
+                    conn,
+                    "scheduled_task_runs",
+                    "baseline_message_sequence",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )
+                _add_column_if_missing(
+                    conn,
+                    "scheduled_task_runs",
+                    "trigger_message_sequence",
+                    "INTEGER",
+                )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_runs_active_per_session "
+                        "ON scheduled_task_runs(session_id) "
+                        "WHERE status IN ('running', 'waiting_user')"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS uq_runs_session_trigger "
+                        "ON scheduled_task_runs(session_id, trigger_message_sequence) "
+                        "WHERE trigger_message_sequence IS NOT NULL"
+                    )
+                )
+            else:
+                logger.info("迁移到版本 32：scheduled_task_runs 表不存在，跳过消息窗口列")
+
+            sessions_exists = conn.execute(
+                text("SELECT 1 FROM sqlite_master " "WHERE type = 'table' AND name = 'sessions'")
+            ).fetchone()
+            if tasks_exists is not None and runs_exists is not None and sessions_exists is not None:
+                # 每个 task 只认最近一条关系完整的真实 scheduled session。非法/缺失历史
+                # 保持 NULL，交给下一次 launch 惰性创建，绝不伪造绑定。
+                conn.execute(
+                    text(
+                        "UPDATE scheduled_tasks AS task "
+                        "SET session_id = ("
+                        "  SELECT run.session_id "
+                        "  FROM scheduled_task_runs AS run "
+                        "  JOIN sessions AS sess ON sess.session_id = run.session_id "
+                        "  WHERE run.scheduled_task_id = task.scheduled_task_id "
+                        "    AND sess.agent_type = 'assistant' "
+                        "    AND sess.status IN "
+                        "      ('active', 'archived', 'completed', 'suspended', 'failed') "
+                        "    AND sess.source = 'scheduled' "
+                        "    AND sess.is_scheduled = 1 "
+                        "    AND sess.scheduled_task_id = task.scheduled_task_id "
+                        "  ORDER BY run.started_at DESC, run.run_id DESC "
+                        "  LIMIT 1"
+                        ") "
+                        "WHERE task.session_id IS NULL"
+                    )
+                )
+            conn.execute(text("UPDATE schema_version SET version = 32"))
+    except Exception as e:
+        logger.error(f"迁移到版本 32 失败: {e}")
+        raise
+    logger.info("迁移到版本 32 完成：scheduled task 常驻会话与 run 消息窗口")
+
+
+def downgrade_v32(engine):
+    """回退版本 32（仅测试调用，不注册）。"""
+    try:
+        with engine.begin() as conn:
+            runs_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'scheduled_task_runs'"
+                )
+            ).fetchone()
+            if runs_exists is not None:
+                conn.execute(text("DROP INDEX IF EXISTS uq_runs_session_trigger"))
+                conn.execute(text("DROP INDEX IF EXISTS uq_runs_active_per_session"))
+                if _column_exists(
+                    conn,
+                    "scheduled_task_runs",
+                    "trigger_message_sequence",
+                ):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE scheduled_task_runs "
+                            "DROP COLUMN trigger_message_sequence"
+                        )
+                    )
+                if _column_exists(
+                    conn,
+                    "scheduled_task_runs",
+                    "baseline_message_sequence",
+                ):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE scheduled_task_runs "
+                            "DROP COLUMN baseline_message_sequence"
+                        )
+                    )
+            tasks_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'scheduled_tasks'"
+                )
+            ).fetchone()
+            if tasks_exists is not None:
+                conn.execute(text("DROP INDEX IF EXISTS uq_scheduled_tasks_session"))
+                if _column_exists(conn, "scheduled_tasks", "session_id"):
+                    conn.execute(text("ALTER TABLE scheduled_tasks DROP COLUMN session_id"))
+            conn.execute(text("UPDATE schema_version SET version = 31"))
+    except Exception as e:
+        logger.error(f"回退版本 32 失败: {e}")
+        raise
+    logger.info("回退版本 32 完成：移除 scheduled session reuse 字段")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -2447,6 +2865,7 @@ _MIGRATIONS = [
     (29, migrate_to_v29),
     (30, migrate_to_v30),
     (31, migrate_to_v31),
+    (32, migrate_to_v32),
 ]
 
 

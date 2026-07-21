@@ -1181,6 +1181,21 @@ def _unattended_auto_approve_for(session_id: str | None) -> str:
         # source=scheduled 但 scheduled_task_id 缺失（数据异常）→ 按未授权 D7 立即拒
         return "reject_immediately"
     try:
+        from src.data.repos.scheduled_task_repository import (
+            ScheduledTaskRepository,
+        )
+
+        with ScheduledTaskRepository() as task_repo:
+            scheduled_task = task_repo.get(str(task_id))
+        if (
+            scheduled_task is None
+            or bool(scheduled_task.is_deleted)
+            or (scheduled_task.session_id or "").strip() != sid
+        ):
+            # 034：per-task 授权只随 current-session 绑定生效。显式重开后的旧
+            # scheduled session 即使仍保留相同 task_id，也不得继承无人值守权限。
+            return "reject_immediately"
+
         from src.business.scheduling.unattended_confirmation_manager import (
             get_unattended_confirmation_manager,
         )

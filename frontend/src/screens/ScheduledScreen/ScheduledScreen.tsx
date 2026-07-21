@@ -43,7 +43,13 @@ const RUN_STATUS_LABEL: Record<ScheduledRunStatus, string> = {
 };
 
 // 行内操作在组件本地按 `${taskId}:${action}` 维护 loading/disabled 状态。
-type InlineAction = "pause" | "resume" | "fire" | "delete" | "set-unattended";
+type InlineAction =
+  | "pause"
+  | "resume"
+  | "fire"
+  | "delete"
+  | "set-unattended"
+  | "reset-session";
 
 function runStatusTone(
   status: ScheduledRunStatus,
@@ -100,6 +106,7 @@ export function ScheduledScreen(): JSX.Element {
   const takeover = useScheduledStore((s) => s.takeover);
   const patchTask = useScheduledStore((s) => s.patchTask);
   const fireNow = useScheduledStore((s) => s.fireNow);
+  const resetSession = useScheduledStore((s) => s.resetSession);
   const remove = useScheduledStore((s) => s.remove);
 
   const setRoute = useShellStore((s) => s.setRoute);
@@ -202,6 +209,21 @@ export function ScheduledScreen(): JSX.Element {
       }
     } finally {
       setActionPending(task, "delete", false);
+    }
+  };
+
+  const runResetSession = async (task: ScheduledTaskItem) => {
+    if (isActionPending(task, "reset-session")) return;
+    setActionPending(task, "reset-session", true);
+    try {
+      const reset = await resetSession(task.scheduledTaskId);
+      if (reset) {
+        notifySuccess(`已为「${task.title}」重开一轮，下一次会使用新会话。`);
+      } else {
+        notifyWarning("当前会话可能仍在执行或处理回流，稍后再试一下。");
+      }
+    } finally {
+      setActionPending(task, "reset-session", false);
     }
   };
 
@@ -340,7 +362,9 @@ export function ScheduledScreen(): JSX.Element {
               isActionPending(task, "pause") ||
               isActionPending(task, "resume") ||
               isActionPending(task, "fire") ||
-              isActionPending(task, "delete");
+              isActionPending(task, "delete") ||
+              isActionPending(task, "set-unattended") ||
+              isActionPending(task, "reset-session");
             return (
               <li
                 className="scheduled-task-row"
@@ -481,6 +505,24 @@ export function ScheduledScreen(): JSX.Element {
                             </button>
                           </>
                         )}
+                      </div>
+                      <div className="scheduled-detail-row">
+                        <span className="scheduled-detail-label">
+                          会话上下文
+                        </span>
+                        <span className="scheduled-detail-value scheduled-detail-muted">
+                          每次执行会继续使用同一会话与历史上下文
+                        </span>
+                        <button
+                          type="button"
+                          className="scheduled-detail-toggle scheduled-detail-reset"
+                          disabled={anyActionOnRow}
+                          onClick={() => void runResetSession(task)}
+                          aria-label="重开一轮"
+                          title="保留历史记录，下一次触发会创建新会话"
+                        >
+                          重开一轮
+                        </button>
                       </div>
                     </div>
                     <div className="scheduled-runs">

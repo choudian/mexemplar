@@ -281,6 +281,67 @@ class ScheduledTaskRepository(BaseRepository):
             return None
         return self._refetch(scheduled_task_id)
 
+    def cas_bind_session(
+        self,
+        scheduled_task_id: str,
+        session_id: str,
+        *,
+        expected_session_id: str | None,
+    ) -> ScheduledTask | None:
+        """把 current session 从期望值原子切到 ``session_id``。"""
+        normalized_session_id = (session_id or "").strip()
+        if not normalized_session_id:
+            raise ValueError("session_id must not be empty")
+        query = self.session.query(ScheduledTask).filter(
+            ScheduledTask.scheduled_task_id == scheduled_task_id,
+            ScheduledTask.is_deleted == 0,
+        )
+        if expected_session_id is None:
+            query = query.filter(ScheduledTask.session_id.is_(None))
+        else:
+            query = query.filter(ScheduledTask.session_id == str(expected_session_id).strip())
+        updated = query.update(
+            {
+                "session_id": normalized_session_id,
+                "updated_at": utc_now_naive(),
+            },
+            synchronize_session=False,
+        )
+        self._commit()
+        if updated == 0:
+            return None
+        return self._refetch(scheduled_task_id)
+
+    def cas_clear_session(
+        self,
+        scheduled_task_id: str,
+        *,
+        expected_session_id: str,
+    ) -> ScheduledTask | None:
+        """仅当仍绑定给定 session 时清空 current session。"""
+        normalized_session_id = (expected_session_id or "").strip()
+        if not normalized_session_id:
+            raise ValueError("expected_session_id must not be empty")
+        updated = (
+            self.session.query(ScheduledTask)
+            .filter(
+                ScheduledTask.scheduled_task_id == scheduled_task_id,
+                ScheduledTask.session_id == normalized_session_id,
+                ScheduledTask.is_deleted == 0,
+            )
+            .update(
+                {
+                    "session_id": None,
+                    "updated_at": utc_now_naive(),
+                },
+                synchronize_session=False,
+            )
+        )
+        self._commit()
+        if updated == 0:
+            return None
+        return self._refetch(scheduled_task_id)
+
     def soft_delete(self, scheduled_task_id: str) -> bool:
         """软删（is_deleted=1，历史 runs 保留）。"""
         updated = (

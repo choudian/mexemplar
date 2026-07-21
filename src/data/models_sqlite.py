@@ -702,6 +702,12 @@ class ScheduledTask(Base):
             "source_ref",
             sqlite_where=text("source_type = 'todo' AND is_deleted = 0"),
         ),
+        Index(
+            "uq_scheduled_tasks_session",
+            "session_id",
+            unique=True,
+            sqlite_where=text("session_id IS NOT NULL"),
+        ),
     )
 
     scheduled_task_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -716,6 +722,8 @@ class ScheduledTask(Base):
     executor_hint: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     next_fire_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # v32（034）：该任务当前复用的常驻 scheduled assistant session。
+    session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
@@ -728,7 +736,7 @@ class ScheduledTask(Base):
 
 
 class ScheduledTaskRun(Base):
-    """定时任务执行账目（033 调度中心）——一次触发产生的一条 append-only 执行记录。
+    """定时任务执行账目（033/034）——一次触发产生的一条 append-only 执行记录。
 
     关联的 scheduled 主助理会话复用既有 sessions 表（只加 ``source`` 列），会话细节
     不重复存储。终态 succeeded/failed/skipped 不可逆；waiting_user ⇄ running 可逆。
@@ -748,6 +756,19 @@ class ScheduledTaskRun(Base):
             unique=True,
             sqlite_where=text("status IN ('running', 'waiting_user')"),
         ),
+        Index(
+            "uq_runs_active_per_session",
+            "session_id",
+            unique=True,
+            sqlite_where=text("status IN ('running', 'waiting_user')"),
+        ),
+        Index(
+            "uq_runs_session_trigger",
+            "session_id",
+            "trigger_message_sequence",
+            unique=True,
+            sqlite_where=text("trigger_message_sequence IS NOT NULL"),
+        ),
     )
 
     run_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -758,6 +779,17 @@ class ScheduledTaskRun(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
     summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     failure_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # v32（034）：消息水位线只用于本 run 的持久消息/图查询窗口。
+    baseline_message_sequence: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+    )
+    # 预约时确定的首条 scheduled user 消息序号；历史 v31 run 无法可靠回填，保持 NULL。
+    trigger_message_sequence: Mapped[Optional[int]] = mapped_column(
+        Integer,
+        nullable=True,
+    )
     # v31：终态 UI 通知投递账本。终态先提交、事件成功后再确认；NULL 会由 worker 重试。
     terminal_event_delivered_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime,
@@ -1217,25 +1249,29 @@ class BrainSkillEquipment(Base):
 event.listen(
     BrainSkill.__table__,
     "after_create",
-    DDL("""
+    DDL(
+        """
         CREATE TRIGGER IF NOT EXISTS trg_brain_skills_no_delete
         BEFORE DELETE ON brain_skills
         BEGIN
             SELECT RAISE(ABORT, 'brain_skills_no_physical_delete');
         END
-        """),
+        """
+    ),
 )
 
 event.listen(
     BrainSkillEquipment.__table__,
     "after_create",
-    DDL("""
+    DDL(
+        """
         CREATE TRIGGER IF NOT EXISTS trg_brain_skill_equipment_no_delete
         BEFORE DELETE ON brain_skill_equipment
         BEGIN
             SELECT RAISE(ABORT, 'brain_skill_equipment_no_physical_delete');
         END
-        """),
+        """
+    ),
 )
 
 

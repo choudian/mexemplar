@@ -31,6 +31,7 @@ def seed_message(
     is_archived: bool = False,
     tool_calls: str | None = None,
     tool_call_id: str | None = None,
+    tool_name: str | None = None,
 ) -> Message:
     msg = Message(
         message_id=f"msg_{uuid.uuid4().hex[:12]}",
@@ -42,7 +43,7 @@ def seed_message(
         is_archived=is_archived,
         tool_calls=tool_calls,
         tool_call_id=tool_call_id,
-        tool_name=None,
+        tool_name=tool_name,
         compressed_range=None,
         created_at=datetime.now(timezone.utc),
     )

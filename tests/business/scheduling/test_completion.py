@@ -157,7 +157,29 @@ class _MessageRepoStub:
     def get_all(self, _session_id):
         return self._messages
 
-    def get_latest_assistant_text(self, _session_id, max_length=500):
+    def list_tool_messages_after(
+        self,
+        _session_id,
+        *,
+        after_sequence,
+        tool_names,
+    ):
+        del after_sequence
+        return [
+            message
+            for message in self._messages
+            if getattr(message, "role", None) == "tool"
+            and getattr(message, "tool_name", None) in tool_names
+        ]
+
+    def get_latest_assistant_text(
+        self,
+        _session_id,
+        max_length=500,
+        *,
+        after_sequence=None,
+    ):
+        del after_sequence
         return self._summary[:max_length]
 
 
@@ -171,15 +193,6 @@ class _MessageRepoStub:
                 "session_id": "ast_event_failure",
                 "all_terminal": True,
                 "all_completed": True,
-            },
-        ),
-        (
-            "assistant_subagent_finished",
-            {
-                "session_id": "ast_event_failure",
-                "subagent_id": "sub_event_failure",
-                "status": "completed",
-                "last_output": "done",
             },
         ),
         (
@@ -209,10 +222,16 @@ def test_event_receivers_isolate_completion_evaluation_failures(
     monitor = RunCompletionMonitor()
     monkeypatch.setattr(monitor, "retry_pending_terminal_events", lambda: 0)
 
-    def _raise(_session_id):
+    monkeypatch.setattr(
+        monitor,
+        "resolve_run_id_for_graph",
+        lambda **_kwargs: "schr_event_failure",
+    )
+
+    def _raise(_run_id):
         raise RuntimeError("completion store unavailable")
 
-    monkeypatch.setattr(monitor, "evaluate_session", _raise)
+    monkeypatch.setattr(monitor, "evaluate_run", _raise)
     monitor.connect()
     try:
         with caplog.at_level(
@@ -224,7 +243,7 @@ def test_event_receivers_isolate_completion_evaluation_failures(
         monitor.disconnect()
 
     assert event_name in caplog.text
-    assert "ast_event_failure" in caplog.text
+    assert "schr_event_failure" in caplog.text
     assert "completion store unavailable" in caplog.text
 
 
@@ -420,6 +439,289 @@ def test_no_graph_with_successful_sync_delegation_is_succeeded():
         assert result["summary"] == "报告已经写入知识库。"
 
 
+def test_new_run_cannot_reuse_previous_run_delegation_evidence() -> None:
+    from src.business.agents.config import AgentType
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.models_sqlite import Message, Session
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.data.repos.session_repository import SessionRepository
+
+    SessionRepository().create(
+        Session(
+            session_id="ast_reused_window",
+            workflow_id=None,
+            agent_type=AgentType.ASSISTANT,
+            status="active",
+        )
+    )
+    with MessageRepository() as messages:
+        messages.create(
+            Message(
+                message_id="msg_old_trigger",
+                session_id="ast_reused_window",
+                sequence=1,
+                role="user",
+                content="old trigger",
+            )
+        )
+        messages.create(
+            Message(
+                message_id="msg_old_delegate",
+                session_id="ast_reused_window",
+                sequence=2,
+                role="tool",
+                tool_name="delegate_to_subagent",
+                content='{"success": true}',
+            )
+        )
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        previous = runs.create(
+            scheduled_task_id="sch_reused_window",
+            session_id="ast_reused_window",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        runs.cas_transition(previous.run_id, from_status="running", to_status="succeeded")
+        current = runs.create(
+            scheduled_task_id="sch_reused_window",
+            session_id="ast_reused_window",
+            baseline_message_sequence=2,
+            trigger_message_sequence=3,
+        )
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            get_graph_snapshot=lambda _sid: None,
+            run_repo=runs,
+            message_repo=messages,
+        )
+
+        result = monitor.evaluate_run(current.run_id)
+
+        assert result is not None
+        assert result["status"] == "failed"
+        assert runs.get_fresh(current.run_id).status == "failed"
+
+
+def test_run_summary_uses_only_assistant_text_after_its_baseline() -> None:
+    from src.business.agents.config import AgentType
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.models_sqlite import Message, Session
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.data.repos.session_repository import SessionRepository
+
+    SessionRepository().create(
+        Session(
+            session_id="ast_summary_window",
+            workflow_id=None,
+            agent_type=AgentType.ASSISTANT,
+            status="active",
+        )
+    )
+    with MessageRepository() as messages:
+        for message in (
+            Message(
+                message_id="msg_old_summary",
+                session_id="ast_summary_window",
+                sequence=2,
+                role="assistant",
+                content="old summary",
+            ),
+            Message(
+                message_id="msg_current_delegate",
+                session_id="ast_summary_window",
+                sequence=4,
+                role="tool",
+                tool_name="delegate_to_subagent",
+                content='{"success": true}',
+            ),
+            Message(
+                message_id="msg_current_summary",
+                session_id="ast_summary_window",
+                sequence=5,
+                role="assistant",
+                content="current summary",
+            ),
+        ):
+            messages.create(message)
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        run = runs.create(
+            scheduled_task_id="sch_summary_window",
+            session_id="ast_summary_window",
+            baseline_message_sequence=2,
+            trigger_message_sequence=3,
+        )
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            get_graph_snapshot=lambda _sid: None,
+            run_repo=runs,
+            message_repo=messages,
+        )
+
+        result = monitor.evaluate_run(run.run_id)
+
+    assert result is not None
+    assert result["status"] == "succeeded"
+    assert result["summary"] == "current summary"
+
+
+def test_previous_run_graph_is_not_used_for_current_run() -> None:
+    from src.business.agents.config import AgentType
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.models_sqlite import Message, Session
+    from src.data.repos.assistant_task_repository import AssistantTaskRepository
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.data.repos.session_repository import SessionRepository
+
+    SessionRepository().create(
+        Session(
+            session_id="ast_graph_window",
+            workflow_id=None,
+            agent_type=AgentType.ASSISTANT,
+            status="active",
+        )
+    )
+    with AssistantTaskRepository() as tasks:
+        tasks.create_task(
+            graph_id="tg_previous",
+            session_id="ast_graph_window",
+            task_id="tsk_previous_root",
+            title="old graph",
+            description="old graph",
+            user_message_sequence=1,
+        )
+    with MessageRepository() as messages:
+        messages.create(
+            Message(
+                message_id="msg_graph_window_delegate",
+                session_id="ast_graph_window",
+                sequence=4,
+                role="tool",
+                tool_name="delegate_to_subagent",
+                content='{"success": true}',
+            )
+        )
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        run = runs.create(
+            scheduled_task_id="sch_graph_window",
+            session_id="ast_graph_window",
+            baseline_message_sequence=2,
+            trigger_message_sequence=3,
+        )
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            run_repo=runs,
+            message_repo=messages,
+        )
+
+        result = monitor.evaluate_run(run.run_id)
+
+    assert result is not None
+    assert result["status"] == "succeeded"
+
+
+def test_unscoped_graph_created_during_run_defers_completion_fail_closed() -> None:
+    from src.business.agents.config import AgentType
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.models_sqlite import Message, Session
+    from src.data.repos.assistant_task_repository import AssistantTaskRepository
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+    from src.data.repos.session_repository import SessionRepository
+
+    SessionRepository().create(
+        Session(
+            session_id="ast_unscoped_graph",
+            workflow_id=None,
+            agent_type=AgentType.ASSISTANT,
+            status="active",
+        )
+    )
+    with ScheduledTaskRunRepository() as runs:
+        run = runs.create(
+            scheduled_task_id="sch_unscoped_graph",
+            session_id="ast_unscoped_graph",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+    with AssistantTaskRepository() as tasks:
+        tasks.create_task(
+            graph_id="tg_unscoped",
+            session_id="ast_unscoped_graph",
+            task_id="tsk_unscoped_root",
+            title="unknown graph",
+            description="unknown graph",
+            user_message_sequence=None,
+        )
+    with MessageRepository() as messages:
+        messages.create(
+            Message(
+                message_id="msg_unscoped_delegate",
+                session_id="ast_unscoped_graph",
+                sequence=2,
+                role="tool",
+                tool_name="delegate_to_subagent",
+                content='{"success": true}',
+            )
+        )
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            run_repo=runs,
+            message_repo=messages,
+        )
+
+        result = monitor.evaluate_run(run.run_id)
+
+        assert result is None
+        assert runs.get_fresh(run.run_id).status == "running"
+
+
+def test_graph_event_maps_to_run_by_graph_message_sequence() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.assistant_task_repository import AssistantTaskRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as runs:
+        previous = runs.create(
+            scheduled_task_id="sch_graph_owner",
+            session_id="ast_graph_owner",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        runs.cas_transition(previous.run_id, from_status="running", to_status="succeeded")
+        current = runs.create(
+            scheduled_task_id="sch_graph_owner",
+            session_id="ast_graph_owner",
+            baseline_message_sequence=5,
+            trigger_message_sequence=6,
+        )
+    with AssistantTaskRepository() as tasks:
+        tasks.create_task(
+            graph_id="tg_current_owner",
+            session_id="ast_graph_owner",
+            task_id="tsk_current_owner_root",
+            title="current",
+            description="current",
+            user_message_sequence=6,
+        )
+    monitor = RunCompletionMonitor()
+
+    assert (
+        monitor.resolve_run_id_for_graph(
+            session_id="ast_graph_owner",
+            graph_id="tg_current_owner",
+        )
+        == current.run_id
+    )
+
+
 def test_evaluate_reads_graph_snapshot_only_once() -> None:
     """同一次静默落账必须复用图状态，不能在判静默后再次读取权威快照。"""
     from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
@@ -551,7 +853,7 @@ def test_waiting_user_takeover_resets_delivery_ack_for_next_terminal_event(
         run = _seed_run(rr, session_id="ast_delivery_cycle")
         monitor = RunCompletionMonitor(run_repo=rr)
 
-        monitor.mark_waiting_user("ast_delivery_cycle")
+        monitor.mark_waiting_user(run.run_id)
         waiting = rr.get_fresh(run.run_id)
         assert waiting.terminal_event_delivered_at is not None
         assert waiting.terminal_event_version == 1
@@ -686,6 +988,35 @@ def test_evaluate_fails_closed_when_pending_reentry_callback_is_missing():
         assert rr.get_by_session("ast_pending_unknown").status == "running"
 
 
+def test_evaluate_checks_pending_reentry_for_the_current_graph_only() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    pending_queries: list[tuple[str, str | None]] = []
+    snapshot = SimpleNamespace(
+        graph_id="tg_current_pending_scope",
+        tasks=[_root(), _executor("t1", "completed")],
+    )
+
+    def has_pending(session_id: str, graph_id: str | None = None) -> bool:
+        pending_queries.append((session_id, graph_id))
+        return graph_id == "tg_old_pending_scope"
+
+    with ScheduledTaskRunRepository() as rr:
+        run = _seed_run(rr, session_id="ast_pending_scope")
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=has_pending,
+            get_graph_snapshot=lambda _sid: snapshot,
+            run_repo=rr,
+        )
+
+        result = monitor.evaluate_run(run.run_id)
+
+        assert result is not None and result["status"] == "succeeded"
+        assert pending_queries == [("ast_pending_scope", "tg_current_pending_scope")]
+
+
 def test_evaluate_fails_closed_when_graph_snapshot_query_raises():
     """图查询异常与权威“无图”不同：未知时不得误报简单会话成功。"""
     from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
@@ -722,17 +1053,45 @@ def test_mark_waiting_user_is_atomic_and_emits_once(monkeypatch):
     )
 
     with ScheduledTaskRunRepository() as rr:
-        _seed_run(rr, session_id="ast_needs_user")
+        run = _seed_run(rr, session_id="ast_needs_user")
         monitor = RunCompletionMonitor(run_repo=rr)
 
-        result = monitor.mark_waiting_user("ast_needs_user")
-        duplicate = monitor.mark_waiting_user("ast_needs_user")
+        result = monitor.mark_waiting_user(run.run_id)
+        duplicate = monitor.mark_waiting_user(run.run_id)
 
         assert result is not None
         assert result["status"] == "waiting_user"
         assert duplicate is None
         assert rr.get_by_session("ast_needs_user").status == "waiting_user"
         assert [item["status"] for item in emitted] == ["waiting_user"]
+
+
+def test_mark_waiting_user_targets_run_id_not_latest_run_by_session() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as runs:
+        previous = runs.create(
+            scheduled_task_id="sch_run_owned",
+            session_id="ast_run_owned",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        runs.cas_transition(previous.run_id, from_status="running", to_status="succeeded")
+        current = runs.create(
+            scheduled_task_id="sch_run_owned",
+            session_id="ast_run_owned",
+            baseline_message_sequence=2,
+            trigger_message_sequence=3,
+        )
+        monitor = RunCompletionMonitor(run_repo=runs)
+
+        result = monitor.mark_waiting_user(current.run_id)
+
+        assert result is not None
+        assert result["runId"] == current.run_id
+        assert runs.get_fresh(current.run_id).status == "waiting_user"
+        assert runs.get_fresh(previous.run_id).status == "succeeded"
 
 
 def test_mark_failed_can_finish_waiting_user_run():
@@ -744,10 +1103,129 @@ def test_mark_failed_can_finish_waiting_user_run():
         rr.cas_transition(run.run_id, from_status="running", to_status="waiting_user")
         monitor = RunCompletionMonitor(run_repo=rr)
 
-        result = monitor.mark_failed("ast_waiting_then_stopped")
+        result = monitor.mark_failed(run.run_id)
 
         assert result is not None
         assert result["status"] == "failed"
         row = rr.get_by_session("ast_waiting_then_stopped")
         assert row.status == "failed"
         assert row.finished_at is not None
+
+
+def test_mark_failed_releases_trigger_slot_when_user_message_never_persisted() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        run = runs.create(
+            scheduled_task_id="sch_pre_message_failure",
+            session_id="ast_pre_message_failure",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        monitor = RunCompletionMonitor(run_repo=runs, message_repo=messages)
+
+        monitor.mark_failed(run.run_id)
+        failed = runs.get_fresh(run.run_id)
+        retry = runs.create(
+            scheduled_task_id="sch_pre_message_failure",
+            session_id="ast_pre_message_failure",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+
+        assert failed.trigger_message_sequence is None
+        assert retry.status == "running"
+
+
+def test_quiescent_failure_releases_trigger_slot_when_user_message_never_persisted() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        run = runs.create(
+            scheduled_task_id="sch_quiescent_pre_message_failure",
+            session_id="ast_quiescent_pre_message_failure",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        monitor = RunCompletionMonitor(
+            has_active_worker=lambda _sid: False,
+            has_pending_reentry=lambda _sid: False,
+            get_graph_snapshot=lambda _sid: None,
+            run_repo=runs,
+            message_repo=messages,
+        )
+
+        result = monitor.evaluate_run(run.run_id)
+        failed = runs.get_fresh(run.run_id)
+        retry = runs.create(
+            scheduled_task_id="sch_quiescent_pre_message_failure",
+            session_id="ast_quiescent_pre_message_failure",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+
+        assert result is not None and result["status"] == "failed"
+        assert failed.trigger_message_sequence is None
+        assert retry.status == "running"
+
+
+def test_mark_failed_keeps_missing_trigger_slot_when_a_graph_claims_it() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.repos.assistant_task_repository import AssistantTaskRepository
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        run = runs.create(
+            scheduled_task_id="sch_missing_message_with_graph",
+            session_id="ast_missing_message_with_graph",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_missing_message_with_graph",
+                session_id=run.session_id,
+                task_id="tsk_missing_message_with_graph_root",
+                title="graph root",
+                description="graph root",
+                user_message_sequence=1,
+            )
+        monitor = RunCompletionMonitor(run_repo=runs, message_repo=messages)
+
+        monitor.mark_failed(run.run_id)
+
+        assert runs.get_fresh(run.run_id).trigger_message_sequence == 1
+
+
+def test_mark_failed_keeps_trigger_slot_when_user_message_exists() -> None:
+    from src.business.scheduling.run_completion_monitor import RunCompletionMonitor
+    from src.data.models_sqlite import Message
+    from src.data.repos.message_repository import MessageRepository
+    from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
+
+    with ScheduledTaskRunRepository() as runs, MessageRepository() as messages:
+        run = runs.create(
+            scheduled_task_id="sch_post_message_failure",
+            session_id="ast_post_message_failure",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        messages.create(
+            Message(
+                message_id="msg_post_message_failure",
+                session_id=run.session_id,
+                sequence=1,
+                role="user",
+                content="scheduled trigger",
+            )
+        )
+        monitor = RunCompletionMonitor(run_repo=runs, message_repo=messages)
+
+        monitor.mark_failed(run.run_id)
+
+        assert runs.get_fresh(run.run_id).trigger_message_sequence == 1

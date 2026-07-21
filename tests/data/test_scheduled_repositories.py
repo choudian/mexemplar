@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+from src.data.models_sqlite import Session
+from src.data.repos.session_repository import SessionRepository
 from src.data.repos.scheduled_task_repository import ScheduledTaskRepository
 from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
 from src.utils.timezone import utc_now_naive
@@ -110,6 +112,35 @@ def test_task_unattended_auto_approve_toggle_and_list():
         assert r.list_unattended_auto_approve_task_ids() == []
 
 
+def test_task_current_session_binding_is_compare_and_swap():
+    with ScheduledTaskRepository() as r:
+        task = _make_task(r)
+
+        bound = r.cas_bind_session(
+            task.scheduled_task_id,
+            "ast_current",
+            expected_session_id=None,
+        )
+        assert bound is not None and bound.session_id == "ast_current"
+        lost_race = r.cas_bind_session(
+            task.scheduled_task_id,
+            "ast_other",
+            expected_session_id=None,
+        )
+        wrong_clear = r.cas_clear_session(
+            task.scheduled_task_id,
+            expected_session_id="ast_other",
+        )
+        cleared = r.cas_clear_session(
+            task.scheduled_task_id,
+            expected_session_id="ast_current",
+        )
+
+        assert lost_race is None
+        assert wrong_clear is None
+        assert cleared is not None and cleared.session_id is None
+
+
 def test_task_list_due_and_soonest():
     now = utc_now_naive()
     with ScheduledTaskRepository() as r:
@@ -135,6 +166,37 @@ def test_run_create_and_cas_to_succeeded_sets_finished_at():
         assert s.status == "succeeded"
         assert s.finished_at is not None
         assert s.summary == "done"
+
+
+def test_active_run_persists_message_window_and_is_found_without_latest_heuristic():
+    with ScheduledTaskRunRepository() as rr:
+        run = rr.create(
+            scheduled_task_id="sch_window",
+            session_id="ast_window",
+            baseline_message_sequence=7,
+            trigger_message_sequence=8,
+        )
+
+        active = rr.get_active_by_session("ast_window")
+
+        assert active is not None
+        assert active.run_id == run.run_id
+        assert active.baseline_message_sequence == 7
+        assert active.trigger_message_sequence == 8
+
+
+def test_active_run_trigger_must_be_the_immediate_next_message_sequence() -> None:
+    with ScheduledTaskRunRepository() as rr:
+        with pytest.raises(
+            ValueError,
+            match=r"trigger_message_sequence must equal baseline_message_sequence \+ 1",
+        ):
+            rr.create(
+                scheduled_task_id="sch_invalid_window",
+                session_id="ast_invalid_window",
+                baseline_message_sequence=7,
+                trigger_message_sequence=9,
+            )
 
 
 def test_run_terminal_non_reversible():
@@ -205,6 +267,99 @@ def test_try_create_active_uses_unique_slot_and_releases_after_terminal() -> Non
             session_id="ast_atomic_3",
         )
         assert replacement is not None
+
+
+def test_new_scheduled_session_binding_and_active_run_commit_atomically() -> None:
+    with ScheduledTaskRepository() as tasks:
+        task = _make_task(tasks)
+        task_id = task.scheduled_task_id
+    session = Session(
+        session_id="ast_bound_atomic",
+        workflow_id=None,
+        agent_type="assistant",
+        status="active",
+        source="scheduled",
+        scheduled_task_id=task_id,
+        is_scheduled=1,
+    )
+
+    with ScheduledTaskRunRepository() as runs:
+        run = runs.try_create_active_with_new_bound_session(
+            scheduled_task_id=task_id,
+            session=session,
+            expected_session_id=None,
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+
+    assert run is not None
+    with ScheduledTaskRepository() as tasks:
+        assert tasks.get(task_id).session_id == "ast_bound_atomic"
+    with SessionRepository() as sessions:
+        assert sessions.get_by_id("ast_bound_atomic") is not None
+    with ScheduledTaskRunRepository() as runs:
+        persisted = runs.get(run.run_id)
+        assert persisted is not None
+        assert persisted.session_id == "ast_bound_atomic"
+        assert persisted.trigger_message_sequence == 1
+
+
+def test_bound_scheduled_session_can_start_a_later_run_without_new_session() -> None:
+    with ScheduledTaskRepository() as tasks:
+        task = _make_task(tasks)
+        task_id = task.scheduled_task_id
+    session = Session(
+        session_id="ast_reused",
+        workflow_id=None,
+        agent_type="assistant",
+        status="active",
+        source="scheduled",
+        scheduled_task_id=task_id,
+        is_scheduled=1,
+    )
+    with ScheduledTaskRunRepository() as runs:
+        first = runs.try_create_active_with_new_bound_session(
+            scheduled_task_id=task_id,
+            session=session,
+            expected_session_id=None,
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        assert first is not None
+        runs.cas_transition(first.run_id, from_status="running", to_status="succeeded")
+        second = runs.try_create_active_for_bound_session(
+            scheduled_task_id=task_id,
+            session_id="ast_reused",
+            baseline_message_sequence=9,
+            trigger_message_sequence=10,
+        )
+
+    assert second is not None
+    assert second.session_id == "ast_reused"
+    assert second.baseline_message_sequence == 9
+    with SessionRepository() as sessions:
+        assert len(sessions.get_by_ids(["ast_reused"])) == 1
+
+
+def test_run_is_resolved_by_message_sequence_window_not_latest_session_row() -> None:
+    with ScheduledTaskRunRepository() as runs:
+        first = runs.create(
+            scheduled_task_id="sch_message_owner",
+            session_id="ast_message_owner",
+            baseline_message_sequence=0,
+            trigger_message_sequence=1,
+        )
+        runs.cas_transition(first.run_id, from_status="running", to_status="succeeded")
+        second = runs.create(
+            scheduled_task_id="sch_message_owner",
+            session_id="ast_message_owner",
+            baseline_message_sequence=5,
+            trigger_message_sequence=6,
+        )
+
+        assert runs.get_for_message_sequence("ast_message_owner", 2).run_id == first.run_id
+        assert runs.get_for_message_sequence("ast_message_owner", 6).run_id == second.run_id
+        assert runs.get_for_message_sequence("ast_message_owner", 0) is None
 
 
 def test_run_skipped_is_a_separate_trigger_record_not_a_running_transition():
