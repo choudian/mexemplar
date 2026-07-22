@@ -126,7 +126,7 @@ def test_v32_is_idempotent_and_registered_as_latest_migration() -> None:
     assert task_columns.count("session_id") == 1
     assert run_columns.count("baseline_message_sequence") == 1
     assert run_columns.count("trigger_message_sequence") == 1
-    assert migrations._MIGRATIONS[-1] == (32, migrations.migrate_to_v32)
+    assert (32, migrations.migrate_to_v32) in migrations._MIGRATIONS
     assert version == 32
 
 

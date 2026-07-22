@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from src.data.repos.base_repository import generate_id
 from src.data.repos.external_coding_session_repository import ExternalCodingSessionRepository
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
+from src.execution.external_coding_process import ExternalProcessTerminationOutcome
 from src.utils.events import emit
 from src.utils.timezone import utc_now_naive
 
@@ -23,7 +26,7 @@ from .artifacts import (
     write_handoff,
 )
 from .cli_adapters import CliExternalCodingAdapter, ExternalCodingAdapter
-from .git_ops import GitOps
+from .git_ops import GitOperationError, GitOps, GitProcessError
 from .models import (
     AttemptStatus,
     CodingPhase,
@@ -34,6 +37,7 @@ from .models import (
     LaunchMode,
     MergeRecordStatus,
     OwnerType,
+    ProcessStartResult,
     QuotaSignal,
     QuotaState,
     RESUMABLE_CODING_STATUSES,
@@ -56,8 +60,58 @@ AdapterFactory = Callable[[], ExternalCodingAdapter]
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _StartupResources:
+    repo_root: Path
+    worktree_path: Path
+    branch_name: str
+    artifact_dir: Path
+    remove_worktree_root: bool
+    remove_artifact_root: bool
+
+
 def _now() -> str:
     return utc_now_naive().isoformat()
+
+
+def _attempt_fields_from_result(
+    result: ProcessStartResult,
+    *,
+    log_path: Path,
+    max_log_chars: int,
+    fallback_pid: int | None = None,
+    fallback_process_create_time: float | None = None,
+    fallback_external_session_ref: str | None = None,
+    include_command_summary: bool = False,
+) -> dict[str, object]:
+    """Project an adapter result into the durable attempt field set."""
+    fields: dict[str, object] = {
+        "status": result.status.value,
+        "pid": result.pid or fallback_pid,
+        "process_create_time": (
+            result.process_create_time
+            if result.process_create_time is not None
+            else fallback_process_create_time
+        ),
+        # A running attempt still owns a process (or an unresolved spawn), so
+        # only a deterministic terminal observation may clear this guard.
+        "termination_unconfirmed": result.status == AttemptStatus.RUNNING,
+        "exit_code": result.exit_code,
+        "log_path": str(log_path),
+        "log_tail": (
+            _safe_text(result.log_tail, max_chars=max_log_chars) if result.log_tail else None
+        ),
+        "external_session_ref": (result.external_session_ref or fallback_external_session_ref),
+        "error_category": result.error_category.value if result.error_category else None,
+        "error_message": (
+            _safe_text(result.error_message, max_chars=600) if result.error_message else None
+        ),
+    }
+    if include_command_summary:
+        fields["command_summary"] = (
+            _safe_text(result.command_summary, max_chars=500) if result.command_summary else None
+        )
+    return fields
 
 
 def _validate_branch_name(name: str) -> str:
@@ -129,6 +183,52 @@ class ExternalCodingSessionService:
         owner = self._coerce_owner(owner_type, owner_id)
         if not objective.strip():
             raise ValueError("objective is required for external coding sessions")
+        raw_target_path = (target_worktree_path or "").strip()
+        if not raw_target_path:
+            raise ValueError(
+                "target repository path is required; provide an absolute path "
+                "to a usable git repository"
+            )
+        target_path = Path(raw_target_path).expanduser()
+        if not target_path.is_absolute():
+            raise ValueError(
+                "target repository path must be absolute; provide the absolute path "
+                "to a usable git repository"
+            )
+        try:
+            if not target_path.exists():
+                raise ValueError(
+                    "target repository path does not exist; provide an " "existing absolute path"
+                )
+            if not target_path.is_dir():
+                raise ValueError(
+                    "target repository must be a usable git repository with at least one commit"
+                )
+            repo_root = target_path.resolve(strict=True)
+        except OSError:
+            raise ValueError(
+                "target repository path could not be accessed; provide an accessible "
+                "absolute path"
+            ) from None
+        try:
+            base_commit = self._git.head(repo_root, "HEAD")
+        except GitProcessError as exc:
+            logger.warning(
+                "target repository Git process could not be used (%s)",
+                type(exc).__name__,
+            )
+            raise ValueError(
+                "target repository could not be inspected; verify Git is installed "
+                "and the repository is accessible"
+            ) from None
+        except GitOperationError as exc:
+            logger.warning(
+                "target repository HEAD could not be resolved (%s)",
+                type(exc).__name__,
+            )
+            raise ValueError(
+                "target repository must be a usable git repository with at least one commit"
+            ) from None
         mode = LaunchMode(launch_mode or self._config.get_external_coding_default_launch_mode())
 
         signals = self._probe_and_persist_quota()
@@ -141,37 +241,72 @@ class ExternalCodingSessionService:
         if target_branch:
             _validate_branch_name(target_branch)
         coding_session_id = generate_id("ecs")
-        repo_root = Path(target_worktree_path or Path.cwd()).resolve()
-        try:
-            base_commit = self._git.head(repo_root, "HEAD")
-        except Exception as exc:
-            raise ValueError("target worktree HEAD could not be resolved") from exc
-        artifact_root = Path(self._config.get_external_coding_artifact_root())
-        worktree_root = Path(self._config.get_external_coding_worktree_root())
-        artifact_dir = ensure_artifact_dir(artifact_root, coding_session_id)
+        artifact_root = (
+            Path(self._config.get_external_coding_artifact_root()).expanduser().resolve()
+        )
+        configured_worktree_root = Path(
+            self._config.get_external_coding_worktree_root()
+        ).expanduser()
+        worktree_root = (
+            configured_worktree_root
+            if configured_worktree_root.is_absolute()
+            else repo_root / configured_worktree_root
+        ).resolve()
+        artifact_dir = artifact_root / coding_session_id
         worktree_path = (worktree_root / coding_session_id).resolve()
         branch_name = f"coding/{coding_session_id}"
-        plan_path = artifact_dir / PLAN_FILENAME
-        result_path = artifact_dir / RESULT_FILENAME
-        handoff_path = write_handoff(
-            artifact_dir,
-            objective=objective,
-            context=context,
-            plan_path=plan_path.resolve(),
-            result_path=result_path.resolve(),
-            worktree_path=worktree_path,
-        )
-
+        branch_exists = getattr(self._git, "branch_exists", None)
         try:
+            generated_branch_exists = bool(
+                callable(branch_exists) and branch_exists(repo_root, branch_name)
+            )
+        except GitOperationError as exc:
+            logger.warning(
+                "external coding generated branch state could not be checked (%s)",
+                type(exc).__name__,
+            )
+            raise ValueError(
+                "target repository state could not be verified; verify Git access and retry"
+            ) from None
+        generated_target_exists = (
+            artifact_dir.exists() or worktree_path.exists() or generated_branch_exists
+        )
+        if generated_target_exists:
+            raise ValueError("failed to allocate external coding session paths; retry the request")
+        artifact_root_existed = artifact_root.exists()
+        worktree_root_existed = worktree_root.exists()
+        resources = _StartupResources(
+            repo_root=repo_root,
+            worktree_path=worktree_path,
+            branch_name=branch_name,
+            artifact_dir=artifact_dir,
+            remove_worktree_root=not worktree_root_existed,
+            remove_artifact_root=not artifact_root_existed,
+        )
+        startup_stage = "artifacts"
+        worktree_started = False
+        try:
+            artifact_dir = ensure_artifact_dir(artifact_root, coding_session_id)
+            plan_path = artifact_dir / PLAN_FILENAME
+            result_path = artifact_dir / RESULT_FILENAME
+            handoff_path = write_handoff(
+                artifact_dir,
+                objective=objective,
+                context=context,
+                plan_path=plan_path,
+                result_path=result_path,
+                worktree_path=worktree_path,
+            )
+
+            startup_stage = "worktree"
+            worktree_started = True
             self._git.create_worktree(
                 target_worktree=repo_root,
                 worktree_path=worktree_path,
                 branch_name=branch_name,
             )
-        except Exception as exc:
-            raise ValueError(f"failed to create external coding worktree: {exc}") from exc
 
-        try:
+            startup_stage = "persistence"
             row = self._repo.create_session(
                 coding_session_id=coding_session_id,
                 session_id=session_id,
@@ -189,19 +324,69 @@ class ExternalCodingSessionService:
                 base_commit=base_commit,
                 artifact_dir=str(artifact_dir),
                 handoff_path=str(handoff_path),
+                plan_path=str(plan_path),
+                result_path=str(result_path),
                 target_branch=target_branch,
                 target_worktree_path=str(repo_root),
             )
-        except Exception:
-            # Session row failed to persist: the worktree is now orphaned with
-            # no entity tracking it. Clean it up before propagating the failure.
-            self._cleanup_worktree(repo_root, worktree_path)
-            raise
-        self._repo.update_session(
-            row.coding_session_id,
-            plan_path=str(plan_path),
-            result_path=str(result_path),
-        )
+        except Exception as exc:
+            durable_row = None
+            if startup_stage == "persistence":
+                try:
+                    durable_row = self._repo.get_session(coding_session_id)
+                except Exception as lookup_exc:
+                    logger.error(
+                        "external coding session persistence outcome is unknown for %s "
+                        "(create=%s lookup=%s)",
+                        coding_session_id,
+                        type(exc).__name__,
+                        type(lookup_exc).__name__,
+                    )
+                    raise ValueError(
+                        "external coding session persistence could not be verified; "
+                        "generated resources were retained for recovery under "
+                        f"session {coding_session_id}"
+                    ) from None
+            if durable_row is not None:
+                logger.warning(
+                    "external coding session create raised after durable persistence (%s)",
+                    type(exc).__name__,
+                )
+                row = durable_row
+            else:
+                cleanup_errors = self._cleanup_failed_startup(
+                    resources,
+                    cleanup_git=worktree_started,
+                )
+                if cleanup_errors:
+                    logger.error(
+                        "external coding startup compensation was incomplete at %s (%s)",
+                        startup_stage,
+                        ",".join(cleanup_errors),
+                    )
+                    raise ValueError(
+                        "external coding session startup failed and cleanup could not be completed "
+                        f"for session {coding_session_id}; remove the generated session resources "
+                        "and retry"
+                    ) from None
+                logger.warning(
+                    "external coding session startup failed at %s (%s)",
+                    startup_stage,
+                    type(exc).__name__,
+                )
+                if startup_stage == "artifacts":
+                    raise ValueError(
+                        "failed to create external coding artifacts; "
+                        "verify the configured artifact root"
+                    ) from None
+                if startup_stage == "worktree":
+                    raise ValueError(
+                        "failed to create external coding worktree; verify the repository "
+                        "and configured worktree root"
+                    ) from None
+                raise ValueError(
+                    "failed to persist external coding session; retry the request"
+                ) from None
         row = self._repo.get_session(row.coding_session_id)
         if mode == LaunchMode.INTERACTIVE or self._config.get_external_coding_autostart_enabled():
             self._start_attempt(row, CodingPhase.PLAN)
@@ -289,6 +474,18 @@ class ExternalCodingSessionService:
         phase: str | None = None,
     ) -> dict:
         row = self._require_session(coding_session_id)
+        active_attempt = self._repo.get_active_attempt(coding_session_id)
+        if active_attempt is not None and not active_attempt.launch_started:
+            if not self._fail_reserved_attempt(
+                row,
+                active_attempt.attempt_id,
+                message="external coding launch did not begin",
+            ):
+                raise RuntimeError("unlaunched external coding reservation could not be recovered")
+            row = self._require_session(coding_session_id)
+            active_attempt = None
+        if active_attempt is not None:
+            raise ValueError("session has an active external coding attempt")
         if row.status not in RESUMABLE_CODING_STATUSES:
             raise ValueError(f"session in status {row.status} cannot be resumed")
         target_phase = CodingPhase(phase or row.phase)
@@ -353,14 +550,17 @@ class ExternalCodingSessionService:
         row = self._require_session(coding_session_id)
         if row.status in TERMINAL_CODING_STATUSES:
             raise ValueError(f"session in status {row.status} cannot be abandoned")
-        self._stop_running_attempts(row, reason="session abandoned")
-        row = self._repo.update_session(
-            coding_session_id,
-            status=CodingSessionStatus.ABANDONED.value,
-            phase=CodingPhase.DONE.value,
-            last_error_category=ErrorCategory.UNKNOWN.value,
-            last_error_message=_safe_text(reason, max_chars=600),
-        )
+        session_fields = {
+            "status": CodingSessionStatus.ABANDONED.value,
+            "phase": CodingPhase.DONE.value,
+            "last_error_category": ErrorCategory.UNKNOWN.value,
+            "last_error_message": _safe_text(reason, max_chars=600),
+        }
+        row = self._stop_running_attempts(
+            row,
+            reason="session abandoned",
+            session_fields=session_fields,
+        ) or self._repo.update_session(coding_session_id, **session_fields)
         self._emit(row, "abandoned")
         return self.detail_to_dict(row)
 
@@ -756,6 +956,18 @@ class ExternalCodingSessionService:
         approval_feedback: str = "",
         resume_instruction: str = "",
     ) -> None:
+        if self._repo.get_active_attempt(row.coding_session_id) is not None:
+            raise ValueError("session has an active external coding attempt")
+        if not row.plan_path or not row.result_path:
+            updated = self._repo.update_session(
+                row.coding_session_id,
+                status=CodingSessionStatus.INTERRUPTED.value,
+                last_error_category=ErrorCategory.MISSING_ARTIFACT.value,
+                last_error_message="external coding session artifact paths are incomplete",
+            )
+            if updated is None:
+                raise RuntimeError("external coding session disappeared during attempt startup")
+            return
         phase_attempts = [
             attempt
             for attempt in self._repo.list_attempts(row.coding_session_id)
@@ -763,75 +975,180 @@ class ExternalCodingSessionService:
         ]
         attempt_number = len(phase_attempts)
         log_path = Path(row.artifact_dir) / "logs" / f"{phase.value}-{attempt_number}.log"
-        prompt_path = write_attempt_prompt(
-            Path(row.artifact_dir),
-            phase=phase.value,
-            attempt_number=attempt_number,
-            handoff_path=Path(row.handoff_path),
-            plan_path=Path(row.plan_path),
-            result_path=Path(row.result_path),
-            approval_feedback=approval_feedback,
-            resume_instruction=resume_instruction,
-            external_session_ref=row.external_session_ref,
-        )
-        adapter = self._adapter_factory()
-        result = adapter.start(
-            tool=ExternalCodingTool(row.tool),
-            phase=phase,
-            prompt_path=prompt_path,
-            worktree_path=Path(row.worktree_path),
-            artifact_dir=Path(row.artifact_dir),
-            log_path=log_path,
-            launch_mode=LaunchMode(row.launch_mode),
-            external_session_ref=row.external_session_ref,
-        )
-        self._repo.add_attempt(
-            coding_session_id=row.coding_session_id,
-            phase=phase.value,
-            launch_mode=row.launch_mode,
-            status=result.status.value,
-            command_summary=(
-                _safe_text(result.command_summary, max_chars=500)
-                if result.command_summary
-                else None
-            ),
-            external_session_ref=result.external_session_ref,
-            pid=result.pid,
-            exit_code=result.exit_code,
-            log_path=str(log_path),
-            log_tail=(
-                _safe_text(
-                    result.log_tail,
-                    max_chars=self._config.get_external_coding_log_tail_chars(),
+        try:
+            reserved = self._repo.add_attempt(
+                coding_session_id=row.coding_session_id,
+                phase=phase.value,
+                launch_mode=row.launch_mode,
+                status=AttemptStatus.RUNNING.value,
+                termination_unconfirmed=True,
+                launch_started=False,
+                log_path=str(log_path),
+            )
+        except Exception as exc:
+            logger.error(
+                "external coding attempt reservation failed (%s)",
+                type(exc).__name__,
+            )
+            try:
+                active_attempt = self._repo.get_active_attempt(row.coding_session_id)
+            except Exception:
+                active_attempt = None
+            if active_attempt is not None:
+                raise ValueError("session has an active external coding attempt") from None
+            try:
+                updated = self._repo.update_session(
+                    row.coding_session_id,
+                    status=CodingSessionStatus.INTERRUPTED.value,
+                    last_error_category=ErrorCategory.PROCESS_ERROR.value,
+                    last_error_message="external coding attempt could not be reserved",
                 )
-                if result.log_tail
-                else None
-            ),
-            error_category=result.error_category.value if result.error_category else None,
-            error_message=(
-                _safe_text(result.error_message, max_chars=600) if result.error_message else None
-            ),
-        )
-        if result.external_session_ref:
-            self._repo.update_session(
-                row.coding_session_id,
-                external_session_ref=result.external_session_ref,
+            except Exception:
+                updated = None
+            if updated is None:
+                raise RuntimeError("external coding attempt reservation failed") from None
+            return
+        try:
+            prompt_path = write_attempt_prompt(
+                Path(row.artifact_dir),
+                phase=phase.value,
+                attempt_number=attempt_number,
+                handoff_path=Path(row.handoff_path),
+                plan_path=Path(row.plan_path),
+                result_path=Path(row.result_path),
+                approval_feedback=approval_feedback,
+                resume_instruction=resume_instruction,
+                external_session_ref=row.external_session_ref,
             )
-        if result.status in {AttemptStatus.FAILED, AttemptStatus.INTERRUPTED}:
-            self._repo.update_session(
-                row.coding_session_id,
-                status=CodingSessionStatus.INTERRUPTED.value,
-                last_error_category=(
-                    result.error_category.value
-                    if result.error_category
-                    else ErrorCategory.UNKNOWN.value
-                ),
-                last_error_message=_safe_text(result.error_message, max_chars=600),
+        except Exception as exc:
+            logger.error(
+                "external coding attempt prompt creation failed (%s)",
+                type(exc).__name__,
             )
+            if not self._fail_reserved_attempt(
+                row,
+                reserved.attempt_id,
+                message="external coding attempt prompt could not be created",
+            ):
+                raise RuntimeError("external coding attempt prompt creation failed") from None
+            return
+        try:
+            adapter = self._adapter_factory()
+        except Exception as exc:
+            logger.error(
+                "external coding adapter preparation failed (%s)",
+                type(exc).__name__,
+            )
+            if not self._fail_reserved_attempt(
+                row,
+                reserved.attempt_id,
+                message="external coding process adapter could not be prepared",
+            ):
+                raise RuntimeError("external coding adapter preparation failed") from None
+            return
+        try:
+            launch_marked = self._repo.mark_attempt_launch_started(reserved.attempt_id)
+            if launch_marked is None:
+                raise RuntimeError("external coding attempt disappeared before launch")
+        except Exception as exc:
+            logger.error(
+                "external coding launch intent persistence failed (%s)",
+                type(exc).__name__,
+            )
+            if not self._fail_reserved_attempt(
+                row,
+                reserved.attempt_id,
+                message="external coding launch could not be prepared",
+            ):
+                raise RuntimeError("external coding launch preparation failed") from None
+            return
+        try:
+            result = adapter.start(
+                tool=ExternalCodingTool(row.tool),
+                phase=phase,
+                prompt_path=prompt_path,
+                worktree_path=Path(row.worktree_path),
+                artifact_dir=Path(row.artifact_dir),
+                log_path=log_path,
+                launch_mode=LaunchMode(row.launch_mode),
+                external_session_ref=row.external_session_ref,
+            )
+        except Exception as exc:
+            logger.error("external coding adapter start failed (%s)", type(exc).__name__)
+            if not self._fail_reserved_attempt(
+                row,
+                reserved.attempt_id,
+                message="external coding process could not be started",
+            ):
+                raise RuntimeError("external coding process startup failed") from None
+            return
+        try:
+            self._apply_attempt_result(
+                row,
+                attempt_id=reserved.attempt_id,
+                result=result,
+                log_path=log_path,
+                fallback_pid=reserved.pid,
+                fallback_process_create_time=reserved.process_create_time,
+                fallback_external_session_ref=reserved.external_session_ref,
+                include_command_summary=True,
+            )
+        except Exception as exc:
+            logger.error(
+                "external coding attempt result persistence failed (%s)",
+                type(exc).__name__,
+            )
+            termination = (
+                ExternalProcessTerminationOutcome.CONFIRMED_EXITED
+                if result.status != AttemptStatus.RUNNING
+                else self._stop_started_process(
+                    adapter,
+                    pid=result.pid,
+                    process_create_time=result.process_create_time,
+                    termination_unconfirmed=result.termination_unconfirmed,
+                    log_path=log_path,
+                )
+            )
+            if termination.confirmed:
+                if not self._fail_reserved_attempt(
+                    row,
+                    reserved.attempt_id,
+                    message="external coding process state could not be persisted",
+                ):
+                    raise RuntimeError("external coding process state persistence failed") from None
+                return
+            if not self._record_unstopped_process(
+                row,
+                reserved.attempt_id,
+                result=result,
+                log_path=log_path,
+            ):
+                logger.critical(
+                    "external coding process ownership persistence failed for %s pid=%s",
+                    row.coding_session_id,
+                    result.pid,
+                )
+                raise RuntimeError(
+                    "external coding process ownership could not be persisted "
+                    f"for session {row.coding_session_id} (pid {result.pid}); "
+                    "managed shutdown is required"
+                ) from None
 
     def _refresh_running_attempt(self, row, phase: CodingPhase):
         attempt = self._latest_attempt(row.coding_session_id, phase)
         if attempt is None or attempt.status != AttemptStatus.RUNNING.value:
+            return attempt
+        if not attempt.launch_started:
+            if self._fail_reserved_attempt(
+                row,
+                attempt.attempt_id,
+                message="external coding launch did not begin",
+            ):
+                return self._repo.get_attempt(attempt.attempt_id)
+            logger.warning(
+                "unlaunched external coding reservation could not be recovered for %s",
+                row.coding_session_id,
+            )
             return attempt
         log_path = (
             Path(attempt.log_path)
@@ -840,118 +1157,315 @@ class ExternalCodingSessionService:
         )
         adapter = self._adapter_factory()
         try:
-            result = adapter.poll(pid=attempt.pid, log_path=log_path)
+            result = adapter.poll(
+                pid=attempt.pid,
+                log_path=log_path,
+                process_create_time=attempt.process_create_time,
+                termination_unconfirmed=attempt.termination_unconfirmed,
+            )
         except Exception as exc:
             logger.warning(
                 "external coding process status check failed for %s (%s)",
                 row.coding_session_id,
                 type(exc).__name__,
             )
-            result_status = AttemptStatus.INTERRUPTED
-            result_error = ErrorCategory.PROCESS_ERROR
-            result_message = "external coding process status could not be determined"
-            updated = self._repo.update_attempt(
-                attempt.attempt_id,
-                status=result_status.value,
-                error_category=result_error.value,
-                error_message=result_message,
-                log_tail=tail_file(
-                    log_path,
-                    max_chars=self._config.get_external_coding_log_tail_chars(),
-                ),
-            )
-            self._repo.update_session(
-                row.coding_session_id,
-                status=CodingSessionStatus.INTERRUPTED.value,
-                last_error_category=result_error.value,
-                last_error_message=result_message,
-            )
-            return updated
-
-        update_fields = {
-            "status": result.status.value,
-            "pid": result.pid or attempt.pid,
-            "exit_code": result.exit_code,
-            "log_path": str(log_path),
-            "log_tail": (
-                _safe_text(
-                    result.log_tail,
-                    max_chars=self._config.get_external_coding_log_tail_chars(),
+            message = "external coding process status could not be determined"
+            try:
+                projected = self._repo.update_session_and_attempt(
+                    coding_session_id=row.coding_session_id,
+                    attempt_id=attempt.attempt_id,
+                    session_fields={
+                        "last_error_category": ErrorCategory.PROCESS_ERROR.value,
+                        "last_error_message": message,
+                    },
+                    attempt_fields={
+                        "status": AttemptStatus.RUNNING.value,
+                        "termination_unconfirmed": True,
+                        "error_category": ErrorCategory.PROCESS_ERROR.value,
+                        "error_message": message,
+                        "log_tail": tail_file(
+                            log_path,
+                            max_chars=self._config.get_external_coding_log_tail_chars(),
+                        ),
+                    },
+                    expected_attempt_status=AttemptStatus.RUNNING.value,
                 )
-                if result.log_tail
-                else None
-            ),
-            "external_session_ref": result.external_session_ref,
-            "error_category": result.error_category.value if result.error_category else None,
-            "error_message": (
-                _safe_text(result.error_message, max_chars=600) if result.error_message else None
-            ),
-        }
-        updated = self._repo.update_attempt(attempt.attempt_id, **update_fields)
+                if projected is not None:
+                    return projected[1]
+                return self._repo.get_attempt(attempt.attempt_id) or attempt
+            except Exception as persist_exc:
+                logger.warning(
+                    "external coding status uncertainty could not be persisted for %s (%s)",
+                    row.coding_session_id,
+                    type(persist_exc).__name__,
+                )
+                return attempt
+
+        try:
+            return self._apply_attempt_result(
+                row,
+                attempt_id=attempt.attempt_id,
+                result=result,
+                log_path=log_path,
+                fallback_pid=attempt.pid,
+                fallback_process_create_time=attempt.process_create_time,
+                fallback_external_session_ref=attempt.external_session_ref,
+                stale_conflict_is_noop=True,
+            )
+        except Exception as exc:
+            # The repository rolls both projections back, leaving the durable
+            # running attempt available for a later retry.
+            logger.warning(
+                "external coding poll result could not be persisted for %s (%s)",
+                row.coding_session_id,
+                type(exc).__name__,
+            )
+            return attempt
+
+    def _apply_attempt_result(
+        self,
+        row,
+        *,
+        attempt_id: str,
+        result: ProcessStartResult,
+        log_path: Path,
+        fallback_pid: int | None,
+        fallback_process_create_time: float | None,
+        fallback_external_session_ref: str | None,
+        include_command_summary: bool = False,
+        stale_conflict_is_noop: bool = False,
+    ):
+        fields = _attempt_fields_from_result(
+            result,
+            log_path=log_path,
+            max_log_chars=self._config.get_external_coding_log_tail_chars(),
+            fallback_pid=fallback_pid,
+            fallback_process_create_time=fallback_process_create_time,
+            fallback_external_session_ref=fallback_external_session_ref,
+            include_command_summary=include_command_summary,
+        )
+        session_fields: dict[str, object] = {}
         if result.external_session_ref:
-            self._repo.update_session(
-                row.coding_session_id,
-                external_session_ref=result.external_session_ref,
-            )
+            session_fields["external_session_ref"] = result.external_session_ref
         if result.status in {AttemptStatus.FAILED, AttemptStatus.INTERRUPTED}:
-            self._repo.update_session(
-                row.coding_session_id,
-                status=CodingSessionStatus.INTERRUPTED.value,
-                last_error_category=(
-                    result.error_category.value
-                    if result.error_category
-                    else ErrorCategory.UNKNOWN.value
-                ),
-                last_error_message=_safe_text(
-                    result.error_message or "external coding process was interrupted",
-                    max_chars=600,
-                ),
+            session_fields.update(
+                {
+                    "status": CodingSessionStatus.INTERRUPTED.value,
+                    "last_error_category": (
+                        result.error_category.value
+                        if result.error_category
+                        else ErrorCategory.UNKNOWN.value
+                    ),
+                    "last_error_message": _safe_text(
+                        result.error_message or "external coding process was interrupted",
+                        max_chars=600,
+                    ),
+                }
             )
+        if session_fields:
+            projected = self._repo.update_session_and_attempt(
+                coding_session_id=row.coding_session_id,
+                attempt_id=attempt_id,
+                session_fields=session_fields,
+                attempt_fields=fields,
+                expected_attempt_status=AttemptStatus.RUNNING.value,
+            )
+            if projected is None:
+                current = self._repo.get_attempt(attempt_id)
+                if stale_conflict_is_noop and current is not None:
+                    return current
+                raise RuntimeError("external coding state changed during result persistence")
+            return projected[1]
+        updated = self._repo.update_attempt(
+            attempt_id,
+            expected_status=AttemptStatus.RUNNING.value,
+            **fields,
+        )
+        if updated is None:
+            current = self._repo.get_attempt(attempt_id)
+            if stale_conflict_is_noop and current is not None:
+                return current
+            raise RuntimeError("external coding attempt changed during result persistence")
         return updated
 
-    def _stop_running_attempts(self, row, *, reason: str) -> None:
+    def _fail_reserved_attempt(self, row, attempt_id: str, *, message: str) -> bool:
+        try:
+            projected = self._repo.update_session_and_attempt(
+                coding_session_id=row.coding_session_id,
+                attempt_id=attempt_id,
+                session_fields={
+                    "status": CodingSessionStatus.INTERRUPTED.value,
+                    "last_error_category": ErrorCategory.PROCESS_ERROR.value,
+                    "last_error_message": message,
+                },
+                attempt_fields={
+                    "status": AttemptStatus.FAILED.value,
+                    "termination_unconfirmed": False,
+                    "error_category": ErrorCategory.PROCESS_ERROR.value,
+                    "error_message": message,
+                },
+                expected_attempt_status=AttemptStatus.RUNNING.value,
+            )
+        except Exception as exc:
+            logger.error("failed to close reserved external coding state (%s)", type(exc).__name__)
+            return False
+        if projected is not None:
+            return True
+        current = self._repo.get_attempt(attempt_id)
+        return current is not None and current.status != AttemptStatus.RUNNING.value
+
+    @staticmethod
+    def _stop_started_process(
+        adapter,
+        *,
+        pid: int | None,
+        process_create_time: float | None,
+        termination_unconfirmed: bool,
+        log_path: Path,
+    ) -> ExternalProcessTerminationOutcome:
+        if not pid:
+            return ExternalProcessTerminationOutcome.UNCONFIRMED
+        try:
+            return adapter.stop(
+                pid=pid,
+                log_path=log_path,
+                reason="attempt state persistence failed",
+                process_create_time=process_create_time,
+                termination_unconfirmed=termination_unconfirmed,
+            )
+        except Exception:
+            return ExternalProcessTerminationOutcome.UNCONFIRMED
+
+    def _record_unstopped_process(
+        self,
+        row,
+        attempt_id: str,
+        *,
+        result: ProcessStartResult,
+        log_path: Path,
+    ) -> bool:
+        message = "external coding process could not be stopped after state persistence failed"
+        try:
+            projected = self._repo.update_session_and_attempt(
+                coding_session_id=row.coding_session_id,
+                attempt_id=attempt_id,
+                session_fields={
+                    "last_error_category": ErrorCategory.PROCESS_ERROR.value,
+                    "last_error_message": message,
+                },
+                attempt_fields={
+                    "status": AttemptStatus.RUNNING.value,
+                    "pid": result.pid,
+                    "process_create_time": result.process_create_time,
+                    "termination_unconfirmed": True,
+                    "command_summary": _safe_text(result.command_summary, max_chars=500),
+                    "log_path": str(log_path),
+                    "error_category": ErrorCategory.PROCESS_ERROR.value,
+                    "error_message": message,
+                },
+                expected_attempt_status=AttemptStatus.RUNNING.value,
+            )
+            if projected is None:
+                return False
+        except Exception as exc:
+            logger.error(
+                "unstopped external coding process could not be persisted (%s)",
+                type(exc).__name__,
+            )
+            return False
+        return True
+
+    def _stop_running_attempts(
+        self,
+        row,
+        *,
+        reason: str,
+        session_fields: dict[str, object],
+    ):
+        running_attempts = [
+            attempt
+            for attempt in self._repo.list_attempts(row.coding_session_id)
+            if attempt.status == AttemptStatus.RUNNING.value
+        ]
+        if len(running_attempts) > 1:
+            raise RuntimeError("external coding session has multiple active attempts")
+        if not running_attempts:
+            return None
         adapter = self._adapter_factory()
-        for attempt in self._repo.list_attempts(row.coding_session_id):
-            if attempt.status != AttemptStatus.RUNNING.value:
-                continue
+        for attempt in running_attempts:
             log_path = (
                 Path(attempt.log_path)
                 if attempt.log_path
                 else Path(row.artifact_dir) / "logs" / f"{attempt.phase}.log"
             )
-            stopped = adapter.stop(
-                pid=attempt.pid,
-                log_path=log_path,
-                reason=reason,
+            pid = attempt.pid
+            process_create_time = attempt.process_create_time
+            if attempt.launch_started and not pid:
+                observed = adapter.poll(
+                    pid=None,
+                    log_path=log_path,
+                    process_create_time=attempt.process_create_time,
+                    termination_unconfirmed=attempt.termination_unconfirmed,
+                )
+                pid = observed.pid
+                process_create_time = observed.process_create_time
+                if pid:
+                    self._repo.update_attempt(
+                        attempt.attempt_id,
+                        expected_status=AttemptStatus.RUNNING.value,
+                        pid=pid,
+                        process_create_time=observed.process_create_time,
+                        termination_unconfirmed=True,
+                    )
+            if attempt.launch_started:
+                termination = adapter.stop(
+                    pid=pid,
+                    log_path=log_path,
+                    reason=reason,
+                    process_create_time=process_create_time,
+                    termination_unconfirmed=attempt.termination_unconfirmed,
+                )
+                if not termination.confirmed:
+                    raise ValueError("unable to confirm external coding process tree termination")
+            projected = self._repo.update_session_and_attempt(
+                coding_session_id=row.coding_session_id,
+                attempt_id=attempt.attempt_id,
+                session_fields=session_fields,
+                attempt_fields={
+                    "status": AttemptStatus.INTERRUPTED.value,
+                    "termination_unconfirmed": False,
+                    "log_tail": tail_file(
+                        log_path,
+                        max_chars=self._config.get_external_coding_log_tail_chars(),
+                    ),
+                    "error_category": ErrorCategory.UNKNOWN.value,
+                    "error_message": reason,
+                },
+                expected_attempt_status=AttemptStatus.RUNNING.value,
             )
-            if not stopped:
-                observed = adapter.poll(pid=attempt.pid, log_path=log_path)
-                if observed.status == AttemptStatus.RUNNING:
-                    raise ValueError("unable to stop running external coding process")
-            self._repo.update_attempt(
-                attempt.attempt_id,
-                status=AttemptStatus.INTERRUPTED.value,
-                log_tail=tail_file(
-                    log_path,
-                    max_chars=self._config.get_external_coding_log_tail_chars(),
-                ),
-                error_category=ErrorCategory.UNKNOWN.value,
-                error_message=reason,
-            )
+            if projected is not None:
+                return projected[0]
+            current = self._repo.get_attempt(attempt.attempt_id)
+            if current is None:
+                raise RuntimeError("external coding attempt disappeared during stop")
+        return None
 
     def _refresh_plan(self, row):
         attempt = self._refresh_running_attempt(row, CodingPhase.PLAN)
         row = self._require_session(row.coding_session_id)
         dirty = self._worktree_dirty(row)
         if dirty:
-            self._stop_running_attempts(row, reason="plan phase protocol violation")
-            row = self._repo.update_session(
-                row.coding_session_id,
-                status=CodingSessionStatus.INTERRUPTED.value,
-                phase=CodingPhase.PLAN.value,
-                last_error_category=ErrorCategory.PROTOCOL_VIOLATION.value,
-                last_error_message=f"plan phase modified files: {', '.join(dirty[:10])}",
-            )
+            session_fields = {
+                "status": CodingSessionStatus.INTERRUPTED.value,
+                "phase": CodingPhase.PLAN.value,
+                "last_error_category": ErrorCategory.PROTOCOL_VIOLATION.value,
+                "last_error_message": f"plan phase modified files: {', '.join(dirty[:10])}",
+            }
+            row = self._stop_running_attempts(
+                row,
+                reason="plan phase protocol violation",
+                session_fields=session_fields,
+            ) or self._repo.update_session(row.coding_session_id, **session_fields)
             self._emit(row, "protocol_violation")
             return row
         if dirty is None:
@@ -1064,25 +1578,34 @@ class ExternalCodingSessionService:
         attempt = self._latest_attempt(row.coding_session_id, phase)
         if attempt is None or attempt.status == AttemptStatus.RUNNING.value:
             return row
-        if attempt.status in {AttemptStatus.RUNNING.value, AttemptStatus.SUCCEEDED.value}:
+        session_fields = {
+            "status": CodingSessionStatus.INTERRUPTED.value,
+            "phase": phase.value,
+            "last_error_category": ErrorCategory.MISSING_ARTIFACT.value,
+            "last_error_message": f"{missing_name} was not produced before the process exited",
+        }
+        if attempt.status == AttemptStatus.SUCCEEDED.value:
             log_path = Path(attempt.log_path) if attempt.log_path else None
-            self._repo.update_attempt(
-                attempt.attempt_id,
-                status=AttemptStatus.INTERRUPTED.value,
-                log_tail=tail_file(
-                    log_path,
-                    max_chars=self._config.get_external_coding_log_tail_chars(),
-                ),
-                error_category=ErrorCategory.MISSING_ARTIFACT.value,
-                error_message=f"{missing_name} was not produced before the process exited",
+            projected = self._repo.update_session_and_attempt(
+                coding_session_id=row.coding_session_id,
+                attempt_id=attempt.attempt_id,
+                session_fields=session_fields,
+                attempt_fields={
+                    "status": AttemptStatus.INTERRUPTED.value,
+                    "log_tail": tail_file(
+                        log_path,
+                        max_chars=self._config.get_external_coding_log_tail_chars(),
+                    ),
+                    "error_category": ErrorCategory.MISSING_ARTIFACT.value,
+                    "error_message": (f"{missing_name} was not produced before the process exited"),
+                },
+                expected_attempt_status=AttemptStatus.SUCCEEDED.value,
             )
-        row = self._repo.update_session(
-            row.coding_session_id,
-            status=CodingSessionStatus.INTERRUPTED.value,
-            phase=phase.value,
-            last_error_category=ErrorCategory.MISSING_ARTIFACT.value,
-            last_error_message=f"{missing_name} was not produced before the process exited",
-        )
+            if projected is None:
+                raise RuntimeError("external coding state disappeared during artifact validation")
+            row = projected[0]
+        else:
+            row = self._repo.update_session(row.coding_session_id, **session_fields)
         self._emit(row, "missing_artifact")
         return row
 
@@ -1130,16 +1653,48 @@ class ExternalCodingSessionService:
             logger.warning("git dirty check failed for %s: %s", row.coding_session_id, exc)
             return None
 
-    def _cleanup_worktree(self, repo_root: Path, worktree_path: Path) -> None:
-        """Best-effort removal of a coding worktree leaked on session failure."""
+    def _cleanup_failed_startup(
+        self,
+        resources: _StartupResources,
+        *,
+        cleanup_git: bool,
+    ) -> list[str]:
+        """Compensate startup resources and report every unverified cleanup."""
+        failures: list[str] = []
+        if cleanup_git:
+            try:
+                self._git.remove_worktree(
+                    target_worktree=resources.repo_root,
+                    worktree_path=resources.worktree_path,
+                )
+            except Exception:
+                failures.append("worktree")
+            try:
+                self._git.delete_branch(
+                    target_worktree=resources.repo_root,
+                    branch_name=resources.branch_name,
+                )
+            except Exception:
+                failures.append("branch")
+        if resources.remove_worktree_root:
+            try:
+                resources.worktree_path.parent.rmdir()
+            except OSError:
+                pass
         try:
-            self._git.remove_worktree(target_worktree=repo_root, worktree_path=worktree_path)
-        except Exception as cleanup_exc:
-            logger.warning(
-                "failed to clean up worktree %s after session failure: %s",
-                worktree_path,
-                cleanup_exc,
-            )
+            shutil.rmtree(resources.artifact_dir)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            failures.append("artifacts")
+        if resources.artifact_dir.exists() and "artifacts" not in failures:
+            failures.append("artifacts")
+        if resources.remove_artifact_root:
+            try:
+                resources.artifact_dir.parent.rmdir()
+            except OSError:
+                pass
+        return failures
 
     def _coerce_owner(self, owner_type: str, owner_id: str) -> OwnerType:
         if not (owner_id or "").strip():

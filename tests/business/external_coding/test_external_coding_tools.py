@@ -1,9 +1,28 @@
 """Tests for external coding agent tool handlers."""
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from src.business.agents.tools.external_coding_tools import create_external_coding_tools
+from src.business.external_coding.cli_adapters import CliExternalCodingAdapter
+from src.business.external_coding.models import CodingPhase, ExternalCodingTool
+
+
+class _CommandConfig:
+    def get_external_coding_claude_command(self):
+        return "claude"
+
+    def get_external_coding_codex_command(self):
+        return "codex"
+
+    def get_external_coding_claude_effort(self):
+        return "max"
+
+    def get_external_coding_codex_reasoning_effort(self):
+        return "xhigh"
 
 
 def _tools(bound_task_id: str | None = "tsk_bound"):
@@ -48,12 +67,14 @@ def test_start_external_coding_session_success() -> None:
             ownerType="task",
             ownerId="tsk_bound",
             objective="implement feature",
+            targetWorktreePath="E:/target-repository",
         )
     payload = json.loads(result)
     assert payload["codingSessionId"] == "ecs_001"
     assert payload["status"] == "planning"
     mock.start_session.assert_called_once()
     assert mock.start_session.call_args.kwargs["owner_id"] == "tsk_bound"
+    assert mock.start_session.call_args.kwargs["target_worktree_path"] == "E:/target-repository"
 
 
 def test_start_external_coding_session_rejects_bound_owner_override() -> None:
@@ -239,3 +260,40 @@ def test_confirm_external_coding_rollback_requires_user_for_reset_hard() -> None
 
 def test_merge_analysis_tool_is_declared_side_effecting() -> None:
     assert _tools()["analyze_external_coding_merge"].has_side_effects is True
+
+
+@pytest.mark.parametrize(
+    ("phase", "external_session_ref"),
+    [
+        (CodingPhase.PLAN, None),
+        (CodingPhase.IMPLEMENT, None),
+        (CodingPhase.IMPLEMENT, "existing-session"),
+    ],
+    ids=["plan", "implement", "resume"],
+)
+def test_external_cli_commands_deliver_the_prompt_file_instruction(
+    tmp_path: Path,
+    phase: CodingPhase,
+    external_session_ref: str | None,
+) -> None:
+    adapter = CliExternalCodingAdapter(config=_CommandConfig())
+    prompt_path = tmp_path / f"{phase.value}-prompt.md"
+
+    codex = adapter._build_command(
+        ExternalCodingTool.CODEX_CLI,
+        phase,
+        prompt_path,
+        external_session_ref=external_session_ref,
+    )
+    claude = adapter._build_command(
+        ExternalCodingTool.CLAUDE_CODE,
+        phase,
+        prompt_path,
+        external_session_ref=external_session_ref,
+    )
+
+    codex_instruction = codex[-1]
+    assert not codex_instruction.startswith("@")
+    assert codex_instruction.startswith(f"Follow the instructions in this file: {prompt_path}.")
+    assert "complete requested phase artifact" in codex_instruction
+    assert f"@{prompt_path}" in claude

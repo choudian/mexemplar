@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -15,6 +16,10 @@ class GitOperationError(RuntimeError):
     pass
 
 
+class GitProcessError(GitOperationError):
+    """Git executable could not be invoked or did not respond in time."""
+
+
 def _run_git(args: list[str], *, cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(
@@ -25,7 +30,10 @@ def _run_git(args: list[str], *, cwd: Path, check: bool = True) -> subprocess.Co
             timeout=60,
         )
     except subprocess.TimeoutExpired as exc:
-        raise GitOperationError(f"git {' '.join(args)} timed out after 60s") from exc
+        raise GitProcessError("git command timed out") from exc
+    except OSError as exc:
+        _logger.warning("git process could not be started (%s)", type(exc).__name__)
+        raise GitProcessError("git command could not be started") from exc
     if check and result.returncode != 0:
         raise GitOperationError((result.stderr or result.stdout or "git command failed").strip())
     return result
@@ -75,6 +83,27 @@ class GitOps:
 
     def current_branch(self, worktree: Path) -> str:
         return _run_git(["symbolic-ref", "--short", "HEAD"], cwd=worktree).stdout.strip()
+
+    def branch_exists(self, target_worktree: Path, branch_name: str) -> bool:
+        result = _run_git(
+            ["show-ref", "--verify", "--quiet", f"refs/heads/{branch_name}"],
+            cwd=target_worktree,
+            check=False,
+        )
+        if result.returncode not in {0, 1}:
+            raise GitOperationError("generated coding branch state could not be determined")
+        return result.returncode == 0
+
+    def worktree_exists(self, target_worktree: Path, worktree_path: Path) -> bool:
+        """Return whether Git still registers ``worktree_path`` as a worktree."""
+        expected = worktree_path.resolve()
+        result = _run_git(["worktree", "list", "--porcelain"], cwd=target_worktree)
+        for line in result.stdout.splitlines():
+            if not line.startswith("worktree "):
+                continue
+            if Path(line.removeprefix("worktree ")).resolve() == expected:
+                return True
+        return False
 
     def merge_analysis(
         self,
@@ -390,12 +419,40 @@ class GitOps:
     def remove_worktree(self, *, target_worktree: Path, worktree_path: Path) -> None:
         """Remove a coding worktree registered under target_worktree.
 
-        Used to clean up worktrees leaked when session creation/abandon fails
-        after the worktree has already been created.  Best-effort: a missing or
-        already-removed worktree is not an error.
+        A missing or already-removed worktree is not an error.  Every other
+        outcome is verified so callers cannot mistake a failed compensation for
+        success.
         """
-        _run_git(
+        registered_before = self.worktree_exists(target_worktree, worktree_path)
+        if not registered_before and not worktree_path.exists():
+            return
+        result = _run_git(
             ["worktree", "remove", "--force", str(worktree_path)],
             cwd=target_worktree,
             check=False,
         )
+        if result.returncode != 0:
+            # A partially-created worktree may have left only an unregistered
+            # directory.  It is still the generated coding path owned by this
+            # session, so remove that residue without touching registered work.
+            if not self.worktree_exists(target_worktree, worktree_path):
+                try:
+                    shutil.rmtree(worktree_path)
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    raise GitOperationError("coding worktree path could not be removed") from exc
+            else:
+                raise GitOperationError("git worktree could not be removed")
+        if self.worktree_exists(target_worktree, worktree_path) or worktree_path.exists():
+            raise GitOperationError("coding worktree removal could not be verified")
+
+    def delete_branch(self, *, target_worktree: Path, branch_name: str) -> None:
+        """Delete a generated coding branch after its worktree is removed."""
+        if not self.branch_exists(target_worktree, branch_name):
+            return
+        result = _run_git(["branch", "-D", branch_name], cwd=target_worktree, check=False)
+        if result.returncode != 0 and self.branch_exists(target_worktree, branch_name):
+            raise GitOperationError("generated coding branch could not be deleted")
+        if self.branch_exists(target_worktree, branch_name):
+            raise GitOperationError("generated coding branch deletion could not be verified")

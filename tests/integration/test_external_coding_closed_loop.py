@@ -41,6 +41,8 @@ def test_persisted_coding_session_reaches_task_snapshot_and_safe_ui_event() -> N
                 base_commit="a" * 40,
                 artifact_dir="data/coding_sessions/ecs_closed_loop",
                 handoff_path="data/coding_sessions/ecs_closed_loop/HANDOFF.md",
+                plan_path="data/coding_sessions/ecs_closed_loop/PLAN.md",
+                result_path="data/coding_sessions/ecs_closed_loop/RESULT.md",
             )
 
         snapshot = task_service.get_graph_snapshot(

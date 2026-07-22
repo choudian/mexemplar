@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from sqlalchemy import update as sqlalchemy_update
+
 from src.data.models_sqlite import (
     ExternalCodingAttempt,
     ExternalCodingMergeRecord,
@@ -23,6 +25,62 @@ def _now() -> str:
 
 def _json_list(value: list[str] | None) -> str:
     return json.dumps(value or [], ensure_ascii=False)
+
+
+_TERMINAL_ATTEMPT_STATUSES = frozenset({"succeeded", "interrupted", "failed"})
+_SESSION_MUTABLE_FIELDS = frozenset(
+    {
+        "status",
+        "phase",
+        "selected_reason",
+        "quota_state",
+        "external_session_ref",
+        "target_branch",
+        "target_worktree_path",
+        "plan_approved_at",
+        "plan_approved_by",
+        "last_error_category",
+        "last_error_message",
+        "resume_count",
+        "review_recommended",
+        "review_skipped_reason",
+        "completed_at",
+    }
+)
+_ATTEMPT_MUTABLE_FIELDS = frozenset(
+    {
+        "status",
+        "command_summary",
+        "external_session_ref",
+        "pid",
+        "process_create_time",
+        "termination_unconfirmed",
+        "exit_code",
+        "finished_at",
+        "log_path",
+        "log_tail",
+        "error_category",
+        "error_message",
+    }
+)
+
+
+def _validate_attempt_state(
+    *,
+    status: str,
+    pid: int | None,
+    process_create_time: float | None,
+    termination_unconfirmed: bool,
+    launch_started: bool,
+) -> None:
+    if status == "running" and not termination_unconfirmed:
+        raise ValueError("running external coding attempts must retain process ownership")
+    if status in _TERMINAL_ATTEMPT_STATUSES and termination_unconfirmed:
+        raise ValueError("terminal external coding attempts cannot retain process ownership")
+    if not launch_started and (pid is not None or process_create_time is not None):
+        raise ValueError("unlaunched external coding attempts cannot have process identity")
+    if process_create_time is not None and pid is None:
+        raise ValueError("external coding process creation time requires a PID")
 
 
 class ExternalCodingSessionRepository(BaseRepository):
@@ -44,12 +102,21 @@ class ExternalCodingSessionRepository(BaseRepository):
         base_commit: str | None,
         artifact_dir: str,
         handoff_path: str,
+        plan_path: str,
+        result_path: str,
         target_branch: str | None = None,
         target_worktree_path: str | None = None,
         selected_reason: str | None = None,
         quota_state: str | None = None,
         coding_session_id: str | None = None,
     ) -> ExternalCodingSession:
+        if (
+            not isinstance(plan_path, str)
+            or not isinstance(result_path, str)
+            or not plan_path.strip()
+            or not result_path.strip()
+        ):
+            raise ValueError("plan_path and result_path are required")
         now = _now()
         row = ExternalCodingSession(
             coding_session_id=coding_session_id or generate_id("ecs"),
@@ -70,13 +137,20 @@ class ExternalCodingSessionRepository(BaseRepository):
             target_worktree_path=target_worktree_path,
             artifact_dir=artifact_dir,
             handoff_path=handoff_path,
+            plan_path=plan_path,
+            result_path=result_path,
             created_at=now,
             updated_at=now,
         )
         return self._add_and_flush(row)
 
     def get_session(self, coding_session_id: str) -> ExternalCodingSession | None:
-        return self.session.get(ExternalCodingSession, coding_session_id)
+        return (
+            self.session.query(ExternalCodingSession)
+            .populate_existing()
+            .filter(ExternalCodingSession.coding_session_id == coding_session_id)
+            .one_or_none()
+        )
 
     def list_sessions(
         self,
@@ -131,30 +205,13 @@ class ExternalCodingSessionRepository(BaseRepository):
         row = self.get_session(coding_session_id)
         if row is None:
             return None
-        allowed = {
-            "status",
-            "phase",
-            "selected_reason",
-            "quota_state",
-            "external_session_ref",
-            "target_branch",
-            "target_worktree_path",
-            "plan_path",
-            "result_path",
-            "plan_approved_at",
-            "plan_approved_by",
-            "last_error_category",
-            "last_error_message",
-            "resume_count",
-            "review_recommended",
-            "review_skipped_reason",
-            "completed_at",
-        }
-        for key, value in fields.items():
-            if key in allowed:
-                setattr(row, key, value)
-        row.updated_at = _now()
-        return self._update_and_flush(row)
+        self._apply_session_fields(row, fields)
+        try:
+            return self._update_and_flush(row)
+        except Exception:
+            if self.session.in_transaction():
+                self.session.rollback()
+            raise
 
     def add_attempt(
         self,
@@ -166,6 +223,9 @@ class ExternalCodingSessionRepository(BaseRepository):
         command_summary: str | None = None,
         external_session_ref: str | None = None,
         pid: int | None = None,
+        process_create_time: float | None = None,
+        termination_unconfirmed: bool = False,
+        launch_started: bool = False,
         exit_code: int | None = None,
         log_path: str | None = None,
         log_tail: str | None = None,
@@ -173,6 +233,13 @@ class ExternalCodingSessionRepository(BaseRepository):
         error_message: str | None = None,
         attempt_id: str | None = None,
     ) -> ExternalCodingAttempt:
+        _validate_attempt_state(
+            status=status,
+            pid=pid,
+            process_create_time=process_create_time,
+            termination_unconfirmed=termination_unconfirmed,
+            launch_started=launch_started,
+        )
         row = ExternalCodingAttempt(
             attempt_id=attempt_id or generate_id("eca"),
             coding_session_id=coding_session_id,
@@ -182,45 +249,261 @@ class ExternalCodingSessionRepository(BaseRepository):
             external_session_ref=external_session_ref,
             status=status,
             pid=pid,
+            process_create_time=process_create_time,
+            termination_unconfirmed=termination_unconfirmed,
+            launch_started=launch_started,
             exit_code=exit_code,
             started_at=_now(),
-            finished_at=_now() if status in {"succeeded", "interrupted", "failed"} else None,
+            finished_at=_now() if status in _TERMINAL_ATTEMPT_STATUSES else None,
             log_path=log_path,
             log_tail=log_tail,
             error_category=error_category,
             error_message=error_message,
         )
-        return self._add_and_flush(row)
+        try:
+            return self._add_and_flush(row)
+        except Exception:
+            if self.session.in_transaction():
+                self.session.rollback()
+            raise
 
-    def update_attempt(self, attempt_id: str, **fields: Any) -> ExternalCodingAttempt | None:
-        row = self.session.get(ExternalCodingAttempt, attempt_id)
+    def update_attempt(
+        self,
+        attempt_id: str,
+        *,
+        expected_status: str | None = None,
+        **fields: Any,
+    ) -> ExternalCodingAttempt | None:
+        if expected_status is not None:
+            current = self.get_attempt(attempt_id)
+            if current is None:
+                return None
+            if current.status != expected_status:
+                self._abort_conflict()
+                return None
+            try:
+                values = self._attempt_update_values(
+                    expected_status,
+                    fields,
+                    current_attempt=current,
+                )
+                result = self.session.execute(
+                    sqlalchemy_update(ExternalCodingAttempt)
+                    .where(
+                        ExternalCodingAttempt.attempt_id == attempt_id,
+                        ExternalCodingAttempt.status == expected_status,
+                    )
+                    .values(**values)
+                )
+                if result.rowcount != 1:
+                    self._abort_conflict()
+                    return None
+                self._commit()
+                return self.get_attempt(attempt_id)
+            except Exception:
+                if self.session.in_transaction():
+                    self.session.rollback()
+                raise
+        row = self.get_attempt(attempt_id)
         if row is None:
             return None
-        for key in {
-            "status",
-            "command_summary",
-            "external_session_ref",
-            "pid",
-            "exit_code",
-            "finished_at",
-            "log_path",
-            "log_tail",
-            "error_category",
-            "error_message",
-        }:
-            if key in fields:
-                setattr(row, key, fields[key])
-        if row.status in {"succeeded", "interrupted", "failed"} and row.finished_at is None:
-            row.finished_at = _now()
-        return self._update_and_flush(row)
+        try:
+            self._apply_attempt_fields(row, fields)
+            return self._update_and_flush(row)
+        except Exception:
+            if self.session.in_transaction():
+                self.session.rollback()
+            raise
+
+    def mark_attempt_launch_started(self, attempt_id: str) -> ExternalCodingAttempt | None:
+        """CAS the reservation across the spawn boundary exactly once."""
+        try:
+            result = self.session.execute(
+                sqlalchemy_update(ExternalCodingAttempt)
+                .where(
+                    ExternalCodingAttempt.attempt_id == attempt_id,
+                    ExternalCodingAttempt.status == "running",
+                    ExternalCodingAttempt.launch_started.is_(False),
+                )
+                .values(launch_started=True)
+            )
+            if result.rowcount != 1:
+                self._abort_conflict()
+                return None
+            self._commit()
+            return self.get_attempt(attempt_id)
+        except Exception:
+            if self.session.in_transaction():
+                self.session.rollback()
+            raise
+
+    def get_attempt(self, attempt_id: str) -> ExternalCodingAttempt | None:
+        return (
+            self.session.query(ExternalCodingAttempt)
+            .populate_existing()
+            .filter(ExternalCodingAttempt.attempt_id == attempt_id)
+            .one_or_none()
+        )
+
+    def update_session_and_attempt(
+        self,
+        *,
+        coding_session_id: str,
+        attempt_id: str,
+        session_fields: dict[str, Any],
+        attempt_fields: dict[str, Any],
+        expected_attempt_status: str | None = None,
+    ) -> tuple[ExternalCodingSession, ExternalCodingAttempt] | None:
+        """Project one process observation atomically into both durable rows."""
+        session_row = self.get_session(coding_session_id)
+        if session_row is None:
+            return None
+        if expected_attempt_status is not None:
+            current_attempt = self.get_attempt(attempt_id)
+            if current_attempt is None:
+                return None
+            if current_attempt.coding_session_id != coding_session_id:
+                raise ValueError("external coding attempt does not belong to the session")
+            if current_attempt.status != expected_attempt_status:
+                self._abort_conflict()
+                return None
+            try:
+                attempt_values = self._attempt_update_values(
+                    expected_attempt_status,
+                    attempt_fields,
+                    current_attempt=current_attempt,
+                )
+                result = self.session.execute(
+                    sqlalchemy_update(ExternalCodingAttempt)
+                    .where(
+                        ExternalCodingAttempt.attempt_id == attempt_id,
+                        ExternalCodingAttempt.coding_session_id == coding_session_id,
+                        ExternalCodingAttempt.status == expected_attempt_status,
+                    )
+                    .values(**attempt_values)
+                )
+                if result.rowcount != 1:
+                    self._abort_conflict()
+                    return None
+                self._apply_session_fields(session_row, session_fields)
+                self._commit()
+                self.session.refresh(session_row)
+                attempt_row = self.get_attempt(attempt_id)
+                if attempt_row is None:
+                    raise RuntimeError("external coding attempt disappeared after projection")
+                return session_row, attempt_row
+            except Exception:
+                if self.session.in_transaction():
+                    self.session.rollback()
+                raise
+        attempt_row = self.get_attempt(attempt_id)
+        if attempt_row is None:
+            return None
+        if attempt_row.coding_session_id != coding_session_id:
+            raise ValueError("external coding attempt does not belong to the session")
+        try:
+            self._apply_session_fields(session_row, session_fields)
+            self._apply_attempt_fields(attempt_row, attempt_fields)
+            self._commit()
+            self.session.refresh(session_row)
+            self.session.refresh(attempt_row)
+        except Exception:
+            if self.session.in_transaction():
+                self.session.rollback()
+            raise
+        return session_row, attempt_row
+
+    def get_active_attempt(self, coding_session_id: str) -> ExternalCodingAttempt | None:
+        return (
+            self.session.query(ExternalCodingAttempt)
+            .filter(
+                ExternalCodingAttempt.coding_session_id == coding_session_id,
+                ExternalCodingAttempt.status == "running",
+            )
+            .populate_existing()
+            .order_by(ExternalCodingAttempt.started_at.desc())
+            .first()
+        )
 
     def list_attempts(self, coding_session_id: str) -> list[ExternalCodingAttempt]:
         return (
             self.session.query(ExternalCodingAttempt)
             .filter(ExternalCodingAttempt.coding_session_id == coding_session_id)
+            .populate_existing()
             .order_by(ExternalCodingAttempt.started_at)
             .all()
         )
+
+    @staticmethod
+    def _apply_session_fields(row: ExternalCodingSession, fields: dict[str, Any]) -> None:
+        if {"plan_path", "result_path"}.intersection(fields):
+            raise ValueError("external coding artifact paths are immutable")
+        unknown = set(fields).difference(_SESSION_MUTABLE_FIELDS)
+        if unknown:
+            raise ValueError(f"unsupported external coding session fields: {sorted(unknown)}")
+        for key, value in fields.items():
+            if key in _SESSION_MUTABLE_FIELDS:
+                setattr(row, key, value)
+        row.updated_at = _now()
+
+    @staticmethod
+    def _apply_attempt_fields(row: ExternalCodingAttempt, fields: dict[str, Any]) -> None:
+        values = ExternalCodingSessionRepository._attempt_update_values(
+            row.status,
+            fields,
+            current_attempt=row,
+        )
+        for key, value in values.items():
+            setattr(row, key, value)
+
+    @staticmethod
+    def _attempt_update_values(
+        current_status: str,
+        fields: dict[str, Any],
+        *,
+        current_attempt: ExternalCodingAttempt | None = None,
+    ) -> dict[str, Any]:
+        unknown = set(fields).difference(_ATTEMPT_MUTABLE_FIELDS)
+        if unknown:
+            raise ValueError(f"unsupported external coding attempt fields: {sorted(unknown)}")
+        resulting_status = str(fields.get("status", current_status))
+        if current_status in _TERMINAL_ATTEMPT_STATUSES and resulting_status == "running":
+            raise ValueError("terminal external coding attempts cannot return to running")
+        if resulting_status == "running" and fields.get("termination_unconfirmed") is False:
+            raise ValueError("running external coding attempts must retain process ownership")
+        if (
+            resulting_status in _TERMINAL_ATTEMPT_STATUSES
+            and fields.get("termination_unconfirmed") is True
+        ):
+            raise ValueError("terminal external coding attempts cannot retain process ownership")
+        values = {key: value for key, value in fields.items() if key in _ATTEMPT_MUTABLE_FIELDS}
+        if resulting_status in _TERMINAL_ATTEMPT_STATUSES:
+            values["termination_unconfirmed"] = False
+            if values.get("finished_at") is None:
+                values["finished_at"] = _now()
+        elif resulting_status == "running":
+            values["finished_at"] = None
+        if current_attempt is not None:
+            _validate_attempt_state(
+                status=resulting_status,
+                pid=(values["pid"] if "pid" in values else current_attempt.pid),
+                process_create_time=(
+                    values["process_create_time"]
+                    if "process_create_time" in values
+                    else current_attempt.process_create_time
+                ),
+                termination_unconfirmed=bool(
+                    values["termination_unconfirmed"]
+                    if "termination_unconfirmed" in values
+                    else current_attempt.termination_unconfirmed
+                ),
+                launch_started=bool(
+                    values["launch_started"]
+                    if "launch_started" in values
+                    else current_attempt.launch_started
+                ),
+            )
+        return values
 
     def add_quota_observation(
         self,

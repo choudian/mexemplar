@@ -145,12 +145,22 @@ class ProcessStartResult:
     status: AttemptStatus
     command_summary: str
     pid: int | None = None
+    process_create_time: float | None = None
+    termination_unconfirmed: bool = False
     external_session_ref: str | None = None
     exit_code: int | None = None
     log_path: str | None = None
     log_tail: str | None = None
     error_category: ErrorCategory | None = None
     error_message: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.status == AttemptStatus.RUNNING and not self.termination_unconfirmed:
+            raise ValueError("running process results must retain unconfirmed ownership")
+        if self.status != AttemptStatus.RUNNING and self.termination_unconfirmed:
+            raise ValueError("terminal process results cannot retain unconfirmed ownership")
+        if self.process_create_time is not None and self.pid is None:
+            raise ValueError("process creation time requires a PID")
 
 
 @dataclass(frozen=True)

@@ -8,9 +8,13 @@ from pathlib import Path
 from src.data.unified_config import UnifiedConfigManager, get_unified_config
 from src.execution.external_coding_process import (
     ExternalCodingProcessRunner,
+    ExternalProcessStartError,
     ExternalProcessSnapshot,
+    ExternalProcessTerminationOutcome,
+    safe_external_command_summary,
 )
 
+from .artifacts import PLAN_FILENAME, RESULT_FILENAME
 from .models import (
     AttemptStatus,
     CodingPhase,
@@ -36,10 +40,25 @@ class ExternalCodingAdapter:
     ) -> ProcessStartResult:
         raise NotImplementedError
 
-    def poll(self, *, pid: int | None, log_path: Path) -> ProcessStartResult:
+    def poll(
+        self,
+        *,
+        pid: int | None,
+        log_path: Path,
+        process_create_time: float | None = None,
+        termination_unconfirmed: bool = False,
+    ) -> ProcessStartResult:
         raise NotImplementedError
 
-    def stop(self, *, pid: int | None, log_path: Path, reason: str) -> bool:
+    def stop(
+        self,
+        *,
+        pid: int | None,
+        log_path: Path,
+        reason: str,
+        process_create_time: float | None = None,
+        termination_unconfirmed: bool = False,
+    ) -> ExternalProcessTerminationOutcome:
         raise NotImplementedError
 
 
@@ -84,6 +103,7 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
             max(self._config.get_external_coding_log_tail_chars() * 4, 16_000),
             1_000_000,
         )
+        command_summary = safe_external_command_summary(command)
         try:
             started = self._runner.start(
                 command=command,
@@ -96,15 +116,28 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
         except FileNotFoundError:
             return ProcessStartResult(
                 status=AttemptStatus.FAILED,
-                command_summary=command[0],
+                command_summary=command_summary,
                 error_category=ErrorCategory.LOGIN_REQUIRED,
                 error_message=f"{tool.value} command is not available or not on PATH",
+            )
+        except ExternalProcessStartError as exc:
+            self._log.error("External coding process survived failed initialization")
+            return ProcessStartResult(
+                status=AttemptStatus.RUNNING,
+                command_summary=command_summary,
+                pid=exc.pid,
+                process_create_time=exc.process_create_time,
+                termination_unconfirmed=True,
+                error_category=ErrorCategory.PROCESS_ERROR,
+                error_message=(
+                    "external coding process initialization failed; managed shutdown is required"
+                ),
             )
         except Exception as exc:
             self._log.error("Failed to start external coding process (%s)", type(exc).__name__)
             return ProcessStartResult(
                 status=AttemptStatus.FAILED,
-                command_summary=command[0],
+                command_summary=command_summary,
                 error_category=ErrorCategory.PROCESS_ERROR,
                 error_message="failed to start external coding process",
             )
@@ -112,15 +145,43 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
             status=AttemptStatus.RUNNING,
             command_summary=started.command_summary,
             pid=started.pid,
+            process_create_time=started.process_create_time,
+            termination_unconfirmed=True,
             log_path=str(log_path),
         )
 
-    def poll(self, *, pid: int | None, log_path: Path) -> ProcessStartResult:
-        snapshot = self._runner.poll(pid=pid, log_path=log_path)
+    def poll(
+        self,
+        *,
+        pid: int | None,
+        log_path: Path,
+        process_create_time: float | None = None,
+        termination_unconfirmed: bool = False,
+    ) -> ProcessStartResult:
+        snapshot = self._runner.poll(
+            pid=pid,
+            log_path=log_path,
+            process_create_time=process_create_time,
+            termination_unconfirmed=termination_unconfirmed,
+        )
         return self._snapshot_to_result(snapshot, log_path=log_path)
 
-    def stop(self, *, pid: int | None, log_path: Path, reason: str) -> bool:
-        return self._runner.stop(pid=pid, log_path=log_path, reason=reason)
+    def stop(
+        self,
+        *,
+        pid: int | None,
+        log_path: Path,
+        reason: str,
+        process_create_time: float | None = None,
+        termination_unconfirmed: bool = False,
+    ) -> ExternalProcessTerminationOutcome:
+        return self._runner.stop(
+            pid=pid,
+            log_path=log_path,
+            reason=reason,
+            process_create_time=process_create_time,
+            termination_unconfirmed=termination_unconfirmed,
+        )
 
     def _build_command(
         self,
@@ -132,13 +193,14 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
         launch_mode: LaunchMode = LaunchMode.HEADLESS,
         external_session_ref: str | None = None,
     ) -> list[str]:
-        del phase
         if tool == ExternalCodingTool.CLAUDE_CODE:
             command = self._config.get_external_coding_claude_command()
             effort = self._config.get_external_coding_claude_effort()
             args = [command]
             if external_session_ref:
                 args.extend(["--resume", external_session_ref])
+            # Claude's @file expansion depends on background prefetch. Adding
+            # --bare disables that prefetch and would silently stop delivery.
             if launch_mode == LaunchMode.HEADLESS:
                 args.extend(
                     [
@@ -146,6 +208,7 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
                         f"@{prompt_path}",
                         "--output-format",
                         "stream-json",
+                        "--verbose",
                     ]
                 )
             else:
@@ -170,11 +233,14 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
             return args
         command = self._config.get_external_coding_codex_command()
         effort = self._config.get_external_coding_codex_reasoning_effort()
+        prompt_instruction = (
+            f"Follow the instructions in this file: {prompt_path}. "
+            "Return the complete requested phase artifact as your final response; "
+            "the CLI will persist it."
+        )
         args = [command]
         if launch_mode == LaunchMode.HEADLESS:
-            args.append("exec")
-            if external_session_ref:
-                args.extend(["resume", external_session_ref])
+            args.extend(["exec", "--json"])
         elif external_session_ref:
             args.extend(["resume", external_session_ref])
         args.extend(
@@ -186,11 +252,16 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
                 f'model_reasoning_effort="{effort}"',
             ]
         )
-        if launch_mode == LaunchMode.HEADLESS:
-            args.insert(2 if not external_session_ref else 4, "--json")
         if artifact_dir is not None:
             args.extend(["--add-dir", str(artifact_dir.resolve())])
-        args.append(f"@{prompt_path}")
+            if launch_mode == LaunchMode.HEADLESS:
+                output_name = PLAN_FILENAME if phase == CodingPhase.PLAN else RESULT_FILENAME
+                args.extend(["-o", str((artifact_dir / output_name).resolve())])
+        if launch_mode == LaunchMode.HEADLESS and external_session_ref:
+            # ``codex exec resume`` does not accept the parent command's sandbox
+            # and add-dir flags after the subcommand. Keep parent options first.
+            args.extend(["resume", external_session_ref])
+        args.append(prompt_instruction)
         return args
 
     @staticmethod
@@ -211,6 +282,8 @@ class CliExternalCodingAdapter(ExternalCodingAdapter):
             status=status,
             command_summary="managed external coding process",
             pid=snapshot.pid,
+            process_create_time=snapshot.process_create_time,
+            termination_unconfirmed=snapshot.termination_unconfirmed,
             exit_code=snapshot.exit_code,
             external_session_ref=snapshot.external_session_ref,
             log_path=str(log_path),

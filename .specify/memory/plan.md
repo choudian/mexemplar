@@ -1,8 +1,8 @@
 # Main Implementation Plan Memory
 
 **Purpose**: Consolidated technical state from all merged features. Reflects the *implemented* state of the system.
-**Last Updated**: 2026-07-20
-**Revision**: 2026-07-20 — Archived feature 033 (Scheduling Center / 调度中心)
+**Last Updated**: 2026-07-22
+**Revision**: 2026-07-22 — Archived features 034 and 035
 
 ---
 
@@ -1867,7 +1867,8 @@ append-only run 账目、完成/接管通知与 `/scheduled` 管理屏；CC-005 
   与既有 Tauri 2 / Python 3.11+ 约束一致，无版本冲突。
 - **Storage**: SQLite v30 新增 `scheduled_tasks` / `scheduled_task_runs`，并给 `sessions`
   增加 `source` / `scheduled_task_id` / `is_scheduled`；v31 为 run 终态事件增加按代次投递确认。
-  DuckDB 与 `user_todos` schema 不变。
+  034 的 v32 再增加 task current-session 绑定、run baseline/trigger 水位线和 task/session 双维度
+  active-run 约束。DuckDB 与 `user_todos` schema 不变。
 - **Configuration**: `scheduler.scan_interval_seconds=30`（bounded 5..600）和
   `scheduler.confirmation_timeout_seconds=300` 经 `UnifiedConfigManager`；
   misfire/reentry 是硬不变量，不提供关闭开关。无新增 secret。
@@ -1880,7 +1881,7 @@ Assistant create_scheduled_task
   → SchedulingConfirmationManager（内存 pending、first-decision-wins、fail-closed）
   → SchedulerService / ScheduledTaskRepository
   → SchedulerWorker（周期扫描 + 最近时点动态等待 + Event 唤醒）
-  → SessionLauncher（detached scheduled session + active run 同事务 first-wins）
+  → SessionLauncher（runtime reservation + current session 首绑/复用 + active run 原子 first-wins）
   → injected AssistantRuntime.dispatch_message（复用既有 100% 调度）
   → RunCompletionMonitor（runtime 退出直调 + 内部图/任务事件）
   → TerminalEventDelivery（v31 按 run/version 确认与补投）
@@ -1889,10 +1890,10 @@ Assistant create_scheduled_task
 
 - `SessionLauncher` 位于 business 层，只依赖 desktop lifespan 注入的 dispatch callback；
   business 不反向 import `desktop_api`。
-- `uq_runs_active_per_task` partial unique index 是 worker/fire-now 并发 first-wins 权威门卫；
-  冲突经 `create_skipped()` 记账且不创建第二个会话。
-- 完成门卫固定为无活跃 runtime worker、无 pending reentry、执行节点图全终态；
-  图/runtime 查询未知时延后。`compute_graph_terminal_state` 归属
+- `uq_runs_active_per_task` 与 v32 active-per-session partial unique index 是 worker/fire-now 并发
+  first-wins 权威门卫；runtime busy 或索引冲突经 `create_skipped()` 记账且不启动第二轮。
+- 完成门卫以 run-id + baseline/trigger 窗口固定为无活跃 runtime worker、无本图 pending reentry、
+  本 run 执行节点图全终态；图/runtime 查询未知时延后。`compute_graph_terminal_state` 归属
   `task_collaboration/graph_terminal.py`，observer emit 失败不阻断既有父侧回流。
 - 终态业务事实先提交，再发布公开事件并按 `(run_id, terminal_event_version)` 确认；
   启动和 worker tick 有界补投。语义为 at-least-once，允许极窄重复提醒窗口但不永久丢失。
@@ -1904,8 +1905,8 @@ src/business/scheduling/
 ├── scheduler_service.py                  # CRUD、状态/调度不变量、fire-now
 ├── scheduler_worker.py                   # 双 Event 值守、misfire、reentry
 ├── schedule_calc.py                      # interval/daily/weekly/weekdays + zoneinfo/DST
-├── session_launcher.py                   # session + active run 原子提交后 dispatch
-├── run_completion_monitor.py             # 三条件静默判定、waiting_user/failed/succeeded
+├── session_launcher.py                   # reservation + current session 首绑/复用 + active run
+├── run_completion_monitor.py             # run-id / 消息窗口三条件终态判定
 ├── terminal_event_delivery.py            # v31 按代次投递、确认与重试
 ├── scheduling_confirmation_manager.py    # 创建确认卡生命周期
 └── unattended_confirmation_manager.py    # per-task 授权与 scheduled 立即拒绝
@@ -1972,3 +1973,284 @@ frontend/src/utils/desktopNotification.ts
   未返回 verdict，未计为通过。
 - **Feature tasks**: 94/96。未完成 T075（Windows NSIS/AUMID 桌面通知实机验收）和
   T080（按 quickstart 的五场景完整实机冒烟）；两者均保留为人工验证，不伪造完成。
+
+## 外部 Coding 可靠性修复 [Source: specs/035-external-coding-reliability]
+
+**Revision note (2026-07-22)**: Archived 035 on the verified feature branch for merge into
+`prepare-github`。在 030 外部 Coding Session 与 031 组合授权边界内收紧目标仓库、任务书、
+启动补偿和进程 ownership；实现集中于既有 business / execution / data 模块，不新增第三方
+依赖、模块、配置键、公开 API/UI event 或 secret。完整规格、数据模型、命令契约与验证记录
+保留在 `specs/035-external-coding-reliability/`。
+
+### Technical Context
+
+- **Language/Version**: Python 3.12 运行时；保持既有 `from __future__ import annotations` 风格。
+- **Primary Dependencies**: 无新增第三方依赖；复用标准库 `shutil.which`、psutil、SQLAlchemy、
+  `UnifiedConfigManager`、`ExternalCodingSessionRepository` 与 `ExternalCodingProcessRunner`。
+- **Storage**: SQLite v33 在 `external_coding_attempts` 增加 `process_create_time`、
+  `termination_unconfirmed`、`launch_started`，以及每 session 单 running partial unique index、
+  ownership/launch 行 guards；无新表，DuckDB 不变。
+- **Configuration**: 0 新键。`external_coding.worktree_root` 键名和默认值
+  `.worktrees/coding` 不变，仅把相对路径展开基准从 sidecar cwd 修正为显式目标仓库；
+  artifact 根仍以 sidecar cwd 绝对化。
+- **Events/Secrets/UI**: 0 新公开 UI event、0 新 secret、0 前端/Tauri/desktop API 变更。
+- **Target/Scope**: Windows 11 桌面生产路径；涉及 Python business / execution / data，
+  不改变外部 Coding 的固定专员 + 正式 Task + 已发布组合授权范围。
+
+### Modified Source Structure
+
+```text
+src/
+├── business/
+│   ├── agents/tools/external_coding_tools.py   # targetWorktreePath required + schema 约束
+│   └── external_coding/
+│       ├── service.py                          # 目标校验、绝对 artifact、reservation/CAS/补偿
+│       ├── cli_adapters.py                     # CLI 语法、任务书指示、Codex final-output
+│       ├── git_ops.py                          # Git 错误分型与可验证 worktree/分支删除
+│       └── models.py                           # durable identity / stop 三态内部值
+├── execution/external_coding_process.py        # PATH/PATHEXT、无 shell spawn、registry/monitor/reader
+└── data/
+    ├── migrations.py                           # SQLite v33 幂等升级/回退、索引与 triggers
+    ├── models_sqlite.py                        # attempt ownership columns/check constraints
+    └── repos/external_coding_session_repository.py  # 原子 session/attempt 投影与 CAS
+
+tests/
+├── business/external_coding/
+│   ├── test_target_repository_required.py      # 新：目标仓库 fail-closed 与补偿
+│   ├── test_cli_adapters.py
+│   ├── test_external_coding_tools.py
+│   ├── test_git_ops.py
+│   └── test_service_attempts.py
+├── data/test_migrations_v33.py                 # 新：v33 幂等迁移与行 guard
+├── data/test_external_coding_session_repository.py
+└── integration/test_external_coding_closed_loop.py
+```
+
+没有新建业务模块。`service.py` 仍负责生命周期编排，`git_ops.py` 负责 Git 原语，
+`cli_adapters.py` 负责命令构造，execution runner 负责进程树与私有状态文件，Repository 负责
+SQLite 原子性和 CAS；依赖方向保持 business → execution/data。
+
+### Session Creation And Launch Flow
+
+```text
+required targetWorktreePath
+  → 校验存在 + Git HEAD（失败零副作用）
+  → 绝对化 artifact root；按目标仓库展开相对 worktree root
+  → 创建 artifact/HANDOFF + worktree/branch
+  → create_session 一次写入 plan/result 绝对路径
+  → create running attempt reservation（launch_started=false）
+  → 写 prompt + 构造 adapter
+  → CAS(status=running, launch_started=false → true) 取得唯一 spawn 权
+  → PATH/PATHEXT 解析 argv，shell=False Popen
+  → 持久化 PID + process_create_time + termination_unconfirmed
+  → guarded monitor + reader sentinel
+  → Repository expected-status CAS / attempt+session 单事务终态投影
+```
+
+- 创建前的目标错误不触碰文件系统或数据库；创建后的任一步失败进入统一逆序补偿并验证
+  worktree 注册、目录、生成分支和本次 artifact 均消失。
+- 首次 session 写入抛错后先按预生成 ID 回读：确认未提交才补偿；回读也失败则保留资源并
+  返回安全恢复 ID，避免猜测性删除已提交行。
+- adapter factory 位于 launch CAS 前；并发 abandon/refresh 已关单或 CAS 未命中时在
+  `Popen` 前停止。`launch_started` 只能经专用 CAS 单向 false→true。
+
+### Durable Process Ownership And Recovery
+
+- running attempt 行固定为 `termination_unconfirmed=true`；terminal 固定为 false。
+  `launch_started=false` 时 PID/创建时间必须为空，创建时间非空时 PID 必须非空。
+- v33 旧 running 行回填 `process_create_time=NULL`、`termination_unconfirmed=true`、
+  `launch_started=true`，旧 terminal 行回填 `NULL/false/true`。缺失 durable 创建时间意味着
+  永久未验证 ownership，状态文件不能反向补齐后“洗白”。
+- runner 只以 PID + 创建时间 + 状态路径 + 实例令牌管理 owner；registry lookup 校验完整
+  identity，删除用对象 CAS。PID 复用、旧 monitor 迟到或碰撞补偿失败不会覆盖、误删、误停
+  另一 owner。
+- stop 返回 confirmed-stopped / already-exited / unconfirmed 三态。只有前两态可以清除
+  ownership；普通 `poll` terminal snapshot 不替代整棵进程树退出证明。
+- headless/interactive 共用 guarded monitor。stdout/stderr reader 用独立 EOF/failed sentinel；
+  queue put 可取消。进程退出或 queue 暂空不能抢先宣告 stream 完成，读取错误和 wait 超时
+  都进入整树终止契约。
+- monitor 已确认退出但 terminal marker 写失败时保留 recovery payload 与 registry；后续 poll
+  只有 marker 真正落盘后才返回终态并释放 owner。状态/marker 双写都失败时 SQLite running
+  guard 和 registry 至少保留一条恢复路径。
+
+### CLI, Artifact And Error Contracts
+
+- `targetWorktreePath` 是工具 required 字段；description 明确绝对路径、可用 Git 仓库、
+  缺失即拒绝和指向 Exemplar 也需显式填写。约束不进入主助理 system prompt。
+- Codex plan / implement / resume 使用 `Follow the instructions in this file: <path>`，并以
+  CLI final-output 参数分别写 `PLAN.md` / `RESULT.md`；resume 的 sandbox/add-dir/output 父级
+  参数位于子命令前。
+- Claude Code 保留 `@path` background-prefetch 契约，`stream-json` 带当前版本要求的
+  verbosity；代码注释和测试警告 `--bare` 会关闭该预取。
+- Windows 命令名经 PATH/PATHEXT 找到 `.cmd` / `.exe` 真实入口，但仍用 argv、`shell=False`；
+  executable、prompt、artifact 与句中绝对路径在成功/失败 command summary 中统一脱敏。
+- Git HEAD/分支预期失败、timeout/OSError 和未知异常分型；只有预期业务错误转安全可行动文案，
+  未知程序异常继续显式失败。
+
+### Data Model And Compatibility
+
+- `ExternalCodingSessionRepository.create_session()` 对 035 新调用要求非空 plan/result 路径；
+  数据库旧列继续 nullable 以兼容历史 schema，但通用 update 不再允许改写这两个路径。
+- v33 migration 幂等增加列、partial unique index、INSERT/UPDATE ownership triggers 和
+  `launch_started` true→false guard；downgrade 移除这些 v33 对象并保留 v32 数据模型。
+- Repository 先合并现有行再校验完整状态；domain result/snapshot 只承诺校验其自身携带的
+  status/ownership/PID 字段，不冒充掌握 `launch_started`。
+- failed/interrupted、abandon 和协议违规的 attempt/session 终态同事务提交；成功 attempt
+  终态与随后 PLAN/RESULT 语义校验保留为可重试的两步投影。
+
+### Architecture Decisions And Gotchas
+
+- **R1 明确目标胜过项目注册表**：当前单用户未发布，不新增项目表/UI；调用点缺目标直接
+  fail-closed。模型是否把路径交代清楚仍是软约束，代码硬保证仅是“不清楚就不执行”。
+- **R2 相对 worktree 跟随目标仓库**：修正默认产物仍堆在 Exemplar 的同源风险；绝对根保持
+  既有含义，artifact 根继续独立。
+- **R3 两个 CLI 不强行同构**：Codex 没有 `@file` 预取，使用显式读取动作；Claude 的
+  `@file` 已实测有效并依赖 background prefetch。若 Codex 再发生未读任务书事故，后续候选
+  是通过 stdin 直接送内容，而不是声称当前提示词给出确定性内容注入。
+- **R4 参数存在不等于组合可运行**：维护 adapter 时既要核对本机 `--help`，也要跑真实
+  headless 生产链；Windows shim、Claude verbosity、Codex resume 参数顺序和 final-output
+  均是 T015/T020 实测发现。
+- **R5 运行态事实必须多源闭合**：数据库 durable identity 是恢复权威，私有状态文件和
+  进程内 registry 各自提供证据但都不能单独把 unconfirmed owner 升级为终态。
+
+### Testing Strategy And Status
+
+- 目标仓库测试覆盖缺失/不存在/非仓库/无 HEAD、linked worktree、显式 Exemplar、相对/绝对
+  worktree 与 artifact 根、部分创建、补偿失败和首次持久化未知。
+- execution/service 故障注入覆盖 adapter factory、reservation→spawn 竞态、Popen 后初始化、
+  reader error/EOF、满队列取消、整树终止三态、monitor recovery、PID 复用、registry CAS、
+  terminal 重放、跨重启 stop 和 stale running CAS。
+- Repository/migration 覆盖 v32→v33 running/terminal 回填、幂等 upgrade/downgrade、单 running
+  唯一索引、ownership guards、launch 单向性、原子 rollback 与未知投影字段拒绝。
+- **Feature verification (2026-07-22)**: 扩大 external coding 范围 `207 passed, 43 warnings`；
+  全仓 Flake8、16 个非既有格式债务变更文件 Black、核心 `py_compile`、`git diff --check` 与
+  src AI 三镜像哈希通过。全仓 Black 仍只报告已登记的 6 个既有文件。
+- **Real Codex path**: 默认命令名 `codex` 经 production service/execution 链进入
+  `plan_ready`，生成含精确目标的 `PLAN.md`，目标仓库侧 worktree 和命令摘要脱敏均通过；
+  当前通道无法操作桌面 GUI，未把 UI 派活伪写为人工验证。
+- **Feature tasks**: 63/63 completed。
+
+## 调度任务常驻会话复用 [Source: specs/034-scheduled-session-reuse]
+
+**Revision note (2026-07-22)**: Archived 034 after 035 in the same worktree for a joint commit
+into `prepare-github`。034 把 ScheduledTask current session 设计为长生命周期资源，把
+ScheduledTaskRun 保持为单次触发所有权与审计单元；在既有 scheduling 模块内演进 SQLite v32、
+launcher、runtime/graph 接缝、完成监视与 reset API/UI，不新增模块、依赖、配置、公开事件或 secret。
+
+### Technical Context
+
+- **Language/Version**: Python 3.11+（当前运行时 3.12），React 18 + TypeScript 5.x。
+- **Dependencies**: 无新增第三方依赖；复用 SQLAlchemy/SQLite、FastAPI、AssistantRuntime、Zustand
+  与既有 UI Event Registry。
+- **Storage**: SQLite v32；`scheduled_tasks` 增加唯一可空 `session_id`，
+  `scheduled_task_runs` 增加 baseline/trigger 消息序号和 active-per-session、session-trigger 索引。
+  DuckDB、`user_todos` 与公开 DTO 基础模型不扩表。
+- **Configuration/Events/Secrets**: 0 新配置、0 新公开 UI event、0 新 secret；reset 复用
+  `scheduled_task.changed(status_changed)`。
+- **Scope**: `src/business/scheduling/` 为业务所有者；只窄化修改 task-collaboration 的回流接缝，
+  并接入 desktop API typed router 与 `/scheduled` 现有详情 UI。
+
+### Data Ownership And Atomic Launch
+
+```text
+SchedulerWorker / fire-now
+  → SessionLauncher.reserve_scheduled_session(session_id, reservation_id)
+  → Repository transaction
+      ├─ first run: insert scheduled session + CAS bind task + insert active run
+      └─ later run: validate current binding + insert active run
+  → dispatch_reserved_message(..., reservation_id, scheduled_run_id)
+  → AssistantRuntime worker（pinned run_id）
+```
+
+- `scheduled_tasks.session_id` 是 current session 权威；唯一可空索引阻止不同 task 共享绑定。
+- `baseline_message_sequence` 是 run 开始前最大消息序号，`trigger_message_sequence` 是预约的
+  下一 user 消息序号；它们只定义持久查询窗口，不代表运行时 worker 身份。
+- 数据层以 `try_create_active_for_bound_session(...)` 和
+  `try_create_active_with_new_bound_session(...)` 收口 task/session 关系、绑定 CAS、唯一槽和事务。
+- reservation 与普通 dispatch/retry/reentry 共用 worker lock，封住静默检查与 worker 注册间竞态；
+  任一失败释放预约。trigger 尚未落库时 run 终态事务清预留序号，已落库则保留审计证据。
+- busy 发生在 run 创建前时 occurrence 直接记 skipped，不制造先 running 后 failed 的伪执行。
+
+### Run Ownership, Graph And Completion
+
+- 自动触发把 `run_id` 固定传入 runtime worker；waiting_user takeover 只解析一次该 session 的唯一
+  active run，之后 waiting/failed/evaluate 全部按 pinned run-id mutation。
+- monitor 的 tool evidence、assistant summary 与任务图只读取 `sequence > baseline` 窗口；窗口内
+  任何 root 缺 `user_message_sequence` 都返回 unknown/fail-closed。
+- graph observer 通过 root `user_message_sequence` 映射到满足
+  `baseline < sequence` 的最大 run，不以“session 最近 run”猜归属。
+- `ParentReentrySink` 队列键从 session 扩为 `(session_id, graph_id)`；worker 只 drain/re-enqueue
+  本图，tail-kick 选择仍 pending 的图。`GraphScheduler` 先入 graph-complete 回流，再 emit
+  scheduling observer，防止完成门卫抢在迟到回流前判静默。
+- 这些改动不改变节点推进、裁定、执行器选择、通信或恢复决策，依赖方向仍为 scheduling →
+  task-collaboration 公共接缝。
+
+### Reset And Authorization Flow
+
+```text
+POST /api/scheduled-tasks/{task_id}/reset-session
+  → SchedulerService.reset_session()
+  → trigger guard + active-run check
+  → injected runtime busy guard
+  → Repository CAS clear current session
+  → typed task snapshot + scheduled_task.changed(status_changed)
+```
+
+- active run、worker、reservation、pending reentry 或非终态图任一存在即 fail-closed；REST 映射 409，
+  绑定保持不变，前端只显示可重试提示。
+- reset 不删除、不改写、不转型旧 session；历史 run 仍可导航，旧 scheduled session 继续从普通
+  聊天列表排除并跳过 Brain Segment。
+- unattended manager 除 session source/task id 外还验证 `task.session_id == session_id`，因此旧
+  session 在 CAS 清绑定后立即失去 CC-005 资格。
+- UI 只经 typed client/store 调 reset facade；请求中按钮禁用，成功后刷新权威 task snapshot，
+  不在本地推断新绑定。
+
+### Migration And Compatibility
+
+- v32 migration 在既有表上幂等加列、索引与仅测试 downgrade；按每个 task 最新、关系合法且
+  session 可复用的 run 回填 current binding，冲突或损坏历史保持 NULL 并等待下次惰性首绑。
+- v31 历史 run 回填 `baseline_message_sequence=0`、`trigger_message_sequence=NULL`，保持可读且
+  已终态历史行不会被 monitor 重推。
+- takeover 的 legacy session 修复继续保留；正常复用路径不删除损坏数据恢复保护。
+- 033 的 per-task active-run、misfire、聊天排除、Segment opt-out 和 CC-005 边界保持有效；
+  仅“每次触发新建 session”和 task-collaboration 禁改范围由 034 明确替代。
+
+### Modified Source Structure
+
+```text
+src/
+├── business/
+│   ├── scheduling/
+│   │   ├── session_launcher.py            # reservation、首绑/复用、busy skip
+│   │   ├── run_completion_monitor.py      # run-id mutation、窗口化证据/图/摘要
+│   │   ├── scheduler_service.py            # reset facade 与统一 trigger guard
+│   │   └── unattended_confirmation_manager.py # current-session 授权校验
+│   └── task_collaboration/
+│       ├── parent_reentry_sink.py          # (session_id, graph_id) 队列
+│       └── graph_scheduler.py              # 先回流、后 observer
+├── data/
+│   ├── migrations.py                       # SQLite v32
+│   └── repos/                               # task/run/message/graph 原子接口与窗口查询
+└── desktop_api/routers/scheduled_tasks.py   # reset typed endpoint / 409 映射
+
+frontend/src/
+├── api/scheduledTasks.ts
+├── state/scheduledStore.ts
+└── screens/ScheduledScreen/                # “重开一轮”交互
+```
+
+### Testing Strategy And Status
+
+- migration/Repository 覆盖列、索引、回填、幂等/downgrade、原子首绑/复用、task/session 双 active
+  槽与 trigger 预留释放。
+- launcher/runtime 覆盖连续触发、reservation、普通 worker/用户接管冲突、run-id 终态与 busy skip；
+  graph/monitor 覆盖旧 tool evidence、旧图、旧 summary、NULL root 与 graph-scoped reentry。
+- service/API/frontend 覆盖 reset 成功、active/busy/不存在、旧 session 授权失效、typed client/store/
+  screen 交互和 takeover legacy recovery。
+- **Recorded feature verification**: 扩大专项 `340 passed`，Black / Flake8 通过；frontend lint、
+  build、`447` unit 与 `6` 个 scheduled-center E2E 通过；排除独立既有 MCP filesystem 文件后的
+  Python 全量 `3273 passed`。完整全量另有 8 个可独立复现的既有 MCP filesystem stop 失败，
+  位于本 feature 未修改的 `mcp_process_manager.py` AnyIO cancel-scope 路径，不计为 034 通过。
+- **Joint archive rerun (2026-07-22)**: 034 后端专项/集成/门卫 `289 passed, 43 warnings`；
+  frontend 调度单测 `2 files / 36 tests passed`，ESLint 与 TypeScript/Vite 生产构建通过。
+- **Feature tasks**: 25/25 completed。

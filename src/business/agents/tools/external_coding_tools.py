@@ -33,9 +33,15 @@ START_EXTERNAL_CODING_SESSION_SCHEMA = make_tool_schema(
             "description": "默认 headless；interactive 也必须依赖 artifact 完成",
         },
         "targetBranch": {"type": "string", "description": "可选目标分支"},
-        "targetWorktreePath": {"type": "string", "description": "可选目标 worktree 路径"},
+        "targetWorktreePath": {
+            "type": "string",
+            "description": (
+                "要改动的目标仓库绝对路径；必须指向一个可用的 git 仓库，不填即拒绝。"
+                "若目标就是 Exemplar 自身仓库，也必须显式写出其绝对路径。"
+            ),
+        },
     },
-    required=["ownerType", "ownerId", "objective"],
+    required=["ownerType", "ownerId", "objective", "targetWorktreePath"],
 )
 
 INSPECT_EXTERNAL_CODING_SESSION_SCHEMA = make_tool_schema(

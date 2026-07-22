@@ -1,7 +1,95 @@
 # Merged Features Log
 
-**Last Updated:** 2026-07-20
-**Revision:** 2026-07-20 — Archived 033 Scheduling Center（调度中心）
+**Last Updated:** 2026-07-22
+**Revision:** 2026-07-22 — Archived 034 and 035
+
+## 外部 Coding 可靠性修复 — 2026-07-22
+
+**Branch:** `035-external-coding-reliability`
+**Spec:** `specs/035-external-coding-reliability`
+[Source: specs/035-external-coding-reliability]
+
+**Revision note:** Archived on the verified feature branch for merge into `prepare-github`;
+no unresolved conflicts or constitution exceptions. Feature-local IDs were mapped without
+collisions to US-120~121 / FR-536~562 / CC-200~204 / SC-230~242。034 在 035 归档时尚未进入
+main memory，因此 035 按当时最高全局编号顺延；034 随后从该最高号继续顺延，未重排本条。
+
+**What was added:**
+- US-120 (P1): `start_external_coding_session` 必须显式接收目标仓库绝对路径；缺失、无效或
+  HEAD 不可解析时 fail-closed 且零残留。相对 worktree 根基于目标仓库，显式指向 Exemplar
+  自身仍允许。
+- US-121 (P2): Codex plan/implement/resume 使用明确任务书读取指示与 final-output artifact；
+  Claude 保持已验证的 `@file` 预取契约。Windows CLI 经 PATH/PATHEXT 解析后仍无 shell 启动。
+- 启动创建纳入统一补偿边界；attempt 先 reservation 后 spawn，adapter 构造和 launch CAS
+  封住并发关单窗口，命令摘要与错误分类保持安全脱敏。
+- SQLite v33 持久化 PID 创建时间、未确认终止和 spawn 边界；单 running 索引、行 guards、
+  expected-status CAS、完整 identity registry、guarded monitor 与 reader sentinel 共同保证
+  进程树终止、跨重启恢复、PID 复用和 terminal 重放不会产生双活、假终态或无主进程。
+
+**New Components:**
+- SQLite v33 attempt schema evolution：三个内部恢复列、per-session active-attempt partial
+  unique index、ownership/launch INSERT/UPDATE guards（不新增表）。
+- `tests/business/external_coding/test_target_repository_required.py` 与
+  `tests/data/test_migrations_v33.py`，并扩充 service/runner/repository/CLI/Git/closed-loop 测试。
+
+**Modified Components:**
+- `src/business/external_coding/{service,cli_adapters,git_ops,models}.py` 与
+  `src/business/agents/tools/external_coding_tools.py`。
+- `src/execution/external_coding_process.py`、`src/data/{migrations,models_sqlite}.py`、
+  `src/data/repos/external_coding_session_repository.py`。
+- `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md`、根/src AI 入口镜像与 035 规格文档。
+
+**Verification:** 扩大 external coding 回归 `207 passed, 43 warnings`；全仓 Flake8、
+16 个非既有格式债务变更文件 Black、核心编译、`git diff --check` 与 src AI 三镜像校验通过。
+真实 Codex production service/execution 链使用默认命令名进入 `plan_ready`，生成含精确任务目标
+的 `PLAN.md`，目标仓库侧 worktree 与命令摘要脱敏通过；未把不可操作的桌面 GUI 派活写成已验收。
+
+**Tasks Completed:** 63/63 tasks
+
+## 调度任务常驻会话复用 — 2026-07-22
+
+**Branch:** `prepare-github`
+**Spec:** `specs/034-scheduled-session-reuse`
+[Source: specs/034-scheduled-session-reuse]
+
+**Revision note:** Archived after 035 in the same feature worktree for a joint commit into
+`prepare-github`。034 的实现已存在于集成基线；归档明确替代 033 / 全局 FR-512 的“每次触发
+新建 session”与 CC-192 的两处禁改范围。由于 035 已先占用当前最高全局编号，034 顺延映射为
+US-122~126 / FR-563~577 / CC-205~207 / SC-243~247，不重排 035。
+
+**What was added:**
+- US-122 (P1): 同一 ScheduledTask 首次触发创建并绑定 current scheduled session，后续 run
+  复用该 session，让周期任务保留纵向上下文；不同 task 不共享绑定。
+- US-123 (P1): 每次 run 仍独立记账，以 run-id 与 baseline/trigger 消息窗口隔离旧工具证据、
+  旧图、旧摘要和终态 mutation。
+- US-124 (P1): runtime reservation 封住静默检查到 worker 注册的竞态，task/session 双 active-run
+  数据库槽阻止双轮并发；busy occurrence 直接记 skipped。
+- US-125 (P1): `ParentReentrySink` 按 `(session_id, graph_id)` 隔离回流，graph-complete 先入回流
+  再 emit scheduling observer，图根消息序号映射精确 run 窗口。
+- US-126 (P2): 调度详情提供 fail-closed 的“重开一轮”；静默时 CAS 清 current binding，下一次
+  触发换 session，旧 session/run 历史保留且旧会话立即失去 CC-005 授权资格。
+
+**New Components:**
+- 无新模块、表、配置、公开 UI 事件或 secret；SQLite v32 只演进既有 scheduled task/run 表。
+
+**Modified Components:**
+- `src/business/scheduling/`：SessionLauncher reservation/首绑/复用、run-id 完成监视、reset facade、
+  current-session unattended 门卫。
+- `src/business/task_collaboration/parent_reentry_sink.py` 与 `graph_scheduler.py`：仅 graph-scoped
+  回流和完成通知顺序，不改变节点推进、裁定、执行器选择或恢复决策。
+- `src/data/`：v32 migration、task/session CAS、active-per-session 和消息/图窗口 Repository 接口。
+- `src/desktop_api/routers/scheduled_tasks.py` 与 frontend typed client/store/ScheduledScreen：
+  reset endpoint、409 busy 映射与“重开一轮”交互。
+- `docs/ARCHITECTURE.md`、`docs/PROJECT_CONSTRAINTS.md` 与根/src/scheduling/frontend AI 入口镜像。
+
+**Verification:** feature 记录的扩大专项 `340 passed`，Black / Flake8 通过；frontend lint、build、
+`447` unit tests 与 `6` 个 scheduled-center E2E 通过；排除独立既有 MCP filesystem 文件后的
+Python 全量 `3273 passed`。完整全量另有 8 个可独立复现的既有 MCP filesystem stop 失败，
+位于本 feature 未修改的 `mcp_process_manager.py` AnyIO cancel-scope 路径，未伪报为通过。
+本次 034+035 联合归档复验：034 后端专项/集成/门卫 `289 passed, 43 warnings`；frontend
+调度单测 `2 files / 36 tests passed`，ESLint 与 TypeScript/Vite 生产构建通过。
+
+**Tasks Completed:** 25/25 tasks
 
 ## Scheduling Center（调度中心） — 2026-07-20
 

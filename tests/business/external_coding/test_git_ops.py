@@ -3,7 +3,8 @@ from pathlib import Path
 
 import pytest
 
-from src.business.external_coding.git_ops import GitOperationError, GitOps
+from src.business.external_coding import git_ops
+from src.business.external_coding.git_ops import GitOperationError, GitOps, GitProcessError
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -33,6 +34,22 @@ def _coding_worktree(repo: Path, path: Path) -> Path:
     return path
 
 
+def test_run_git_wraps_os_error_without_exposing_raw_path(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        git_ops.subprocess,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PermissionError(r"access denied: C:\private\git.exe")
+        ),
+    )
+
+    with pytest.raises(GitProcessError) as caught:
+        git_ops._run_git(["status"], cwd=tmp_path)
+
+    assert str(caught.value) == "git command could not be started"
+    assert "private" not in str(caught.value)
+
+
 def test_create_worktree_refuses_a_preexisting_path(tmp_path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo, {"a.txt": "base\n"})
@@ -45,6 +62,47 @@ def test_create_worktree_refuses_a_preexisting_path(tmp_path) -> None:
             worktree_path=stale,
             branch_name="coding/stale",
         )
+
+
+def test_remove_worktree_rejects_nonzero_git_result_when_still_registered(
+    tmp_path, monkeypatch
+) -> None:
+    ops = GitOps()
+    monkeypatch.setattr(ops, "worktree_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        git_ops,
+        "_run_git",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["git", "worktree", "remove"],
+            returncode=1,
+            stdout="",
+            stderr="worktree is locked",
+        ),
+    )
+
+    with pytest.raises(GitOperationError, match="could not be removed"):
+        ops.remove_worktree(
+            target_worktree=tmp_path,
+            worktree_path=tmp_path / "coding",
+        )
+
+
+def test_delete_branch_rejects_nonzero_git_result_when_ref_survives(tmp_path, monkeypatch) -> None:
+    ops = GitOps()
+    monkeypatch.setattr(ops, "branch_exists", lambda *_args: True)
+    monkeypatch.setattr(
+        git_ops,
+        "_run_git",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=["git", "branch", "-D"],
+            returncode=1,
+            stdout="",
+            stderr="branch is checked out",
+        ),
+    )
+
+    with pytest.raises(GitOperationError, match="could not be deleted"):
+        ops.delete_branch(target_worktree=tmp_path, branch_name="coding/locked")
 
 
 def test_merge_analysis_detects_dirty_overlap(tmp_path) -> None:

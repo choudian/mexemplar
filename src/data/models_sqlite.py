@@ -1610,7 +1610,26 @@ class ExternalCodingAttempt(Base):
             "status IN ('running', 'succeeded', 'interrupted', 'failed')",
             name="ck_external_coding_attempts_status",
         ),
+        CheckConstraint(
+            "((status = 'running' AND termination_unconfirmed = 1) OR "
+            "(status != 'running' AND termination_unconfirmed = 0))",
+            name="ck_external_coding_attempts_ownership_status",
+        ),
+        CheckConstraint(
+            "(launch_started = 1 OR (pid IS NULL AND process_create_time IS NULL))",
+            name="ck_external_coding_attempts_unlaunched_identity",
+        ),
+        CheckConstraint(
+            "(process_create_time IS NULL OR pid IS NOT NULL)",
+            name="ck_external_coding_attempts_process_identity",
+        ),
         Index("ix_external_coding_attempts_session", "coding_session_id", "started_at"),
+        Index(
+            "uq_external_coding_attempts_active_session",
+            "coding_session_id",
+            unique=True,
+            sqlite_where=text("status = 'running'"),
+        ),
     )
 
     attempt_id: Mapped[str] = mapped_column(String(50), primary_key=True)
@@ -1621,6 +1640,15 @@ class ExternalCodingAttempt(Base):
     external_session_ref: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     pid: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # v33（035）：跨 sidecar 重启验证 PID 身份并保持 fail-closed ownership。
+    process_create_time: Mapped[Optional[float]] = mapped_column(nullable=True)
+    termination_unconfirmed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+    # False identifies a reservation that durably never crossed the spawn boundary.
+    launch_started: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
     exit_code: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     started_at: Mapped[str] = mapped_column(String(50), nullable=False)
     finished_at: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

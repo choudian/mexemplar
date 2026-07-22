@@ -2834,6 +2834,170 @@ def downgrade_v32(engine):
     logger.info("回退版本 32 完成：移除 scheduled session reuse 字段")
 
 
+def migrate_to_v33(engine):
+    """迁移到版本 33：持久化 external coding 进程 ownership 身份。"""
+    try:
+        with engine.begin() as conn:
+            attempts_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'external_coding_attempts'"
+                )
+            ).fetchone()
+            if attempts_exists is not None:
+                launch_started_exists = _column_exists(
+                    conn,
+                    "external_coding_attempts",
+                    "launch_started",
+                )
+                termination_unconfirmed_exists = _column_exists(
+                    conn,
+                    "external_coding_attempts",
+                    "termination_unconfirmed",
+                )
+                _add_column_if_missing(
+                    conn,
+                    "external_coding_attempts",
+                    "process_create_time",
+                    "REAL",
+                )
+                _add_column_if_missing(
+                    conn,
+                    "external_coding_attempts",
+                    "termination_unconfirmed",
+                    "BOOLEAN NOT NULL DEFAULT 0",
+                )
+                if not termination_unconfirmed_exists:
+                    # Pre-v33 running rows may still own a live CLI, but they
+                    # have no creation-time proof. Keep them fail-closed.
+                    conn.execute(
+                        text(
+                            "UPDATE external_coding_attempts "
+                            "SET termination_unconfirmed = 1 "
+                            "WHERE status = 'running'"
+                        )
+                    )
+                _add_column_if_missing(
+                    conn,
+                    "external_coding_attempts",
+                    "launch_started",
+                    "BOOLEAN NOT NULL DEFAULT 0",
+                )
+                if not launch_started_exists:
+                    # Every row predating v33 was created by calling an adapter;
+                    # only new v33 reservations may safely remain false.
+                    conn.execute(text("UPDATE external_coding_attempts SET launch_started = 1"))
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "uq_external_coding_attempts_active_session "
+                        "ON external_coding_attempts(coding_session_id) "
+                        "WHERE status = 'running'"
+                    )
+                )
+                ownership_guard = (
+                    "((NEW.status = 'running' AND NEW.termination_unconfirmed != 1) "
+                    "OR (NEW.status != 'running' AND NEW.termination_unconfirmed != 0) "
+                    "OR (NEW.launch_started = 0 AND "
+                    "(NEW.pid IS NOT NULL OR NEW.process_create_time IS NOT NULL)) "
+                    "OR (NEW.process_create_time IS NOT NULL AND NEW.pid IS NULL))"
+                )
+                ownership_update_guard = (
+                    f"({ownership_guard} OR "
+                    "(OLD.launch_started = 1 AND NEW.launch_started = 0))"
+                )
+                conn.execute(
+                    text("DROP TRIGGER IF EXISTS trg_external_coding_attempts_ownership_insert")
+                )
+                conn.execute(
+                    text("DROP TRIGGER IF EXISTS trg_external_coding_attempts_ownership_update")
+                )
+                conn.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS "
+                        "trg_external_coding_attempts_ownership_insert "
+                        "BEFORE INSERT ON external_coding_attempts "
+                        f"WHEN {ownership_guard} "
+                        "BEGIN SELECT RAISE(ABORT, "
+                        "'invalid external coding process ownership state'); END"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE TRIGGER IF NOT EXISTS "
+                        "trg_external_coding_attempts_ownership_update "
+                        "BEFORE UPDATE ON external_coding_attempts "
+                        f"WHEN {ownership_update_guard} "
+                        "BEGIN SELECT RAISE(ABORT, "
+                        "'invalid external coding process ownership state'); END"
+                    )
+                )
+            else:
+                logger.info("迁移到版本 33：external_coding_attempts 表不存在，跳过 ownership 列")
+            conn.execute(text("UPDATE schema_version SET version = 33"))
+    except Exception as e:
+        logger.error(f"迁移到版本 33 失败: {e}")
+        raise
+    logger.info("迁移到版本 33 完成：external coding 进程 ownership 身份")
+
+
+def downgrade_v33(engine):
+    """回退版本 33（仅测试调用，不注册）。"""
+    try:
+        with engine.begin() as conn:
+            attempts_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'external_coding_attempts'"
+                )
+            ).fetchone()
+            if attempts_exists is not None:
+                conn.execute(
+                    text("DROP TRIGGER IF EXISTS trg_external_coding_attempts_ownership_insert")
+                )
+                conn.execute(
+                    text("DROP TRIGGER IF EXISTS trg_external_coding_attempts_ownership_update")
+                )
+                conn.execute(
+                    text("DROP INDEX IF EXISTS uq_external_coding_attempts_active_session")
+                )
+                if _column_exists(
+                    conn,
+                    "external_coding_attempts",
+                    "launch_started",
+                ):
+                    conn.execute(
+                        text("ALTER TABLE external_coding_attempts " "DROP COLUMN launch_started")
+                    )
+                if _column_exists(
+                    conn,
+                    "external_coding_attempts",
+                    "termination_unconfirmed",
+                ):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE external_coding_attempts "
+                            "DROP COLUMN termination_unconfirmed"
+                        )
+                    )
+                if _column_exists(
+                    conn,
+                    "external_coding_attempts",
+                    "process_create_time",
+                ):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE external_coding_attempts "
+                            "DROP COLUMN process_create_time"
+                        )
+                    )
+            conn.execute(text("UPDATE schema_version SET version = 32"))
+    except Exception as e:
+        logger.error(f"回退版本 33 失败: {e}")
+        raise
+    logger.info("回退版本 33 完成：移除 external coding ownership 字段")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -2866,6 +3030,7 @@ _MIGRATIONS = [
     (30, migrate_to_v30),
     (31, migrate_to_v31),
     (32, migrate_to_v32),
+    (33, migrate_to_v33),
 ]
 
 

@@ -175,7 +175,7 @@ Assistant tool handler / Orchestrator
 
 ### External Coding Sessions（030）
 
-外部 coding session 把 Claude Code / Codex CLI 作为固定专员在正式 Task 中可激活的能力，而不是并入主助理或通用执行体工具集。11 个操作由 `builtin_compositions.py` 声明为系统内置、只读、已发布的范围型技能组合“外部 Coding”；专员只配置组合 ID，不逐项配置成员工具。专员当前配置与版本快照通过 SQLite v29 `composition_ids` 保存。会话业务层位于 `src/business/external_coding/`，持久化走 SQLite v27 `external_coding_*` 表与 v28 worktree 基线列，CLI 子进程启动在 `src/execution/external_coding_process.py`，文件 artifact 默认落在 `data/coding_sessions/`，隔离 worktree 默认落在 `.worktrees/coding/`。
+外部 coding session 把 Claude Code / Codex CLI 作为固定专员在正式 Task 中可激活的能力，而不是并入主助理或通用执行体工具集。11 个操作由 `builtin_compositions.py` 声明为系统内置、只读、已发布的范围型技能组合“外部 Coding”；专员只配置组合 ID，不逐项配置成员工具。专员当前配置与版本快照通过 SQLite v29 `composition_ids` 保存。会话业务层位于 `src/business/external_coding/`，持久化走 SQLite v27 `external_coding_*` 表、v28 worktree 基线列与 v33 attempt 进程 ownership 列，CLI 子进程启动在 `src/execution/external_coding_process.py`，文件 artifact 默认落在 `data/coding_sessions/`，隔离 worktree 默认落在 `.worktrees/coding/`。
 
 ```text
 Specialist Management → SpecialistService → v29 composition_ids
@@ -196,6 +196,11 @@ Specialist Management → SpecialistService → v29 composition_ids
 - Specialist Management 从 `/api/compositions` 展示已发布组合；“外部 Coding”带 `isBuiltin/readOnly/trialSupported=false`，在组合页可查看成员但不可编辑/试用，在专员页作为一个范围型组合配置。
 - session 必须有 owner（`task` 或 `workflow`）和 `codingSessionId`；记录工具选择、quota 观察、attempt、artifact、worktree、merge 和 rollback 决策，便于追溯“何时派发、派发了什么、产出了什么、何时完成”。
 - 默认 headless 且自动启动；交互模式在 Windows 新控制台启动真实 CLI TUI，并继续由 PID/超时与 artifact 判定完成，不解析终端屏幕。Claude Code 默认 `--effort max`，Codex CLI 默认 `model_reasoning_effort="xhigh"`，都可经 `UnifiedConfigManager` 配置。
+- running attempt 以 SQLite v33 的 `process_create_time`、`termination_unconfirmed` 与 `launch_started` 保存跨 sidecar 重启 ownership；PID 必须同时匹配创建时间才能被重启后的 runner 认领或终止。旧 running 行升级为 `NULL/true/true` 并立即 fail-closed；状态文件不能为缺失的 durable 创建时间补造身份。状态文件缺失/残缺、PID 复用、父进程已消失而进程树终止未确认时保持 running 并禁止 resume；匹配存活身份可重复 stop。三个字段是内部恢复事实，不进入公开 DTO/UI event。
+- adapter object 先构造，reservation 再通过 `attempt_id + status=running + launch_started=false` 的 Repository CAS 取得唯一启动权；factory 失败按 pre-spawn 关单，并发 abandon/refresh 已关单或 CAS 未命中时不得 spawn。v33 的 ORM checks 与幂等 insert/update triggers 拒绝 running/terminal ownership、pre-spawn identity 和创建时间无 PID 等非法行；`launch_started` 从通用 Repository 更新面移除，UPDATE trigger 比较 OLD/NEW 禁止 true→false。
+- registry 以 PID、创建时间、状态路径和实例令牌隔离 owner，并用对象 CAS 清理；PID 碰撞后的新进程补偿终止若失败，旧、新 owner 同时保留且互不串扰。headless 与 interactive monitor 共用 guarded wrapper；reader 的 EOF/失败 sentinel 是 stream 完成权威，进程退出与 queue 瞬时为空不能提前判成功。读取、日志或状态写入异常触发有界整树终止，wait 超时也不得只 kill 父进程。reader 的 queue put 可取消；已确认退出但 terminal marker 首写失败时由后续 poll 重试，只有落盘成功才重放安全终态并释放 owner，无法确认时继续保留 registry 和 durable running guard。
+- running poll/stop 观测通过 Repository expected-status CAS 单向投影；terminal attempt 不可复活或保留未确认标记。failed/interrupted 以及 abandon、plan 协议违规等显式 stop 的 session/attempt 终态在同一事务提交，失败时两行一起回滚并允许后续重试。
+- HEAD/目标分支 probe 只把预期 Git 命令故障分类为安全的仓库错误；Git timeout/OSError 归一化为不含 OS 正文的 process error，未知异常继续显式失败，不能伪装成路径冲突。首次 session 写入和回读都无法确认结果时保留已创建资源，错误携带预生成 coding session id；安全日志只用该 id 和两次异常类型关联恢复路径。
 - 两阶段协议：外部 agent 先写 `PLAN.md`，派活 agent 审核后才批准实现；实现完成写 `RESULT.md`。semantic validator 只是软校验，强约束靠 session 状态机、artifact 缺失/脏 diff 检测、owner 绑定和后续 review。
 - quota probe 由 execution adapter 调用 Claude `/usage` 或 Codex app-server
   `account/rateLimits/read`，在原始响应离开 execution 层前只提取使用率、reset

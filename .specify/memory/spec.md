@@ -1,8 +1,8 @@
 # Main Specification Memory
 
 **Purpose**: Consolidated requirements from all merged features. Single source of truth for what the system does.
-**Last Updated**: 2026-07-20
-**Revision**: 2026-07-20 — Archived feature 033 (Scheduling Center / 调度中心)
+**Last Updated**: 2026-07-22
+**Revision**: 2026-07-22 — Archived features 034 and 035
 
 ---
 
@@ -2269,7 +2269,9 @@ remains explicitly incomplete; automated implementation and regression tasks are
 ### Functional Requirements
 
 - **FR-511**: 系统 MUST 支持立即动作、一次性定时和周期三种触发；立即是可作用于既有任务的动作，不是第三种持久任务类型。
-- **FR-512**: 每次触发 MUST 新建 `source=scheduled` 的主助理会话并投递用户核定后的指令；调度中心不得自行拆任务或派执行体。
+- **FR-512 (revised by 034)**: 每个 ScheduledTask MUST 持久绑定至多一个 current
+  `source=scheduled` 主助理会话；首次触发惰性创建并绑定，后续触发复用该会话且只新增独立
+  run 与用户核定指令。只有显式 reset 才解除绑定；调度中心仍不得自行拆任务或派执行体。
 - **FR-513**: scheduled 会话 MUST 获得无人值守 advisory；安全边界仍由确定性机制 fail-closed 保证。
 - **FR-514**: 执行、通信、恢复和任务图推进 MUST 复用既有 task collaboration 内核；只允许登记的公共图终态函数与观察事件接缝。
 - **FR-515**: 定时任务创建入口 MUST 是主助理专用工具 + 用户确认卡；调度中心 UI 不提供绕过确认的创建表单。
@@ -2298,20 +2300,23 @@ remains explicitly incomplete; automated implementation and regression tasks are
 
 - **ScheduledTask**: SQLite v30 `scheduled_tasks`；保存来源、`source_ref`、用户核定后的独立
   `instruction`、调度规则、状态、per-task 授权、`next_fire_at`/`last_fired_at` 与软删标记。
-  `source_type=todo` 只保存外部引用，不建 FK。
+  v32 增加唯一可空 `session_id` 作为 current scheduled session；`source_type=todo` 只保存
+  外部引用，不建 FK。
 - **ScheduledTaskRun**: SQLite v30 append-only `scheduled_task_runs`；记录 task/session、
   起止时间、`running|succeeded|failed|waiting_user|skipped`、安全摘要与失败投影；
   partial unique index 保证每 task 仅一个 active run。v31 增加
-  `terminal_event_delivered_at` 与单调 `terminal_event_version`，按代次确认终态事件投影。
+  `terminal_event_delivered_at` 与单调 `terminal_event_version`，按代次确认终态事件投影；
+  v32 增加 baseline/trigger 消息序号与 per-session active-run 唯一槽，使复用会话后每轮仍独立归属。
 - **Session 来源**: 既有 `sessions` 表在 v30 增加 `source`、`scheduled_task_id`、
   `is_scheduled`；既有行回填为 user，Repository 强制 scheduled 三字段关系一致。
 
 ### Data Flow / Architecture
 
 `create_scheduled_task` → `SchedulingConfirmationManager` → `SchedulerService` →
-`scheduled_tasks`；`SchedulerWorker` 到点后调用 `SessionLauncher`，在同一事务提交 detached
-session + active run，再经 desktop lifespan 注入的 callback 调用权威 `AssistantRuntime`。
-`RunCompletionMonitor` 由 runtime worker 退出直调和内部图/任务事件双路径重评静默条件，
+`scheduled_tasks`；`SchedulerWorker` 到点后调用 `SessionLauncher`，先取得 runtime reservation，
+再于同一事务首绑或复用 current session 并创建 active run，随后把 reservation 转成权威
+`AssistantRuntime` worker。`RunCompletionMonitor` 以 run-id 和 baseline/trigger 窗口，由 runtime
+worker 退出直调和内部图/任务事件双路径重评静默条件，
 写入 run 终态后通过 `TerminalEventDelivery` 发布注册过的 UI 事件；v31 对未确认投影在启动
 与 worker tick 有界重试。business 层不反向 import desktop API。
 
@@ -2319,7 +2324,9 @@ session + active run，再经 desktop lifespan 注入的 callback 调用权威 `
 
 - **CC-190**: 调度路径 MUST NOT 修改 `user_todos` 表或结构；待办仅作外部只读引用。
 - **CC-191**: todo 来源 MUST 恒为 one-shot，防止周期语义污染个人待办。
-- **CC-192**: task collaboration 执行/通信/恢复决策保持不变；公共图终态函数和首次全终态 observer emit 不得门控既有 root 收口或父侧 reentry，观察者失败不得阻断原路径。
+- **CC-192 (revised by 034)**: task collaboration 的节点推进、裁定、执行器选择和恢复决策保持
+  不变；为复用 session 隔离各 run，父侧回流允许按 `(session_id, graph_id)` 分桶，且图完成
+  必须先入回流通道再 emit scheduling observer。观察者失败仍不得阻断原执行路径。
 - **CC-193**: 无人值守安全 MUST 由立即拒绝和权威 session/task 判定硬保证，不得退回 prompt 或乐观超时。
 - **CC-194**: `unattended_auto_approve` 持久化是 constitution 3.1.0 登记的唯一受控例外，必须保持四重限定、三重不暴露、独立 manager 和列表层可回收。
 - **CC-195**: scheduled 会话第一批 MUST NOT 参与 brain Segment 沉淀。
@@ -2343,9 +2350,267 @@ session + active run，再经 desktop lifespan 注入的 callback 调用权威 `
 
 - app 关闭期间不触发、不通知；启动后按 misfire 规则补最近一次。
 - paused 期间过点不补跑；one-shot expired，recurring 滚到未来。
-- 同 task 重入或并发抢占 active-run 槽时只记 skipped，不启动第二个会话。
+- 同 task 或同 current session 重入、或 runtime 已 busy 时只记 skipped，不启动第二轮 worker，
+  也不额外创建会话。
 - todo 被删除/完成时 task expired；todo Repository 暂时失败时保留任务重试。
 - 首轮主助理 completed 但 durable 子任务仍在执行时不得误报终态。
 - 图含失败/取消或图/runtime 查询未知时不得误报全成功。
 - 终态事件采用持久 at-least-once 投递；发布后、确认前退出的极窄窗口允许重复提醒，但不得永久丢失。
 - 无 offset 时间按显式 IANA 时区或 `tzlocal` 发现的系统时区解释；发现失败拒绝创建，DST ambiguous/nonexistent 按已登记规则处理并记录 warning。
+
+## 外部 Coding 可靠性修复 [Source: specs/035-external-coding-reliability]
+
+**Revision note (2026-07-22)**: Archived 035 on the verified feature branch for merge into
+`prepare-github`。本次不扩展外部 Coding 产品范围，而是把两条隐含假设改成硬边界：启动
+session 必须显式指定目标仓库，Codex 命令必须明确要求读取任务书；同时把真实运行和七轮
+review 暴露的启动补偿、CLI 参数、进程树终止、跨重启 ownership、并发 CAS、reader 生命周期
+与 SQLite v33 行不变量收口。0 新表 / 0 新配置键 / 0 新公开 UI 事件 / 0 新 secret。
+
+> ID mapping: 035 feature-local US1~2 / FR-001~027 / CC-001~005 / SC-001~013
+> 归档时顺延为 US-120~121 / FR-536~562 / CC-200~204 / SC-230~242；
+> 不复用或重排既有全局编号。034 在 035 归档当时尚未进入 memory，随后从该最高号继续顺延。
+
+### User Stories
+
+- **US-120 (P1)**: 干活的仓库不会被搞错——固定执行专员启动外部 coding session 时必须
+  明确给出目标仓库；缺失或无效就安全拒绝且零残留，合法外部仓库的相对 worktree 根随该
+  仓库落盘，显式指向 Exemplar 自身仍正常放行。
+- **US-121 (P2)**: 换哪个外部工具，任务书都可靠可取——Codex 收到带动作语义的文件读取
+  指示，Claude Code 保留已验证的 `@file` 预取写法；plan / implement / resume 均使用当前
+  CLI 参数契约，Codex headless 由 final-output 参数确定性写入阶段 artifact。
+
+### Functional Requirements
+
+- **FR-536**: 启动外部 coding session MUST 要求显式目标仓库位置；缺失时 MUST 拒绝，
+  MUST NOT 回退到 cwd、Exemplar 或任何其他隐含默认值。
+- **FR-537**: 缺少或无效目标仓库的预校验拒绝 MUST 零副作用；若失败发生在部分创建之后，
+  MUST 补偿 worktree、生成分支、session 行和本次 artifact，不能留下孤儿资源。
+- **FR-538**: 不存在、非仓库、HEAD 不可解析、目标分支冲突与 Git 进程启动/超时故障 MUST
+  返回安全且可行动的分类；未知程序异常 MUST 显式失败，底层异常正文、堆栈和内部路径
+  MUST NOT 原样进入用户错误或普通日志。
+- **FR-539**: `external_coding.worktree_root` 为相对路径时 MUST 以显式目标仓库为基准展开；
+  为绝对路径时 MUST 保持该绝对根。
+- **FR-540**: 系统 MUST NOT 禁止显式以 Exemplar 自身为目标仓库；禁止的是隐含回退，
+  不是正当的显式选择。
+- **FR-541**: Codex 的 plan / implement / resume 启动指令 MUST 包含明确的任务书读取动作，
+  不能只传孤立路径或裸 `@path`。
+- **FR-542**: Claude Code 的任务书引用 MUST 保持已验证的 `@path` 写法；本 feature 不把
+  两个 CLI 强行统一为同一输入机制。
+- **FR-543**: `targetWorktreePath` 的绝对路径、可用 Git 仓库、缺失即拒绝等填参约束 MUST
+  写入工具 schema description 并列入 required，MUST NOT 依赖主助理系统提示词。
+- **FR-544**: Claude Code `@path` 的有效性依赖 background prefetch，增加 `--bare` 会使其
+  失效；该耦合 MUST 留在代码说明和回归测试中。
+- **FR-545**: Windows 外部 CLI 名称 MUST 通过 PATH/PATHEXT 解析真实入口后以 argv、
+  `shell=False` 直接启动，MUST NOT 为 `.cmd` / `.exe` shim 启用 shell。
+- **FR-546**: headless 命令 MUST 符合当前 CLI 组合语法：Codex resume 的父级 sandbox、
+  add-dir 与 output 参数位于 `resume` 前，Claude `stream-json` 携带要求的 verbosity。
+- **FR-547**: Codex headless 阶段 artifact MUST 通过 CLI final-output 文件参数写入
+  `PLAN.md` / `RESULT.md`；prompt、executable 与 artifact 绝对路径在命令摘要中必须脱敏。
+- **FR-548**: artifact 根无论配置为相对还是绝对路径，MUST 在 session 创建入口规范化为
+  绝对路径；handoff / plan / result / prompt 的持久路径均 MUST 为绝对路径。
+- **FR-549**: artifact/handoff、worktree/分支与首次 session 写入 MUST 位于同一补偿边界；
+  删除必须检查结果并验证资源消失。补偿失败 MUST 返回安全的 `cleanup-incomplete` 与预生成
+  session 标识；首次写入与回读均未知时 MUST 保留资源供恢复，并只记录标识与异常类型。
+- **FR-550**: CLI spawn 前 MUST 先持久化 running attempt reservation；spawn 后 ownership
+  落库失败时 MUST 有界终止并确认进程树，无法确认时保留可管理的 running attempt 与 PID。
+- **FR-551**: `Popen` 成功后的状态文件、registry 或 monitor 初始化失败 MUST 进入同一
+  有界终止契约；无法证明整棵进程树退出时 MUST 保留 PID ownership，不得遗留无主进程。
+- **FR-552**: running 进程的 `poll` 观测失败 MUST 保持 running 并允许后续重试，
+  MUST NOT 转成 interrupted、清除 ownership 或开放并发 resume。
+- **FR-553**: 进程停止 MUST 返回“确认已停止 / 确认先前退出 / 无法确认”三态；只有前两态
+  可以写终态并释放 registry，无法确认时 MUST 保持 running、持久化未确认标记并禁止 resume。
+- **FR-554**: failed/interrupted attempt 与关联 session 投影以及 abandon、协议违规等显式
+  stop 的终态 MUST 由 Repository 在同一事务提交或回滚；PID ownership 补写失败 MUST
+  显式失败，不能只记日志后返回 created/resumed。
+- **FR-555**: 启动成功与所有启动异常的 command summary 均 MUST 遮蔽绝对 executable、
+  prompt 与 artifact 路径；session 首次写入后的 plan/result 路径 MUST 不可变。
+- **FR-556**: running attempt MUST 在 SQLite 持久化 PID、进程创建时间和未确认终止标记；
+  重启后只可用 PID + 创建时间验证身份。状态文件缺失/损坏、父进程消失、PID 复用、身份
+  冲突或 durable 创建时间缺失时 MUST 保持 running/fail-closed，状态文件不得反向补造身份。
+- **FR-557**: headless 与 interactive monitor MUST 共用顶层守护边界；reader、日志、状态
+  或 marker 的未预期异常 MUST 触发有界终止，恢复失败时保留 registry 与 durable ownership；
+  已确认退出但 terminal marker 首写失败时，后续 poll MUST 可重放终态后再释放 owner。
+- **FR-558**: 每个 coding session MUST 至多一个 running attempt，并由数据库 partial unique
+  index 兜底；v33 必须持久化 `process_create_time`、`termination_unconfirmed`、
+  `launch_started`，旧 running 行回填 `NULL/true/true`，旧 terminal 行回填 `NULL/false/true`。
+- **FR-559**: 所有从 running attempt 投影 poll/stop 观测的写入 MUST 使用 expected-status
+  CAS；terminal 状态和 `finished_at` 单向不可复活，CAS 冲突必须返回权威当前行或安全重试，
+  Repository 对未知投影字段必须显式拒绝。
+- **FR-560**: adapter object MUST 在 launch CAS 前构造；reservation 只有通过
+  `attempt_id + status=running + launch_started=false` 的单条条件更新才能取得 spawn 权。
+  CAS 未命中不得启动 CLI；`launch_started` 只能由专用 CAS false→true，通用更新和 SQLite
+  guard 必须拒绝 true→false。
+- **FR-561**: stdout/stderr reader 的读取异常 MUST 作为独立故障信号，不能伪装为 EOF；
+  EOF/失败 sentinel 是 stream 完成权威，进程退出与 queue 暂空不能替代。wait 超时补偿
+  MUST 使用整棵进程树的三态终止证明。
+- **FR-562**: domain value MUST 拒绝其可见的 status/ownership 与 PID/创建时间矛盾；
+  Repository、ORM checks 与 SQLite guards MUST 额外拒绝 pre-spawn identity、创建时间无 PID、
+  running/terminal 未确认标记等完整行矛盾，MUST NOT 静默纠正调用方显式提交的非法状态。
+
+### Key Entities
+
+- **TargetRepositoryLocation**: 启动调用方显式提供的绝对仓库位置；非空、存在且 HEAD 可解析。
+  它不从 cwd、记忆或模型上下文推导，也不排斥 Exemplar 自身。
+- **IsolationWorktreeLocation**: `external_coding.worktree_root + codingSessionId` 的派生位置；
+  相对根基于目标仓库，绝对根保持原样。
+- **ArtifactAbsolutePathSet**: `artifact_dir`、`HANDOFF.md`、`PLAN.md`、`RESULT.md` 与 attempt
+  prompt 的绝对路径集合；新 session 首次写入即完整持久化，plan/result 此后不可变。
+- **ExternalCodingAttempt / DurableProcessIdentity（SQLite v33）**: 既有 attempt 增加
+  `process_create_time`、`termination_unconfirmed` 与 `launch_started`，并以单 running 索引、
+  行级 guards、expected-status CAS 和完整 registry identity 维持跨重启进程 ownership。
+
+### Data Flow / Architecture
+
+`start_external_coding_session` schema required target → `ExternalCodingSessionService` 校验目标仓库
+并绝对化 artifact → `GitWorktreeManager` 创建目标仓库侧隔离 worktree →
+`ExternalCodingSessionRepository.create_session()` 首次原子持久化完整路径 → 创建 attempt
+reservation → 构造 CLI adapter → launch CAS 取得 spawn 权 → `ExternalCodingProcessRunner`
+以无 shell argv 启动并守护 reader/进程树 → Repository 以 CAS/事务投影 attempt 与 session。
+business 只向下调用 execution/data，desktop API、前端、公开事件和授权链均未改变。
+
+### Constraints & Compatibility
+
+- **CC-200**: 外部 Coding 的固定 executor + 已配置内置组合 + 正式 Task + 已发布能力四重授权链
+  MUST 保持不变，不得借可靠性修复扩大工具可见面。
+- **CC-201**: PLAN-before-code 与 RESULT completion 两阶段协议及 artifact 语义 MUST 保持不变。
+- **CC-202**: 本 feature MUST NOT 新增数据表、配置键、secret 或公开 UI 事件；v33 只演进
+  既有 attempt 表和内部恢复约束。
+- **CC-203**: 无法确定目标仓库、进程身份、终止证明或并发状态时一律 fail-closed，
+  MUST NOT 引入静默降级。
+- **CC-204**: 既有外部 coding 自动化测试 MUST 全部保持通过，并新增静默失败、迁移、
+  并发、跨重启与后台 reader 行为覆盖。
+
+### Success Criteria
+
+- **SC-230**: 未指明目标仓库的启动尝试 100% 被拒，且无 worktree、分支、session 行或 artifact 残留。
+- **SC-231**: 合法外部仓库 + 默认相对 worktree 根时，worktree/分支只落目标仓库侧；
+  Exemplar 不新增资源，绝对 worktree 根和 artifact 根各自服从既有配置。
+- **SC-232**: Claude/Codex 的 plan、implement、resume 三类命令 100% 含各自契约要求的任务书
+  获取方式，Codex 不使用裸 `@path`。
+- **SC-233**: 不存在、非仓库、无提交及 Git 运行故障均返回可行动安全说明，底层异常文本泄漏为 0。
+- **SC-234**: 既有外部 coding 自动化测试不减少且全部通过。
+- **SC-235**: Windows 默认命令名 `codex` 的真实生产链进入 `plan_ready`，生成含精确目标的
+  `PLAN.md`，命令摘要不暴露 artifact 路径。
+- **SC-236**: 相对 artifact、部分创建/补偿失败、spawn 初始化、attempt 落库和 poll 异常均有
+  故障注入测试，不产生无主进程或假终态。
+- **SC-237**: monitor 初始化/运行期终止未确认、CLI 启动异常、session 投影失败与 PID ownership
+  补写失败均保持可恢复 running 状态，不开放重复 resume。
+- **SC-238**: 状态/marker 双写失败和 sidecar 重启场景仍可凭 durable identity 再次 stop；
+  父进程消失或身份不匹配保持 fail-closed，monitor 顶层异常不遗留无主进程。
+- **SC-239**: PID 复用、旧 monitor 迟到、terminal 身份冲突、事务失败、重复 running 与
+  pre-spawn 关单失败均不会误终止新 owner、产生双活 CLI 或留下不可恢复 reservation。
+- **SC-240**: 旧行迁移、缺失创建时间双 refresh、显式 stop 原子失败、迟到 running CAS、
+  terminal 重放、满队列 reader 取消和 owner 碰撞隔离均有确定性测试。
+- **SC-241**: reservation→launch 并发关单、reader 读取异常、首次 session 写入结果未知、
+  Git probe 分类及 attempt 跨字段非法组合均可直接断言 CLI 次数、终止结果、恢复 ID 与数据库拒绝。
+- **SC-242**: 进程先退出后 reader 延迟失败、adapter factory 失败、Git OS/HEAD 故障、
+  Repository/原始 SQL 回退 `launch_started` 均不会产生假成功、路径泄漏或 spawn 边界倒退。
+
+### Edge Cases
+
+- 目标位置是 linked worktree 时允许，并以该位置为相对 worktree 根基准；空仓库/无 HEAD 拒绝。
+- 目标仓库与 Exemplar 位于不同磁盘时仍在目标仓库侧落相对 worktree；绝对根不重解释。
+- 补偿删除被 Git/文件系统拒绝时继续尝试其余资源并返回 `cleanup-incomplete + session id`。
+- 首次 session 写入结果未知且回读失败时保留资源，避免猜测性删除已提交业务事实。
+- v32 running 行升级 v33 后缺少创建时间，必须一直保持未确认 ownership，不能被状态文件洗白。
+- terminal 与 stale running 并发观测时仅首个 CAS 生效，迟到观测不得复活 attempt。
+- abandon/refresh 在 reservation 与 spawn 之间获胜时，launch CAS 失败且 CLI 启动次数为 0。
+- adapter factory 在 CAS 前抛错时按 pre-spawn 关单，不留下无 PID 的已启动 reservation。
+- stdout/stderr reader 延迟失败即使发生在进程退出后也必须进入 guarded recovery，不能写假终态。
+- 进程树停止无法确认、PID 复用、父进程消失或 durable identity 冲突时均保留 running owner。
+- terminal marker 首写/重写失败时 registry 保留；只有安全终态真正落盘后才释放 owner。
+- PID 注册碰撞后的新进程若补偿终止失败，旧、新 owner 按完整身份和状态路径隔离保留。
+
+## 调度任务常驻会话复用 [Source: specs/034-scheduled-session-reuse]
+
+**Revision note (2026-07-22)**: Archived 034 after 035 in the same worktree for a joint commit
+into `prepare-github`。034 已在 `prepare-github` 实现并明确替代 033 的“每次触发新建 session”
+及两处 task-collaboration 禁改描述；归档保留 033 的历史语境，同时把 main memory 中的当前
+真相修订为 task current session + independent runs。0 新公开 UI 事件 / 0 新配置 / 0 新 secret。
+
+> ID mapping: 034 feature-local US1~5 / FR-001~015 / 3 条明确兼容约束 / SC-001~005
+> 归档时从 035 已占用的最高全局编号继续顺延为 US-122~126 / FR-563~577 /
+> CC-205~207 / SC-243~247；不重排或复用 035 的编号。
+
+### User Stories
+
+- **US-122 (P1)**: 周期任务记得上一次执行——同一 ScheduledTask 首次触发创建并绑定 scheduled
+  session，后续 run 继续向该 session 投递，因此模型上下文保留历史；不同 task 不共享 current session。
+- **US-123 (P1)**: 每次执行独立记账——复用 session 后，run N 只能由自身 worker、消息窗口、
+  任务图和回流裁定；旧工具证据、旧失败图和旧 assistant 文本不得污染新 run。
+- **US-124 (P1)**: 同一 session 不并发跑两轮——启动前必须无 worker、预约、pending reentry
+  或非终态图；检查与注册间用 runtime reservation 封口，busy occurrence 记 skipped。
+- **US-125 (P1)**: 回流不跨 run 串台——父侧回流按 `(session_id, graph_id)` 隔离，图根消息序号
+  映射到精确 run 窗口，完成通知先入回流通道再发布 scheduling observer。
+- **US-126 (P2)**: 用户手动“重开一轮”——静默时可解除 current session 绑定，下一次触发
+  创建新 session；busy 返回 409，旧 session/run 历史保留且旧会话立即失去 CC-005 授权资格。
+
+### Functional Requirements
+
+- **FR-563**: `scheduled_tasks` MUST 持久化唯一可空 `session_id`，表示该 task 的 current session。
+- **FR-564**: `scheduled_task_runs` MUST 持久化 `baseline_message_sequence` 与
+  `trigger_message_sequence`；新 active run 的 trigger 必须等于预约时的下一消息序号。
+- **FR-565**: 首次绑定、scheduled session 插入和 active run 插入 MUST 在同一数据库事务中提交。
+- **FR-566**: v32 migration SHOULD 为存量 task 回填最近一个关系合法、可复用的 scheduled
+  session；没有合法历史时保持空绑定并在下一次触发惰性创建。
+- **FR-567**: session/task、active run/task、active run/session 与
+  `(session, trigger_message_sequence)` 唯一性 MUST 由数据库索引兜底。
+- **FR-568**: Launcher MUST 使用 runtime reservation 完成“占 session → 原子建 run → 预约转
+  worker”，任一失败都释放预约；trigger 消息尚未落库时还必须在 run 终态事务中清空预留序号，
+  已落库则保留作为审计归属。
+- **FR-569**: busy 若发生在 run 创建前，MUST 将 occurrence 记为 skipped，不得先建 running 再标 failed。
+- **FR-570**: 完成监视的 mutation interface MUST 以 `run_id` 为权威；session 仅用于验证归属和读取窗口。
+- **FR-571**: 任务图查询 MUST 限定 `user_message_sequence > baseline`；窗口内存在未标序号图时
+  MUST 返回 unknown/fail-closed。
+- **FR-572**: tool evidence 与 summary MUST 只使用 `sequence > baseline` 的本 run 消息窗口。
+- **FR-573**: `ParentReentrySink` MUST 提供 graph-scoped drain、re-enqueue 与 pending interface。
+- **FR-574**: reset MUST 经 scheduling business facade；router 与 UI 不得直接操作 Repository。
+- **FR-575**: unattended 判定除 scheduled 来源与 task id 外，MUST 验证 session 仍是该 task
+  当前绑定的 session。
+- **FR-576**: 本 feature MUST NOT 新增公开 UI event、配置或 secret；reset 复用
+  `scheduled_task.changed` 的 `status_changed` changeType。
+- **FR-577**: current 与历史 scheduled session MUST 继续从普通聊天列表排除并跳过 Brain Segment。
+
+### Key Entities
+
+- **ScheduledTask current session（SQLite v32）**: `scheduled_tasks.session_id` 是唯一可空绑定；
+  reset 只做静默校验后的 CAS 清绑定，不删除或改写旧 session。
+- **ScheduledTaskRun window（SQLite v32）**: 每次触发仍新增 append-only run，以 baseline/trigger
+  划定持久消息窗口；run-id 是终态写入权威，水位线不是 runtime ownership。
+- **Runtime reservation**: 在静默检查与 worker 注册之间占住 session；普通 dispatch、retry、
+  reentry 与 scheduled trigger 共用 worker lock，只有 reservation owner 能转换为 worker。
+- **Graph-scoped reentry**: 回流队列键为 `(session_id, graph_id)`；graph root 的
+  `user_message_sequence` 决定它属于哪个 run 窗口。
+
+### Data Flow / Architecture
+
+`SchedulerWorker` / fire-now → `SessionLauncher` 取得 runtime reservation → Repository 在一个事务中
+首绑或复用 current session + 创建带 baseline/trigger 的 active run → reserved dispatch 固定
+`scheduled_run_id` → graph-scoped reentry → `RunCompletionMonitor(run_id)` 窗口化读取与终态 CAS。
+reset 则走 `SchedulerService.reset_session()` 的 trigger guard、active-run 检查、runtime busy guard
+和 task/session CAS；FastAPI/typed frontend 只调用 facade，不越过业务层。
+
+### Constraints & Compatibility
+
+- **CC-205**: 034 明确替代 033 / 全局 FR-512 的“每次触发新建 session”；当前契约是每 task
+  复用唯一 current session、每次触发新增独立 run，历史 033 规格原文保留用于追溯。
+- **CC-206**: 034 对 033 / 全局 CC-192 的替代仅限 graph-scoped 父侧回流与 graph-complete
+  通知顺序；节点推进、裁定、执行器选择、通信和恢复决策 MUST 保持不变。
+- **CC-207**: 033 的 per-task active-run、misfire、普通聊天排除、Segment opt-out 与 CC-005
+  四重限定/三重不暴露继续有效；current-session 校验只进一步收紧授权，不扩大例外。
+
+### Success Criteria
+
+- **SC-243**: 自动化测试证明同一 task 连续两次 run 使用同一 session，不同 task 不共享绑定。
+- **SC-244**: 自动化测试证明旧图、旧工具结果和旧 assistant 文本均不能影响新 run。
+- **SC-245**: 并发测试证明 task/session 两个维度都不存在双 active run 或双 worker。
+- **SC-246**: reset 后新 run 更换 session，旧 session 无 unattended 权限且历史仍可访问。
+- **SC-247**: 相关 Python、frontend、类型检查、lint、格式化与回归验证满足归档记录。
+
+### Edge Cases
+
+- 用户接管、普通对话、pending reentry 或非终态图使 session busy 时，本次触发只记 skipped。
+- trigger 消息落库前 reserved dispatch 失败时清空预留序号；消息已落库时保留序号供审计。
+- 图根缺少 `user_message_sequence` 时 run 归属未知，完成门卫延后而不是推断成功。
+- reset 遇 active run、worker、reservation、pending reentry 或非终态图时返回 409 且绑定不变。
+- v31 历史 run 以 baseline=0、trigger=NULL 保持可读，已终态历史行不得被 monitor 再推进。
