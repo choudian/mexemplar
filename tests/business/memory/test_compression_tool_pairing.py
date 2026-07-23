@@ -18,6 +18,9 @@ def handler():
     config.get_memory_compression_keep_recent.return_value = 3
     config.get_memory_compression_trigger_strategy.return_value = "count"
     config.get_memory_compression_count_threshold.return_value = 100
+    # 必须显式给数值：MagicMock 支持 __int__ 且返回 1，不配就等于把引用替换
+    # 阈值设成 1 字符，每条工具结果都会被转成引用。
+    config.get_memory_reference_size_threshold.return_value = 10000
     return CompressionHandler(config)
 
 
@@ -265,6 +268,7 @@ class TestCompressPersistence:
         config.get_memory_compression_keep_recent.return_value = 1
         config.get_memory_compression_trigger_strategy.return_value = "count"
         config.get_memory_compression_count_threshold.return_value = 2
+        config.get_memory_reference_size_threshold.return_value = 10000
         handler = CompressionHandler(config)
         handler._llm_client = _FakeCompressionLLM()
         repo = MessageRepository()
