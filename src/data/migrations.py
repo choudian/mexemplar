@@ -2998,6 +2998,49 @@ def downgrade_v33(engine):
     logger.info("回退版本 33 完成：移除 external coding ownership 字段")
 
 
+def migrate_to_v34(engine):
+    """迁移到版本 34：assistant 消息记录本次调用的 token 用量。
+
+    provider 每次都上报用量，此前被整体丢弃。落到消息上而非独立表，
+    是为了天然按会话 / 任务 / 专员聚合，且压缩触发能直接读到最后一条
+    assistant 消息的真实 input_tokens。
+    """
+    try:
+        with engine.begin() as conn:
+            messages_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'messages'"
+                )
+            ).fetchone()
+            if messages_exists is not None:
+                _add_column_if_missing(conn, "messages", "token_usage", "TEXT")
+            else:
+                logger.info("迁移到版本 34：messages 表不存在，跳过 token 用量列")
+            conn.execute(text("UPDATE schema_version SET version = 34"))
+    except Exception as e:
+        logger.error(f"迁移到版本 34 失败: {e}")
+        raise
+    logger.info("迁移到版本 34 完成：messages 记录 token 用量")
+
+
+def downgrade_from_v34(engine):
+    """回退版本 34：移除 token 用量列。"""
+    try:
+        with engine.begin() as conn:
+            columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info(messages)")).fetchall()
+            }
+            if "token_usage" in columns:
+                conn.execute(text("ALTER TABLE messages DROP COLUMN token_usage"))
+            conn.execute(text("UPDATE schema_version SET version = 33"))
+    except Exception as e:
+        logger.error(f"回退版本 34 失败: {e}")
+        raise
+    logger.info("回退版本 34 完成：移除 token 用量列")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -3031,6 +3074,7 @@ _MIGRATIONS = [
     (31, migrate_to_v31),
     (32, migrate_to_v32),
     (33, migrate_to_v33),
+    (34, migrate_to_v34),
 ]
 
 

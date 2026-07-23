@@ -929,7 +929,7 @@ class AgentOrchestrator:
                 if cancelled
                 else f"子代理已暂停（{reason}），可用 continue_subagent 唤回续跑"
             )
-            return {
+            paused_payload = {
                 "success": False,
                 "paused": True,
                 "cancelled": cancelled,
@@ -940,6 +940,15 @@ class AgentOrchestrator:
                 "result_type": result.result_type.value,
                 "reason": reason,
             }
+            # 结构化暂停原因随结果上行：父侧靠它区分"跑到预算了"（可追加轮次续跑）
+            # 和"等外部恢复"（只能等），仅凭 reason 文本无法可靠区分。
+            if not cancelled and result.pause_reason:
+                paused_payload["pause_reason"] = result.pause_reason
+                if result.iterations_used is not None:
+                    paused_payload["iterations_used"] = result.iterations_used
+                if result.max_iterations is not None:
+                    paused_payload["max_iterations"] = result.max_iterations
+            return paused_payload
 
         if (
             result.result_type == ResultType.NEEDS_USER_INPUT
@@ -1072,11 +1081,21 @@ class AgentOrchestrator:
             }
         return None
 
+    # 可被 inspect/continue 的执行体类型。专员与临时子代理都由
+    # ``_new_delegation_workflow_id`` 生成 ``dlg_<父会话哈希>_<随机>`` 形式的
+    # workflow_id，故下方三层归属校验对两者同样成立，无需分叉。
+    _RESUMABLE_EXECUTOR_TYPES = (
+        AgentType.EPHEMERAL_SUBAGENT,
+        AgentType.SPECIALIST,
+    )
+
     def _resolve_subagent_session(self, parent_session_id: str, subagent_id: str):
-        """归属校验：确认 subagent_id 是当前主代理派出的临时子代理 session。
+        """归属校验：确认 subagent_id 是当前主代理派出的执行体 session。
 
         返回 Session（合法）或 None（不存在 / 类型不符 / 非本主代理派出），
         防止主代理传入任意 session_id 唤回或窥探他人会话。
+
+        专员再派出的子代理归属于专员会话，主代理越级查看仍被拒——正是该校验要守的边界。
         """
         parent_id = parent_session_id.strip() if isinstance(parent_session_id, str) else ""
         if not parent_id:
@@ -1087,7 +1106,7 @@ class AgentOrchestrator:
         session = self._session_store.get_session(sid)
         if session is None:
             return None
-        if getattr(session, "agent_type", None) != AgentType.EPHEMERAL_SUBAGENT:
+        if getattr(session, "agent_type", None) not in self._RESUMABLE_EXECUTOR_TYPES:
             return None
         workflow_id = getattr(session, "workflow_id", "") or ""
         transition_match = self._subagent_transition_belongs_to_parent(workflow_id, parent_id, sid)
@@ -1849,6 +1868,9 @@ class AgentOrchestrator:
                 agent_type=AgentType.SPECIALIST,
                 system_prompt="你是一个固定专员。根据你的角色定义完成指定工作。",
                 max_iterations=30,
+                # 撞轮次上限不是失败：工作历史完整保留，父侧可 continue_subagent 追加
+                # 预算续跑。此前默认 False 让专员直接判 ERROR，30 轮做不完的任务全部作废。
+                resumable_on_failure=True,
                 workspace_root=Path(workspace_root) if workspace_root else None,
             )
             return AgentLoop(specialist_config, self._llm, self._config)

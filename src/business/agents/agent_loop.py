@@ -26,6 +26,7 @@ from .config import (
     AgentConfig,
     AgentResult,
     AgentType,
+    PauseReason,
     ResultType,
     RetryConfig,
     ToolDefinition,
@@ -149,6 +150,20 @@ def _serialize_tool_calls(tool_calls: List[ToolCallInfo]) -> str:
         [{"id": tc.id, "name": tc.name, "args": tc.args} for tc in tool_calls],
         ensure_ascii=False,
     )
+
+
+def _serialize_token_usage(usage) -> Optional[str]:
+    """序列化本次调用的 token 用量；provider 未上报时返回 None。
+
+    记账失败不能影响本轮对话，故异常一律吞掉只留 debug 日志。
+    """
+    if usage is None:
+        return None
+    try:
+        return json.dumps(usage.to_dict(), ensure_ascii=False)
+    except Exception:
+        logger.debug("token usage serialization failed", exc_info=True)
+        return None
 
 
 class AgentLoop:
@@ -1055,6 +1070,7 @@ class AgentLoop:
             tool_calls=(
                 _serialize_tool_calls(response.tool_calls) if response.has_tool_calls else None
             ),
+            token_usage=_serialize_token_usage(getattr(response, "usage", None)),
         )
 
         # 逐步活动事件（014）：仅随【带工具调用的中间消息】一同产生 reasoning，
@@ -1342,6 +1358,9 @@ class AgentLoop:
                         return AgentResult(
                             result_type=ResultType.PAUSED,
                             error="LLM 调用失败（账单或网络），可恢复后续跑",
+                            pause_reason=PauseReason.EXTERNAL_UNAVAILABLE.value,
+                            iterations_used=iteration,
+                            max_iterations=self._config.max_iterations,
                         )
                     ctx.update_session_status("failed")
                     return AgentResult(result_type=ResultType.ERROR, error="LLM 调用失败")
@@ -1377,6 +1396,9 @@ class AgentLoop:
             return AgentResult(
                 result_type=ResultType.PAUSED,
                 error=f"已达迭代上限（{self._config.max_iterations} 轮）",
+                pause_reason=PauseReason.BUDGET_EXHAUSTED.value,
+                iterations_used=self._config.max_iterations,
+                max_iterations=self._config.max_iterations,
             )
         if self._config.text_as_user_input:
             # 持续对话类 Agent（assistant 等）：标记 suspended，用户下条消息可恢复

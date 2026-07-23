@@ -23,6 +23,9 @@ class SuspendReason(StrEnum):
     WAITING_USER = "waiting_user"
     WAITING_SYSTEM = "waiting_system"
     USER_STOP = "user_stop"
+    # 执行体跑到轮次预算但工作完整保留：与"等外部条件"不同，父侧可追加预算续跑。
+    # 落进 WAITING_SYSTEM 会让父侧误以为在等外部，从而无限期干等。
+    BUDGET_EXHAUSTED = "budget_exhausted"
 
 
 class TaskEdgeType(StrEnum):

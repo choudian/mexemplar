@@ -299,7 +299,9 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             ),
             (
                 "suspendReason",
-                frozenset({"waiting_user", "waiting_system", "user_stop"}),
+                frozenset(
+                    {"waiting_user", "waiting_system", "user_stop", "budget_exhausted"}
+                ),
             ),
         ),
     ),

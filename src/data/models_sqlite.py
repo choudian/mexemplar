@@ -206,6 +206,8 @@ class Message(Base):
     tool_calls: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     compressed_range: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
+    # v34：本次 LLM 调用的 token 用量 JSON；provider 未上报时为 NULL。
+    token_usage: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
 
     def __repr__(self) -> str:

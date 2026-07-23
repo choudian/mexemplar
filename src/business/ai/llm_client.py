@@ -17,6 +17,7 @@ import logging
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
+from src.business.ai.token_usage import TokenUsage, extract_token_usage
 from src.utils.llm_helpers import sanitize_text_for_llm
 from src.utils.helpers import normalize_thinking_level
 
@@ -41,6 +42,8 @@ class LLMResponse:
 
     content: Optional[str]
     tool_calls: List[ToolCallInfo]
+    usage: Optional[TokenUsage] = None
+    """本次调用的 token 用量；provider 未上报时为 None。"""
 
     @property
     def has_tool_calls(self) -> bool:
@@ -311,6 +314,22 @@ class LangChainLLMClient:
         Returns:
             模型响应文本
         """
+        text, _usage = self.chat_with_usage(prompt, **kwargs)
+        return text
+
+    def chat_with_usage(
+        self, prompt: str, **kwargs
+    ) -> "tuple[str, Optional[TokenUsage]]":
+        """发送聊天请求，同时带回本次调用的 token 用量。
+
+        ``chat()`` 只要文本，这里给需要记账的调用方保留 provider 上报的用量。
+        provider 未上报时用量为 ``None``，由调用方决定是否退回估算。
+
+        Returns:
+            (响应文本, token 用量或 None)
+        """
+        # observe_chat 要求 invoke_fn 返回文本，用量只能经闭包带出。
+        captured: Dict[str, Optional[TokenUsage]] = {"usage": None}
 
         def _invoke(raw_prompt: str) -> str:
             try:
@@ -326,6 +345,7 @@ class LangChainLLMClient:
 
             # 调用模型
             response = self.llm.invoke([message], **kwargs)
+            captured["usage"] = extract_token_usage(response)
 
             # 返回文本内容
             return response.content
@@ -337,9 +357,9 @@ class LangChainLLMClient:
             buffer, redactor, epoch = get_active_capture()
         except Exception:
             logger.debug("debug observation unavailable for chat", exc_info=True)
-            return _invoke(prompt)
+            return _invoke(prompt), captured["usage"]
 
-        return observe_chat(
+        text = observe_chat(
             buffer=buffer,
             redactor=redactor,
             epoch=epoch,
@@ -347,6 +367,7 @@ class LangChainLLMClient:
             invoke_fn=_invoke,
             method="chat",
         )
+        return text, captured["usage"]
 
     def chat_with_tools(
         self,
@@ -528,4 +549,8 @@ class LangChainLLMClient:
                     )
                 )
 
-        return LLMResponse(content=content, tool_calls=tool_calls)
+        return LLMResponse(
+            content=content,
+            tool_calls=tool_calls,
+            usage=extract_token_usage(ai_message),
+        )

@@ -174,6 +174,7 @@ class ContextManager:
         tool_call_id: Optional[str] = None,
         tool_name: Optional[str] = None,
         tool_calls: Optional[str] = None,
+        token_usage: Optional[str] = None,
     ) -> Message:
         """
         保存消息，自动分配 sequence
@@ -184,6 +185,7 @@ class ContextManager:
             tool_call_id: 工具调用 ID（tool 角色必需）
             tool_name: 工具名称（tool 角色）
             tool_calls: 工具调用列表 JSON（assistant 角色）
+            token_usage: 本次调用的 token 用量 JSON（assistant 角色）
 
         Returns:
             保存的消息对象
@@ -199,6 +201,7 @@ class ContextManager:
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             tool_calls=tool_calls,
+            token_usage=token_usage,
         )
 
         return self._msg_repo.create(msg)
@@ -211,12 +214,14 @@ class ContextManager:
         self,
         content: Optional[str],
         tool_calls: Optional[str] = None,
+        token_usage: Optional[str] = None,
     ) -> Message:
         """便捷方法：保存 assistant 消息"""
         return self.save_message(
             role="assistant",
             content=content,
             tool_calls=tool_calls,
+            token_usage=token_usage,
         )
 
     def save_tool_result(

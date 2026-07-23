@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from typing import Any, TYPE_CHECKING
 
-from src.business.agents.config import AgentType
+from src.business.agents.config import AgentType, PauseReason
 from src.business.agents.delegation_context import prepare_delegated_execution_context
 from src.business.task_collaboration.models import SuspendReason
 
@@ -217,6 +217,18 @@ class TaskExecutorAdapter:
             for key in ("reentry_type", "question_id", "question_kind"):
                 if result.get(key):
                     outcome[key] = result[key]
+            # 撞轮次预算：若上游没给更具体的 reentry_type，就归到 budget_exhausted，
+            # 否则会落进"无类型暂停"，dispatcher 认不出来、父侧收不到任何通知。
+            if (
+                result.get("pause_reason") == PauseReason.BUDGET_EXHAUSTED.value
+                and "reentry_type" not in outcome
+                and not result.get("cancelled")
+            ):
+                outcome["suspend_reason"] = SuspendReason.BUDGET_EXHAUSTED.value
+                outcome["reentry_type"] = "budget_exhausted"
+                for key in ("iterations_used", "max_iterations"):
+                    if result.get(key) is not None:
+                        outcome[key] = result[key]
             return outcome
         raise RuntimeError(result.get("message") or "委派执行未返回可用结果")
 

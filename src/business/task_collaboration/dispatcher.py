@@ -647,6 +647,19 @@ def _paused_reentry_payload(result: str | dict[str, Any] | None) -> dict[str, An
             "taskId": result.get("task_id"),
             "safeSummary": result.get("safe_summary", "节点标记为需确认，请裁定是否执行。"),
         }
+    # 执行体跑到轮次预算：工作完整保留，父侧可追加预算续跑、改拆任务或就现有成果裁定。
+    # 不给回流载荷会让任务静默挂起——父侧既不知道发生了什么，也不知道还能做什么。
+    if reentry_type == "budget_exhausted":
+        return {
+            "eventType": "budget_exhausted",
+            "taskId": result.get("task_id"),
+            "subagentId": result.get("subagent_id"),
+            "iterationsUsed": result.get("iterations_used"),
+            "maxIterations": result.get("max_iterations"),
+            "safeSummary": result.get(
+                "safe_summary", "执行体已跑到轮次预算，工作已保留，可续跑或改拆任务。"
+            ),
+        }
     return None
 
 

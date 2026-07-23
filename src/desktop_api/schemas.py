@@ -181,7 +181,9 @@ TaskStatus = Literal[
     "cancelled",
 ]
 TaskDisplayPhase = Literal["running", "reviewing", "needs_attention", "paused", "done"]
-TaskSuspendReason = Literal["waiting_user", "waiting_system", "user_stop"]
+TaskSuspendReason = Literal[
+    "waiting_user", "waiting_system", "user_stop", "budget_exhausted"
+]
 
 
 # I8: 运行时同步断言——business StrEnum 与 schema Literal 必须保持一致。

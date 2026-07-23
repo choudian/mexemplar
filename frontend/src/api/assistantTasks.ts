@@ -9,7 +9,11 @@ export type TaskStatus =
   | "failed"
   | "cancelled";
 
-export type SuspendReason = "waiting_user" | "waiting_system" | "user_stop";
+export type SuspendReason =
+  | "waiting_user"
+  | "waiting_system"
+  | "user_stop"
+  | "budget_exhausted";
 
 export type TaskDisplayPhase =
   | "running"

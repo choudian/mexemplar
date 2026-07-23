@@ -230,6 +230,7 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
       "running",
     ],
     "suspendReason": [
+      "budget_exhausted",
       "user_stop",
       "waiting_system",
       "waiting_user",

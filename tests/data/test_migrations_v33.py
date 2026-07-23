@@ -91,7 +91,8 @@ def test_v33_adds_restart_safe_process_ownership_columns_idempotently() -> None:
         "trg_external_coding_attempts_ownership_insert",
         "trg_external_coding_attempts_ownership_update",
     }
-    assert migrations._MIGRATIONS[-1] == (33, migrations.migrate_to_v33)
+    # v33 已注册即可；不锁定它是最后一个，否则每加一个迁移都要改这行。
+    assert (33, migrations.migrate_to_v33) in migrations._MIGRATIONS
     assert version == 33
 
     with pytest.raises(IntegrityError, match="invalid external coding process ownership state"):
