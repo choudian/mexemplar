@@ -56,6 +56,16 @@ def create_app(session_token: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
+        # 必须最先执行：此后构造的 LLM client、启动的子进程都从 os.environ 取值，
+        # 晚一步设置就有东西已经拿着空环境跑了。
+        try:
+            from src.data.unified_config import get_unified_config
+            from src.utils.process_env import apply_process_env
+
+            apply_process_env(get_unified_config().get_process_env())
+        except Exception:
+            # 环境变量缺失只让部分功能不可用；启动失败会让整个应用起不来。
+            logger.warning("Process environment setup failed", exc_info=True)
         RecordingStartupService().ensure_recovered()
         try:
             from src.business.services.assistant_failure_service import AssistantFailureService

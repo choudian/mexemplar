@@ -290,6 +290,31 @@ class UnifiedConfigManager:
         """获取视觉模型 endpoint（为空则返回 None，由 LangChain 根据 provider 自动选择默认 endpoint）"""
         return self.get("ai.vision_base_url", default=None)
 
+    def get_process_env(self) -> dict[str, str]:
+        """进程级环境变量；空 dict 表示不改动继承环境。
+
+        由 sidecar 启动时写入 ``os.environ``，此后所有 HTTP 调用和子进程自然继承。
+        桌面壳启动的 sidecar 拿不到终端 profile 里的任何变量，代理只是最常见的
+        一个缺口——把某个 CLI 指向自建后端还需要 ``ANTHROPIC_BASE_URL`` 之类。
+
+        值可能是密钥（如 ``ANTHROPIC_AUTH_TOKEN``），不得写进日志、命令摘要、
+        DTO 或 UI 事件。
+        """
+        raw = self.get("env", default=None)
+        if not isinstance(raw, dict):
+            return {}
+        result: dict[str, str] = {}
+        for key, value in raw.items():
+            name = str(key).strip()
+            # 空名在部分平台会让 Popen 直接报错；空值按"不设置"处理，
+            # 避免把变量置空反而盖掉子进程本可继承的值。
+            if not name or value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                result[name] = text
+        return result
+
     def get_ai_provider(self) -> str:
         """获取 AI 提供商"""
         return self.get("ai.provider", default="anthropic")

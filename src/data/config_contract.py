@@ -116,6 +116,13 @@ _RULES = (
         template_allowed=False,
         replacement="inherit the primary model profile",
     ),
+    # 进程级环境变量：键名由部署环境决定（http_proxy、ANTHROPIC_BASE_URL 等），
+    # 无法从 dataclass 推导出叶子路径，故显式登记容器与通配。
+    # 标 secret 只约束一件事：随包分发的 config.example.json 里不得带真值。
+    # 用户自己的 config.json 仍按明文保存——否则每次保存设置都会把代理清掉，
+    # 配置就成了填不进去的东西。
+    ConfigRule("env", ConfigScope.FILE_DB, template_allowed=True),
+    ConfigRule("env.*", ConfigScope.FILE_DB, template_allowed=True, secret=True),
     ConfigRule("debug", ConfigScope.DEPRECATED, template_allowed=False),
     ConfigRule("debug.*", ConfigScope.RUNTIME_ONLY, template_allowed=False),
     ConfigRule("ui.language", ConfigScope.DEPRECATED, template_allowed=False),

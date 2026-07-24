@@ -1,6 +1,7 @@
 {
   "app_name": "Mexemplar",
   "version": "0.1.0",
+  "env": {},
   "ai": {
     "provider": "openai",
     "model": "GLM-5.1",

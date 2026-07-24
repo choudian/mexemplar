@@ -593,6 +593,13 @@ class AppConfig:
 
     app_name: str = "Mexemplar"
     version: str = "0.1.0"
+    # 进程级环境变量：sidecar 启动时写入 os.environ，此后所有 HTTP 调用和子进程
+    # （LLM client、外部 coding CLI、MCP server、exec 工具、录制浏览器）自然继承。
+    #
+    # 桌面壳启动的 sidecar 拿不到终端 profile 里的任何变量，代理只是最常见的
+    # 一个缺口——把某个 CLI 指向自建后端还需要 ANTHROPIC_BASE_URL 之类，
+    # 逐个场景加配置项不现实，所以在入口一次性铺平。
+    env: Dict[str, str] = field(default_factory=dict)
     ai: AIConfig = field(default_factory=AIConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     ui: UIConfig = field(default_factory=UIConfig)
