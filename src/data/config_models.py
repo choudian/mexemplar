@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 from dataclasses import dataclass, field, asdict
 
-from src.utils.helpers import get_default_data_dir
+from src.utils.helpers import bundled_resource_path, get_default_data_dir, is_frozen
 
 logger = logging.getLogger(__name__)
 
@@ -816,22 +816,34 @@ class ConfigFileLoader:
         """
         启动时同步配置文件到 data/config/config.json。
 
-        规则：
-        1. 如果当前目录存在 config.json，优先复制它
-        2. 否则如果存在 config.example.json，复制它
-        3. 两者都不存在则跳过
+        搜索顺序：
+        1. working_dir（默认 cwd）下的 config.json
+        2. working_dir 下的 config.example.json
+        3. **仅打包态**：PyInstaller 解压目录下的 config.example.json
+        4. 以上均不存在则跳过
+
+        第 3 步限定打包态，是因为开发时 ``bundled_resource_path`` 解析到仓库根，
+        那里总有 config.example.json——无条件回落会让"哪里都没有配置"这个分支
+        在开发环境永远走不到。
         """
         current_dir = working_dir or Path.cwd()
         config_source = current_dir / "config.json"
         example_source = current_dir / "config.example.json"
 
+        # 打包后 cwd 是安装目录、不含模板，须回落到 PyInstaller 解压目录
+        bundled_example = (
+            bundled_resource_path("config.example.json") if is_frozen() else None
+        )
+
         if config_source.exists():
             source_path = config_source
         elif example_source.exists():
             source_path = example_source
+        elif bundled_example is not None and bundled_example.exists():
+            source_path = bundled_example
         else:
             logger.info(
-                "[配置文件] 当前目录未找到 config.json 或 config.example.json，跳过启动同步"
+                "[配置文件] 未找到 config.json 或 config.example.json，跳过启动同步"
             )
             return
 

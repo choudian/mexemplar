@@ -40,6 +40,16 @@ def safe_format_template(template: str, **kwargs: str) -> str:
     return _TEMPLATE_RE.sub(replacer, template)
 
 
+def is_frozen() -> bool:
+    """当前是否运行在 PyInstaller 打包产物中。
+
+    用于区分"资源该从解压目录找"和"开发时仓库根就有"。开发态下
+    ``bundled_resource_path`` 总能解析到真实文件，所以只判断文件是否存在
+    无法区分两种环境。
+    """
+    return getattr(sys, "_MEIPASS", None) is not None
+
+
 def bundled_resource_path(relative_path: str | Path) -> Path:
     """定位随程序打包的只读资源（seed 文件、扩展等）。
 

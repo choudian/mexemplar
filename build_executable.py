@@ -44,6 +44,12 @@ def build_sidecar() -> Path:
         raise FileNotFoundError(f"Brain seed directory not found: {brain_seed}")
     brain_seed_dest = Path("src") / "business" / "brain" / "seed"
 
+    # 配置模板（不含密钥）——打包后 sidecar 首次启动时从解压目录同步到
+    # data/config/config.json，为用户提供完整默认值。
+    config_example = root / "config.example.json"
+    if not config_example.exists():
+        raise FileNotFoundError(f"Config template not found: {config_example}")
+
     cmd = [
         sys.executable,
         "-m",
@@ -60,6 +66,7 @@ def build_sidecar() -> Path:
         "--hidden-import=sqlite_vec",
         f"--add-data={browser_extension}{os.pathsep}{browser_extension_dest}",
         f"--add-data={brain_seed}{os.pathsep}{brain_seed_dest}",
+        f"--add-data={config_example}{os.pathsep}.",
         str(entry),
     ]
     subprocess.run(cmd, cwd=root, check=True)

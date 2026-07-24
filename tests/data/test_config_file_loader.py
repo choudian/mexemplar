@@ -152,3 +152,64 @@ def test_loader_warns_about_runtime_only_and_unknown_keys_without_values(tmp_pat
     assert "debug.trace.max_records" in caplog.text
     assert "unsupported.value" in caplog.text
     assert "hidden" not in caplog.text
+
+
+def test_sync_startup_config_falls_back_to_the_bundled_template(tmp_path, monkeypatch):
+    """Installed builds have no template beside the exe — it ships inside it.
+
+    After install, cwd is the installation directory, which contains neither
+    config.json nor config.example.json. Without this fallback the sidecar
+    starts with no defaults at all, and only on a user's machine: a source
+    checkout always has the template sitting in the repo root.
+    """
+    extraction_dir = _case_dir(tmp_path, "frozen") / "_MEIPASS"
+    extraction_dir.mkdir(parents=True)
+    (extraction_dir / "config.example.json").write_text('{"app_name": "bundled"}', encoding="utf-8")
+    monkeypatch.setattr("src.data.config_models.bundled_resource_path", lambda rel: extraction_dir / rel)
+    monkeypatch.setattr("src.data.config_models.is_frozen", lambda: True)
+
+    install_dir = _case_dir(tmp_path, "frozen") / "install"
+    install_dir.mkdir(parents=True)
+    target = install_dir / "data" / "config" / "config.json"
+
+    ConfigFileLoader._sync_startup_config(target, working_dir=install_dir)
+
+    assert target.exists()
+    assert "bundled" in target.read_text(encoding="utf-8")
+
+
+def test_working_directory_sources_still_win_over_the_bundled_template(tmp_path, monkeypatch):
+    # A checkout must keep using its own config.json; the bundle is last resort.
+    extraction_dir = _case_dir(tmp_path, "precedence") / "_MEIPASS"
+    extraction_dir.mkdir(parents=True)
+    (extraction_dir / "config.example.json").write_text('{"app_name": "bundled"}', encoding="utf-8")
+    monkeypatch.setattr("src.data.config_models.bundled_resource_path", lambda rel: extraction_dir / rel)
+    monkeypatch.setattr("src.data.config_models.is_frozen", lambda: True)
+
+    working_dir = _case_dir(tmp_path, "precedence") / "working"
+    working_dir.mkdir(parents=True)
+    (working_dir / "config.json").write_text('{"app_name": "local"}', encoding="utf-8")
+    target = working_dir / "data" / "config" / "config.json"
+
+    ConfigFileLoader._sync_startup_config(target, working_dir=working_dir)
+
+    assert "local" in target.read_text(encoding="utf-8")
+
+
+def test_bundled_fallback_stays_off_outside_a_frozen_build(tmp_path, monkeypatch):
+    """Development must still be able to reach the "nothing found" branch.
+
+    `bundled_resource_path` resolves to the repo root when not frozen, and the
+    repo root always has config.example.json. Keying the fallback on file
+    existence alone would make the skip branch unreachable during development
+    and silently mask a missing-config situation.
+    """
+    monkeypatch.setattr("src.data.config_models.is_frozen", lambda: False)
+
+    empty_dir = _case_dir(tmp_path, "not_frozen") / "working"
+    empty_dir.mkdir(parents=True)
+    target = empty_dir / "data" / "config" / "config.json"
+
+    ConfigFileLoader._sync_startup_config(target, working_dir=empty_dir)
+
+    assert not target.exists()

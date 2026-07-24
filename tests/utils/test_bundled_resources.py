@@ -67,3 +67,12 @@ def test_build_script_bundles_the_whole_seed_directory():
 
     assert "brain_seed" in build_script
     assert "--add-data={brain_seed}" in build_script
+
+
+def test_build_script_bundles_the_config_template():
+    # The sidecar falls back to this template when installed; if the build
+    # stops shipping it, that fallback silently finds nothing.
+    build_script = bundled_resource_path("build_executable.py").read_text(encoding="utf-8")
+
+    assert "config_example" in build_script
+    assert "--add-data={config_example}" in build_script

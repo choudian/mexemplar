@@ -68,7 +68,10 @@ class SkillBootstrapService:
                 logger.warning("读取 brain.skill.seed_file_path 失败，使用默认路径: %s", exc)
         path = Path(path_text)
         if not path.is_absolute():
-            path = Path.cwd() / path
+            # 打包后 cwd 是安装目录，那里没有源码树；seed 随 exe 走。
+            from src.utils.helpers import bundled_resource_path
+
+            path = bundled_resource_path(path)
         try:
             body = path.read_text(encoding="utf-8")
         except FileNotFoundError:
