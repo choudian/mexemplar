@@ -40,6 +40,21 @@ def safe_format_template(template: str, **kwargs: str) -> str:
     return _TEMPLATE_RE.sub(replacer, template)
 
 
+def bundled_resource_path(relative_path: str | Path) -> Path:
+    """定位随程序打包的只读资源（seed 文件、扩展等）。
+
+    开发时相对仓库根，打包后相对 PyInstaller 的解压目录。这些资源不能用
+    ``Path.cwd()`` 拼——装机后 cwd 是安装目录，那里没有源码树，本地开发
+    却一切正常，于是问题只在用户机器上出现。
+
+    Args:
+        relative_path: 相对仓库根的路径，如 ``src/business/brain/seed/x.md``
+    """
+    meipass = getattr(sys, "_MEIPASS", None)
+    base = Path(meipass) if meipass else Path(__file__).resolve().parents[2]
+    return base / relative_path
+
+
 def get_default_data_dir() -> Path:
     """获取默认数据目录，确保目录存在。
 

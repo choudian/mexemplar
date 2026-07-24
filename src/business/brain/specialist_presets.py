@@ -21,10 +21,13 @@ from pathlib import Path
 from src.business.services.skill_composition.builtin_compositions import (
     EXTERNAL_CODING_COMPOSITION_ID,
 )
+from src.utils.helpers import bundled_resource_path
 
 logger = logging.getLogger(__name__)
 
-_SEED_DIR = Path(__file__).parent / "seed"
+# 打包后 __file__ 指向 PyInstaller 解压目录内的模块位置，seed/*.md 只有被
+# 显式声明进 --add-data 才会同在；用统一的资源定位避免两边路径规则分叉。
+_SEED_RELATIVE_DIR = Path("src") / "business" / "brain" / "seed"
 
 
 def compute_fingerprint(
@@ -65,7 +68,7 @@ class SpecialistPreset:
     tool_whitelist: list[str] = field(default_factory=list)
 
     def load_role_definition(self) -> str:
-        path = _SEED_DIR / self.role_definition_file
+        path = bundled_resource_path(_SEED_RELATIVE_DIR / self.role_definition_file)
         return path.read_text(encoding="utf-8").strip()
 
     def fingerprint(self) -> str:

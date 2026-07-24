@@ -912,7 +912,10 @@ def migrate_to_v11(engine):
 def _load_v12_bootstrap_body() -> str:
     path = Path(DEFAULT_SEED_FILE_PATH)
     if not path.is_absolute():
-        path = Path.cwd() / path
+        # 打包后 cwd 是安装目录，那里没有源码树；资源随 exe 走。
+        from src.utils.helpers import bundled_resource_path
+
+        path = bundled_resource_path(path)
     try:
         body = path.read_text(encoding="utf-8").strip()
     except (OSError, UnicodeError) as exc:

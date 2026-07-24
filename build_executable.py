@@ -36,6 +36,14 @@ def build_sidecar() -> Path:
         raise FileNotFoundError(f"Browser recording extension not found: {browser_extension}")
     browser_extension_dest = Path("src") / "recording" / "browser_extension"
 
+    # 种子内容（方法论 seed、内置专员角色定义）是 .md，PyInstaller 只自动收集
+    # .py，不显式声明就会在打包后 FileNotFoundError——本地开发一切正常，
+    # 装机后才暴露。
+    brain_seed = root / "src" / "business" / "brain" / "seed"
+    if not brain_seed.exists():
+        raise FileNotFoundError(f"Brain seed directory not found: {brain_seed}")
+    brain_seed_dest = Path("src") / "business" / "brain" / "seed"
+
     cmd = [
         sys.executable,
         "-m",
@@ -51,6 +59,7 @@ def build_sidecar() -> Path:
         "--collect-data=tldextract",
         "--hidden-import=sqlite_vec",
         f"--add-data={browser_extension}{os.pathsep}{browser_extension_dest}",
+        f"--add-data={brain_seed}{os.pathsep}{brain_seed_dest}",
         str(entry),
     ]
     subprocess.run(cmd, cwd=root, check=True)
