@@ -317,10 +317,22 @@ def create_app(session_token: str | None = None) -> FastAPI:
             event_queue.shutdown()
 
     app = FastAPI(title="Mexemplar Desktop API", version="0.1.0", lifespan=lifespan)
+    # webview 的 origin 随平台/模式变化，请求要过 CORS 预检才能到达：
+    # - 开发模式：devUrl，即 http://127.0.0.1:1420（命中下方正则）
+    # - 打包 Windows：http://tauri.localhost（Tauri 2 默认，v1 是 https）
+    # - 打包 macOS/Linux：tauri://localhost
+    # 少了打包 Windows 的 tauri.localhost，开发能连、装机后一律 CORS 预检失败，
+    # 表现为"连不上后端"，而裸 socket（不走 CORS）却正常——正是本 bug。
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["tauri://localhost", "http://localhost", "http://127.0.0.1"],
-        allow_origin_regex=r"^http://(localhost|127\.0\.0\.1):\d+$",
+        allow_origins=[
+            "tauri://localhost",
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "http://localhost",
+            "http://127.0.0.1",
+        ],
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=[SESSION_HEADER, "Content-Type"],

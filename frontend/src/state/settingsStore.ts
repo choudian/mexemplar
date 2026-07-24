@@ -139,9 +139,16 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ busy: true, lastError: null });
     try {
       const response = await writeSettingSecret(secretKey, value);
+      // 只更新这个密钥的展示状态。此前会调 load() 全量重载，把用户尚未点
+      // "保存全部"的 draftValues 用后端旧值冲掉、dirtyKeys 归零，导致"保存全部"
+      // 变灰且已填内容丢失——保存密钥不该动到其他字段的未保存草稿。
       const secrets = { ...get().secrets, [secretKey]: response };
-      set({ secrets, validationErrors: { ...get().validationErrors, [secretKey]: "" } });
-      await get().load();
+      // 清掉该密钥的校验错误——必须删 key 而不是设成空串：saveValues 用
+      // Object.keys(validationErrors).length 判断能否保存，留一个空串 key 会让
+      // 计数为 1，"保存全部"永远发不出去（旧代码靠 load() 整表清空掩盖了这点）。
+      const validationErrors = { ...get().validationErrors };
+      delete validationErrors[secretKey];
+      set({ secrets, validationErrors });
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法保存密钥。") });
     } finally {
@@ -152,8 +159,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     set({ busy: true, lastError: null });
     try {
       const response = await deleteSettingSecret(secretKey);
+      // 同 writeSecret：只更新该密钥状态，不 load() 冲掉其他字段的未保存草稿。
       set({ secrets: { ...get().secrets, [secretKey]: response } });
-      await get().load();
     } catch (error) {
       set({ lastError: toErrorMessage(error, "无法删除密钥。") });
     } finally {
