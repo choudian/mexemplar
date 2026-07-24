@@ -30,6 +30,15 @@
     ],
     "externalBin": [
       "binaries/mexamplar-sidecar"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "both",
+        "displayLanguageSelector": false,
+        "languages": [
+          "SimpChinese"
+        ]
+      }
+    }
   }
 }

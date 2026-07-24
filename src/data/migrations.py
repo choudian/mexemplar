@@ -3041,6 +3041,67 @@ def downgrade_from_v34(engine):
     logger.info("回退版本 34 完成：移除 token 用量列")
 
 
+def migrate_to_v35(engine):
+    """迁移到版本 35：内置专员种子的归属与改动标记。
+
+    ``preset_key`` 让种子在用户改名后仍能认出同一个专员；
+    ``preset_fingerprint`` 记录种子写入时的内容摘要，与当前内容不符即说明
+    用户改过，此后不再自动更新——否则每次升级都会撤销一次用户的修改。
+    """
+    try:
+        with engine.begin() as conn:
+            table_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'brain_specialists'"
+                )
+            ).fetchone()
+            if table_exists is not None:
+                _add_column_if_missing(conn, "brain_specialists", "preset_key", "TEXT")
+                _add_column_if_missing(
+                    conn, "brain_specialists", "preset_fingerprint", "TEXT"
+                )
+                conn.execute(
+                    text(
+                        "CREATE UNIQUE INDEX IF NOT EXISTS "
+                        "uq_brain_specialists_preset_key "
+                        "ON brain_specialists(preset_key) WHERE preset_key IS NOT NULL"
+                    )
+                )
+            else:
+                logger.info("迁移到版本 35：brain_specialists 表不存在，跳过种子标记列")
+            conn.execute(text("UPDATE schema_version SET version = 35"))
+    except Exception as e:
+        logger.error(f"迁移到版本 35 失败: {e}")
+        raise
+    logger.info("迁移到版本 35 完成：内置专员可安全升级且不覆盖用户改动")
+
+
+def downgrade_from_v35(engine):
+    """回退版本 35：移除种子标记列。"""
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DROP INDEX IF EXISTS uq_brain_specialists_preset_key")
+            )
+            columns = {
+                row[1]
+                for row in conn.execute(
+                    text("PRAGMA table_info(brain_specialists)")
+                ).fetchall()
+            }
+            for column in ("preset_key", "preset_fingerprint"):
+                if column in columns:
+                    conn.execute(
+                        text(f"ALTER TABLE brain_specialists DROP COLUMN {column}")
+                    )
+            conn.execute(text("UPDATE schema_version SET version = 34"))
+    except Exception as e:
+        logger.error(f"回退版本 35 失败: {e}")
+        raise
+    logger.info("回退版本 35 完成：移除内置专员种子标记列")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -3075,6 +3136,7 @@ _MIGRATIONS = [
     (32, migrate_to_v32),
     (33, migrate_to_v33),
     (34, migrate_to_v34),
+    (35, migrate_to_v35),
 ]
 
 

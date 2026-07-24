@@ -985,6 +985,11 @@ class BrainSpecialist(Base):
     current_version: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     role_kind: Mapped[str] = mapped_column(String(30), nullable=False, default="executor")
+    # v35 内置专员种子：preset_key 是稳定标识（用户改名后仍认得出），
+    # preset_fingerprint 记录种子当时写入的内容摘要——与当前内容不符即表示
+    # 用户改过，此后不再自动更新。两者均为 NULL 表示这是用户自建专员。
+    preset_key: Mapped[Optional[str]] = mapped_column(String(60), nullable=True)
+    preset_fingerprint: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
 

@@ -68,10 +68,35 @@ def _frozen_data_dir() -> Path:
     if repo_data_dir is not None:
         return repo_data_dir
 
+    # 与 Tauri 壳一致：数据放在程序旁边，装到 E:\mnt\test 时即 E:\mnt\test\data。
+    # 正常启动时壳会传 EXEMPLAR_DATA_DIR，这里只覆盖单独运行 sidecar 的情况。
+    install_data_dir = _install_dir_data_dir()
+    if install_data_dir is not None:
+        return install_data_dir
+
     local_app_data = os.environ.get("LOCALAPPDATA", "").strip()
     if local_app_data:
         return Path(local_app_data) / "Mexemplar" / "data"
     return Path.home() / ".mexemplar" / "data"
+
+
+def _install_dir_data_dir() -> Optional[Path]:
+    """exe 同级的 data 目录，不可写时返回 None 由调用方回退。
+
+    装到 Program Files 这类受保护位置且非管理员运行时会写不进去。
+    """
+    executable = getattr(sys, "executable", "")
+    if not executable:
+        return None
+    candidate = Path(executable).resolve().parent / "data"
+    try:
+        candidate.mkdir(parents=True, exist_ok=True)
+        probe = candidate / ".write-probe"
+        probe.write_bytes(b"")
+        probe.unlink()
+    except OSError:
+        return None
+    return candidate
 
 
 def _find_repo_data_dir_from_executable() -> Optional[Path]:

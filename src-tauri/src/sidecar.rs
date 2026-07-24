@@ -143,6 +143,31 @@ fn write_sidecar_output(log: &mut File, stream: &str, bytes: &[u8]) {
     let _ = log.flush();
 }
 
+/// 安装目录（release 下即 exe 所在目录）。数据与程序同放一处，
+/// 便于整个目录搬走或备份；装到无写权限的位置时由调用方回退。
+fn install_dir() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(PathBuf::from))
+}
+
+/// 目录是否可写。装到 Program Files 这类受保护位置时，
+/// 非管理员运行会写不进去，此时必须回退到用户数据目录，
+/// 否则 sidecar 起不来且报错难懂。
+fn is_writable(dir: &std::path::Path) -> bool {
+    if fs::create_dir_all(dir).is_err() {
+        return false;
+    }
+    let probe = dir.join(".write-probe");
+    match fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = fs::remove_file(&probe);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 fn resolve_sidecar_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     if let Ok(configured) = env::var("EXEMPLAR_DATA_DIR") {
         let trimmed = configured.trim();
@@ -158,6 +183,13 @@ fn resolve_sidecar_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
         }
     }
 
+    // 优先与程序同目录：安装到 E:\mnt\test 时数据就在 E:\mnt\test\data。
+    if let Some(candidate) = install_dir().map(|dir| dir.join("data")) {
+        if is_writable(&candidate) {
+            return Ok(candidate);
+        }
+    }
+
     app.path()
         .app_data_dir()
         .map(|dir| dir.join("data"))
@@ -169,6 +201,12 @@ fn resolve_sidecar_working_dir(app: &AppHandle) -> Result<PathBuf, String> {
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         if let Some(project_root) = manifest_dir.parent() {
             return Ok(project_root.to_path_buf());
+        }
+    }
+
+    if let Some(candidate) = install_dir() {
+        if is_writable(&candidate) {
+            return Ok(candidate);
         }
     }
 

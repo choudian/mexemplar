@@ -124,6 +124,14 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 "recovery/timeout jobs are DISABLED for this process",
                 exc_info=True,
             )
+        try:
+            from src.business.brain.specialist_service import SpecialistService
+
+            SpecialistService().seed_builtin_specialists()
+        except Exception:
+            # 缺内置专员只影响相关能力可用性，不该阻断启动。
+            logger.warning("[Specialist] 内置专员种子失败", exc_info=True)
+
         mcp_service = None
         try:
             from src.business.mcp import get_mcp_server_service

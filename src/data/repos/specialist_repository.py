@@ -118,6 +118,39 @@ class SpecialistRepository(BaseRepository):
         )
         return next((s for s in candidates if s.name.lower() == name_lower), None)
 
+    def get_specialist_by_preset_key(self, preset_key: str) -> Optional[BrainSpecialist]:
+        """按内置种子标识查询，含已停用的。
+
+        用户可能改过名字，故不能按名字找；也可能停用过，停用的仍算"已存在"，
+        否则每次启动都会把用户关掉的内置专员重新建出来。
+        """
+        return (
+            self.session.query(BrainSpecialist)
+            .filter(BrainSpecialist.preset_key == preset_key)
+            .first()
+        )
+
+    def mark_as_preset(
+        self,
+        specialist_id: str,
+        preset_key: str,
+        fingerprint: str,
+        *,
+        commit: bool = True,
+    ) -> bool:
+        """给专员打上内置种子标记。
+
+        不走版本历史：这是归属标记而非内容变更，用户看到的角色定义没有变化。
+        """
+        specialist = self.get_specialist(specialist_id)
+        if specialist is None:
+            return False
+        specialist.preset_key = preset_key
+        specialist.preset_fingerprint = fingerprint
+        if commit:
+            self.session.commit()
+        return True
+
     def list_specialists(
         self,
         active_only: bool = True,

@@ -300,6 +300,116 @@ class SpecialistService:
         )
         return [self._to_dict(s) for s in specialists], total
 
+    def seed_builtin_specialists(self) -> None:
+        """启动时补齐内置专员，并把用户没动过的升级到最新定义。
+
+        新装的应用必须自带这些专员，否则"外部 Coding"这类内置能力组合会变成
+        十一个没有合法执行者的工具——只有配置了该组合的固定 executor 专员才被
+        允许激活它们。
+
+        三条规则：
+
+        - **没有就建。**
+        - **用户没改过就升级。** 提示词改进要能到达已装用户手里，否则等于
+          只有重装才能拿到修复。
+        - **用户改过就再也不动。** 判据是种子当时写入的内容摘要与当前内容是否
+          仍然一致；不一致即视为用户接管，此后升级一律跳过。
+
+        软删除的内置专员算"已存在"：停用是用户的决定，不能每次启动都撤销。
+        但其定义仍会被升级，以便重新启用时拿到的是当前版本。
+        """
+        from src.business.brain.specialist_presets import (
+            compute_fingerprint,
+            load_specialist_presets,
+        )
+
+        for preset in load_specialist_presets():
+            try:
+                self._seed_one_specialist(preset, compute_fingerprint)
+            except Exception:
+                # 种子失败不能拖垮启动：其余功能仍可用，用户也能手工建。
+                logger.warning(
+                    "[Specialist] 内置专员种子失败: %s", preset.name, exc_info=True
+                )
+
+    def _seed_one_specialist(self, preset, compute_fingerprint) -> None:
+        existing = self._repo.get_specialist_by_preset_key(preset.key)
+        if existing is None:
+            # 本次刚认领的专员只记归属，不在同一轮里顺手升级：认领时写入的指纹
+            # 就是它当前的内容，内容与种子不同即说明是用户自建的同名专员，
+            # 继续走升级会当场覆盖掉人家的定义。
+            self._adopt_untagged_preset(preset, compute_fingerprint)
+            if self._repo.get_specialist_by_preset_key(preset.key) is None:
+                self._create_preset_specialist(preset)
+            return
+
+        current = compute_fingerprint(
+            role_definition=existing.role_definition or "",
+            description=existing.description or "",
+            composition_ids=parse_composition_ids(existing.composition_ids or "[]"),
+        )
+        if current != existing.preset_fingerprint:
+            logger.debug(
+                "[Specialist] 内置专员 %s 已被用户修改，跳过升级", preset.name
+            )
+            return
+
+        target = preset.fingerprint()
+        if current == target:
+            return
+
+        self._repo.update_specialist(
+            specialist_id=existing.specialist_id,
+            description=preset.description,
+            role_definition=preset.load_role_definition(),
+            composition_ids=list(preset.composition_ids),
+            changed_by="system",
+            change_reason="内置专员定义升级",
+        )
+        self._repo.mark_as_preset(existing.specialist_id, preset.key, target)
+        logger.info("[Specialist] 已升级内置专员定义: %s", preset.name)
+
+    def _adopt_untagged_preset(self, preset, compute_fingerprint):
+        """认领同名但还没打过种子标记的专员。
+
+        覆盖两种情况：v35 之前手工建的，以及用户自己建了同名专员。前者内容与
+        当前种子一致，认领后即可继续接收升级；后者内容不同，认领只是记下归属，
+        指纹按其当前内容写入，因而此后被视为用户接管、不再自动更新。
+        """
+        existing = self._repo.get_specialist_by_name(preset.name)
+        if existing is None:
+            return None
+        fingerprint = compute_fingerprint(
+            role_definition=existing.role_definition or "",
+            description=existing.description or "",
+            composition_ids=parse_composition_ids(existing.composition_ids or "[]"),
+        )
+        self._repo.mark_as_preset(existing.specialist_id, preset.key, fingerprint)
+        logger.info("[Specialist] 已认领同名专员为内置: %s", preset.name)
+        return self._repo.get_specialist_by_preset_key(preset.key)
+
+    def _create_preset_specialist(self, preset) -> None:
+        result = self.create_specialist(
+            name=preset.name,
+            description=preset.description,
+            role_definition=preset.load_role_definition(),
+            tool_whitelist=list(preset.tool_whitelist),
+            origin="user_management_ui",
+            reason=preset.reason,
+            role_kind=preset.role_kind,
+            composition_ids=list(preset.composition_ids),
+        )
+        specialist_id = result.get("specialist_id")
+        if not specialist_id:
+            logger.warning(
+                "[Specialist] 内置专员未创建: %s (%s)",
+                preset.name,
+                result.get("message") or result.get("error"),
+            )
+            return
+        self._repo.mark_as_preset(specialist_id, preset.key, preset.fingerprint())
+        logger.info("[Specialist] 已创建内置专员: %s", preset.name)
+
     def get_version_history(
         self,
         specialist_id: str,
