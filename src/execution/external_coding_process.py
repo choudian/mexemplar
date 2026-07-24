@@ -953,12 +953,41 @@ def _dangerous_git_action(command: str) -> str | None:
 
 
 def _classify_failure(log_text: str) -> tuple[str, str]:
+    """把 CLI 日志归类成可行动的失败原因。
+
+    分类结果直接决定派活方的下一步：``model_unavailable`` 会让它换工具或降档，
+    而真正的原因若是端点不可达，换多少次工具都没用。所以匹配必须够具体——
+    日志里包含我们自己拼的命令行，裸词会命中参数名而不是错误信息。
+    """
     lowered = log_text.lower()
     if any(marker in lowered for marker in ("quota", "rate limit", "usage limit")):
         return "quota_exhausted", "external coding quota is exhausted"
-    if any(marker in lowered for marker in ("unauthorized", "not logged in", "login required")):
+    # 认证判定排在模型之前：CLI 常把网络层 403 显示成 "Failed to authenticate"，
+    # 让它先被更模糊的规则接走会指向完全错误的补救方向。
+    if any(
+        marker in lowered
+        for marker in (
+            "unauthorized",
+            "not logged in",
+            "login required",
+            "failed to authenticate",
+            "authentication_failed",
+            "authentication failed",
+        )
+    ):
         return "login_required", "external coding login is required"
-    if any(marker in lowered for marker in ("model unavailable", "unsupported model", "effort")):
+    # 用短语而非裸 "effort"：``--effort`` 出现在每条 Claude 命令里，
+    # 裸词几乎能命中任何一次失败，把真实原因盖掉。
+    if any(
+        marker in lowered
+        for marker in (
+            "model unavailable",
+            "unsupported model",
+            "unsupported effort",
+            "invalid effort",
+            "unknown model",
+        )
+    ):
         return "model_unavailable", "requested external coding model or effort is unavailable"
     if any(marker in lowered for marker in ("connection", "network", "dns", "timed out")):
         return "network", "external coding process encountered a network error"
