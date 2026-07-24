@@ -21,8 +21,21 @@ from src.data.unified_config import UnifiedConfigManager
 from src.utils.timezone import to_local
 from .reference_handler import ReferenceHandler
 from .compression_handler import CompressionHandler
+from .tool_result_budget import ToolResultBudget
 
 logger = logging.getLogger(__name__)
+
+# 配置读不出数字时的并发工具结果总预算，与 unified_config 默认值一致。
+_DEFAULT_TOOL_RESULT_GROUP_BUDGET = 24000
+
+
+def _positive_int(value, *, default: int) -> int:
+    """把配置值归一化为正整数；不可用时退回默认值。"""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number > 0 else default
 
 
 class ContextManager:
@@ -48,6 +61,14 @@ class ContextManager:
         # 初始化压缩处理器
         self._compression_handler = CompressionHandler(config)
 
+        # 并发工具结果的单批总预算：每条都不超单条上限、加起来仍可撑爆一条消息
+        self._tool_result_budget = ToolResultBudget(
+            _positive_int(
+                config.get_memory_tool_result_group_budget(),
+                default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
+            )
+        )
+
         # load_reference 复用共享 Repository session，并发访问需串行化；
         # 锁与受保护的资源同位（见 load_reference）。
         self._reference_lock = threading.Lock()
@@ -71,7 +92,12 @@ class ContextManager:
         # 1. 加载消息
         messages = self._msg_repo.get_context(self.session_id)
 
-        # 2. 检查是否需要压缩
+        # 2. 先按并发批次裁剪超预算的工具结果（零模型调用），再判断是否需要压缩。
+        # 顺序不能反：裁剪可能已把上下文降到阈值以下，先压缩就白花一次 LLM 调用。
+        if messages:
+            self._tool_result_budget.apply(self.session_id, messages, self._msg_repo)
+
+        # 3. 检查是否需要压缩
         if messages:
             if self._compression_handler.should_compress(messages):
                 logger.info(f"[上下文] 会话 {self.session_id} 触发压缩")

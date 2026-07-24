@@ -509,6 +509,21 @@ class UnifiedConfigManager:
             20,
         )
 
+    def get_memory_tool_result_group_budget(self) -> int:
+        """一轮并发工具调用的结果字符总预算。
+
+        单条工具结果已有 12000 字符上限（agent_tools.output.visible_char_cap），
+        但 4 路并发时每条都不超限、加起来仍可撑爆一条消息。默认 24000 表示
+        "允许两个满额结果并存，第三个开始截"。
+
+        取 12000（等于单条上限）会惩罚并发：每轮只允许一个结果完整存活，
+        模型并发读两个文件必有一个变预览、需多花一轮 load_reference 取回，
+        反而把模型推向顺序调用。
+        """
+        return self._get_bounded_positive_int(
+            "ai.memory_tool_result_group_budget", 24000, maximum=200_000
+        )
+
     def get_memory_compression_trigger_strategy(self) -> str:
         """压缩触发策略："token" | "count" | "combined" """
         return self._get_canonical_with_legacy(

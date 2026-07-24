@@ -109,11 +109,16 @@ class ImprovementProposalRepository(BaseRepository):
                     return None
                 terminal = [r for r in existing if r.status in TERMINAL_STATUSES]
                 if terminal:
-                    cutoff = (
-                        utc_now_naive() - timedelta(hours=self._get_dedup_cooldown_hours())
-                    ).isoformat()
-                    if any(r.created_at and r.created_at >= cutoff for r in terminal):
-                        return None
+                    cooldown_hours = self._get_dedup_cooldown_hours()
+                    # cooldown=0 表示不设冷却。若仍走下面的比较，cutoff 就是"此刻"，
+                    # 而 >= 会把"同一时刻创建"的行判进冷却期——是否命中取决于创建与
+                    # 判定之间是否隔了至少一微秒，机器快就随机失败。
+                    if cooldown_hours > 0:
+                        cutoff = (
+                            utc_now_naive() - timedelta(hours=cooldown_hours)
+                        ).isoformat()
+                        if any(r.created_at and r.created_at >= cutoff for r in terminal):
+                            return None
 
         row = ImprovementProposal(
             id=generate_id("prop"),

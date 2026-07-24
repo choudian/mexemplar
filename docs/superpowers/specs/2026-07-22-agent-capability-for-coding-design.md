@@ -3,6 +3,10 @@
 日期：2026-07-22
 状态：逐条推进中
 
+> **实施状态（2026-07-22）**：第一组 1.1–1.4 已在分支 `036-agent-capability-foundation`
+> 实现。实现过程中发现并修正的问题记录在各节「实现记录」小节 —— 它们是设计阶段没
+>预见到的，值得留档。第 2–4 组仍待设计。
+
 ## 背景与目标
 
 目标是用 Exemplar 自己的主助理 + 专员 + 临时子代理承担代码开发，而不是依赖外部
@@ -42,10 +46,10 @@ Claude Code                    Exemplar
 |---|---|---|
 | 0.1 | codex 收到的是路径不是任务书 | 已归档 035 |
 | 0.2 | 目标仓库选填，默认改 Exemplar 自己 | 已归档 035 |
-| **1.1** | **token 用量完全没记录** | **已定稿（本文）** |
-| **1.2** | **撞轮次上限是 ERROR / 静默挂起** | **已定稿（本文）** |
-| **1.3** | **压缩体系补强（含原 2.6 / 6.1 / 6.2）** | **已定稿（本文）** |
-| **1.4** | **单条消息工具结果总预算** | **已定稿（本文）** |
+| **1.1** | **token 用量完全没记录** | **已实现** `e781d19` |
+| **1.2** | **撞轮次上限是 ERROR / 静默挂起** | **已实现** `e781d19` |
+| **1.3** | **压缩体系补强（含原 2.6 / 6.1 / 6.2）** | **已实现** `4dcbe47`（b2 / c2 仍缓做） |
+| **1.4** | **单条消息工具结果总预算** | **已实现** |
 | 2.1 | 执行体拿不到项目文档 | 待过 |
 | 2.2 | 轮次硬编码 30，要做成配置项（含 per-agent 模型） | 待过 |
 | 2.3 | 预算维度（用户已砍掉 token 限制，剩轮次 / 时间） | 后议 |
@@ -122,6 +126,19 @@ return response.content   # usage_metadata 随函数返回一起消失
 
 不设限制，但任务回流时在 briefing 里带上本次消耗（含推理占比）。主助理看到一个任务
 烧了大量 token 仍未完成，可自行判断是否任务拆得过大 —— 决定权在它，不是被硬停。
+
+### 实现记录
+
+`chat()` 保持返回 `str`，新增 `chat_with_usage()` 带回用量 —— 改返回类型会波及
+7 个既有调用方，收益不抵风险。`observe_chat` 要求 `invoke_fn` 返回文本，故用量经
+闭包带出。
+
+SQLite v34 加 `messages.token_usage`。**迁移必须先判 `messages` 表是否存在**：
+仓库里有若干只建了部分表的迁移测试库，硬 `ALTER TABLE` 会把它们全打挂
+（`test_recording_repository_timezones.py` 第一时间撞上）。
+
+顺带修了 `test_migrations_v33.py` 里的脆弱断言 `_MIGRATIONS[-1] == (33, ...)` ——
+它锁定 v33 必须是最后一个迁移，每加一条迁移都要改。改为「v33 已注册即可」。
 
 ---
 
@@ -201,6 +218,21 @@ parent_session_id 链路亦已确认：`service.py:329` 建图时 `owner_session
 
 **实施顺序**：1-4 先做（修临时子代理已有缺口），5-6 后做（让专员进入这条路），
 否则专员会从"报错"变成"静默挂起"，比现状更糟。
+
+### 实现记录
+
+**测试抓到一个真缺陷**：最初的映射分支没判 `cancelled`，用户主动点停止时
+`user_stop` 会被覆盖成 `budget_exhausted` —— 用户点了停止，界面却显示"跑到轮次
+预算"。已加 `not result.get("cancelled")` 条件，并保留该回归测试。
+
+`SuspendReason` 新增值需要同步四处，缺一处就 fail-closed 挡掉事件：
+`models.py` 枚举、`desktop_api/schemas.py` 的 `Literal`、
+`desktop_api/ui_events.py` 的 `payload_enum_values`（硬校验）、
+前端 `assistantTasks.ts` 与 `uiEventTypes.ts` 的字面量。
+
+`_resolve_subagent_session` 放开专员后，5 项归属校验测试验证了设计推断成立：
+专员与临时子代理共用 `_new_delegation_workflow_id`，三层校验对两者天然一致，
+且专员再派出的子代理仍被主助理越级拒绝。
 
 ### 对标数据
 
@@ -523,6 +555,23 @@ instead of a single summary"，而本项目版本**比它更强：折叠内容�
 `reference_handler.py` 的代码与配置均在，改造量小于重写：把"组装时视图变换"改为
 "压缩时持久化变更"，加 `load_reference` 排除规则。
 
+### 实现记录
+
+**e 的落点**：`_replace_large_tool_results` 在 `compress()` 内、LLM 摘要之前。
+原文另存为 `message_type="tool_result_archive"` 的归档消息，原消息内容改写为指针
+并保留 `role` / `tool_call_id` —— 否则 assistant tool_calls 与 tool results 配对
+断裂。`load_reference` 按 ID 直读、不过滤 `is_archived`，故取回路径无需改动。
+
+**幂等性来自持久化本身**：替换后可见内容已是短指针，第二遍的大小检查自然不再命中，
+不需要额外的状态记录。这正是旧实现（组装时视图变换）与新实现的根本差别。
+
+**测试 fixture 的坑**：`MagicMock` 支持 `__int__` 且返回 1。`CompressionHandler`
+新增 `size_threshold` 配置依赖后，未显式配置的 mock config 等于把阈值设成 1 字符，
+每条工具结果都会被转成引用。既有两处 fixture 已补 `return_value`。
+
+生产侧另加 `_positive_int` 归一化：引用替换只是省一次 LLM 调用的优化，
+不该因为配置异常把整条压缩路径带崩。
+
 ### 1.3 定稿
 
 | | 内容 | 结论 |
@@ -625,6 +674,23 @@ for (const c of sorted) {
 那约 4400 token 实际不构成压力。
 
 24000 既保住并发价值，又挡住 4 路全满额（48000）这类真正的极端。配置项，改错代价低。
+
+### 实现记录
+
+独立模块 `src/business/memory/tool_result_budget.py`，不塞进已有 480 行的
+`compression_handler.py`。接在 `assemble_context` 里、压缩检查**之前** ——
+顺序不能反：裁剪可能已把上下文降到阈值以下，先压缩就白花一次 LLM 调用。
+
+**frozen 语义来自时序，不需要状态记录**：工具结果保存后、下一次 `assemble_context`
+才发给模型，故裁剪发生时模型尚未见过任何一条。"不能拿走模型看过的内容"这条约束
+自动成立。幂等同样来自持久化——裁剪后可见内容是短预览，第二遍不再命中。
+
+**只处理 `len(results) > 1` 的组**：单条结果已由 `visible_char_cap` 单独约束，
+不重复管辖。
+
+**新配置键要过两道门卫**：`test_config_contract.py` 要求键在 `AIConfig` dataclass
+中声明（否则 `classify()` 返回 UNKNOWN），且必须出现在 `config.example.json`。
+只加 `unified_config.py` 的 getter 不够。
 
 ---
 

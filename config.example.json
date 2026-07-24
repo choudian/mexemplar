@@ -24,7 +24,8 @@
     "memory_compression_token_threshold": 80000,
     "memory_compression_count_threshold": null,
     "memory_compression_keep_recent": 20,
-    "memory_compression_trigger_strategy": "token"
+    "memory_compression_trigger_strategy": "token",
+    "memory_tool_result_group_budget": 24000
   },
   "recording": {
     "screenshot_quality": 85,

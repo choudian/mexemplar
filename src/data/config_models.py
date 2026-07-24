@@ -100,6 +100,9 @@ class AIConfig:
     memory_compression_count_threshold: Optional[int] = None  # 消息条数触发压缩的阈值（可选）
     memory_compression_keep_recent: int = 20  # 压缩时保留的最近消息数
     memory_compression_trigger_strategy: str = "token"  # token | count | combined
+    # 一轮并发工具调用的结果字符总预算：单条已有 12000 上限，4 路并发时
+    # 每条都不超限、加起来仍可撑爆一条消息。24000 = 允许两个满额结果并存。
+    memory_tool_result_group_budget: int = 24000
 
 
 @dataclass

@@ -229,6 +229,37 @@ def test_create_dedup_allows_same_key_terminal_after_cooldown(in_memory_db, monk
         assert new_row is not None, "same dedup_key outside cooldown must be allowed"
 
 
+def test_zero_cooldown_means_no_cooldown_regardless_of_timing(in_memory_db, monkeypatch):
+    """cooldown=0 disables suppression outright — it must not hinge on clock resolution.
+
+    The comparison used to run even at 0h, making cutoff equal to "now" while
+    `>=` counted a row created in that same instant as still inside the window.
+    Whether the test passed then depended on at least a microsecond elapsing
+    between create and check, so it failed on fast machines.
+    """
+    with in_memory_db.get_session() as session:
+        repo = ImprovementProposalRepository(session=session)
+        key = compute_dedup_key("efficiency", "零冷却问题")
+
+        monkeypatch.setattr(
+            ImprovementProposalRepository,
+            "_get_dedup_cooldown_hours",
+            staticmethod(lambda: 0),
+        )
+
+        for index in range(5):
+            # Distinct review ids: UNIQUE(source_review_id, finding_index) is a
+            # separate constraint and would otherwise mask what is being tested.
+            row = _make_proposal(
+                repo,
+                source_review_id=f"rev_zero_cooldown_{index}",
+                dedup_key=key,
+                what="零冷却问题",
+            )
+            assert row is not None, f"zero cooldown must never suppress (attempt {index})"
+            repo.reject(row.id)
+
+
 # -- CAS state machine -------------------------------------------------------
 
 
