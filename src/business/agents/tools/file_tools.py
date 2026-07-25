@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import mimetypes
 import re
 import threading
 from collections import OrderedDict
@@ -32,32 +31,114 @@ from src.business.agents.tools.builtin_permissions import (
 )
 from src.utils.agent_tool_health import increment_agent_tool_health
 
+# 二进制判定只信显式扩展名 + 内容嗅探，不用 ``mimetypes``：后者在 Windows 上会读
+# HKEY_CLASSES_ROOT，同一份代码在不同机器上结果不同（实测 ``.ts`` 被本机注册为
+# ``video/vnd.dlna.mpeg-tts``，于是 TypeScript 源码全部读不了，而 Linux CI 上复现不出）。
 _BINARY_EXTENSIONS = {
+    # 图片
     ".png",
     ".jpg",
     ".jpeg",
     ".gif",
-    ".webp",
+    ".bmp",
     ".ico",
-    ".pdf",
-    ".zip",
-    ".gz",
-    ".7z",
-    ".mp3",
+    ".webp",
+    ".tiff",
+    ".tif",
+    # 视频
     ".mp4",
     ".mov",
     ".avi",
+    ".mkv",
+    ".webm",
+    ".wmv",
+    ".flv",
+    ".m4v",
+    ".mpeg",
+    ".mpg",
+    # 音频
+    ".mp3",
+    ".wav",
+    ".ogg",
+    ".flac",
+    ".aac",
+    ".m4a",
+    ".wma",
+    ".aiff",
+    ".opus",
+    # 压缩包
+    ".zip",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".7z",
+    ".rar",
+    ".xz",
+    ".tgz",
+    ".iso",
+    # 可执行与目标文件
     ".exe",
     ".dll",
     ".so",
+    ".dylib",
+    ".bin",
+    ".o",
+    ".a",
+    ".obj",
+    ".lib",
+    ".msi",
+    ".deb",
+    ".rpm",
+    # 文档
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".odt",
+    ".ods",
+    ".odp",
+    # 字体
+    ".ttf",
+    ".otf",
+    ".woff",
+    ".woff2",
+    ".eot",
+    # 字节码与虚拟机产物
     ".pyc",
+    ".pyo",
+    ".class",
+    ".jar",
+    ".war",
+    ".ear",
+    ".node",
+    ".wasm",
+    # 数据库
+    ".sqlite",
+    ".sqlite3",
+    ".db",
+    ".mdb",
+    # 设计与 3D
+    ".psd",
+    ".ai",
+    ".eps",
+    ".sketch",
+    ".fig",
+    ".blend",
 }
 
+# 键与值都可能被引号包裹（JSON / TS 对象字面量）；不允许引号就漏掉 ``config.json``
+# 这类真正持有明文密钥的文件。值本身不含引号、空格、逗号和分号。
+_SECRET_SEPARATOR = r"[\"']?\s*[:=]\s*[\"']?"
+_SECRET_VALUE = r"[^\s,;\"']+"
+
 _SECRET_PATTERNS = [
-    ("api_key", re.compile(r"(?i)\bapi[_-]?key\s*[:=]\s*[^\s,;]+")),
-    ("token", re.compile(r"(?i)\btoken\s*[:=]\s*[^\s,;]+")),
-    ("password", re.compile(r"(?i)\bpassword\s*[:=]\s*[^\s,;]+")),
-    ("secret", re.compile(r"(?i)\bsecret\s*[:=]\s*[^\s,;]+")),
+    ("api_key", re.compile(r"(?i)\bapi[_-]?key" + _SECRET_SEPARATOR + _SECRET_VALUE)),
+    ("token", re.compile(r"(?i)\btoken" + _SECRET_SEPARATOR + _SECRET_VALUE)),
+    ("password", re.compile(r"(?i)\bpassword" + _SECRET_SEPARATOR + _SECRET_VALUE)),
+    ("secret", re.compile(r"(?i)\bsecret" + _SECRET_SEPARATOR + _SECRET_VALUE)),
     ("openai_key", re.compile(r"(?<!\w)sk-[A-Za-z0-9_\-]{8,}", re.IGNORECASE)),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._\-]{12,}")),
 ]
@@ -156,6 +237,42 @@ def _baseline_error(tool: str, path: Path, *, stale: bool, old_baseline: str | N
     )
 
 
+# 源码文件不做密钥脱敏。源码里的 ``api_key: str`` / ``password: string;`` 是类型声明
+# 与变量引用，不是密钥；抹掉它们等于把 agent 要修改的代码本身改坏——它读到
+# ``password:***`` 只能靠猜。项目硬规则本就禁止 secret 进源码，真出现了让 agent 看见
+# 并上报比静默抹掉更有用。脚本（.sh/.ps1/.bat）不算源码：``export API_KEY=`` 很常见。
+# 未列出的类型（配置、文档、无扩展名）一律保持脱敏，fail-safe 方向。
+_SOURCE_CODE_EXTENSIONS = {
+    ".py",
+    ".ts",
+    ".tsx",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".rs",
+    ".go",
+    ".java",
+    ".kt",
+    ".swift",
+    ".c",
+    ".h",
+    ".cc",
+    ".cpp",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".scala",
+}
+
+
+def _redact_for_path(path: Path, text: str) -> tuple[str, list[dict[str, Any]]]:
+    if path.suffix.lower() in _SOURCE_CODE_EXTENSIONS:
+        return text, []
+    return _redact_text(text)
+
+
 def _redact_text(text: str) -> tuple[str, list[dict[str, Any]]]:
     counts: dict[str, int] = {}
     redacted = text
@@ -185,9 +302,6 @@ def _redacted_secret(value: str) -> str:
 
 def _looks_binary(path: Path, sample: bytes) -> bool:
     if path.suffix.lower() in _BINARY_EXTENSIONS:
-        return True
-    guessed, _ = mimetypes.guess_type(path.name)
-    if guessed and not guessed.startswith(("text/", "application/json", "application/xml")):
         return True
     if b"\x00" in sample:
         return True
@@ -352,7 +466,7 @@ def read_file_handler(
     if len(content) > max_window_chars:
         content = content[:max_window_chars]
         char_truncated = True
-    redacted_content, redactions = _redact_text(content)
+    redacted_content, redactions = _redact_for_path(target, content)
     baseline = _file_baseline(target, root)
     repeat = _record_repeat_read(
         target, line_start, line_count, baseline.baseline_id, selected_encoding

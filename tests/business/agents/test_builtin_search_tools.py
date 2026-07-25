@@ -98,3 +98,23 @@ def test_search_rejects_outside_workspace_root(tmp_path, monkeypatch):
 
     assert result["outcome"] == "rejected"
     assert result["error"]["code"] == "path_outside_workspace"
+
+
+def test_search_content_keeps_source_matches_unredacted(tmp_path, monkeypatch):
+    """Matches inside source files are code, not secrets — same rule as read_file."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "types.ts").write_text(
+        "interface C {\n  password: string;\n  token: string;\n}\n", encoding="utf-8"
+    )
+
+    result = _obj(
+        search_tools.search_content_handler(
+            root="src",
+            pattern="password",
+        )
+    )
+
+    text = json.dumps(result, ensure_ascii=False)
+    assert "password: string;" in text
+    assert "password:***" not in text

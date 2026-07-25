@@ -284,3 +284,77 @@ def test_mutation_lock_eviction_does_not_deadlock_on_non_reentrant_guard(monkeyp
     # Cache still functional: same path returns the same RLock instance.
     again = file_tools._mutation_lock(Path("/tmp/regression_lock_after.txt"))
     assert again is file_tools._mutation_lock(Path("/tmp/regression_lock_after.txt"))
+
+
+def test_read_file_reads_typescript_source(tmp_path, monkeypatch):
+    """`.ts` is TypeScript source, not an MPEG transport stream."""
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "layoutDag.ts"
+    target.write_text('import react from "x";\nexport const a = 1;\n', encoding="utf-8")
+
+    result = _obj(file_tools.read_file_handler("layoutDag.ts"))
+
+    assert result["outcome"] == "success"
+    assert result["payload"]["fileType"] == "text"
+    assert "export const a = 1;" in result["payload"]["content"]
+
+
+def test_read_file_reads_shell_and_svg_sources(tmp_path, monkeypatch):
+    """`.sh` and `.svg` are text; mimetypes labels them x-sh / image+xml."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "build.sh").write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+    (tmp_path / "icon.svg").write_text('<svg viewBox="0 0 1 1"></svg>\n', encoding="utf-8")
+
+    sh = _obj(file_tools.read_file_handler("build.sh"))
+    svg = _obj(file_tools.read_file_handler("icon.svg"))
+
+    assert sh["outcome"] == "success"
+    assert "echo hi" in sh["payload"]["content"]
+    assert svg["outcome"] == "success"
+    assert "<svg" in svg["payload"]["content"]
+
+
+def test_read_file_still_refuses_real_binary_by_extension(tmp_path, monkeypatch):
+    """Extension list must still catch binaries whose bytes look textual."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "font.woff2").write_bytes(b"wOF2 plain looking ascii payload")
+
+    result = _obj(file_tools.read_file_handler("font.woff2"))
+
+    assert result["outcome"] == "unsupported"
+    assert result["error"]["code"] == "unsupported_binary"
+
+
+def test_read_file_keeps_source_declarations_unredacted(tmp_path, monkeypatch):
+    """Field declarations in source are code, not secrets."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config_model.py").write_text(
+        "api_key: str = Field(default=None)\ntoken = self._session_token\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "types.ts").write_text(
+        "interface C {\n  apiKey: string;\n  password: string;\n}\n", encoding="utf-8"
+    )
+
+    py = _obj(file_tools.read_file_handler("config_model.py"))
+    ts = _obj(file_tools.read_file_handler("types.ts"))
+
+    assert "api_key: str = Field(default=None)" in py["payload"]["content"]
+    assert "token = self._session_token" in py["payload"]["content"]
+    assert "apiKey: string;" in ts["payload"]["content"]
+    assert "password: string;" in ts["payload"]["content"]
+
+
+def test_read_file_still_redacts_config_and_unknown_types(tmp_path, monkeypatch):
+    """Config and unknown file types keep fail-safe redaction."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "config.json").write_text(
+        '{"api_key": "0f942ec7684144e0ad7e0d8656624def"}\n', encoding="utf-8"
+    )
+    (tmp_path / "credentials").write_text("password=hunter2plaintext\n", encoding="utf-8")
+
+    cfg = _obj(file_tools.read_file_handler("config.json"))
+    unknown = _obj(file_tools.read_file_handler("credentials"))
+
+    assert "0f942ec7684144e0ad7e0d8656624def" not in cfg["payload"]["content"]
+    assert "hunter2plaintext" not in unknown["payload"]["content"]

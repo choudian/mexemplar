@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from src.business.agents.tools.builtin_config import get_config_int
 from src.business.agents.tools.builtin_contracts import OUTCOME_REJECTED, error_json, success_json
 from src.business.agents.tools.builtin_permissions import permission_for_path
-from src.business.agents.tools.file_tools import _looks_binary, _redact_text
+from src.business.agents.tools.file_tools import _looks_binary, _redact_for_path
 
 DEFAULT_IGNORED_DIRS = [
     ".git",
@@ -251,9 +251,9 @@ def search_content_handler(
         for idx, line in enumerate(lines):
             if not compiled.search(line):
                 continue
-            redacted_line, _ = _redact_text(line)
-            before = [_redact_text(v)[0] for v in lines[max(0, idx - context) : idx]]
-            after = [_redact_text(v)[0] for v in lines[idx + 1 : idx + 1 + context]]
+            redacted_line, _ = _redact_for_path(file_path, line)
+            before = [_redact_for_path(file_path, v)[0] for v in lines[max(0, idx - context) : idx]]
+            after = [_redact_for_path(file_path, v)[0] for v in lines[idx + 1 : idx + 1 + context]]
             flat.append(
                 {
                     "path": file_path.relative_to(root_path).as_posix(),
