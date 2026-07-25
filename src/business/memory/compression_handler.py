@@ -15,12 +15,10 @@ from src.business.ai.token_usage import TokenUsage, estimate_tokens
 from src.business.debug.context import TraceContext
 from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
+from src.utils.helpers import positive_int
+from .tool_result_budget import RETRIEVAL_TOOLS, archive_tool_result
 
 logger = logging.getLogger(__name__)
-
-# 这些工具的结果永不被引用替换：它们本身就是模型主动取回原文的产物，
-# 再替换回去就是把"替换 → 取回 → 再替换"的循环重新接上。
-_NEVER_REPLACED_TOOLS = frozenset({"load_reference", "load_tool_output"})
 
 # 摘要累积到多少段时开始告警（只观测，不自动合并）。
 _SUMMARY_COUNT_WARN_THRESHOLD = 12
@@ -29,13 +27,13 @@ _SUMMARY_COUNT_WARN_THRESHOLD = 12
 _DEFAULT_REFERENCE_SIZE_THRESHOLD = 10000
 
 
-def _positive_int(value, *, default: int) -> int:
-    """把配置值归一化为正整数；不可用时退回默认值。"""
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return number if number > 0 else default
+def _build_compression_pointer(content: str, reference_id: str, tool_name: str | None) -> str:
+    """压缩管线的工具结果指针：纯引用，不带预览头。"""
+    return (
+        f"[REF::{reference_id}]（{len(content)} 字符）"
+        f"{tool_name or '工具'} 的完整结果已转为引用，"
+        "需要时用 load_reference 取回。"
+    )
 
 
 class ParsedToolCall(NamedTuple):
@@ -96,9 +94,7 @@ class TokenTrigger(CompressionTrigger):
             return max(total - tokens_freed, 0)
 
         # 锚点之后新增的消息尚未进过任何请求，只能估算；量小，偏差可接受。
-        tail = sum(
-            estimate_tokens(msg.content or "") for msg in messages[anchor_index + 1 :]
-        )
+        tail = sum(estimate_tokens(msg.content or "") for msg in messages[anchor_index + 1 :])
         return max(anchor_tokens + tail - tokens_freed, 0)
 
     @staticmethod
@@ -109,11 +105,6 @@ class TokenTrigger(CompressionTrigger):
             if usage is not None and usage.is_actual and usage.input_tokens > 0:
                 return index, usage.input_tokens
         return None, 0
-
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        """按 CJK / latin 分别计数的 token 估算（保留给既有调用方）。"""
-        return estimate_tokens(text)
 
 
 def _is_summary(message: Message) -> bool:
@@ -231,7 +222,7 @@ class CompressionHandler:
         # 复用旧 reference_handler 的阈值：同一个"多大算大"的判断，换了执行位置。
         # 配置读不出数字时退回默认值——引用替换只是省一次 LLM 调用的优化，
         # 不该因为配置异常把整条压缩路径带崩。
-        self.size_threshold = _positive_int(
+        self.size_threshold = positive_int(
             config.get_memory_reference_size_threshold(),
             default=_DEFAULT_REFERENCE_SIZE_THRESHOLD,
         )
@@ -324,13 +315,9 @@ class CompressionHandler:
         # 上下文仍是完整的消息序列，只是工具结果变成指针。
         freed = self._replace_large_tool_results(session_id, compress_msgs, msg_repo)
         if freed > 0:
-            remaining = self._rebuild_messages(
-                system_msg, summaries, compress_msgs + keep_msgs
-            )
+            remaining = self._rebuild_messages(system_msg, summaries, compress_msgs + keep_msgs)
             if not self._trigger.should_compress(remaining):
-                logger.info(
-                    "[压缩] 引用替换腾出约 %d 字符，已降到阈值以下，跳过 LLM 摘要", freed
-                )
+                logger.info("[压缩] 引用替换腾出约 %d 字符，已降到阈值以下，跳过 LLM 摘要", freed)
                 return remaining
 
         # 获取 LLM 客户端
@@ -383,9 +370,7 @@ class CompressionHandler:
             )
 
             # 返回更新后的消息列表：新摘要与既有摘要并列累积，不合并成一条
-            return self._rebuild_messages(
-                system_msg, summaries + [compressed_msg], keep_msgs
-            )
+            return self._rebuild_messages(system_msg, summaries + [compressed_msg], keep_msgs)
 
         except Exception as e:
             logger.error(f"[压缩] 压缩失败: {e}")
@@ -404,44 +389,26 @@ class CompressionHandler:
         断循环还需要第二条硬规则：``load_reference`` 自己的返回结果永不替换。
         取回的内容也是个大工具结果，不排除它就只是把循环拖慢，绕一圈照样回来。
 
-        原文另存为归档消息、原消息内容改写为指针——保留 role/tool_call_id，
-        assistant tool_calls 与 tool results 的配对不能因此断裂。
+        归档+回写的机械动作由 ``archive_tool_result`` 统一做（与并发结果预算共用），
+        本方法只决定"哪些消息要替换"和"指针长什么样"；保留 role/tool_call_id 以
+        维持 assistant tool_calls 与 tool results 的配对。
         """
         freed = 0
         for msg in compress_msgs:
             if msg.role != "tool":
                 continue
-            if msg.tool_name in _NEVER_REPLACED_TOOLS:
+            if msg.tool_name in RETRIEVAL_TOOLS:
                 continue
             content = msg.content or ""
             if len(content) < self.size_threshold:
                 continue
             try:
-                archived = Message(
-                    message_id=str(uuid.uuid4()),
-                    session_id=session_id,
-                    sequence=msg.sequence,
-                    role=msg.role,
-                    content=content,
-                    message_type="tool_result_archive",
-                    tool_call_id=msg.tool_call_id,
-                    tool_name=msg.tool_name,
-                    is_archived=True,
+                freed += archive_tool_result(
+                    session_id, msg, msg_repo, build_pointer=_build_compression_pointer
                 )
-                msg_repo.create(archived)
-                pointer = (
-                    f"[REF::{archived.message_id}]（{len(content)} 字符）"
-                    f"{msg.tool_name or '工具'} 的完整结果已转为引用，"
-                    "需要时用 load_reference 取回。"
-                )
-                msg_repo.update_content(msg.message_id, pointer)
-                msg.content = pointer
-                freed += len(content) - len(pointer)
             except Exception:
                 # 单条替换失败不影响其余，也不影响后续 LLM 摘要。
-                logger.warning(
-                    "[压缩] 工具结果转引用失败: %s", msg.message_id, exc_info=True
-                )
+                logger.warning("[压缩] 工具结果转引用失败: %s", msg.message_id, exc_info=True)
         if freed:
             logger.info("[压缩] 已将大工具结果转为引用，腾出约 %d 字符", freed)
         return freed
@@ -648,9 +615,7 @@ class CompressionHandler:
         return result + self._reference_index(tool_call_info, tool_result_refs, summary)
 
     @staticmethod
-    def _reference_index(
-        tool_call_info: dict, tool_result_refs: dict, summary: str
-    ) -> str:
+    def _reference_index(tool_call_info: dict, tool_result_refs: dict, summary: str) -> str:
         """把摘要没提到的工具调用补成一份引用清单。
 
         上面的替换依赖模型把 tool_call_id 写进摘要——写了才有引用，忘了就没了。

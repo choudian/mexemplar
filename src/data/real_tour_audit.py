@@ -16,6 +16,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from src.utils.helpers import positive_int
+
 
 class RealTourBudgetExceeded(RuntimeError):
     """Raised before a provider call that would exceed the real-tour budget."""
@@ -40,8 +42,12 @@ def record_paid_call(source: str) -> None:
 
     with _LOCK:
         state = _read_state_unlocked()
-        max_minutes = _positive_int(os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_MAX_MINUTES"), 20)
-        max_calls = _positive_int(os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS"), 30)
+        max_minutes = positive_int(
+            os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_MAX_MINUTES"), default=20
+        )
+        max_calls = positive_int(
+            os.environ.get("MEXEMPLAR_REAL_GRAND_TOUR_MAX_PAID_CALLS"), default=30
+        )
         elapsed_ms = int((time.monotonic() - _STARTED_AT) * 1000)
 
         if elapsed_ms > max_minutes * 60_000:
@@ -64,14 +70,6 @@ def record_paid_call(source: str) -> None:
         state["lastCallSource"] = source
         state["elapsedMs"] = elapsed_ms
         _write_state_unlocked(state)
-
-
-def _positive_int(value: str | None, fallback: int) -> int:
-    try:
-        parsed = int(str(value))
-        return parsed if parsed > 0 else fallback
-    except (TypeError, ValueError):
-        return fallback
 
 
 def _audit_file() -> Path:

@@ -18,6 +18,7 @@ from src.data.repositories import (
 )
 from src.data.models_sqlite import Message
 from src.data.unified_config import UnifiedConfigManager
+from src.utils.helpers import positive_int
 from src.utils.timezone import to_local
 from .reference_handler import ReferenceHandler
 from .compression_handler import CompressionHandler
@@ -32,15 +33,6 @@ _DEFAULT_TOOL_RESULT_GROUP_BUDGET = 24000
 # 预算小于一条结果的量级只会把每条结果都截成预览。踩过两次——mock 配置
 # 未显式赋值时 int(MagicMock()) 返回 1，静默把预算变成 1 字符。
 _MIN_SANE_TOOL_RESULT_GROUP_BUDGET = 1000
-
-
-def _positive_int(value, *, default: int, minimum: int = 1) -> int:
-    """把配置值归一化为正整数；不可用或明显不合理时退回默认值。"""
-    try:
-        number = int(value)
-    except (TypeError, ValueError):
-        return default
-    return number if number >= minimum else default
 
 
 class ContextManager:
@@ -68,7 +60,7 @@ class ContextManager:
 
         # 并发工具结果的单批总预算：每条都不超单条上限、加起来仍可撑爆一条消息
         self._tool_result_budget = ToolResultBudget(
-            _positive_int(
+            positive_int(
                 config.get_memory_tool_result_group_budget(),
                 default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
                 minimum=_MIN_SANE_TOOL_RESULT_GROUP_BUDGET,

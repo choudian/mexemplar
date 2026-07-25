@@ -21,15 +21,15 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from typing import Iterable, List, Sequence
+from typing import Callable, Iterable, List, Optional, Sequence
 
 from src.data.models_sqlite import Message
 
 logger = logging.getLogger(__name__)
 
-# Recovery tools return content the model explicitly asked for; trimming those
-# re-arms the replace/recover loop.
-_NEVER_TRIMMED_TOOLS = frozenset({"load_reference", "load_tool_output"})
+# 这些工具返回的是模型主动取回的原文；对它们做任何裁剪/替换都会重新接上
+# 「替换 → load_reference 取回 → 再被替换」的循环。compression_handler 共用此常量。
+RETRIEVAL_TOOLS = frozenset({"load_reference", "load_tool_output"})
 
 _PREVIEW_CHARS = 600
 
@@ -45,11 +45,7 @@ class ToolResultGroup:
         return sum(len(m.content or "") for m in self.results)
 
     def trimmable(self) -> List[Message]:
-        return [
-            m
-            for m in self.results
-            if m.tool_name not in _NEVER_TRIMMED_TOOLS and (m.content or "")
-        ]
+        return [m for m in self.results if m.tool_name not in RETRIEVAL_TOOLS and (m.content or "")]
 
 
 def group_tool_results(messages: Sequence[Message]) -> List[ToolResultGroup]:
@@ -125,30 +121,53 @@ class ToolResultBudget:
         return freed
 
     def _trim(self, session_id: str, message: Message, msg_repo) -> int:
-        original = message.content or ""
         try:
-            archived = Message(
-                message_id=str(uuid.uuid4()),
-                session_id=session_id,
-                sequence=message.sequence,
-                role=message.role,
-                content=original,
-                message_type="tool_result_archive",
-                tool_call_id=message.tool_call_id,
-                tool_name=message.tool_name,
-                is_archived=True,
-            )
-            msg_repo.create(archived)
-            preview = _build_preview(original, archived.message_id, message.tool_name)
-            msg_repo.update_content(message.message_id, preview)
-            message.content = preview
-            return len(original) - len(preview)
+            return archive_tool_result(session_id, message, msg_repo, build_pointer=_build_preview)
         except Exception:
             # One failed trim must not stop the others, nor block compression.
-            logger.warning(
-                "[工具结果预算] 裁剪失败: %s", message.message_id, exc_info=True
-            )
+            logger.warning("[工具结果预算] 裁剪失败: %s", message.message_id, exc_info=True)
             return 0
+
+
+def archive_tool_result(
+    session_id: str,
+    message: Message,
+    msg_repo,
+    *,
+    build_pointer: Callable[[str, str, Optional[str]], str],
+) -> int:
+    """把一条工具结果消息归档为可经 load_reference 取回，原消息改写为指针。
+
+    构造 ``tool_result_archive`` 归档行、写库、把原消息内容替换为 ``build_pointer``
+    生成的指针、回写 ``message.content``，返回腾出的字符数。归档或写库抛出的异常
+    向调用方传播，由调用方记日志并决定是否继续处理其余消息——pointer 形态和失败
+    日志都由调用方决定，本函数只做机械的归档+回写。
+
+    Args:
+        session_id: 归档行所属会话。
+        message: 要归档的工具结果消息；原地改写 ``content``，保留 role/tool_call_id
+            以维持 assistant tool_calls 与 tool results 的配对。
+        msg_repo: MessageRepository，提供 create / update_content。
+        build_pointer: ``(original_content, archived_id, tool_name) -> 指针文本``，
+            指针形态由调用方决定（预算裁剪带预览头，压缩替换是纯引用）。
+    """
+    original = message.content or ""
+    archived = Message(
+        message_id=str(uuid.uuid4()),
+        session_id=session_id,
+        sequence=message.sequence,
+        role=message.role,
+        content=original,
+        message_type="tool_result_archive",
+        tool_call_id=message.tool_call_id,
+        tool_name=message.tool_name,
+        is_archived=True,
+    )
+    msg_repo.create(archived)
+    pointer = build_pointer(original, archived.message_id, message.tool_name)
+    msg_repo.update_content(message.message_id, pointer)
+    message.content = pointer
+    return len(original) - len(pointer)
 
 
 def _build_preview(content: str, reference_id: str, tool_name: str | None) -> str:

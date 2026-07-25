@@ -36,6 +36,7 @@ from src.data.repos.workflow_transition_repository import WorkflowTransitionRepo
 from src.data.unified_config import get_unified_config
 
 from .attempt_heartbeat import AttemptHeartbeat
+from src.utils.helpers import positive_int
 from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -690,11 +691,7 @@ def _sane_lease_seconds(value: Any) -> int:
     ``UnifiedConfigManager`` 自己有 minimum=10 的下界，但这里还会收到测试替身
     和损坏配置——``int(MagicMock())`` 返回 1，静默把心跳变成忙循环。
     """
-    try:
-        seconds = int(value)
-    except (TypeError, ValueError):
-        return _DEFAULT_LEASE_SECONDS
-    return seconds if seconds >= _MIN_SANE_LEASE_SECONDS else _DEFAULT_LEASE_SECONDS
+    return positive_int(value, default=_DEFAULT_LEASE_SECONDS, minimum=_MIN_SANE_LEASE_SECONDS)
 
 
 def _begin_attempt_run_context(attempt_id: str) -> bool:

@@ -160,6 +160,19 @@ def normalize_thinking_level(value, *, fallback: str = "off") -> str:
     return normalized
 
 
+def positive_int(value, *, default: int, minimum: int = 1) -> int:
+    """把配置值归一化为正整数；不可解析或低于 ``minimum`` 时退回默认值。
+
+    配置读取（尤其是测试替身和损坏的持久化值）可能给出 None、空串、MagicMock
+    或负数。统一在此兜底，避免每个消费者各自重写 try/except + 下界判断。
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return default
+    return number if number >= minimum else default
+
+
 def walk_exception_chain(
     exc: BaseException,
     *,

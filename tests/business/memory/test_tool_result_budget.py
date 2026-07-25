@@ -83,9 +83,7 @@ def test_unrelated_messages_close_the_group():
     messages = [
         _assistant(1, ["a", "b"]),
         _result(2, "a", 10),
-        Message(
-            message_id="msg_3", session_id="sess", sequence=3, role="user", content="hi"
-        ),
+        Message(message_id="msg_3", session_id="sess", sequence=3, role="user", content="hi"),
         _result(4, "b", 20),
     ]
 
@@ -240,11 +238,11 @@ def test_absurdly_small_budgets_fall_back_to_the_default():
     from src.business.memory.context_manager import (
         _DEFAULT_TOOL_RESULT_GROUP_BUDGET,
         _MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
-        _positive_int,
     )
+    from src.utils.helpers import positive_int
 
     for bad in (MagicMock(), 1, 0, -5, None, "abc"):
-        resolved = _positive_int(
+        resolved = positive_int(
             bad,
             default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
             minimum=_MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
@@ -253,7 +251,7 @@ def test_absurdly_small_budgets_fall_back_to_the_default():
 
     # A deliberate, plausible value is still honoured.
     assert (
-        _positive_int(
+        positive_int(
             5000,
             default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
             minimum=_MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
