@@ -3080,6 +3080,58 @@ def migrate_to_v35(engine):
     logger.info("迁移到版本 35 完成：内置专员可安全升级且不覆盖用户改动")
 
 
+def migrate_to_v36(engine):
+    """迁移到版本 36：执行记录补上"这次开工跑在哪个会话里"。
+
+    派活发生在执行体被创建之前，所以 ``executor_id`` 对临时子代理只能填任务 id 顶替
+    （见 ``graph_scheduler`` 的执行器解析）。结果是"谁在干这活"在库里根本不存在：
+    ``ask_parent`` / ``todo_update`` 的归属校验查无此人，任务也无法下钻到执行过程。
+    本列由执行体在 agent loop 启动前回填，是该问题唯一缺失的事实。
+
+    既有行保持 NULL——它们的执行早已结束，补造身份只会伪造无法验证的关联。
+    """
+    try:
+        with engine.begin() as conn:
+            table_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'assistant_task_attempts'"
+                )
+            ).fetchone()
+            if table_exists is not None:
+                _add_column_if_missing(
+                    conn, "assistant_task_attempts", "executor_session_id", "TEXT"
+                )
+            else:
+                logger.info("迁移到版本 36：assistant_task_attempts 表不存在，跳过执行会话列")
+            conn.execute(text("UPDATE schema_version SET version = 36"))
+    except Exception as e:
+        logger.error(f"迁移到版本 36 失败: {e}")
+        raise
+    logger.info("迁移到版本 36 完成：执行记录可追溯到执行会话")
+
+
+def downgrade_from_v36(engine):
+    """回退版本 36：移除执行会话列。"""
+    try:
+        with engine.begin() as conn:
+            columns = {
+                row[1]
+                for row in conn.execute(
+                    text("PRAGMA table_info(assistant_task_attempts)")
+                ).fetchall()
+            }
+            if "executor_session_id" in columns:
+                conn.execute(
+                    text("ALTER TABLE assistant_task_attempts DROP COLUMN executor_session_id")
+                )
+            conn.execute(text("UPDATE schema_version SET version = 35"))
+    except Exception as e:
+        logger.error(f"回退版本 36 失败: {e}")
+        raise
+    logger.info("回退版本 36 完成：移除执行会话列")
+
+
 def downgrade_from_v35(engine):
     """回退版本 35：移除种子标记列。"""
     try:
@@ -3140,6 +3192,7 @@ _MIGRATIONS = [
     (33, migrate_to_v33),
     (34, migrate_to_v34),
     (35, migrate_to_v35),
+    (36, migrate_to_v36),
 ]
 
 

@@ -5,9 +5,14 @@ from __future__ import annotations
 import threading
 
 from src.business.task_collaboration.models import TodoStatus, safe_public_preview
+from src.business.task_collaboration.ownership import executor_session_owns_task
 from src.business.task_collaboration.service import emit_todo_changed
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
-from src.data.repos import AssistantTaskRepository, AssistantTodoRepository
+from src.data.repos import (
+    AssistantTaskAttemptRepository,
+    AssistantTaskRepository,
+    AssistantTodoRepository,
+)
 from src.data.repos.base_repository import generate_id
 
 
@@ -22,10 +27,12 @@ class TaskTodoService(AtomicTaskService):
         self,
         task_repo: AssistantTaskRepository | None = None,
         todo_repo: AssistantTodoRepository | None = None,
+        attempt_repo: AssistantTaskAttemptRepository | None = None,
     ) -> None:
         self._init_repos(
             tasks=(AssistantTaskRepository, task_repo),
             todos=(AssistantTodoRepository, todo_repo),
+            attempts=(AssistantTaskAttemptRepository, attempt_repo),
         )
 
     def list_todos(self, task_id: str, *, session_id: str | None = None) -> list[dict]:
@@ -44,14 +51,17 @@ class TaskTodoService(AtomicTaskService):
         executor_id: str,
         items: list[dict],
         session_id: str | None = None,
+        executor_session_id: str | None = None,
     ) -> list[dict]:
         task = self._tasks.get_task(task_id)
         if task is None or (session_id is not None and task.session_id != session_id):
             raise LookupError("task not found")
         if executor_type not in {"ephemeral_subagent", "specialist"}:
             raise ValueError("todo executor must be an assistant executor")
-        if task.assignee_type != executor_type or task.assignee_id != executor_id:
-            raise PermissionError("todo updates require assigned executor ownership")
+        # 权威依据是执行记录当前绑定的会话；显式指派路径保留原判定（见 ownership.py）。
+        if not executor_session_owns_task(self._attempts, task_id, executor_session_id):
+            if task.assignee_type != executor_type or task.assignee_id != executor_id:
+                raise PermissionError("todo updates require assigned executor ownership")
         normalized = [_normalize_item(item, index) for index, item in enumerate(items)]
         emitted_changes: list[tuple[str, str, str, int]] = []
         with self._write_lock:

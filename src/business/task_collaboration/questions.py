@@ -15,9 +15,14 @@ from src.business.task_collaboration.models import (
     safe_preview,
     validate_task_transition,
 )
+from src.business.task_collaboration.ownership import executor_session_owns_task
 from src.business.task_collaboration.service import emit_question_changed, emit_task_updated
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
-from src.data.repos import AssistantTaskQuestionRepository, AssistantTaskRepository
+from src.data.repos import (
+    AssistantTaskAttemptRepository,
+    AssistantTaskQuestionRepository,
+    AssistantTaskRepository,
+)
 
 
 class TaskQuestionService(AtomicTaskService):
@@ -25,10 +30,12 @@ class TaskQuestionService(AtomicTaskService):
         self,
         task_repo: AssistantTaskRepository | None = None,
         question_repo: AssistantTaskQuestionRepository | None = None,
+        attempt_repo: AssistantTaskAttemptRepository | None = None,
     ) -> None:
         self._init_repos(
             tasks=(AssistantTaskRepository, task_repo),
             questions=(AssistantTaskQuestionRepository, question_repo),
+            attempts=(AssistantTaskAttemptRepository, attempt_repo),
         )
 
     def ask_parent(
@@ -41,11 +48,12 @@ class TaskQuestionService(AtomicTaskService):
         question: str,
         capability_delta: Iterable[str] | None = None,
         expires_at: datetime | None = None,
+        asker_session_id: str | None = None,
     ):
         task = self._tasks.get_task(task_id)
         if task is None:
             raise LookupError("task not found")
-        _assert_asker_owns_task(task, asker_type, asker_id)
+        self._assert_asker_owns_task(task, asker_type, asker_id, asker_session_id)
         question_kind = TaskQuestionKind(kind)
         parent = self._tasks.get_task(task.parent_task_id) if task.parent_task_id else None
         recipient_type = parent.assignee_type if parent is not None else None
@@ -250,6 +258,19 @@ class TaskQuestionService(AtomicTaskService):
             emit_task_updated(self, suspended)
         return count
 
+    def _assert_asker_owns_task(
+        self, task, asker_type: str, asker_id: str, asker_session_id: str | None
+    ) -> None:
+        """只有"此刻正在干这活的执行体"才能开父级/资源通道。
+
+        权威依据是执行记录当前绑定的会话。显式指派路径（assignee 两列有值）保留原判定，
+        供 delegate_task 直接点名的场景使用。绑定工具入口的 task id 已经挡住模型
+        自填的跨任务 id，这里只判身份。
+        """
+        if executor_session_owns_task(self._attempts, task.task_id, asker_session_id):
+            return
+        _assert_explicit_assignment(task, asker_type, asker_id)
+
     @staticmethod
     def _assert_parent_scope_subset(parent, requested: set[str]) -> None:
         parent_scope = _scope_from_json(getattr(parent, "capability_scope", None))
@@ -261,13 +282,16 @@ def _normalized_scope(values: Iterable[str] | None) -> set[str]:
     return {str(value).strip() for value in values or [] if str(value).strip()}
 
 
-def _assert_asker_owns_task(task, asker_type: str, asker_id: str) -> None:
-    """Only the task's assigned executor can open parent/resource routes.
+def _assert_explicit_assignment(task, asker_type: str, asker_id: str) -> None:
+    """显式指派路径：任务被点名派给某个执行体时的既有判定，原样保留。
 
-    Ephemeral tasks currently store the type placeholder as assignee_id while
-    the runtime handler identity uses the child session id. Binding handlers to
-    the current task id prevents model-supplied cross-task ids; this guard still
-    rejects wrong executor types and specialist id mismatches.
+    ``build_task_graph`` 建出的节点两列恒为空，走不到这里；能走到的是预先指定了
+    assignee 的路径。占位符分支服务统一派发：``delegate_to_subagent`` 复杂任务经
+    ``_dispatch_task_via_unified_model`` → ``delegate_task`` 落库时写
+    ``assignee_id="ephemeral_subagent"``（派活先于执行体创建，只能用类型串顶替），
+    而执行体运行时身份是自己的会话 id，永不等于该占位串——``assignee_id == asker_id``
+    匹配不上，占位符分支正是放这类任务过关。本提交后通常由 session 归属校验先行
+    短路，这里是其失效时的兜底。
     """
     if task.assignee_type != asker_type:
         raise PermissionError("ask_parent requires the assigned executor")

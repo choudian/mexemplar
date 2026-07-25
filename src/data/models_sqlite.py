@@ -430,6 +430,10 @@ class AssistantTaskAttempt(Base):
     task_id: Mapped[str] = mapped_column(String(50), nullable=False)
     executor_type: Mapped[str] = mapped_column(String(40), nullable=False)
     executor_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    # 这次开工实际跑在哪个会话里。派活时执行体还没被创建，``executor_id`` 对临时子代理
+    # 只能填任务 id 顶替，于是"谁在干这活"在库里不存在——归属校验和任务下钻都无处可查。
+    # 执行体在 agent loop 启动前回填本列，专员同样受益（executor_id 是专员身份，不是现场）。
+    executor_session_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="starting")
     lease_owner: Mapped[str] = mapped_column(String(80), nullable=False)
     lease_expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)

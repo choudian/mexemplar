@@ -266,6 +266,9 @@ class ToolRegistry:
                 handler=create_ask_parent_handler(
                     executor_type=executor_type,
                     executor_id=resolved_executor_id,
+                    # 归属校验的权威依据：``executor_id`` 传进来的就是执行体自己的会话 id，
+                    # 而 ``resolved_executor_id`` 对专员会被替换成专员身份，不能代表现场。
+                    executor_session_id=executor_id,
                     bound_task_id=current_task_id,
                     interrupt=bool(current_task_id),
                 ),
@@ -289,6 +292,7 @@ class ToolRegistry:
                 handler=create_todo_update_handler(
                     executor_type=executor_type,
                     executor_id=todo_executor_id,
+                    executor_session_id=executor_id,
                     bound_task_id=current_task_id,
                 ),
             ),

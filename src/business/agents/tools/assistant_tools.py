@@ -850,6 +850,7 @@ def create_ask_parent_handler(
     executor_type: str = "specialist",
     executor_id: str = "",
     *,
+    executor_session_id: str | None = None,
     bound_task_id: str | None = None,
     interrupt: bool = False,
     service_factory: Callable[[], "TaskQuestionService"] | None = None,
@@ -874,6 +875,7 @@ def create_ask_parent_handler(
                     task_id=effective_task_id,
                     asker_type=executor_type,
                     asker_id=executor_id or executor_type,
+                    asker_session_id=executor_session_id,
                     kind=kind,
                     question=question,
                     capability_delta=capabilityDelta,
@@ -1147,6 +1149,7 @@ def create_todo_update_handler(
     executor_type: str = "specialist",
     executor_id: str = "",
     *,
+    executor_session_id: str | None = None,
     bound_task_id: str | None = None,
     service_factory: Callable[[], "TaskTodoService"] | None = None,
 ):
@@ -1165,6 +1168,7 @@ def create_todo_update_handler(
                     task_id=effective_task_id,
                     executor_type=executor_type,
                     executor_id=executor_id or executor_type,
+                    executor_session_id=executor_session_id,
                     items=items or [],
                 )
                 return to_json({"success": True, "taskId": effective_task_id, "items": projected})

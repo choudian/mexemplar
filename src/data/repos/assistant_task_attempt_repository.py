@@ -132,6 +132,61 @@ class AssistantTaskAttemptRepository(BaseRepository):
             .one_or_none()
         )
 
+    def _active_attempt_for_task(self, task_id: str) -> AssistantTaskAttempt | None:
+        """返回该任务当前的 active attempt（partial unique index 保证至多一条）。
+
+        ``populate_existing`` 强制落库读：绑定态可能被 recovery fence / 终态在别的连接
+        上改写，归属判定和绑定刷新都必须拿权威值，不能信 identity map 里的旧态。
+        """
+        return (
+            self.session.query(AssistantTaskAttempt)
+            .populate_existing()
+            .filter(
+                AssistantTaskAttempt.task_id == task_id,
+                AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
+            )
+            .first()
+        )
+
+    def bind_session(self, *, task_id: str, executor_session_id: str) -> bool:
+        """把执行体的会话 id 绑定到该任务当前 active attempt，返回是否绑上。
+
+        派活先于执行体创建，所以 ``executor_id`` 对临时子代理只能填任务 id 顶替——
+        "此刻谁在干这活"因此在库里不存在。执行体启动时回填本列补上这条事实，
+        归属校验和任务下钻都以它为准。
+
+        与 ``renew_lease`` 同样用条件 UPDATE：绑定跑在执行线程，围栏和终态跑在别的
+        连接上，ORM 的 read-check-write 会盲写把已终态的 attempt 复活。守卫进 SQL，
+        匹配 0 行说明这个任务已经没有 active attempt——绑定失败即返回 False，
+        由调用方决定是继续还是放弃，不静默当成功。
+        """
+        self.ensure_immediate_transaction()
+        updated = (
+            self.session.query(AssistantTaskAttempt)
+            .filter(
+                AssistantTaskAttempt.task_id == task_id,
+                AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
+            )
+            .update({"executor_session_id": executor_session_id}, synchronize_session=False)
+        )
+        self._commit()
+        if updated == 0:
+            return False
+        # bulk UPDATE 不同步 identity map：同 session 的后续读会拿到绑定前的 None，
+        # 看起来像"绑定没生效"。partial unique index 保证每 task 至多一条 active，
+        # 直接 populate_existing 刷新该行即可，不必先查 attempt_id 再按 PK refetch。
+        self._active_attempt_for_task(task_id)
+        return True
+
+    def active_attempt_session(self, task_id: str) -> str | None:
+        """返回该任务当前 active attempt 绑定的执行会话 id，未绑定或无 active attempt 时 None。
+
+        每个任务同时至多一条 active attempt（partial unique index 焊死），所以
+        "正在干这活的执行体"必然唯一，不需要调用方再做区分。
+        """
+        row = self._active_attempt_for_task(task_id)
+        return row.executor_session_id if row is not None else None
+
     def renew_lease(self, attempt_id: str, *, lease_expires_at: datetime) -> bool:
         """续租一个仍在执行的 attempt，返回是否续上。
 

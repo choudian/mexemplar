@@ -789,6 +789,33 @@ class AgentOrchestrator:
             execution_context=execution_context,
         )
 
+    @staticmethod
+    def _bind_executor_session_to_attempt(current_task_id: str | None, session_id: str) -> None:
+        """把执行体会话绑定到该任务当前 active attempt；无 task 时整体跳过。
+
+        绑不上说明这个任务此刻已没有 active attempt（被围栏、已终态或图被取消）。
+        这时执行体本就不该代表该任务说话，让归属校验按事实拒绝它即可——不在这里
+        中止执行，避免把一个独立的生命周期问题混进委派路径。
+        """
+        if not current_task_id:
+            return
+        from src.data.repos import AssistantTaskAttemptRepository
+
+        try:
+            with AssistantTaskAttemptRepository() as attempts:
+                bound = attempts.bind_session(
+                    task_id=current_task_id, executor_session_id=session_id
+                )
+        except Exception:
+            logger.warning(
+                "[Orchestrator] 执行会话绑定失败: task=%s", current_task_id, exc_info=True
+            )
+            return
+        if not bound:
+            logger.warning(
+                "[Orchestrator] 任务无 active attempt，执行会话未绑定: task=%s", current_task_id
+            )
+
     def _run_delegated_executor(
         self,
         *,
@@ -833,6 +860,11 @@ class AgentOrchestrator:
             agent_type=str(agent_type),
             task=user_input,
         )
+
+        # 派活先于执行体创建，attempt 的 executor_id 对临时子代理只能填任务 id 顶替，
+        # "此刻谁在干这活"因此在库里不存在。在 loop 启动前把本会话绑上去——必须早于
+        # 第一次工具调用，否则 ask_parent / todo_update 的归属校验仍然查无此人。
+        self._bind_executor_session_to_attempt(current_task_id, session_id)
 
         try:
             loop = self._get_loop(
