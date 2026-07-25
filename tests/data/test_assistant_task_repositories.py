@@ -584,3 +584,89 @@ def test_fenced_attempt_does_not_hold_capacity_slot(db_session) -> None:
     )
     assert new_active is not None
     assert new_active.attempt_id != first.attempt_id
+
+
+def test_renew_lease_extends_an_active_attempt(db_session) -> None:
+    """续租把到期时间往后推，让还在干活的执行体不被恢复扫描判死。
+
+    租约原本只在创建时写死，此后无人续约：执行体只要跑得比租约长就会被判死并
+    重新派发，而它其实还活着——重派只会又起一个。
+    """
+    repo = AssistantTaskAttemptRepository(db_session)
+    original_expiry = datetime.now() + timedelta(seconds=60)
+    started = repo.start_attempt(
+        task_id="tsk_renew",
+        executor_type="specialist",
+        executor_id="spec_renew",
+        lease_owner="w",
+        lease_expires_at=original_expiry,
+        attempt_id="att_renew",
+    )
+    assert started is not None
+    extended = original_expiry + timedelta(seconds=300)
+
+    assert repo.renew_lease("att_renew", lease_expires_at=extended) is True
+
+    after = repo.get_by_id("att_renew")
+    assert after.lease_expires_at > original_expiry
+    assert after.status == started.status
+    assert after.fence_token == started.fence_token
+
+
+def test_renew_lease_refuses_to_revive_a_terminal_attempt(db_session) -> None:
+    """终态 attempt 不得被续租复活。
+
+    续租跑在执行线程，围栏和终态写入在别的连接上；ORM 的 read-check-write 会盲写
+    覆盖，把已经交出所有权的 attempt 又标成有租约的活跃态。守卫必须进 SQL。
+    """
+    repo = AssistantTaskAttemptRepository(db_session)
+    started = repo.start_attempt(
+        task_id="tsk_renew_terminal",
+        executor_type="specialist",
+        executor_id="spec_renew_terminal",
+        lease_owner="w",
+        lease_expires_at=datetime.now() + timedelta(seconds=60),
+        attempt_id="att_renew_terminal",
+    )
+    assert started is not None
+    repo.complete_if_current(
+        attempt_id="att_renew_terminal", fence_token=started.fence_token, result_ref="ref"
+    )
+
+    renewed = repo.renew_lease(
+        "att_renew_terminal", lease_expires_at=datetime.now() + timedelta(seconds=600)
+    )
+
+    assert renewed is False
+    assert repo.get_by_id("att_renew_terminal").status == "succeeded"
+
+
+def test_renew_lease_refuses_a_fenced_attempt(db_session) -> None:
+    # Recovery already handed the task to someone else; renewing here would put
+    # two executors on the same work.
+    repo = AssistantTaskAttemptRepository(db_session)
+    started = repo.start_attempt(
+        task_id="tsk_renew_fenced",
+        executor_type="specialist",
+        executor_id="spec_renew_fenced",
+        lease_owner="w",
+        lease_expires_at=datetime.now() + timedelta(seconds=60),
+        attempt_id="att_renew_fenced",
+    )
+    assert started is not None
+    repo.fence("att_renew_fenced")
+
+    assert (
+        repo.renew_lease(
+            "att_renew_fenced", lease_expires_at=datetime.now() + timedelta(seconds=600)
+        )
+        is False
+    )
+
+
+def test_renew_lease_on_a_missing_attempt_is_a_no_op(db_session) -> None:
+    repo = AssistantTaskAttemptRepository(db_session)
+
+    assert (
+        repo.renew_lease("att_nonexistent", lease_expires_at=datetime.now()) is False
+    )

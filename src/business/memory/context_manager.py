@@ -28,14 +28,19 @@ logger = logging.getLogger(__name__)
 # 配置读不出数字时的并发工具结果总预算，与 unified_config 默认值一致。
 _DEFAULT_TOOL_RESULT_GROUP_BUDGET = 24000
 
+# 低于这个值的预算一定是配错了：单条工具结果的可见上限就有 12000 字符，
+# 预算小于一条结果的量级只会把每条结果都截成预览。踩过两次——mock 配置
+# 未显式赋值时 int(MagicMock()) 返回 1，静默把预算变成 1 字符。
+_MIN_SANE_TOOL_RESULT_GROUP_BUDGET = 1000
 
-def _positive_int(value, *, default: int) -> int:
-    """把配置值归一化为正整数；不可用时退回默认值。"""
+
+def _positive_int(value, *, default: int, minimum: int = 1) -> int:
+    """把配置值归一化为正整数；不可用或明显不合理时退回默认值。"""
     try:
         number = int(value)
     except (TypeError, ValueError):
         return default
-    return number if number > 0 else default
+    return number if number >= minimum else default
 
 
 class ContextManager:
@@ -66,6 +71,7 @@ class ContextManager:
             _positive_int(
                 config.get_memory_tool_result_group_budget(),
                 default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
+                minimum=_MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
             )
         )
 

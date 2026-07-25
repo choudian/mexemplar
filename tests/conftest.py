@@ -79,6 +79,9 @@ def mock_config():
     config.get_memory_compression_token_threshold.return_value = 999_999
     config.get_memory_compression_count_threshold.return_value = None
     config.get_memory_compression_keep_recent.return_value = 5
+    # 并发工具结果总预算（很高，不触发）。必须显式给数值：MagicMock 支持 __int__
+    # 且返回 1，不配等于把预算设成 1 字符，每个工具结果都会被截成预览。
+    config.get_memory_tool_result_group_budget.return_value = 999_999
     # LLM retry 默认值（与 AIConfig 默认一致；测试需要时可按用例覆盖）
     config.get_ai_retry_max_retries.return_value = 3
     config.get_ai_retry_delay.return_value = 1.0

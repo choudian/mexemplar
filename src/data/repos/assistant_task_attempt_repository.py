@@ -132,6 +132,37 @@ class AssistantTaskAttemptRepository(BaseRepository):
             .one_or_none()
         )
 
+    def renew_lease(self, attempt_id: str, *, lease_expires_at: datetime) -> bool:
+        """续租一个仍在执行的 attempt，返回是否续上。
+
+        租约原本只在创建时写死一个到期时间，此后无人续约，于是执行体只要跑得比
+        租约长就会被恢复扫描判死并重新派发——而它其实还活着，重派只会又起一个。
+
+        与 ``fence`` 同样用条件 UPDATE：续约跑在执行线程，围栏和终态跑在别的
+        连接上，ORM 的 read-check-write 会盲写覆盖，把已终态的 attempt 复活。
+        守卫进 SQL，匹配 0 行就说明这个 attempt 已经不归自己管了。
+        """
+        self.ensure_immediate_transaction()
+        now = utc_now_naive()
+        updated = (
+            self.session.query(AssistantTaskAttempt)
+            .filter(
+                AssistantTaskAttempt.attempt_id == attempt_id,
+                AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
+            )
+            .update(
+                {"lease_expires_at": lease_expires_at, "heartbeat_at": now},
+                synchronize_session=False,
+            )
+        )
+        self._commit()
+        if updated == 0:
+            return False
+        # bulk UPDATE 不同步 identity map：同 session 的后续读会拿到旧的到期时间，
+        # 看起来像"续约没生效"。与 fence 一致，只刷新本行。
+        self._refetch(attempt_id)
+        return True
+
     def fence(self, attempt_id: str) -> AssistantTaskAttempt | None:
         # 原子条件 UPDATE：守卫（仅 active 才围栏）进 SQL，不在 Python 读后判断。recovery 的
         # fence 与 worker 的 terminate 跑在独立连接、不共用 _write_lock；ORM read-check-write

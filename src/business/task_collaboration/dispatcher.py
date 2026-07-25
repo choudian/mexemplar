@@ -34,6 +34,8 @@ from src.data.repos import (
 )
 from src.data.repos.workflow_transition_repository import WorkflowTransitionRepository
 from src.data.unified_config import get_unified_config
+
+from .attempt_heartbeat import AttemptHeartbeat
 from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -42,6 +44,10 @@ ExecutorCallback = Callable[[str], str | dict[str, Any] | None]
 ParentReentryCallback = Callable[[dict[str, Any]], None]
 
 _TASK_OUTCOME_SUSPENDED = "suspended"
+
+# 租约时长的下界与兜底值，与 unified_config 的 minimum / default 一致。
+_MIN_SANE_LEASE_SECONDS = 10
+_DEFAULT_LEASE_SECONDS = 120
 
 # 024: 失败自愈动作候选集（确定性，按失败类；FR-010）。advisory——主助理仍可自由裁定，
 # 这里只提供"下一步建议"避免开放自由发挥（FR-015）。display_hint 供 briefing 渲染。
@@ -314,7 +320,14 @@ class TaskDispatcher:
         run_started = _begin_attempt_run_context(attempt_id)
         try:
             try:
-                result = self._executor_callback(attempt_id) if self._executor_callback else None
+                # 执行期间持续续租：租约只在创建时写死，不续约的话执行体跑得比
+                # 租约长就会被恢复扫描判死重派，而它还活着——重派只是又起一个。
+                # 心跳随 executor 返回或抛出立即停止：租约活得比执行体久，正是
+                # 恢复机制要抓的那种情况。
+                with _lease_heartbeat(attempt_id):
+                    result = (
+                        self._executor_callback(attempt_id) if self._executor_callback else None
+                    )
             except Exception as exc:
                 # executor 原始异常只进后端日志，不进安全投影（result_ref 只留异常类型名）。
                 logger.exception("[task attempt] executor failed attempt=%s", attempt_id)
@@ -647,20 +660,41 @@ def _paused_reentry_payload(result: str | dict[str, Any] | None) -> dict[str, An
             "taskId": result.get("task_id"),
             "safeSummary": result.get("safe_summary", "节点标记为需确认，请裁定是否执行。"),
         }
-    # 执行体跑到轮次预算：工作完整保留，父侧可追加预算续跑、改拆任务或就现有成果裁定。
-    # 不给回流载荷会让任务静默挂起——父侧既不知道发生了什么，也不知道还能做什么。
-    if reentry_type == "budget_exhausted":
-        return {
-            "eventType": "budget_exhausted",
-            "taskId": result.get("task_id"),
-            "subagentId": result.get("subagent_id"),
-            "iterationsUsed": result.get("iterations_used"),
-            "maxIterations": result.get("max_iterations"),
-            "safeSummary": result.get(
-                "safe_summary", "执行体已跑到轮次预算，工作已保留，可续跑或改拆任务。"
-            ),
-        }
     return None
+
+
+def _lease_heartbeat(attempt_id: str) -> AttemptHeartbeat:
+    """构造该 attempt 的续租心跳。
+
+    每次续约用独立 Repository：心跳跑在执行线程，与 worker 的终态写入、恢复扫描
+    的围栏各自独立连接，共用 Session 会踩 SQLAlchemy 的多线程竞态。
+    """
+
+    def _renew(target_attempt_id: str, *, lease_expires_at) -> bool:
+        with AssistantTaskAttemptRepository() as attempts:
+            return attempts.renew_lease(target_attempt_id, lease_expires_at=lease_expires_at)
+
+    return AttemptHeartbeat(
+        attempt_id,
+        lease_seconds=_sane_lease_seconds(
+            get_unified_config().get_assistant_tasks_attempt_lease_seconds()
+        ),
+        renew=_renew,
+    )
+
+
+def _sane_lease_seconds(value: Any) -> int:
+    """把租约时长归一化；荒谬值退回默认。
+
+    续约频率由租约推导，租约被读成 1 秒就会让后台线程每秒打一次库。
+    ``UnifiedConfigManager`` 自己有 minimum=10 的下界，但这里还会收到测试替身
+    和损坏配置——``int(MagicMock())`` 返回 1，静默把心跳变成忙循环。
+    """
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_LEASE_SECONDS
+    return seconds if seconds >= _MIN_SANE_LEASE_SECONDS else _DEFAULT_LEASE_SECONDS
 
 
 def _begin_attempt_run_context(attempt_id: str) -> bool:

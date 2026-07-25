@@ -226,3 +226,37 @@ def test_one_failed_trim_does_not_abort_the_rest():
 
     assert budget.apply("sess", messages, repo) == 0
     assert messages[1].content == "x" * 5_000
+
+
+def test_absurdly_small_budgets_fall_back_to_the_default():
+    """A budget below one result's own cap can only shred every result.
+
+    Hit twice during development: a mock config that does not stub the getter
+    yields `int(MagicMock()) == 1`, silently setting the budget to one
+    character. Production code refuses the value rather than trusting it.
+    """
+    from unittest.mock import MagicMock
+
+    from src.business.memory.context_manager import (
+        _DEFAULT_TOOL_RESULT_GROUP_BUDGET,
+        _MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
+        _positive_int,
+    )
+
+    for bad in (MagicMock(), 1, 0, -5, None, "abc"):
+        resolved = _positive_int(
+            bad,
+            default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
+            minimum=_MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
+        )
+        assert resolved == _DEFAULT_TOOL_RESULT_GROUP_BUDGET, bad
+
+    # A deliberate, plausible value is still honoured.
+    assert (
+        _positive_int(
+            5000,
+            default=_DEFAULT_TOOL_RESULT_GROUP_BUDGET,
+            minimum=_MIN_SANE_TOOL_RESULT_GROUP_BUDGET,
+        )
+        == 5000
+    )
