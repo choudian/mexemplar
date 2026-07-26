@@ -23,16 +23,19 @@ def _exec_context(command: str, *, cwd: str = ".") -> ToolCallContext:
     )
 
 
-def test_shell_host_requires_confirmation_instead_of_hard_rejection(tmp_path, monkeypatch) -> None:
+def test_shell_host_inline_flag_no_longer_hard_rejected(tmp_path, monkeypatch) -> None:
+    """删 shell host 内联 flag 关卡后，powershell -Command 不再硬拒，改走默认确认。"""
     monkeypatch.chdir(tmp_path)
 
     result = general_tools.exec_pre_hook(_exec_context("powershell -Command Get-Date"))
 
+    # 不再硬拒（command_rejected）；测试上下文无 UI → 走确认即 fail-closed
     assert result is not None
     assert result.error_code == "confirmation_failed_closed"
 
 
-def test_shell_host_is_allowed_by_session_auto_approval(tmp_path, monkeypatch) -> None:
+def test_shell_host_inline_flag_allowed_under_auto_approval(tmp_path, monkeypatch) -> None:
+    """删 shell host 关卡后，powershell -Command 在 allow_all 下短路放行。"""
     monkeypatch.chdir(tmp_path)
     general_tools.set_auto_approve_enabled(
         True,
@@ -109,9 +112,10 @@ def test_explicit_external_path_is_allowed_by_session_auto_approval(tmp_path, mo
         r'''powershell -Command "Set-Location('..')"''',
     ],
 )
-def test_parent_path_traversal_remains_hard_rejected_during_auto_approval(
+def test_parent_path_traversal_no_longer_hard_rejected_under_auto_approval(
     command, tmp_path, monkeypatch
 ) -> None:
+    """删 `..` 穿越关卡后,含 `..` 的命令在 allow_all 下短路放行,不再硬拒。"""
     monkeypatch.chdir(tmp_path)
     general_tools.set_auto_approve_enabled(
         True,
@@ -120,8 +124,7 @@ def test_parent_path_traversal_remains_hard_rejected_during_auto_approval(
 
     result = general_tools.exec_pre_hook(_exec_context(command))
 
-    assert result is not None
-    assert result.error_code == "command_rejected"
+    assert result is None
 
 
 @pytest.mark.parametrize(
@@ -169,9 +172,10 @@ def test_double_dot_within_path_name_is_not_treated_as_parent_traversal(
         "echo `whoami`",
     ],
 )
-def test_shell_control_syntax_remains_hard_rejected_during_auto_approval(
+def test_shell_metachar_commands_short_circuit_under_auto_approval(
     command, tmp_path, monkeypatch
 ) -> None:
+    """删元字符 force_interactive 关卡后，含管道/反引号的命令在 allow_all 下短路放行。"""
     monkeypatch.chdir(tmp_path)
     general_tools.set_auto_approve_enabled(
         True,
@@ -180,13 +184,13 @@ def test_shell_control_syntax_remains_hard_rejected_during_auto_approval(
 
     result = general_tools.exec_pre_hook(_exec_context(command))
 
-    assert result is not None
-    assert result.error_code == "command_rejected"
+    assert result is None
 
 
-def test_inline_interpreter_code_remains_hard_rejected_during_auto_approval(
+def test_inline_interpreter_code_no_longer_hard_rejected_under_auto_approval(
     tmp_path, monkeypatch
 ) -> None:
+    """删内联代码关卡后,python -c 在 allow_all 下短路放行,不再硬拒。"""
     monkeypatch.chdir(tmp_path)
     general_tools.set_auto_approve_enabled(
         True,
@@ -195,5 +199,45 @@ def test_inline_interpreter_code_remains_hard_rejected_during_auto_approval(
 
     result = general_tools.exec_pre_hook(_exec_context('python -c "print(1)"'))
 
+    assert result is None
+
+
+def test_bash_dash_c_not_hard_rejected_under_auto_approval(tmp_path, monkeypatch) -> None:
+    """删 shell host 关卡后，bash -c 不再硬拒，allow_all 下短路放行。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    result = general_tools.exec_pre_hook(_exec_context("bash -c 'rm -rf /'"))
+    assert result is None
+
+
+def test_cmd_slash_c_not_hard_rejected_under_auto_approval(tmp_path, monkeypatch) -> None:
+    """删 shell host 关卡后，cmd /c 不再硬拒，allow_all 下短路放行。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    result = general_tools.exec_pre_hook(_exec_context("cmd /c dir"))
+    assert result is None
+
+
+def test_os_system_path_in_command_arg_hard_rejected(tmp_path, monkeypatch) -> None:
+    """命令参数命中 OS 系统路径（C:/Windows）硬拒。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    result = general_tools.exec_pre_hook(_exec_context("rm -rf C:/Windows"))
     assert result is not None
     assert result.error_code == "command_rejected"
+
+
+def test_python_command_short_circuits_under_auto_approval(tmp_path, monkeypatch) -> None:
+    """删 allowlist 后 python script.py 不再特殊放行，但仍随 allow_all 默认短路。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    result = general_tools.exec_pre_hook(_exec_context("python script.py"))
+    assert result is None
+
+
+def test_destructive_command_short_circuits_under_auto_approval(tmp_path, monkeypatch) -> None:
+    """rm -rf build（非 OS 路径、非穿越）随 allow_all 默认短路放行。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    result = general_tools.exec_pre_hook(_exec_context("rm -rf build"))
+    assert result is None

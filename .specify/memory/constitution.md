@@ -98,8 +98,8 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
   开启进程会话级「全部允许」（`_auto_approve_enabled`）则短路放行并记 `auth_confirmation_decision`
   审计（`decision=auto_approved, source=auto_scope`），未开启则逐次弹确认（确认后本会话同文件
   不再问）。它 MUST 满足：(1) 只对 `write/edit/delete/patch` 操作生效，`execute` 的 cwd 与
-  控制语法/内联代码/`..` 穿越硬门卫，以及 OS 系统路径（`C:\Windows`、`C:\Program Files` 等）
-  **继续不受覆盖、始终硬拒**；(2) `_self_improvement_mutation_denial`（builtin_permissions
+  shell host 内联 flag（`bash -c` / `powershell -Command` / `cmd /c`）/内联代码/`..` 穿越硬门卫，以及 OS 系统路径（`C:\Windows`、`/etc` 等）
+  **继续不受覆盖、始终硬拒**；其他 shell 元字符经 shell 模式执行但不受"全部允许"短路（force_interactive）；allowlist 内开发命令可短路；(2) `_self_improvement_mutation_denial`（builtin_permissions
   inside-workspace 守卫）**正交不动**；(3) 本会话确认缓存只在进程内存（重启 / 新会话 reset /
   停止清空），不持久化；(4) proposal executor 派发源头守卫
   `_assert_proposal_executor_workspace_or_raise` 仍 fail-closed，与 allow_all 状态无关。

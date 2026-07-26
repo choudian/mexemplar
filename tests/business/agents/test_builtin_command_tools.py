@@ -51,17 +51,19 @@ def test_exec_timeout_is_stable_outcome(tmp_path, monkeypatch):
     assert result["error"]["code"] == "command_timeout"
 
 
-def test_exec_rejects_external_cwd(tmp_path, monkeypatch):
+def test_exec_allows_external_cwd(tmp_path, monkeypatch):
+    """删 cwd workspace 外拒绝后,外部 cwd 的命令允许执行。"""
     monkeypatch.chdir(tmp_path)
 
     command = _python_script(tmp_path, "external-cwd.py", "print('no')\n")
     result = _obj(command_tools.exec_handler(command, cwd=str(tmp_path.parent)))
 
-    assert result["outcome"] == "rejected"
-    assert result["error"]["code"] == "command_rejected"
+    # 不再因外部 cwd 被拒;脚本能否跑通取决于路径,权限层不再拦
+    assert result["outcome"] != "rejected"
 
 
-def test_exec_rejects_path_reader_command_targeting_outside_workspace(tmp_path, monkeypatch):
+def test_exec_no_longer_rejects_path_reader_targeting_outside_workspace(tmp_path, monkeypatch):
+    """删 `..` 穿越关卡后,读 workspace 外文件的命令不再被权限层拒绝。"""
     monkeypatch.chdir(tmp_path)
     outside = tmp_path.parent / "outside-command-read.txt"
     outside.write_text("secret\n", encoding="utf-8")
@@ -70,26 +72,31 @@ def test_exec_rejects_path_reader_command_targeting_outside_workspace(tmp_path, 
     finally:
         outside.unlink(missing_ok=True)
 
-    assert result["outcome"] == "rejected"
-    assert result["error"]["code"] == "command_rejected"
+    # 不再因 `..` 穿越被拒;cat 是否存在取决于平台,权限层不再拦
+    assert result["outcome"] != "rejected"
 
 
-def test_exec_rejects_shell_syntax_inline_code_and_parent_traversal(tmp_path, monkeypatch):
+def test_exec_handler_no_longer_rejects_inline_code_and_parent_traversal(tmp_path, monkeypatch):
+    """删 inline + `..` 关卡后,内联代码和父目录穿越命令不再被权限层拒绝。"""
     monkeypatch.chdir(tmp_path)
-    outside = tmp_path.parent / "outside-command-write.txt"
     cases = [
-        "echo ok\nwhoami",
-        f'echo unsafe > "{outside}"',
         f'"{sys.executable}" -c "print(1)"',
         "git -C .. status",
     ]
 
     for command in cases:
         result = _obj(command_tools.exec_handler(command, cwd="."))
-        assert result["outcome"] == "rejected"
-        assert result["error"]["code"] == "command_rejected"
-    assert not outside.exists()
-    assert is_safe_exec_command("echo ok\nwhoami") is False
+        # 权限层不再拦;实际执行成功/失败取决于命令本身
+        assert result["outcome"] != "rejected"
+
+
+def test_exec_handler_runs_commands_via_shell(tmp_path, monkeypatch):
+    """删黑名单后命令经 shell 执行（bash -c），echo 这类普通命令不再硬拒。"""
+    monkeypatch.chdir(tmp_path)
+    result = _obj(command_tools.exec_handler("echo hello", cwd="."))
+    assert result["outcome"] == "success"
+    # echo 不在 allowlist（仍走确认，但 handler 直调不经 pre_hook，直接 shell 执行）
+    assert is_safe_exec_command("echo hello") is False
 
 
 def test_exec_large_output_creates_recoverable_raw_reference(tmp_path, monkeypatch):

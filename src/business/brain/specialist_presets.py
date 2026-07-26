@@ -17,6 +17,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import ClassVar
 
 from src.business.services.skill_composition.builtin_compositions import (
     EXTERNAL_CODING_COMPOSITION_ID,
@@ -66,17 +67,22 @@ class SpecialistPreset:
     role_kind: str = "executor"
     composition_ids: list[str] = field(default_factory=list)
     tool_whitelist: list[str] = field(default_factory=list)
+    _fingerprint_cache: ClassVar[dict[int, str]] = {}
 
     def load_role_definition(self) -> str:
         path = bundled_resource_path(_SEED_RELATIVE_DIR / self.role_definition_file)
         return path.read_text(encoding="utf-8").strip()
 
     def fingerprint(self) -> str:
-        return compute_fingerprint(
-            role_definition=self.load_role_definition(),
-            description=self.description,
-            composition_ids=list(self.composition_ids),
-        )
+        # ClassVar dict 以 id(self) 为 key，避免 dataclass 字段污染
+        cache_key = id(self)
+        if cache_key not in self._fingerprint_cache:
+            self._fingerprint_cache[cache_key] = compute_fingerprint(
+                role_definition=self.load_role_definition(),
+                description=self.description,
+                composition_ids=list(self.composition_ids),
+            )
+        return self._fingerprint_cache[cache_key]
 
 
 CODING_EXECUTOR = SpecialistPreset(

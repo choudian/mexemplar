@@ -119,26 +119,6 @@ SAFE_EXEC_COMMANDS = frozenset(
         "ps",
     }
 )
-_SHELL_HOST_NAMES = frozenset(
-    {
-        "bash",
-        "cmd",
-        "cmd.exe",
-        "cscript",
-        "cscript.exe",
-        "dash",
-        "fish",
-        "ksh",
-        "powershell",
-        "powershell.exe",
-        "pwsh",
-        "sh",
-        "wscript",
-        "wscript.exe",
-        "wsl",
-        "zsh",
-    }
-)
 _ALL_ARGUMENT_DATA_EXECUTABLES = frozenset({"echo", "echo.exe", "printf"})
 _PATTERN_EXECUTABLES = frozenset(
     {
@@ -211,29 +191,92 @@ _RG_AUX_VALUE_FLAGS = frozenset(
         "--path-separator",
     }
 )
-_INLINE_CODE_FLAGS = {
-    "node": {"-e", "--eval", "-p", "--print"},
-    "node.exe": {"-e", "--eval", "-p", "--print"},
-    "perl": {"-e"},
-    "perl.exe": {"-e"},
-    "php": {"-r"},
-    "php.exe": {"-r"},
-    "py": {"-c"},
-    "py.exe": {"-c"},
-    "python": {"-c"},
-    "python.exe": {"-c"},
-    "python3": {"-c"},
-    "python3.exe": {"-c"},
-    "ruby": {"-e"},
-    "ruby.exe": {"-e"},
+# workspace 外读/写的本会话确认缓存（pre_hook 确认后 mark，permission_for_path 后续返回 confirmed）。
+# 文件级粒度；allow_all 关时每个外部文件首次读/写走确认，确认后本会话同文件不再问。
+_confirmed_external: dict[str, set[tuple[str, str, str]]] = {
+    "read": set(),
+    "write": set(),
 }
+_confirmed_external_lock = threading.Lock()
 
-_confirmed_external_reads: set[tuple[str, str, str]] = set()
-_confirmed_external_reads_lock = threading.Lock()
-# workspace 外写的本会话确认缓存（镜像读：pre_hook 确认后 mark，permission_for_path 后续返回 confirmed）。
-# 文件级粒度（与读一致）；allow_all 关时每个外部文件首次写走确认，确认后本会话同文件不再问。
-_confirmed_external_writes: set[tuple[str, str, str]] = set()
-_confirmed_external_writes_lock = threading.Lock()
+
+def _external_key(
+    cls: PathClassification, *, scope: str, session_id: str | None = None
+) -> tuple[str, str, str]:
+    sid = (session_id or "_default_agent_session").strip() or "_default_agent_session"
+    return (sid, workspace_hash(cls.workspace_root), str(cls.resolved))
+
+
+def mark_external_confirmed(
+    path: str | Path,
+    workspace_root: Path | str | None = None,
+    *,
+    scope: str,
+    session_id: str | None = None,
+) -> None:
+    cls = classify_path(path, workspace_root=workspace_root)
+    with _confirmed_external_lock:
+        _confirmed_external[scope].add(_external_key(cls, scope=scope, session_id=session_id))
+
+
+def clear_external_confirmations_for_tests() -> None:
+    with _confirmed_external_lock:
+        for s in _confirmed_external.values():
+            s.clear()
+
+
+def _is_external_confirmed(
+    cls: PathClassification, *, scope: str, session_id: str | None = None
+) -> bool:
+    with _confirmed_external_lock:
+        return _external_key(cls, scope=scope, session_id=session_id) in _confirmed_external[scope]
+
+
+# 向后兼容别名（供外部测试和调用方渐进迁移）
+def mark_external_read_confirmed(
+    path: str | Path,
+    workspace_root: Path | str | None = None,
+    *,
+    session_id: str | None = None,
+) -> None:
+    mark_external_confirmed(path, workspace_root, scope="read", session_id=session_id)
+
+
+def clear_external_read_confirmations_for_tests() -> None:
+    clear_external_confirmations_for_tests()
+
+
+def _external_read_key(
+    cls: PathClassification, *, session_id: str | None = None
+) -> tuple[str, str, str]:
+    return _external_key(cls, scope="read", session_id=session_id)
+
+
+def _is_external_read_confirmed(cls: PathClassification, *, session_id: str | None = None) -> bool:
+    return _is_external_confirmed(cls, scope="read", session_id=session_id)
+
+
+def mark_external_write_confirmed(
+    path: str | Path,
+    workspace_root: Path | str | None = None,
+    *,
+    session_id: str | None = None,
+) -> None:
+    mark_external_confirmed(path, workspace_root, scope="write", session_id=session_id)
+
+
+def clear_external_write_confirmations_for_tests() -> None:
+    clear_external_confirmations_for_tests()
+
+
+def _external_write_key(
+    cls: PathClassification, *, session_id: str | None = None
+) -> tuple[str, str, str]:
+    return _external_key(cls, scope="write", session_id=session_id)
+
+
+def _is_external_write_confirmed(cls: PathClassification, *, session_id: str | None = None) -> bool:
+    return _is_external_confirmed(cls, scope="write", session_id=session_id)
 
 
 @dataclass(frozen=True)
@@ -355,60 +398,8 @@ def classify_path(
     )
 
 
-def mark_external_read_confirmed(
-    path: str | Path,
-    workspace_root: Path | str | None = None,
-    *,
-    session_id: str | None = None,
-) -> None:
-    cls = classify_path(path, workspace_root=workspace_root)
-    with _confirmed_external_reads_lock:
-        _confirmed_external_reads.add(_external_read_key(cls, session_id=session_id))
 
 
-def clear_external_read_confirmations_for_tests() -> None:
-    with _confirmed_external_reads_lock:
-        _confirmed_external_reads.clear()
-
-
-def _external_read_key(
-    cls: PathClassification, *, session_id: str | None = None
-) -> tuple[str, str, str]:
-    sid = (session_id or "_default_agent_session").strip() or "_default_agent_session"
-    return (sid, workspace_hash(cls.workspace_root), str(cls.resolved))
-
-
-def _is_external_read_confirmed(cls: PathClassification, *, session_id: str | None = None) -> bool:
-    with _confirmed_external_reads_lock:
-        return _external_read_key(cls, session_id=session_id) in _confirmed_external_reads
-
-
-def mark_external_write_confirmed(
-    path: str | Path,
-    workspace_root: Path | str | None = None,
-    *,
-    session_id: str | None = None,
-) -> None:
-    cls = classify_path(path, workspace_root=workspace_root)
-    with _confirmed_external_writes_lock:
-        _confirmed_external_writes.add(_external_write_key(cls, session_id=session_id))
-
-
-def clear_external_write_confirmations_for_tests() -> None:
-    with _confirmed_external_writes_lock:
-        _confirmed_external_writes.clear()
-
-
-def _external_write_key(
-    cls: PathClassification, *, session_id: str | None = None
-) -> tuple[str, str, str]:
-    sid = (session_id or "_default_agent_session").strip() or "_default_agent_session"
-    return (sid, workspace_hash(cls.workspace_root), str(cls.resolved))
-
-
-def _is_external_write_confirmed(cls: PathClassification, *, session_id: str | None = None) -> bool:
-    with _confirmed_external_writes_lock:
-        return _external_write_key(cls, session_id=session_id) in _confirmed_external_writes
 
 
 def permission_for_path(
@@ -746,45 +737,6 @@ def _bare_parent_data_indexes(tokens: list[str], *, executable: str) -> set[int]
     return indexes
 
 
-def _command_contains_parent_path_traversal(
-    tokens: list[str],
-    *,
-    executable: str,
-) -> bool:
-    option_syntax = True
-    previous_token: str | None = None
-    shell_host = executable in _SHELL_HOST_NAMES
-    data_indexes = _bare_parent_data_indexes(tokens, executable=executable)
-    # shlex removes wrapping quotes. Only a bare ``..`` in a known
-    # data/pattern argument position is exempt from path interpretation.
-    for index, token in enumerate(tokens):
-        if token == "--":
-            option_syntax = False
-            previous_token = token
-            continue
-
-        path_option_context = option_syntax and _is_separated_path_option(
-            previous_token,
-            executable=executable,
-        )
-        is_data_argument = index in data_indexes and not path_option_context
-        if not is_data_argument and _contains_parent_path_segment(token):
-            return True
-        if shell_host and _EMBEDDED_PARENT_PATH_SEGMENT_PATTERN.search(token) is not None:
-            return True
-
-        if option_syntax and not is_data_argument:
-            for value in _explicit_option_values(token):
-                if _contains_parent_path_segment(value):
-                    return True
-            compact_value = _compact_path_option_value(
-                token,
-                executable=executable,
-            )
-            if compact_value is not None and _contains_parent_path_segment(compact_value):
-                return True
-        previous_token = token
-    return False
 
 
 def _command_policy_rejection(
@@ -902,6 +854,30 @@ def _self_improvement_exec_denial(
         return None
 
 
+def _command_targets_system_path(tokens: list[str]) -> bool:
+    """命令参数是否命中 OS 系统路径（``C:\\Windows`` / ``/etc`` 等）。
+
+    扫 ``tokens[1:]``（参数，跳 executable），是绝对路径的查 ``_is_system_path``。简化：
+    不区分选项值 vs 裸 token，接受 ``grep "/etc"`` 这类罕见误报——安全优先（命令注入碰
+    OS 文件不可挽回，宁可误拒）。复用写文件的 ``_is_system_path`` 清单，边界一致。
+    """
+    for raw_token in tokens[1:]:
+        token = str(raw_token or "").strip()
+        if not token:
+            continue
+        # 剥选项前缀（-C /path、--target=/path、-o C:\x）再判绝对路径
+        candidate = token.rsplit("=", 1)[-1] if "=" in token else token
+        candidate = candidate.lstrip("-")
+        if not Path(candidate).is_absolute():
+            continue
+        try:
+            if _is_system_path(Path(candidate).resolve(strict=False)):
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def command_path_policy_violation(
     command: str,
     *,
@@ -918,22 +894,11 @@ def command_path_policy_violation(
             message=str(exc),
             reason="shell_syntax_or_parse_error",
         )
-    executable = Path(tokens[0]).name.lower()
-    denied_flags = _INLINE_CODE_FLAGS.get(executable, set())
-    if any(token.lower() in denied_flags for token in tokens[1:]):
+    if _command_targets_system_path(tokens):
         return _command_policy_rejection(
             root=root,
-            message="Inline interpreter code is not supported by the workspace-safe exec tool.",
-            reason="inline_code_denied",
-        )
-    if _command_contains_parent_path_traversal(
-        tokens,
-        executable=executable,
-    ):
-        return _command_policy_rejection(
-            root=root,
-            message="Parent-directory traversal is not supported by the exec tool.",
-            reason="exec_path_traversal_denied",
+            message="Command targets an OS system-protected path (e.g. C:\\Windows, /etc).",
+            reason="system_path_target_denied",
         )
     improvement_denial = _self_improvement_exec_denial(
         command,

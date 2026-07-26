@@ -1313,41 +1313,49 @@ def read_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     return None
 
 
-def write_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
-    p = _resolve_path_arg(ctx)
-    check = permission_for_path(p, operation="write", session_id=ctx.session_id)
+def _confirm_external_mutation(
+    tool_name: str,
+    path: Path,
+    *,
+    session_id: str | None,
+    summary: str | None = None,
+) -> PreHookResult | None:
+    """workspace 外写操作确认：confirmation_required → 弹确认 → mark；denied → 拒绝。"""
+    check = permission_for_path(path, operation="write", session_id=session_id)
     if check.decision.decision == "confirmation_required":
-        rejected = _confirm_or_reject("write_file", check.decision.summary or build_write_summary(p))
+        rejected = _confirm_or_reject(tool_name, check.decision.summary or summary or f"{tool_name} (outside workspace): {path}")
         if rejected is not None:
             return rejected
-        mark_external_write_confirmed(p, session_id=ctx.session_id)
+        mark_external_write_confirmed(path, session_id=session_id)
         return None
     if not check.allowed:
         return PreHookResult(
-            error=check.message or "文件写入被权限策略拒绝",
+            error=check.message or f"文件操作被权限策略拒绝",
             error_code=check.error_code or "permission_denied",
         )
+    return None  # allowed
+
+
+def write_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    p = _resolve_path_arg(ctx)
+    mutation_check = _confirm_external_mutation(
+        "write_file", p, session_id=ctx.session_id,
+        summary=build_write_summary(p),
+    )
+    if mutation_check is not None:
+        return mutation_check
     baseline = ctx.args.get("expectedBaselineId") or ctx.args.get("expected_baseline_id")
     return _confirm_or_reject("write_file", build_write_summary(p, baseline_id=str(baseline or "")))
 
 
 def edit_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     p = _resolve_path_arg(ctx)
-    check = permission_for_path(p, operation="edit", session_id=ctx.session_id)
-    if check.decision.decision == "confirmation_required":
-        rejected = _confirm_or_reject(
-            "edit_file",
-            check.decision.summary or build_edit_summary(p, "", "", baseline_id=""),
-        )
-        if rejected is not None:
-            return rejected
-        mark_external_write_confirmed(p, session_id=ctx.session_id)
-        return None
-    if not check.allowed:
-        return PreHookResult(
-            error=check.message or "文件编辑被权限策略拒绝",
-            error_code=check.error_code or "permission_denied",
-        )
+    mutation_check = _confirm_external_mutation(
+        "edit_file", p, session_id=ctx.session_id,
+        summary=build_edit_summary(p, "", "", baseline_id=""),
+    )
+    if mutation_check is not None:
+        return mutation_check
     if not p.exists():
         return PreHookResult(error=f"文件不存在: {p}", error_code="path_not_found")
     if not p.is_file():
@@ -1437,19 +1445,8 @@ def list_dir_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
 
 def exec_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     command = str(ctx.args["command"])
-    cwd = ctx.args.get("cwd", ".")
     workspace_root = runtime_workspace_root()
-    check = permission_for_path(cwd, operation="execute", workspace_root=workspace_root)
-    if not check.allowed:
-        return PreHookResult(
-            error=check.message or "命令执行目录被权限策略拒绝",
-            error_code=check.error_code or "command_rejected",
-        )
-    path_check = command_path_policy_violation(
-        command,
-        workspace_root=workspace_root,
-        base_dir=check.classification.resolved,
-    )
+    path_check = command_path_policy_violation(command, workspace_root=workspace_root)
     if path_check is not None:
         return PreHookResult(
             error=path_check.message or "命令路径参数被权限策略拒绝",

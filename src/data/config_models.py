@@ -546,6 +546,10 @@ class AgentToolsProcessConfig:
     event_buffer_size: int = 64
     stalled_threshold_ms: int = 10000
     chunk_threshold_chars: int = 4096
+    # exec 走 shell 模式（bash -c / cmd /c 包装命令串），对齐 claude code/codex；
+    # shell_path 为空时走 resolve_shell 自动发现（Git Bash → cmd 回退）
+    shell_mode: bool = True
+    shell_path: str | None = None
 
 
 @dataclass

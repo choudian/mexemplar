@@ -19,6 +19,10 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+from src.execution.process_tree_utils import (
+    terminate_pid_tree,
+    terminate_process_tree,
+)
 
 from src.utils.sensitive_text import redact_sensitive_text
 
@@ -254,7 +258,7 @@ class ExternalCodingProcessRunner:
             stopped = (
                 _terminate_managed_process(managed)
                 if managed is not None
-                else _terminate_process(process)
+                else terminate_process_tree(process)
             )
             if not stopped:
                 # Keep the process discoverable by poll/stop.  The adapter
@@ -535,7 +539,7 @@ class ExternalCodingProcessRunner:
         )
         if identity is None or not _pid_matches_identity(identity):
             return ExternalProcessTerminationOutcome.UNCONFIRMED
-        stopped = _terminate_pid_tree(int(pid))
+        stopped = terminate_pid_tree(int(pid))
         if stopped:
             _write_status(
                 _status_path(log_path),
@@ -999,90 +1003,12 @@ def _terminate_managed_process(managed: _ManagedProcess) -> bool:
     with managed.termination_lock:
         if managed.termination_unconfirmed and managed.process.poll() is not None:
             return False
-        confirmed = _terminate_process(managed.process)
+        confirmed = terminate_process_tree(managed.process)
         managed.termination_unconfirmed = not confirmed
         return confirmed
 
 
-def _terminate_process(process: subprocess.Popen[bytes]) -> bool:
-    """Stop a spawned process tree and confirm every observed member exited."""
-    if process.poll() is not None:
-        return True
-    try:
-        parent = psutil.Process(process.pid)
-        descendants = parent.children(recursive=True)
-        stopped = _terminate_psutil_processes([*descendants, parent])
-        try:
-            process.wait(timeout=0.5)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        return stopped and process.poll() is not None
-    except psutil.NoSuchProcess:
-        try:
-            process.wait(timeout=0.5)
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        return process.poll() is not None
-    except psutil.Error:
-        try:
-            process.terminate()
-            process.wait(timeout=2)
-            # The parent stopped, but process-tree enumeration failed, so the
-            # tree as a whole cannot be certified as gone.
-            return False
-        except OSError:
-            return False
-        except subprocess.TimeoutExpired:
-            try:
-                process.kill()
-                process.wait(timeout=2)
-                return False
-            except (OSError, subprocess.TimeoutExpired):
-                return False
-
-
-def _terminate_pid_tree(pid: int) -> bool:
-    try:
-        process = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        # This path is only used after a restart. If the parent vanished
-        # between identity verification and tree enumeration, descendants
-        # cannot be proven gone.
-        return False
-    except psutil.Error:
-        return False
-    try:
-        descendants = process.children(recursive=True)
-    except psutil.NoSuchProcess:
-        return False
-    except psutil.Error:
-        return False
-    return _terminate_psutil_processes([*descendants, process])
-
-
-def _terminate_psutil_processes(processes: list[psutil.Process]) -> bool:
-    """Terminate, then kill, and finally verify a fixed process set is gone."""
-    for item in processes:
-        try:
-            item.terminate()
-        except psutil.Error:
-            pass
-    try:
-        _, alive = psutil.wait_procs(processes, timeout=2)
-    except psutil.Error:
-        return False
-    for item in alive:
-        try:
-            item.kill()
-        except psutil.Error:
-            pass
-    if not alive:
-        return True
-    try:
-        _, still_alive = psutil.wait_procs(alive, timeout=2)
-    except psutil.Error:
-        return False
-    return not still_alive
+# 进程树终止 helper 已移至 src/execution/process_tree_utils.py（与 command_runner 共用）。
 
 
 def _process_create_time(pid: int) -> float | None:

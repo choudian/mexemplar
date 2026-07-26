@@ -556,7 +556,7 @@ def test_status_and_marker_write_failure_persists_restart_safe_process_identity(
     )
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda _process: False,
     )
     monkeypatch.setattr(

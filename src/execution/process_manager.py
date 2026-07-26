@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from src.execution.command_runner import parse_command_argv
+from src.execution.shell_resolver import resolve_shell, shell_argv
 from src.utils.agent_tool_health import record_process_cleanup
 
 logger = logging.getLogger(__name__)
@@ -111,7 +111,7 @@ class ProcessManager:
     ) -> tuple[ProcessRecord, bool]:
         cwd_path = Path(cwd).resolve()
         normalized = (session_id, str(cwd_path), " ".join(command.split()))
-        argv = parse_command_argv(command)
+        argv = shell_argv(resolve_shell(), command)
         with self._lock:
             running_count = 0
             for record in self._records.values():

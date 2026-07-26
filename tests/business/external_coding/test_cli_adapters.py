@@ -28,7 +28,7 @@ from src.execution.external_coding_process import (
     _resolve_executable,
     _safe_command_summary,
     _status_path,
-    _terminate_process,
+    terminate_process_tree,
 )
 from src.execution import external_coding_process
 
@@ -394,7 +394,7 @@ def test_process_runner_stops_spawned_process_when_initialization_fails(
     monkeypatch.setattr(external_coding_process, "_process_create_time", lambda _pid: 10.0)
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda spawned: (setattr(spawned, "stopped", True), True)[1],
     )
     monkeypatch.setattr(external_coding_process.threading, "Thread", FakeMonitor)
@@ -457,7 +457,7 @@ def test_process_runner_retains_and_later_stops_unconfirmed_startup_process(
         lambda *_args, **_kwargs: process,
     )
     monkeypatch.setattr(external_coding_process, "_process_create_time", lambda _pid: 10.0)
-    monkeypatch.setattr(external_coding_process, "_terminate_process", _terminate)
+    monkeypatch.setattr(external_coding_process, "terminate_process_tree", _terminate)
     monkeypatch.setattr(external_coding_process.threading, "Thread", FailingMonitor)
     runner = ExternalCodingProcessRunner()
     log_path = tmp_path / "survived.log"
@@ -521,7 +521,7 @@ def test_process_tree_termination_confirms_child_exit(tmp_path) -> None:
         assert child_pid_path.exists()
         child_pid = int(child_pid_path.read_text(encoding="utf-8"))
 
-        assert _terminate_process(process) is True
+        assert terminate_process_tree(process) is True
         assert process.poll() is not None
         deadline = time.monotonic() + 3
         while time.monotonic() < deadline and psutil.pid_exists(child_pid):
@@ -740,7 +740,7 @@ def test_monitor_keeps_running_ownership_when_tree_termination_is_unconfirmed(
         stop_reason="stop requested",
     )
     _register_test_managed(managed)
-    monkeypatch.setattr(external_coding_process, "_terminate_process", lambda _process: False)
+    monkeypatch.setattr(external_coding_process, "terminate_process_tree", lambda _process: False)
 
     try:
         ExternalCodingProcessRunner._monitor_interactive(managed)
@@ -816,7 +816,7 @@ def test_runner_never_stops_reused_unmanaged_pid(tmp_path, monkeypatch) -> None:
 
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_pid_tree",
+        "terminate_pid_tree",
         fail_if_called,
     )
 
@@ -852,7 +852,7 @@ def test_restarted_runner_retries_verified_live_unconfirmed_process(tmp_path, mo
     terminated = []
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_pid_tree",
+        "terminate_pid_tree",
         lambda pid: (terminated.append(pid), True)[1],
     )
 
@@ -986,7 +986,7 @@ def test_guarded_monitor_converts_unexpected_failure_to_safe_terminal_status(
     )
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda spawned: (setattr(spawned, "stopped", True), True)[1],
     )
 
@@ -1027,7 +1027,7 @@ def test_guarded_monitor_retains_registry_when_recovery_and_marker_write_fail(
     )
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda _process: False,
     )
     monkeypatch.setattr(
@@ -1076,7 +1076,7 @@ def test_poll_retries_recovery_marker_and_releases_stopped_registry_owner(
     )
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda spawned: (setattr(spawned, "stopped", True), True)[1],
     )
     real_write_status = external_coding_process._write_status
@@ -1169,7 +1169,7 @@ def test_process_runner_pid_reuse_conflict_never_overwrites_existing_owner(
     monkeypatch.setattr(external_coding_process, "_process_create_time", lambda _pid: 200.0)
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda process: (setattr(process, "stopped", True), True)[1],
     )
     new_log = tmp_path / "new-owner.log"
@@ -1233,7 +1233,7 @@ def test_pid_collision_with_failed_compensation_retains_isolated_owners(
         lambda *_args, **_kwargs: new_process,
     )
     monkeypatch.setattr(external_coding_process, "_process_create_time", lambda _pid: 200.0)
-    monkeypatch.setattr(external_coding_process, "_terminate_process", _terminate)
+    monkeypatch.setattr(external_coding_process, "terminate_process_tree", _terminate)
 
     new_managed = None
     try:
@@ -1324,7 +1324,7 @@ def test_output_reader_failure_enters_guarded_process_tree_recovery(tmp_path, mo
     _register_test_managed(managed)
     monkeypatch.setattr(
         external_coding_process,
-        "_terminate_process",
+        "terminate_process_tree",
         lambda spawned: (setattr(spawned, "stopped", True), True)[1],
     )
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from typing import Any
 
 from src.business.agents.tools.builtin_config import get_config_int
 from src.business.agents.tools.builtin_contracts import (
@@ -34,6 +35,47 @@ from src.execution.process_manager import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_command_start_error(
+    exc: Exception,
+    *,
+    tool: str,
+    permission: Any,
+    display_path: str,
+    error_code: str = "command_start_failed",
+    label: str = "Command",
+) -> dict[str, Any]:
+    """统一的命令启动异常映射：CommandParseError / FileNotFoundError / PermissionError / OSError+。"""
+    if isinstance(exc, CommandParseError):
+        return error_json(
+            tool, "command_rejected", str(exc),
+            outcome=OUTCOME_REJECTED, permission=permission,
+            payload={"cwd": display_path},
+        )
+    if isinstance(exc, FileNotFoundError):
+        return error_json(
+            tool, "command_not_found",
+            f"Executable not found: {exc.filename or 'unknown'}",
+            outcome=OUTCOME_REJECTED, permission=permission,
+            payload={"cwd": display_path, "exitCode": 127},
+        )
+    if isinstance(exc, PermissionError):
+        return error_json(
+            tool, "command_not_executable",
+            f"Executable could not be started (permission denied): {exc.filename}",
+            outcome=OUTCOME_REJECTED, permission=permission,
+            payload={"cwd": display_path, "exitCode": 126},
+        )
+    if isinstance(exc, (OSError, ValueError, subprocess.SubprocessError)):
+        logger.warning("[agent_tools] %s start failed", label, exc_info=True)
+        return error_json(
+            tool, error_code,
+            f"{label} could not be started: {type(exc).__name__}: {exc}",
+            outcome=OUTCOME_REJECTED, permission=permission,
+            payload={"cwd": display_path},
+        )
+    raise exc  # 未预期异常不吞
 
 
 def _bounded(text: str, cap: int) -> tuple[str, bool]:
@@ -104,15 +146,6 @@ def exec_handler(
 ) -> str:
     tool = "exec"
     check = _cwd_check(cwd)
-    if not check.allowed:
-        return error_json(
-            tool,
-            check.error_code or "command_rejected",
-            check.message or "Command cwd is outside the workspace.",
-            outcome=OUTCOME_REJECTED,
-            permission=check.decision,
-            payload={"cwd": check.classification.display_path},
-        )
     path_check = command_path_policy_violation(
         command,
         workspace_root=runtime_workspace_root(),
@@ -158,15 +191,11 @@ def exec_handler(
                 permission=check.decision,
                 payload={"cwd": check.classification.display_path},
             )
-        except (CommandParseError, OSError, ValueError, subprocess.SubprocessError):
-            logger.warning("[agent_tools] background process start failed", exc_info=True)
-            return error_json(
-                tool,
-                "process_start_failed",
-                "Background process could not be started.",
-                outcome=OUTCOME_REJECTED,
-                permission=check.decision,
-                payload={"cwd": check.classification.display_path},
+        except (CommandParseError, FileNotFoundError, PermissionError, OSError, ValueError, subprocess.SubprocessError) as exc:
+            return _handle_command_start_error(
+                exc, tool=tool, permission=check.decision,
+                display_path=check.classification.display_path,
+                error_code="process_start_failed", label="Background process",
             )
         payload = manager.poll(record.process_id) or {}
         payload["duplicate"] = duplicate
@@ -182,15 +211,11 @@ def exec_handler(
             timeout_ms=timeout_ms,
             stdin=stdin,
         )
-    except (CommandParseError, OSError, ValueError, subprocess.SubprocessError):
-        logger.warning("[agent_tools] synchronous command start failed", exc_info=True)
-        return error_json(
-            tool,
-            "command_rejected",
-            "Command could not be started.",
-            outcome=OUTCOME_REJECTED,
-            permission=check.decision,
-            payload={"cwd": check.classification.display_path},
+    except (CommandParseError, FileNotFoundError, PermissionError, OSError, ValueError, subprocess.SubprocessError) as exc:
+        return _handle_command_start_error(
+            exc, tool=tool, permission=check.decision,
+            display_path=check.classification.display_path,
+            error_code="command_start_failed", label="Command",
         )
     stdout, stdout_truncated = _bounded(result.stdout, log_cap)
     stderr, stderr_truncated = _bounded(result.stderr, log_cap)
