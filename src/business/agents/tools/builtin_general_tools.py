@@ -57,9 +57,11 @@ from src.business.agents.tools.builtin_permissions import (
     build_exec_summary,
     build_write_summary,
     clear_external_read_confirmations_for_tests,
+    clear_external_write_confirmations_for_tests,
     command_path_policy_violation,
     is_safe_exec_command,
     mark_external_read_confirmed,
+    mark_external_write_confirmed,
     permission_for_path,
     _truncate_summary,
 )
@@ -308,6 +310,7 @@ def reset_confirmation_state_for_tests() -> None:
         _auto_approve_enabled = False
     _confirm_signal = None
     clear_external_read_confirmations_for_tests()
+    clear_external_write_confirmations_for_tests()
 
 
 def _ask_user_confirm(
@@ -1312,7 +1315,13 @@ def read_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
 
 def write_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     p = _resolve_path_arg(ctx)
-    check = permission_for_path(p, operation="write")
+    check = permission_for_path(p, operation="write", session_id=ctx.session_id)
+    if check.decision.decision == "confirmation_required":
+        rejected = _confirm_or_reject("write_file", check.decision.summary or build_write_summary(p))
+        if rejected is not None:
+            return rejected
+        mark_external_write_confirmed(p, session_id=ctx.session_id)
+        return None
     if not check.allowed:
         return PreHookResult(
             error=check.message or "文件写入被权限策略拒绝",
@@ -1324,7 +1333,16 @@ def write_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
 
 def edit_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
     p = _resolve_path_arg(ctx)
-    check = permission_for_path(p, operation="edit")
+    check = permission_for_path(p, operation="edit", session_id=ctx.session_id)
+    if check.decision.decision == "confirmation_required":
+        rejected = _confirm_or_reject(
+            "edit_file",
+            check.decision.summary or build_edit_summary(p, "", "", baseline_id=""),
+        )
+        if rejected is not None:
+            return rejected
+        mark_external_write_confirmed(p, session_id=ctx.session_id)
+        return None
     if not check.allowed:
         return PreHookResult(
             error=check.message or "文件编辑被权限策略拒绝",
@@ -1347,6 +1365,45 @@ def edit_file_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
         "edit_file",
         build_edit_summary(p, old_text, new_text, baseline_id=str(baseline or "")),
     )
+
+
+def apply_patch_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
+    operations = ctx.args.get("operations")
+    if not isinstance(operations, list) or not operations:
+        return None  # 让 handler 用 patch_validation_failed 拒
+    confirmed_once = False
+    for op in operations:
+        if not isinstance(op, dict):
+            return PreHookResult(
+                error="Patch operation must be an object",
+                error_code="patch_validation_failed",
+            )
+        target_path = op.get("path")
+        op_type = str(op.get("type") or "").lower()
+        if op_type not in {"add", "update", "delete"} or not target_path:
+            return PreHookResult(
+                error="Invalid patch operation",
+                error_code="patch_validation_failed",
+            )
+        check = permission_for_path(target_path, operation="patch", session_id=ctx.session_id)
+        if check.decision.decision == "confirmation_required":
+            # 整批外部 patch 只走一次确认（避免重复审计）；确认后 mark 每个 target，本会话同文件不再问
+            if not confirmed_once:
+                rejected = _confirm_or_reject(
+                    "apply_patch",
+                    check.decision.summary or f"apply_patch (outside workspace): {target_path}",
+                )
+                if rejected is not None:
+                    return rejected
+                confirmed_once = True
+            mark_external_write_confirmed(target_path, session_id=ctx.session_id)
+            continue
+        if not check.allowed:
+            return PreHookResult(
+                error=check.message or "Patch target rejected",
+                error_code=check.error_code or "permission_denied",
+            )
+    return None
 
 
 def list_dir_pre_hook(ctx: ToolCallContext) -> PreHookResult | None:
@@ -1969,6 +2026,7 @@ BUILTIN_GENERAL_TOOLS: List[ToolDefinition] = [
         name="apply_patch",
         schema=APPLY_PATCH_SCHEMA,
         handler=apply_patch_handler,
+        pre_hook=apply_patch_pre_hook,
     ),
     ToolDefinition(
         name="search_files",

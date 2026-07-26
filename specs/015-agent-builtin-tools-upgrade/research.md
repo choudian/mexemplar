@@ -16,6 +16,13 @@
 - Replace the module with a package in one step. Rejected because it increases migration risk without improving the public contract.
 - Keep all implementation in one file. Rejected because path policy, patching, process lifecycle, and compaction would become hard to verify.
 
+> **Amendment 2026-07-26**: The "outside-workspace mutation is rejected" stance below is
+> reversed for `write/edit/delete/patch` under a user-enabled process-session "allow_all"
+> toggle — they now route through the high-risk confirmation chain (audited
+> `auto_approved`/`auto_scope`), still rejected by default. Outside-workspace execution is
+> unchanged (still rejected). See `docs/PROJECT_CONSTRAINTS.md` and the controlled-exception
+> registry in `.specify/memory/constitution.md`.
+
 ## Decision: Enforce workspace policy with canonical resolved paths before handler mutation or execution
 
 **Rationale**: The spec distinguishes external reads from external writes/deletes/patches/execution. A central policy object can resolve relative traversal, absolute paths, hidden/system/link targets, and symlink escapes consistently before any handler side effect. Outside-workspace reads become high-risk confirmation candidates; outside-workspace mutation and execution are rejected.

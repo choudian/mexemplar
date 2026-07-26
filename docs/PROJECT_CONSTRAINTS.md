@@ -30,7 +30,7 @@
 - 已升级的通用内置工具必须返回统一 JSON envelope（必含 `schemaVersion`、`tool`、`outcome`、`payload`、`createdAt`，按需含 `error`、`permission`、`limits`、`references`、`warnings`、`verification`）；AgentLoop 保存工具结果时必须经 output governance，畸形结果必须收敛为不含原文的 `handler_contract_violation`，并确保接受、拒绝、未知工具、handler 异常、跳过和 fallback 路径都只有一条配对 tool result。
 - 文件读取只能返回有界文本窗口、行号/续读元数据、脱敏内容和 raw-byte baseline；二进制、媒体和解码失败不得把 raw bytes 写入 tool result、普通日志或 UI event。
 - 已存在文件的 `write_file`、`edit_file`、`apply_patch` update/delete 必须提供当前 baseline；baseline 缺失或过期必须在落盘前拒绝。新文件创建可以没有 baseline，但仍受 workspace 写权限和确认约束。
-- workspace 外读取只能作为高风险检查路径，经确认后短期放行；workspace 外写入、删除和 patch 仍一律 fail-closed。`exec` 只允许 workspace 内 cwd；命令参数中的显式 workspace 外目标属于高风险确认级，只有单次确认或当前进程会话级“全部允许”后才可执行；含独立 `..` 路径段的相对穿越始终 fail-closed，不得用 symlink 或 cwd 切换绕过。
+- workspace 外读取只能作为高风险检查路径，经确认后短期放行；workspace 外写入、删除和 patch 默认走 `_confirm_or_reject` 确认链——用户开启“全部允许”则短路放行并记审计，未开启则逐次弹确认（确认后本会话同文件不再问）。OS 系统路径（`C:\Windows`、`C:\Program Files` 等）与 execute 始终硬拒，不受“全部允许”覆盖。`exec` 只允许 workspace 内 cwd；命令参数中的显式 workspace 外目标属于高风险确认级，只有单次确认或当前进程会话级“全部允许”后才可执行；含独立 `..` 路径段的相对穿越始终 fail-closed，不得用 symlink 或 cwd 切换绕过。
 - `search_files` / `search_content` 必须使用结构化遍历、默认忽略依赖/构建/缓存目录、稳定排序、有界分页和脱敏摘要；不要恢复通过 shell `find`/`grep` 解析结果的默认路径。
 - `exec` 和 process lifecycle 工具只允许 workspace 内 cwd，并以解析后的 argv 直接启动子进程，runner 不使用 `shell=True`。换行、管道、重定向、命令连接符、反引号、含独立 `..` 路径段的相对穿越和内联解释器代码必须在执行前硬拒绝，当前进程会话级“全部允许”也不能覆盖；shell host、显式 workspace 外 executable 和 workspace 外路径参数必须经过高风险确认，确认后仍作为 argv 子进程直接启动。同步命令输出必须截断并脱敏，后台进程数、日志窗口和等待时间必须受统一配置上限约束；进程记录只在当前 sidecar 进程会话内有效，重启后的未知 `proc_*` 必须返回 unavailable 而不是尝试复用系统进程。
 - 大输出原文只能由 `ToolOutputRepository` 管理的私有 blob + SQLite metadata 持久化；业务层不得直接写 tool-output SQL 或暴露 blob 路径。`load_tool_output` 必须按 owner session + workspace 授权、有界窗口读取、脱敏并处理 expired / missing blob；`tool_call_id` 只记录来源，不是授权因子。过期或软删除 blob 删除失败时必须保留可重试清理路径。
@@ -186,7 +186,7 @@ Reviewer 必须拒绝下列改动：
 - 在 handler 中保留已经迁移到 pre_hook 的拒绝、确认、限流或安全策略分支。
 - 让已升级内置工具返回旧的纯文本成功/失败形态，或绕过 AgentLoop output governance 直接保存工具结果。
 - 在业务层、desktop API、前端或 Tauri 层直接管理内置工具执行状态、后台进程 registry、tool-output SQL 或私有 blob 路径。
-- 让既有文件写入/编辑/patch 在缺少当前 baseline 时落盘，或允许 workspace 外写入、删除、patch；让 `exec` 在 workspace 外 cwd 运行、未经确认使用 shell host/显式 workspace 外目标，或让自动放行覆盖控制语法、内联代码与 `..` 路径穿越硬门卫。
+- 让既有文件写入/编辑/patch 在缺少当前 baseline 时落盘，或在未经用户确认（逐次或“全部允许”）时让 workspace 外写入、删除、patch 落盘；让 `exec` 在 workspace 外 cwd 运行、未经确认使用 shell host/显式 workspace 外目标，或让自动放行覆盖控制语法、内联代码与 `..` 路径穿越硬门卫。
 - 将 assistant 高危确认改回模态阻塞确认，或让普通 Toast 与高危确认浮层复用同一个生命周期引用。
 - 让 Assistant 终止失败只存在于乐观前端消息、绕过 Repository 状态机重试，或把原始 provider 错误暴露到普通聊天 DTO、UI event、Toast 或日志。
 - 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。

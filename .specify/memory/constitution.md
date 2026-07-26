@@ -93,6 +93,18 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
   未授权高危动作立即按拒绝处理，不空等超时且不得被全局开关越权，FR-023）。爆炸半径焊死
   在「仅该 scheduled 会话的高危动作」，列表层一眼可见、详情页可显式开启或回收。详见
   `docs/PROJECT_CONSTRAINTS.md` CC-005 与 `specs/033-scheduling-center/`。
+- **受控例外登记（workspace 外写走确认链，2026-07-26）**：workspace 外 `write_file` /
+  `edit_file` / `apply_patch`（含 delete 子操作）默认走 `_confirm_or_reject` 确认链——用户
+  开启进程会话级「全部允许」（`_auto_approve_enabled`）则短路放行并记 `auth_confirmation_decision`
+  审计（`decision=auto_approved, source=auto_scope`），未开启则逐次弹确认（确认后本会话同文件
+  不再问）。它 MUST 满足：(1) 只对 `write/edit/delete/patch` 操作生效，`execute` 的 cwd 与
+  控制语法/内联代码/`..` 穿越硬门卫，以及 OS 系统路径（`C:\Windows`、`C:\Program Files` 等）
+  **继续不受覆盖、始终硬拒**；(2) `_self_improvement_mutation_denial`（builtin_permissions
+  inside-workspace 守卫）**正交不动**；(3) 本会话确认缓存只在进程内存（重启 / 新会话 reset /
+  停止清空），不持久化；(4) proposal executor 派发源头守卫
+  `_assert_proposal_executor_workspace_or_raise` 仍 fail-closed，与 allow_all 状态无关。
+  详见 `docs/PROJECT_CONSTRAINTS.md` Agent Built-in Tool Boundaries 与
+  `specs/015-agent-builtin-tools-upgrade/`。
 
 ## Workflow & Review
 

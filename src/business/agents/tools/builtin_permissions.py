@@ -230,6 +230,10 @@ _INLINE_CODE_FLAGS = {
 
 _confirmed_external_reads: set[tuple[str, str, str]] = set()
 _confirmed_external_reads_lock = threading.Lock()
+# workspace 外写的本会话确认缓存（镜像读：pre_hook 确认后 mark，permission_for_path 后续返回 confirmed）。
+# 文件级粒度（与读一致）；allow_all 关时每个外部文件首次写走确认，确认后本会话同文件不再问。
+_confirmed_external_writes: set[tuple[str, str, str]] = set()
+_confirmed_external_writes_lock = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -379,6 +383,34 @@ def _is_external_read_confirmed(cls: PathClassification, *, session_id: str | No
         return _external_read_key(cls, session_id=session_id) in _confirmed_external_reads
 
 
+def mark_external_write_confirmed(
+    path: str | Path,
+    workspace_root: Path | str | None = None,
+    *,
+    session_id: str | None = None,
+) -> None:
+    cls = classify_path(path, workspace_root=workspace_root)
+    with _confirmed_external_writes_lock:
+        _confirmed_external_writes.add(_external_write_key(cls, session_id=session_id))
+
+
+def clear_external_write_confirmations_for_tests() -> None:
+    with _confirmed_external_writes_lock:
+        _confirmed_external_writes.clear()
+
+
+def _external_write_key(
+    cls: PathClassification, *, session_id: str | None = None
+) -> tuple[str, str, str]:
+    sid = (session_id or "_default_agent_session").strip() or "_default_agent_session"
+    return (sid, workspace_hash(cls.workspace_root), str(cls.resolved))
+
+
+def _is_external_write_confirmed(cls: PathClassification, *, session_id: str | None = None) -> bool:
+    with _confirmed_external_writes_lock:
+        return _external_write_key(cls, session_id=session_id) in _confirmed_external_writes
+
+
 def permission_for_path(
     path: str | Path,
     *,
@@ -478,6 +510,35 @@ def permission_for_path(
             ),
             "path_outside_workspace",
             "Outside-workspace read requires high-risk confirmation.",
+        )
+
+    # workspace 外的写/编辑/patch 默认走确认链（像读一样），由 pre_hook 的
+    # confirmation_required 分支接入 _confirm_or_reject：allow_all 开则短路放行并记审计，
+    # 关则弹确认卡让用户逐次决定。OS 系统路径已在上面 cls.system 分支硬拒；
+    # execute 仍硬拒（落到下方 denied）。
+    if op in mutation_ops:
+        if _is_external_write_confirmed(cls, session_id=session_id):
+            return PermissionCheck(
+                cls,
+                PermissionDecision(
+                    scope=cls.scope,
+                    risk="elevated",
+                    decision="confirmed",
+                    summary=f"{op}: {cls.display_path} (outside workspace, confirmed this session)",
+                    reason="outside_workspace_write_confirmed",
+                ),
+            )
+        return PermissionCheck(
+            cls,
+            PermissionDecision(
+                scope=cls.scope,
+                risk="elevated",
+                decision="confirmation_required",
+                summary=f"{op}: {cls.display_path} (outside workspace)",
+                reason="outside_workspace_write_requires_confirmation",
+            ),
+            "path_outside_workspace",
+            "Outside-workspace mutation requires confirmation.",
         )
 
     return PermissionCheck(

@@ -1,7 +1,7 @@
 """门卫：执行体 workspace 重定向注入（坐实 D4 承重假设 / FR-014a 文件爆炸半径）。
 
 经 AgentLoop 端到端验证：当 ``AgentConfig.workspace_root`` 注入为指定根目录时，
-执行体的 write_file 实际以该根为 workspace——根内放行、根外 fail-closed。
+执行体的 write_file 实际以该根为 workspace——根内放行；根外在 allow_all 关闭时 fail-closed，开启时经确认链放行（反转自 2026-07-26，原 FR-003 外部写硬拒改为可由全部允许覆盖）。
 
 设计要点：
 - ``monkeypatch.chdir`` 到一个**与注入根不同的临时目录**，确保 ``cwd != workspace_root``。
@@ -101,10 +101,11 @@ def test_injected_workspace_root_resolves_relative_write_inside(tmp_path, monkey
     assert not (cwd_dir / "inside.txt").exists()
 
 
-def test_injected_workspace_root_blocks_write_outside(tmp_path, monkeypatch, mock_config):
-    """注入 workspace_root 后，根外写文件 fail-closed（FR-014a 文件爆炸半径）。
+def test_injected_workspace_root_allows_write_outside_under_allow_all(tmp_path, monkeypatch, mock_config):
+    """allow_all 开启时，根外写文件经确认链放行（反转 FR-003 外部写硬边界）。
 
-    越界写 MUST 被拒且无副作用——文件不得被创建。
+    autouse fixture 已开 allow_all=True，越界写走 _confirm_or_reject 短路放行并记审计，
+    落盘成功。
     """
     wt_root = tmp_path / "wt_root"
     wt_root.mkdir()
@@ -113,8 +114,8 @@ def test_injected_workspace_root_blocks_write_outside(tmp_path, monkeypatch, moc
     monkeypatch.chdir(cwd_dir)
     outside = cwd_dir / "outside.txt"
 
-    payload = _run_write(wt_root, outside, "ws-redir-outside", mock_config)
+    payload = _run_write(wt_root, outside, "ws-redir-outside-allow", mock_config)
 
-    assert payload["outcome"] == "rejected"
-    assert payload["error"]["code"] == "path_outside_workspace"
-    assert not outside.exists()  # 无副作用：越界文件未被创建
+    assert payload["outcome"] == "success"
+    assert outside.exists()
+    assert outside.read_text(encoding="utf-8") == "x"

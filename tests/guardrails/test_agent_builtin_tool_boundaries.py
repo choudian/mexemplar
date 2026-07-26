@@ -7,7 +7,9 @@ from src.business.agents.tools import file_tools
 from src.business.agents.tools.builtin_permissions import (
     build_edit_summary,
     build_exec_summary,
+    clear_external_write_confirmations_for_tests,
     mark_external_read_confirmed,
+    mark_external_write_confirmed,
     permission_for_path,
 )
 from src.business.agents.tools.output_governance import get_tool_output_health_counters
@@ -68,6 +70,62 @@ def test_outside_workspace_mutation_rejects_before_side_effect(tmp_path, monkeyp
         assert not outside.exists()
     finally:
         outside.unlink(missing_ok=True)
+
+
+def test_permission_for_path_outside_write_branches(tmp_path):
+    """workspace 外写的确认分支：未确认 → confirmation_required；mark 后 → confirmed；execute 仍 denied。"""
+    clear_external_write_confirmations_for_tests()
+    try:
+        inside = tmp_path / "inside.txt"
+        inside.write_text("x", encoding="utf-8")
+        outside = tmp_path.parent / "outside-perm.txt"
+
+        # inside workspace：写放行
+        assert permission_for_path(
+            inside, operation="write", workspace_root=tmp_path
+        ).allowed
+
+        # outside read：始终 confirmation_required（读确认链）
+        assert (
+            permission_for_path(
+                outside, operation="read", workspace_root=tmp_path
+            ).decision.decision
+            == "confirmation_required"
+        )
+
+        # outside write 未 mark：confirmation_required（默认走确认卡，不再硬拒）
+        assert (
+            permission_for_path(
+                outside, operation="write", workspace_root=tmp_path
+            ).decision.decision
+            == "confirmation_required"
+        )
+
+        # outside write mark 后：confirmed（本会话同文件不再问）
+        mark_external_write_confirmed(outside, workspace_root=tmp_path)
+        assert (
+            permission_for_path(
+                outside, operation="write", workspace_root=tmp_path
+            ).decision.decision
+            == "confirmed"
+        )
+
+        # outside edit/patch/delete mark 后同样 confirmed
+        for op in ("edit", "patch", "delete"):
+            decision = permission_for_path(
+                outside, operation=op, workspace_root=tmp_path
+            ).decision.decision
+            assert decision == "confirmed", op
+
+        # execute 始终 denied（不受 mark 影响）
+        assert (
+            permission_for_path(
+                outside, operation="execute", workspace_root=tmp_path
+            ).decision.decision
+            == "denied"
+        )
+    finally:
+        clear_external_write_confirmations_for_tests()
 
 
 def test_external_read_confirmation_is_scoped_to_session_and_workspace(tmp_path, monkeypatch):

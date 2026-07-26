@@ -581,7 +581,13 @@ def write_file_handler(
 ) -> str:
     tool = "write_file"
     root = _workspace_root()
-    check = permission_for_path(path, operation="write", workspace_root=root)
+    runtime = current_tool_runtime()
+    check = permission_for_path(
+        path,
+        operation="write",
+        workspace_root=root,
+        session_id=runtime.session_id if runtime is not None else None,
+    )
     if not check.allowed:
         return _mutation_permission_error(tool, check)
     target = check.classification.resolved
@@ -695,7 +701,13 @@ def edit_file_handler(
 ) -> str:
     tool = "edit_file"
     root = _workspace_root()
-    check = permission_for_path(path, operation="edit", workspace_root=root)
+    runtime = current_tool_runtime()
+    check = permission_for_path(
+        path,
+        operation="edit",
+        workspace_root=root,
+        session_id=runtime.session_id if runtime is not None else None,
+    )
     if not check.allowed:
         return _mutation_permission_error(tool, check)
     target = check.classification.resolved
@@ -775,6 +787,7 @@ def edit_file_handler(
 def apply_patch_handler(operations: list[dict[str, Any]]) -> str:
     tool = "apply_patch"
     root = _workspace_root()
+    runtime = current_tool_runtime()
     if not isinstance(operations, list) or not operations:
         return error_json(
             tool,
@@ -790,7 +803,12 @@ def apply_patch_handler(operations: list[dict[str, Any]]) -> str:
         target_path = op.get("path")
         if op_type not in {"add", "update", "delete"} or not target_path:
             return _patch_rejected(op_id, "patch_validation_failed", "Invalid patch operation.")
-        check = permission_for_path(target_path, operation="patch", workspace_root=root)
+        check = permission_for_path(
+            target_path,
+            operation="patch",
+            workspace_root=root,
+            session_id=runtime.session_id if runtime is not None else None,
+        )
         if not check.allowed:
             return _patch_rejected(
                 op_id,

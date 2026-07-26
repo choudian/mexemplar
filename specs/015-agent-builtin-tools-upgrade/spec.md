@@ -5,6 +5,16 @@
 **Status**: Completed
 **Input**: User description: "Upgrade Agent built-in foundational tools for file reading, writing, editing, searching, terminal/process execution, permission handling, and tool-result output governance so long-running Agent workflows have stable contracts, pagination/truncation, safety boundaries, recoverability, and testability."
 
+> **Amendment 2026-07-26**: The "outside-workspace writes/deletes/patches are rejected" rule
+> (FR-003, Clarifications, Decision) is **reversed for `write/edit/delete/patch`**: these now
+> route through the high-risk confirmation chain by default — "allow_all" short-circuits the
+> confirmation (audited `auto_approved`/`auto_scope`), otherwise the user is prompted per file
+> (confirmed files skip subsequent prompts within the session). OS system paths
+> (`C:\Windows`, `C:\Program Files`, etc.) and outside-workspace **execution** remain
+> hard-rejected regardless of allow_all. The `_self_improvement_mutation_denial` inside-workspace
+> guard is orthogonal and unchanged. Source of truth: `docs/PROJECT_CONSTRAINTS.md` (Agent
+> Built-in Tool Boundaries) and `.specify/memory/constitution.md` (controlled-exception registry).
+
 ## Clarifications
 
 ### Session 2026-06-08
