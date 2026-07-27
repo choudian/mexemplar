@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+from dataclasses import replace
 from typing import Any
 
 from src.business.agents.tools.builtin_config import get_config_int
@@ -84,8 +85,28 @@ def _bounded(text: str, cap: int) -> tuple[str, bool]:
 
 
 def _cwd_check(cwd: str | None):
-    return permission_for_path(
+    """解析 exec 的 cwd，并给出与实际边界一致的审计决策。
+
+    8e75333 砍掉 cwd 的 workspace 限制后，exec 不再消费 ``permission_for_path`` 的
+    ``allowed``——它只用于解析路径。若原样沿用其对 workspace 外 execute 的 ``denied``，
+    返回体的 permission 字段就会与实际行为相反（报拒绝、却 exitCode=0），据此读日志会
+    得出错误结论。这里把决策改成反映真实边界：OS 系统路径由
+    ``command_path_policy_violation`` 硬拒（``_cwd_targets_system_path``），其余 cwd 放行。
+    """
+    check = permission_for_path(
         cwd or ".", operation="execute", workspace_root=runtime_workspace_root()
+    )
+    if check.allowed:
+        return check
+    return replace(
+        check,
+        decision=replace(
+            check.decision,
+            decision="allowed",
+            reason="outside_workspace_cwd_allowed",
+        ),
+        error_code=None,
+        message=None,
     )
 
 
@@ -150,6 +171,8 @@ def exec_handler(
         command,
         workspace_root=runtime_workspace_root(),
         base_dir=check.classification.resolved,
+        # 传已解析的绝对 cwd（而非原始相对值），避免与 base_dir 重复拼接
+        cwd=check.classification.resolved,
     )
     if path_check is not None:
         return error_json(

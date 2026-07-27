@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -60,6 +61,38 @@ def test_exec_allows_external_cwd(tmp_path, monkeypatch):
 
     # 不再因外部 cwd 被拒;脚本能否跑通取决于路径,权限层不再拦
     assert result["outcome"] != "rejected"
+
+
+def test_exec_permission_field_matches_actual_outcome(tmp_path, monkeypatch):
+    """外部 cwd 执行成功时 permission 不得报 denied——审计字段必须与实际行为一致。
+
+    8e75333 删掉 `if not check.allowed` 后，permission_for_path 对 workspace 外 execute
+    仍返回 denied，而该结果只被拿去填返回体，于是出现「报拒绝、却 exitCode=0」的撒谎
+    审计。日志据此判断会得出与事实相反的结论。
+    """
+    monkeypatch.chdir(tmp_path)
+    outside = tmp_path.parent / "outside-permission-probe"
+    outside.mkdir(exist_ok=True)
+
+    result = _obj(command_tools.exec_handler("whoami", cwd=str(outside)))
+
+    assert result["outcome"] == "success"
+    assert result["permission"]["decision"] != "denied"
+
+
+def test_exec_rejects_os_system_path_as_cwd(tmp_path, monkeypatch):
+    """handler 层同样拒绝 OS 系统路径 cwd——不能靠绕过 pre_hook 直调 handler 逃掉。
+
+    参数扫描只看 tokens[1:]，`whoami` 这类命令串里没有绝对路径，若不查 cwd 就会在
+    C:\\Windows 里执行成功（8e75333 删掉 `if not check.allowed` 后的回归）。
+    """
+    monkeypatch.chdir(tmp_path)
+    system_cwd = "C:/Windows" if os.name == "nt" else "/etc"
+
+    result = _obj(command_tools.exec_handler("whoami", cwd=system_cwd))
+
+    assert result["outcome"] == "rejected"
+    assert result["error"]["code"] == "command_rejected"
 
 
 def test_exec_no_longer_rejects_path_reader_targeting_outside_workspace(tmp_path, monkeypatch):

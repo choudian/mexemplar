@@ -227,6 +227,47 @@ def test_os_system_path_in_command_arg_hard_rejected(tmp_path, monkeypatch) -> N
     assert result.error_code == "command_rejected"
 
 
+def test_os_system_path_as_cwd_hard_rejected(tmp_path, monkeypatch) -> None:
+    """cwd 落在 OS 系统路径硬拒——命令参数扫描只看 tokens[1:]，挡不住相对路径操作。
+
+    8e75333 砍掉 cwd 的 workspace 限制后，`exec(command="rm -rf System32",
+    cwd="C:/Windows")` 的命令串里没有任何绝对路径，参数扫描完全放行。红线必须同时
+    管住「站在哪」，否则等价于 `rm -rf C:/Windows/System32` 却能绕过。
+    """
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    system_cwd = "C:/Windows" if os.name == "nt" else "/etc"
+
+    result = general_tools.exec_pre_hook(_exec_context("rm -rf System32", cwd=system_cwd))
+
+    assert result is not None
+    assert result.error_code == "command_rejected"
+
+
+def test_os_system_subdir_as_cwd_hard_rejected(tmp_path, monkeypatch) -> None:
+    """系统路径的子目录同样硬拒（is_relative_to 覆盖整棵树）。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    system_cwd = "C:/Windows/System32" if os.name == "nt" else "/etc/ssl"
+
+    result = general_tools.exec_pre_hook(_exec_context("whoami", cwd=system_cwd))
+
+    assert result is not None
+    assert result.error_code == "command_rejected"
+
+
+def test_external_non_system_cwd_still_allowed(tmp_path, monkeypatch) -> None:
+    """workspace 外的普通 cwd 仍随 allow_all 放行——只补系统路径，不恢复 workspace 限制。"""
+    monkeypatch.chdir(tmp_path)
+    general_tools.set_auto_approve_enabled(True, general_tools.CONFIRM_SOURCE_TOAST_ALLOW_ALL)
+    outside = tmp_path.parent / "outside-cwd-probe"
+    outside.mkdir(exist_ok=True)
+
+    result = general_tools.exec_pre_hook(_exec_context("whoami", cwd=str(outside)))
+
+    assert result is None
+
+
 def test_python_command_short_circuits_under_auto_approval(tmp_path, monkeypatch) -> None:
     """删 allowlist 后 python script.py 不再特殊放行，但仍随 allow_all 默认短路。"""
     monkeypatch.chdir(tmp_path)

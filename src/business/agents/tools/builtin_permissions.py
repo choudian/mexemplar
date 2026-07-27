@@ -505,8 +505,13 @@ def permission_for_path(
 
     # workspace 外的写/编辑/patch 默认走确认链（像读一样），由 pre_hook 的
     # confirmation_required 分支接入 _confirm_or_reject：allow_all 开则短路放行并记审计，
-    # 关则弹确认卡让用户逐次决定。OS 系统路径已在上面 cls.system 分支硬拒；
-    # execute 仍硬拒（落到下方 denied）。
+    # 关则弹确认卡让用户逐次决定。OS 系统路径已在上面 cls.system 分支硬拒。
+    #
+    # execute 落到下方 denied，但这**不是 exec 的实际边界**：8e75333 砍掉 cwd 的 workspace
+    # 限制后，exec 的唯一调用方 command_tools._cwd_check 只取这里的路径解析结果，不消费
+    # allowed（并把 denied 规范化成 allowed 以免审计撒谎）。exec 的真实硬拒在
+    # command_path_policy_violation：OS 系统路径（命令参数 + cwd 各一道）、
+    # self-improvement worktree 守卫、命令 parse 失败。改这里前先看那边。
     if op in mutation_ops:
         if _is_external_write_confirmed(cls, session_id=session_id):
             return PermissionCheck(
@@ -878,11 +883,33 @@ def _command_targets_system_path(tokens: list[str]) -> bool:
     return False
 
 
+def _cwd_targets_system_path(cwd: str | Path | None, *, base: Path) -> bool:
+    """exec 的工作目录是否落在 OS 系统路径内。
+
+    ``_command_targets_system_path`` 只扫 ``tokens[1:]``，而 8e75333 之后 cwd 不再受
+    workspace 限制，于是 ``exec(command="rm -rf System32", cwd="C:/Windows")`` 的命令串
+    里没有任何绝对路径可扫，等价操作却能整个绕过 OS 路径红线。这里补上工作目录本身的
+    判定：红线要同时管住「手里拿什么」和「站在哪」。
+
+    解析失败 fail-closed 当命中——路径畸形到 resolve 不了时，宁可拒。
+    """
+    raw = str(cwd or ".").strip().strip("'\"")
+    if not raw:
+        return False
+    try:
+        candidate = Path(raw).expanduser()
+        resolved = candidate if candidate.is_absolute() else (base / candidate)
+        return _is_system_path(resolved.resolve(strict=False))
+    except (OSError, ValueError):
+        return True
+
+
 def command_path_policy_violation(
     command: str,
     *,
     workspace_root: Path | str | None = None,
     base_dir: Path | str | None = None,
+    cwd: str | Path | None = None,
 ) -> PermissionCheck | None:
     root = resolve_workspace_root(workspace_root)
     base = Path(base_dir).expanduser().resolve() if base_dir is not None else root
@@ -899,6 +926,15 @@ def command_path_policy_violation(
             root=root,
             message="Command targets an OS system-protected path (e.g. C:\\Windows, /etc).",
             reason="system_path_target_denied",
+        )
+    if _cwd_targets_system_path(cwd, base=base):
+        return _command_policy_rejection(
+            root=root,
+            message=(
+                "Command working directory is an OS system-protected path "
+                "(e.g. C:\\Windows, /etc)."
+            ),
+            reason="system_path_cwd_denied",
         )
     improvement_denial = _self_improvement_exec_denial(
         command,

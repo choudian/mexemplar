@@ -1,10 +1,16 @@
 <!--
 Sync Impact Report
-Version change: 3.0.0 -> 3.1.0
+Version change: 3.1.0 -> 3.2.0
 Modified principles:
-- Engineering Guardrails: registered the 033 Scheduling Center CC-005 controlled
-  exception for persistent per-task unattended approval, including its scope,
-  UI-only activation, tool non-exposure, and fail-closed decision ordering
+- Engineering Guardrails: registered the second controlled exception
+  (workspace-external writes routed through the confirmation chain, 513b9b8),
+  then narrowed the exec gate set to three hard denials (8e75333) and corrected
+  the wording against the shipped code (2026-07-27). The earlier "workspace-external
+  write is fail-closed and never covered by allow-all" boundary is reversed: it now
+  goes through _confirm_or_reject, with allow-all short-circuiting it.
+- Technology Stack: corrected the SQLite migration mechanism — it is the hand-written
+  _MIGRATIONS version chain in src/data/migrations.py, not Alembic (alembic appears
+  only in the dependency list; src/ has zero references).
 Added sections:
 - None
 Removed sections:
@@ -12,7 +18,10 @@ Removed sections:
 Templates requiring updates:
 - None (existing templates remain compatible)
 Follow-up TODOs:
-- None
+- None (the exec-cwd gap in the OS-system-path denial was closed on 2026-07-27:
+  _cwd_targets_system_path in builtin_permissions.py, wired into both exec_pre_hook
+  and exec_handler, covered by regression tests in test_builtin_exec_permissions.py
+  and test_builtin_command_tools.py)
 -->
 # Mexemplar Constitution
 
@@ -69,7 +78,9 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
 ## Engineering Guardrails
 
 - 当前主实现栈为 Python 3.11+（运行时 3.12）、Tauri 2 + React 18 + TypeScript/Vite、
-  FastAPI sidecar、Rust stable、SQLite（SQLAlchemy / Alembic 迁移）、DuckDB、
+  FastAPI sidecar、Rust stable、SQLite（SQLAlchemy ORM + `src/data/migrations.py` 手写版本函数链
+  `_MIGRATIONS`，启动时由 `sqlalchemy_manager` 调 `run_migrations()`；alembic 仅存于依赖清单，
+  `src/` 零引用，`migrations/versions/` 下的孤儿脚本从未执行）、DuckDB、
   Playwright、blinker、sqlglot、LangChain、mitmproxy 与自研 AgentLoop；浏览器扩展使用
   JavaScript（`src/recording/browser_extension/`）。旧 PyQt UI 已退休，不得恢复正常用户可触达
   的 PyQt fallback；涉及这些基础设施的改动 MUST 先说明兼容性影响。
@@ -97,9 +108,13 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
   `edit_file` / `apply_patch`（含 delete 子操作）默认走 `_confirm_or_reject` 确认链——用户
   开启进程会话级「全部允许」（`_auto_approve_enabled`）则短路放行并记 `auth_confirmation_decision`
   审计（`decision=auto_approved, source=auto_scope`），未开启则逐次弹确认（确认后本会话同文件
-  不再问）。它 MUST 满足：(1) 只对 `write/edit/delete/patch` 操作生效，`execute` 的 cwd 与
-  shell host 内联 flag（`bash -c` / `powershell -Command` / `cmd /c`）/内联代码/`..` 穿越硬门卫，以及 OS 系统路径（`C:\Windows`、`/etc` 等）
-  **继续不受覆盖、始终硬拒**；其他 shell 元字符经 shell 模式执行但不受"全部允许"短路（force_interactive）；allowlist 内开发命令可短路；(2) `_self_improvement_mutation_denial`（builtin_permissions
+  不再问）。它 MUST 满足：(1) 文件侧只对 `write/edit/delete/patch` 生效；`exec` 侧（2026-07-26
+  关卡收敛后）只剩三类不受覆盖的硬拒——OS 系统路径（`C:\Windows`、`/etc` 等，**命令参数与
+  cwd 各一道**）、self-improvement worktree 守卫（FR-413）、命令 parse 失败；shell host
+  内联 flag、内联代码、`..` 穿越、workspace 外 cwd（非系统路径）、shell 元字符和破坏性/网络
+  命令**均已回退为走确认链**并可被
+  「全部允许」短路，`SAFE_EXEC_COMMANDS` 8 条只读命令直接放行，执行效果兜底待 OS 沙箱补；
+  (2) `_self_improvement_mutation_denial`（builtin_permissions
   inside-workspace 守卫）**正交不动**；(3) 本会话确认缓存只在进程内存（重启 / 新会话 reset /
   停止清空），不持久化；(4) proposal executor 派发源头守卫
   `_assert_proposal_executor_workspace_or_raise` 仍 fail-closed，与 allow_all 状态无关。
@@ -126,4 +141,4 @@ plan/PR 中留下明确的例外说明。Rationale: 这个项目的高风险错�
 MINOR；文字澄清与非语义修订使用 PATCH。每次计划评审和合并评审都 MUST 做合规检查；
 如存在例外，必须在计划或 PR 中明示，而不是默默绕过。
 
-**Version**: 3.1.0 | **Ratified**: 2026-04-21 | **Last Amended**: 2026-07-19
+**Version**: 3.2.0 | **Ratified**: 2026-04-21 | **Last Amended**: 2026-07-27

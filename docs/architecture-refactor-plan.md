@@ -68,6 +68,7 @@
 
 ### 批次 5 task_collaboration
 - commit `960c7ed`：`run_control.py` / `cutover.py` 并入 `dispatcher.py`，`health.py` / `events.py` helper 并入 `service.py`，`failure_bridge.py` 并入 `adjudication.py`；保留 `TaskCollaborationCutoverGuard` 生产门卫，并未改动 `dispatcher.run_side_effect` 三事务幂等结构。
+  > 后续更正（2026-07-27，`7677eae`）：`TaskCollaborationCutoverGuard` **已删除**。它查最近 200 条 transition 里有没有 `*_started`（只看开始、不看完成），会被主助理自己早先那次简单委派的旧 transition 命中，把统一调度关在门外 → 回退 sync + 留下孤儿 root task。主助理串行已保证简单委派与统一调度不并发，guard 的迁移保护不再需要；`unified_dispatch_enabled` 保留作总开关。
 - 验证：`test_task_idempotency.py`、`test_task_idempotency_negative.py`、task dispatcher/cutover/failure bridge/adjudication/recovery/meeting/atomicity/board/question/todo、desktop assistant task API/event 指定集通过。
 
 ---
@@ -114,7 +115,8 @@
 ### 批次 5 task_collaboration（中）
 
 - **#9** `src/business/task_collaboration/`（18 文件 / 3412 行）合并 5 个浅模块 → 13 文件：`run_control`(15) / `health`(48) / `failure_bridge`(39) 并入 `service` / `dispatcher` / `adjudication`；`events.py` 8 个薄 emit 内联或合并进 `dispatcher`。
-- **红线 1**：`cutover.py`(62) 是**生产门卫**（`TaskCollaborationCutoverGuard`，`dispatcher.delegate_task` 前置），**不是测试样板——并入 `dispatcher.py`，不能删**。
+- ~~**红线 1**：`cutover.py`(62) 是**生产门卫**（`TaskCollaborationCutoverGuard`，`dispatcher.delegate_task` 前置），**不是测试样板——并入 `dispatcher.py`，不能删**。~~
+  > **已作废（2026-07-27，`7677eae`）**：这条红线当时是对的（重构期不能顺手删生产代码），但 guard 本身后来被证明是 bug——查历史 `started` 不查 `completed`，误拦已完成的委派。已连同 `test_assistant_task_cutover.py` 一并删除，`dispatcher.__init__` 只留 `cutover_guard=None` 兼容参数。
 - **红线 2**：**绝对不动 `dispatcher.py:361-414` `run_side_effect` 三事务幂等结构**（Tx1 plan → `execute()` 外部副作用必须在事务外 → Tx2 / Tx3 落定）。合并文件时别顺手"重构"它。
 - **验证**：`tests/business/agents/test_task_idempotency.py` + `test_task_idempotency_negative.py`（改后必跑）。
 

@@ -30,9 +30,9 @@
 - 已升级的通用内置工具必须返回统一 JSON envelope（必含 `schemaVersion`、`tool`、`outcome`、`payload`、`createdAt`，按需含 `error`、`permission`、`limits`、`references`、`warnings`、`verification`）；AgentLoop 保存工具结果时必须经 output governance，畸形结果必须收敛为不含原文的 `handler_contract_violation`，并确保接受、拒绝、未知工具、handler 异常、跳过和 fallback 路径都只有一条配对 tool result。
 - 文件读取只能返回有界文本窗口、行号/续读元数据、脱敏内容和 raw-byte baseline；二进制、媒体和解码失败不得把 raw bytes 写入 tool result、普通日志或 UI event。
 - 已存在文件的 `write_file`、`edit_file`、`apply_patch` update/delete 必须提供当前 baseline；baseline 缺失或过期必须在落盘前拒绝。新文件创建可以没有 baseline，但仍受 workspace 写权限和确认约束。
-- workspace 外读取只能作为高风险检查路径，经确认后短期放行；workspace 外写入、删除和 patch 默认走 `_confirm_or_reject` 确认链——用户开启“全部允许”则短路放行并记审计，未开启则逐次弹确认（确认后本会话同文件不再问）。OS 系统路径（`C:\Windows`、`C:\Program Files` 等）与 execute 始终硬拒，不受“全部允许”覆盖。`exec` 只允许 workspace 内 cwd；命令参数中的显式 workspace 外目标属于高风险确认级，只有单次确认或当前进程会话级“全部允许”后才可执行；含独立 `..` 路径段的相对穿越始终 fail-closed，不得用 symlink 或 cwd 切换绕过。
+- workspace 外读取只能作为高风险检查路径，经确认后短期放行；workspace 外写入、删除和 patch 默认走 `_confirm_or_reject` 确认链——用户开启“全部允许”则短路放行并记审计，未开启则逐次弹确认（确认后本会话同文件不再问）。文件路径落在 OS 系统路径（`C:\Windows`、`C:\Program Files` 等）时始终硬拒，不受“全部允许”覆盖。`exec` 的边界见下方 exec 条目——2026-07-26 关卡收敛后 cwd 不再限制在 workspace 内，`..` 穿越也已回退为走确认链。
 - `search_files` / `search_content` 必须使用结构化遍历、默认忽略依赖/构建/缓存目录、稳定排序、有界分页和脱敏摘要；不要恢复通过 shell `find`/`grep` 解析结果的默认路径。
-- `exec` 和 process lifecycle 工具只允许 workspace 内 cwd。命令经 shell 包装（`bash -c` / `cmd /c`，shell 二进制预解析绝对路径、命令串作单一 argv 喂 shell）执行；shell host 内联 flag（`bash -c` / `powershell -Command` / `cmd /c`）、内联解释器代码、含独立 `..` 路径段的相对穿越、命令参数命中 OS 系统路径必须硬拒绝，不受“全部允许”覆盖；其他 shell 元字符（管道/重定向/连接符/命令替换）经 shell 执行但即使“全部允许”也逐次确认（force_interactive）；allowlist 内开发命令（`python`/`pytest`/`git status` 等）可被“全部允许”短路。同步命令输出必须截断并脱敏，后台进程数、日志窗口和等待时间必须受统一配置上限约束；进程记录只在当前 sidecar 进程会话内有效，重启后的未知 `proc_*` 必须返回 unavailable 而不是尝试复用系统进程。
+- `exec` 和 process lifecycle 工具的命令经 shell 包装（`bash -c` / `cmd /c`，shell 二进制预解析绝对路径、命令串作单一 argv 喂 shell）执行。2026-07-26 关卡收敛后只剩三类硬拒绝、不受“全部允许”覆盖：OS 系统路径（`C:\Windows`、`/etc` 等）——**命令参数与 cwd 各一道**（`_command_targets_system_path` 只扫 `tokens[1:]`，`_cwd_targets_system_path` 补工作目录，两者缺一即可用相对路径绕过）、self-improvement worktree 守卫（FR-413）、命令 parse 失败（引号畸形/空命令）。`SAFE_EXEC_COMMANDS` 的 8 条只读命令直接放行；**其余一律走 `_confirm_or_reject` 确认链并可被“全部允许”短路**，包括 shell host 内联 flag（`bash -c` / `powershell -Command` / `cmd /c`）、内联解释器代码、含独立 `..` 路径段的相对穿越、workspace 外 cwd、shell 元字符（管道/重定向/连接符/命令替换）以及破坏性与网络命令。执行效果兜底（敏感文件读、出站网络）待 OS 沙箱补，当前应用层不拦。同步命令输出必须截断并脱敏，后台进程数、日志窗口和等待时间必须受统一配置上限约束；进程记录只在当前 sidecar 进程会话内有效，重启后的未知 `proc_*` 必须返回 unavailable 而不是尝试复用系统进程。
 - 大输出原文只能由 `ToolOutputRepository` 管理的私有 blob + SQLite metadata 持久化；业务层不得直接写 tool-output SQL 或暴露 blob 路径。`load_tool_output` 必须按 owner session + workspace 授权、有界窗口读取、脱敏并处理 expired / missing blob；`tool_call_id` 只记录来源，不是授权因子。过期或软删除 blob 删除失败时必须保留可重试清理路径。
 - 所有文本 tool result 都经过同一治理边界：小型 legacy/custom 结果保持原格式；原文达到阈值、handler 报告截断/裁剪、或已有 raw reference 时转 compact envelope。compact payload 的 `facts` 和 `preview` 是确定性权威信息；`semanticSummary` 永远是 `advisory=true` 的辅助信息，失败/超时/非法 JSON 时必须直接省略，不能覆盖 facts 或产生第二条 tool result。
 - 语义摘要输入必须在 provider 调用前脱敏，并把工具输出声明为不可信数据；模型输出在解析后再次脱敏并受固定 schema/字符上限约束。超过输入上限的选择预算固定保留 head、错误/异常/warning 上下文、均匀采样和 tail；模型调用受总超时、map 数量、并发和 token 上限控制，不做业务重试。
@@ -186,7 +186,7 @@ Reviewer 必须拒绝下列改动：
 - 在 handler 中保留已经迁移到 pre_hook 的拒绝、确认、限流或安全策略分支。
 - 让已升级内置工具返回旧的纯文本成功/失败形态，或绕过 AgentLoop output governance 直接保存工具结果。
 - 在业务层、desktop API、前端或 Tauri 层直接管理内置工具执行状态、后台进程 registry、tool-output SQL 或私有 blob 路径。
-- 让既有文件写入/编辑/patch 在缺少当前 baseline 时落盘，或在未经用户确认（逐次或“全部允许”）时让 workspace 外写入、删除、patch 落盘；让 `exec` 在 workspace 外 cwd 运行、未经确认使用 shell host/显式 workspace 外目标，或让自动放行覆盖控制语法、内联代码与 `..` 路径穿越硬门卫。
+- 让既有文件写入/编辑/patch 在缺少当前 baseline 时落盘，或在未经用户确认（逐次或“全部允许”）时让 workspace 外写入、删除、patch 落盘；让 `exec` 未经确认就运行（2026-07-26 关卡收敛后 shell host、内联代码、`..` 穿越、workspace 外 cwd 都已降为确认链，不再是硬门卫——Reviewer 应按「有没有走确认链」而非「有没有硬拒」来判），或让自动放行覆盖仅剩的三类硬拒（OS 系统路径——命令参数与 cwd 各一道、self-improvement worktree 守卫、命令 parse 失败）。
 - 将 assistant 高危确认改回模态阻塞确认，或让普通 Toast 与高危确认浮层复用同一个生命周期引用。
 - 让 Assistant 终止失败只存在于乐观前端消息、绕过 Repository 状态机重试，或把原始 provider 错误暴露到普通聊天 DTO、UI event、Toast 或日志。
 - 将自动放行状态持久化，或把未脱敏的文件内容、替换文本、命令体写入确认日志。
