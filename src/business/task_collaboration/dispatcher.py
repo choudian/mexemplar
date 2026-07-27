@@ -84,52 +84,10 @@ def _healing_actions_for(delivered_status: str) -> list[str]:
     return list(_HEALING_ACTIONS_BY_STATUS.get(delivered_status, _DEFAULT_HEALING_ACTIONS))
 
 
-LEGACY_ACTIVE_DELEGATION_EVENTS = frozenset(
-    {
-        "assistant_delegation_started",
-        "assistant_subagent_started",
-        "subagent_started",
-    }
-)
-
-
-@dataclass(frozen=True)
-class CutoverState:
-    enabled: bool
-    reason: str = ""
-
-
-class TaskCollaborationCutoverGuard:
-    """Decides whether unified task dispatch may start for a clean graph."""
-
-    def __init__(self, transition_repo: WorkflowTransitionRepository | None = None):
-        self._transition_repo = transition_repo or WorkflowTransitionRepository()
-        self._config = get_unified_config()
-
-    def evaluate(self) -> CutoverState:
-        config = self._config
-        if not config.get_assistant_tasks_unified_dispatch_enabled():
-            return CutoverState(False, "unified_dispatch_disabled")
-        if not config.get_assistant_tasks_clean_start_guard_enabled():
-            return CutoverState(True, "clean_start_guard_disabled")
-        if self._has_legacy_active_delegation():
-            return CutoverState(False, "legacy_active_delegation")
-        return CutoverState(True, "")
-
-    def assert_can_dispatch(self) -> None:
-        state = self.evaluate()
-        if not state.enabled:
-            raise RuntimeError(state.reason or "assistant_task_dispatch_disabled")
-
-    def _has_legacy_active_delegation(self) -> bool:
-        try:
-            return self._transition_repo.has_recent_event_types(LEGACY_ACTIVE_DELEGATION_EVENTS)
-        except Exception:
-            logger.warning(
-                "cutover guard could not read legacy transitions; assuming legacy active",
-                exc_info=True,
-            )
-            return True
+# TaskCollaborationCutoverGuard 已删除：主助理串行保证了简单委派和统一调度不会并发，
+# guard 的历史 transition 查询（只看 started 不看 completed）反而误拦已完成的委派，
+# 导致统一调度回退 sync + 留下孤儿 root task。原 023 CC-005 设计意图（防双写）
+# 由主助理串行保证；unified_dispatch_enabled 开关保留作为统一调度总开关。
 
 
 def graph_cancel_key(graph_id: str) -> str:
@@ -148,13 +106,13 @@ class TaskDispatcher:
     def __init__(
         self,
         *,
-        cutover_guard: TaskCollaborationCutoverGuard | None = None,
+        cutover_guard=None,  # legacy: cutover guard 已删，参数保留兼容现有测试
         executor_callback: ExecutorCallback | None = None,
         parent_reentry_callback: ParentReentryCallback | None = None,
         scheduler_callback: Callable | None = None,
     ) -> None:
         self._config = get_unified_config()
-        self._cutover_guard = cutover_guard or TaskCollaborationCutoverGuard()
+        self._cutover_guard = cutover_guard  # legacy: guard 已删，保留兼容测试注入
         self._executor_callback = executor_callback
         self._parent_reentry_callback = parent_reentry_callback
         # 024: GraphScheduler.on_attempt_outcome 回调（松耦合，避免循环依赖）
@@ -181,7 +139,6 @@ class TaskDispatcher:
         assignee_id: str | None = None,
         capability_scope: str | None = None,
     ) -> dict:
-        self._cutover_guard.assert_can_dispatch()
         task_id = service.create_child_task(
             graph_id=graph_id,
             session_id=session_id,
