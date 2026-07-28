@@ -31,14 +31,18 @@
 >
 > **这不是推翻 DEC-B，是修正实现对它的过度解读**。DEC-B 原文写的是「不注入 todo_update/ask_parent/**执行器工具**」；实现时把整个 `BUILTIN_GENERAL_TOOLS` 都当成执行器工具挡在门外，连纯只读的读取与搜索一并禁掉。
 >
-> **修订后的 planner 工具边界**：
-> - **放行**（只读调研）：`read_file`、`list_dir`、`search_files`、`search_content`、`load_tool_output`。全部 `has_side_effects=False`，门卫测试对此有断言。
+> **修订后的 planner 工具边界**（改为排除法）：
+> - **放行**：`BUILTIN_GENERAL_TOOLS` 中除下方禁止项外的全部，含 `read_file`、`list_dir`、`search_files`、`search_content`、`load_tool_output`、**`exec` 及全套 `process_*`**。
 > - **新增**（规划必需）：`list_specialists`。`build_task_graph` 的 `assigneeId` 要求填具体 specialist id，没有目录就只能把所有节点退化成临时子代理。专员目录同时按 `brain.specialist_catalog.full_max_items`（默认 15）注入 system prompt，超阈值转本工具按需查询。
-> - **仍然禁止**（"只规划不执行"硬边界不变）：`write_file`、`edit_file`、`apply_patch`、`exec`、`process_*`（含无副作用的进程查询——不属于规划职责）、`web_search` / `web_fetch`（无副作用但引入网络与外部内容，另行评估）、以及 `todo_update` / `ask_parent` / `meeting_*` / `delegate_to_subagent` 等执行器协作工具。
+> - **仍然禁止**：`write_file`、`edit_file`、`apply_patch`（直接落盘的文件改写）、`web_search` / `web_fetch`（引入网络与外部内容，另行评估）、以及 `todo_update` / `ask_parent` / `meeting_*` / `delegate_to_subagent` 等执行器协作工具（深度封顶仍然成立）。
 >
-> **`exec` 明确不给**：Claude Code 的 Plan agent 给 Bash 但靠 prompt 白名单限定只读命令；Exemplar 的 `exec` 已改 shell 模式、只剩 OS 路径一道硬拒，给了即等于完整执行能力，prompt 拦不住。代价是 planner 看不了 `git log`/`git diff`，将来需要时单独做只读 git 查询工具，不开 `exec` 的口子。
+> **`exec` 与 `process_*` 放行（用户决策 2026-07-27），这取消了"只规划不执行"的工具层硬边界**：
+> - 理由：规划调研常需要 `git log` / `git diff` / `npm ls` 这类命令，只给文件读取不够。
+> - `exec` 支持 `mode="background"`，放行它就必须同时给全套 `process_*`——否则 planner 起了后台进程既看不到日志也停不掉，反而造成进程泄漏。门卫对这个配对关系有断言。
+> - **诚实记录后果**：`exec` 可以写文件（`echo x > file`），因此上面禁 `write_file` / `edit_file` / `apply_patch` 只挡直接调用、挡不住绕道。**"只规划不执行"从此不是工具层保证**，实际约束由 `exec` 自身的权限层承担：OS 系统路径硬拒、workspace 外操作走确认链、self-improvement worktree 守卫（FR-413）。
+> - 参照：Claude Code 的 Plan agent 同样持有 Bash，靠 prompt 层的只读命令白名单约束。Exemplar 选择不做 prompt 白名单，直接依赖既有权限层。
 >
-> **门卫**：`tests/guardrails/test_planner_specialist_tools.py` 同时守正反两侧——禁止清单不得泄漏，只读放行清单不得缺失，且放行清单成员必须 `has_side_effects=False`。
+> **门卫**：`tests/guardrails/test_planner_specialist_tools.py` 同时守正反两侧——禁止清单不得泄漏、调研清单不得缺失、`exec` 与 `process_*` 必须成套出现。
 
 ### DEC-C：节点失败自愈 → **在 pending adjudication 阶段介入，裁定动作复用现有三态**
 - 调研发现：失败 attempt 默认**不翻 task FAILED**，而是建 pending adjudication（`deliveredStatus ∈ {stuck, failed_input}`）等主助理裁定；只有 `decide(abandoned)` 或 `fail_root_graph` 才翻 FAILED。

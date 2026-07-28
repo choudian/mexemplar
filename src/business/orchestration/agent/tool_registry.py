@@ -73,25 +73,30 @@ class _DelegationFacade(Protocol):
     ) -> dict: ...
 
 
-# 规划专员的只读调研工具（024 DEC-B 修订 2026-07-27）。
+# 规划专员不拿的 BUILTIN_GENERAL_TOOLS 工具（024 DEC-B 修订 2026-07-27）。
 #
-# 原 DEC-B 把 BUILTIN_GENERAL_TOOLS 整体挡在 planner 之外，连纯只读的读取和搜索
-# 一并禁掉，导致规划专员无法核实任务书里的指代（"复用现有 X"），只能把调研甩给
-# 下游执行体——同一批信息被 N 个执行体各查一遍，还可能查出 N 种理解。
+# 原 DEC-B 把 BUILTIN_GENERAL_TOOLS 整体挡在 planner 之外，规划专员连一个文件都
+# 打不开，任务书里的指代（"复用现有 X"）无从核实，只能原样甩给下游执行体——同一批
+# 信息被 N 个执行体各查一遍，还可能查出 N 种理解。修订后改为排除法：除下列几项外
+# 都放行，planner 与 executor 的工具差别收敛为协作类工具。
 #
-# 这里只放行无副作用且属于"看代码"范畴的工具。刻意排除：
-#   - write_file / edit_file / apply_patch / exec / process_stop 等有副作用的
-#     —— "只规划不执行"仍是硬边界
-#   - process_list / process_poll 等进程查询 —— 无副作用但不属于规划职责
-#   - web_search / web_fetch —— 无副作用但引入网络与外部内容，另行评估
-_PLANNER_READONLY_TOOL_NAMES = frozenset(
+# 仍然排除：
+#   - write_file / edit_file / apply_patch —— 直接落盘的文件改写
+#   - web_search / web_fetch —— 引入网络与外部内容，另行评估
+#
+# exec 与 process_* 已放行（用户决策 2026-07-27）：调研常需要 git log、npm ls 这类
+# 命令，而 exec 支持 background，放行它就必须同时给 process_*，否则起了进程看不到
+# 日志也停不掉，反而造成泄漏。代价是"只规划不执行"不再是工具层的硬边界——exec 可以
+# 写文件，因此上面禁 write_file 只挡直接调用、挡不住绕道。实际约束由 exec 自身的
+# 权限层承担（OS 系统路径硬拒、workspace 外操作走确认链、self-improvement worktree
+# 守卫），而非本清单。
+_PLANNER_DENIED_BUILTIN_TOOL_NAMES = frozenset(
     {
-        "read_file",
-        "list_dir",
-        "search_files",
-        "search_content",
-        # 上面几个的输出超阈值时会转 artifact，没有它就只能读到半截
-        "load_tool_output",
+        "write_file",
+        "edit_file",
+        "apply_patch",
+        "web_search",
+        "web_fetch",
     }
 )
 
@@ -415,12 +420,12 @@ class ToolRegistry:
                     handler=create_list_specialists_handler(specialist_id or ""),
                 ),
             ]
-            # 只读调研工具：规划前先核实任务书里的指代，别把调研甩给下游执行体。
-            # 名单与排除理由见 _PLANNER_READONLY_TOOL_NAMES。
+            # 调研工具：规划前先核实任务书里的指代，别把调研甩给下游执行体。
+            # 排除项与理由见 _PLANNER_DENIED_BUILTIN_TOOL_NAMES。
             planner_tools.extend(
                 tool
                 for tool in BUILTIN_GENERAL_TOOLS
-                if tool.name in _PLANNER_READONLY_TOOL_NAMES
+                if tool.name not in _PLANNER_DENIED_BUILTIN_TOOL_NAMES
             )
 
         # 027: MCP 工具注入 — 预置全量 + 自定义激活
@@ -436,8 +441,8 @@ class ToolRegistry:
         def tool_factory() -> list[ToolDefinition]:
             if role_kind == "planner":
                 # 规划专员：search + 规划工具（build_task_graph / list_specialists /
-                # 只读调研工具）+ load_skill。不含 BUILTIN_GENERAL_TOOLS 的写、执行
-                # 和进程管理工具——"只规划不执行"仍是硬边界。
+                # 调研工具）+ load_skill。不拿执行器协作工具（todo_update / ask_parent /
+                # meeting_* / delegate_to_subagent）——深度封顶仍然成立。
                 return (
                     search_tools
                     + planner_tools
