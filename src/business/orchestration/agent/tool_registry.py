@@ -192,6 +192,7 @@ class ToolRegistry:
             CREATE_USER_TODO_SCHEMA,
             DELETE_USER_TODO_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
+            LIST_SPECIALISTS_SCHEMA,
             LIST_USER_TODOS_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
             TODO_UPDATE_SCHEMA,
@@ -201,6 +202,7 @@ class ToolRegistry:
             create_complete_user_todo_handler,
             create_delete_user_todo_handler,
             create_delegate_to_subagent_handler,
+            create_list_specialists_handler,
             create_list_user_todos_handler,
             create_meeting_send_message_handler,
             create_todo_update_handler,
@@ -368,7 +370,7 @@ class ToolRegistry:
                 )
             ]
 
-        # 024: planner 角色分支——规划专员只拿 build_task_graph，不拿执行器工具
+        # 024: planner 角色分支——规划专员只拿规划工具，不拿执行器工具
         planner_tools: list[ToolDefinition] = []
         if role_kind == "planner":
             graph_owner_session_id = parent_session_id or executor_id or ""
@@ -379,6 +381,15 @@ class ToolRegistry:
                     handler=create_build_task_graph_handler(
                         graph_owner_session_id,
                     ),
+                ),
+                # build_task_graph 的 assigneeId 要求填具体 specialist id，规划专员必须
+                # 能查到有哪些专员、各自什么工具，否则只能把所有节点退化成临时子代理。
+                # 专员目录同时按阈值注入 prompt（见 _build_specialist_prompt）：条目少时
+                # 直接展示，超阈值转本工具按需查询。
+                ToolDefinition(
+                    name="list_specialists",
+                    schema=LIST_SPECIALISTS_SCHEMA,
+                    handler=create_list_specialists_handler(specialist_id or ""),
                 ),
             ]
 

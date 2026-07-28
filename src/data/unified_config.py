@@ -1112,6 +1112,14 @@ class UnifiedConfigManager:
         """潜意识区注入 top-N 条目"""
         return self.get("brain.injection.subconscious_top_n", default=10)
 
+    def get_brain_specialist_catalog_full_max_items(self) -> int:
+        """专员目录完整展示上限：超过该条数转 list_specialists 发现模式"""
+        return self._get_bounded_positive_int(
+            "brain.specialist_catalog.full_max_items",
+            15,
+            maximum=1000,
+        )
+
     def get_brain_decay_fading_threshold(self) -> float:
         """relevance_score 低于此值转为 fading"""
         return self.get("brain.decay.fading_threshold", default=0.3)

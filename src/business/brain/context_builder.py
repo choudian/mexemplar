@@ -507,6 +507,66 @@ class BrainContextBuilder:
         return "\n\n".join(sections) if sections else ""
 
     @staticmethod
+    def format_specialists_for_prompt(
+        specialists: list[dict],
+        *,
+        exclude_specialist_id: str = "",
+        full_catalog_max_items: int | None = None,
+    ) -> str:
+        """把可用专员目录渲染进 prompt：小目录全量展示，超阈值转发现模式。
+
+        与能力目录（``agent_tools.discovery.*``）同构：条目少时直接列出角色定义和工具
+        白名单，供 planner 判断节点该派给谁；超过阈值只给统计和发现说明，改由
+        ``list_specialists`` 按需查询，避免专员增长后撑爆 prompt。
+
+        ``exclude_specialist_id`` 用于排除调用者自身——planner 不能把节点派给自己。
+        """
+        visible = [
+            item
+            for item in specialists
+            if str(item.get("specialist_id") or "") != str(exclude_specialist_id or "")
+        ]
+        if not visible:
+            return "## 可用专员\n\n当前没有其他可用专员；所有节点都交给临时子代理执行。"
+
+        if full_catalog_max_items is None:
+            from src.data.unified_config import get_unified_config
+
+            full_catalog_max_items = (
+                get_unified_config().get_brain_specialist_catalog_full_max_items()
+            )
+
+        header = [
+            "## 可用专员",
+            "",
+            "拆任务图时，节点可以指定 `assigneeHint=\"specialist\"` + `assigneeId`（下方的 id）"
+            "派给固定专员；不指定则由临时子代理执行。派之前先确认该专员的工具够完成这个节点。",
+            "",
+        ]
+        if len(visible) > full_catalog_max_items:
+            header.extend(
+                [
+                    f"当前共 {len(visible)} 个可用专员，超过完整展示阈值。",
+                    "调用 `list_specialists(query=...)` 按需查询专员的角色定义和工具白名单。",
+                ]
+            )
+            return "\n".join(header)
+
+        header.append("specialists:")
+        for item in visible:
+            whitelist = item.get("tool_whitelist") or []
+            header.extend(
+                [
+                    f"  - id: {item.get('specialist_id', '')}",
+                    f"    name: {item.get('name', '')}",
+                    f"    description: {item.get('description', '')}",
+                    f"    role_definition: {item.get('role_definition', '')}",
+                    f"    tools: {'、'.join(whitelist) if whitelist else '（无工具白名单）'}",
+                ]
+            )
+        return "\n".join(header)
+
+    @staticmethod
     def format_equipped_skills_for_prompt(equipped_skills: list[dict]) -> str:
         lines = [
             "## 你已装备的方法论清单",

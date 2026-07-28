@@ -1633,6 +1633,32 @@ class AgentOrchestrator:
                 "specialist methodology equipment prompt injection failed: %s", exc, exc_info=True
             )
             raise RuntimeError("specialist_methodology_equipment_prompt_unavailable") from exc
+
+        # 规划专员要为节点填 assigneeId，必须看得到可用专员目录。条目少时全量注入，
+        # 超阈值只给发现说明、改由 list_specialists 查询。加载失败降级为提示文本，
+        # 不中断委派——没有目录时规划仍可进行，只是所有节点退化成临时子代理。
+        specialists_section = ""
+        if (getattr(specialist, "role_kind", "executor") or "executor") == "planner":
+            try:
+                from src.business.brain.assistant_facades import AssistantSpecialistToolFacade
+                from src.business.brain.context_builder import BrainContextBuilder
+
+                catalog = AssistantSpecialistToolFacade().list_active(
+                    exclude_specialist_id=getattr(specialist, "specialist_id", ""),
+                    limit=1000,
+                )
+                specialists_section = "\n\n" + BrainContextBuilder.format_specialists_for_prompt(
+                    catalog.get("specialists") or [],
+                    exclude_specialist_id=getattr(specialist, "specialist_id", ""),
+                )
+            except Exception as exc:
+                logger.warning("planner specialist catalog injection failed: %s", exc)
+                specialists_section = (
+                    "\n\n## 可用专员\n\n"
+                    "专员目录暂时不可用；本轮不要假定专员清单完整，"
+                    "可调用 `list_specialists` 重试，或把节点留给临时子代理执行。"
+                )
+
         return (
             f"你是固定专员：{getattr(specialist, 'name', '')}\n"
             f"描述：{getattr(specialist, 'description', '') or '无'}\n\n"
@@ -1644,6 +1670,7 @@ class AgentOrchestrator:
             "delegate_to_subagent 起一个临时子代理代办、只取其干净结果——这种临时子代理"
             "至多只能起一个，且它不能再向下委派或找平级。"
             f"{equipment_section}"
+            f"{specialists_section}"
         )
 
     @staticmethod

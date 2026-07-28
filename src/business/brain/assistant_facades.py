@@ -83,3 +83,51 @@ class AssistantSpecialistToolFacade:
             origin="user_conversation",
             reason=f"由用户在会话 {session_id[:8]}... 中创建",
         )
+
+    def list_active(
+        self,
+        *,
+        query: str = "",
+        exclude_specialist_id: str = "",
+        offset: int = 0,
+        limit: int = 20,
+    ) -> dict:
+        """列出 active 专员，供规划专员判断任务节点该派给谁。
+
+        只投影规划需要的字段（id / 名称 / 描述 / 角色定义 / 工具白名单），
+        不暴露 origin、reason、版本号等内部管理字段。
+        """
+        items, _ = SpecialistService().list_specialists(active_only=True, limit=None, offset=0)
+        excluded = str(exclude_specialist_id or "")
+        visible = [
+            item for item in items if str(item.get("specialist_id") or "") != excluded
+        ]
+        keyword = (query or "").strip().lower()
+        if keyword:
+            visible = [
+                item
+                for item in visible
+                if keyword
+                in " ".join(
+                    str(item.get(field) or "")
+                    for field in ("name", "description", "role_definition")
+                ).lower()
+            ]
+        total = len(visible)
+        start = max(0, offset)
+        page = visible[start : start + max(1, limit)]
+        return {
+            "specialists": [
+                {
+                    "specialist_id": item.get("specialist_id", ""),
+                    "name": item.get("name", ""),
+                    "description": item.get("description", ""),
+                    "role_definition": item.get("role_definition", ""),
+                    "tool_whitelist": item.get("tool_whitelist") or [],
+                }
+                for item in page
+            ],
+            "total": total,
+            "offset": start,
+            "limit": max(1, limit),
+        }

@@ -96,6 +96,17 @@ class TestPlannerToolScope:
         names = _planner_tools(orchestrator)
         assert "build_task_graph" in names
 
+    def test_planner_includes_list_specialists(self, in_memory_db, orchestrator):
+        """planner 拿 list_specialists——build_task_graph 的 assigneeId 要求填具体
+        specialist id，没有这个工具就只能把所有节点退化成临时子代理。"""
+        names = _planner_tools(orchestrator)
+        assert "list_specialists" in names
+
+    def test_executor_excludes_list_specialists(self, in_memory_db, orchestrator):
+        """executor 不拿 list_specialists——它不拆任务图，不需要挑执行者。"""
+        names = _executor_tools(orchestrator)
+        assert "list_specialists" not in names
+
     def test_executor_still_includes_executor_tools(self, in_memory_db, orchestrator):
         """executor（默认）仍含执行器工具——防 planner 分支误伤 executor 路径。"""
         names = _executor_tools(orchestrator)
@@ -163,3 +174,111 @@ class TestPlannerSchema:
         col = AssistantTask.__table__.columns.get("requires_confirmation")
         assert col is not None and col.default is not None
         assert col.default.arg == 0
+
+
+class TestPlannerSpecialistCatalogInjection:
+    """planner 的 system prompt 必须带可用专员目录——否则 assigneeId 无从填起。"""
+
+    @staticmethod
+    def _planner(specialist_id="sp_me"):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            specialist_id=specialist_id,
+            name="planner",
+            description="规划",
+            role_definition="拆图",
+            role_kind="planner",
+        )
+
+    @staticmethod
+    def _patch_catalog(monkeypatch, payload):
+        from src.business.brain import assistant_facades
+
+        monkeypatch.setattr(
+            assistant_facades.AssistantSpecialistToolFacade,
+            "list_active",
+            lambda self, **kwargs: payload,
+        )
+
+    def test_planner_prompt_contains_specialist_catalog(self, monkeypatch):
+        from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+
+        self._patch_catalog(
+            monkeypatch,
+            {
+                "specialists": [
+                    {
+                        "specialist_id": "sp_coder",
+                        "name": "编码执行专员",
+                        "description": "跑外部 coding",
+                        "role_definition": "执行编码任务",
+                        "tool_whitelist": ["start_external_coding_session"],
+                    }
+                ],
+                "total": 1,
+            },
+        )
+        prompt = AgentOrchestrator._build_specialist_prompt(self._planner(), [], equipped_skills=[])
+
+        assert "## 可用专员" in prompt
+        assert "sp_coder" in prompt
+        assert "编码执行专员" in prompt
+        # 工具白名单必须一并给出：planner 要据此判断该专员能不能完成这个节点
+        assert "start_external_coding_session" in prompt
+
+    def test_planner_prompt_excludes_self(self, monkeypatch):
+        """planner 不能把节点派回给自己，目录里不该出现自己。"""
+        from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+
+        self._patch_catalog(
+            monkeypatch,
+            {
+                "specialists": [
+                    {
+                        "specialist_id": "sp_me",
+                        "name": "planner",
+                        "description": "规划",
+                        "role_definition": "拆图",
+                        "tool_whitelist": ["build_task_graph"],
+                    }
+                ],
+                "total": 1,
+            },
+        )
+        prompt = AgentOrchestrator._build_specialist_prompt(self._planner("sp_me"), [], equipped_skills=[])
+
+        assert "当前没有其他可用专员" in prompt
+
+    def test_executor_prompt_has_no_specialist_catalog(self, monkeypatch):
+        """executor 不拆图，不注入专员目录。"""
+        from types import SimpleNamespace
+
+        from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+
+        executor = SimpleNamespace(
+            specialist_id="sp_x",
+            name="编码执行专员",
+            description="执行",
+            role_definition="干活",
+            role_kind="executor",
+        )
+        prompt = AgentOrchestrator._build_specialist_prompt(executor, [], equipped_skills=[])
+
+        assert "## 可用专员" not in prompt
+
+    def test_catalog_failure_degrades_without_breaking_delegation(self, monkeypatch):
+        """目录加载失败只降级为提示，不得中断委派（对比方法论装备失败是 raise）。"""
+        from src.business.brain import assistant_facades
+        from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+
+        def _boom(self, **kwargs):
+            raise RuntimeError("specialist repo down")
+
+        monkeypatch.setattr(
+            assistant_facades.AssistantSpecialistToolFacade, "list_active", _boom
+        )
+        prompt = AgentOrchestrator._build_specialist_prompt(self._planner(), [], equipped_skills=[])
+
+        assert "专员目录暂时不可用" in prompt
+        assert "list_specialists" in prompt

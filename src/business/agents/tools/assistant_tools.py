@@ -548,6 +548,8 @@ __all__ = [
     "create_delegate_to_specialist_handler",
     "CREATE_SPECIALIST_SCHEMA",
     "create_create_specialist_handler",
+    "LIST_SPECIALISTS_SCHEMA",
+    "create_list_specialists_handler",
     "CONTINUE_SUBAGENT_SCHEMA",
     "create_continue_subagent_handler",
     "INSPECT_SUBAGENT_SCHEMA",
@@ -2676,3 +2678,54 @@ def create_create_specialist_handler(session_id: str):
             return error_json("创建专员时发生内部错误，请稍后重试。")
 
     return create_specialist_handler
+
+
+LIST_SPECIALISTS_SCHEMA = make_tool_schema(
+    name="list_specialists",
+    description=(
+        "查询当前可用的固定专员及其职责与工具白名单。"
+        "拆任务图时用它确认某个节点该交给哪个专员："
+        '节点填 assigneeHint="specialist" + assigneeId 即指定该专员，'
+        "不指定则由临时子代理执行。派之前先确认该专员的工具足以完成这个节点。"
+    ),
+    properties={
+        "query": {
+            "type": "string",
+            "description": "可选关键词，匹配专员名称/描述/角色定义；留空则浏览全部",
+        },
+        "offset": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "分页偏移，默认 0",
+        },
+        "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "页大小，默认 20",
+        },
+    },
+    required=[],
+)
+
+
+def create_list_specialists_handler(caller_specialist_id: str = ""):
+    """工厂函数：创建 list_specialists handler。
+
+    ``caller_specialist_id`` 用于把调用者自身排除在结果之外——规划专员不能把
+    任务节点派回给自己。
+    """
+
+    def list_specialists_handler(query: str = "", offset: int = 0, limit: int = 20) -> str:
+        try:
+            result = AssistantSpecialistToolFacade().list_active(
+                query=query,
+                exclude_specialist_id=caller_specialist_id,
+                offset=offset,
+                limit=limit,
+            )
+            return to_json({"success": True, **result})
+        except Exception as e:
+            logger.error("[list_specialists] 查询失败: %s", e, exc_info=True)
+            return error_json("查询专员列表时发生内部错误，请稍后重试。")
+
+    return list_specialists_handler
