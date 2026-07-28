@@ -73,6 +73,29 @@ class _DelegationFacade(Protocol):
     ) -> dict: ...
 
 
+# 规划专员的只读调研工具（024 DEC-B 修订 2026-07-27）。
+#
+# 原 DEC-B 把 BUILTIN_GENERAL_TOOLS 整体挡在 planner 之外，连纯只读的读取和搜索
+# 一并禁掉，导致规划专员无法核实任务书里的指代（"复用现有 X"），只能把调研甩给
+# 下游执行体——同一批信息被 N 个执行体各查一遍，还可能查出 N 种理解。
+#
+# 这里只放行无副作用且属于"看代码"范畴的工具。刻意排除：
+#   - write_file / edit_file / apply_patch / exec / process_stop 等有副作用的
+#     —— "只规划不执行"仍是硬边界
+#   - process_list / process_poll 等进程查询 —— 无副作用但不属于规划职责
+#   - web_search / web_fetch —— 无副作用但引入网络与外部内容，另行评估
+_PLANNER_READONLY_TOOL_NAMES = frozenset(
+    {
+        "read_file",
+        "list_dir",
+        "search_files",
+        "search_content",
+        # 上面几个的输出超阈值时会转 artifact，没有它就只能读到半截
+        "load_tool_output",
+    }
+)
+
+
 def _filter_builtin_tools(
     builtin_tools: list[ToolDefinition],
     tool_whitelist: list[str] | None,
@@ -392,6 +415,13 @@ class ToolRegistry:
                     handler=create_list_specialists_handler(specialist_id or ""),
                 ),
             ]
+            # 只读调研工具：规划前先核实任务书里的指代，别把调研甩给下游执行体。
+            # 名单与排除理由见 _PLANNER_READONLY_TOOL_NAMES。
+            planner_tools.extend(
+                tool
+                for tool in BUILTIN_GENERAL_TOOLS
+                if tool.name in _PLANNER_READONLY_TOOL_NAMES
+            )
 
         # 027: MCP 工具注入 — 预置全量 + 自定义激活
         from src.business.mcp import get_mcp_tool_registry
@@ -405,7 +435,9 @@ class ToolRegistry:
 
         def tool_factory() -> list[ToolDefinition]:
             if role_kind == "planner":
-                # 规划专员：search + build_task_graph + load_skill（不含 BUILTIN_GENERAL_TOOLS 执行工具）
+                # 规划专员：search + 规划工具（build_task_graph / list_specialists /
+                # 只读调研工具）+ load_skill。不含 BUILTIN_GENERAL_TOOLS 的写、执行
+                # 和进程管理工具——"只规划不执行"仍是硬边界。
                 return (
                     search_tools
                     + planner_tools

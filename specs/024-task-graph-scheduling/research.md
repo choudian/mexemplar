@@ -25,6 +25,21 @@
   - 跨会话拆解经验经现有 brain specialist 经验积累通道沉淀。
 - 招募路径：复用现有 specialist recruit（`brain/specialist_service.py`），用规划型信号招募；首版可提供手动/配置注册一个规划专员（避免依赖信号阈值冷启动），后续接累计信号。具体在 tasks 阶段定。
 
+> **Amendment 2026-07-27：规划专员补只读调研工具与专员目录**
+>
+> **背景**：一次真实 run（见 `docs/local/2026-07-25-mexemplar-sandbox-run-postmortem.md`）暴露规划专员零工具调用直接建图——它手里只有 `build_task_graph`，既读不了目标项目，也看不到有哪些专员可派。产出的六个节点里，凡依赖项目现状的都退化成「先阅读以下文件确认…」把调研甩给下游执行体，且 assignee 两列全部 NULL。
+>
+> **这不是推翻 DEC-B，是修正实现对它的过度解读**。DEC-B 原文写的是「不注入 todo_update/ask_parent/**执行器工具**」；实现时把整个 `BUILTIN_GENERAL_TOOLS` 都当成执行器工具挡在门外，连纯只读的读取与搜索一并禁掉。
+>
+> **修订后的 planner 工具边界**：
+> - **放行**（只读调研）：`read_file`、`list_dir`、`search_files`、`search_content`、`load_tool_output`。全部 `has_side_effects=False`，门卫测试对此有断言。
+> - **新增**（规划必需）：`list_specialists`。`build_task_graph` 的 `assigneeId` 要求填具体 specialist id，没有目录就只能把所有节点退化成临时子代理。专员目录同时按 `brain.specialist_catalog.full_max_items`（默认 15）注入 system prompt，超阈值转本工具按需查询。
+> - **仍然禁止**（"只规划不执行"硬边界不变）：`write_file`、`edit_file`、`apply_patch`、`exec`、`process_*`（含无副作用的进程查询——不属于规划职责）、`web_search` / `web_fetch`（无副作用但引入网络与外部内容，另行评估）、以及 `todo_update` / `ask_parent` / `meeting_*` / `delegate_to_subagent` 等执行器协作工具。
+>
+> **`exec` 明确不给**：Claude Code 的 Plan agent 给 Bash 但靠 prompt 白名单限定只读命令；Exemplar 的 `exec` 已改 shell 模式、只剩 OS 路径一道硬拒，给了即等于完整执行能力，prompt 拦不住。代价是 planner 看不了 `git log`/`git diff`，将来需要时单独做只读 git 查询工具，不开 `exec` 的口子。
+>
+> **门卫**：`tests/guardrails/test_planner_specialist_tools.py` 同时守正反两侧——禁止清单不得泄漏，只读放行清单不得缺失，且放行清单成员必须 `has_side_effects=False`。
+
 ### DEC-C：节点失败自愈 → **在 pending adjudication 阶段介入，裁定动作复用现有三态**
 - 调研发现：失败 attempt 默认**不翻 task FAILED**，而是建 pending adjudication（`deliveredStatus ∈ {stuck, failed_input}`）等主助理裁定；只有 `decide(abandoned)` 或 `fail_root_graph` 才翻 FAILED。
 - `AdjudicationDecision` 仅 `accepted/returned/abandoned`，**无「问用户」动作**。

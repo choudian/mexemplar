@@ -24,17 +24,18 @@ _EXECUTOR_ONLY_TOOLS = {
     "delegate_to_subagent",
 }
 
-# planner MUST NOT 拿 BUILTIN_GENERAL_TOOLS 执行工具（FR-005/DEC-B：只规划不执行）
+# planner MUST NOT 拿的 BUILTIN_GENERAL_TOOLS 工具（FR-005/DEC-B：只规划不执行）
+#
+# DEC-B 修订 2026-07-27：原清单把纯只读的读取/搜索也算作"执行工具"一并禁掉，
+# 导致规划专员无法核实任务书里的指代，只能把调研甩给下游执行体。只读四件套 +
+# load_tool_output 已移到 _PLANNER_READONLY_TOOL_NAMES 放行；写、执行、进程管理
+# 和网络访问仍然禁止——"只规划不执行"的硬边界不变。
 _BUILTIN_EXECUTION_TOOL_NAMES = {
     "web_search",
     "web_fetch",
-    "read_file",
     "write_file",
     "edit_file",
     "apply_patch",
-    "search_files",
-    "search_content",
-    "list_dir",
     "exec",
     "process_list",
     "process_poll",
@@ -44,6 +45,15 @@ _BUILTIN_EXECUTION_TOOL_NAMES = {
     "process_stop",
     "process_send_input",
     "process_close",
+}
+
+# planner MUST 拿到的只读调研工具（DEC-B 修订）——缺任何一个都会让它退回
+# "先阅读以下文件确认…"式的甩锅节点描述
+_PLANNER_READONLY_TOOL_NAMES = {
+    "read_file",
+    "list_dir",
+    "search_files",
+    "search_content",
     "load_tool_output",
 }
 
@@ -80,10 +90,33 @@ class TestPlannerToolScope:
         assert not leaked, f"planner 不该拿执行器工具，却包含：{leaked}"
 
     def test_planner_excludes_builtin_execution_tools(self, in_memory_db, orchestrator):
-        """planner 工具集不含 BUILTIN_GENERAL_TOOLS 执行工具（DEC-B：只规划不执行）。"""
+        """planner 工具集不含写/执行/进程/网络工具（DEC-B：只规划不执行）。"""
         names = _planner_tools(orchestrator)
         leaked = _BUILTIN_EXECUTION_TOOL_NAMES & names
         assert not leaked, f"planner 不该拿 BUILTIN 执行工具，却包含：{leaked}"
+
+    def test_planner_includes_readonly_research_tools(self, in_memory_db, orchestrator):
+        """planner 必须拿到只读调研工具（DEC-B 修订）。
+
+        缺任何一个，规划专员就无法核实任务书里的指代（"复用现有 X"），只能把
+        调研甩给下游执行体——那次 run 的 TaskDetailPane 节点就是这么写成
+        "先阅读以下文件确认…"的。
+        """
+        names = _planner_tools(orchestrator)
+        missing = _PLANNER_READONLY_TOOL_NAMES - names
+        assert not missing, f"planner 缺少只读调研工具：{missing}"
+
+    def test_planner_readonly_tools_are_side_effect_free(self):
+        """放行清单里的工具必须无副作用——防止以后某个工具变成有副作用还留在清单里。"""
+        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
+
+        by_name = {tool.name: tool for tool in BUILTIN_GENERAL_TOOLS}
+        for name in _PLANNER_READONLY_TOOL_NAMES:
+            tool = by_name.get(name)
+            assert tool is not None, f"放行清单引用了不存在的工具：{name}"
+            assert (
+                getattr(tool, "has_side_effects", True) is False
+            ), f"{name} 有副作用，不该出现在 planner 只读放行清单里"
 
     def test_executor_still_includes_builtin_tools(self, in_memory_db, orchestrator):
         """executor（默认）仍含 BUILTIN 执行工具——防 planner 分支误伤 executor 路径。"""
