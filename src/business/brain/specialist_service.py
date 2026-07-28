@@ -499,21 +499,24 @@ class SpecialistService:
                 "role_kind": existing.role_kind,
             }
 
-        return self.create_specialist(
+        # 角色定义取自 PLANNER 种子，与 seed_builtin_specialists 同源——两条路径
+        # 各写一份文案的话，先跑到的那条会决定 planner 拿到哪个版本。创建后打上
+        # 种子标记，使其此后能正常接收定义升级。
+        from src.business.brain.specialist_presets import PLANNER
+
+        created = self.create_specialist(
             name=planner_name,
-            description="复杂任务分解专员：将超阈值复杂任务分解为带依赖的 DAG 任务图，交由调度器按序执行。只规划不执行。",
-            role_definition=(
-                "你是规划专员。你的唯一职责是将复杂任务分解为一张带依赖关系的任务图（DAG）。"
-                "你只输出任务图，不执行任何具体操作。"
-                "节点粒度 = 一个执行器的一次连贯执行。"
-                "高风险/不可逆节点必须标 needsConfirmation=true。"
-                "不要使用 todo_update、ask_parent 等执行器工具。"
-            ),
-            tool_whitelist=["build_task_graph"],
+            description=PLANNER.description,
+            role_definition=PLANNER.load_role_definition(),
+            tool_whitelist=list(PLANNER.tool_whitelist),
             origin="auto_planner_registration",
-            reason="024: 自动注册默认规划专员（避免信号阈值冷启动）",
+            reason=PLANNER.reason,
             role_kind="planner",
         )
+        specialist_id = created.get("specialist_id")
+        if specialist_id and planner_name == PLANNER.name:
+            self._repo.mark_as_preset(specialist_id, PLANNER.key, PLANNER.fingerprint())
+        return created
 
     def _recruit_from_signal(self, signal, brain_repo) -> Optional[dict]:
         """

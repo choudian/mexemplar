@@ -11,6 +11,8 @@ restart would silently undo the user's own edits.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from src.business.brain.specialist_presets import (
@@ -99,6 +101,33 @@ def _seeded_row(**overrides):
     return _Row(**defaults)
 
 
+def _other_presets_already_seeded(subject_key):
+    """其余内置专员都已按种子写入。
+
+    单个 preset 的三条规则各自成立，但 seed_builtin_specialists 会遍历全部——
+    不预置其余的，被测断言（"没有新建""没有更新"）会被别的 preset 的正常种子
+    动作污染。
+    """
+    return [
+        _Row(
+            specialist_id=f"spec_{preset.key}",
+            name=preset.name,
+            description=preset.description,
+            role_definition=preset.load_role_definition(),
+            composition_ids=json.dumps(preset.composition_ids),
+            preset_key=preset.key,
+            preset_fingerprint=preset.fingerprint(),
+        )
+        for preset in load_specialist_presets()
+        if preset.key != subject_key
+    ]
+
+
+def _repo_with(subject_row):
+    """被测 preset 用给定行，其余 preset 保持已就绪。"""
+    return _FakeRepo([subject_row] + _other_presets_already_seeded(CODING_EXECUTOR.key))
+
+
 # --- 规则 1：缺了就建 ---------------------------------------------------------
 
 
@@ -147,7 +176,7 @@ def test_untouched_specialist_is_upgraded_when_the_preset_changes():
             composition_ids=[EXTERNAL_CODING_COMPOSITION_ID],
         ),
     )
-    repo = _FakeRepo([stale])
+    repo = _repo_with(stale)
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -166,7 +195,7 @@ def test_upgrade_refreshes_the_fingerprint_so_it_settles():
             composition_ids=[EXTERNAL_CODING_COMPOSITION_ID],
         ),
     )
-    repo = _FakeRepo([stale])
+    repo = _repo_with(stale)
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -178,7 +207,7 @@ def test_upgrade_refreshes_the_fingerprint_so_it_settles():
 
 
 def test_already_current_specialist_is_not_rewritten():
-    repo = _FakeRepo([_seeded_row()])
+    repo = _repo_with(_seeded_row())
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -192,7 +221,7 @@ def test_already_current_specialist_is_not_rewritten():
 
 def test_user_edited_role_definition_is_never_overwritten():
     edited = _seeded_row(role_definition="我自己写的角色定义")
-    repo = _FakeRepo([edited])
+    repo = _repo_with(edited)
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -205,7 +234,7 @@ def test_user_edited_compositions_also_count_as_touched():
     # Fingerprinting only the role text would let a composition change be
     # silently reverted on the next upgrade.
     edited = _seeded_row(composition_ids='["comp_something_else"]')
-    repo = _FakeRepo([edited])
+    repo = _repo_with(edited)
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -214,7 +243,7 @@ def test_user_edited_compositions_also_count_as_touched():
 
 
 def test_deactivated_preset_is_not_recreated():
-    repo = _FakeRepo([_seeded_row(is_active=False)])
+    repo = _repo_with(_seeded_row(is_active=False))
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -235,7 +264,7 @@ def test_untagged_specialist_matching_the_preset_is_adopted_and_kept_current():
         role_definition=CODING_EXECUTOR.load_role_definition(),
         composition_ids=f'["{EXTERNAL_CODING_COMPOSITION_ID}"]',
     )
-    repo = _FakeRepo([legacy])
+    repo = _repo_with(legacy)
     service = _Service(repo)
 
     service.seed_builtin_specialists()
@@ -285,3 +314,76 @@ def test_preset_fingerprint_is_stable_across_calls():
 def test_every_preset_has_a_readable_seed_file(preset):
     assert preset.load_role_definition().strip()
     assert preset.key
+
+
+# --- planner 纳入种子体系（024 DEC-B 修订 2026-07-27）-------------------------
+
+
+def _planner_preset():
+    return next(p for p in load_specialist_presets() if p.key == "planner")
+
+
+def test_planner_is_a_preset_so_its_prompt_can_be_upgraded():
+    """planner 必须在种子体系内。
+
+    024 originally registered it through ensure_planner_specialist alone, which
+    creates and never syncs -- so a prompt improvement reached only fresh
+    installs, and every existing planner kept planning with the definition it
+    was born with.
+    """
+    planner = _planner_preset()
+    assert planner.role_kind == "planner"
+    assert "第二步：探索现状" in planner.load_role_definition()
+
+
+def test_legacy_untagged_planner_is_adopted_then_upgraded():
+    """7/25 那个手工注册的 planner：先被认领，再在下一轮启动升级到当前定义。"""
+    planner = _planner_preset()
+    legacy = _Row(
+        specialist_id="spec_planner_legacy",
+        name=planner.name,
+        description="复杂任务分解专员：将超阈值复杂任务分解为带依赖的 DAG 任务图，交由调度器按序执行。只规划不执行。",
+        role_definition=(
+            "你是规划专员。你的唯一职责是将复杂任务分解为一张带依赖关系的任务图（DAG）。"
+            "你只输出任务图，不执行任何具体操作。"
+        ),
+        composition_ids="[]",
+    )
+    repo = _FakeRepo([legacy] + _other_presets_already_seeded(planner.key))
+    service = _Service(repo)
+
+    # 第一轮：认领，记下归属与当前内容指纹，本轮不改内容
+    service.seed_builtin_specialists()
+    assert legacy.preset_key == planner.key
+    assert service.created == []
+    assert repo.updates == []
+
+    # 第二轮：内容仍等于认领时的指纹 → 判定未被用户改过 → 升级到四段式
+    service.seed_builtin_specialists()
+    assert len(repo.updates) == 1
+    assert "第二步：探索现状" in repo.updates[0]["role_definition"]
+
+
+def test_user_edited_planner_is_left_alone():
+    """用户自己改过 planner 提示词的，升级不得覆盖。"""
+    planner = _planner_preset()
+    edited = _Row(
+        specialist_id="spec_planner_mine",
+        name=planner.name,
+        description=planner.description,
+        role_definition="我自己写的规划流程",
+        composition_ids="[]",
+        preset_key=planner.key,
+        preset_fingerprint=compute_fingerprint(
+            role_definition="别的内容",
+            description=planner.description,
+            composition_ids=[],
+        ),
+    )
+    repo = _FakeRepo([edited] + _other_presets_already_seeded(planner.key))
+    service = _Service(repo)
+
+    service.seed_builtin_specialists()
+
+    assert repo.updates == []
+    assert edited.role_definition == "我自己写的规划流程"

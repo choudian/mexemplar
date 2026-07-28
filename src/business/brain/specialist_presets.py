@@ -95,6 +95,21 @@ CODING_EXECUTOR = SpecialistPreset(
     composition_ids=[EXTERNAL_CODING_COMPOSITION_ID],
 )
 
+# 规划专员在 024 里由 ensure_planner_specialist 单独注册，游离在种子体系之外——
+# 于是角色定义一旦落库就再也不会跟进代码，提示词改进只能到达全新安装的用户。
+# 纳入种子后走同一套三条规则：没有就建、用户没改过就升级、用户改过就再也不动。
+PLANNER = SpecialistPreset(
+    key="planner",
+    name="planner",
+    description="复杂任务分解专员：先调研现状再把复杂任务拆成带依赖的 DAG 任务图，交由调度器按序执行。只规划不实施。",
+    role_definition_file="planner_specialist.md",
+    reason="内置专员：超阈值复杂任务的唯一规划者",
+    role_kind="planner",
+    # 规划专员的工具由 tool_registry 的 role_kind 分支硬编码装配，tool_whitelist
+    # 对它不起作用（见 024 DEC-B 修订）。这里留空，避免暗示它是授权来源。
+    tool_whitelist=[],
+)
+
 
 def load_specialist_presets() -> list[SpecialistPreset]:
-    return [CODING_EXECUTOR]
+    return [CODING_EXECUTOR, PLANNER]
