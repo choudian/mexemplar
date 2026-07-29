@@ -7,6 +7,7 @@ from src.business.agents.tools import file_tools
 from src.business.agents.tools.builtin_permissions import (
     build_edit_summary,
     build_exec_summary,
+    clear_external_read_confirmations_for_tests,
     clear_external_write_confirmations_for_tests,
     mark_external_read_confirmed,
     mark_external_write_confirmed,
@@ -162,6 +163,51 @@ def test_external_read_confirmation_is_scoped_to_session_and_workspace(tmp_path,
     assert initial.decision.decision == "confirmation_required"
     assert confirmed.decision.decision == "confirmed"
     assert other_session.decision.decision == "confirmation_required"
+
+
+def test_external_search_uses_read_confirmation_chain(tmp_path):
+    clear_external_read_confirmations_for_tests()
+    outside = tmp_path.parent / "outside-agent-search"
+    try:
+        initial = permission_for_path(
+            outside,
+            operation="search",
+            workspace_root=tmp_path,
+            session_id="session-a",
+        )
+        mark_external_read_confirmed(
+            outside,
+            workspace_root=tmp_path,
+            session_id="session-a",
+        )
+        confirmed = permission_for_path(
+            outside,
+            operation="search",
+            workspace_root=tmp_path,
+            session_id="session-a",
+        )
+    finally:
+        clear_external_read_confirmations_for_tests()
+
+    assert initial.decision.decision == "confirmation_required"
+    assert initial.decision.summary.startswith("Search outside workspace:")
+    assert confirmed.decision.decision == "confirmed"
+    assert confirmed.decision.summary.startswith("Search outside workspace:")
+
+
+def test_workspace_hidden_paths_are_allowed_including_git(tmp_path):
+    hidden_paths = (tmp_path / ".env.local", tmp_path / ".git" / "config")
+
+    for hidden_path in hidden_paths:
+        for operation in ("read", "search", "write", "edit", "delete", "patch"):
+            check = permission_for_path(
+                hidden_path,
+                operation=operation,
+                workspace_root=tmp_path,
+            )
+
+            assert check.classification.hidden is True
+            assert check.decision.decision == "allowed", (hidden_path, operation)
 
 
 def test_confirmation_summaries_do_not_leak_full_content_or_secrets():

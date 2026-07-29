@@ -9,6 +9,8 @@
 """
 
 import json
+import threading
+import sys
 import uuid
 from unittest.mock import MagicMock, patch
 
@@ -25,6 +27,8 @@ from src.business.agents.config import (
 )
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+from src.data.repositories import MessageRepository
+from src.execution.process_manager import get_process_manager
 from tests.conftest import MockLLMClient
 
 
@@ -73,6 +77,94 @@ def _clean_run_context():
 
 
 class TestLoopCancellation:
+    def test_executor_exit_cleans_background_processes_for_its_session(
+        self, mock_config, in_memory_db, tmp_path
+    ):
+        sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
+        manager = get_process_manager()
+        script = tmp_path / "background-owned.py"
+        script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        process_id = None
+
+        def start_background():
+            nonlocal process_id
+            record, _ = manager.start(
+                session_id=sid,
+                command=f'"{sys.executable}" "{script.name}"',
+                cwd=tmp_path,
+                cwd_display=".",
+                command_summary="background-owned.py",
+            )
+            process_id = record.process_id
+            return json.dumps({"processId": process_id})
+
+        llm = MockLLMClient(
+            [
+                LLMResponse(
+                    content=None,
+                    tool_calls=[ToolCallInfo(id="bg1", name="background", args={})],
+                ),
+                LLMResponse(content="done", tool_calls=[]),
+            ]
+        )
+        loop = AgentLoop(
+            AgentConfig(
+                agent_type=AgentType.EPHEMERAL_SUBAGENT,
+                system_prompt="sub",
+                max_iterations=5,
+            ),
+            llm,
+            mock_config,
+        )
+
+        result = loop.run(
+            sid,
+            user_input="go",
+            tools=[
+                ToolDefinition(
+                    name="background",
+                    schema={"type": "object", "properties": {}},
+                    handler=start_background,
+                    has_side_effects=True,
+                )
+            ],
+        )
+
+        assert result.result_type == ResultType.COMPLETED
+        assert process_id is not None
+        assert manager.poll(process_id)["status"] == "terminated"
+
+    def test_cancel_interrupts_inflight_llm_request(self, mock_config, in_memory_db):
+        sid = _new_session(AgentType.ASSISTANT)
+        run_context.begin(sid)
+        entered = threading.Event()
+        released = threading.Event()
+
+        class BlockingLLM:
+            def chat_with_tools(self, messages, tools, *, cancel_token=None, **kwargs):
+                assert cancel_token is run_context.get_current().cancel_token
+                entered.set()
+                remove = cancel_token.add_callback(lambda _reason: released.set())
+                try:
+                    assert released.wait(timeout=2)
+                    raise RuntimeError("provider request interrupted")
+                finally:
+                    remove()
+
+        def cancel() -> None:
+            assert entered.wait(timeout=2)
+            run_context.request_cancel(sid)
+
+        canceller = threading.Thread(target=cancel, daemon=True)
+        canceller.start()
+        loop = AgentLoop(_assistant_config(), BlockingLLM(), mock_config)
+
+        result = loop.run(sid, user_input="go", tools=[_noop_tool()])
+
+        canceller.join(timeout=2)
+        assert result.result_type == ResultType.CANCELLED
+        assert not canceller.is_alive()
+
     def test_cancel_at_iteration_start_skips_llm(self, mock_config, in_memory_db):
         sid = _new_session(AgentType.ASSISTANT)
         run_context.begin(sid)
@@ -105,6 +197,102 @@ class TestLoopCancellation:
         assert result.result_type == ResultType.CANCELLED
         assert ran["count"] == 0  # 取消在工具批次前，副作用工具未执行
         assert loop._get_context_manager(sid).get_session_status() == "suspended"
+
+    def test_cancelled_current_tool_is_paired_and_later_calls_stay_pending(
+        self, mock_config, in_memory_db
+    ):
+        sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
+        run_context.begin(sid)
+        entered = threading.Event()
+        released = threading.Event()
+        third_ran = False
+
+        def first_handler():
+            return json.dumps({"step": 1})
+
+        def cancellable_handler():
+            token = run_context.get_current().cancel_token
+            remove = token.add_callback(lambda _reason: released.set())
+            entered.set()
+            try:
+                assert released.wait(timeout=2)
+                return json.dumps({"step": 2, "result": "must be replaced"})
+            finally:
+                remove()
+
+        def third_handler():
+            nonlocal third_ran
+            third_ran = True
+            return json.dumps({"step": 3})
+
+        response = LLMResponse(
+            content=None,
+            tool_calls=[
+                ToolCallInfo(id="c1", name="first", args={}),
+                ToolCallInfo(id="c2", name="second", args={}),
+                ToolCallInfo(id="c3", name="third", args={}),
+            ],
+        )
+        llm = MockLLMClient([response])
+        tools = [
+            ToolDefinition(
+                name="first",
+                schema={"type": "object", "properties": {}},
+                handler=first_handler,
+                has_side_effects=True,
+            ),
+            ToolDefinition(
+                name="second",
+                schema={"type": "object", "properties": {}},
+                handler=cancellable_handler,
+                has_side_effects=True,
+            ),
+            ToolDefinition(
+                name="third",
+                schema={"type": "object", "properties": {}},
+                handler=third_handler,
+                has_side_effects=True,
+            ),
+        ]
+
+        canceller = threading.Thread(
+            target=lambda: (
+                entered.wait(timeout=2),
+                run_context.request_cancel(sid),
+            ),
+            daemon=True,
+        )
+        canceller.start()
+        loop = AgentLoop(
+            AgentConfig(
+                agent_type=AgentType.EPHEMERAL_SUBAGENT,
+                system_prompt="sub",
+                max_iterations=5,
+                resumable_on_failure=True,
+            ),
+            llm,
+            mock_config,
+        )
+
+        result = loop.run(sid, user_input="go", tools=tools)
+
+        canceller.join(timeout=2)
+        ctx = loop._get_context_manager(sid)
+        messages = MessageRepository().get_all(sid)
+        by_call_id = {
+            message.tool_call_id: json.loads(message.content)
+            for message in messages
+            if message.role == "tool"
+        }
+        assert result.result_type == ResultType.CANCELLED
+        assert by_call_id["c1"] == {"step": 1}
+        assert by_call_id["c2"] == {
+            "outcome": "interrupted",
+            "note": "被中断，副作用状态未知",
+        }
+        assert "c3" not in by_call_id
+        assert [item["id"] for item in ctx.get_pending_tool_calls()] == ["c3"]
+        assert third_ran is False
 
     def test_deep_cancel_parent_and_child_both_suspended(self, mock_config, in_memory_db):
         parent_sid = _new_session(AgentType.ASSISTANT)

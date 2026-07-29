@@ -104,8 +104,17 @@ class TestSelfHeal:
         briefing = build_reentry_briefing(entries)
         assert "自愈选项" not in briefing
 
-    def test_mutate_task_graph_skip_node(self):
+    def test_mutate_task_graph_skip_node(self, monkeypatch):
         """自愈跳过节点：mutate_task_graph(skip_node) 标记 cancelled。"""
+        from src.business.agents import run_context
+        from src.execution.cancellation import CancelReason
+
+        signals = []
+        monkeypatch.setattr(
+            run_context,
+            "request_cancel_key",
+            lambda key, *, reason=CancelReason.USER_CANCEL: signals.append((key, reason)) or True,
+        )
         session_id = generate_id("sess")
         with TaskCollaborationService() as svc:
             result = svc.build_task_graph(
@@ -127,6 +136,7 @@ class TestSelfHeal:
             assert len(mutation["applied"]) == 1
             task = svc._tasks.get_task(n1_id)
             assert task.status == "cancelled"
+            assert signals == [(f"assistant_task:{n1_id}", CancelReason.SIBLING_ERROR)]
 
     def test_skip_node_cascades_downstream_so_graph_cannot_stall(self):
         """skip_node 的下游规则必须落地：不可继续的下游子图应被取消，避免依赖永久等待。"""

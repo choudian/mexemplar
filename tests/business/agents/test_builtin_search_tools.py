@@ -2,6 +2,10 @@ import json
 from pathlib import Path
 
 from src.business.agents.tools import search_tools
+from src.business.agents.tools.builtin_permissions import (
+    clear_external_confirmations_for_tests,
+    mark_external_read_confirmed,
+)
 
 
 def _obj(result: str) -> dict:
@@ -98,6 +102,26 @@ def test_search_rejects_outside_workspace_root(tmp_path, monkeypatch):
 
     assert result["outcome"] == "rejected"
     assert result["error"]["code"] == "path_outside_workspace"
+
+
+def test_search_files_reads_confirmed_outside_workspace_root(tmp_path, monkeypatch):
+    workspace = tmp_path / "workspace"
+    outside = tmp_path / "outside"
+    workspace.mkdir()
+    outside.mkdir()
+    (outside / "found.py").write_text("", encoding="utf-8")
+    monkeypatch.chdir(workspace)
+    clear_external_confirmations_for_tests()
+    mark_external_read_confirmed(outside, workspace_root=workspace)
+
+    try:
+        result = _obj(search_tools.search_files_handler(root=str(outside), pattern="*.py"))
+    finally:
+        clear_external_confirmations_for_tests()
+
+    assert result["outcome"] == "success"
+    assert result["permission"]["decision"] == "confirmed"
+    assert [match["path"] for match in result["payload"]["matches"]] == ["found.py"]
 
 
 def test_search_content_keeps_source_matches_unredacted(tmp_path, monkeypatch):

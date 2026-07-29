@@ -12,8 +12,17 @@ from src.data.repos.base_repository import generate_id
 class TestCancelPropagation:
     """US5: 取消传播。"""
 
-    def test_cancel_graph_stops_all_nodes(self):
+    def test_cancel_graph_stops_all_nodes(self, monkeypatch):
         """取消图：所有节点变为 cancelled。"""
+        from src.business.agents import run_context
+        from src.execution.cancellation import CancelReason
+
+        signals = []
+        monkeypatch.setattr(
+            run_context,
+            "request_cancel_key",
+            lambda key, *, reason=CancelReason.USER_CANCEL: signals.append((key, reason)) or True,
+        )
         session_id = generate_id("sess")
         with TaskCollaborationService() as svc:
             result = svc.build_task_graph(
@@ -35,6 +44,7 @@ class TestCancelPropagation:
             snapshot = svc.get_graph_snapshot(session_id=session_id, graph_id=graph_id)
             for task in snapshot.tasks:
                 assert task.status in ("cancelled", "failed")
+            assert signals == [(f"assistant_task_graph:{graph_id}", CancelReason.USER_CANCEL)]
 
     def test_redirect_cancel_and_redecompose(self):
         """改主意：取消旧图 + 重新分解。"""

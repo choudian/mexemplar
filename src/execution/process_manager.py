@@ -280,9 +280,23 @@ class ProcessManager:
     def cleanup(self) -> dict[str, int]:
         with self._lock:
             records = list(self._records.values())
+        return self._cleanup_records(records)
+
+    def cleanup_session(self, session_id: str) -> dict[str, int]:
+        """Stop every running background process owned by one executor session."""
+        sid = str(session_id or "").strip()
+        if not sid:
+            return {"stopped": 0, "failures": 0}
+        with self._lock:
+            records = [record for record in self._records.values() if record.session_id == sid]
+        return self._cleanup_records(records)
+
+    def _cleanup_records(self, records: list[ProcessRecord]) -> dict[str, int]:
         stopped = 0
         failures = 0
         for record in records:
+            with self._lock:
+                self._refresh_locked(record)
             if record.status == "running":
                 try:
                     self.stop(record.process_id, force=True)

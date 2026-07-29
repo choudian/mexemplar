@@ -18,6 +18,7 @@ from src.business.debug.context import TraceContext
 from src.data.unified_config import UnifiedConfigManager
 from src.business.memory.context_manager import ContextManager
 from src.data.repositories import MessageRepository, SessionRepository
+from src.execution.cancellation import should_persist_interrupted_tool
 from src.utils.events import emit
 from src.utils.helpers import safe_format_template, walk_exception_chain
 
@@ -57,6 +58,13 @@ _ASSISTANT_FORBIDDEN_DYNAMIC_TOOL_PREFIXES = ("utool_", "comp_")
 
 # 活动事件文本截断上限（projector 还会再走 009 payload allowlist 脱敏）。
 _ACTIVITY_TEXT_LIMIT = 2000
+_INTERRUPTED_TOOL_RESULT = json.dumps(
+    {
+        "outcome": "interrupted",
+        "note": "被中断，副作用状态未知",
+    },
+    ensure_ascii=False,
+)
 
 
 def _activity_payload_text(value: Any) -> Any:
@@ -296,7 +304,14 @@ class AgentLoop:
                     workflow_id=workflow_id or "",
                     iteration=iteration,
                 ):
-                    response = self._llm.chat_with_tools(messages, tools)
+                    current_run = run_context.get_current()
+                    response = self._llm.chat_with_tools(
+                        messages,
+                        tools,
+                        cancel_token=(
+                            current_run.cancel_token if current_run is not None else None
+                        ),
+                    )
                 logger.debug(
                     "[Agent Loop] LLM 回复: iteration=%s text_chars=%s tool_calls=%s",
                     iteration,
@@ -308,6 +323,13 @@ class AgentLoop:
                 return response, False
 
             except Exception as e:
+                current_run = run_context.get_current()
+                if current_run is not None and current_run.cancel_token.is_set():
+                    logger.info(
+                        "[Agent Loop] LLM 请求已按取消信号中断: reason=%s",
+                        getattr(current_run.cancel_token.reason, "value", None),
+                    )
+                    return None, False
                 if retry_count >= retry_config.max_retries:
                     recoverable = _is_recoverable_llm_failure(e)
                     logger.error(
@@ -750,6 +772,33 @@ class AgentLoop:
         )
         self._emit_activity(ctx, "tool_result", tool_name=tool_call.name, text=content)
 
+    def _save_interrupted_tool_result(
+        self,
+        tool_call: ToolCallInfo,
+        ctx: ContextManager,
+    ) -> None:
+        """Pair a killed call without making it eligible for blind replay.
+
+        This synthetic result intentionally bypasses built-in handler contract
+        governance: it is produced by AgentLoop, not by the interrupted
+        handler, and must remain the stable minimal marker used by pending-call
+        recovery.
+        """
+        self._save_governed_tool_result(
+            tool_call,
+            ctx,
+            _INTERRUPTED_TOOL_RESULT,
+        )
+
+    @staticmethod
+    def _interrupted_result_required() -> bool:
+        current_run = run_context.get_current()
+        return bool(
+            current_run is not None
+            and current_run.cancel_token.is_set()
+            and should_persist_interrupted_tool(current_run.cancel_token.reason)
+        )
+
     def _execute_and_govern_tool_call(
         self,
         tool_call: ToolCallInfo,
@@ -953,6 +1002,11 @@ class AgentLoop:
         executor: Optional[ThreadPoolExecutor] = None
         try:
             for is_parallel, partition in partitions:
+                cancelled = self._cancellation_result(ctx)
+                if cancelled is not None:
+                    # No call in this partition started, so leave every one
+                    # unpaired for existing pending-call resume semantics.
+                    return cancelled
                 if failure_upstream_id is not None:
                     for tc, _, _ in partition:
                         self._save_error(
@@ -985,6 +1039,9 @@ class AgentLoop:
                             )
                         else:
                             self._log_tool_result(tc, outcome)
+                    cancelled = self._cancellation_result(ctx)
+                    if cancelled is not None:
+                        return cancelled
                     continue
 
                 tc, kind, tool_def = partition[0]
@@ -996,7 +1053,13 @@ class AgentLoop:
                     continue
 
                 outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
+                if self._interrupted_result_required():
+                    self._save_interrupted_tool_result(tc, ctx)
+                    return self._cancellation_result(ctx)
                 self._persist_tool_result(tc, ctx, outcome.result)
+                cancelled = self._cancellation_result(ctx)
+                if cancelled is not None:
+                    return cancelled
                 if outcome.failed:
                     # Only cascade failure for tools with side effects
                     if tool_def.has_side_effects:
@@ -1034,6 +1097,9 @@ class AgentLoop:
     ) -> Optional[AgentResult]:
         """Execute a solo interrupting tool with contract validation."""
         outcome = self._execute_tool_call(tc, tool_def, session_id, iteration)
+        if self._interrupted_result_required():
+            self._save_interrupted_tool_result(tc, ctx)
+            return self._cancellation_result(ctx)
         if not isinstance(outcome.result, ToolSignal):
             self._persist_tool_result(tc, ctx, outcome.result)
             return None
@@ -1200,6 +1266,50 @@ class AgentLoop:
         initial_tool_calls: Optional[List[ToolCallInfo]] = None,
         resume_existing_turn: bool = False,
     ) -> AgentResult:
+        """Run one executor body and reclaim its session-owned background processes."""
+        from src.execution.cancellation import (
+            CancelReason,
+            should_terminate_command,
+        )
+        from src.execution.process_manager import get_process_manager
+
+        manager = get_process_manager()
+        current_run = run_context.get_current()
+        token = current_run.cancel_token if current_run is not None else None
+
+        def cleanup_on_cancel(reason) -> None:
+            if should_terminate_command(reason):
+                manager.cleanup_session(session_id)
+
+        remove_cancel_callback = (
+            token.add_callback(cleanup_on_cancel) if token is not None else lambda: None
+        )
+        try:
+            return self._run_impl(
+                session_id,
+                user_input=user_input,
+                tools=tools,
+                system_prompt_override=system_prompt_override,
+                initial_tool_calls=initial_tool_calls,
+                resume_existing_turn=resume_existing_turn,
+            )
+        finally:
+            remove_cancel_callback()
+            # ``interrupt`` and explicit ``background`` preserve detached work.
+            # Every normal/true-cancel/sibling-error executor exit owns cleanup.
+            reason = token.reason if token is not None else None
+            if reason not in {CancelReason.INTERRUPT, CancelReason.BACKGROUND}:
+                manager.cleanup_session(session_id)
+
+    def _run_impl(
+        self,
+        session_id: str,
+        user_input: Optional[Union[str, dict]] = None,
+        tools: Optional[Union[List[ToolDefinition], Callable[[], List[ToolDefinition]]]] = None,
+        system_prompt_override: Optional[str] = None,
+        initial_tool_calls: Optional[List[ToolCallInfo]] = None,
+        resume_existing_turn: bool = False,
+    ) -> AgentResult:
         """
         执行 Agent 循环
 
@@ -1347,6 +1457,9 @@ class AgentLoop:
                     workflow_id,
                 )
                 if response is None:
+                    cancelled = self._cancellation_result(ctx)
+                    if cancelled is not None:
+                        return cancelled
                     if self._config.resumable_on_failure and llm_failure_recoverable:
                         # 账户配额/限流/网络等"需等外部恢复"的失败：不丢工作，转可唤回暂停。
                         # 不可恢复错误（如 400/认证/校验）落入下方 ERROR，避免误导主代理等待。

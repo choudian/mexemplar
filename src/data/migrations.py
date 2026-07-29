@@ -3111,6 +3111,117 @@ def migrate_to_v36(engine):
     logger.info("迁移到版本 36 完成：执行记录可追溯到执行会话")
 
 
+def migrate_to_v37(engine):
+    """迁移到版本 37：扩展 Assistant Task 的暂停原因约束。"""
+    try:
+        with engine.begin() as conn:
+            table_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'assistant_tasks'"
+                )
+            ).fetchone()
+            if table_exists is not None:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE assistant_tasks_v37 (
+                            task_id TEXT PRIMARY KEY,
+                            graph_id TEXT NOT NULL,
+                            root_task_id TEXT,
+                            parent_task_id TEXT,
+                            session_id TEXT NOT NULL,
+                            user_message_sequence INTEGER,
+                            title TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'pending_dispatch'
+                                CONSTRAINT ck_assistant_tasks_status
+                                CHECK (status IN (
+                                    'pending_dispatch', 'running', 'suspended',
+                                    'completed', 'failed', 'cancelled'
+                                )),
+                            suspend_reason TEXT
+                                CONSTRAINT ck_assistant_tasks_suspend_reason
+                                CHECK (
+                                    suspend_reason IS NULL OR suspend_reason IN (
+                                        'waiting_user', 'waiting_system', 'user_stop',
+                                        'budget_exhausted', 'interrupted'
+                                    )
+                                ),
+                            assignee_type TEXT
+                                CONSTRAINT ck_assistant_tasks_assignee_type
+                                CHECK (
+                                    assignee_type IS NULL OR assignee_type IN (
+                                        'ephemeral_subagent', 'specialist'
+                                    )
+                                ),
+                            assignee_id TEXT,
+                            owner_session_id TEXT,
+                            capability_scope TEXT,
+                            graph_version INTEGER NOT NULL DEFAULT 1,
+                            task_version INTEGER NOT NULL DEFAULT 1,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            completed_at DATETIME,
+                            failed_at DATETIME,
+                            cancelled_at DATETIME,
+                            requires_confirmation INTEGER NOT NULL DEFAULT 0,
+                            workspace_root TEXT,
+                            CONSTRAINT ck_assistant_tasks_suspend_reason_required CHECK (
+                                (status = 'suspended' AND suspend_reason IS NOT NULL)
+                                OR
+                                (status != 'suspended' AND suspend_reason IS NULL)
+                            )
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO assistant_tasks_v37 (
+                            task_id, graph_id, root_task_id, parent_task_id,
+                            session_id, user_message_sequence, title, description,
+                            status, suspend_reason, assignee_type, assignee_id,
+                            owner_session_id, capability_scope, graph_version,
+                            task_version, created_at, updated_at, completed_at,
+                            failed_at, cancelled_at, requires_confirmation,
+                            workspace_root
+                        )
+                        SELECT
+                            task_id, graph_id, root_task_id, parent_task_id,
+                            session_id, user_message_sequence, title, description,
+                            status, suspend_reason, assignee_type, assignee_id,
+                            owner_session_id, capability_scope, graph_version,
+                            task_version, created_at, updated_at, completed_at,
+                            failed_at, cancelled_at, requires_confirmation,
+                            workspace_root
+                        FROM assistant_tasks
+                        """
+                    )
+                )
+                conn.execute(text("DROP TABLE assistant_tasks"))
+                conn.execute(text("ALTER TABLE assistant_tasks_v37 RENAME TO assistant_tasks"))
+                for index_sql in (
+                    "CREATE INDEX idx_assistant_tasks_graph_status "
+                    "ON assistant_tasks(graph_id, status)",
+                    "CREATE INDEX idx_assistant_tasks_graph_parent "
+                    "ON assistant_tasks(graph_id, parent_task_id)",
+                    "CREATE INDEX idx_assistant_tasks_session_message "
+                    "ON assistant_tasks(session_id, user_message_sequence)",
+                    "CREATE INDEX idx_assistant_tasks_graph_version "
+                    "ON assistant_tasks(graph_id, task_version)",
+                ):
+                    conn.execute(text(index_sql))
+            else:
+                logger.info("迁移到版本 37：assistant_tasks 表不存在，跳过约束重建")
+            conn.execute(text("UPDATE schema_version SET version = 37"))
+    except Exception as e:
+        logger.error(f"迁移到版本 37 失败: {e}")
+        raise
+    logger.info("迁移到版本 37 完成：Assistant Task 暂停原因约束已扩展")
+
+
 def downgrade_from_v36(engine):
     """回退版本 36：移除执行会话列。"""
     try:
@@ -3193,6 +3304,7 @@ _MIGRATIONS = [
     (34, migrate_to_v34),
     (35, migrate_to_v35),
     (36, migrate_to_v36),
+    (37, migrate_to_v37),
 ]
 
 

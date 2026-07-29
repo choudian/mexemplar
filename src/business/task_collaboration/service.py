@@ -684,6 +684,16 @@ class TaskCollaborationService(AtomicTaskService):
             task_obj = self._tasks.get_task(task_id_to_emit)
             if task_obj is not None:
                 emit_task_updated(self, task_obj)
+            # skip_node is a local sibling/self-heal cancellation: stop only
+            # the matching executor, not the parent run or the whole graph.
+            from src.business.agents import run_context
+            from src.business.task_collaboration.dispatcher import task_cancel_key
+            from src.execution.cancellation import CancelReason
+
+            run_context.request_cancel_key(
+                task_cancel_key(task_id_to_emit),
+                reason=CancelReason.SIBLING_ERROR,
+            )
 
         # 获取当前 graph_version
         root_refreshed = self._tasks.get_task(root_task_id)
@@ -1100,7 +1110,7 @@ class TaskCollaborationService(AtomicTaskService):
         return affected
 
     def stop_graph(self, *, session_id: str, graph_id: str) -> int:
-        return self._bulk_transition(
+        affected = self._bulk_transition(
             session_id=session_id,
             graph_id=graph_id,
             predicate=lambda task: task.status in {TaskStatus.PENDING_DISPATCH, TaskStatus.RUNNING},
@@ -1108,6 +1118,15 @@ class TaskCollaborationService(AtomicTaskService):
             suspend_reason=SuspendReason.USER_STOP,
             change_type="graph_stopped",
         )
+        from src.business.agents import run_context
+        from src.business.task_collaboration.dispatcher import graph_cancel_key
+        from src.execution.cancellation import CancelReason
+
+        run_context.request_cancel_key(
+            graph_cancel_key(graph_id),
+            reason=CancelReason.USER_CANCEL,
+        )
+        return affected
 
     def continue_graph(self, *, session_id: str, graph_id: str) -> int:
         return self._bulk_transition(
@@ -1126,7 +1145,7 @@ class TaskCollaborationService(AtomicTaskService):
         graph_id: str,
         expected_graph_version: int | None = None,
     ) -> int:
-        return self._bulk_transition(
+        affected = self._bulk_transition(
             session_id=session_id,
             graph_id=graph_id,
             predicate=lambda task: task.status not in TERMINAL_TASK_STATUSES,
@@ -1134,6 +1153,15 @@ class TaskCollaborationService(AtomicTaskService):
             expected_graph_version=expected_graph_version,
             change_type="graph_cancelled",
         )
+        from src.business.agents import run_context
+        from src.business.task_collaboration.dispatcher import graph_cancel_key
+        from src.execution.cancellation import CancelReason
+
+        run_context.request_cancel_key(
+            graph_cancel_key(graph_id),
+            reason=CancelReason.USER_CANCEL,
+        )
+        return affected
 
     @staticmethod
     def snapshot_to_dict(snapshot: TaskGraphSnapshot) -> dict:

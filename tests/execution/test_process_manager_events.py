@@ -391,3 +391,29 @@ def test_stalled_only_when_running(tmp_path, monkeypatch):
     result = pm.wait_for_event(record.process_id, since_cursor=0, timeout_ms=300)
     stalled = [e for e in result["events"] if e["type"] == "stalled"]
     assert not stalled
+
+
+def test_cleanup_session_stops_only_owned_background_processes(tmp_path):
+    pm = ProcessManager()
+    owned = _start(
+        pm,
+        tmp_path=tmp_path,
+        name="owned.py",
+        code="import time; time.sleep(30)\n",
+        session_id="executor-a",
+    )
+    other = _start(
+        pm,
+        tmp_path=tmp_path,
+        name="other.py",
+        code="import time; time.sleep(30)\n",
+        session_id="executor-b",
+    )
+    try:
+        result = pm.cleanup_session("executor-a")
+
+        assert result == {"stopped": 1, "failures": 0}
+        assert pm.poll(owned.process_id)["status"] == "terminated"
+        assert pm.poll(other.process_id)["status"] == "running"
+    finally:
+        pm.stop(other.process_id, force=True)

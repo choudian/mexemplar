@@ -28,6 +28,7 @@ from src.business.agents.tools.builtin_permissions import (
 )
 from src.business.agents.tools.file_tools import _redact_text
 from src.data.repos.tool_output_repository import ToolOutputRepository
+from src.business.agents import run_context
 from src.execution.command_runner import CommandParseError, run_command
 from src.execution.process_manager import (
     ProcessLimitExceeded,
@@ -228,11 +229,13 @@ def exec_handler(
         )
 
     try:
+        current_run = run_context.get_current()
         result = run_command(
             command,
             cwd=check.classification.resolved,
             timeout_ms=timeout_ms,
             stdin=stdin,
+            cancel_token=current_run.cancel_token if current_run is not None else None,
         )
     except (CommandParseError, FileNotFoundError, PermissionError, OSError, ValueError, subprocess.SubprocessError) as exc:
         return _handle_command_start_error(
@@ -270,6 +273,17 @@ def exec_handler(
             permission=check.decision,
             payload=payload,
             details={"timeoutMs": timeout_ms},
+            references=references,
+            warnings=warnings or None,
+        )
+    if result.interrupted:
+        return error_json(
+            tool,
+            "command_interrupted",
+            "Command was interrupted; side-effect state is unknown.",
+            outcome="interrupted",
+            permission=check.decision,
+            payload=payload,
             references=references,
             warnings=warnings or None,
         )

@@ -430,19 +430,8 @@ def permission_for_path(
     mutation_ops = {"write", "edit", "delete", "patch"}
 
     if cls.inside_workspace:
-        if cls.hidden and not allow_hidden:
-            return PermissionCheck(
-                cls,
-                PermissionDecision(
-                    scope="hidden",
-                    risk="denied",
-                    decision="denied",
-                    summary=f"Denied {op}: {cls.display_path}",
-                    reason="path_hidden_or_system",
-                ),
-                "path_hidden_or_system",
-                "Path is hidden or system-protected.",
-            )
+        # Hidden metadata remains available to callers, but workspace-owned hidden
+        # paths (including .git) are governed by the same operation gates as peers.
         risk = (
             "read_only"
             if op in read_only_ops
@@ -478,7 +467,7 @@ def permission_for_path(
             ),
         )
 
-    if op == "read":
+    if op in read_only_ops:
         if _is_external_read_confirmed(cls, session_id=session_id):
             return PermissionCheck(
                 cls,
@@ -486,7 +475,7 @@ def permission_for_path(
                     scope=cls.scope,
                     risk="elevated",
                     decision="confirmed",
-                    summary=build_external_read_summary(cls),
+                    summary=build_external_read_summary(cls, operation=op),
                     reason="outside_workspace_read_confirmed",
                 ),
             )
@@ -496,11 +485,11 @@ def permission_for_path(
                 scope=cls.scope,
                 risk="elevated",
                 decision="confirmation_required",
-                summary=build_external_read_summary(cls),
+                summary=build_external_read_summary(cls, operation=op),
                 reason="outside_workspace_read_requires_confirmation",
             ),
             "path_outside_workspace",
-            "Outside-workspace read requires high-risk confirmation.",
+            f"Outside-workspace {op} requires high-risk confirmation.",
         )
 
     # workspace 外的写/编辑/patch 默认走确认链（像读一样），由 pre_hook 的
@@ -583,9 +572,14 @@ def _redacted_token(value: str) -> str:
     return "***"
 
 
-def build_external_read_summary(cls: PathClassification) -> str:
+def build_external_read_summary(
+    cls: PathClassification,
+    *,
+    operation: str = "read",
+) -> str:
+    verb = "Search" if operation.lower() == "search" else "Read"
     return _truncate_summary(
-        f"Read outside workspace: {redact_fragment(cls.display_path, 140)}; "
+        f"{verb} outside workspace: {redact_fragment(cls.display_path, 140)}; "
         "reason: exceptional inspection"
     )
 

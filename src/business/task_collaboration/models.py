@@ -26,6 +26,8 @@ class SuspendReason(StrEnum):
     # 执行体跑到轮次预算但工作完整保留：与"等外部条件"不同，父侧可追加预算续跑。
     # 落进 WAITING_SYSTEM 会让父侧误以为在等外部，从而无限期干等。
     BUDGET_EXHAUSTED = "budget_exhausted"
+    # 执行体异常中断，工作保留但最后一步副作用可能未知；续跑前需要先核对现场。
+    INTERRUPTED = "interrupted"
 
 
 class TaskEdgeType(StrEnum):

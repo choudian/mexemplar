@@ -715,14 +715,21 @@ class AssistantRuntime:
         if not sid:
             return False
         expected_run_id = (run_id or "").strip() or None
-        accepted = run_context.request_cancel(sid, expected_run_id=expected_run_id)
+        accepted = run_context.request_cancel(
+            sid,
+            expected_run_id=expected_run_id,
+            reason=run_context.CancelReason.USER_CANCEL,
+        )
         if not accepted:
             with self._workers_lock:
                 worker = self._workers.get(sid)
                 has_worker = worker is not None and worker.is_alive()
             if has_worker and expected_run_id is None:
                 # 停止早于 begin() 登记 Event（早停竞态 C2-E3）：记待停止意图，begin 命中即取消。
-                run_context.mark_pending_cancel(sid)
+                run_context.mark_pending_cancel(
+                    sid,
+                    reason=run_context.CancelReason.USER_CANCEL,
+                )
                 accepted = True
         # 若回合此刻阻塞在 pending 高危确认等待中，fail-closed 当拒绝并唤醒回合到下一取消检查点
         # （FR-006b / C2-X1）；CC-001 同步确认协议 first-decision-wins / expires_at 不被破坏。
@@ -741,7 +748,10 @@ class AssistantRuntime:
 
         with TaskCollaborationService() as service:
             affected = service.stop_graph(session_id=session_id, graph_id=graph_id)
-        signaled = run_context.request_cancel_key(graph_cancel_key(graph_id))
+        signaled = run_context.request_cancel_key(
+            graph_cancel_key(graph_id),
+            reason=run_context.CancelReason.USER_CANCEL,
+        )
         if run_id:
             signaled = self.cancel_session(session_id, run_id=run_id) or signaled
         if signaled:

@@ -182,7 +182,11 @@ TaskStatus = Literal[
 ]
 TaskDisplayPhase = Literal["running", "reviewing", "needs_attention", "paused", "done"]
 TaskSuspendReason = Literal[
-    "waiting_user", "waiting_system", "user_stop", "budget_exhausted"
+    "waiting_user",
+    "waiting_system",
+    "user_stop",
+    "budget_exhausted",
+    "interrupted",
 ]
 
 

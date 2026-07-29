@@ -9,6 +9,7 @@
 import pytest
 
 from src.business.agents import run_context
+from src.business.agents.run_context import CancelReason, CancelToken
 
 
 @pytest.fixture(autouse=True)
@@ -102,3 +103,44 @@ class TestRequestCancel:
     def test_non_assistant_flow_has_no_context(self):
         """非助理流程从不 begin → get_current() 为 None（取消检查恒 False，零行为变化）。"""
         assert run_context.get_current() is None
+
+
+class TestCancelToken:
+    def test_cancel_invokes_callbacks_once_with_first_reason(self):
+        token = CancelToken()
+        seen = []
+
+        remove = token.add_callback(seen.append)
+
+        assert token.cancel(CancelReason.SIBLING_ERROR) is True
+        assert token.cancel(CancelReason.USER_CANCEL) is False
+        remove()
+
+        assert token.is_set() is True
+        assert token.reason == CancelReason.SIBLING_ERROR
+        assert seen == [CancelReason.SIBLING_ERROR]
+
+    def test_late_callback_runs_immediately_and_removed_callback_does_not_run(self):
+        token = CancelToken()
+        removed = []
+        late = []
+
+        remove = token.add_callback(removed.append)
+        remove()
+        token.cancel(CancelReason.INTERRUPT)
+        token.add_callback(late.append)
+
+        assert removed == []
+        assert late == [CancelReason.INTERRUPT]
+
+    def test_request_cancel_propagates_structured_reason(self):
+        sid = "sess-reason"
+        ctx = run_context.begin(sid)
+        seen = []
+        ctx.cancel_token.add_callback(seen.append)
+
+        assert run_context.request_cancel(sid, reason=CancelReason.USER_CANCEL) is True
+
+        assert ctx.cancel_event is ctx.cancel_token
+        assert ctx.cancel_event.wait(timeout=0) is True
+        assert seen == [CancelReason.USER_CANCEL]

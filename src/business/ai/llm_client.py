@@ -14,6 +14,7 @@
 """
 
 import logging
+import threading
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
 
@@ -373,6 +374,7 @@ class LangChainLLMClient:
         self,
         messages: List[Dict[str, Any]],
         tools: List[Dict[str, Any]],
+        cancel_token=None,
         **kwargs,
     ) -> LLMResponse:
         """
@@ -388,6 +390,13 @@ class LangChainLLMClient:
         Returns:
             LLMResponse 对象
         """
+
+        request_llm, owns_request_llm = self._request_llm(cancel_token)
+        close_request_resources = self._request_resource_closer(request_llm)
+        remove_cancel_callback = self._register_request_cancellation(
+            cancel_token,
+            close_request_resources,
+        )
 
         def _invoke_provider(
             provider_messages: List[Dict[str, Any]],
@@ -416,7 +425,7 @@ class LangChainLLMClient:
                 )
 
             # 绑定工具（单工具调用模式）
-            llm_with_tools = self.llm.bind_tools(provider_tools or [], parallel_tool_calls=False)
+            llm_with_tools = request_llm.bind_tools(provider_tools or [], parallel_tool_calls=False)
 
             # 调用模型
             ai_message = llm_with_tools.invoke(lc_messages, **kwargs)
@@ -441,23 +450,101 @@ class LangChainLLMClient:
             return response
 
         try:
-            from src.business.debug.observation import observe_chat_with_tools
-            from src.business.debug.service import get_active_capture
+            try:
+                from src.business.debug.observation import observe_chat_with_tools
+                from src.business.debug.service import get_active_capture
 
-            buffer, redactor, epoch = get_active_capture()
-        except Exception:
-            logger.debug("debug observation unavailable for tool chat", exc_info=True)
-            return _invoke_provider(messages, tools)
+                buffer, redactor, epoch = get_active_capture()
+            except Exception:
+                logger.debug("debug observation unavailable for tool chat", exc_info=True)
+                return _invoke_provider(messages, tools)
 
-        return observe_chat_with_tools(
-            buffer=buffer,
-            redactor=redactor,
-            epoch=epoch,
-            messages=messages,
-            tools=tools,
-            invoke_fn=_invoke_provider,
-            method="chat_with_tools",
-        )
+            return observe_chat_with_tools(
+                buffer=buffer,
+                redactor=redactor,
+                epoch=epoch,
+                messages=messages,
+                tools=tools,
+                invoke_fn=_invoke_provider,
+                method="chat_with_tools",
+            )
+        finally:
+            remove_cancel_callback()
+            if owns_request_llm:
+                # The provider SDK owns the response body. Cancellable
+                # requests have their own provider/transport and are closed in
+                # ``finally`` so early cancellation and generator/observation
+                # unwinding cannot retain TLS buffers until GC.
+                close_request_resources()
+
+    def _request_llm(self, cancel_token):
+        """Select a shared or request-scoped provider.
+
+        Orchestrators intentionally share ``LangChainLLMClient`` across
+        concurrent TaskAttempts. A shared root client cannot provide
+        request-scoped cancellation: closing it would abort unrelated sessions.
+        Cancellable Agent requests therefore get isolated transports. Existing
+        PM/background callers without a token retain the original shared-client
+        behavior and construction cost.
+        """
+        if cancel_token is None:
+            return self.llm, False
+        return self._create_llm(), True
+
+    def _request_resource_closer(self, request_llm):
+        """Return a thread-safe one-shot closer shared by cancel and ``finally``."""
+        close_lock = threading.Lock()
+        closed = False
+
+        def close_once() -> None:
+            nonlocal closed
+            with close_lock:
+                if closed:
+                    return
+                closed = True
+            self._close_sync_llm_resources(request_llm)
+
+        return close_once
+
+    def _register_request_cancellation(self, cancel_token, close_request_resources):
+        if cancel_token is None or not hasattr(cancel_token, "add_callback"):
+            return lambda: None
+
+        def interrupt(reason) -> None:
+            from src.execution.cancellation import should_abort_http
+
+            if not should_abort_http(reason):
+                return
+            close_request_resources()
+
+        return cancel_token.add_callback(interrupt)
+
+    @staticmethod
+    def _close_sync_llm_resources(request_llm) -> None:
+        """Close provider-owned synchronous transports, idempotently.
+
+        ChatOpenAI exposes ``root_client`` (OpenAI), while ChatAnthropic keeps
+        its synchronous Anthropic client in ``_client``. Both own the active
+        httpx response body and closing them from the stop thread interrupts a
+        blocking sync read.
+        """
+        seen: set[int] = set()
+        for name in ("root_client", "_client", "http_client"):
+            resource = getattr(request_llm, name, None)
+            if resource is None or id(resource) in seen:
+                continue
+            seen.add(id(resource))
+            close = getattr(resource, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except Exception:
+                logger.debug(
+                    "[LLM客户端] 取消时关闭 provider transport 失败: resource=%s",
+                    name,
+                    exc_info=True,
+                )
 
     def _convert_to_langchain_messages(self, messages: List[Dict[str, Any]]) -> List[Any]:
         """

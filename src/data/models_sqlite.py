@@ -276,7 +276,9 @@ class AssistantTask(Base):
             name="ck_assistant_tasks_status",
         ),
         CheckConstraint(
-            "suspend_reason IS NULL OR suspend_reason IN ('waiting_user', 'waiting_system', 'user_stop')",
+            "suspend_reason IS NULL OR suspend_reason IN "
+            "('waiting_user', 'waiting_system', 'user_stop', "
+            "'budget_exhausted', 'interrupted')",
             name="ck_assistant_tasks_suspend_reason",
         ),
         CheckConstraint(

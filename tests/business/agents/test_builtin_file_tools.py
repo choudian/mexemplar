@@ -30,6 +30,19 @@ def test_read_file_returns_bounded_window_baseline_redaction_and_repeat_metadata
     assert second["payload"]["repeatRead"]["seenCount"] >= 2
 
 
+def test_read_file_allows_hidden_git_metadata_inside_workspace(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "config").write_text("[core]\nrepositoryformatversion = 0\n", encoding="utf-8")
+
+    result = _obj(file_tools.read_file_handler(".git/config"))
+
+    assert result["outcome"] == "success"
+    assert result["permission"]["decision"] == "allowed"
+    assert "repositoryformatversion = 0" in result["payload"]["content"]
+
+
 def test_read_file_can_continue_past_decode_byte_cap(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     target = tmp_path / "large.txt"

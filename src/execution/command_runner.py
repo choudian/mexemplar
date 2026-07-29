@@ -10,10 +10,12 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.execution.cancellation import CancelToken, should_terminate_command
 from src.execution.process_tree_utils import terminate_process_tree
 from src.execution.shell_resolver import resolve_shell, shell_argv
 
@@ -57,6 +59,7 @@ class CommandRunResult:
     stderr: str
     duration_ms: int
     timed_out: bool = False
+    interrupted: bool = False
 
 
 def _coerce_output(value) -> str:
@@ -74,8 +77,18 @@ def run_command(
     timeout_ms: int,
     stdin: str | None = None,
     shell_path: str | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> CommandRunResult:
     started = time.perf_counter()
+    if cancel_token is not None and should_terminate_command(cancel_token.reason):
+        return CommandRunResult(
+            status="interrupted",
+            exit_code=None,
+            stdout="",
+            stderr="",
+            duration_ms=0,
+            interrupted=True,
+        )
     resolved_shell = resolve_shell(configured=shell_path)
     argv = shell_argv(resolved_shell, command)
     proc = subprocess.Popen(
@@ -89,11 +102,38 @@ def run_command(
         encoding="utf-8",
         errors="replace",
     )
+    interrupt_requested = threading.Event()
+    terminate_lock = threading.Lock()
+
+    def terminate_for_cancel(reason) -> None:
+        if not should_terminate_command(reason):
+            return
+        interrupt_requested.set()
+        # Callback may race timeout cleanup. Serialize tree enumeration so the
+        # two paths cannot each act on a partially reaped process set.
+        with terminate_lock:
+            terminate_process_tree(proc)
+
+    remove_cancel_callback = (
+        cancel_token.add_callback(terminate_for_cancel)
+        if cancel_token is not None
+        else lambda: None
+    )
     try:
         stdout, stderr = proc.communicate(
-            input=stdin, timeout=max(0.001, timeout_ms / 1000),
+            input=stdin,
+            timeout=max(0.001, timeout_ms / 1000),
         )
         duration_ms = int((time.perf_counter() - started) * 1000)
+        if interrupt_requested.is_set():
+            return CommandRunResult(
+                status="interrupted",
+                exit_code=None,
+                stdout=stdout or "",
+                stderr=stderr or "",
+                duration_ms=duration_ms,
+                interrupted=True,
+            )
         return CommandRunResult(
             status="completed" if proc.returncode == 0 else "failed",
             exit_code=proc.returncode,
@@ -104,8 +144,18 @@ def run_command(
         )
     except subprocess.TimeoutExpired as exc:
         # shell 是中间父进程，必须递归终止整棵树（否则真实命令变孤儿继续跑）
-        terminate_process_tree(proc)
+        with terminate_lock:
+            terminate_process_tree(proc)
         duration_ms = int((time.perf_counter() - started) * 1000)
+        if interrupt_requested.is_set():
+            return CommandRunResult(
+                status="interrupted",
+                exit_code=None,
+                stdout=_coerce_output(exc.stdout),
+                stderr=_coerce_output(exc.stderr),
+                duration_ms=duration_ms,
+                interrupted=True,
+            )
         return CommandRunResult(
             status="timed_out",
             exit_code=None,
@@ -114,3 +164,5 @@ def run_command(
             duration_ms=duration_ms,
             timed_out=True,
         )
+    finally:
+        remove_cancel_callback()
