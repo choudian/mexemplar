@@ -14,9 +14,7 @@ class CancelReason(str, Enum):
     """Cancellation reason controls how an in-flight side effect is handled."""
 
     USER_CANCEL = "user-cancel"
-    INTERRUPT = "interrupt"
     SIBLING_ERROR = "sibling_error"
-    BACKGROUND = "background"
 
 
 CancelCallback = Callable[[CancelReason], None]
@@ -96,14 +94,11 @@ class CancelToken:
 def should_abort_http(reason: CancelReason | None) -> bool:
     return reason in {
         CancelReason.USER_CANCEL,
-        CancelReason.INTERRUPT,
         CancelReason.SIBLING_ERROR,
     }
 
 
 def should_terminate_command(reason: CancelReason | None) -> bool:
-    # ``interrupt`` preserves the shell as background work; ``background`` is
-    # an explicit detach. True cancellation and sibling failure stop the tree.
     return reason in {CancelReason.USER_CANCEL, CancelReason.SIBLING_ERROR}
 
 

@@ -80,30 +80,6 @@ def test_cancel_closes_provider_transport_and_unblocks_sync_invoke():
     assert failure and "transport closed" in str(failure[0])
 
 
-def test_background_reason_does_not_close_provider_transport():
-    provider = _BlockingProvider()
-    client = _client_with_provider(provider)
-    token = CancelToken()
-    failure = []
-
-    def invoke() -> None:
-        try:
-            client.chat_with_tools([], [], cancel_token=token)
-        except Exception as exc:
-            failure.append(exc)
-
-    thread = threading.Thread(target=invoke, daemon=True)
-    thread.start()
-    assert provider.entered.wait(timeout=2)
-
-    token.cancel(CancelReason.BACKGROUND)
-
-    assert provider.root_client.closed.wait(timeout=0.1) is False
-    provider.root_client.close()
-    thread.join(timeout=2)
-    assert failure
-
-
 def test_concurrent_requests_cancel_only_their_own_transport():
     first = _BlockingProvider()
     second = _BlockingProvider()

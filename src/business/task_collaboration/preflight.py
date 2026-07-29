@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from typing import Iterable, Literal
 
 
-_PATH_END_DELIMITERS = r"""\s`"'<>|?*，。；：！？、（）()【】\[\]{}"""
+_UNQUOTED_PATH_HARD_DELIMITERS = r"""`"'<>|?*，。；：！？、（）()【】\[\]{},;!"""
+_UNQUOTED_PATH_TERMINATOR = rf"""(?=$|[\r\n\t{_UNQUOTED_PATH_HARD_DELIMITERS}]|\.(?=\s|$))"""
 _QUOTED_ABSOLUTE_PATH_RE = re.compile(
     r"""
     (?:
@@ -33,20 +34,23 @@ _ABSOLUTE_PATH_RE = re.compile(
     (?P<windows>
         (?<![A-Za-z0-9_])
         (?:
-            [A-Za-z]:[\\/][^{_PATH_END_DELIMITERS}]*
+            [A-Za-z]:[\\/]
+            [^{_UNQUOTED_PATH_HARD_DELIMITERS}\r\n\t]*?
             |
-            \\\\[^\\/{_PATH_END_DELIMITERS}]+[\\/]
-            [^\\/{_PATH_END_DELIMITERS}]+
-            (?:[\\/][^{_PATH_END_DELIMITERS}]+)*
+            \\\\[^\\/{_UNQUOTED_PATH_HARD_DELIMITERS}\r\n\t]+[\\/]
+            [^\\/{_UNQUOTED_PATH_HARD_DELIMITERS}\r\n\t]+
+            (?:[\\/][^{_UNQUOTED_PATH_HARD_DELIMITERS}\r\n\t]+)*?
         )
     )
+    {_UNQUOTED_PATH_TERMINATOR}
     |
     (?P<posix>
         (?<![A-Za-z0-9_:/\\])
         /
-        [^{_PATH_END_DELIMITERS}/]
-        [^{_PATH_END_DELIMITERS}]*
+        [^{_UNQUOTED_PATH_HARD_DELIMITERS}/\r\n\t]
+        [^{_UNQUOTED_PATH_HARD_DELIMITERS}\r\n\t]*?
     )
+    {_UNQUOTED_PATH_TERMINATOR}
     """,
     re.VERBOSE,
 )
@@ -88,22 +92,51 @@ def _normalized(path: str, style: Literal["windows", "posix"]) -> str:
     return path_module.normcase(normalized) if style == "windows" else normalized
 
 
-def _is_inside_workspace(candidate: str, workspace_root: str) -> bool:
+def _segments(path: str, style: Literal["windows", "posix"]) -> list[str]:
+    """Split a normalized absolute path into comparable segments."""
+    normalized = _normalized(path, style)
+    if style == "windows":
+        drive, rest = ntpath.splitdrive(normalized)
+        parts = [part for part in rest.replace("/", "\\").split("\\") if part]
+        return ([drive] if drive else []) + parts
+    return [part for part in normalized.split("/") if part]
+
+
+def _is_confidently_outside_workspace(candidate: str, workspace_root: str) -> bool:
+    """Report a risk only when the candidate genuinely diverges from the root.
+
+    An unquoted path inside prose is ambiguous: ``E:\\ws 下的文件`` may be the path
+    ``E:\\ws`` followed by prose, or a directory whose name contains a space.  No
+    extraction rule resolves that, so a candidate that merely truncates the root's
+    segment (``C:\\Program`` for ``C:\\Program Files``) or extends it (``E:\\ws 下的
+    文件`` for ``E:\\ws``) counts as unknown rather than outside.
+
+    These risks are advisory.  A false alarm on an in-workspace node teaches
+    readers to ignore the whole check, which costs more than a missed warning.
+    """
     candidate_style = _path_style(candidate)
     root_style = _path_style(workspace_root)
     if candidate_style is None or root_style is None:
         raise ValueError("workspace_root must be absolute")
     if candidate_style != root_style:
-        return False
+        return True
 
-    path_module = ntpath if candidate_style == "windows" else posixpath
-    normalized_candidate = _normalized(candidate, candidate_style)
-    normalized_root = _normalized(workspace_root, root_style)
-    try:
-        return path_module.commonpath([normalized_candidate, normalized_root]) == normalized_root
-    except ValueError:
-        # Different Windows drives (or otherwise incompatible roots) are necessarily outside.
-        return False
+    candidate_segments = _segments(candidate, candidate_style)
+    root_segments = _segments(workspace_root, root_style)
+
+    for index, root_segment in enumerate(root_segments):
+        if index >= len(candidate_segments):
+            # The candidate stops above the root: an ancestor, not an outsider.
+            return False
+        candidate_segment = candidate_segments[index]
+        if candidate_segment == root_segment:
+            continue
+        if index == len(candidate_segments) - 1 and (
+            candidate_segment.startswith(root_segment) or root_segment.startswith(candidate_segment)
+        ):
+            return False
+        return True
+    return False
 
 
 def _absolute_paths(description: str) -> Iterable[str]:
@@ -132,7 +165,7 @@ def _absolute_paths(description: str) -> Iterable[str]:
         matches.append((match.start(), match.group(0)))
 
     for _, raw_candidate in sorted(matches, key=lambda item: item[0]):
-        candidate = raw_candidate.rstrip(_TRAILING_SENTENCE_PUNCTUATION)
+        candidate = raw_candidate.rstrip().rstrip(_TRAILING_SENTENCE_PUNCTUATION).rstrip()
         if candidate:
             yield candidate
 
@@ -162,7 +195,7 @@ def find_outside_workspace_path_risks(
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
-            if _is_inside_workspace(absolute_path, node.workspace_root):
+            if not _is_confidently_outside_workspace(absolute_path, node.workspace_root):
                 continue
             risks.append(
                 TaskGraphPreflightRisk(

@@ -136,6 +136,91 @@ def test_quoted_paths_with_spaces_are_compared_as_complete_paths():
     assert [risk.absolute_path for risk in risks] == [r"E:\Other Project\outside.py"]
 
 
+def test_unquoted_windows_path_with_spaces_inside_workspace_is_not_reported():
+    risks = find_outside_workspace_path_risks(
+        [
+            TaskNodePathContext(
+                node_id="inside-spaces",
+                description=r"改 C:\Program Files\ws\sub\a.txt",
+                workspace_root=r"C:\Program Files\ws",
+            )
+        ]
+    )
+
+    assert risks == []
+
+
+def test_unquoted_windows_path_with_spaces_outside_workspace_is_reported_in_full():
+    risks = find_outside_workspace_path_risks(
+        [
+            TaskNodePathContext(
+                node_id="outside-spaces",
+                description=r"请修改 C:\Program Files\Foo\a.txt",
+                workspace_root=r"C:\Program Files\ws",
+            )
+        ]
+    )
+
+    assert [risk.absolute_path for risk in risks] == [r"C:\Program Files\Foo\a.txt"]
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        r"改 E:\code\ws 下的文件",
+        r"在 E:\code\ws 中新增模块",
+        r"把结果写到 E:\code\ws 里",
+        r"请在 E:\code\ws 目录下实现功能",
+    ],
+)
+def test_workspace_root_followed_by_prose_is_not_reported(description):
+    """未加引号时，路径与紧随其后的中文无法分辨，不得据此误报区内节点。
+
+    误报会让人学会忽略整份清单，代价比漏报大。
+    """
+    risks = find_outside_workspace_path_risks(
+        [
+            TaskNodePathContext(
+                node_id="prose",
+                description=description,
+                workspace_root=r"E:\code\ws",
+            )
+        ]
+    )
+
+    assert risks == []
+
+
+def test_prose_after_a_diverging_path_still_reports():
+    """吞进散文不能掩盖真正的分叉：目录段不同就必须报。"""
+    risks = find_outside_workspace_path_risks(
+        [
+            TaskNodePathContext(
+                node_id="diverging",
+                description=r"在项目 E:\code\Exemplar 下，阅读设计文档并实现 layoutDag",
+                workspace_root=r"E:\code\test\Mexemplar",
+            )
+        ]
+    )
+
+    assert [risk.node_id for risk in risks] == ["diverging"]
+
+
+def test_ancestor_of_workspace_root_is_not_reported():
+    """提到工作区的上级目录不算越界，只是没写到底。"""
+    risks = find_outside_workspace_path_risks(
+        [
+            TaskNodePathContext(
+                node_id="ancestor",
+                description=r"仓库都放在 E:\code 下",
+                workspace_root=r"E:\code\ws",
+            )
+        ]
+    )
+
+    assert risks == []
+
+
 def test_workspace_root_must_be_absolute():
     with pytest.raises(ValueError, match="workspace_root must be absolute"):
         find_outside_workspace_path_risks(

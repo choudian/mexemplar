@@ -1267,10 +1267,7 @@ class AgentLoop:
         resume_existing_turn: bool = False,
     ) -> AgentResult:
         """Run one executor body and reclaim its session-owned background processes."""
-        from src.execution.cancellation import (
-            CancelReason,
-            should_terminate_command,
-        )
+        from src.execution.cancellation import should_terminate_command
         from src.execution.process_manager import get_process_manager
 
         manager = get_process_manager()
@@ -1295,11 +1292,9 @@ class AgentLoop:
             )
         finally:
             remove_cancel_callback()
-            # ``interrupt`` and explicit ``background`` preserve detached work.
-            # Every normal/true-cancel/sibling-error executor exit owns cleanup.
-            reason = token.reason if token is not None else None
-            if reason not in {CancelReason.INTERRUPT, CancelReason.BACKGROUND}:
-                manager.cleanup_session(session_id)
+            # Every executor exit reclaims background processes owned by this
+            # session, including completed, failed, cancelled, and paused runs.
+            manager.cleanup_session(session_id)
 
     def _run_impl(
         self,

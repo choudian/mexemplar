@@ -52,21 +52,3 @@ def test_user_cancel_terminates_entire_sync_command_tree(tmp_path):
     assert result.status == "interrupted"
     assert result.interrupted is True
     assert psutil.pid_exists(child_pid) is False
-
-
-def test_interrupt_reason_does_not_kill_foreground_command(tmp_path):
-    script = tmp_path / "short.py"
-    script.write_text("import time\ntime.sleep(0.1)\nprint('done')\n", encoding="utf-8")
-    token = CancelToken()
-    token.cancel(CancelReason.INTERRUPT)
-
-    result = run_command(
-        f'"{sys.executable}" "{script.name}"',
-        cwd=tmp_path,
-        timeout_ms=5_000,
-        cancel_token=token,
-    )
-
-    assert result.status == "completed"
-    assert result.interrupted is False
-    assert "done" in result.stdout

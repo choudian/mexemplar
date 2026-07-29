@@ -134,6 +134,62 @@ class TestLoopCancellation:
         assert process_id is not None
         assert manager.poll(process_id)["status"] == "terminated"
 
+    def test_paused_executor_cleans_background_processes_for_its_session(
+        self, mock_config, in_memory_db, tmp_path
+    ):
+        sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
+        manager = get_process_manager()
+        script = tmp_path / "background-before-pause.py"
+        script.write_text("import time\ntime.sleep(30)\n", encoding="utf-8")
+        process_id = None
+
+        def start_background():
+            nonlocal process_id
+            record, _ = manager.start(
+                session_id=sid,
+                command=f'"{sys.executable}" "{script.name}"',
+                cwd=tmp_path,
+                cwd_display=".",
+                command_summary="background-before-pause.py",
+            )
+            process_id = record.process_id
+            return json.dumps({"processId": process_id})
+
+        loop = AgentLoop(
+            AgentConfig(
+                agent_type=AgentType.EPHEMERAL_SUBAGENT,
+                system_prompt="sub",
+                max_iterations=1,
+                resumable_on_failure=True,
+            ),
+            MockLLMClient(
+                [
+                    LLMResponse(
+                        content=None,
+                        tool_calls=[ToolCallInfo(id="bg-pause", name="background", args={})],
+                    )
+                ]
+            ),
+            mock_config,
+        )
+
+        result = loop.run(
+            sid,
+            user_input="go",
+            tools=[
+                ToolDefinition(
+                    name="background",
+                    schema={"type": "object", "properties": {}},
+                    handler=start_background,
+                    has_side_effects=True,
+                )
+            ],
+        )
+
+        assert result.result_type == ResultType.PAUSED
+        assert process_id is not None
+        assert manager.poll(process_id)["status"] == "terminated"
+
     def test_cancel_interrupts_inflight_llm_request(self, mock_config, in_memory_db):
         sid = _new_session(AgentType.ASSISTANT)
         run_context.begin(sid)

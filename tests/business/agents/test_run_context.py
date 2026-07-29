@@ -106,6 +106,12 @@ class TestRequestCancel:
 
 
 class TestCancelToken:
+    def test_cancel_reasons_are_limited_to_production_sources(self):
+        assert {reason.value for reason in CancelReason} == {
+            "user-cancel",
+            "sibling_error",
+        }
+
     def test_cancel_invokes_callbacks_once_with_first_reason(self):
         token = CancelToken()
         seen = []
@@ -127,11 +133,11 @@ class TestCancelToken:
 
         remove = token.add_callback(removed.append)
         remove()
-        token.cancel(CancelReason.INTERRUPT)
+        token.cancel(CancelReason.SIBLING_ERROR)
         token.add_callback(late.append)
 
         assert removed == []
-        assert late == [CancelReason.INTERRUPT]
+        assert late == [CancelReason.SIBLING_ERROR]
 
     def test_request_cancel_propagates_structured_reason(self):
         sid = "sess-reason"

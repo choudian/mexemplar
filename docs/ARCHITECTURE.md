@@ -172,7 +172,7 @@ Assistant tool handler / Orchestrator
 - Todo 是执行者私人 checklist，按 Task + executor 持久化，状态词为 `todo / doing / done / skipped`，不创建 Task 节点、不进裁定、不进入 brain memory。
 - 前端只读 task snapshot 和公开 UI events：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。缺口或事件会话不匹配时走 `backend.resync_required` 拉 graph/board/meeting/todo 权威快照。
 - 024 DAG 调度：复杂任务（中等主助理自拆 / 超阈值委派 `role_kind='planner'` 规划专员）经 `build_task_graph` 原子落库为带 `dependency` 边的 DAG，由确定性 `GraphScheduler`（`task_collaboration/graph_scheduler.py`，orchestrator 装配的进程级单例）按依赖就绪自动推进——建图 handler 触发 `start_graph`，节点 attempt 完成经 `scheduler_callback` 回调 `on_attempt_outcome` 推进下游，全图完成经 `ParentReentrySink.notify_graph_complete` kick 续跑汇报。`requires_confirmation=1` 高风险节点派发前建 needs_confirmation adjudication 暂停（`waiting_user`），`decide(accepted)` 放行翻 `pending_dispatch` 派发（普通结果裁定 `decide(accepted)` 仍翻 `completed`，023 语义不回归）；节点失败回流附确定性 `healingActions` 候选集（advisory）+ `safeRecoveryHint` 安全文案。就绪硬校验 `_assert_dependencies_satisfied` 在 scheduler 与 dispatcher 派发层双层兜底。节点 todo 概览在回流 briefing 中按进行中节点标题渲染，详细 todo 经 TaskGraphPanel 节点展开按需可见、默认任务界面不展示（DEC-E）。
-- `task_collaboration/preflight.py` 提供第一版建图后确定性预检纯函数：只从节点描述提取绝对路径，并按各执行体工作区根做词法边界比较；范围外路径返回高风险 advisory 清单，不读文件系统、不调用 LLM，也不自行通过或否决图。该纯函数当前只建立接口与行为测试，接线留给后续委派重构。
+- `task_collaboration/preflight.py` 提供第一版建图后确定性预检纯函数：只从节点描述提取绝对路径，并按各执行体工作区根做词法边界比较；范围外路径返回高风险 advisory 清单，不读文件系统、不调用 LLM，也不自行通过或否决图。该纯函数当前只建立接口与行为测试，尚未接入调度入口。
 
 ### External Coding Sessions（030）
 
@@ -890,7 +890,7 @@ Agent 与 prompt：
 
 把"黑盒"主助理对话变成**看得见、停得下、接得上**，运行结构上新增：
 
-- **取消原语（业务层）**：`src/execution/cancellation.py` 的 `CancelToken` 保留 `threading.Event` 风格的 `set/is_set/wait` 兼容面，并增加 first-decision-wins 的 reason 与可移除回调；`run_context.py` 持 `ContextVar[{root_session_id, cancel_token, generation}]`、session/graph/task/attempt key 注册表和待取消集合。`AssistantRuntime._run_assistant`（worker 线程入口）`begin()`/`finally: end()`；`AgentLoop` 的检查点负责控制流收尾，回调负责立即停止副作用。`user-cancel` / `sibling_error` 会关闭本次 LLM 请求独占的 HTTP transport、终止当前同步命令整棵进程树，并在执行体退出时清理该 session 拥有的后台进程；请求级 transport 与进程归属保证不影响其他并发执行体。`interrupt` 不杀前台命令，`background` 保持脱钩语义。
+- **取消原语（业务层）**：`src/execution/cancellation.py` 的 `CancelToken` 保留 `threading.Event` 风格的 `set/is_set/wait` 兼容面，并增加 first-decision-wins 的 reason 与可移除回调；`run_context.py` 持 `ContextVar[{root_session_id, cancel_token, generation}]`、session/graph/task/attempt key 注册表和待取消集合。`AssistantRuntime._run_assistant`（worker 线程入口）`begin()`/`finally: end()`；`AgentLoop` 的检查点负责控制流收尾，回调负责立即停止副作用。`user-cancel` / `sibling_error` 会关闭本次 LLM 请求独占的 HTTP transport、终止当前同步命令整棵进程树；任何执行体退出（完成、失败、取消或暂停）都会清理该 session 拥有的后台进程。请求级 transport 与进程归属保证不影响其他并发执行体。
 - **中断结果与恢复**：如果取消掐在单个工具执行中途，AgentLoop 必须为当前 `tool_call_id` 持久化唯一合成结果 `{"outcome":"interrupted","note":"被中断，副作用状态未知"}`，使续跑不会盲目重放未知副作用；同批已完成调用保留结果，尚未开始的调用保持 pending。取消只停止后续工作，不自动回滚已经写入的文件。
 - **新增 blinker 事件**（`src/utils/events.py`）：`assistant_agent_step`（逐步过程，仅可观测运行时 emit、单回合上限）、`assistant_subagent_started/finished/paused`（子任务生命周期，session_id=父会话）。
 - **公开 UI 事件**（Registry + projector，payload 走 009 allowlist 脱敏）：`assistant.activity`（过程时间线，按 `subagentId` 归类；`text` 字段保留原文 + `redacted` 标记——命中敏感规则的步骤 UI 默认隐藏、双击查看，原文本就明文存于 messages 表）、`assistant.subagent`（子任务卡片壳与状态，仍脱敏）；`assistant.progress.status` 新增 `cancelled` 取值，运行中 payload 带 `runId` 供停止请求绑定当前代际。非助理 agent_type 在 projector 处过滤，零 UI 噪声。
