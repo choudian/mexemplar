@@ -20,7 +20,7 @@ from src.business.self_improvement.proposal_workspace import (
     create_worktree,
     remove_worktree,
 )
-from src.business.task_collaboration.models import DeliveredStatus, TaskStatus
+from src.business.task_collaboration.models import DeliveredStatus, TaskStatus, WaitingOn
 from src.data.repos.assistant_task_adjudication_repository import (
     AssistantTaskAdjudicationRepository,
 )
@@ -413,9 +413,32 @@ def _write_back_terminal_graph(proposal: Any) -> bool:
         )
 
     execution_nodes = [task for task in snapshot.tasks if task.parent_task_id is not None]
-    if not execution_nodes or any(
-        task.status not in _EXECUTION_STATUSES for task in execution_nodes
-    ):
+    if not execution_nodes:
+        return False
+
+    non_terminal = [task for task in execution_nodes if task.status not in _EXECUTION_STATUSES]
+    if non_terminal:
+        # self_improvement:<id> 是合成 session——**没有用户在看，也没有父助理在等**。
+        # 所以等人的节点在这里不是"还在进行中"，是永久死锁：每个 recovery tick 重新
+        # 判定一次、静默返回、一行日志都不留，而 _kick_next_approved_if_idle 看到
+        # has_in_progress() 就不再启动下一个提案——整个已批准队列被队头堵死。
+        stuck = [
+            task
+            for task in non_terminal
+            if task.waiting_on in (WaitingOn.USER.value, WaitingOn.ASSISTANT.value)
+        ]
+        if stuck:
+            return bool(
+                _mark_failed(
+                    proposal.id,
+                    error=(
+                        "实施图卡在等人处理的节点，而自我改进会话没有用户也没有父助理："
+                        + ", ".join(f"{t.task_id}({t.suspend_reason})" for t in stuck[:5])
+                    ),
+                    tests_passed=None,
+                )
+            )
+        # 只剩 waiting_on=system（会自动重试）或还在跑的节点 → 正常等待
         return False
 
     test_nodes = _identify_test_nodes(snapshot, execution_nodes)

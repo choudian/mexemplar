@@ -10,7 +10,11 @@ from __future__ import annotations
 from src.business.agents.config import AgentResult, PauseReason, ResultType
 from src.business.orchestration.agent.task_executor_adapter import TaskExecutorAdapter
 from src.business.task_collaboration.dispatcher import _paused_reentry_payload
-from src.business.task_collaboration.models import SuspendReason
+from src.business.task_collaboration.models import (
+    SuspendReason,
+    WaitingOn,
+    waiting_on_for_reason,
+)
 
 
 def _map(result: dict) -> dict:
@@ -54,6 +58,8 @@ def test_budget_pause_maps_to_its_own_suspend_reason_not_waiting_system():
     assert outcome["reentry_type"] == "budget_exhausted"
     assert outcome["iterations_used"] == 30
     assert outcome["max_iterations"] == 30
+    # 球在主助理手上：它能追加预算让这个活接着跑。
+    assert waiting_on_for_reason(outcome["suspend_reason"]) is WaitingOn.ASSISTANT
 
 
 def test_external_unavailable_pause_still_reads_as_waiting_system():
@@ -67,6 +73,9 @@ def test_external_unavailable_pause_still_reads_as_waiting_system():
 
     assert outcome["suspend_reason"] == SuspendReason.WAITING_SYSTEM.value
     assert "reentry_type" not in outcome
+    # waiting_system 的实际生产者是 ask_parent 和未知情形兜底，两者都该由主助理来
+    # 处理。归到 SYSTEM 会让它进 recovery 自动重试，那是错的。
+    assert waiting_on_for_reason(outcome["suspend_reason"]) is WaitingOn.ASSISTANT
 
 
 def test_user_stop_keeps_priority_over_the_budget_reason():
@@ -80,6 +89,8 @@ def test_user_stop_keeps_priority_over_the_budget_reason():
     )
 
     assert outcome["suspend_reason"] == SuspendReason.USER_STOP.value
+    # 用户自己按的停，只有他能说继续——不叫主助理。
+    assert waiting_on_for_reason(outcome["suspend_reason"]) is WaitingOn.USER
 
 
 def test_a_more_specific_reentry_type_is_not_overwritten():
@@ -119,6 +130,35 @@ def test_dispatcher_emits_a_reentry_payload_so_the_parent_is_told():
     assert payload["safeSummary"]
 
 
-def test_unknown_pause_types_still_yield_no_payload():
-    assert _paused_reentry_payload({"reentry_type": "something_else"}) is None
+def test_unknown_pause_types_still_reach_the_parent():
+    """认不出的暂停兜底通知主助理，绝不静默丢弃。
+
+    这条原名 ``test_unknown_pause_types_still_yield_no_payload``，断言未知类型返回
+    ``None``——那正是白名单设计本身：认不出就什么都不做。它和"撞预算暂停必须回流"
+    不可能同时成立，因为 ``budget_exhausted`` 对旧白名单来说就是个未知类型。
+
+    改成默认通知 + 显式排除后，"不通知父侧"成了需要写明理由的例外（等用户、等系统
+    各有自己的路径），而不是默认行为。
+    """
+    payload = _paused_reentry_payload({"reentry_type": "something_else"})
+    assert payload is not None
+    assert payload["safeSummary"]
+
+    # 输入不是 dict 属于调用错误，跟"认不出的暂停"是两回事，仍然返回 None
     assert _paused_reentry_payload(None) is None
+
+
+def test_pauses_that_wait_on_someone_else_do_not_wake_the_assistant():
+    """只有球在主助理手上才叫醒它。"""
+    assert (
+        _paused_reentry_payload(
+            {"reentry_type": "budget_exhausted"}, waiting_on=WaitingOn.USER.value
+        )
+        is None
+    )
+    assert (
+        _paused_reentry_payload(
+            {"reentry_type": "budget_exhausted"}, waiting_on=WaitingOn.SYSTEM.value
+        )
+        is None
+    )

@@ -237,7 +237,15 @@ class AssistantTaskRepository(BaseRepository):
         status: str,
         expected_task_version: int | None = None,
         suspend_reason: str | None = None,
+        waiting_on: str | None = None,
     ) -> AssistantTask | None:
+        """``waiting_on`` 与 ``suspend_reason`` 同生同灭，由 DB CHECK 约束保证。
+
+        本层不从 ``suspend_reason`` 推导 ``waiting_on``——那是业务语义，数据层不反
+        调业务层。调用方用 ``models.waiting_on_for_reason()`` 算好了传进来；漏传会
+        直接撞 ``ck_assistant_tasks_waiting_on_required`` 当场报错，不会静默落一行
+        "停了却不知道等谁"的记录。
+        """
         self.ensure_immediate_transaction()
         row = self.get_task(task_id)
         if row is None:
@@ -249,6 +257,7 @@ class AssistantTaskRepository(BaseRepository):
         now = utc_now_naive()
         row.status = status
         row.suspend_reason = suspend_reason
+        row.waiting_on = waiting_on
         row.task_version += 1
         row.updated_at = now
         if status == "completed":

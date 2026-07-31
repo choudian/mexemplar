@@ -169,6 +169,7 @@ _TASK_GRAPH_FIELD_MAP: dict[str, tuple[str, Any]] = {
     "requiresReview": ("requires_review", _value_or_false),
     "safeExplanation": ("safe_explanation", _safe_short_text),
     "suspendReason": ("suspend_reason", _string_or_none),
+    "waitingOn": ("waiting_on", _string_or_none),
     "sequence": ("sequence", _int_or_none),
 }
 

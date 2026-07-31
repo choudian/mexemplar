@@ -3222,6 +3222,162 @@ def migrate_to_v37(engine):
     logger.info("迁移到版本 37 完成：Assistant Task 暂停原因约束已扩展")
 
 
+# 与 src/business/task_collaboration/models.py 的 _SUSPEND_REASON_WAITING_ON 同源。
+# 两处必须一致，由 tests/data/test_migrations_v38.py 的一致性测试守住。
+_V38_WAITING_ON_BACKFILL = """
+                            CASE suspend_reason
+                                WHEN 'waiting_user'     THEN 'user'
+                                WHEN 'user_stop'        THEN 'user'
+                                WHEN 'budget_exhausted' THEN 'assistant'
+                                WHEN 'waiting_system'   THEN 'assistant'
+                                WHEN 'interrupted'      THEN 'system'
+                                ELSE NULL
+                            END
+"""
+
+
+def migrate_to_v38(engine):
+    """迁移到版本 38：assistant_tasks 新增 waiting_on（暂停时球在谁手上）。
+
+    ``waiting_on`` 是持久化的通知意图——状态落库即等于通知已发出，派发时直接读它，
+    不做第二次判断。此前落库写 ``suspend_reason``、而决定是否通知父侧的代码查另一套
+    白名单，两套判断对不上，撞轮次预算暂停的任务永远没人被告知。
+
+    与 ``suspend_reason`` 同生同灭（见 ck_assistant_tasks_waiting_on_required），
+    保证不会出现"有原因却不知道等谁"或反之。
+    """
+    try:
+        with engine.begin() as conn:
+            table_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'assistant_tasks'"
+                )
+            ).fetchone()
+            if table_exists is not None:
+                existing_columns = {
+                    row[1] for row in conn.execute(text("PRAGMA table_info(assistant_tasks)"))
+                }
+                # 重跑时旧表已带 waiting_on，原样搬运；只有首次迁移才按 suspend_reason
+                # 回填。两者不能混——被显式改写过的 waiting_on（例如球从主助理换手到
+                # 用户）不该被推导值覆盖回去。
+                waiting_on_source = (
+                    "waiting_on" if "waiting_on" in existing_columns else _V38_WAITING_ON_BACKFILL
+                )
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE assistant_tasks_v38 (
+                            task_id TEXT PRIMARY KEY,
+                            graph_id TEXT NOT NULL,
+                            root_task_id TEXT,
+                            parent_task_id TEXT,
+                            session_id TEXT NOT NULL,
+                            user_message_sequence INTEGER,
+                            title TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'pending_dispatch'
+                                CONSTRAINT ck_assistant_tasks_status
+                                CHECK (status IN (
+                                    'pending_dispatch', 'running', 'suspended',
+                                    'completed', 'failed', 'cancelled'
+                                )),
+                            suspend_reason TEXT
+                                CONSTRAINT ck_assistant_tasks_suspend_reason
+                                CHECK (
+                                    suspend_reason IS NULL OR suspend_reason IN (
+                                        'waiting_user', 'waiting_system', 'user_stop',
+                                        'budget_exhausted', 'interrupted'
+                                    )
+                                ),
+                            waiting_on TEXT
+                                CONSTRAINT ck_assistant_tasks_waiting_on
+                                CHECK (
+                                    waiting_on IS NULL OR waiting_on IN (
+                                        'user', 'assistant', 'system'
+                                    )
+                                ),
+                            assignee_type TEXT
+                                CONSTRAINT ck_assistant_tasks_assignee_type
+                                CHECK (
+                                    assignee_type IS NULL OR assignee_type IN (
+                                        'ephemeral_subagent', 'specialist'
+                                    )
+                                ),
+                            assignee_id TEXT,
+                            owner_session_id TEXT,
+                            capability_scope TEXT,
+                            graph_version INTEGER NOT NULL DEFAULT 1,
+                            task_version INTEGER NOT NULL DEFAULT 1,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            completed_at DATETIME,
+                            failed_at DATETIME,
+                            cancelled_at DATETIME,
+                            requires_confirmation INTEGER NOT NULL DEFAULT 0,
+                            workspace_root TEXT,
+                            CONSTRAINT ck_assistant_tasks_suspend_reason_required CHECK (
+                                (status = 'suspended' AND suspend_reason IS NOT NULL)
+                                OR
+                                (status != 'suspended' AND suspend_reason IS NULL)
+                            ),
+                            CONSTRAINT ck_assistant_tasks_waiting_on_required CHECK (
+                                (status = 'suspended' AND waiting_on IS NOT NULL)
+                                OR
+                                (status != 'suspended' AND waiting_on IS NULL)
+                            )
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        f"""
+                        INSERT INTO assistant_tasks_v38 (
+                            task_id, graph_id, root_task_id, parent_task_id,
+                            session_id, user_message_sequence, title, description,
+                            status, suspend_reason, waiting_on, assignee_type,
+                            assignee_id, owner_session_id, capability_scope,
+                            graph_version, task_version, created_at, updated_at,
+                            completed_at, failed_at, cancelled_at,
+                            requires_confirmation, workspace_root
+                        )
+                        SELECT
+                            task_id, graph_id, root_task_id, parent_task_id,
+                            session_id, user_message_sequence, title, description,
+                            status, suspend_reason,
+                            {waiting_on_source},
+                            assignee_type,
+                            assignee_id, owner_session_id, capability_scope,
+                            graph_version, task_version, created_at, updated_at,
+                            completed_at, failed_at, cancelled_at,
+                            requires_confirmation, workspace_root
+                        FROM assistant_tasks
+                        """
+                    )
+                )
+                conn.execute(text("DROP TABLE assistant_tasks"))
+                conn.execute(text("ALTER TABLE assistant_tasks_v38 RENAME TO assistant_tasks"))
+                for index_sql in (
+                    "CREATE INDEX idx_assistant_tasks_graph_status "
+                    "ON assistant_tasks(graph_id, status)",
+                    "CREATE INDEX idx_assistant_tasks_graph_parent "
+                    "ON assistant_tasks(graph_id, parent_task_id)",
+                    "CREATE INDEX idx_assistant_tasks_session_message "
+                    "ON assistant_tasks(session_id, user_message_sequence)",
+                    "CREATE INDEX idx_assistant_tasks_graph_version "
+                    "ON assistant_tasks(graph_id, task_version)",
+                ):
+                    conn.execute(text(index_sql))
+            else:
+                logger.info("迁移到版本 38：assistant_tasks 表不存在，跳过 waiting_on 新增")
+            conn.execute(text("UPDATE schema_version SET version = 38"))
+    except Exception as e:
+        logger.error(f"迁移到版本 38 失败: {e}")
+        raise
+    logger.info("迁移到版本 38 完成：assistant_tasks.waiting_on")
+
+
 def downgrade_from_v36(engine):
     """回退版本 36：移除执行会话列。"""
     try:
@@ -3305,6 +3461,7 @@ _MIGRATIONS = [
     (35, migrate_to_v35),
     (36, migrate_to_v36),
     (37, migrate_to_v37),
+    (38, migrate_to_v38),
 ]
 
 

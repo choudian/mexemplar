@@ -188,6 +188,8 @@ TaskSuspendReason = Literal[
     "budget_exhausted",
     "interrupted",
 ]
+# 暂停时球在谁手上——谁能让这个活继续。这是持久化的通知意图，不只是描述。
+TaskWaitingOn = Literal["user", "assistant", "system"]
 
 
 # I8: 运行时同步断言——business StrEnum 与 schema Literal 必须保持一致。
@@ -196,6 +198,7 @@ def _assert_enum_literal_sync() -> None:
     from src.business.task_collaboration.models import (
         TaskStatus as _TaskStatusEnum,
         SuspendReason as _SuspendReasonEnum,
+        WaitingOn as _WaitingOnEnum,
     )
 
     _status_values = {s.value for s in _TaskStatusEnum}
@@ -209,6 +212,13 @@ def _assert_enum_literal_sync() -> None:
     assert _suspend_values == _suspend_literal_values, (
         f"SuspendReason enum/label mismatch: enum={_suspend_values - _suspend_literal_values} "
         f"literal={_suspend_literal_values - _suspend_values}"
+    )
+    _waiting_on_values = {w.value for w in _WaitingOnEnum}
+    _waiting_on_literal_values = set(TaskWaitingOn.__args__)  # type: ignore[attr-defined]
+    assert _waiting_on_values == _waiting_on_literal_values, (
+        f"WaitingOn enum/label mismatch: "
+        f"enum={_waiting_on_values - _waiting_on_literal_values} "
+        f"literal={_waiting_on_literal_values - _waiting_on_values}"
     )
 
     # External coding enum/literal sync
@@ -268,6 +278,7 @@ class AssistantTaskSnapshot(BaseModel):
     requiresConfirmation: bool = False
     safeExplanation: str = ""
     suspendReason: TaskSuspendReason | None = None
+    waitingOn: TaskWaitingOn | None = None
     assignee: AssistantTaskAssignee | None = None
     adjudicationId: str | None = None
     updatedAt: datetime | None = None
@@ -1360,6 +1371,7 @@ class ScheduledTaskRunItem(BaseModel):
     status: ScheduledRunStatusLiteral
     summary: str | None = None
     failureReason: str | None = None
+    graphId: str | None = None
 
     @model_validator(mode="after")
     def session_matches_status(self) -> "ScheduledTaskRunItem":

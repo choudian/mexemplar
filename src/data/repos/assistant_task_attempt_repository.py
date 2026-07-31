@@ -17,6 +17,11 @@ class AssistantTaskAttemptRepository(BaseRepository):
     # 让专员去接别的任务；续跑走 continue_graph → pending_dispatch → 新 start_attempt（attempt
     # 仓库没有 unpause，paused 从不就地复活）。若把 paused 算 active，旧 paused 会撞 per-task
     # partial unique index 把同一任务的续跑挡死。终态/暂停行都不占名额。
+    #
+    # ⚠️ 这里**刻意不含 paused**，不是漏网之鱼。排查"暂停后没人被通知"时，这一处曾被列为
+    # 疑似缺陷之一——但它的语义是"占不占执行者槽"，跟"该不该通知"无关。paused 的活不需要
+    # recovery 兜底，它需要的是通知，而通知由 task.waiting_on 负责（见 dispatcher
+    # ._paused_reentry_payload）。改这里只会撞上面说的 unique index。
     ACTIVE_STATUSES = ("starting", "running")
 
     def start_attempt(

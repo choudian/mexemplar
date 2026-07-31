@@ -25,11 +25,59 @@ from src.business.task_collaboration.models import (
 
 _DELIVERABLE_BRIEFING_MAX_CHARS = 6000
 
+# 暂停原因 → 一句人话。主助理拿到的原本是兜底值 "result"，零信息量。
+_PAUSE_HEADLINE = {
+    "budget_exhausted": "撞到轮次上限，工作已完整保留",
+    "waiting_system": "停下来等派活方处理",
+    "interrupted": "上次异常中断，工作保留但最后一步的结果未知",
+    "user_stop": "用户按了停",
+    "waiting_user": "在等用户答复",
+}
+
+# 每种停法对应的可选动作。这是 advisory：最终选哪条仍由主助理判断，
+# 但至少不能像原来那样把「认可/打回/放弃」摆给一个什么都没交的活。
+_PAUSE_ACTIONS = {
+    "budget_exhausted": (
+        "可用 continue_subagent 追加预算续跑（工作完整保留，不必从头做）；"
+        "也可以改任务书重派、跳过该节点、或放弃它。"
+    ),
+    "waiting_system": "可用 continue_subagent 续跑，或改任务书重派。",
+    "interrupted": (
+        "可用 continue_subagent 续跑——续跑指令会提示执行体先核对上次中断处的现场，"
+        "再往下做。"
+    ),
+}
+_PAUSE_ACTIONS_FALLBACK = "可用 continue_subagent 续跑，或决定跳过 / 放弃该节点。"
+
 
 def _sep(lines: list[str]) -> None:
     """在已有内容后插入空行分隔。"""
     if lines:
         lines.append("")
+
+
+def _is_paused_entry(entry: dict) -> bool:
+    return str(entry.get("taskStatus") or "") == TaskStatus.SUSPENDED
+
+
+def _render_paused(entry: dict) -> list[str]:
+    """暂停回流的渲染：说清停在哪、还剩什么、下一步能做什么。"""
+    task_id = entry.get("taskId") or "unknown"
+    reason = str(entry.get("suspendReason") or entry.get("eventType") or "")
+    line = f"- 任务 {task_id}：{_PAUSE_HEADLINE.get(reason, '已暂停')}"
+    used, cap = entry.get("iterationsUsed"), entry.get("maxIterations")
+    if used is not None and cap is not None:
+        line = f"{line}（已用 {used} / 上限 {cap} 轮）"
+    summary = entry.get("safeSummary")
+    if summary:
+        line = f"{line} — {summary}"
+
+    lines = [line]
+    subagent_id = entry.get("subagentId")
+    if subagent_id:
+        lines.append(f"  执行体 {subagent_id}")
+    lines.append("  " + _PAUSE_ACTIONS.get(reason, _PAUSE_ACTIONS_FALLBACK))
+    return lines
 
 
 def build_reentry_briefing(
@@ -39,9 +87,13 @@ def build_reentry_briefing(
 ) -> str:
     """把回流 ``entries`` + 可选 ``snapshot`` 组装成主助理续跑轮的 briefing 文本。
 
-    entry 按 ``eventType`` 分流：
-    - 普通结果：``taskId`` / ``deliveredStatus`` / ``safeSummary`` / 可选 ``adjudicationId``，
-      失败时附 ``healingActions`` / ``safeRecoveryHint``；
+    entry 分四类渲染，前两类靠 ``taskStatus`` 区分、后两类靠 ``eventType``：
+    - 普通结果（交了东西）：``taskId`` / ``deliveredStatus`` / ``safeSummary`` /
+      可选 ``adjudicationId``，失败时附 ``healingActions`` / ``safeRecoveryHint``；
+    - **暂停待推进**（``taskStatus == suspended``，什么都没交）：``suspendReason`` /
+      可选 ``iterationsUsed`` / ``maxIterations`` / ``subagentId``。这一类**必须与交付
+      分开**——让主助理对一个没交东西的活做"认可/打回/放弃"是错的引导，它该做的是
+      决定怎么推进（续跑 / 改任务书 / 跳过 / 放弃）；
     - ``needs_review``（024，高风险需确认）：``taskId`` / ``safeSummary``；
     - ``task_question``：``questionId`` / ``questionKind`` / ``safeSummary``。
     空 entries 且无 snapshot 返回"暂无新结果"提示。
@@ -52,10 +104,19 @@ def build_reentry_briefing(
     if not entries and snapshot is None:
         return "你之前派发的子任务暂无新结果。"
 
+    _special = ("task_question", "needs_review")
+    # 暂停回流与交付回流必须分开渲染：暂停的活**什么都没交**，让主助理去"认可/打回/
+    # 放弃"是错的引导——它该做的是决定怎么推进（续跑/改任务书/跳过/放弃）。混在一起
+    # 时主助理看到的是「任务 X：result」这种零信息量的行，还会被提示去放弃整张图。
+    paused_entries = [
+        entry
+        for entry in entries
+        if entry.get("eventType") not in _special and _is_paused_entry(entry)
+    ]
     result_entries = [
         entry
         for entry in entries
-        if entry.get("eventType") not in ("task_question", "needs_review")
+        if entry.get("eventType") not in _special and not _is_paused_entry(entry)
     ]
     question_entries = [entry for entry in entries if entry.get("eventType") == "task_question"]
     needs_review_entries = [entry for entry in entries if entry.get("eventType") == "needs_review"]
@@ -113,6 +174,13 @@ def build_reentry_briefing(
             "若这些结果显示本次用户请求已无法继续完成（多条路径都失败、无法绕过），"
             "可调用 abandon_request_graph 工具放弃整张任务图（根任务失败，触发安全失败卡）。"
         )
+
+    # === 暂停待推进段 ===
+    if paused_entries:
+        _sep(lines)
+        lines.append("以下子任务停下来了（未交付成果），需要你决定怎么推进：")
+    for entry in paused_entries:
+        lines.extend(_render_paused(entry))
 
     # === 现有 question 段 ===
     if question_entries:

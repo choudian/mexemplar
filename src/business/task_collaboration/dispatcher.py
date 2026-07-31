@@ -19,7 +19,9 @@ from src.business.task_collaboration.models import (
     OperationStatus,
     SuspendReason,
     TaskStatus,
+    WaitingOn,
     safe_preview,
+    waiting_on_for_reason,
 )
 from src.business.task_collaboration.service import (
     TaskCollaborationService,
@@ -305,7 +307,7 @@ class TaskDispatcher:
                         suspend_reason=_suspend_reason_from_result(result),
                         safe_summary=_safe_result_summary(result),
                         result_ref=_result_reference_with_truncation(result)[0],
-                        reentry_payload=_paused_reentry_payload(result),
+                        pause_result=result,
                     )
                 result_ref, result_ref_truncated = _result_reference_with_truncation(result)
                 return self._record_attempt_outcome(
@@ -415,15 +417,37 @@ class TaskDispatcher:
         suspend_reason: str,
         safe_summary: str,
         result_ref: str | None = None,
-        reentry_payload: dict[str, Any] | None = None,
+        pause_result: str | dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """落库之后才决定通知谁——读的就是刚写进库的 ``waiting_on``。
+
+        顺序不能反：先发通知后落库会留下一个说谎窗口（主助理被叫醒去查这个活，
+        库里还写着"正在跑"）。而通知对象若来自另一套独立判断，两边迟早对不上
+        ——这正是撞预算暂停从不回流的成因。
+        """
         with _worker_scope() as (attempts, service):
             current_attempt = attempts.get_by_id(attempt_id)
             if current_attempt is None or current_attempt.fence_token != fence_token:
                 increment_task_collaboration_counter("late_result_rejected")
                 return {"accepted": False, "attemptId": attempt_id, "lateResult": True}
             task_row = service.get_task(current_attempt.task_id)
-            if task_row is not None and task_row.status in TERMINAL_TASK_STATUSES:
+            if task_row is None:
+                # attempt 指向的 task 不存在（数据不一致）。必须在把 attempt 翻 paused
+                # 之前中止：继续往下走的话，attempt 落了 paused 而 task 无从更新，
+                # 通知里的 sessionId / graphId 也全是空的——而回流正是按 sessionId
+                # 分队列投递的。早失败，不留半截状态。
+                logger.error(
+                    "[task reentry] attempt=%s 指向的 task=%s 不存在，暂停收尾中止",
+                    attempt_id,
+                    current_attempt.task_id,
+                )
+                return {
+                    "accepted": False,
+                    "attemptId": attempt_id,
+                    "taskId": current_attempt.task_id,
+                    "taskMissing": True,
+                }
+            if task_row.status in TERMINAL_TASK_STATUSES:
                 increment_task_collaboration_counter("late_result_rejected")
                 return {
                     "accepted": False,
@@ -444,17 +468,41 @@ class TaskDispatcher:
                 status=TaskStatus.SUSPENDED,
                 suspend_reason=suspend_reason,
             )
+            if task is None:
+                # 落库没成功。通知的前提是**状态已经落库**——这里放行的话，主助理会
+                # 被叫醒去查一个账上没记的活，而且 payload 的 sessionId / graphId 都
+                # 是空的。抛异常让 _worker_scope 的共享事务整体回滚（attempt 不会停在
+                # paused），由上层兜底记为内部错误。这条正常到不了：上面已确认 task
+                # 存在，且此处不传 expected_task_version，所以它守的是不变量本身。
+                raise RuntimeError(
+                    f"暂停落库失败，未发通知：task={resolved.task_id} attempt={attempt_id}"
+                )
+            persisted_waiting_on = task.waiting_on
             payload = {
                 "accepted": True,
                 "attemptId": attempt_id,
                 "taskId": resolved.task_id,
                 "taskStatus": TaskStatus.SUSPENDED,
                 "suspendReason": suspend_reason,
+                "waitingOn": persisted_waiting_on,
                 "safeSummary": safe_summary,
-                "sessionId": task.session_id if task is not None else None,
-                "graphId": task.graph_id if task is not None else None,
+                "sessionId": task.session_id,
+                "graphId": task.graph_id,
             }
+            reentry_payload = _paused_reentry_payload(
+                pause_result if isinstance(pause_result, dict) else {},
+                waiting_on=persisted_waiting_on,
+            )
             if reentry_payload is not None:
+                reentry_payload["taskId"] = resolved.task_id
+                if safe_summary:
+                    # 外层这份已经过 _safe_result_summary 归一化，优先用它
+                    reentry_payload["safeSummary"] = safe_summary
+                # 同理：外层这份已过 _suspend_reason_from_result 校验并转成标准值。
+                # 让 result 里的原始值盖回去，等于把那道校验绕过去——眼下两份内容
+                # 相同看不出差别，但校验哪天开始做实事（清洗、旧写法转新写法），
+                # 结果就会被静默丢掉。
+                reentry_payload["suspendReason"] = suspend_reason
                 payload.update(reentry_payload)
         if reentry_payload is not None:
             self._notify_parent_reentry(payload)
@@ -601,24 +649,74 @@ def _suspend_reason_from_result(result: str | dict[str, Any] | None) -> str:
     return SuspendReason(str(value)).value
 
 
-def _paused_reentry_payload(result: str | dict[str, Any] | None) -> dict[str, Any] | None:
+_REENTRY_DEFAULT_SUMMARY = {
+    "budget_exhausted": "子任务已用完本轮轮次预算，等待追加预算或改派。",
+    "task_question": "子任务正在等待派活方答复。",
+    "needs_review": "节点标记为需确认，请裁定是否执行。",
+}
+_REENTRY_FALLBACK_SUMMARY = "子任务已暂停，等待主助理处理。"
+
+
+def _paused_reentry_payload(
+    result: str | dict[str, Any] | None,
+    *,
+    waiting_on: str | None = None,
+) -> dict[str, Any] | None:
+    """按「球在谁手上」决定要不要叫醒主助理，并组出回流 payload。
+
+    只有 ``waiting_on == assistant`` 才发——等用户、等系统各有自己的通知路径，
+    不该挤进这一条。
+
+    ``waiting_on`` 缺失时**兜底当 assistant 并记 warning**：认不出的暂停宁可多叫
+    醒主助理一次，也绝不静默丢弃。这里原本是一张只认两种 ``reentry_type`` 的白名
+    单，于是撞轮次预算暂停的任务状态全部正确落库，却永远没有任何人被告知——主助
+    理以为活还在跑，用户在等主助理告知，两边互等。
+    """
     if not isinstance(result, dict):
         return None
+
+    resolved = waiting_on or result.get("waiting_on")
+    if resolved is None:
+        resolved = waiting_on_for_reason(result.get("suspend_reason"))
+    if resolved is None:
+        logger.warning(
+            "[task reentry] 暂停结果既无 waiting_on 也无 suspend_reason，"
+            "兜底通知主助理 reentry_type=%s task=%s",
+            result.get("reentry_type"),
+            result.get("task_id"),
+        )
+        resolved = WaitingOn.ASSISTANT.value
+    if str(resolved) != WaitingOn.ASSISTANT.value:
+        return None
+
     reentry_type = result.get("reentry_type")
+    event_type = str(reentry_type or _suspend_reason_from_result(result))
+    raw_summary = result.get("safe_summary")
+    payload: dict[str, Any] = {
+        "eventType": event_type,
+        "taskId": result.get("task_id"),
+        # 独立调用（如单测）时这里也得走 safe_preview，别把未归一化的长文本带出去；
+        # 生产路径上 _record_attempt_paused 会用它已处理过的 safe_summary 覆盖。
+        "safeSummary": (
+            safe_preview(raw_summary)
+            if isinstance(raw_summary, str) and raw_summary.strip()
+            else _REENTRY_DEFAULT_SUMMARY.get(event_type, _REENTRY_FALLBACK_SUMMARY)
+        ),
+    }
     if reentry_type == "task_question":
-        return {
-            "eventType": "task_question",
-            "questionId": result.get("question_id"),
-            "questionKind": result.get("question_kind"),
-        }
-    # 024: needs_review reentry_type（DEC-D，需确认节点暂停回流）
-    if reentry_type == "needs_review":
-        return {
-            "eventType": "needs_review",
-            "taskId": result.get("task_id"),
-            "safeSummary": result.get("safe_summary", "节点标记为需确认，请裁定是否执行。"),
-        }
-    return None
+        payload["questionId"] = result.get("question_id")
+        payload["questionKind"] = result.get("question_kind")
+    # 主助理要续跑得知道续哪个执行体——没有这个 id，它知道该做什么也做不了。
+    if result.get("subagent_id"):
+        payload["subagentId"] = result["subagent_id"]
+    for src_key, out_key in (
+        ("iterations_used", "iterationsUsed"),
+        ("max_iterations", "maxIterations"),
+        ("suspend_reason", "suspendReason"),
+    ):
+        if result.get(src_key) is not None:
+            payload[out_key] = result[src_key]
+    return payload
 
 
 def _lease_heartbeat(attempt_id: str) -> AttemptHeartbeat:

@@ -5,6 +5,7 @@ import type {
   AssistantTodoItem,
   TaskAdjudicationDecision,
 } from "../../api/assistantTasks";
+import { canContinueTask } from "../../api/assistantTasks";
 
 const DISPLAY_PHASE_LABELS: Record<string, string> = {
   running: "执行中",
@@ -70,9 +71,7 @@ export function TaskGraphPanel({
   const canStop = graph.tasks.some(
     (task) => task.displayPhase === "running",
   );
-  const canContinue = graph.tasks.some(
-    (task) => task.displayPhase === "paused" && task.suspendReason === "user_stop",
-  );
+  const canContinue = graph.tasks.some(canContinueTask);
 
   const toggleTodoExpand = (taskId: string) => {
     setExpandedTodoTaskIds((prev) => {

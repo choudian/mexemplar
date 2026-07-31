@@ -287,6 +287,16 @@ class AssistantTask(Base):
             name="ck_assistant_tasks_suspend_reason_required",
         ),
         CheckConstraint(
+            "waiting_on IS NULL OR waiting_on IN ('user', 'assistant', 'system')",
+            name="ck_assistant_tasks_waiting_on",
+        ),
+        # waiting_on 与 suspend_reason 同生同灭：不允许"有原因却不知道等谁"或反之。
+        CheckConstraint(
+            "(status = 'suspended' AND waiting_on IS NOT NULL) OR "
+            "(status != 'suspended' AND waiting_on IS NULL)",
+            name="ck_assistant_tasks_waiting_on_required",
+        ),
+        CheckConstraint(
             "assignee_type IS NULL OR assignee_type IN ('ephemeral_subagent', 'specialist')",
             name="ck_assistant_tasks_assignee_type",
         ),
@@ -306,6 +316,9 @@ class AssistantTask(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_dispatch")
     suspend_reason: Mapped[Optional[str]] = mapped_column(String(30), nullable=True)
+    # 暂停时球在谁手上（user/assistant/system）。这是持久化的通知意图——
+    # 落库即等于通知已发出，派发时直接读它，不做第二次判断。
+    waiting_on: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     assignee_type: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
     assignee_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     owner_session_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)

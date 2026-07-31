@@ -8,6 +8,7 @@ from src.business.agents.tools.assistant_tools import (
     create_answer_task_question_handler,
     create_ask_parent_handler,
 )
+from src.business.task_collaboration.models import waiting_on_for_reason
 from src.business.task_collaboration.questions import TaskQuestionService
 from src.data.repos import AssistantTaskQuestionRepository, AssistantTaskRepository
 
@@ -176,6 +177,7 @@ def test_answer_question_resumes_waiting_system_task_for_redispatch() -> None:
         child_id,
         status="suspended",
         suspend_reason="waiting_system",
+        waiting_on=waiting_on_for_reason("waiting_system"),
     )
 
     answered = service.answer_question(
@@ -298,6 +300,7 @@ def test_answer_task_question_handler_answers_and_requests_redispatch() -> None:
         child_id,
         status="suspended",
         suspend_reason="waiting_system",
+        waiting_on=waiting_on_for_reason("waiting_system"),
     )
     redispatches: list[str] = []
     handler = create_answer_task_question_handler(

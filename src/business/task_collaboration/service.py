@@ -17,10 +17,12 @@ from src.business.task_collaboration.models import (
     TaskSnapshot,
     TaskStatus,
     SuspendReason,
+    WaitingOn,
     TERMINAL_TASK_STATUSES,
     derive_display_phase,
     safe_public_preview,
     validate_task_transition,
+    waiting_on_for_reason,
 )
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
 from src.data.repos import AssistantTaskAdjudicationRepository, AssistantTaskRepository
@@ -112,6 +114,7 @@ def emit_task_updated(sender, task) -> None:
         change_type="task_updated",
         display_phase=derive_display_phase(task.status),
         suspend_reason=task.suspend_reason,
+        waiting_on=task.waiting_on,
     )
 
 
@@ -164,6 +167,7 @@ def emit_graph_changed(
     requires_review: bool | None = None,
     safe_explanation: str | None = None,
     suspend_reason: str | None = None,
+    waiting_on: str | None = None,
 ) -> None:
     """图级生命周期变更 → assistant_task_graph_changed。"""
     emit(
@@ -178,6 +182,7 @@ def emit_graph_changed(
         requires_review=requires_review,
         safe_explanation=safe_explanation,
         suspend_reason=suspend_reason,
+        waiting_on=waiting_on,
     )
     if change_type in {"task_created", "graph_stopped", "graph_cancelled"}:
         increment_task_collaboration_counter(change_type)
@@ -745,9 +750,15 @@ class TaskCollaborationService(AtomicTaskService):
         task_id: str,
         status: str,
         suspend_reason: str | None = None,
+        waiting_on: str | None = None,
         expected_task_version: int | None = None,
         emit: bool = True,
     ):
+        """``waiting_on`` 不传时按 ``suspend_reason`` 推导；传了则以传入值为准。
+
+        留出显式覆盖，是因为 ``waiting_on`` 迟早不再是 ``suspend_reason`` 的纯函数
+        ——同一个原因下球会换手（例如进程重启后，原本等主助理的活要改成等用户）。
+        """
         current = self._tasks.get_task(task_id)
         if current is None:
             return None
@@ -756,12 +767,16 @@ class TaskCollaborationService(AtomicTaskService):
             status,
             suspend_reason=suspend_reason,
         )
+        resolved_waiting_on = (
+            waiting_on if waiting_on is not None else waiting_on_for_reason(suspend_reason)
+        )
         with self._atomic():
             task = self._tasks.update_status(
                 task_id,
                 status=status,
                 expected_task_version=expected_task_version,
                 suspend_reason=suspend_reason,
+                waiting_on=resolved_waiting_on,
             )
         if task is not None and emit:
             emit_task_updated(self, task)
@@ -868,6 +883,7 @@ class TaskCollaborationService(AtomicTaskService):
                 task_id,
                 status=TaskStatus.SUSPENDED,
                 suspend_reason=SuspendReason.WAITING_USER,
+                waiting_on=WaitingOn.USER,
             )
         emit_graph_changed(
             self,
@@ -1015,6 +1031,7 @@ class TaskCollaborationService(AtomicTaskService):
                         requires_confirmation=task.requires_confirmation,  # DB Boolean → snapshot bool（统一类型）
                         safe_explanation=_PENDING_REVIEW_EXPLANATION if pending is not None else "",
                         suspend_reason=task.suspend_reason,
+                        waiting_on=task.waiting_on,
                         assignee=(
                             TaskAssignee(
                                 type=task.assignee_type,
@@ -1094,6 +1111,7 @@ class TaskCollaborationService(AtomicTaskService):
                     task.task_id,
                     status=target_status,
                     suspend_reason=suspend_reason,
+                    waiting_on=waiting_on_for_reason(suspend_reason),
                 )
                 if updated is not None:
                     updated_tasks.append(updated)
@@ -1106,6 +1124,7 @@ class TaskCollaborationService(AtomicTaskService):
             graph_id=graph_id,
             change_type=change_type,
             display_phase=derive_display_phase(target_status),
+            waiting_on=waiting_on_for_reason(suspend_reason),
         )
         return affected
 
@@ -1129,11 +1148,29 @@ class TaskCollaborationService(AtomicTaskService):
         return affected
 
     def continue_graph(self, *, session_id: str, graph_id: str) -> int:
+        """用户点"继续"：除了在等一个具体答案的，其余暂停一律放行。
+
+        原本只认 ``USER_STOP``，于是撞轮次预算暂停的活匹配 0 条——用户点了继续、
+        界面报成功、实际一条记录都没动，他会以为"我点了没用"。
+
+        改成显式排除：``WAITING_USER`` 等的是一个具体答案，无参数的"继续"推不动
+        它（它由 ``answer_question`` 复活）；其余暂停用户说继续就该继续——他是最终
+        决策者，不该被"球在主助理手上"挡住。
+
+        ⚠️ 往 ``SuspendReason`` 加新值时**必须回来判断该不该进排除列表**。判据是
+        "用户点了继续之后，这个活能不能真的往前走"——不能的必须排除。典型是将来的
+        "撞上程序缺陷"：代码不改，重试多少次都是同一个错，放行等于把"主助理重试
+        7 次"那个循环原样搬给用户手动重复，那种活的按钮该是跳过 / 放弃 / 上报。
+
+        前端 ``canContinueTask``（frontend/src/api/assistantTasks.ts）是这条谓词的
+        镜像，**两处必须同时改**：只改这里会让按钮还在、点下去却什么都不发生，正是
+        "系统装作听见了"那种最恶劣的形态。
+        """
         return self._bulk_transition(
             session_id=session_id,
             graph_id=graph_id,
             predicate=lambda task: task.status == TaskStatus.SUSPENDED
-            and task.suspend_reason == SuspendReason.USER_STOP,
+            and task.suspend_reason != SuspendReason.WAITING_USER,
             target_status=TaskStatus.PENDING_DISPATCH,
             change_type="graph_continued",
         )
@@ -1184,6 +1221,7 @@ class TaskCollaborationService(AtomicTaskService):
                     "requiresConfirmation": t.requires_confirmation,
                     "safeExplanation": t.safe_explanation,
                     "suspendReason": t.suspend_reason,
+                    "waitingOn": t.waiting_on,
                     "assignee": (
                         {"type": t.assignee.type, "id": t.assignee.id, "label": t.assignee.label}
                         if t.assignee is not None

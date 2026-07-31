@@ -275,3 +275,85 @@ class TestSnapshotGraphProgress:
         # 全图完成（root 未计入）应触发汇报提示
         assert "已全部完成" in text
         assert "向用户汇报最终结果" in text
+
+
+def _paused_entry(**overrides) -> dict:
+    entry = {
+        "accepted": True,
+        "taskId": "tsk_paused",
+        "taskStatus": "suspended",
+        "suspendReason": "budget_exhausted",
+        "waitingOn": "assistant",
+        "safeSummary": "已达迭代上限（30 轮）",
+        "eventType": "budget_exhausted",
+        "subagentId": "ast_child",
+        "iterationsUsed": 30,
+        "maxIterations": 30,
+    }
+    entry.update(overrides)
+    return entry
+
+
+class TestPausedEntriesAreNotRenderedAsDeliveries:
+    """暂停的活什么都没交，不能摆「认可/打回/放弃」给主助理。
+
+    在此之前，撞轮次预算暂停的回流会掉进普通结果段，主助理看到的是
+    「- 任务 X：result」——`result` 是兜底值，零信息量；引导却是去认可/打回/放弃，
+    甚至提示它可以放弃整张任务图。而这个活正确的处置是追加预算续跑。
+    """
+
+    def test_paused_entry_goes_to_its_own_section(self):
+        text = build_reentry_briefing([_paused_entry()])
+
+        assert "停下来了" in text
+        assert "认可/打回/放弃" not in text
+        assert "abandon_request_graph" not in text
+        # `result` 那个兜底值不该再出现
+        assert "：result" not in text
+
+    def test_paused_entry_states_the_reason_in_plain_words(self):
+        text = build_reentry_briefing([_paused_entry()])
+
+        assert "撞到轮次上限" in text
+        assert "工作已完整保留" in text
+        assert "已用 30 / 上限 30 轮" in text
+
+    def test_paused_entry_carries_the_executor_id_so_it_can_be_resumed(self):
+        """主助理要续跑得知道续哪个执行体——没有这个 id，它知道该做什么也做不了。"""
+        text = build_reentry_briefing([_paused_entry()])
+
+        assert "ast_child" in text
+        assert "continue_subagent" in text
+
+    def test_delivery_and_pause_render_as_two_separate_sections(self):
+        delivered = {
+            "taskId": "tsk_done",
+            "deliveredStatus": "done",
+            "safeSummary": "组件已实现",
+            "adjudicationId": "adj_1",
+        }
+        text = build_reentry_briefing([delivered, _paused_entry()])
+
+        assert "认可/打回/放弃" in text  # 交付段还在
+        assert "decide_task_adjudication" in text
+        assert "停下来了" in text  # 暂停段也在
+        assert "continue_subagent" in text
+        # 两段各自独立，交付段的裁定引导不该落到暂停的活上
+        assert text.index("认可/打回/放弃") < text.index("停下来了")
+
+    def test_interrupted_pause_tells_the_assistant_to_verify_first(self):
+        text = build_reentry_briefing(
+            [_paused_entry(suspendReason="interrupted", eventType="interrupted")]
+        )
+
+        assert "上次异常中断" in text
+        assert "核对" in text
+
+    def test_unknown_pause_reason_still_offers_a_way_forward(self):
+        """认不出的停法也要给出路，不能只丢一句状态。"""
+        text = build_reentry_briefing(
+            [_paused_entry(suspendReason="something_new", eventType="something_new")]
+        )
+
+        assert "停下来了" in text
+        assert "continue_subagent" in text

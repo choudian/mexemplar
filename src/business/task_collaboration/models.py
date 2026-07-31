@@ -30,6 +30,37 @@ class SuspendReason(StrEnum):
     INTERRUPTED = "interrupted"
 
 
+class WaitingOn(StrEnum):
+    """暂停时球在谁手上——谁能让这个活继续。
+
+    这是**持久化的通知意图**，不只是描述：状态落库就等于通知已发出，派发通知时
+    直接读这个字段，不做第二次判断。
+
+    在此之前，落库写的是 ``suspend_reason``，而决定"要不要通知父侧"的代码查的
+    是另一套 ``reentry_type`` 白名单——两套独立判断对不上，撞轮次预算暂停的任务
+    状态全部正确落库，却永远没有人被告知，主助理和用户两边互等。
+    """
+
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
+# suspend_reason → waiting_on 的单一事实来源：业务写入、迁移回填、测试共用这一份。
+_SUSPEND_REASON_WAITING_ON: dict[SuspendReason, WaitingOn] = {
+    SuspendReason.WAITING_USER: WaitingOn.USER,
+    SuspendReason.USER_STOP: WaitingOn.USER,
+    SuspendReason.BUDGET_EXHAUSTED: WaitingOn.ASSISTANT,
+    # WAITING_SYSTEM 的实际生产者是 ask_parent（执行体求助，等主助理答复）和
+    # _map_to_outcome 的兜底（未知情形）。映射成 SYSTEM 会让它进 recovery 自动
+    # 重试，那是错的；映射成 ASSISTANT 最坏只是多叫醒主助理一次。
+    SuspendReason.WAITING_SYSTEM: WaitingOn.ASSISTANT,
+    # INTERRUPTED 目前零生产者。启动对账落地后它才会被真正写入，届时改成 USER
+    # ——重启是一次新的开工，得有人拍板，不能自动烧 token。
+    SuspendReason.INTERRUPTED: WaitingOn.SYSTEM,
+}
+
+
 class TaskEdgeType(StrEnum):
     DEPENDENCY = "dependency"
     DELEGATION = "delegation"
@@ -115,6 +146,10 @@ class TodoStatus(StrEnum):
     SKIPPED = "skipped"
 
 
+# ⚠️ 这里**刻意不含 SUSPENDED**，不是漏网之鱼。它的语义是"这个活结束了"——活停着当然
+# 不算结束，图里有节点暂停时 all_terminal 为假、不发全图完成通知，是正确行为。排查
+# "暂停后没人被通知"时这一处曾被列为疑似缺陷；真正的缺口在通知那一环（task.waiting_on），
+# 通知修好之后活会继续走，图最终自然收口。
 TERMINAL_TASK_STATUSES = frozenset(
     {
         TaskStatus.COMPLETED,
@@ -144,6 +179,7 @@ class TaskSnapshot:
     requires_confirmation: bool = False
     safe_explanation: str = ""
     suspend_reason: SuspendReason | None = None
+    waiting_on: WaitingOn | None = None
     assignee: TaskAssignee | None = None
     adjudication_id: str | None = None
     updated_at: datetime | None = None
@@ -185,6 +221,25 @@ def coerce_suspend_reason(value: str | SuspendReason | None) -> SuspendReason | 
     if value is None:
         return None
     return value if isinstance(value, SuspendReason) else SuspendReason(str(value))
+
+
+def coerce_waiting_on(value: str | WaitingOn | None) -> WaitingOn | None:
+    if value is None:
+        return None
+    return value if isinstance(value, WaitingOn) else WaitingOn(str(value))
+
+
+def waiting_on_for_reason(reason: str | SuspendReason | None) -> WaitingOn | None:
+    """按暂停原因推出球在谁手上。
+
+    ``SuspendReason`` 之外的值仍按既有约定抛 ``ValueError``（非法输入要当场炸）。
+    那句 ``.get`` 兜底防的是另一件事：**将来往枚举里加了新原因、却忘了在映射表
+    里登记**——这时归给主助理，宁可多叫醒它一次，也不要让活停在那儿没人知道。
+    """
+    coerced = coerce_suspend_reason(reason)
+    if coerced is None:
+        return None
+    return _SUSPEND_REASON_WAITING_ON.get(coerced, WaitingOn.ASSISTANT)
 
 
 def validate_task_transition(

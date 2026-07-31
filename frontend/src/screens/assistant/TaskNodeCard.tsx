@@ -26,6 +26,7 @@ import type {
   TaskAdjudicationDecision,
   TaskDisplayPhase,
 } from "../../api/assistantTasks";
+import { canContinueTask } from "../../api/assistantTasks";
 import type {
   ExternalCodingAvailableAction,
   ExternalCodingSessionDetail,
@@ -728,8 +729,7 @@ function TaskNodeCard({
   const [continuing, setContinuing] = useState(false);
   const [note, setNote] = useState("");
 
-  const showContinue =
-    task.displayPhase === "paused" && task.suspendReason === "user_stop";
+  const showContinue = canContinueTask(task);
   const showAdjudication = task.requiresReview && !!task.adjudicationId;
   const externalCodingSessions = task.externalCodingSessions ?? [];
 

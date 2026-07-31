@@ -53,6 +53,7 @@ import type {
   TaskGraphDisplayPhase,
   TaskGraphStatus,
   TaskGraphSuspendReason,
+  TaskGraphWaitingOn,
   TaskQuestionChangedEvent,
   TaskQuestionChangeType,
   TaskQuestionKind,
@@ -99,6 +100,7 @@ const TASK_GRAPH_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assis
 const TASK_GRAPH_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].status);
 const TASK_GRAPH_DISPLAY_PHASE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].displayPhase);
 const TASK_GRAPH_SUSPEND_REASON_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].suspendReason);
+const TASK_GRAPH_WAITING_ON_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_graph.changed"].waitingOn);
 const TASK_QUESTION_KIND_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_question.changed"].kind);
 const TASK_QUESTION_STATUS_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_question.changed"].status);
 const TASK_QUESTION_CHANGE_TYPE_SET = new Set<string>(UI_EVENT_PAYLOAD_ENUMS["assistant.task_question.changed"].changeType);
@@ -223,6 +225,8 @@ const isOptionalTaskGraphDisplayPhase = (v: unknown): v is TaskGraphDisplayPhase
   isOptionalNullableEnumMember<TaskGraphDisplayPhase>(TASK_GRAPH_DISPLAY_PHASE_SET, v);
 const isOptionalTaskGraphSuspendReason = (v: unknown): v is TaskGraphSuspendReason | null | undefined =>
   isOptionalNullableEnumMember<TaskGraphSuspendReason>(TASK_GRAPH_SUSPEND_REASON_SET, v);
+const isOptionalTaskGraphWaitingOn = (v: unknown): v is TaskGraphWaitingOn | null | undefined =>
+  isOptionalNullableEnumMember<TaskGraphWaitingOn>(TASK_GRAPH_WAITING_ON_SET, v);
 const isOptionalTaskQuestionKind = (v: unknown): v is TaskQuestionKind | undefined =>
   v === undefined || isEnumMember<TaskQuestionKind>(TASK_QUESTION_KIND_SET, v);
 const isOptionalTaskQuestionStatus = (v: unknown): v is TaskQuestionStatus | undefined =>
@@ -443,6 +447,7 @@ function parseTaskGraphChangedPayload(payload: Record<string, unknown>): TaskGra
       typeof payload.requiresReview !== "boolean") ||
     !isOptionalNullableString(payload.safeExplanation) ||
     !isOptionalTaskGraphSuspendReason(payload.suspendReason) ||
+    !isOptionalTaskGraphWaitingOn(payload.waitingOn) ||
     !isOptionalNullableNumber(payload.sequence)
   ) {
     return null;
@@ -456,6 +461,7 @@ function parseTaskGraphChangedPayload(payload: Record<string, unknown>): TaskGra
     requiresReview: payload.requiresReview ?? null,
     safeExplanation: payload.safeExplanation ?? null,
     suspendReason: payload.suspendReason ?? null,
+    waitingOn: payload.waitingOn ?? null,
     sequence: payload.sequence ?? null,
   };
 }

@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 
-from src.business.task_collaboration.models import SuspendReason
+from src.business.task_collaboration.models import SuspendReason, waiting_on_for_reason
 from src.data import migrations
 from src.data.models_sqlite import Base
 from src.data.repos import AssistantTaskRepository
@@ -124,7 +124,9 @@ def _engine_at_v36():
 def test_v37_accepts_budget_exhausted_through_repository_and_preserves_rows() -> None:
     engine = _engine_at_v36()
 
-    migrations.migrate_to_v37(engine)
+    # 跑完整迁移链而不是只跑 v37：下面用的 Repository 走的是最新 ORM 定义，
+    # 库停在旧版本就会缺列。验证的仍是 v37 引入的 suspend_reason 约束。
+    migrations.run_migrations(engine)
 
     Session = sessionmaker(bind=engine)
     with Session.begin() as session:
@@ -133,6 +135,7 @@ def test_v37_accepts_budget_exhausted_through_repository_and_preserves_rows() ->
             "tsk_existing",
             status="suspended",
             suspend_reason=SuspendReason.BUDGET_EXHAUSTED.value,
+            waiting_on=waiting_on_for_reason(SuspendReason.BUDGET_EXHAUSTED),
         )
 
     assert updated is not None
@@ -149,7 +152,7 @@ def test_v37_accepts_budget_exhausted_through_repository_and_preserves_rows() ->
 def test_v37_persists_every_suspend_reason_through_repository() -> None:
     assert {reason.value for reason in SuspendReason} == EXPECTED_SUSPEND_REASONS
     engine = _engine_at_v36()
-    migrations.migrate_to_v37(engine)
+    migrations.run_migrations(engine)  # 同上：Repository 走最新 ORM
 
     Session = sessionmaker(bind=engine)
     with Session.begin() as session:
@@ -167,6 +170,7 @@ def test_v37_persists_every_suspend_reason_through_repository() -> None:
                 task_id,
                 status="suspended",
                 suspend_reason=reason.value,
+                waiting_on=waiting_on_for_reason(reason),
             )
             assert updated is not None
 
@@ -252,6 +256,7 @@ def test_orm_schema_persists_every_suspend_reason() -> None:
                 task_id,
                 status="suspended",
                 suspend_reason=reason.value,
+                waiting_on=waiting_on_for_reason(reason),
             )
             assert updated is not None
 

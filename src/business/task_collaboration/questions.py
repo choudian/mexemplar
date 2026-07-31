@@ -12,6 +12,7 @@ from src.business.task_collaboration.models import (
     TaskQuestionKind,
     TaskQuestionStatus,
     TaskStatus,
+    WaitingOn,
     safe_preview,
     validate_task_transition,
 )
@@ -130,6 +131,7 @@ class TaskQuestionService(AtomicTaskService):
                 question.task_id,
                 status=TaskStatus.SUSPENDED,
                 suspend_reason=SuspendReason.WAITING_USER,
+                waiting_on=WaitingOn.USER,
             )
         if task is not None:
             emit_task_updated(self, task)
@@ -250,6 +252,7 @@ class TaskQuestionService(AtomicTaskService):
                             question.task_id,
                             status=TaskStatus.SUSPENDED,
                             suspend_reason=SuspendReason.WAITING_USER,
+                            waiting_on=WaitingOn.USER,
                         )
                         if suspended is not None:
                             updated_tasks.append(suspended)

@@ -244,6 +244,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                 "requiresReview",
                 "safeExplanation",
                 "suspendReason",
+                "waitingOn",
                 "sequence",
             }
         ),
@@ -257,6 +258,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
             "requiresReview": True,
             "safeExplanation": "等待上级检查结果",
             "suspendReason": None,
+            "waitingOn": None,
             "sequence": 42,
         },
         required_payload_keys=frozenset({"graphId", "changeType"}),
@@ -298,10 +300,23 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                 frozenset({"running", "reviewing", "needs_attention", "paused", "done"}),
             ),
             (
+                # interrupted 此前漏在这张表外——业务枚举、schema Literal 和 DB CHECK
+                # 都有它，唯独这里没有。它目前零生产者所以没炸，但启动对账落地后
+                # 会立刻撞 UiEventValidationError。
                 "suspendReason",
                 frozenset(
-                    {"waiting_user", "waiting_system", "user_stop", "budget_exhausted"}
+                    {
+                        "waiting_user",
+                        "waiting_system",
+                        "user_stop",
+                        "budget_exhausted",
+                        "interrupted",
+                    }
                 ),
+            ),
+            (
+                "waitingOn",
+                frozenset({"user", "assistant", "system"}),
             ),
         ),
     ),

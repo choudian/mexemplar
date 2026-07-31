@@ -81,6 +81,7 @@ export const UI_EVENT_EXAMPLES = {
     "requiresReview": true,
     "safeExplanation": "等待上级检查结果",
     "suspendReason": null,
+    "waitingOn": null,
     "sequence": 42,
   },
   "assistant.task_board.changed": {
@@ -231,9 +232,15 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
     ],
     "suspendReason": [
       "budget_exhausted",
+      "interrupted",
       "user_stop",
       "waiting_system",
       "waiting_user",
+    ],
+    "waitingOn": [
+      "assistant",
+      "system",
+      "user",
     ],
   },
   "assistant.task_board.changed": {
@@ -761,6 +768,8 @@ export type TaskGraphChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.tas
 export type TaskGraphStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["status"][number];
 export type TaskGraphDisplayPhase = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["displayPhase"][number];
 export type TaskGraphSuspendReason = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["suspendReason"][number];
+/** 暂停时球在谁手上——谁能让这个活继续。 */
+export type TaskGraphWaitingOn = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_graph.changed"]["waitingOn"][number];
 export type TaskQuestionKind = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_question.changed"]["kind"][number];
 export type TaskQuestionStatus = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_question.changed"]["status"][number];
 export type TaskQuestionChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["assistant.task_question.changed"]["changeType"][number];
@@ -800,6 +809,7 @@ export type TaskGraphChangedEvent = UiEventEnvelope<
     requiresReview?: boolean | null;
     safeExplanation?: string | null;
     suspendReason?: TaskGraphSuspendReason | null;
+    waitingOn?: TaskGraphWaitingOn | null;
     sequence?: number | null;
   }
 >;

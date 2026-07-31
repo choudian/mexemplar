@@ -10,6 +10,7 @@ Orchestrator 执行内核替换为一个返回预设结果的替身（避免真�
 
 from __future__ import annotations
 
+from datetime import timedelta
 from threading import Barrier, BrokenBarrierError, Lock
 from time import sleep
 
@@ -22,6 +23,7 @@ from src.data.repos import (
     AssistantTaskAttemptRepository,
     AssistantTaskRepository,
 )
+from src.utils.timezone import utc_now_naive
 
 
 class _Config:
@@ -162,6 +164,166 @@ def test_adapter_executes_and_reentry_reaches_sink(monkeypatch):
     assert len(entries) == 1
     assert entries[0]["taskId"] == task_id
     assert kicks == [("ast_reentry_a", graph_id)]
+
+
+def _paused_dispatcher(monkeypatch, *, session_id: str, title: str, result: dict):
+    """搭一条真实的派发链，让执行体返回一个暂停结果。"""
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    graph_id, task_id = _create_child_task(service, session_id=session_id, title=title)
+    service.close()
+
+    kicks: list[tuple[str, str]] = []
+    sink = ParentReentrySink(
+        has_active_worker=lambda sid: False,
+        kick_reentry_run=lambda sid, gid: kicks.append((sid, gid)) or True,
+    )
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        executor_callback=TaskExecutorAdapter(_FakeOrchestrator(result)),
+        parent_reentry_callback=sink.dispatch,
+    )
+    future = dispatcher.start_attempt_async(
+        task_id=task_id,
+        executor_type="ephemeral_subagent",
+        executor_id=task_id,
+        lease_owner="test",
+    )
+    assert future is not None
+    return graph_id, task_id, sink, kicks, future.result(timeout=5)
+
+
+def test_budget_pause_wakes_the_parent(monkeypatch):
+    """撞轮次预算暂停必须叫醒主助理——这条链此前是断的。
+
+    7/29 实跑：执行体跑满 30 轮正常暂停、工作完整保留，task 与 attempt 状态**全部
+    正确落库**，然后没有任何人被告知。主助理以为活还在跑，用户在等主助理"第一时间
+    告知"，两边互等到用户自己发现不对。
+
+    断点在于落库写的是 suspend_reason，而决定"要不要通知父侧"的代码查的是另一套
+    reentry_type 白名单——两套独立判断对不上。现在通知只读刚写进库的 waiting_on。
+    """
+    graph_id, task_id, sink, kicks, payload = _paused_dispatcher(
+        monkeypatch,
+        session_id="ast_budget",
+        title="实现 DAG viewer",
+        result={
+            "success": False,
+            "paused": True,
+            "pause_reason": "budget_exhausted",
+            "iterations_used": 30,
+            "max_iterations": 30,
+            "message": "已达迭代上限（30 轮）",
+            "subagent_id": "ast_child",
+        },
+    )
+
+    # 1. 落库：停住了，而且记下了球在主助理手上
+    with AssistantTaskRepository() as tasks:
+        row = tasks.get_task(task_id)
+    assert row.status == "suspended"
+    assert row.suspend_reason == "budget_exhausted"
+    assert row.waiting_on == "assistant"
+
+    # 2. attempt 让出执行者槽
+    with AssistantTaskAttemptRepository() as attempts:
+        assert attempts.get_by_id(payload["attemptId"]).status == "paused"
+
+    # 3. 主助理真的被叫醒了 —— 这一条是这一步存在的全部理由
+    entries = sink.drain("ast_budget")
+    assert len(entries) == 1
+    assert entries[0]["eventType"] == "budget_exhausted"
+    assert entries[0]["taskId"] == task_id
+    assert entries[0]["iterationsUsed"] == 30
+    assert entries[0]["maxIterations"] == 30
+    assert entries[0]["safeSummary"]
+    assert kicks == [("ast_budget", graph_id)]
+
+
+def test_user_stop_does_not_wake_the_parent(monkeypatch):
+    """对照：用户自己按停的活球在用户手上，不该去打扰主助理。"""
+    _, task_id, sink, kicks, _ = _paused_dispatcher(
+        monkeypatch,
+        session_id="ast_user_stop",
+        title="随便什么活",
+        result={
+            "success": False,
+            "paused": True,
+            "cancelled": True,
+            "pause_reason": "budget_exhausted",
+            "message": "用户已停止",
+            "subagent_id": "ast_child",
+        },
+    )
+
+    with AssistantTaskRepository() as tasks:
+        row = tasks.get_task(task_id)
+    assert row.suspend_reason == "user_stop"
+    assert row.waiting_on == "user"
+
+    assert sink.drain("ast_user_stop") == []
+    assert kicks == []
+
+
+def test_a_pause_whose_task_row_is_gone_notifies_nobody(monkeypatch):
+    """attempt 指向的 task 不存在时：中止收尾、不动 attempt、不发通知。
+
+    通知的前提是**状态已经落库**。若放行，主助理会被叫醒去查一个账上没有的活，
+    而且 payload 里的 sessionId / graphId 全是空的——回流恰恰是按 sessionId 分队列
+    投递的。所以必须在把 attempt 翻 paused 之前就中止，不留"attempt 已让出槽位、
+    task 却没动"的半截状态。
+    """
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    _, task_id = _create_child_task(service, session_id="ast_gone", title="活")
+    service.close()
+
+    with AssistantTaskAttemptRepository() as attempts:
+        attempt = attempts.start_attempt(
+            task_id=task_id,
+            executor_type="ephemeral_subagent",
+            executor_id=task_id,
+            lease_owner="test",
+            lease_expires_at=utc_now_naive() + timedelta(seconds=60),
+        )
+        attempt_id = attempt.attempt_id
+        fence_token = attempt.fence_token
+
+    sink = ParentReentrySink(
+        has_active_worker=lambda sid: False,
+        kick_reentry_run=lambda sid, gid: True,
+    )
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        parent_reentry_callback=sink.dispatch,
+    )
+
+    # 让这一次收尾看到「task 不存在」
+    monkeypatch.setattr(TaskCollaborationService, "get_task", lambda self, _task_id: None)
+
+    result = dispatcher._record_attempt_paused(
+        attempt_id=attempt_id,
+        fence_token=fence_token,
+        suspend_reason="budget_exhausted",
+        safe_summary="已达迭代上限",
+        pause_result={
+            "suspend_reason": "budget_exhausted",
+            "reentry_type": "budget_exhausted",
+        },
+    )
+
+    assert result["accepted"] is False
+    assert result["taskMissing"] is True
+    # 没有任何人被叫醒
+    assert sink.drain("ast_gone") == []
+    # attempt 仍占着执行者槽——没被翻成 paused
+    with AssistantTaskAttemptRepository() as attempts:
+        assert (
+            attempts.get_by_id(attempt_id).status
+            in AssistantTaskAttemptRepository.ACTIVE_STATUSES
+        )
 
 
 def test_adapter_maps_non_paused_failure_to_stuck(monkeypatch):

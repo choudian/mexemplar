@@ -215,6 +215,7 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "requires_review",
         "safe_explanation",
         "suspend_reason",
+        "waiting_on",
     ),
     "assistant_task_board_changed": (
         "change_type",

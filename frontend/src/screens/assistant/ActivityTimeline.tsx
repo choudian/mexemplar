@@ -8,6 +8,7 @@ import type {
   AssistantTodoItem,
   TaskAdjudicationDecision,
 } from "../../api/assistantTasks";
+import { canContinueTask } from "../../api/assistantTasks";
 import type { ActivityStep, Subagent } from "../../state/assistantStore";
 import { ActivityStepRow, LoadableContent } from "./ActivityStepRow";
 import SubagentCard from "./SubagentCard";
@@ -88,7 +89,7 @@ function ActivityTimeline({
       (t) =>
         t.displayPhase === "needs_attention" ||
         t.displayPhase === "reviewing" ||
-        (t.displayPhase === "paused" && t.suspendReason === "user_stop"),
+        canContinueTask(t),
     );
 
   const [historySteps, setHistorySteps] = useState<AssistantActivityStep[]>([]);
@@ -194,9 +195,7 @@ function ActivityTimeline({
 
   // 任务图全局操作按钮条件
   const canStopGraph = taskNodes.some((t) => t.displayPhase === "running");
-  const canContinueGraph = taskNodes.some(
-    (t) => t.displayPhase === "paused" && t.suspendReason === "user_stop",
-  );
+  const canContinueGraph = taskNodes.some(canContinueTask);
   const hasGraphActions = canStopGraph || canContinueGraph;
 
   return (
