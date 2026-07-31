@@ -75,6 +75,23 @@ _DEFAULT_HEALING_ACTIONS: list[str] = [
     "replan",
     "skip",
 ]
+
+# 撞上确定性代码缺陷时给主助理的动作候选。**刻意不含 retry / swap_executor /
+# adjust_input** —— 代码不改，重试多少次、换谁来、换什么输入，都是同一个错。
+#
+# 这是"不再重试"的**确定性保证**：不是靠主助理读懂文案自觉，是它手里根本没有
+# 那个选项。7/28 实跑里它照着"需上级检查后决定是否重试"重试了 7 次，1 小时 13
+# 分钟、0 产出——它没做错任何事，是那句建议在骗它。
+_DEFECT_HEALING_ACTIONS: list[str] = ["skip", "replan", "abandon"]
+
+_DEFECT_RECOVERY_HINT = (
+    "这一步撞上程序缺陷，重试不会改变结果（换执行器、改输入也一样）。"
+    "请判断能否跳过该节点让下游继续，或改图绕过；确实绕不开就放弃该分支并告知用户。"
+)
+
+# 记账崩溃时的固定摘要。**必须是常量**：那次崩溃很可能正是因为某个动态值有问题，
+# 收尾时再去拼一个新的只会再崩一次。
+_DEFECT_RECORDING_SUMMARY = "记录这一步的结果时撞上程序缺陷，重试不会改变结果。"
 _SAFE_RECOVERY_HINT = (
     "节点执行失败。可先尝试重试、调整输入或更换执行器；若反复失败可改图（增删节点/依赖）"
     "或跳过该节点；确实无法推进时再升级用户。"
@@ -318,12 +335,82 @@ class TaskDispatcher:
                     result_ref=result_ref,
                     result_ref_truncated=result_ref_truncated,
                 )
-        except Exception:
-            logger.exception("[task attempt] worker crashed attempt=%s", attempt_id)
-            raise
+        except Exception as exc:
+            # 记账本身崩了（落库被约束拒、result 里有不可序列化的对象…）。
+            #
+            # 这里原本是裸 raise —— 而 worker 跑在线程池里，没有人 .result()，
+            # 于是异常被 Future 整个吞掉：只剩一行日志，活停在「运行中」，两分钟
+            # 租约过期后被当成失联重派，再跑一遍、记账时再崩，**无限循环**。
+            # 7/28 那 7 次重试至少还是主助理照建议做的；这一类连它都不知道。
+            #
+            # 所以不再往上抛：把活钉死在一个终态，让它退出重派循环。
+            return self._force_defect_terminal(attempt_id, fence_token, exc)
         finally:
             if run_started:
                 run_context.end()
+
+    def _force_defect_terminal(
+        self, attempt_id: str, fence_token: int, exc: BaseException
+    ) -> dict[str, Any]:
+        """记账崩溃后的收尾：用最小字段集把活钉在「撞上程序缺陷」。
+
+        **只写内置常量字段**（status / suspend_reason / waiting_on / 固定摘要），
+        绕开任何可能就是崩溃原因的东西——原来那次失败很可能正是因为某个值违约
+        或某个对象序列化不了，带着它再写一次只会再崩一次。
+
+        这一步再失败就只剩日志了。那意味着数据库整体写不进去（磁盘满、库损坏），
+        系统已经不可用，不是这里能补救的——但**至少不会递归重试**。
+        """
+        from src.business.services.assistant_failure_classifier import (
+            classify_assistant_failure,
+        )
+
+        classified = classify_assistant_failure(exception=exc)
+        logger.error(
+            "[task defect] 记账失败 attempt=%s class=%s type=%s",
+            attempt_id,
+            classified.category,
+            classified.exception_type,
+            exc_info=True,
+        )
+        try:
+            with self._write_lock:
+                return self._record_attempt_paused(
+                    attempt_id=attempt_id,
+                    fence_token=fence_token,
+                    suspend_reason=SuspendReason.BLOCKED_BY_DEFECT.value,
+                    safe_summary=_DEFECT_RECORDING_SUMMARY,
+                    pause_result={
+                        "suspend_reason": SuspendReason.BLOCKED_BY_DEFECT.value,
+                        "reentry_type": "blocked_by_defect",
+                        "failure_exception_type": classified.exception_type,
+                    },
+                )
+        except Exception:
+            logger.exception(
+                "[task defect] 最小字段集收尾也失败 attempt=%s，只能靠租约扫描兜底",
+                attempt_id,
+            )
+
+        # 收尾写不进 task 表，至少让 attempt 让出执行者槽——否则它一直占着
+        # 「活跃」名额，恢复扫描会把它当失联重派，又回到那个循环里。
+        try:
+            with self._write_lock, _worker_scope() as (attempts, _service):
+                attempts.fail_if_current(
+                    attempt_id=attempt_id,
+                    fence_token=fence_token,
+                    error_category=classified.category,
+                    result_ref=classified.exception_type,
+                )
+        except Exception:
+            logger.exception("[task defect] attempt 收尾也失败 attempt=%s", attempt_id)
+
+        return {
+            "accepted": False,
+            "attemptId": attempt_id,
+            "recordingFailed": True,
+            "failureClass": classified.category,
+        }
 
     def _record_attempt_outcome(
         self,
@@ -706,6 +793,15 @@ def _paused_reentry_payload(
     if reentry_type == "task_question":
         payload["questionId"] = result.get("question_id")
         payload["questionKind"] = result.get("question_kind")
+    if result.get("suspend_reason") == SuspendReason.BLOCKED_BY_DEFECT.value:
+        # 撞上缺陷时**必须**给出动作候选，而且这组里没有 retry —— 见
+        # _DEFECT_HEALING_ACTIONS 的说明。这是"不再重试"的确定性保证：
+        # 主助理想重试也没这个选项，不靠它读懂文案自觉。
+        payload["healingActions"] = list(_DEFECT_HEALING_ACTIONS)
+        payload["safeRecoveryHint"] = _DEFECT_RECOVERY_HINT
+        if result.get("failure_exception_type"):
+            # 只带类型名，给主助理一点判断依据；完整现场在 ERROR 日志里。
+            payload["failureExceptionType"] = result["failure_exception_type"]
     # 主助理要续跑得知道续哪个执行体——没有这个 id，它知道该做什么也做不了。
     if result.get("subagent_id"):
         payload["subagentId"] = result["subagent_id"]

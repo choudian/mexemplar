@@ -3378,6 +3378,226 @@ def migrate_to_v38(engine):
     logger.info("迁移到版本 38 完成：assistant_tasks.waiting_on")
 
 
+def migrate_to_v39(engine):
+    """迁移到版本 39：给「撞上程序缺陷」这一类停法开一个格子。
+
+    此前系统撞上确定性代码缺陷（数据库 CHECK 被拒、TypeError、断言失败…）时，
+    只会说"内部错误，需上级检查后决定是否重试"——而这一类**重试一定还是同样的
+    结果**。7/28 实跑里主助理照这句建议重试了 7 次，1 小时 13 分钟、0 产出。
+
+    两张表各加一个值：
+
+    * ``assistant_tasks.suspend_reason`` += ``blocked_by_defect``
+    * ``assistant_run_failures.category`` += ``code_defect``
+
+    **第二张不是顺带，是必须的**：分类器产出的每个 category 都得能落库，落不进
+    去就意味着"记录失败"这件事本身失败——出了事，连出过事都记不下来，而那正是
+    这一步要消灭的那类故障。由 tests/data/test_assistant_run_failure_repository.py
+    的守卫测试钉住两者同步。
+
+    SQLite 改不了 CHECK，所以两张表都走整表重建（照 v37/v38 的写法）。
+    """
+    try:
+        with engine.begin() as conn:
+            # ── 1. assistant_tasks：suspend_reason 加 blocked_by_defect ──
+            tasks_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'assistant_tasks'"
+                )
+            ).fetchone()
+            if tasks_exists is not None:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE assistant_tasks_v39 (
+                            task_id TEXT PRIMARY KEY,
+                            graph_id TEXT NOT NULL,
+                            root_task_id TEXT,
+                            parent_task_id TEXT,
+                            session_id TEXT NOT NULL,
+                            user_message_sequence INTEGER,
+                            title TEXT NOT NULL,
+                            description TEXT NOT NULL,
+                            status TEXT NOT NULL DEFAULT 'pending_dispatch'
+                                CONSTRAINT ck_assistant_tasks_status
+                                CHECK (status IN (
+                                    'pending_dispatch', 'running', 'suspended',
+                                    'completed', 'failed', 'cancelled'
+                                )),
+                            suspend_reason TEXT
+                                CONSTRAINT ck_assistant_tasks_suspend_reason
+                                CHECK (
+                                    suspend_reason IS NULL OR suspend_reason IN (
+                                        'waiting_user', 'waiting_system', 'user_stop',
+                                        'budget_exhausted', 'interrupted',
+                                        'blocked_by_defect'
+                                    )
+                                ),
+                            waiting_on TEXT
+                                CONSTRAINT ck_assistant_tasks_waiting_on
+                                CHECK (
+                                    waiting_on IS NULL OR waiting_on IN (
+                                        'user', 'assistant', 'system'
+                                    )
+                                ),
+                            assignee_type TEXT
+                                CONSTRAINT ck_assistant_tasks_assignee_type
+                                CHECK (
+                                    assignee_type IS NULL OR assignee_type IN (
+                                        'ephemeral_subagent', 'specialist'
+                                    )
+                                ),
+                            assignee_id TEXT,
+                            owner_session_id TEXT,
+                            capability_scope TEXT,
+                            graph_version INTEGER NOT NULL DEFAULT 1,
+                            task_version INTEGER NOT NULL DEFAULT 1,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            completed_at DATETIME,
+                            failed_at DATETIME,
+                            cancelled_at DATETIME,
+                            requires_confirmation INTEGER NOT NULL DEFAULT 0,
+                            workspace_root TEXT,
+                            CONSTRAINT ck_assistant_tasks_suspend_reason_required CHECK (
+                                (status = 'suspended' AND suspend_reason IS NOT NULL)
+                                OR
+                                (status != 'suspended' AND suspend_reason IS NULL)
+                            ),
+                            CONSTRAINT ck_assistant_tasks_waiting_on_required CHECK (
+                                (status = 'suspended' AND waiting_on IS NOT NULL)
+                                OR
+                                (status != 'suspended' AND waiting_on IS NULL)
+                            )
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO assistant_tasks_v39 (
+                            task_id, graph_id, root_task_id, parent_task_id,
+                            session_id, user_message_sequence, title, description,
+                            status, suspend_reason, waiting_on, assignee_type,
+                            assignee_id, owner_session_id, capability_scope,
+                            graph_version, task_version, created_at, updated_at,
+                            completed_at, failed_at, cancelled_at,
+                            requires_confirmation, workspace_root
+                        )
+                        SELECT
+                            task_id, graph_id, root_task_id, parent_task_id,
+                            session_id, user_message_sequence, title, description,
+                            status, suspend_reason, waiting_on, assignee_type,
+                            assignee_id, owner_session_id, capability_scope,
+                            graph_version, task_version, created_at, updated_at,
+                            completed_at, failed_at, cancelled_at,
+                            requires_confirmation, workspace_root
+                        FROM assistant_tasks
+                        """
+                    )
+                )
+                conn.execute(text("DROP TABLE assistant_tasks"))
+                conn.execute(text("ALTER TABLE assistant_tasks_v39 RENAME TO assistant_tasks"))
+                for index_sql in (
+                    "CREATE INDEX idx_assistant_tasks_graph_status "
+                    "ON assistant_tasks(graph_id, status)",
+                    "CREATE INDEX idx_assistant_tasks_graph_parent "
+                    "ON assistant_tasks(graph_id, parent_task_id)",
+                    "CREATE INDEX idx_assistant_tasks_session_message "
+                    "ON assistant_tasks(session_id, user_message_sequence)",
+                    "CREATE INDEX idx_assistant_tasks_graph_version "
+                    "ON assistant_tasks(graph_id, task_version)",
+                ):
+                    conn.execute(text(index_sql))
+            else:
+                logger.info("迁移到版本 39：assistant_tasks 表不存在，跳过 suspend_reason 扩展")
+
+            # ── 2. assistant_run_failures：category 加 code_defect ──
+            failures_exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'assistant_run_failures'"
+                )
+            ).fetchone()
+            if failures_exists is not None:
+                conn.execute(
+                    text(
+                        """
+                        CREATE TABLE assistant_run_failures_v39 (
+                            failure_id TEXT PRIMARY KEY,
+                            session_id TEXT NOT NULL,
+                            message_sequence INTEGER NOT NULL,
+                            category TEXT NOT NULL
+                                CONSTRAINT ck_assistant_run_failures_category
+                                CHECK (category IN (
+                                    'authentication', 'invalid_request', 'quota', 'network',
+                                    'provider', 'iteration_limit', 'internal', 'code_defect'
+                                )),
+                            safe_message TEXT NOT NULL,
+                            safe_suggestion TEXT NOT NULL,
+                            internal_code TEXT,
+                            exception_type TEXT,
+                            attempt_count INTEGER NOT NULL DEFAULT 1
+                                CONSTRAINT ck_assistant_run_failures_attempt_count
+                                CHECK (attempt_count >= 1),
+                            status TEXT NOT NULL DEFAULT 'failed'
+                                CONSTRAINT ck_assistant_run_failures_status
+                                CHECK (status IN ('failed', 'retrying', 'resolved')),
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            failed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            resolved_at DATETIME
+                        )
+                        """
+                    )
+                )
+                conn.execute(
+                    text(
+                        """
+                        INSERT INTO assistant_run_failures_v39 (
+                            failure_id, session_id, message_sequence, category,
+                            safe_message, safe_suggestion, internal_code, exception_type,
+                            attempt_count, status, created_at, updated_at,
+                            failed_at, resolved_at
+                        )
+                        SELECT
+                            failure_id, session_id, message_sequence, category,
+                            safe_message, safe_suggestion, internal_code, exception_type,
+                            attempt_count, status, created_at, updated_at,
+                            failed_at, resolved_at
+                        FROM assistant_run_failures
+                        """
+                    )
+                )
+                conn.execute(text("DROP TABLE assistant_run_failures"))
+                conn.execute(
+                    text(
+                        "ALTER TABLE assistant_run_failures_v39 "
+                        "RENAME TO assistant_run_failures"
+                    )
+                )
+                for index_sql in (
+                    "CREATE UNIQUE INDEX uq_assistant_run_failure_current_session "
+                    "ON assistant_run_failures(session_id) "
+                    "WHERE status IN ('failed', 'retrying')",
+                    "CREATE INDEX idx_assistant_run_failure_message "
+                    "ON assistant_run_failures(session_id, message_sequence)",
+                    "CREATE INDEX idx_assistant_run_failure_status "
+                    "ON assistant_run_failures(status)",
+                ):
+                    conn.execute(text(index_sql))
+            else:
+                logger.info("迁移到版本 39：assistant_run_failures 表不存在，跳过 category 扩展")
+
+            conn.execute(text("UPDATE schema_version SET version = 39"))
+    except Exception as e:
+        logger.error(f"迁移到版本 39 失败: {e}")
+        raise
+    logger.info("迁移到版本 39 完成：blocked_by_defect + code_defect")
+
+
 def downgrade_from_v36(engine):
     """回退版本 36：移除执行会话列。"""
     try:
@@ -3462,6 +3682,7 @@ _MIGRATIONS = [
     (36, migrate_to_v36),
     (37, migrate_to_v37),
     (38, migrate_to_v38),
+    (39, migrate_to_v39),
 ]
 
 

@@ -230,6 +230,22 @@ class TaskExecutorAdapter:
                     if result.get(key) is not None:
                         outcome[key] = result[key]
             return outcome
+        if result.get("failure_class") == "code_defect":
+            # 撞上确定性代码缺陷，走**暂停**而不是 stuck。
+            #
+            # 差别不只在状态名：stuck 会建父侧裁定并附一组以 retry 打头的自愈动作，
+            # 而重试恰恰是这里最没用的事——代码不改，换执行体、改输入、试一百次都是
+            # 同一个错。暂停则如实表达"活还在、只是这条路在当前代码下走不通"，由
+            # waiting_on=assistant 叫醒主助理去做绕行决定（跳过 / 放弃）。
+            return {
+                "task_outcome": "suspended",
+                "suspend_reason": SuspendReason.BLOCKED_BY_DEFECT.value,
+                "reentry_type": "blocked_by_defect",
+                "safe_summary": _summary(result.get("message")),
+                "subagent_id": result.get("subagent_id") or result.get("executor_session_id"),
+                # 只带类型名，不带任何原文——完整现场留在 ERROR 日志里。
+                "failure_exception_type": result.get("failure_exception_type"),
+            }
         raise RuntimeError(result.get("message") or "委派执行未返回可用结果")
 
 

@@ -20,12 +20,17 @@ TASK_INDEXES = {
     "idx_assistant_tasks_graph_version",
 }
 
+# 这份清单**故意手写**：加一种停法就得回来改这里，逼一次显式确认——
+# 新的暂停原因必须同时落到业务枚举、ORM CHECK 和迁移 DDL 三处，漏一处就会在
+# 运行时才炸（而那正好是"记不下来"那类最难查的故障）。
 EXPECTED_SUSPEND_REASONS = {
     "waiting_user",
     "waiting_system",
     "user_stop",
     "budget_exhausted",
     "interrupted",
+    # v39：撞上确定性代码缺陷。与上面每一条的区别是它**不能再试**。
+    "blocked_by_defect",
 }
 
 

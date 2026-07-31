@@ -889,7 +889,22 @@ class AgentOrchestrator:
                 system_prompt_override=system_prompt,
             )
         except Exception as exc:
-            logger.error("[Orchestrator] 委派执行失败: %s", exc, exc_info=True)
+            # 这里是**唯一还握着执行体真异常**的地方：再往上一层，它会被重新包成一个
+            # 通用 RuntimeError，类型信息就没了（UI 上那个只有一个词的 "RuntimeError"
+            # 就是这么来的）。所以「这是不是代码缺陷」必须在这一层判，判完把结论作为
+            # 字段带出去——下游只读结论，不再需要异常本身。
+            from src.business.services.assistant_failure_classifier import (
+                classify_assistant_failure,
+            )
+
+            classified = classify_assistant_failure(exception=exc)
+            logger.error(
+                "[Orchestrator] 委派执行失败 session=%s class=%s type=%s",
+                session_id,
+                classified.category,
+                classified.exception_type,
+                exc_info=True,
+            )
             # 将孤立 session 标记为 failed，避免 _continue_subagent 因 status=="active" 拒绝唤回。
             self._session_repo.update_status(session_id, "failed")
             failed_transition_id = self._session_store.record_transition(
@@ -915,7 +930,11 @@ class AgentOrchestrator:
             )
             return {
                 "success": False,
-                "message": "委派执行内部错误，已记录详情",
+                # 不再是一句写死的"内部错误…是否重试"——那句话对代码缺陷是假的，
+                # 而主助理正是照着它重试了 7 次（7/28 实跑）。改成按分类给真话。
+                "message": classified.message,
+                "failure_class": classified.category,
+                "failure_exception_type": classified.exception_type,
                 "executor_session_id": session_id,
                 "workflow_id": workflow_id,
             }

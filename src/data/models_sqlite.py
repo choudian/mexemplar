@@ -278,7 +278,7 @@ class AssistantTask(Base):
         CheckConstraint(
             "suspend_reason IS NULL OR suspend_reason IN "
             "('waiting_user', 'waiting_system', 'user_stop', "
-            "'budget_exhausted', 'interrupted')",
+            "'budget_exhausted', 'interrupted', 'blocked_by_defect')",
             name="ck_assistant_tasks_suspend_reason",
         ),
         CheckConstraint(
@@ -1176,8 +1176,11 @@ class AssistantRunFailure(Base):
     __tablename__ = "assistant_run_failures"
     __table_args__ = (
         CheckConstraint(
+            # 与 assistant_failure_classifier.KNOWN_FAILURE_CATEGORIES 同步，
+            # 由 tests/data/test_assistant_run_failure_repository.py 的守卫测试钉住。
+            # 漏了会让「记录失败」这件事本身失败——出了事连出过事都记不下来。
             "category IN ('authentication', 'invalid_request', 'quota', 'network', "
-            "'provider', 'iteration_limit', 'internal')",
+            "'provider', 'iteration_limit', 'internal', 'code_defect')",
             name="ck_assistant_run_failures_category",
         ),
         CheckConstraint(

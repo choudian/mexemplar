@@ -35,6 +35,19 @@ from src.utils.events import emit
 _MAX_DELEGATION_DEPTH = 2
 _PENDING_REVIEW_EXPLANATION = "等待上级检查结果"
 
+# 用户面向文案：他处理不了程序缺陷，但有权知道这一步做不下去了。
+# 刻意不出现 defect / exception / 异常类型这些内部词——那些留给日志和开发者。
+_DEFECT_EXPLANATION = "这一步遇到程序问题，做不下去了。已记录详情，正在处理"
+
+
+def _task_explanation(task, *, has_pending_adjudication: bool) -> str:
+    """卡片上那一句说明。空字符串表示"没什么要特别告诉用户的"。"""
+    if has_pending_adjudication:
+        return _PENDING_REVIEW_EXPLANATION
+    if task.suspend_reason == SuspendReason.BLOCKED_BY_DEFECT:
+        return _DEFECT_EXPLANATION
+    return ""
+
 _COUNTERS: Counter[str] = Counter()
 _COUNTER_LOCK = Lock()
 _KNOWN_COUNTERS = frozenset(
@@ -100,6 +113,19 @@ def reset_task_collaboration_counters() -> None:
     """Testing hook."""
     with _COUNTER_LOCK:
         _COUNTERS.clear()
+
+
+# 无参数的"继续"推不动这些，所以放行它们只会让用户白点：
+#   WAITING_USER      它要的是一个具体答案，由 answer_question 复活
+#   BLOCKED_BY_DEFECT 代码不改，重试多少次都是同一个错；它要的是跳过或放弃
+# 这是一张**排除表**不是白名单——默认放行，加新暂停原因时才回来判断要不要进来。
+# 判据见 continue_graph 的 docstring。前端 canContinueTask 是它的镜像。
+_CONTINUE_CANNOT_MOVE = frozenset(
+    {
+        SuspendReason.WAITING_USER,
+        SuspendReason.BLOCKED_BY_DEFECT,
+    }
+)
 
 
 def emit_task_updated(sender, task) -> None:
@@ -1029,7 +1055,9 @@ class TaskCollaborationService(AtomicTaskService):
                         ),
                         requires_review=pending is not None,
                         requires_confirmation=task.requires_confirmation,  # DB Boolean → snapshot bool（统一类型）
-                        safe_explanation=_PENDING_REVIEW_EXPLANATION if pending is not None else "",
+                        safe_explanation=_task_explanation(
+                            task, has_pending_adjudication=pending is not None
+                        ),
                         suspend_reason=task.suspend_reason,
                         waiting_on=task.waiting_on,
                         assignee=(
@@ -1148,19 +1176,15 @@ class TaskCollaborationService(AtomicTaskService):
         return affected
 
     def continue_graph(self, *, session_id: str, graph_id: str) -> int:
-        """用户点"继续"：除了在等一个具体答案的，其余暂停一律放行。
+        """用户点"继续"：默认放行，只排除那些"继续也推不动"的。
 
         原本只认 ``USER_STOP``，于是撞轮次预算暂停的活匹配 0 条——用户点了继续、
-        界面报成功、实际一条记录都没动，他会以为"我点了没用"。
+        界面报成功、实际一条记录都没动，他会以为"我点了没用"。所以改成显式排除：
+        其余暂停用户说继续就该继续，他是最终决策者，不该被"球在主助理手上"挡住。
 
-        改成显式排除：``WAITING_USER`` 等的是一个具体答案，无参数的"继续"推不动
-        它（它由 ``answer_question`` 复活）；其余暂停用户说继续就该继续——他是最终
-        决策者，不该被"球在主助理手上"挡住。
-
-        ⚠️ 往 ``SuspendReason`` 加新值时**必须回来判断该不该进排除列表**。判据是
-        "用户点了继续之后，这个活能不能真的往前走"——不能的必须排除。典型是将来的
-        "撞上程序缺陷"：代码不改，重试多少次都是同一个错，放行等于把"主助理重试
-        7 次"那个循环原样搬给用户手动重复，那种活的按钮该是跳过 / 放弃 / 上报。
+        ⚠️ 往 ``SuspendReason`` 加新值时**必须回来判断该不该进这张排除表**。判据只有
+        一条：**用户点了继续之后，这个活能不能真的往前走**。不能的必须排除，否则就是
+        把"主助理重试 7 次"那个循环原样搬给用户手动重复——点继续、立刻又停、再点。
 
         前端 ``canContinueTask``（frontend/src/api/assistantTasks.ts）是这条谓词的
         镜像，**两处必须同时改**：只改这里会让按钮还在、点下去却什么都不发生，正是
@@ -1170,7 +1194,7 @@ class TaskCollaborationService(AtomicTaskService):
             session_id=session_id,
             graph_id=graph_id,
             predicate=lambda task: task.status == TaskStatus.SUSPENDED
-            and task.suspend_reason != SuspendReason.WAITING_USER,
+            and task.suspend_reason not in _CONTINUE_CANNOT_MOVE,
             target_status=TaskStatus.PENDING_DISPATCH,
             change_type="graph_continued",
         )

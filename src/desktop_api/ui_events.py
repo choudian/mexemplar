@@ -311,6 +311,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                         "user_stop",
                         "budget_exhausted",
                         "interrupted",
+                        "blocked_by_defect",
                     }
                 ),
             ),

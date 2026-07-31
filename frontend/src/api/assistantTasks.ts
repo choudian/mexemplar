@@ -14,7 +14,9 @@ export type SuspendReason =
   | "waiting_system"
   | "user_stop"
   | "budget_exhausted"
-  | "interrupted";
+  | "interrupted"
+  /** 唯一一个「不能再试」的停法：重试必然是同样的结果，所以不给「继续」按钮。 */
+  | "blocked_by_defect";
 
 /** 暂停时球在谁手上——谁能让这个活继续。 */
 export type WaitingOn = "user" | "assistant" | "system";
@@ -41,11 +43,19 @@ export type TaskDisplayPhase =
  * 重试多少次都是同一个错）该给的是跳过 / 放弃 / 上报，不是继续。
  * 只改后端会让按钮还在、点下去后端拒绝、界面什么都不发生；只改这里则别的入口仍会白派一次。
  */
+const CONTINUE_CANNOT_MOVE: ReadonlySet<SuspendReason> = new Set([
+  // 要的是一个具体答案，无参数的「继续」推不动它
+  "waiting_user",
+  // 代码不改，重试多少次都是同一个错；它要的是跳过或放弃
+  "blocked_by_defect",
+]);
+
 export function canContinueTask(task: {
   displayPhase?: TaskDisplayPhase | null;
   suspendReason?: SuspendReason | null;
 }): boolean {
-  return task.displayPhase === "paused" && task.suspendReason !== "waiting_user";
+  if (task.displayPhase !== "paused") return false;
+  return !task.suspendReason || !CONTINUE_CANNOT_MOVE.has(task.suspendReason);
 }
 
 export interface AssistantActorRef {

@@ -187,6 +187,8 @@ TaskSuspendReason = Literal[
     "user_stop",
     "budget_exhausted",
     "interrupted",
+    # 唯一一个「不能再试」的停法：重试必然是同样的结果，界面上不给"继续"。
+    "blocked_by_defect",
 ]
 # 暂停时球在谁手上——谁能让这个活继续。这是持久化的通知意图，不只是描述。
 TaskWaitingOn = Literal["user", "assistant", "system"]

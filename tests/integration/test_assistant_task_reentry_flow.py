@@ -14,6 +14,8 @@ from datetime import timedelta
 from threading import Barrier, BrokenBarrierError, Lock
 from time import sleep
 
+from sqlalchemy.exc import IntegrityError
+
 from src.business.orchestration.agent.task_executor_adapter import TaskExecutorAdapter
 from src.business.task_collaboration.dispatcher import TaskDispatcher
 from src.business.task_collaboration.parent_reentry_sink import ParentReentrySink
@@ -264,6 +266,131 @@ def test_user_stop_does_not_wake_the_parent(monkeypatch):
 
     assert sink.drain("ast_user_stop") == []
     assert kicks == []
+
+
+def test_a_code_defect_stops_the_task_and_offers_no_retry(monkeypatch):
+    """撞上确定性代码缺陷：活停下、主助理被叫醒，而它拿到的选项里**没有重试**。
+
+    7/28 实跑：写库撞 CHECK 约束（板上钉钉的代码缺陷）被包装成"内部错误，需上级
+    检查后决定是否重试"。主助理照建议重试了 7 次，每次崩在同一个地方——1 小时
+    13 分钟、0 产出。它没做错任何事，是那句话在骗它。
+
+    所以这里的定义性验收不是"文案改好了"（那靠模型读懂），是**动作候选集里
+    根本没有 retry**——它想重试也没这个选项。
+    """
+    graph_id, task_id, sink, kicks, payload = _paused_dispatcher(
+        monkeypatch,
+        session_id="ast_defect",
+        title="写后端 DTO",
+        result={
+            "success": False,
+            "message": "这一步撞上程序缺陷，重试不会改变结果。",
+            "failure_class": "code_defect",
+            "failure_exception_type": "IntegrityError",
+            "executor_session_id": "ast_child",
+        },
+    )
+
+    # 1. 活停着、保留着，而且记下了球在主助理手上
+    with AssistantTaskRepository() as tasks:
+        row = tasks.get_task(task_id)
+    assert row.status == "suspended"
+    assert row.suspend_reason == "blocked_by_defect"
+    assert row.waiting_on == "assistant"
+
+    # 2. 主助理被叫醒 —— 用户处理不了，只有它能做绕行决定
+    entries = sink.drain("ast_defect")
+    assert len(entries) == 1
+    assert entries[0]["eventType"] == "blocked_by_defect"
+    assert kicks == [("ast_defect", graph_id)]
+
+    # 3. 给它的动作里没有重试，但也不能空着——得告诉它能做什么
+    actions = entries[0].get("healingActions") or []
+    assert actions, "缺陷节点也要给出可选动作，否则主助理不知道能做什么"
+    assert "retry" not in actions
+    assert "swap_executor" not in actions, "换个执行体也是同一个错"
+    assert "adjust_input" not in actions, "改输入也绕不开代码里的那个 bug"
+
+    # 4. 用户那边：卡片上要说人话。用户处理不了缺陷，但他有权知道这一步做不了了
+    service = TaskCollaborationService()
+    try:
+        snapshot = service.get_graph_snapshot(session_id="ast_defect", graph_id=graph_id)
+    finally:
+        service.close()
+    node = next(t for t in snapshot.tasks if t.task_id == task_id)
+    assert node.safe_explanation, "停在缺陷上的活必须给用户一句说明，不能只是「暂停」"
+    assert "程序" in node.safe_explanation
+    # 内部术语不进 UI：用户不需要知道 defect / exception / IntegrityError 是什么
+    for internal_word in ("defect", "exception", "IntegrityError", "blocked_by"):
+        assert internal_word not in node.safe_explanation
+
+
+def test_a_crash_while_recording_the_outcome_does_not_leave_the_attempt_running(monkeypatch):
+    """记账崩溃此前会被线程池整个吞掉，然后无限重派。
+
+    执行体跑完了 → 系统把结果记进账本 → 记账时崩了（写了不合法的值）
+      → worker 线程整个崩溃，而没有人去接它的结果（Future 无人 .result()）
+      → 只剩一行日志，活停在「运行中」
+      → 两分钟租约过期 → 系统以为它失联 → 重新派一个 → 再跑一遍 → 记账时再崩
+      → 无限循环
+
+    7/28 那 7 次重试是主助理照着假建议做的；**这一类连主助理都不知道**，
+    是系统自己在转圈。所以这条的定义性验收是：attempt 不许停在活跃状态。
+    """
+    _patch_dispatch_config(monkeypatch)
+
+    service = TaskCollaborationService()
+    _, task_id = _create_child_task(service, session_id="ast_crash", title="写后端 DTO")
+    service.close()
+
+    def _boom(self, **kwargs):
+        raise IntegrityError(
+            "UPDATE assistant_tasks SET suspend_reason=?",
+            {},
+            Exception("CHECK constraint failed: ck_assistant_tasks_suspend_reason"),
+        )
+
+    monkeypatch.setattr(TaskDispatcher, "_record_attempt_paused", _boom)
+
+    sink = ParentReentrySink(
+        has_active_worker=lambda sid: False,
+        kick_reentry_run=lambda sid, gid: True,
+    )
+    dispatcher = TaskDispatcher(
+        cutover_guard=_AllowGuard(),
+        executor_callback=TaskExecutorAdapter(
+            _FakeOrchestrator(
+                {
+                    "success": False,
+                    "paused": True,
+                    "pause_reason": "budget_exhausted",
+                    "message": "已达迭代上限（30 轮）",
+                    "subagent_id": "ast_child",
+                }
+            )
+        ),
+        parent_reentry_callback=sink.dispatch,
+    )
+    future = dispatcher.start_attempt_async(
+        task_id=task_id,
+        executor_type="ephemeral_subagent",
+        executor_id=task_id,
+        lease_owner="test",
+    )
+    assert future is not None
+
+    # 1. 不再往线程池里抛——worker 返回一个明确结果，而不是消失
+    payload = future.result(timeout=5)
+    assert payload["accepted"] is False
+    assert payload.get("recordingFailed") is True
+
+    # 2. attempt 让出执行者槽。这条是「无限重派」的定义性验收：
+    #    停在活跃状态的话，租约一过期就会被当成失联重派，然后再撞同一个约束。
+    with AssistantTaskAttemptRepository() as attempts:
+        status = attempts.get_by_id(payload["attemptId"]).status
+    assert status not in AssistantTaskAttemptRepository.ACTIVE_STATUSES, (
+        f"attempt 停在 {status}，租约过期后会被重派，再撞同一个缺陷——无限循环"
+    )
 
 
 def test_a_pause_whose_task_row_is_gone_notifies_nobody(monkeypatch):

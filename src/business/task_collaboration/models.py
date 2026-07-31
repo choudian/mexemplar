@@ -28,6 +28,11 @@ class SuspendReason(StrEnum):
     BUDGET_EXHAUSTED = "budget_exhausted"
     # 执行体异常中断，工作保留但最后一步副作用可能未知；续跑前需要先核对现场。
     INTERRUPTED = "interrupted"
+    # 撞上确定性代码缺陷（DB CHECK 被拒、TypeError、断言失败…）：**重试一定还是
+    # 同样的结果**。与上面每一条的区别就在这里——那些都还能再试，这一条不能。
+    # 此前这类失败被包装成"内部错误，需上级检查后决定是否重试"，主助理照建议重试
+    # 了 7 次、1 小时 13 分钟、0 产出（7/28 实跑）。
+    BLOCKED_BY_DEFECT = "blocked_by_defect"
 
 
 class WaitingOn(StrEnum):
@@ -58,6 +63,12 @@ _SUSPEND_REASON_WAITING_ON: dict[SuspendReason, WaitingOn] = {
     # INTERRUPTED 目前零生产者。启动对账落地后它才会被真正写入，届时改成 USER
     # ——重启是一次新的开工，得有人拍板，不能自动烧 token。
     SuspendReason.INTERRUPTED: WaitingOn.SYSTEM,
+    # 缺陷谁都修不了（用户改不了代码，主助理重试一百次还是同样的错），但**主助理
+    # 是唯一能做绕行决定的角色**——跳过这一步还是放弃整个任务，而那正是这个活接
+    # 下来唯一能发生的事。用户侧只需要被告知"有程序问题、这部分做不了"。
+    #
+    # 注意它不进 SYSTEM：那一档的行为定义是"到点自动重试"，而这一类重试必然白费。
+    SuspendReason.BLOCKED_BY_DEFECT: WaitingOn.ASSISTANT,
 }
 
 

@@ -1,13 +1,37 @@
 from __future__ import annotations
 
+import re
+
 from src.business.agents.config import AgentType
+from src.business.services.assistant_failure_classifier import KNOWN_FAILURE_CATEGORIES
 from src.business.services.assistant_failure_service import AssistantFailureService
-from src.data.models_sqlite import Message, Session
+from src.data.models_sqlite import AssistantRunFailure, Message, Session
 from src.data.repos import (
     AssistantRunFailureRepository,
     MessageRepository,
     SessionRepository,
 )
+
+
+def test_every_classifier_category_is_accepted_by_the_database() -> None:
+    """分类器每加一个 category，这张表的 CHECK 约束必须同步。
+
+    漏了会怎样：分类器算出一个新 category → 落库撞 CHECK → 抛 IntegrityError
+    → **"记录失败"这件事本身失败**。而这恰好是最坏的一类故障：出了事，连
+    "出过事"都记不下来。
+
+    这个守卫是静态的（读 ORM 上的约束定义），所以加了新 category 却忘了迁移时
+    会当场红，不用等到线上真撞。
+    """
+    constraint = next(
+        c
+        for c in AssistantRunFailure.__table__.constraints
+        if getattr(c, "name", None) == "ck_assistant_run_failures_category"
+    )
+    allowed = set(re.findall(r"'([a-z_]+)'", str(constraint.sqltext)))
+
+    missing = KNOWN_FAILURE_CATEGORIES - allowed
+    assert not missing, f"分类器会产出这些 category，但 DB 约束不认：{sorted(missing)}"
 
 
 def _seed_session() -> str:

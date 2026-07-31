@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from src.business.task_collaboration.models import SuspendReason
 from src.business.task_collaboration.recovery import TaskRecoveryService
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.data.models_sqlite import Base
@@ -522,3 +523,63 @@ def test_continue_graph_does_not_resume_waiting_user_tasks() -> None:
         assert task_after.suspend_reason == "waiting_user"
     finally:
         service.close()
+
+
+def test_continue_graph_does_not_resume_a_task_blocked_by_a_defect() -> None:
+    """撞上程序缺陷的活，"继续"推不动它——代码不改，重试多少次都是同一个错。
+
+    放行的后果是把"主助理重试 7 次"那个循环原样搬给用户手动重复：点继续 →
+    派活 → 立刻撞同样的错 → 又停 → 再点。烧的是他的耐心。那种活该给的是
+    跳过 / 放弃，不是继续。
+    """
+    service = TaskCollaborationService()
+    try:
+        graph_id = service.create_root_graph(
+            session_id="ast_defect",
+            title="root",
+            description="root",
+        )
+        root = service._tasks.list_graph_tasks(graph_id)[0]
+        service.update_task_status(task_id=root.task_id, status="running")
+        service.update_task_status(
+            task_id=root.task_id,
+            status="suspended",
+            suspend_reason=SuspendReason.BLOCKED_BY_DEFECT,
+        )
+
+        resumed = service.continue_graph(session_id="ast_defect", graph_id=graph_id)
+
+        assert resumed == 0
+        task_after = service._tasks.get_task(root.task_id)
+        assert task_after.status == "suspended"
+        assert task_after.suspend_reason == "blocked_by_defect"
+        # 球在主助理手上：它去做绕行决定，不是用户去点继续
+        assert task_after.waiting_on == "assistant"
+    finally:
+        service.close()
+
+
+def test_continue_graph_still_resumes_everything_that_can_actually_move() -> None:
+    """排除是逐条加的，别把"默认放行"改回"白名单"——那正是旧 bug 的形状。"""
+    resumable = (
+        SuspendReason.USER_STOP,
+        SuspendReason.BUDGET_EXHAUSTED,
+        SuspendReason.WAITING_SYSTEM,
+        SuspendReason.INTERRUPTED,
+    )
+    for reason in resumable:
+        service = TaskCollaborationService()
+        try:
+            session_id = f"ast_resume_{reason.value}"
+            graph_id = service.create_root_graph(
+                session_id=session_id, title="root", description="root"
+            )
+            root = service._tasks.list_graph_tasks(graph_id)[0]
+            service.update_task_status(task_id=root.task_id, status="running")
+            service.update_task_status(
+                task_id=root.task_id, status="suspended", suspend_reason=reason
+            )
+
+            assert service.continue_graph(session_id=session_id, graph_id=graph_id) == 1, reason
+        finally:
+            service.close()
