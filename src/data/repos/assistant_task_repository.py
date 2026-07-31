@@ -151,7 +151,9 @@ class AssistantTaskRepository(BaseRepository):
             .filter(
                 AssistantTask.session_id == session_id,
                 AssistantTask.parent_task_id.is_not(None),
-                AssistantTask.status.notin_(("completed", "failed", "cancelled")),
+                # ⚠️ 手抄的 TERMINAL_TASK_STATUSES 副本（数据层不 import 业务枚举）。
+                # 改枚举时这里不会报错，只会静默把某个终态当成"还在跑"。
+                AssistantTask.status.notin_(("completed", "abandoned", "cancelled")),
             )
             .first()
         )
@@ -262,7 +264,9 @@ class AssistantTaskRepository(BaseRepository):
         row.updated_at = now
         if status == "completed":
             row.completed_at = now
-        elif status == "failed":
+        elif status == "abandoned":
+            # 列名仍是 failed_at：它没有任何读取方，改列名要动 5 段迁移历史 DDL 和
+            # 3 份测试期望字典，换不来任何东西。这里记的就是"这个活终结的时刻"。
             row.failed_at = now
         elif status == "cancelled":
             row.cancelled_at = now

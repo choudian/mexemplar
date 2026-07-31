@@ -974,15 +974,17 @@ def test_recovery_fails_when_test_node_reports_failing_tests(
         assert row.error == "test node reported failing tests"
 
 
-def test_recovery_fails_when_implementation_node_failed(
+def test_recovery_fails_when_implementation_node_abandoned(
     in_memory_db,
     tmp_path,
     monkeypatch,
 ) -> None:
-    """执行节点 status=failed(非全 completed)→ proposal failed,
-    error='implementation task graph finished with failed or cancelled nodes'。
+    """执行节点 status=abandoned(非全 completed)→ proposal failed,
+    error='implementation task graph finished with abandoned or cancelled nodes'。
 
-    Regression coverage (tests I1):此分支(图终态含 failed/cancelled)此前未覆盖。"""
+    两个 failed 是两个状态机：任务节点被**放弃**，导致这个**提案**的实施结果是失败。
+
+    Regression coverage (tests I1):此分支(图终态含 abandoned/cancelled)此前未覆盖。"""
     proposal_id = _seed_approved_proposal()
     graph_id = TaskCollaborationService().build_task_graph(
         session_id=f"{SELF_IMPROVEMENT_SESSION_PREFIX}{proposal_id}",
@@ -1017,7 +1019,7 @@ def test_recovery_fails_when_implementation_node_failed(
     service = TaskCollaborationService()
     for task in tasks:
         if task.parent_task_id is not None:
-            status = "failed" if task.title.startswith("实施") else "completed"
+            status = "abandoned" if task.title.startswith("实施") else "completed"
             service.update_task_status(task_id=task.task_id, status=status)
 
     monkeypatch.setattr(
@@ -1033,7 +1035,7 @@ def test_recovery_fails_when_implementation_node_failed(
         assert row is not None
         assert row.status == "failed"
         assert row.result_tests_passed is None
-        assert row.error == "implementation task graph finished with failed or cancelled nodes"
+        assert row.error == "implementation task graph finished with abandoned or cancelled nodes"
 
 
 def test_recovery_identifies_test_node_by_graph_structure_not_title(

@@ -167,28 +167,33 @@ class TestNeedsReviewEntries:
 
 
 class TestSnapshotGraphProgress:
-    def test_failed_tasks_appear_in_progress(self):
-        """Snapshot with failed tasks → '失败节点' in output."""
+    def test_abandoned_tasks_appear_in_progress(self):
+        """Snapshot with abandoned tasks → '已放弃节点' in output.
+
+        简报里刻意不写"失败"：这些节点是**有人拍板不做了**，写失败会引主助理去想
+        重试，而重试正是这里不该发生的事。
+        """
         snapshot = _make_snapshot(
             tasks=[
                 _make_task("t1", status=TaskStatus.COMPLETED, title="OK task"),
-                _make_task("t2", status=TaskStatus.FAILED, title="Bad task"),
+                _make_task("t2", status=TaskStatus.ABANDONED, title="Bad task"),
             ]
         )
         text = build_reentry_briefing([], snapshot=snapshot)
-        assert "失败节点" in text
+        assert "已放弃节点" in text
+        assert "失败节点" not in text
 
     def test_all_terminal_not_all_completed_shows_mixed_status(self):
-        """All terminal but not all completed → shows '含失败/取消' or '已全部终止'."""
+        """All terminal but not all completed → shows '含放弃/取消' or '已全部终止'."""
         snapshot = _make_snapshot(
             tasks=[
                 _make_task("t1", status=TaskStatus.COMPLETED, title="Done"),
-                _make_task("t2", status=TaskStatus.FAILED, title="Failed"),
+                _make_task("t2", status=TaskStatus.ABANDONED, title="Abandoned"),
             ]
         )
         text = build_reentry_briefing([], snapshot=snapshot)
         assert "已全部终止" in text
-        assert "含失败/取消" in text
+        assert "含放弃/取消" in text
 
     def test_running_suspended_tasks_show_active_section(self):
         """Snapshot with running/suspended tasks → '进行中节点' section."""

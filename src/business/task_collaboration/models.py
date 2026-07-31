@@ -15,7 +15,13 @@ class TaskStatus(StrEnum):
     RUNNING = "running"
     SUSPENDED = "suspended"
     COMPLETED = "completed"
-    FAILED = "failed"
+    # 「有人看过之后决定不做了」——**不是**系统判死。这个格子只有两条路进得来，
+    # 两条都是明确拍板：裁定选 abandoned，或主助理调 abandon_request_graph 放弃整个请求。
+    #
+    # 系统侧的失败根本不走这里：执行体崩了写 attempt 表并建待裁定，租约过期回
+    # pending_dispatch 重派。叫 failed 的那段时间里，读到它的人（包括主助理）会以为
+    # "系统判它死了，也许该重试"，而真相是有人已经决定放弃——语义与处置完全相反。
+    ABANDONED = "abandoned"
     CANCELLED = "cancelled"
 
 
@@ -164,7 +170,7 @@ class TodoStatus(StrEnum):
 TERMINAL_TASK_STATUSES = frozenset(
     {
         TaskStatus.COMPLETED,
-        TaskStatus.FAILED,
+        TaskStatus.ABANDONED,
         TaskStatus.CANCELLED,
     }
 )

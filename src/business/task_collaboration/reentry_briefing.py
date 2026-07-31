@@ -172,7 +172,7 @@ def build_reentry_briefing(
     if result_entries:
         lines.append(
             "若这些结果显示本次用户请求已无法继续完成（多条路径都失败、无法绕过），"
-            "可调用 abandon_request_graph 工具放弃整张任务图（根任务失败，触发安全失败卡）。"
+            "可调用 abandon_request_graph 工具放弃整张任务图（根任务标记为已放弃，触发安全失败卡）。"
         )
 
     # === 暂停待推进段 ===
@@ -285,7 +285,7 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
     needs_review_tasks: list[str] = []  # 普通结果待裁定（requires_review）
     confirmation_tasks: list[str] = []  # 高风险需确认（requires_confirmation）
     ready_tasks: list[str] = []
-    failed_tasks: list[str] = []
+    abandoned_tasks: list[str] = []
     completed_ids: set[str] = set()
 
     # 收集 dependency 边的 target → source 映射（用于就绪判定）
@@ -306,8 +306,8 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
             is_ready = not sources or all(s in completed_ids for s in sources)
             if is_ready:
                 ready_tasks.append(t.title or t.task_id)
-        if t.status == TaskStatus.FAILED:
-            failed_tasks.append(t.title or t.task_id)
+        if t.status == TaskStatus.ABANDONED:
+            abandoned_tasks.append(t.title or t.task_id)
 
     # 判断全图是否完成——统一复用 task_collaboration 的公共终态函数。
     all_terminal, all_completed = compute_graph_terminal_state(
@@ -325,7 +325,9 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
         f"running={status_counts.get(TaskStatus.RUNNING, 0)}",
         f"pending={status_counts.get(TaskStatus.PENDING_DISPATCH, 0)}",
         f"需裁定={len(needs_review_tasks)}",
-        f"failed={status_counts.get(TaskStatus.FAILED, 0)}",
+        # 简报是给主助理读的：写 failed 它会想"要不要重试"，而这些节点是**已经拍板
+        # 不做了**的，重试正是不该发生的事。词准了，它的下一步判断才准。
+        f"abandoned={status_counts.get(TaskStatus.ABANDONED, 0)}",
     ]
     lines.append(f"- 图 {snapshot.graph_id} 共 {len(real_tasks)} 节点：{', '.join(parts)}")
 
@@ -337,13 +339,13 @@ def _render_graph_progress(snapshot: TaskGraphSnapshot) -> str:
     if needs_review_tasks:
         lines.append(f"- 待你裁定（认可/打回/放弃）：{', '.join(needs_review_tasks[:5])}")
 
-    if failed_tasks:
-        lines.append(f"- 失败节点：{', '.join(failed_tasks[:5])}")
+    if abandoned_tasks:
+        lines.append(f"- 已放弃节点：{', '.join(abandoned_tasks[:5])}")
 
     if all_completed:
         lines.append("- 全图状态：已全部完成，请向用户汇报最终结果。")
     elif all_terminal:
-        lines.append("- 全图状态：已全部终止（含失败/取消），请决定后续处理。")
+        lines.append("- 全图状态：已全部终止（含放弃/取消），请决定后续处理。")
 
     return "\n".join(lines)
 

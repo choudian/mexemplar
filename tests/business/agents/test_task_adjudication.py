@@ -122,7 +122,7 @@ def test_parent_adjudication_returns_task_for_rework() -> None:
     assert AssistantTaskRepository().get_task(task_id).status == "pending_dispatch"
 
 
-def test_parent_adjudication_abandons_task_as_failed() -> None:
+def test_parent_adjudication_abandons_task() -> None:
     task_id, adjudication_id = _pending_adjudication()
 
     result = TaskAdjudicationService().decide(
@@ -131,13 +131,13 @@ def test_parent_adjudication_abandons_task_as_failed() -> None:
         session_id="ast_adj",
     )
 
-    assert result["taskStatus"] == "failed"
-    assert AssistantTaskRepository().get_task(task_id).status == "failed"
+    assert result["taskStatus"] == "abandoned"
+    assert AssistantTaskRepository().get_task(task_id).status == "abandoned"
 
 
 def test_decide_abandon_survives_failure_bridge_error() -> None:
     # I1：裁定提交后的根失败桥接是旁路副作用（独立 session）。桥接抛错不得回滚已提交的
-    # 裁定、不得把成功的决策冒泡成异常——任务仍为 failed（已提交）、裁定仍为 decided，
+    # 裁定、不得把成功的决策冒泡成异常——任务仍为 abandoned（已提交）、裁定仍为 decided，
     # 错误只记日志。
     task_id, adjudication_id = _pending_adjudication()
 
@@ -152,8 +152,8 @@ def test_decide_abandon_survives_failure_bridge_error() -> None:
         session_id="ast_adj",
     )
 
-    assert result["taskStatus"] == "failed"
-    assert AssistantTaskRepository().get_task(task_id).status == "failed"
+    assert result["taskStatus"] == "abandoned"
+    assert AssistantTaskRepository().get_task(task_id).status == "abandoned"
     assert AssistantTaskAdjudicationRepository().get_by_id(adjudication_id).status == "decided"
 
 
@@ -196,8 +196,8 @@ def test_abandoned_adjudication_cascades_cancel_to_children() -> None:
         session_id="ast_cascade",
     )
 
-    # child is failed
-    assert task_repo.get_task(child_id).status == "failed"
+    # child is abandoned
+    assert task_repo.get_task(child_id).status == "abandoned"
     # grandchild is cancelled (cascaded)
     assert task_repo.get_task(grandchild_id).status == "cancelled"
     # root is still pending_dispatch (not affected)
@@ -253,8 +253,8 @@ def test_abandoned_adjudication_cascades_cancel_skips_terminal_children() -> Non
         session_id="ast_cascade_term",
     )
 
-    # child is failed
-    assert task_repo.get_task(child_id).status == "failed"
+    # child is abandoned
+    assert task_repo.get_task(child_id).status == "abandoned"
     # grandchild_a stays completed (already terminal, not re-cancelled)
     assert task_repo.get_task(grandchild_a_id).status == "completed"
     # grandchild_b is cancelled

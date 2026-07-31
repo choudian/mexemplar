@@ -14,7 +14,7 @@ def test_root_task_failure_bridges_to_assistant_run_failure() -> None:
         user_message_sequence=7,
     )
     root = AssistantTaskRepository().list_graph_tasks(graph_id)[0]
-    service.update_task_status(task_id=root.task_id, status="failed")
+    service.update_task_status(task_id=root.task_id, status="abandoned")
 
     summary = TaskFailureBridge().bridge_root_failure(
         task_id=root.task_id,
@@ -44,7 +44,7 @@ def test_child_task_failure_does_not_bridge_to_run_failure() -> None:
         title="child",
         description="child",
     )
-    service.update_task_status(task_id=child_id, status="failed")
+    service.update_task_status(task_id=child_id, status="abandoned")
 
     summary = TaskFailureBridge().bridge_root_failure(
         task_id=child_id,
@@ -57,11 +57,11 @@ def test_child_task_failure_does_not_bridge_to_run_failure() -> None:
 
 def test_fail_root_graph_entry_bridges_to_run_failure() -> None:
     """FR-008/CC-004：通过 TaskAdjudicationService.fail_root_graph 生产入口（主助理
-    abandon_request_graph 工具）触发 root FAILED → bridge → AssistantRunFailure 卡。
+    abandon_request_graph 工具）触发 root ABANDONED → bridge → AssistantRunFailure 卡。
 
     这条路径补上了 decide(abandoned) 缺的"整图放弃→run 卡"一跳：decide 处理的是有 parent
     的子任务，其 bridge 调用撞 root-only 守卫 return None；fail_root_graph 直接定位 root
-    （parent_task_id is None）翻 FAILED，让 bridge_root_failure 真正命中。
+    （parent_task_id is None）翻 ABANDONED，让 bridge_root_failure 真正命中。
     """
     from src.business.task_collaboration.adjudication import TaskAdjudicationService
 
@@ -81,15 +81,15 @@ def test_fail_root_graph_entry_bridges_to_run_failure() -> None:
 
     assert result["abandoned"] is True
     assert result["rootTaskId"] == root.task_id
-    assert result["taskStatus"] == "failed"
-    assert AssistantTaskRepository().get_task(root.task_id).status == "failed"
+    assert result["taskStatus"] == "abandoned"
+    assert AssistantTaskRepository().get_task(root.task_id).status == "abandoned"
     failure = AssistantRunFailureRepository().get_current("ast_fail_entry")
     assert failure is not None
     assert failure.message_sequence == 21
 
 
 def test_fail_root_graph_cascades_cancel_to_children() -> None:
-    """fail_root_graph 翻 root FAILED 的同时级联取消下游子任务（终态、不复活）。"""
+    """fail_root_graph 翻 root ABANDONED 的同时级联取消下游子任务（终态、不复活）。"""
     from src.business.task_collaboration.adjudication import TaskAdjudicationService
 
     service = TaskCollaborationService()
@@ -118,7 +118,7 @@ def test_fail_root_graph_cascades_cancel_to_children() -> None:
     # 用新的 repo 实例读：setup 时的 task_repo session 已缓存 stale root（identity map），
     # fail_root_graph 经独立 session 提交后必须新开 session 才能看到刷新后的状态。
     fresh_repo = AssistantTaskRepository()
-    assert fresh_repo.get_task(root.task_id).status == "failed"
+    assert fresh_repo.get_task(root.task_id).status == "abandoned"
     assert fresh_repo.get_task(child_id).status == "cancelled"
 
 
@@ -148,7 +148,7 @@ def test_fail_root_graph_cascades_cancel_to_build_task_graph_nodes() -> None:
 
 
 def test_fail_root_graph_without_user_message_sequence_fails_without_card() -> None:
-    """root 无 user_message_sequence（无消息上下文）时，fail_root_graph 仍翻 root FAILED，
+    """root 无 user_message_sequence（无消息上下文）时，fail_root_graph 仍翻 root ABANDONED，
     但 bridge 不桥接（无消息回合可挂失败卡），不产生 run 失败卡。"""
     from src.business.task_collaboration.adjudication import TaskAdjudicationService
 
@@ -165,6 +165,6 @@ def test_fail_root_graph_without_user_message_sequence_fails_without_card() -> N
         safe_summary="无消息上下文的请求失败",
     )
 
-    assert result["taskStatus"] == "failed"
-    assert AssistantTaskRepository().get_task(root.task_id).status == "failed"
+    assert result["taskStatus"] == "abandoned"
+    assert AssistantTaskRepository().get_task(root.task_id).status == "abandoned"
     assert AssistantRunFailureRepository().get_current("ast_no_seq") is None

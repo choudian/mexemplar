@@ -29,7 +29,9 @@ from src.utils.events import emit
 from src.utils.proposal_policy import SELF_IMPROVEMENT_SESSION_PREFIX
 
 logger = logging.getLogger(__name__)
-_EXECUTION_STATUSES = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+_EXECUTION_STATUSES = {TaskStatus.COMPLETED, TaskStatus.ABANDONED, TaskStatus.CANCELLED}
+# ⚠️ 这一行的 "failed" 是 **improvement_proposals** 的状态，跟上一行的 task 状态无关，
+# 两个状态机恰好共用同一个词。改 TaskStatus 时不要顺手改到这里。
 _RETENTION_CANDIDATE_STATUSES = ["done", "failed", "rejected"]
 _SAFE_TEXT_FALLBACK = "详情不可用"
 # 永久失败 worktree 的回收重试上限（026 M6）：超过即强清 DB 元数据停止无界重试。
@@ -476,7 +478,7 @@ def _write_back_terminal_graph(proposal: Any) -> bool:
         error = "test node reported failing tests"
         result_tests_passed = False
     else:
-        error = "implementation task graph finished with failed or cancelled nodes"
+        error = "implementation task graph finished with abandoned or cancelled nodes"
         result_tests_passed = None
 
     return bool(

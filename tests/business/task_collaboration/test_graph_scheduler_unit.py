@@ -550,13 +550,13 @@ class TestGraphCompletion:
         # n1 完成、n2 失败 → 全终态但非全 completed
         _mark_completed(n1)
         with TaskCollaborationService() as svc:
-            svc.update_task_status(task_id=n2, status="failed")
+            svc.update_task_status(task_id=n2, status="abandoned")
         scheduler.on_attempt_outcome(graph_id, n2)
 
         # 含失败也必须通知主助理裁定后续
         assert graph_id in sink.completed
         # 含失败不收口 root（保留非终态供主助理 replan/abandon 裁定）
-        assert _status(root_id) not in ("completed", "failed", "cancelled")
+        assert _status(root_id) not in ("completed", "abandoned", "cancelled")
 
     def test_failed_terminal_graph_emits_only_once_per_graph_version(self, monkeypatch):
         """失败图重复推进时 observer 去重，父侧回流仍保持可重试。"""
@@ -579,7 +579,7 @@ class TestGraphCompletion:
         scheduler.start_graph(graph_id)
         _mark_completed(node_ids["n1"])
         with TaskCollaborationService() as svc:
-            svc.update_task_status(task_id=node_ids["n2"], status="failed")
+            svc.update_task_status(task_id=node_ids["n2"], status="abandoned")
 
         scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
         scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
@@ -608,7 +608,7 @@ class TestGraphCompletion:
         scheduler.start_graph(graph_id)
         _mark_completed(node_ids["n1"])
         with TaskCollaborationService() as svc:
-            svc.update_task_status(task_id=node_ids["n2"], status="failed")
+            svc.update_task_status(task_id=node_ids["n2"], status="abandoned")
 
         scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
         assert sink.calls == 1
@@ -636,7 +636,7 @@ class TestGraphCompletion:
         scheduler.start_graph(graph_id)
         _mark_completed(node_ids["n1"])
         with TaskCollaborationService() as svc:
-            svc.update_task_status(task_id=node_ids["n2"], status="failed")
+            svc.update_task_status(task_id=node_ids["n2"], status="abandoned")
 
         def _raise(*_args, **_kwargs):
             raise RuntimeError("observer unavailable")
@@ -645,7 +645,7 @@ class TestGraphCompletion:
         scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
 
         assert sink.completed == [graph_id]
-        assert _status(root_id) not in ("completed", "failed", "cancelled")
+        assert _status(root_id) not in ("completed", "abandoned", "cancelled")
 
     def test_terminal_notify_not_repeated_after_root_closed(self):
         """全 completed 收口后，重复 _advance 不重复唤醒主助理。"""

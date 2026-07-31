@@ -216,9 +216,9 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
       "task_updated",
     ],
     "status": [
+      "abandoned",
       "cancelled",
       "completed",
-      "failed",
       "pending_dispatch",
       "running",
       "suspended",

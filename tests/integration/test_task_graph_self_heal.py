@@ -259,7 +259,7 @@ class TestSelfHeal:
         assert _status(n1_id) == "pending_dispatch"
 
     def test_unrecoverable_failure_abandoned_then_escalation_hint(self):
-        """FR-010: 不可恢复失败（decide abandoned）后 task 变 failed 终态，
+        """FR-010: 不可恢复失败（decide abandoned）后 task 变 abandoned 终态，
         briefing 中 abandon 选项和 escalation 提示并存——自愈兜不住才升级。"""
         session_id = generate_id("sess")
         with TaskCollaborationService() as svc:
@@ -298,7 +298,7 @@ class TestSelfHeal:
         assert "放弃" in briefing
         assert "ask_user_question 升级" in briefing
 
-        # 走放弃路径：decide(abandoned) → task 变 failed
+        # 走放弃路径：decide(abandoned) → task 变 abandoned
         dispatcher = FakeDispatcher()
         scheduler = GraphScheduler(dispatcher=dispatcher, reentry_sink=FakeReentrySink())
         _decide(
@@ -309,4 +309,4 @@ class TestSelfHeal:
         )
 
         # 不可恢复终态
-        assert _status(n1_id) == "failed"
+        assert _status(n1_id) == "abandoned"

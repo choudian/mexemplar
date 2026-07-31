@@ -206,10 +206,13 @@ def test_scheduled_immediate_full_flow():
 
 
 @pytest.mark.parametrize(
+    # 两列是**两个状态机**：node_status 是任务节点的状态，expected_outcome 是这一轮
+    # 调度 run 的结局。任务被"放弃"，而这轮调度的结局仍然是"没成"——词不同，因为
+    # 说的不是一件事。
     ("node_status", "expected_outcome"),
     [
         ("completed", "succeeded"),
-        ("failed", "failed"),
+        ("abandoned", "failed"),
     ],
 )
 def test_graph_terminal_event_reaches_connected_completion_monitor(

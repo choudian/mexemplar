@@ -177,7 +177,8 @@ TaskStatus = Literal[
     "running",
     "suspended",
     "completed",
-    "failed",
+    # 有人看过之后决定不做了，不是系统判死——详见 TaskStatus.ABANDONED 的说明。
+    "abandoned",
     "cancelled",
 ]
 TaskDisplayPhase = Literal["running", "reviewing", "needs_attention", "paused", "done"]

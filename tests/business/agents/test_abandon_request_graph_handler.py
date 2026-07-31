@@ -41,8 +41,8 @@ def _build_graph_with_children() -> dict:
 class TestAbandonRequestGraphHandler:
     """C3: abandon_request_graph handler wraps fail_root_graph."""
 
-    def test_abandon_marks_root_failed_and_children_cancelled(self) -> None:
-        """Abandoning a graph: root is FAILED, children are CANCELLED."""
+    def test_abandon_marks_root_abandoned_and_children_cancelled(self) -> None:
+        """Abandoning a graph: root is ABANDONED, children are CANCELLED."""
         info = _build_graph_with_children()
         handler = create_abandon_request_graph_handler(_SESSION_ID)
 
@@ -52,11 +52,11 @@ class TestAbandonRequestGraphHandler:
         assert result.get("abandoned") is True
         assert result["graphId"] == info["graph_id"]
         assert result["rootTaskId"] == info["root_id"]
-        assert result["taskStatus"] == "failed"
+        assert result["taskStatus"] == "abandoned"
 
         task_repo = AssistantTaskRepository()
         root_task = task_repo.get_task(info["root_id"])
-        assert root_task.status == "failed"
+        assert root_task.status == "abandoned"
 
         for child_id in info["child_ids"]:
             child_task = task_repo.get_task(child_id)

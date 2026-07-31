@@ -28,8 +28,8 @@ class TestValidTransitions:
     def test_running_to_completed(self) -> None:
         validate_task_transition(TaskStatus.RUNNING, TaskStatus.COMPLETED)
 
-    def test_running_to_failed(self) -> None:
-        validate_task_transition(TaskStatus.RUNNING, TaskStatus.FAILED)
+    def test_running_to_abandoned(self) -> None:
+        validate_task_transition(TaskStatus.RUNNING, TaskStatus.ABANDONED)
 
     def test_running_to_cancelled(self) -> None:
         validate_task_transition(TaskStatus.RUNNING, TaskStatus.CANCELLED)
@@ -51,7 +51,7 @@ class TestValidTransitions:
 class TestTerminalCannotRevive:
     @pytest.mark.parametrize(
         "terminal",
-        [TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED],
+        [TaskStatus.COMPLETED, TaskStatus.ABANDONED, TaskStatus.CANCELLED],
     )
     @pytest.mark.parametrize(
         "target",
@@ -71,8 +71,8 @@ class TestTerminalCannotRevive:
         """Same-to-same on terminal is a no-op, not a violation."""
         validate_task_transition(TaskStatus.COMPLETED, TaskStatus.COMPLETED)
 
-    def test_failed_to_failed_is_allowed(self) -> None:
-        validate_task_transition(TaskStatus.FAILED, TaskStatus.FAILED)
+    def test_abandoned_to_abandoned_is_allowed(self) -> None:
+        validate_task_transition(TaskStatus.ABANDONED, TaskStatus.ABANDONED)
 
     def test_cancelled_to_cancelled_is_allowed(self) -> None:
         validate_task_transition(TaskStatus.CANCELLED, TaskStatus.CANCELLED)
@@ -113,8 +113,10 @@ class TestDisplayPhase:
     def test_completed_is_done(self) -> None:
         assert derive_display_phase("completed") == "done"
 
-    def test_failed_is_needs_attention(self) -> None:
-        assert derive_display_phase("failed") == "needs_attention"
+    def test_abandoned_is_needs_attention(self) -> None:
+        # 改名前后映射不变，所以前端零改动——这正是 derive_display_phase 这层的作用：
+        # 后端状态词怎么调整，UI 看到的仍是这五个 phase。
+        assert derive_display_phase("abandoned") == "needs_attention"
 
     def test_cancelled_is_needs_attention(self) -> None:
         assert derive_display_phase("cancelled") == "needs_attention"

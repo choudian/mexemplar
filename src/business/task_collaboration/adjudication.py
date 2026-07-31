@@ -41,7 +41,10 @@ class TaskFailureBridge:
 
     def bridge_root_failure(self, *, task_id: str, safe_summary: str) -> object | None:
         task = self._tasks.get_task(task_id)
-        if task is None or task.parent_task_id is not None or task.status != TaskStatus.FAILED:
+        # ⚠️ 这个判断是用户"失败卡"的总开关，而它不匹配时走的是 `return None`——不抛错、
+        # 不告警。所以状态改名时漏掉这一行，症状是失败卡**静默消失**：整个请求被放弃了，
+        # 用户界面上什么都不出现。改 TaskStatus 时这里必须跟着改。
+        if task is None or task.parent_task_id is not None or task.status != TaskStatus.ABANDONED:
             return None
         if task.user_message_sequence is None:
             return None
@@ -135,7 +138,7 @@ class TaskAdjudicationService(AtomicTaskService):
             target_status = {
                 AdjudicationDecision.ACCEPTED: TaskStatus.COMPLETED,
                 AdjudicationDecision.RETURNED: TaskStatus.PENDING_DISPATCH,
-                AdjudicationDecision.ABANDONED: TaskStatus.FAILED,
+                AdjudicationDecision.ABANDONED: TaskStatus.ABANDONED,
             }[resolved_decision]
         task_session_id = task.session_id
         task_graph_id = task.graph_id
@@ -259,13 +262,16 @@ class TaskAdjudicationService(AtomicTaskService):
         session_id: str,
         safe_summary: str,
     ) -> dict:
-        """主助理显式放弃整个用户请求：root task 翻 FAILED + 级联取消下游 + 桥接 run 卡。
+        """主助理显式放弃整个用户请求：root task 翻 ABANDONED + 级联取消下游 + 桥接 run 卡。
 
         FR-008/CC-004：失败冒到顶 → 桥接 run 级失败。``decide(abandoned)`` 处理的是"有
         pending adjudication 的子任务"，其 bridge 调用因被裁定 task 必有 parent 而从不命中
         ``bridge_root_failure`` 的 root-only 守卫；本方法直接定位当前请求的 root
-        （``parent_task_id is None``）翻 FAILED，让 bridge 真正触发，补上"整图放弃 → run 卡"
-        这一跳。由主助理在 reentry briefing 判断"子失败导致整个请求无法完成"后显式调用。
+        （``parent_task_id is None``）翻 ABANDONED，让 bridge 真正触发，补上"整图放弃 →
+        run 卡"这一跳。由主助理在 reentry briefing 判断"子失败导致整个请求无法完成"后显式调用。
+
+        方法名保留 ``fail_root_graph``：它是主助理工具的对外契约名，改名要连同工具
+        schema、模型见过的名字一起动，跟这次"把状态词改准"不是一件事。
         """
         graph_id = self._tasks.get_current_graph_id(session_id)
         if graph_id is None:
@@ -278,10 +284,10 @@ class TaskAdjudicationService(AtomicTaskService):
         with self._atomic():
             updated_root = self._graph_service.update_task_status(
                 task_id=root_task_id,
-                status=TaskStatus.FAILED,
+                status=TaskStatus.ABANDONED,
                 emit=False,
             )
-            # 级联取消下游：失败沿链向下终止，下游不继续执行、不被 replan 复活
+            # 级联取消下游：放弃沿链向下终止，下游不继续执行、不被 replan 复活
             # （与 abandon 裁定同语义，复用 _cascade_cancel_children）。
             self._cascade_cancel_children(
                 parent_task_id=root_task_id,
@@ -289,8 +295,8 @@ class TaskAdjudicationService(AtomicTaskService):
             )
             final_status = updated_root.status if updated_root is not None else root.status
         # bridge 用独立 session 在 _atomic() 外执行（与 decide() 同模式）；失败只告警不回滚
-        # 已提交的 root FAILED。root.user_message_sequence 为 None 时 bridge 不桥接（无消息
-        # 回合可挂失败卡），root 仍 FAILED，由 task_updated 让前端感知。
+        # 已提交的 root ABANDONED。root.user_message_sequence 为 None 时 bridge 不桥接（无消息
+        # 回合可挂失败卡），root 仍 ABANDONED，由 task_updated 让前端感知。
         try:
             self._failure_bridge.bridge_root_failure(
                 task_id=root_task_id,

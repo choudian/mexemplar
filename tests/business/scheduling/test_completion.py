@@ -60,7 +60,7 @@ def test_graph_with_failed_executor_terminal_but_not_completed():
     tasks = [
         _root(status="completed"),  # 即使 root completed，含 failed 子节点也不算全成功
         _executor("t1", "completed"),
-        _executor("t2", "failed"),
+        _executor("t2", "abandoned"),
     ]
     all_terminal, all_completed = compute_graph_terminal_state(
         tasks, terminal_statuses=_TERM, completed_status=_DONE
@@ -305,7 +305,7 @@ def test_evaluate_marks_failed_when_graph_has_failed_executor():
             snapshot_tasks=[
                 _root(status="completed"),
                 _executor("t1", "completed"),
-                _executor("t2", "failed"),  # 含失败
+                _executor("t2", "abandoned"),  # 含失败
             ],
             run_repo=rr,
         )
