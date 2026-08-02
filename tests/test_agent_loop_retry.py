@@ -41,10 +41,10 @@ def test_first_attempt_succeeds_no_sleep(make_loop):
     llm.chat_with_tools.return_value = expected
 
     with patch("src.business.agents.agent_loop.time.sleep") as sleep_mock:
-        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
+        response, failure_class = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is expected
-    assert recoverable is False
+    assert failure_class is None
     assert llm.chat_with_tools.call_count == 1
     sleep_mock.assert_not_called()
 
@@ -59,10 +59,10 @@ def test_retries_business_exception(make_loop):
     ]
 
     with patch("src.business.agents.agent_loop.time.sleep"):
-        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
+        response, failure_class = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is expected
-    assert recoverable is False
+    assert failure_class is None
     assert llm.chat_with_tools.call_count == 2
 
 
@@ -76,10 +76,10 @@ def test_retries_real_world_rate_limit_message(make_loop):
     ]
 
     with patch("src.business.agents.agent_loop.time.sleep"):
-        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
+        response, failure_class = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is expected
-    assert recoverable is False
+    assert failure_class is None
     assert llm.chat_with_tools.call_count == 2
 
 
@@ -88,10 +88,10 @@ def test_returns_none_after_max_retries(make_loop):
     llm.chat_with_tools.side_effect = RuntimeError("boom")
 
     with patch("src.business.agents.agent_loop.time.sleep"):
-        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
+        response, failure_class = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is None
-    assert recoverable is False
+    assert failure_class is None
     # max_retries=2 → 一次原始 + 两次重试 = 3 次总调用
     assert llm.chat_with_tools.call_count == 3
 
@@ -126,10 +126,10 @@ def test_max_retries_zero_no_retry(make_loop):
     llm.chat_with_tools.side_effect = RuntimeError("boom")
 
     with patch("src.business.agents.agent_loop.time.sleep") as sleep_mock:
-        response, recoverable = loop._call_llm_with_retry([], [], iteration=1)
+        response, failure_class = loop._call_llm_with_retry([], [], iteration=1)
 
     assert response is None
-    assert recoverable is False
+    assert failure_class is None
     assert llm.chat_with_tools.call_count == 1
     sleep_mock.assert_not_called()
 

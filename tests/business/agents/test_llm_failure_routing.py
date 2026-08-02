@@ -122,10 +122,24 @@ def test_nonrecoverable_authentication_and_bad_request_stay_errors(message: str)
     assert _classify_llm_failure(RuntimeError(message), quota_markers=[]) is None
 
 
-def test_custom_quota_marker_is_effective() -> None:
+def test_custom_marker_cannot_widen_the_old_recoverable_boundary() -> None:
+    """配置只细分既有可恢复失败，不能把认证错误从 ERROR 改成 PAUSED。"""
     assert (
         _classify_llm_failure(
-            RuntimeError("provider code: hard-wallet-empty"),
+            RuntimeError("Error code: 401 authentication failed"),
+            quota_markers=["authentication"],
+        )
+        is None
+    )
+
+
+def test_custom_quota_marker_is_effective() -> None:
+    class RateLimitError(RuntimeError):
+        pass
+
+    assert (
+        _classify_llm_failure(
+            RateLimitError("provider code: hard-wallet-empty"),
             quota_markers=["hard-wallet-empty"],
         )
         == "quota"

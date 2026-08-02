@@ -816,6 +816,42 @@ class AgentOrchestrator:
                 "[Orchestrator] 任务无 active attempt，执行会话未绑定: task=%s", current_task_id
             )
 
+    @staticmethod
+    def _build_delegated_pause_payload(
+        result: AgentResult,
+        *,
+        session_id: str,
+        workflow_id: str,
+    ) -> dict:
+        """把结构化 Agent 暂停结果投影成委派执行边界的安全 payload。"""
+        cancelled = result.result_type == ResultType.CANCELLED
+        reason = "用户已停止" if cancelled else result.error
+        message = (
+            f"子代理已被停止（{reason}），可用 continue_subagent 唤回续跑"
+            if cancelled
+            else f"子代理已暂停（{reason}），可用 continue_subagent 唤回续跑"
+        )
+        payload = {
+            "success": False,
+            "paused": True,
+            "cancelled": cancelled,
+            "subagent_id": session_id,
+            "message": message,
+            "executor_session_id": session_id,
+            "workflow_id": workflow_id,
+            "result_type": result.result_type.value,
+            "reason": reason,
+        }
+        # 结构化暂停原因随结果上行：父侧靠它区分“跑到预算了”（可追加轮次）、
+        # “额度耗尽”（等用户充值）和其他外部恢复；仅凭 reason 文本无法可靠区分。
+        if not cancelled and result.pause_reason:
+            payload["pause_reason"] = result.pause_reason
+            if result.iterations_used is not None:
+                payload["iterations_used"] = result.iterations_used
+            if result.max_iterations is not None:
+                payload["max_iterations"] = result.max_iterations
+        return payload
+
     def _run_delegated_executor(
         self,
         *,
@@ -975,31 +1011,11 @@ class AgentOrchestrator:
                 subagent_id=session_id,
                 reason=reason,
             )
-            message = (
-                f"子代理已被停止（{reason}），可用 continue_subagent 唤回续跑"
-                if cancelled
-                else f"子代理已暂停（{reason}），可用 continue_subagent 唤回续跑"
+            return self._build_delegated_pause_payload(
+                result,
+                session_id=session_id,
+                workflow_id=workflow_id,
             )
-            paused_payload = {
-                "success": False,
-                "paused": True,
-                "cancelled": cancelled,
-                "subagent_id": session_id,
-                "message": message,
-                "executor_session_id": session_id,
-                "workflow_id": workflow_id,
-                "result_type": result.result_type.value,
-                "reason": reason,
-            }
-            # 结构化暂停原因随结果上行：父侧靠它区分"跑到预算了"（可追加轮次）、
-            # "额度耗尽"（等用户充值）和其他外部恢复；仅凭 reason 文本无法可靠区分。
-            if not cancelled and result.pause_reason:
-                paused_payload["pause_reason"] = result.pause_reason
-                if result.iterations_used is not None:
-                    paused_payload["iterations_used"] = result.iterations_used
-                if result.max_iterations is not None:
-                    paused_payload["max_iterations"] = result.max_iterations
-            return paused_payload
 
         if (
             result.result_type == ResultType.NEEDS_USER_INPUT

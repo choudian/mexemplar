@@ -167,7 +167,7 @@ Assistant tool handler / Orchestrator
 - 主 Assistant 是协调者，不作为用户工作 TaskAttempt 执行器；实际执行者只能是临时 subagent 或固定 specialist。委派工具返回 durable `accepted + taskId + graphId`，父侧等待结果回流和裁定重入，不阻塞同步子 loop。
 - Task 只有执行者侧六态：`pending_dispatch / running / suspended / completed / failed / cancelled`；“等待裁定”在 `assistant_task_adjudications` 中表达。父侧裁定支持认可、打回、放弃；只有根图终态失败才桥接到 `assistant_run_failures`。
 - 崩溃恢复通过 TaskAttempt lease/fence 防止永久 running 和迟到结果污染；副作用步骤先写 `assistant_task_operations`，缺少安全 checkpoint 或遇到 `unsafe_to_retry` 时交父侧裁定，不自动重放。
-- 用户停止作用于当前请求 task graph，写 `suspended/user_stop`，可继续；取消是终态并按图级版本防止被旧 replan 复活。SQLite v37 重建 `assistant_tasks` 的暂停原因 CHECK，使领域枚举、ORM 与持久约束共同接受 `budget_exhausted` 和 `interrupted`。
+- 用户停止作用于当前请求 task graph，写 `suspended/user_stop`，可继续；取消是终态并按图级版本防止被旧 replan 复活。SQLite v41 在 v37 基础上再次重建 `assistant_tasks` 的暂停原因 CHECK，使领域枚举、ORM 与持久约束共同接受 `budget_exhausted`、`interrupted` 和 `quota_exhausted`。LLM 最终失败仍以既有 `_is_recoverable_llm_failure()` 作为 PAUSED/ERROR 的权威边界；统一配置 `ai.failure_routing.quota_markers` 只细分其中明确的额度耗尽，落为 `suspended/quota_exhausted` + `waiting_on=user`，不唤醒父侧主助理，其他可恢复失败保持原路由。
 - 协作范式建立在同一 assignment 模型上：定向委派、开放看板原子认领、agent-to-agent question/resource route、受监督 message-only 会议通道。会议不代理工具、不扩授权，有轮次/时长预算，超限回父侧裁定。
 - Todo 是执行者私人 checklist，按 Task + executor 持久化，状态词为 `todo / doing / done / skipped`，不创建 Task 节点、不进裁定、不进入 brain memory。
 - 前端只读 task snapshot 和公开 UI events：`assistant.task_graph.changed`、`assistant.task_board.changed`、`assistant.task_question.changed`、`assistant.meeting.changed`、`assistant.todo.changed`。缺口或事件会话不匹配时走 `backend.resync_required` 拉 graph/board/meeting/todo 权威快照。

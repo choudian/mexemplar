@@ -141,6 +141,10 @@ class TestAgentLoopPause:
         self, mock_config, in_memory_db
     ):
         """AgentLoop 构造后更新注入配置，下一次失败立即使用新标记。"""
+
+        class RateLimitError(RuntimeError):
+            pass
+
         mock_config.get_ai_retry_max_retries.return_value = 0
         mock_config.get_ai_retry_delay.return_value = 0
         mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig(quota_markers=[])
@@ -152,7 +156,7 @@ class TestAgentLoopPause:
         )
         sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
         llm = MagicMock()
-        llm.chat_with_tools.side_effect = RuntimeError("provider code: wallet-drained")
+        llm.chat_with_tools.side_effect = RateLimitError("provider code: wallet-drained")
         loop = AgentLoop(config, llm, mock_config)
 
         mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig(
@@ -171,6 +175,9 @@ class TestAgentLoopPause:
         """
         mock_config.get_ai_retry_max_retries.return_value = 0
         mock_config.get_ai_retry_delay.return_value = 0
+        mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig(
+            quota_markers=["authentication"]
+        )
         config = AgentConfig(
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
             system_prompt="sub",
@@ -179,9 +186,7 @@ class TestAgentLoopPause:
         )
         sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
         llm = MagicMock()
-        llm.chat_with_tools.side_effect = RuntimeError(
-            "Error code: 400 - invalid request: messages malformed"
-        )
+        llm.chat_with_tools.side_effect = RuntimeError("Error code: 401 - authentication failed")
         loop = AgentLoop(config, llm, mock_config)
         with patch("src.business.agents.agent_loop.time.sleep"):
             result = loop.run(sid, user_input="go", tools=[_noop_tool()])

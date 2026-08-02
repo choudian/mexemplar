@@ -150,7 +150,7 @@
 - 终止失败必须先持久化失败记录并发布本回合消息，再发布 `assistant.progress(status=failed)`；普通运行失败不得同时写入前端全局 `lastError` 或发布 `assistant.error` 造成重复 Toast。
 - 原样重试必须从后端按 `messageSequence` 读取原用户消息；编辑后重试必须创建新用户回合且不得修改原消息。非当前失败返回冲突，空编辑内容拒绝，手动次数不限。
 - 成功重试或新的普通消息必须解决旧失败；编辑后重试再次失败时，新失败只能挂到新用户消息。前端卡片移除和迁移以消息 API / typed event 为准，不得根据本地 progress 自行推测。
-- 现有 provider 自动重试策略保持不变；失败恢复不得引入备用模型切换或新的 secret/config 路径。
+- 现有 provider 自动重试策略保持不变；失败恢复不得引入备用模型切换或新的 secret 路径。唯一受控配置例外是统一配置下的 `ai.failure_routing.quota_markers`：它只能在既有 `_is_recoverable_llm_failure()` 判定为可恢复的集合内细分“额度耗尽”，不得把认证、400 等不可恢复错误扩成 PAUSED；不提供 Settings/API 写入口，也不得保存 provider 原始响应。
 
 ## Real Grand Tour Boundaries
 

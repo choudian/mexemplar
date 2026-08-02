@@ -159,19 +159,21 @@ def _classify_llm_failure(
 ) -> str | None:
     """把 LLM 最终失败分成额度、其他可恢复与不可恢复三档。
 
-    必须先跨完整异常链扫描额度标记，再调用既有可恢复性判断；否则外层限流异常会
-    提前遮住内层的额度耗尽正文。
+    额度扫描覆盖完整异常链，但只细分既有可恢复集合；最终是否可暂停仍完全由
+    ``_is_recoverable_llm_failure`` 决定，配置不能把认证/400 等 ERROR 扩成 PAUSED。
     """
     normalized_markers = _normalized_quota_markers(quota_markers)
+    quota_matched = False
     if normalized_markers:
         for node in walk_exception_chain(exc):
             message = str(node).strip().casefold()
             if any(marker in message for marker in normalized_markers):
-                return "quota"
+                quota_matched = True
+                break
 
-    if _is_recoverable_llm_failure(exc):
-        return "other_recoverable"
-    return None
+    if not _is_recoverable_llm_failure(exc):
+        return None
+    return "quota" if quota_matched else "other_recoverable"
 
 
 def classify_tool_calls(

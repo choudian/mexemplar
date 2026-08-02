@@ -13,19 +13,26 @@ from __future__ import annotations
 from datetime import timedelta
 from threading import Barrier, BrokenBarrierError, Lock
 from time import sleep
+from unittest.mock import MagicMock
 
 from sqlalchemy.exc import IntegrityError
 
+from src.business.agents.agent_loop import AgentLoop
+from src.business.agents.config import AgentConfig, AgentResult, AgentType, ResultType
 from src.business.orchestration.agent.task_executor_adapter import TaskExecutorAdapter
+from src.business.orchestration.agent.orchestrator import AgentOrchestrator
 from src.business.task_collaboration.dispatcher import TaskDispatcher
 from src.business.task_collaboration.parent_reentry_sink import ParentReentrySink
 from src.business.task_collaboration.service import TaskCollaborationService
+from src.data.config_models import AiFailureRoutingConfig
 from src.data.repos import (
     AssistantTaskAdjudicationRepository,
     AssistantTaskAttemptRepository,
     AssistantTaskRepository,
 )
 from src.desktop_api.schemas import AssistantTaskGraphSnapshot
+from src.desktop_api.ui_event_projector import project_internal_event
+from src.utils.events import connect, disconnect
 from src.utils.timezone import utc_now_naive
 
 
@@ -83,6 +90,24 @@ class _FakeOrchestrator:
 
     def run_specialist_via_delegated_executor(self, **kwargs) -> dict:
         return self._result
+
+
+class _AgentResultOrchestrator:
+    """让真实 AgentResult 走生产 Orchestrator 的暂停 payload 映射。"""
+
+    def __init__(self, result: AgentResult) -> None:
+        self._result = result
+
+    @property
+    def delegation_orchestrator(self) -> "_AgentResultOrchestrator":
+        return self
+
+    def run_ephemeral_via_delegated_executor(self, **kwargs) -> dict:
+        return AgentOrchestrator._build_delegated_pause_payload(
+            self._result,
+            session_id="ast_quota_child",
+            workflow_id="wf_quota_child",
+        )
 
 
 def _patch_dispatch_config(monkeypatch) -> None:
@@ -169,7 +194,14 @@ def test_adapter_executes_and_reentry_reaches_sink(monkeypatch):
     assert kicks == [("ast_reentry_a", graph_id)]
 
 
-def _paused_dispatcher(monkeypatch, *, session_id: str, title: str, result: dict):
+def _paused_dispatcher(
+    monkeypatch,
+    *,
+    session_id: str,
+    title: str,
+    result: dict | None = None,
+    orchestrator=None,
+):
     """搭一条真实的派发链，让执行体返回一个暂停结果。"""
     _patch_dispatch_config(monkeypatch)
 
@@ -184,7 +216,7 @@ def _paused_dispatcher(monkeypatch, *, session_id: str, title: str, result: dict
     )
     dispatcher = TaskDispatcher(
         cutover_guard=_AllowGuard(),
-        executor_callback=TaskExecutorAdapter(_FakeOrchestrator(result)),
+        executor_callback=TaskExecutorAdapter(orchestrator or _FakeOrchestrator(result or {})),
         parent_reentry_callback=sink.dispatch,
     )
     future = dispatcher.start_attempt_async(
@@ -244,23 +276,48 @@ def test_budget_pause_wakes_the_parent(monkeypatch):
     assert kicks == [("ast_budget", graph_id)]
 
 
-def test_quota_pause_waits_for_user_without_waking_the_parent(monkeypatch):
-    """额度耗尽由用户充值解除；主助理不能行动，因此不得收到回流。"""
+def test_quota_pause_waits_for_user_without_waking_the_parent(monkeypatch, mock_config):
+    """同一真实异常贯穿 AgentResult、派发、DB、DTO 与 UI，且不泄漏。"""
     sentinel = "sk-quota-route-must-not-leak"
-    _, task_id, sink, kicks, payload = _paused_dispatcher(
-        monkeypatch,
-        session_id="ast_quota",
-        title="调用模型完成分析",
-        result={
-            "success": False,
-            "paused": True,
-            "pause_reason": "quota_exhausted",
-            "message": "模型额度已用完，充值后可继续",
-            "subagent_id": "ast_child",
-            "raw_error": f"insufficient_quota account=private-user token={sentinel}",
-            "provider_response": {"secret": sentinel},
-        },
+    mock_config.get_ai_retry_max_retries.return_value = 0
+    mock_config.get_ai_retry_delay.return_value = 0
+    mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig()
+
+    session_store = AgentOrchestrator(MagicMock(), mock_config)._session_store
+    agent_session_id = session_store.create_session("wf_quota_source", AgentType.EPHEMERAL_SUBAGENT)
+    llm = MagicMock()
+    llm.chat_with_tools.side_effect = RuntimeError(
+        f"provider error: insufficient_quota account=private-user token={sentinel}"
     )
+    agent_result = AgentLoop(
+        AgentConfig(
+            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            system_prompt="sub",
+            max_iterations=2,
+            resumable_on_failure=True,
+        ),
+        llm,
+        mock_config,
+    ).run(agent_session_id, user_input="go", tools=[])
+    assert agent_result.result_type == ResultType.PAUSED
+    assert sentinel not in repr(agent_result)
+
+    captured_events: list[dict] = []
+
+    def capture_task_event(sender, **kwargs):
+        if kwargs.get("session_id") == "ast_quota":
+            captured_events.append(kwargs)
+
+    connect("assistant_task_graph_changed", capture_task_event, weak=False)
+    try:
+        _, task_id, sink, kicks, payload = _paused_dispatcher(
+            monkeypatch,
+            session_id="ast_quota",
+            title="调用模型完成分析",
+            orchestrator=_AgentResultOrchestrator(agent_result),
+        )
+    finally:
+        disconnect("assistant_task_graph_changed", capture_task_event)
 
     with AssistantTaskRepository() as tasks:
         row = tasks.get_task(task_id)
@@ -280,6 +337,13 @@ def test_quota_pause_waits_for_user_without_waking_the_parent(monkeypatch):
     finally:
         service.close()
     assert sentinel not in dto.model_dump_json()
+
+    suspended_event = next(
+        event for event in captured_events if event.get("suspend_reason") == "quota_exhausted"
+    )
+    drafts = project_internal_event("assistant_task_graph_changed", suspended_event)
+    assert drafts
+    assert sentinel not in repr(drafts)
 
     assert sink.drain("ast_quota") == []
     assert kicks == []
