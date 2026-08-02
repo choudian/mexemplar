@@ -78,6 +78,22 @@ def test_external_unavailable_pause_still_reads_as_waiting_system():
     assert waiting_on_for_reason(outcome["suspend_reason"]) is WaitingOn.ASSISTANT
 
 
+def test_quota_pause_maps_to_user_without_waking_the_assistant():
+    outcome = _map(
+        {
+            "paused": True,
+            "pause_reason": PauseReason.QUOTA_EXHAUSTED.value,
+            "message": "模型额度已用完，充值后可继续",
+            "subagent_id": "ast_child",
+        }
+    )
+
+    assert outcome["task_outcome"] == "suspended"
+    assert outcome["suspend_reason"] == SuspendReason.QUOTA_EXHAUSTED.value
+    assert waiting_on_for_reason(outcome["suspend_reason"]) is WaitingOn.USER
+    assert _paused_reentry_payload(outcome, waiting_on=WaitingOn.USER.value) is None
+
+
 def test_user_stop_keeps_priority_over_the_budget_reason():
     outcome = _map(
         {

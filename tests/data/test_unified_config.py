@@ -91,6 +91,52 @@ def test_ai_temperature_defaults_and_rejects_non_finite_or_out_of_range_values(t
     assert config.get_ai_temperature() == 2.0
 
 
+def test_ai_failure_routing_reads_defaults_and_nested_file_override(tmp_path):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "missing.json"))
+    config._sa = _SettingsStore()
+
+    assert config.get_ai_failure_routing().quota_markers == [
+        "insufficient_quota",
+        "exceeded your current quota",
+        "credit balance is too low",
+        "billing_hard_limit_reached",
+    ]
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "ai": {
+                    "failure_routing": {
+                        "quota_markers": ["provider-specific-hard-limit"],
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    overridden = UnifiedConfigManager(config_path=str(config_path))
+    overridden._sa = _SettingsStore()
+
+    assert overridden.get_ai_failure_routing().quota_markers == ["provider-specific-hard-limit"]
+
+
+def test_ai_failure_routing_ignores_invalid_marker_values(tmp_path, caplog):
+    config = UnifiedConfigManager(config_path=str(tmp_path / "missing.json"))
+    config._sa = _SettingsStore()
+
+    config.set("ai.failure_routing.quota_markers", "quota", persist="runtime")
+    assert config.get_ai_failure_routing().quota_markers == []
+
+    config.set(
+        "ai.failure_routing.quota_markers",
+        ["", None, 7, "valid-marker"],
+        persist="runtime",
+    )
+    assert config.get_ai_failure_routing().quota_markers == ["valid-marker"]
+    assert "ai.failure_routing.quota_markers" in caplog.text
+
+
 def test_agent_tools_discovery_defaults_and_bounds(tmp_path):
     config = UnifiedConfigManager(config_path=str(tmp_path / "config.json"))
     store = _SettingsStore()

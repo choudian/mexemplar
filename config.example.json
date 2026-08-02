@@ -12,6 +12,14 @@
     "timeout": 180,
     "retry_max_retries": 3,
     "retry_delay": 1.0,
+    "failure_routing": {
+      "quota_markers": [
+        "insufficient_quota",
+        "exceeded your current quota",
+        "credit balance is too low",
+        "billing_hard_limit_reached"
+      ]
+    },
     "thinking_level": "off",
     "vision_model": "claude-3-5-sonnet-20241022",
     "vision_provider": null,
@@ -238,7 +246,9 @@
       "max_background_processes": 16,
       "event_buffer_size": 64,
       "stalled_threshold_ms": 10000,
-      "chunk_threshold_chars": 4096
+      "chunk_threshold_chars": 4096,
+      "shell_mode": true,
+      "shell_path": null
     },
     "discovery": {
       "full_catalog_max_items": 20,

@@ -13,6 +13,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from src.business.ai.llm_client import LLMResponse
+from src.data.config_models import AiFailureRoutingConfig
 from src.data.unified_config import UnifiedConfigManager
 
 # =============================================================================
@@ -85,6 +86,7 @@ def mock_config():
     # LLM retry 默认值（与 AIConfig 默认一致；测试需要时可按用例覆盖）
     config.get_ai_retry_max_retries.return_value = 3
     config.get_ai_retry_delay.return_value = 1.0
+    config.get_ai_failure_routing.return_value = AiFailureRoutingConfig()
     return config
 
 

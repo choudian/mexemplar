@@ -564,6 +564,7 @@ def test_continue_graph_still_resumes_everything_that_can_actually_move() -> Non
     resumable = (
         SuspendReason.USER_STOP,
         SuspendReason.BUDGET_EXHAUSTED,
+        SuspendReason.QUOTA_EXHAUSTED,
         SuspendReason.WAITING_SYSTEM,
         SuspendReason.INTERRUPTED,
     )

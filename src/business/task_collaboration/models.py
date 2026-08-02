@@ -32,6 +32,8 @@ class SuspendReason(StrEnum):
     # 执行体跑到轮次预算但工作完整保留：与"等外部条件"不同，父侧可追加预算续跑。
     # 落进 WAITING_SYSTEM 会让父侧误以为在等外部，从而无限期干等。
     BUDGET_EXHAUSTED = "budget_exhausted"
+    # 模型账户额度已经耗尽：只有用户充值才能推动，主助理重派只会重复失败。
+    QUOTA_EXHAUSTED = "quota_exhausted"
     # 执行体异常中断，工作保留但最后一步副作用可能未知；续跑前需要先核对现场。
     INTERRUPTED = "interrupted"
     # 撞上确定性代码缺陷（DB CHECK 被拒、TypeError、断言失败…）：**重试一定还是
@@ -61,6 +63,7 @@ class WaitingOn(StrEnum):
 _SUSPEND_REASON_WAITING_ON: dict[SuspendReason, WaitingOn] = {
     SuspendReason.WAITING_USER: WaitingOn.USER,
     SuspendReason.USER_STOP: WaitingOn.USER,
+    SuspendReason.QUOTA_EXHAUSTED: WaitingOn.USER,
     SuspendReason.BUDGET_EXHAUSTED: WaitingOn.ASSISTANT,
     # WAITING_SYSTEM 的实际生产者是 ask_parent（执行体求助，等主助理答复）和
     # _map_to_outcome 的兜底（未知情形）。映射成 SYSTEM 会让它进 recovery 自动

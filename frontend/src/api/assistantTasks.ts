@@ -15,6 +15,7 @@ export type SuspendReason =
   | "waiting_system"
   | "user_stop"
   | "budget_exhausted"
+  | "quota_exhausted"
   | "interrupted"
   /** 唯一一个「不能再试」的停法：重试必然是同样的结果，所以不给「继续」按钮。 */
   | "blocked_by_defect";

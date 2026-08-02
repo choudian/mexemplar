@@ -21,6 +21,7 @@ import dataclasses
 from src.utils.helpers import normalize_thinking_level
 from src.data.config_models import (
     AIConfig,
+    AiFailureRoutingConfig,
     AppConfig,
     AgentToolsDiscoveryConfig,
     AgentToolsFileConfig,
@@ -394,6 +395,31 @@ class UnifiedConfigManager:
             logger.warning(f"[配置] ai.retry_delay 不能为负 {value}，回退到 1.0")
             return 1.0
         return value
+
+    def get_ai_failure_routing(self) -> AiFailureRoutingConfig:
+        """获取额度耗尽路由标记；非法元素被忽略并安全退回旧路由。"""
+        config = self._load_dataclass_config("ai.failure_routing", AiFailureRoutingConfig)
+        raw_markers = config.quota_markers
+        if not isinstance(raw_markers, list):
+            logger.warning(
+                "[配置] ai.failure_routing.quota_markers 必须是字符串列表，已忽略: "
+                "value_type=%s",
+                type(raw_markers).__name__,
+            )
+            return AiFailureRoutingConfig(quota_markers=[])
+
+        valid_markers: list[str] = []
+        for index, marker in enumerate(raw_markers):
+            if not isinstance(marker, str) or not marker.strip():
+                logger.warning(
+                    "[配置] ai.failure_routing.quota_markers[%s] 必须是非空字符串，"
+                    "已忽略: value_type=%s",
+                    index,
+                    type(marker).__name__,
+                )
+                continue
+            valid_markers.append(marker)
+        return AiFailureRoutingConfig(quota_markers=valid_markers)
 
     def get_ai_temperature(self) -> float:
         """LLM 采样温度（有限且在 0 到 2 之间）。"""

@@ -991,8 +991,8 @@ class AgentOrchestrator:
                 "result_type": result.result_type.value,
                 "reason": reason,
             }
-            # 结构化暂停原因随结果上行：父侧靠它区分"跑到预算了"（可追加轮次续跑）
-            # 和"等外部恢复"（只能等），仅凭 reason 文本无法可靠区分。
+            # 结构化暂停原因随结果上行：父侧靠它区分"跑到预算了"（可追加轮次）、
+            # "额度耗尽"（等用户充值）和其他外部恢复；仅凭 reason 文本无法可靠区分。
             if not cancelled and result.pause_reason:
                 paused_payload["pause_reason"] = result.pause_reason
                 if result.iterations_used is not None:

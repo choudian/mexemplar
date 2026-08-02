@@ -57,6 +57,24 @@ def _filter_dataclass_fields(data: Dict[str, Any], dataclass_type: type) -> Dict
 
 
 @dataclass
+class AiFailureRoutingConfig:
+    """LLM 额度耗尽识别规则；只影响第一档路由，不改变可恢复边界。
+
+    匹配时由 AgentLoop 对元素和异常文本执行 ``strip().casefold()``；空列表表示关闭
+    quota 专属分类并逐字退回既有可恢复路由。
+    """
+
+    quota_markers: list[str] = field(
+        default_factory=lambda: [
+            "insufficient_quota",
+            "exceeded your current quota",
+            "credit balance is too low",
+            "billing_hard_limit_reached",
+        ]
+    )
+
+
+@dataclass
 class AIConfig:
     """AI配置"""
 
@@ -77,6 +95,7 @@ class AIConfig:
     # 任意异常都会触发重试，指数退避：delay = retry_delay * 2 ** retry_count
     retry_max_retries: int = 3  # 最大重试次数（最终调用次数 = max_retries + 1）
     retry_delay: float = 1.0  # 退避基数（秒）
+    failure_routing: AiFailureRoutingConfig = field(default_factory=AiFailureRoutingConfig)
 
     # 推理强度（仅作用于主对话；vision / 压缩调用强制 off）
     # 取值：off | low | medium | high
@@ -641,7 +660,13 @@ class AppConfig:
         """从字典创建配置对象"""
         config = cls()
         if "ai" in data:
-            config.ai = AIConfig(**_filter_dataclass_fields(data["ai"], AIConfig))
+            ai_data = _filter_dataclass_fields(data["ai"], AIConfig)
+            failure_routing = ai_data.get("failure_routing")
+            if isinstance(failure_routing, dict):
+                ai_data["failure_routing"] = AiFailureRoutingConfig(
+                    **_filter_dataclass_fields(failure_routing, AiFailureRoutingConfig)
+                )
+            config.ai = AIConfig(**ai_data)
 
         if "recording" in data:
             recording_data = _filter_dataclass_fields(data["recording"], RecordingConfig)

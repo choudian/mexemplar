@@ -294,7 +294,9 @@ def test_orm_and_migration_agree_on_both_constraints() -> None:
     """ORM 定义和迁移 DDL 是两份手写副本。它们漂移了不会有任何报错——
     新库按 ORM 建、老库按迁移升，两边行为就此分叉，而且很难查。"""
     engine = _engine_at_v38()
-    migrations.migrate_to_v39(engine)
+    # ORM 表达的是当前 schema；从 v38 跑完整链后再比较，不能把历史 v39 DDL
+    # 与当前枚举硬比（v41 又增加了 quota_exhausted）。
+    migrations.run_migrations(engine)
 
     assert _allowed_values(
         engine, "assistant_tasks", "ck_assistant_tasks_suspend_reason"
@@ -308,7 +310,7 @@ def test_orm_and_migration_agree_on_both_constraints() -> None:
 def test_the_business_enum_and_the_database_agree_on_suspend_reasons() -> None:
     """第三份副本：业务枚举。加了新停法却忘了迁移，活就落不了库。"""
     engine = _engine_at_v38()
-    migrations.migrate_to_v39(engine)
+    migrations.run_migrations(engine)
 
     allowed = _allowed_values(engine, "assistant_tasks", "ck_assistant_tasks_suspend_reason")
     assert {reason.value for reason in SuspendReason} == allowed

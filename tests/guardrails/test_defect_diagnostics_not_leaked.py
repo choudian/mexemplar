@@ -18,6 +18,7 @@ from pathlib import Path
 from src.business.services.assistant_failure_classifier import classify_assistant_failure
 from src.business.task_collaboration.dispatcher import _paused_reentry_payload
 from src.business.task_collaboration.models import SuspendReason, WaitingOn
+from src.desktop_api.ui_event_projector import project_internal_event
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -116,6 +117,31 @@ def test_defect_pause_reaches_the_assistant_not_the_user() -> None:
     from src.business.task_collaboration.models import waiting_on_for_reason
 
     assert waiting_on_for_reason(SuspendReason.BLOCKED_BY_DEFECT) == WaitingOn.ASSISTANT
+
+
+def test_quota_task_ui_event_drops_provider_diagnostics() -> None:
+    """额度路由事件只公开分类结论，绝不透传 provider 异常正文。"""
+    drafts = project_internal_event(
+        "assistant_task_graph_changed",
+        {
+            "session_id": "ast_quota_guard",
+            "graph_id": "tg_quota_guard",
+            "task_id": "tsk_quota_guard",
+            "change_type": "status_changed",
+            "status": "suspended",
+            "display_phase": "paused",
+            "suspend_reason": SuspendReason.QUOTA_EXHAUSTED.value,
+            "waiting_on": WaitingOn.USER.value,
+            "raw_error": f"insufficient_quota account=private token={_SECRET}",
+            "provider_response": {"endpoint": _PRIVATE_PATH, "secret": _SECRET},
+        },
+    )
+
+    assert len(drafts) == 1
+    assert drafts[0].payload["suspendReason"] == "quota_exhausted"
+    assert drafts[0].payload["waitingOn"] == "user"
+    for text in _all_strings(drafts[0].payload):
+        assert not _leaks(text), f"额度 UI event 泄漏了异常正文: {text!r}"
 
 
 def test_user_facing_defect_copy_is_a_constant_free_of_internal_terms() -> None:

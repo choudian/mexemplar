@@ -143,15 +143,18 @@ class AgentConfig:
 class PauseReason(str, Enum):
     """PAUSED 的结构化原因。
 
-    父侧需要区分"跑到预算了"和"等外部恢复"——前者可以追加预算继续，
-    后者只能等。仅靠 ``error`` 文本无法可靠区分，故单列。
+    父侧需要区分"跑到预算了"、"等用户充值"和"等其他外部恢复"——三者能采取的
+    动作不同。仅靠 ``error`` 文本无法可靠区分，故单列。
     """
 
     BUDGET_EXHAUSTED = "budget_exhausted"
     """撞迭代上限：工作完整保留，追加预算即可续跑。"""
 
+    QUOTA_EXHAUSTED = "quota_exhausted"
+    """模型额度已耗尽：只有用户充值后才能继续。"""
+
     EXTERNAL_UNAVAILABLE = "external_unavailable"
-    """LLM 配额/限流/网络等外部原因：需等外部恢复。"""
+    """LLM 限流/网络等其他外部原因：需等外部恢复。"""
 
 
 @dataclass

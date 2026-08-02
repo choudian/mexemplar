@@ -16,6 +16,14 @@
 
 记忆/压缩阈值的 canonical 文件命名空间是 `ai.memory_*`。历史顶层 `memory.*` 键在读取时会临时兼容并记录弃用提示，后续请迁移到 `ai.memory_*`；模板只保留 canonical 键。
 
+### `ai.failure_routing.quota_markers`
+
+用于识别“模型账户额度已经耗尽、只有用户充值才能继续”的 provider 错误文本。系统会先跨完整异常链匹配这组标记；未命中时仍调用既有可恢复性判断，因此该配置只决定可恢复失败中的第一档路由，不会把认证、400 或其他不可恢复错误改成可恢复。
+
+每个元素必须是非空字符串，匹配前会对配置项和异常文本同时执行 `strip().casefold()`；非法元素会被忽略并记录不含原值的 warning。配置为空数组表示关闭额度专属分类，所有失败逐字退回既有路由。默认值刻意不包含裸 `quota` 或 `billing`，避免把自动恢复的 rate quota 或 billing 服务故障误判成需要用户充值。
+
+当前不提供 Settings/API 编辑入口，只支持在 `config.json` 中配置；手工修改后必须重启 sidecar 才会重新加载。标记本身不是 secret，provider 异常原文不会进入 DTO、UI event 或前端持久化状态。
+
 ## `ui`
 
 - `theme`: 设置页可选 `light`、`dark`、`system`。

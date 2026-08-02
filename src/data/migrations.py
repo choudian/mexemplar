@@ -3739,6 +3739,133 @@ def migrate_to_v40(engine):
     logger.info("迁移到版本 40 完成：assistant_tasks.status failed → abandoned")
 
 
+def migrate_to_v41(engine):
+    """迁移到版本 41：允许任务以 ``quota_exhausted`` 等待用户充值。"""
+    try:
+        with engine.begin() as conn:
+            exists = conn.execute(
+                text(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'assistant_tasks'"
+                )
+            ).fetchone()
+            if exists is None:
+                logger.info("迁移到版本 41：assistant_tasks 表不存在，跳过暂停原因扩展")
+                conn.execute(text("UPDATE schema_version SET version = 41"))
+                return
+
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE assistant_tasks_v41 (
+                        task_id TEXT PRIMARY KEY,
+                        graph_id TEXT NOT NULL,
+                        root_task_id TEXT,
+                        parent_task_id TEXT,
+                        session_id TEXT NOT NULL,
+                        user_message_sequence INTEGER,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'pending_dispatch'
+                            CONSTRAINT ck_assistant_tasks_status
+                            CHECK (status IN (
+                                'pending_dispatch', 'running', 'suspended',
+                                'completed', 'abandoned', 'cancelled'
+                            )),
+                        suspend_reason TEXT
+                            CONSTRAINT ck_assistant_tasks_suspend_reason
+                            CHECK (
+                                suspend_reason IS NULL OR suspend_reason IN (
+                                    'waiting_user', 'waiting_system', 'user_stop',
+                                    'budget_exhausted', 'quota_exhausted', 'interrupted',
+                                    'blocked_by_defect'
+                                )
+                            ),
+                        waiting_on TEXT
+                            CONSTRAINT ck_assistant_tasks_waiting_on
+                            CHECK (
+                                waiting_on IS NULL OR waiting_on IN (
+                                    'user', 'assistant', 'system'
+                                )
+                            ),
+                        assignee_type TEXT
+                            CONSTRAINT ck_assistant_tasks_assignee_type
+                            CHECK (
+                                assignee_type IS NULL OR assignee_type IN (
+                                    'ephemeral_subagent', 'specialist'
+                                )
+                            ),
+                        assignee_id TEXT,
+                        owner_session_id TEXT,
+                        capability_scope TEXT,
+                        graph_version INTEGER NOT NULL DEFAULT 1,
+                        task_version INTEGER NOT NULL DEFAULT 1,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        completed_at DATETIME,
+                        failed_at DATETIME,
+                        cancelled_at DATETIME,
+                        requires_confirmation INTEGER NOT NULL DEFAULT 0,
+                        workspace_root TEXT,
+                        CONSTRAINT ck_assistant_tasks_suspend_reason_required CHECK (
+                            (status = 'suspended' AND suspend_reason IS NOT NULL)
+                            OR
+                            (status != 'suspended' AND suspend_reason IS NULL)
+                        ),
+                        CONSTRAINT ck_assistant_tasks_waiting_on_required CHECK (
+                            (status = 'suspended' AND waiting_on IS NOT NULL)
+                            OR
+                            (status != 'suspended' AND waiting_on IS NULL)
+                        )
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO assistant_tasks_v41 (
+                        task_id, graph_id, root_task_id, parent_task_id,
+                        session_id, user_message_sequence, title, description,
+                        status, suspend_reason, waiting_on, assignee_type,
+                        assignee_id, owner_session_id, capability_scope,
+                        graph_version, task_version, created_at, updated_at,
+                        completed_at, failed_at, cancelled_at,
+                        requires_confirmation, workspace_root
+                    )
+                    SELECT
+                        task_id, graph_id, root_task_id, parent_task_id,
+                        session_id, user_message_sequence, title, description,
+                        status, suspend_reason, waiting_on, assignee_type,
+                        assignee_id, owner_session_id, capability_scope,
+                        graph_version, task_version, created_at, updated_at,
+                        completed_at, failed_at, cancelled_at,
+                        requires_confirmation, workspace_root
+                    FROM assistant_tasks
+                    """
+                )
+            )
+            conn.execute(text("DROP TABLE assistant_tasks"))
+            conn.execute(text("ALTER TABLE assistant_tasks_v41 RENAME TO assistant_tasks"))
+            for index_sql in (
+                "CREATE INDEX idx_assistant_tasks_graph_status "
+                "ON assistant_tasks(graph_id, status)",
+                "CREATE INDEX idx_assistant_tasks_graph_parent "
+                "ON assistant_tasks(graph_id, parent_task_id)",
+                "CREATE INDEX idx_assistant_tasks_session_message "
+                "ON assistant_tasks(session_id, user_message_sequence)",
+                "CREATE INDEX idx_assistant_tasks_graph_version "
+                "ON assistant_tasks(graph_id, task_version)",
+            ):
+                conn.execute(text(index_sql))
+
+            conn.execute(text("UPDATE schema_version SET version = 41"))
+    except Exception as e:
+        logger.error(f"迁移到版本 41 失败: {e}")
+        raise
+    logger.info("迁移到版本 41 完成：quota_exhausted")
+
+
 def downgrade_from_v36(engine):
     """回退版本 36：移除执行会话列。"""
     try:
@@ -3825,6 +3952,7 @@ _MIGRATIONS = [
     (38, migrate_to_v38),
     (39, migrate_to_v39),
     (40, migrate_to_v40),
+    (41, migrate_to_v41),
 ]
 
 

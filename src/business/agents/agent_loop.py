@@ -129,6 +129,51 @@ def _is_recoverable_llm_failure(exc: BaseException) -> bool:
     return False
 
 
+def _normalized_quota_markers(quota_markers: object) -> tuple[str, ...]:
+    """校验并归一化额度标记；非法配置安全降级为“不命中第一档”。"""
+    if not isinstance(quota_markers, list):
+        logger.warning(
+            "[配置] ai.failure_routing.quota_markers 必须是字符串列表，已忽略: value_type=%s",
+            type(quota_markers).__name__,
+        )
+        return ()
+
+    normalized: list[str] = []
+    for index, marker in enumerate(quota_markers):
+        if not isinstance(marker, str) or not marker.strip():
+            logger.warning(
+                "[配置] ai.failure_routing.quota_markers[%s] 必须是非空字符串，已忽略: "
+                "value_type=%s",
+                index,
+                type(marker).__name__,
+            )
+            continue
+        normalized.append(marker.strip().casefold())
+    return tuple(normalized)
+
+
+def _classify_llm_failure(
+    exc: BaseException,
+    *,
+    quota_markers: object,
+) -> str | None:
+    """把 LLM 最终失败分成额度、其他可恢复与不可恢复三档。
+
+    必须先跨完整异常链扫描额度标记，再调用既有可恢复性判断；否则外层限流异常会
+    提前遮住内层的额度耗尽正文。
+    """
+    normalized_markers = _normalized_quota_markers(quota_markers)
+    if normalized_markers:
+        for node in walk_exception_chain(exc):
+            message = str(node).strip().casefold()
+            if any(marker in message for marker in normalized_markers):
+                return "quota"
+
+    if _is_recoverable_llm_failure(exc):
+        return "other_recoverable"
+    return None
+
+
 def classify_tool_calls(
     tool_calls: List,
     tool_registry: Dict[str, ToolDefinition],
@@ -277,7 +322,7 @@ class AgentLoop:
         iteration: int,
         session_id: str = "",
         workflow_id: str | None = None,
-    ) -> tuple[Optional[LLMResponse], bool]:
+    ) -> tuple[Optional[LLMResponse], str | None]:
         """
         调用 LLM（带重试机制）
 
@@ -290,8 +335,8 @@ class AgentLoop:
             iteration: 当前迭代次数
 
         Returns:
-            (LLMResponse 或 None, 最终失败是否为可恢复失败)。
-            可恢复失败指账户配额/限流/网络类"需等外部恢复"的失败。
+            (LLMResponse 或 None, 最终失败分类)。分类为 quota、
+            other_recoverable 或 None；None 也用于成功/取消路径。
         """
         retry_config: RetryConfig = self._retry
 
@@ -320,7 +365,7 @@ class AgentLoop:
                 )
                 if response.has_tool_calls:
                     logger.debug(f"[Agent Loop] LLM 工具调用: {response.tool_calls[0].name}")
-                return response, False
+                return response, None
 
             except Exception as e:
                 current_run = run_context.get_current()
@@ -329,15 +374,19 @@ class AgentLoop:
                         "[Agent Loop] LLM 请求已按取消信号中断: reason=%s",
                         getattr(current_run.cancel_token.reason, "value", None),
                     )
-                    return None, False
+                    return None, None
                 if retry_count >= retry_config.max_retries:
-                    recoverable = _is_recoverable_llm_failure(e)
-                    logger.error(
-                        "[Agent Loop] LLM 调用最终失败: error_type=%s recoverable=%s",
-                        type(e).__name__,
-                        recoverable,
+                    routing = self._unified_config.get_ai_failure_routing()
+                    failure_class = _classify_llm_failure(
+                        e,
+                        quota_markers=routing.quota_markers,
                     )
-                    return None, recoverable
+                    logger.error(
+                        "[Agent Loop] LLM 调用最终失败: error_type=%s failure_class=%s",
+                        type(e).__name__,
+                        failure_class,
+                    )
+                    return None, failure_class
                 delay = retry_config.retry_delay * (2**retry_count)
                 logger.warning(
                     "[Agent Loop] LLM 调用失败: error_type=%s, 等待 %ss 后重试 (%s/%s)",
@@ -1444,7 +1493,7 @@ class AgentLoop:
                 messages = ctx.assemble_context()
                 logger.debug(f"[Agent Loop] 迭代 {iteration}: 组装了 {len(messages)} 条消息")
 
-                response, llm_failure_recoverable = self._call_llm_with_retry(
+                response, llm_failure_class = self._call_llm_with_retry(
                     messages,
                     all_tool_schemas,
                     iteration,
@@ -1455,18 +1504,27 @@ class AgentLoop:
                     cancelled = self._cancellation_result(ctx)
                     if cancelled is not None:
                         return cancelled
-                    if self._config.resumable_on_failure and llm_failure_recoverable:
-                        # 账户配额/限流/网络等"需等外部恢复"的失败：不丢工作，转可唤回暂停。
+                    if self._config.resumable_on_failure and llm_failure_class is not None:
+                        # 额度/限流/网络等可恢复失败：不丢工作，转可唤回暂停。
                         # 不可恢复错误（如 400/认证/校验）落入下方 ERROR，避免误导主代理等待。
                         ctx.update_session_status("suspended")
+                        if llm_failure_class == "quota":
+                            pause_reason = PauseReason.QUOTA_EXHAUSTED.value
+                            safe_error = "模型额度已用完，充值后可继续"
+                            log_reason = "额度耗尽"
+                        else:
+                            pause_reason = PauseReason.EXTERNAL_UNAVAILABLE.value
+                            safe_error = "LLM 服务暂时不可用，恢复后可继续"
+                            log_reason = "外部服务不可用"
                         logger.info(
-                            "[Agent Loop] 子代理暂停可唤回（LLM 调用失败，账单或网络）: %s",
+                            "[Agent Loop] 子代理暂停可唤回（LLM %s）: %s",
+                            log_reason,
                             session_id,
                         )
                         return AgentResult(
                             result_type=ResultType.PAUSED,
-                            error="LLM 调用失败（账单或网络），可恢复后续跑",
-                            pause_reason=PauseReason.EXTERNAL_UNAVAILABLE.value,
+                            error=safe_error,
+                            pause_reason=pause_reason,
                             iterations_used=iteration,
                             max_iterations=self._config.max_iterations,
                         )

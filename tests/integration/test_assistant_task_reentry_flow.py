@@ -25,6 +25,7 @@ from src.data.repos import (
     AssistantTaskAttemptRepository,
     AssistantTaskRepository,
 )
+from src.desktop_api.schemas import AssistantTaskGraphSnapshot
 from src.utils.timezone import utc_now_naive
 
 
@@ -241,6 +242,47 @@ def test_budget_pause_wakes_the_parent(monkeypatch):
     assert entries[0]["maxIterations"] == 30
     assert entries[0]["safeSummary"]
     assert kicks == [("ast_budget", graph_id)]
+
+
+def test_quota_pause_waits_for_user_without_waking_the_parent(monkeypatch):
+    """额度耗尽由用户充值解除；主助理不能行动，因此不得收到回流。"""
+    sentinel = "sk-quota-route-must-not-leak"
+    _, task_id, sink, kicks, payload = _paused_dispatcher(
+        monkeypatch,
+        session_id="ast_quota",
+        title="调用模型完成分析",
+        result={
+            "success": False,
+            "paused": True,
+            "pause_reason": "quota_exhausted",
+            "message": "模型额度已用完，充值后可继续",
+            "subagent_id": "ast_child",
+            "raw_error": f"insufficient_quota account=private-user token={sentinel}",
+            "provider_response": {"secret": sentinel},
+        },
+    )
+
+    with AssistantTaskRepository() as tasks:
+        row = tasks.get_task(task_id)
+    assert row.status == "suspended"
+    assert row.suspend_reason == "quota_exhausted"
+    assert row.waiting_on == "user"
+    assert sentinel not in repr(vars(row))
+
+    with AssistantTaskAttemptRepository() as attempts:
+        assert attempts.get_by_id(payload["attemptId"]).status == "paused"
+
+    assert sentinel not in repr(payload)
+    service = TaskCollaborationService()
+    try:
+        snapshot = service.get_graph_snapshot(session_id="ast_quota", graph_id=row.graph_id)
+        dto = AssistantTaskGraphSnapshot.model_validate(service.snapshot_to_dict(snapshot))
+    finally:
+        service.close()
+    assert sentinel not in dto.model_dump_json()
+
+    assert sink.drain("ast_quota") == []
+    assert kicks == []
 
 
 def test_user_stop_does_not_wake_the_parent(monkeypatch):

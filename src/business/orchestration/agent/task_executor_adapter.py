@@ -217,6 +217,14 @@ class TaskExecutorAdapter:
             for key in ("reentry_type", "question_id", "question_kind"):
                 if result.get(key):
                     outcome[key] = result[key]
+            # 模型额度耗尽只有用户充值才能推动；不能落进 waiting_system 兜底后
+            # 再叫醒主助理白派一轮。
+            if (
+                result.get("pause_reason") == PauseReason.QUOTA_EXHAUSTED.value
+                and "reentry_type" not in outcome
+                and not result.get("cancelled")
+            ):
+                outcome["suspend_reason"] = SuspendReason.QUOTA_EXHAUSTED.value
             # 撞轮次预算：若上游没给更具体的 reentry_type，就归到 budget_exhausted，
             # 否则会落进"无类型暂停"，dispatcher 认不出来、父侧收不到任何通知。
             if (

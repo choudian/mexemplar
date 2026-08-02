@@ -19,12 +19,14 @@ from src.business.agents.config import (
     AgentConfig,
     AgentResult,
     AgentType,
+    PauseReason,
     ResultType,
     ToolDefinition,
 )
 from src.business.ai.llm_client import LLMResponse, ToolCallInfo
 from src.business.memory.context_manager import ContextManager
 from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+from src.data.config_models import AiFailureRoutingConfig
 from tests.conftest import MockLLMClient
 
 
@@ -110,6 +112,56 @@ class TestAgentLoopPause:
             result = loop.run(sid, user_input="go", tools=[_noop_tool()])
         assert result.result_type == ResultType.PAUSED
         assert loop._get_context_manager(sid).get_session_status() == "suspended"
+
+    def test_llm_quota_failure_pauses_with_user_actionable_reason(self, mock_config, in_memory_db):
+        """明确额度耗尽仍可续跑，但必须与网络/限流暂停区分。"""
+        mock_config.get_ai_retry_max_retries.return_value = 0
+        mock_config.get_ai_retry_delay.return_value = 0
+        mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig()
+        config = AgentConfig(
+            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            system_prompt="sub",
+            max_iterations=5,
+            resumable_on_failure=True,
+        )
+        sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
+        llm = MagicMock()
+        sentinel = "acct-secret-9381"
+        llm.chat_with_tools.side_effect = RuntimeError(
+            f"provider error: insufficient_quota account={sentinel}"
+        )
+
+        result = AgentLoop(config, llm, mock_config).run(sid, user_input="go", tools=[_noop_tool()])
+
+        assert result.result_type == ResultType.PAUSED
+        assert result.pause_reason == PauseReason.QUOTA_EXHAUSTED.value
+        assert sentinel not in (result.error or "")
+
+    def test_failure_routing_is_read_when_the_final_failure_is_classified(
+        self, mock_config, in_memory_db
+    ):
+        """AgentLoop 构造后更新注入配置，下一次失败立即使用新标记。"""
+        mock_config.get_ai_retry_max_retries.return_value = 0
+        mock_config.get_ai_retry_delay.return_value = 0
+        mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig(quota_markers=[])
+        config = AgentConfig(
+            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            system_prompt="sub",
+            max_iterations=5,
+            resumable_on_failure=True,
+        )
+        sid = _new_session(AgentType.EPHEMERAL_SUBAGENT)
+        llm = MagicMock()
+        llm.chat_with_tools.side_effect = RuntimeError("provider code: wallet-drained")
+        loop = AgentLoop(config, llm, mock_config)
+
+        mock_config.get_ai_failure_routing.return_value = AiFailureRoutingConfig(
+            quota_markers=["wallet-drained"]
+        )
+        result = loop.run(sid, user_input="go", tools=[_noop_tool()])
+
+        assert result.pause_reason == PauseReason.QUOTA_EXHAUSTED.value
+        mock_config.get_ai_failure_routing.assert_called_once_with()
 
     def test_llm_failure_nonrecoverable_still_error_when_resumable(self, mock_config, in_memory_db):
         """resumable_on_failure=True 但失败不可恢复（400/校验等）→ 仍 ERROR，不误转 PAUSED。

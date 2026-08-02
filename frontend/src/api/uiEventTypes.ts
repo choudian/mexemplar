@@ -234,6 +234,7 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
       "blocked_by_defect",
       "budget_exhausted",
       "interrupted",
+      "quota_exhausted",
       "user_stop",
       "waiting_system",
       "waiting_user",

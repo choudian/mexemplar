@@ -28,6 +28,8 @@ EXPECTED_SUSPEND_REASONS = {
     "waiting_system",
     "user_stop",
     "budget_exhausted",
+    # v41：模型额度耗尽，只有用户充值能推动。
+    "quota_exhausted",
     "interrupted",
     # v39：撞上确定性代码缺陷。与上面每一条的区别是它**不能再试**。
     "blocked_by_defect",
