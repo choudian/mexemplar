@@ -33,6 +33,7 @@ from src.recording.browser.recorder import RecordingMode
 
 from ..llm_reviewer import LLMReviewer
 from .agent_session_store import AgentSessionStore
+from .subagent_scope import EffectiveSubagentScope
 from .orchestrator_repos import OrchestratorRepos, default_orchestrator_repos
 from .assistant_prompt_builder import AssistantPromptBuilder
 from .assistant_task_worker import AssistantTaskWorker
@@ -766,12 +767,16 @@ class AgentOrchestrator:
         task: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        workspace_root: str | None = None,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict:
         return self._get_delegation_orchestrator().run_sync_ephemeral_subagent(
             parent_session_id=parent_session_id,
             task=task,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
+            workspace_root=workspace_root,
+            effective_scope=effective_scope,
         )
 
     def _delegate_to_specialist(
@@ -870,6 +875,7 @@ class AgentOrchestrator:
         role_kind: str = "executor",
         workspace_root: str | None = None,
         allowed_composition_ids: set[str] | None = None,
+        allowed_builtin_tool_names: set[str] | None = None,
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -917,6 +923,8 @@ class AgentOrchestrator:
                 parent_session_id=parent_session_id,
                 role_kind=role_kind,
                 allowed_composition_ids=allowed_composition_ids,
+                allowed_builtin_tool_names=allowed_builtin_tool_names,
+                workspace_root=workspace_root,
             )
             result = loop.run(
                 session_id,
@@ -1249,6 +1257,7 @@ class AgentOrchestrator:
         instruction: str = "",
         extra_iterations: int = 20,
         workspace_root: str | None = None,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict:
         """唤回一个属于当前主代理的子代理续跑（从 DB 持久化历史恢复，跨进程重启亦可）。
 
@@ -1278,23 +1287,45 @@ class AgentOrchestrator:
         except (TypeError, ValueError):
             extra = 20
         extra = min(max(1, extra), _MAX_EXTRA_ITERATIONS)
+        if effective_scope is not None:
+            # Same-run specialist continuation: the closure supplies the exact object
+            # captured before first launch.  Revalidate publication/availability only
+            # to tighten it; never reconstruct authority from the parent session.
+            allowed_tool_ids = self._resolve_tool_ids_with_upper_bound(
+                tool_whitelist=list(effective_scope.dynamic_tool_ids),
+                upper_bound_ids=set(effective_scope.dynamic_tool_ids),
+                materialize_snapshot=True,
+            )
+            allowed_composition_ids = self._resolve_available_composition_ids(
+                set(effective_scope.composition_ids)
+            )
+            allowed_builtin_tool_names: set[str] | None = set(effective_scope.builtin_names)
+            effective_workspace_root = effective_scope.workspace_root
+        else:
+            # Main-assistant continuation keeps its established cross-process behavior.
+            allowed_tool_ids = self._resolve_user_tool_ids(
+                parent_session_id=parent_session_id,
+                tool_whitelist=None,
+            )
+            allowed_composition_ids = None
+            allowed_builtin_tool_names = None
+            effective_workspace_root = workspace_root
+
         config = AgentConfig(
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
             system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
             max_iterations=max(1, extra),
             resumable_on_failure=True,
-            workspace_root=Path(workspace_root) if workspace_root else None,
+            workspace_root=(Path(effective_workspace_root) if effective_workspace_root else None),
         )
         loop = AgentLoop(config, self._llm, self._config)
-        # 用主代理当前可用工具池重建（不强制还原原始白名单——当前可用范围对续跑同样合理）
-        allowed_tool_ids = self._resolve_user_tool_ids(
-            parent_session_id=parent_session_id,
-            tool_whitelist=None,
-        )
         tools = self._build_delegated_executor_tools(
             allowed_tool_ids,
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
             executor_id=subagent_id,
+            allowed_composition_ids=allowed_composition_ids,
+            allowed_builtin_tool_names=allowed_builtin_tool_names,
+            workspace_root=effective_workspace_root,
         )
         user_input = instruction.strip() if (instruction or "").strip() else None
         workflow_id = getattr(session, "workflow_id", "") or ""
@@ -1534,6 +1565,8 @@ class AgentOrchestrator:
         parent_session_id: str | None = None,
         role_kind: str = "executor",
         allowed_composition_ids: set[str] | None = None,
+        allowed_builtin_tool_names: set[str] | None = None,
+        workspace_root: str | None = None,
     ) -> Callable[[], List[ToolDefinition]]:
         return self.tool_registry.build_delegated_executor_tools(
             allowed_tool_ids,
@@ -1546,6 +1579,8 @@ class AgentOrchestrator:
             parent_session_id=parent_session_id,
             role_kind=role_kind,
             allowed_composition_ids=allowed_composition_ids,
+            allowed_builtin_tool_names=allowed_builtin_tool_names,
+            workspace_root=workspace_root,
         )
 
     @staticmethod
@@ -1560,9 +1595,32 @@ class AgentOrchestrator:
     ) -> set[str] | None:
         parent_session = self._session_store.get_session(parent_session_id)
         parent_allowed_ids = parent_session.get_tool_id_set() if parent_session else None
-        if tool_whitelist is None:
-            return parent_allowed_ids
+        return self._resolve_tool_ids_with_upper_bound(
+            tool_whitelist=tool_whitelist,
+            upper_bound_ids=parent_allowed_ids,
+        )
 
+    def _resolve_tool_ids_with_upper_bound(
+        self,
+        *,
+        tool_whitelist: list[str] | None,
+        upper_bound_ids: set[str] | None,
+        materialize_snapshot: bool = False,
+    ) -> set[str] | None:
+        """Resolve published tools under an explicit authority ceiling."""
+
+        if tool_whitelist is None:
+            if upper_bound_ids is not None:
+                if not materialize_snapshot:
+                    return set(upper_bound_ids)
+                # A specialist may launch its child long after its own scope was
+                # resolved.  Materialized snapshots must therefore drop members
+                # unpublished in that interval instead of copying stale IDs.
+                tool_whitelist = list(upper_bound_ids)
+            if not materialize_snapshot:
+                return None
+            if upper_bound_ids is None:
+                return {tool.tool_id for tool in self._tool_repo.get_all_published()}
         resolved_ids: set[str] = set()
         for tool_identifier in tool_whitelist:
             if not isinstance(tool_identifier, str) or not tool_identifier.strip():
@@ -1571,10 +1629,30 @@ class AgentOrchestrator:
             tool = self._tool_repo.get_by_id(identifier) or self._tool_repo.get_by_name(identifier)
             if tool is None or getattr(tool, "status", None) != "published":
                 continue
-            if parent_allowed_ids is not None and tool.tool_id not in parent_allowed_ids:
+            if upper_bound_ids is not None and tool.tool_id not in upper_bound_ids:
                 continue
             resolved_ids.add(tool.tool_id)
         return resolved_ids
+
+    def _resolve_available_composition_ids(
+        self,
+        upper_bound_ids: set[str] | None,
+    ) -> set[str]:
+        """Materialize or tighten composition authority against current availability."""
+
+        candidate_ids = (
+            set(upper_bound_ids)
+            if upper_bound_ids is not None
+            else {
+                composition.composition_id
+                for composition in self._composition_service.list_compositions()
+            }
+        )
+        return {
+            composition_id
+            for composition_id in candidate_ids
+            if self._composition_service.get_execution_snapshot(composition_id) is not None
+        }
 
     def _extract_latest_assistant_text(self, session_id: str) -> str:
         return self._message_repo.get_latest_assistant_text(session_id)

@@ -22,6 +22,8 @@ _EXECUTOR_ONLY_TOOLS = {
     "ask_parent",
     "meeting_send_message",
     "delegate_to_subagent",
+    "continue_subagent",
+    "inspect_subagent",
 }
 
 # planner MUST NOT 拿的 BUILTIN_GENERAL_TOOLS 工具（DEC-B 修订 2026-07-27）
@@ -148,6 +150,8 @@ class TestPlannerToolScope:
         names = _executor_tools(orchestrator)
         assert "todo_update" in names
         assert "ask_parent" in names
+        assert "continue_subagent" in names
+        assert "inspect_subagent" in names
 
     def test_planner_build_graph_binds_parent_session(self, in_memory_db, orchestrator):
         """planner 在子会话内调用 build_task_graph 时，图必须归属父助理会话。"""
@@ -282,7 +286,9 @@ class TestPlannerSpecialistCatalogInjection:
                 "total": 1,
             },
         )
-        prompt = AgentOrchestrator._build_specialist_prompt(self._planner("sp_me"), [], equipped_skills=[])
+        prompt = AgentOrchestrator._build_specialist_prompt(
+            self._planner("sp_me"), [], equipped_skills=[]
+        )
 
         assert "当前没有其他可用专员" in prompt
 
@@ -311,9 +317,7 @@ class TestPlannerSpecialistCatalogInjection:
         def _boom(self, **kwargs):
             raise RuntimeError("specialist repo down")
 
-        monkeypatch.setattr(
-            assistant_facades.AssistantSpecialistToolFacade, "list_active", _boom
-        )
+        monkeypatch.setattr(assistant_facades.AssistantSpecialistToolFacade, "list_active", _boom)
         prompt = AgentOrchestrator._build_specialist_prompt(self._planner(), [], equipped_skills=[])
 
         assert "专员目录暂时不可用" in prompt

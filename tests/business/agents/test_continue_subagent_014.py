@@ -13,6 +13,7 @@ from src.business.agents.observability import AssistantObservability
 from src.business.ai.llm_client import LLMResponse
 from src.business.memory.context_manager import ContextManager
 from src.business.orchestration.agent.orchestrator import AgentOrchestrator
+from src.business.orchestration.agent.subagent_scope import EffectiveSubagentScope
 from tests.conftest import MockLLMClient
 
 
@@ -230,3 +231,58 @@ def test_continue_subagent_propagates_workspace_root(orch, mock_config, tmp_path
         )
 
     assert captured.get("workspace_root") is not None
+
+
+def test_specialist_continuation_only_tightens_captured_scope(orch, mock_config, tmp_path):
+    """续跑只重验快照成员；下架项消失，新发布项不能混入。"""
+
+    from types import SimpleNamespace
+
+    parent = "parent-specialist-scope"
+    child = _make_child_subagent(orch, parent, status="suspended")
+    workspace_root = tmp_path / "specialist-worktree"
+    workspace_root.mkdir()
+    scope = EffectiveSubagentScope(
+        dynamic_tool_ids=frozenset({"tool-live", "tool-withdrawn"}),
+        builtin_names=frozenset({"read_file", "search_files"}),
+        composition_ids=frozenset({"composition-live", "composition-withdrawn"}),
+        workspace_root=str(workspace_root),
+    )
+    tools_by_id = {
+        "tool-live": SimpleNamespace(tool_id="tool-live", status="published"),
+        "tool-withdrawn": SimpleNamespace(tool_id="tool-withdrawn", status="draft"),
+        # 当前新发布，但不在首次快照里：不得出现在续跑范围。
+        "tool-new": SimpleNamespace(tool_id="tool-new", status="published"),
+    }
+    orch._tool_repo = MagicMock()
+    orch._tool_repo.get_by_id.side_effect = tools_by_id.get
+    orch._tool_repo.get_by_name.return_value = None
+    orch._composition_service = MagicMock()
+    orch._composition_service.get_execution_snapshot.side_effect = lambda composition_id: (
+        object() if composition_id == "composition-live" else None
+    )
+
+    with (
+        patch("src.business.orchestration.agent.orchestrator.AgentLoop") as loop_cls,
+        patch.object(orch, "_build_delegated_executor_tools", return_value=[]) as build_tools,
+        patch.object(orch, "_extract_latest_assistant_text", return_value="续跑完成"),
+    ):
+        loop_cls.return_value.run.return_value = AgentResult(result_type=ResultType.COMPLETED)
+        result = orch._continue_subagent(
+            parent_session_id=parent,
+            subagent_id=child,
+            instruction="从断点继续",
+            effective_scope=scope,
+        )
+
+    assert result["success"] is True
+    assert loop_cls.call_args.args[0].workspace_root == workspace_root
+    build_tools.assert_called_once_with(
+        {"tool-live"},
+        agent_type=AgentType.EPHEMERAL_SUBAGENT,
+        executor_id=child,
+        allowed_composition_ids={"composition-live"},
+        allowed_builtin_tool_names={"read_file", "search_files"},
+        workspace_root=str(workspace_root),
+    )
+    assert loop_cls.return_value.run.call_args.args[:2] == (child, "从断点继续")

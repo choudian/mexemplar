@@ -15,6 +15,10 @@ from src.business.agents.tools.pm_output_tools import report_code_issue, submit_
 from src.business.agents.tools.programmer_tools import submit_code, syntax_check
 from src.business.agents.tools.recording_data_tools import create_recording_tools
 from src.business.agents.tools.trial_tools import create_desktop_trial_tools, create_trial_tools
+from src.business.orchestration.agent.subagent_scope import (
+    EffectiveSubagentScope,
+    SCOPE_SNAPSHOT_MISSING,
+)
 from src.data.repos.skill_equipment_repository import ASSISTANT_ENTITY_ID
 from src.recording.browser.recorder import RecordingMode
 
@@ -50,6 +54,7 @@ class _DelegationFacade(Protocol):
         subagent_id: str,
         instruction: str = "",
         extra_iterations: int = 20,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict: ...
 
     def inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict: ...
@@ -70,7 +75,19 @@ class _DelegationFacade(Protocol):
         task: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        workspace_root: str | None = None,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict: ...
+
+    def prepare_specialist_subagent_scope(
+        self,
+        *,
+        requested_tool_whitelist: list[str] | None,
+        specialist_allowed_tool_ids: set[str] | None,
+        specialist_builtin_names: set[str],
+        specialist_allowed_composition_ids: set[str] | None,
+        workspace_root: str | None,
+    ) -> EffectiveSubagentScope: ...
 
 
 # 规划专员不拿的 BUILTIN_GENERAL_TOOLS 工具（024 DEC-B 修订 2026-07-27）。
@@ -206,6 +223,8 @@ class ToolRegistry:
         parent_session_id: str | None = None,
         role_kind: str = "executor",
         allowed_composition_ids: set[str] | None = None,
+        allowed_builtin_tool_names: set[str] | None = None,
+        workspace_root: str | None = None,
     ) -> Callable[[], list[ToolDefinition]]:
         """Build tools for delegated executors (specialists / ephemeral subagents).
 
@@ -220,6 +239,8 @@ class ToolRegistry:
             CREATE_USER_TODO_SCHEMA,
             DELETE_USER_TODO_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
+            CONTINUE_SUBAGENT_SCHEMA,
+            INSPECT_SUBAGENT_SCHEMA,
             LIST_SPECIALISTS_SCHEMA,
             LIST_USER_TODOS_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
@@ -228,8 +249,10 @@ class ToolRegistry:
             create_ask_parent_handler,
             create_build_task_graph_handler,
             create_complete_user_todo_handler,
+            create_continue_subagent_handler,
             create_delete_user_todo_handler,
             create_delegate_to_subagent_handler,
+            create_inspect_subagent_handler,
             create_list_specialists_handler,
             create_list_user_todos_handler,
             create_meeting_send_message_handler,
@@ -268,6 +291,10 @@ class ToolRegistry:
             builtin_tool_definitions=builtin_composition_tools,
         )
         builtin_tools = _filter_builtin_tools(BUILTIN_GENERAL_TOOLS, tool_whitelist)
+        if allowed_builtin_tool_names is not None:
+            builtin_tools = [
+                tool for tool in builtin_tools if tool.name in allowed_builtin_tool_names
+            ]
         load_skill_tool = self.make_load_skill_tool(
             caller_type="specialist" if agent_type == AgentType.SPECIALIST else "assistant",
             caller_id=specialist_id or ASSISTANT_ENTITY_ID,
@@ -357,6 +384,32 @@ class ToolRegistry:
         specialist_subagent_tools: list[ToolDefinition] = []
         if agent_type == AgentType.SPECIALIST:
             spawned_state = {"used": False}
+            scope_by_subagent_id: dict[str, EffectiveSubagentScope] = {}
+
+            specialist_continue_schema = copy.deepcopy(CONTINUE_SUBAGENT_SCHEMA)
+            specialist_continue_schema["function"]["description"] = (
+                "继续执行你自己起的那个已暂停隔离子代理，从原会话历史断点接着跑；"
+                "也可追加指令纠偏。pause_reason=quota_exhausted 时不要盲目立即重试，"
+                "应等待配额恢复或用 ask_parent 升级。"
+            )
+            specialist_continue_schema["function"]["parameters"]["properties"]["subagent_id"][
+                "description"
+            ] = "你自己的 delegate_to_subagent 返回的 subagent_id"
+            specialist_inspect_schema = copy.deepcopy(INSPECT_SUBAGENT_SCHEMA)
+            specialist_inspect_schema["function"]["description"] = (
+                "查看你自己起的那个隔离子代理的工作概览，用于判断是续跑、追加指令纠偏，"
+                "还是用 ask_parent 升级。只读，不消耗额外模型调用。"
+            )
+            specialist_inspect_schema["function"]["parameters"]["properties"]["subagent_id"][
+                "description"
+            ] = "你自己的 delegate_to_subagent 返回的 subagent_id"
+            specialist_delegate_schema = copy.deepcopy(DELEGATE_TO_SUBAGENT_SCHEMA)
+            specialist_delegate_schema["function"]["parameters"]["properties"]["tool_whitelist"][
+                "description"
+            ] = (
+                "可选工具名称/ID或组合 ID 白名单；不传则继承当前专员实际权限。"
+                "显式传入列表后，未列出的组合不会授予隔离子代理。"
+            )
 
             def _specialist_subagent_callback(
                 *,
@@ -380,22 +433,83 @@ class ToolRegistry:
                         "delegation_type": "ephemeral_subagent",
                     }
                 spawned_state["used"] = True
-                return self._delegation.run_sync_ephemeral_subagent(
+                effective_scope = self._delegation.prepare_specialist_subagent_scope(
+                    requested_tool_whitelist=tool_whitelist,
+                    specialist_allowed_tool_ids=allowed_tool_ids,
+                    specialist_builtin_names={tool.name for tool in builtin_tools},
+                    specialist_allowed_composition_ids=allowed_composition_ids,
+                    workspace_root=workspace_root,
+                )
+                result = self._delegation.run_sync_ephemeral_subagent(
                     parent_session_id=parent_session_id,
                     task=task,
                     execution_context=execution_context,
                     tool_whitelist=tool_whitelist,
+                    workspace_root=workspace_root,
+                    effective_scope=effective_scope,
+                )
+                child_id = str(result.get("subagent_id") or "").strip()
+                if child_id:
+                    scope_by_subagent_id[child_id] = effective_scope
+                return result
+
+            def _specialist_continue_callback(
+                *,
+                parent_session_id: str,
+                subagent_id: str,
+                instruction: str = "",
+                extra_iterations: int = 20,
+            ) -> dict:
+                scope = scope_by_subagent_id.get(subagent_id, SCOPE_SNAPSHOT_MISSING)
+                if scope is SCOPE_SNAPSHOT_MISSING:
+                    return {
+                        "success": False,
+                        "error": (
+                            "未找到该隔离子代理的权限快照；V1 只支持同一次专员运行内续跑，"
+                            "请用 ask_parent 升级处理。"
+                        ),
+                        "subagent_id": subagent_id,
+                    }
+                if not isinstance(scope, EffectiveSubagentScope):
+                    return {
+                        "success": False,
+                        "error": "隔离子代理权限快照无效，请用 ask_parent 升级处理。",
+                        "subagent_id": subagent_id,
+                    }
+                return self._delegation.continue_subagent(
+                    parent_session_id=parent_session_id,
+                    subagent_id=subagent_id,
+                    instruction=instruction,
+                    extra_iterations=extra_iterations,
+                    effective_scope=scope,
                 )
 
             specialist_subagent_tools = [
                 ToolDefinition(
                     name="delegate_to_subagent",
-                    schema=DELEGATE_TO_SUBAGENT_SCHEMA,
+                    schema=specialist_delegate_schema,
                     handler=create_delegate_to_subagent_handler(
                         executor_id or "",
                         dispatch_callback=_specialist_subagent_callback,
                     ),
-                )
+                ),
+                ToolDefinition(
+                    name="continue_subagent",
+                    schema=specialist_continue_schema,
+                    handler=create_continue_subagent_handler(
+                        executor_id or "",
+                        continue_callback=_specialist_continue_callback,
+                    ),
+                ),
+                ToolDefinition(
+                    name="inspect_subagent",
+                    schema=specialist_inspect_schema,
+                    handler=create_inspect_subagent_handler(
+                        executor_id or "",
+                        inspect_callback=self._delegation.inspect_subagent,
+                    ),
+                    has_side_effects=False,
+                ),
             ]
 
         # 024: planner 角色分支——规划专员只拿规划工具，不拿执行器工具
@@ -622,6 +736,7 @@ class ToolRegistry:
                 session_id,
                 inspect_callback=self._delegation.inspect_subagent,
             ),
+            has_side_effects=False,
         )
         delegate_to_specialist_tool = ToolDefinition(
             name="delegate_to_specialist",

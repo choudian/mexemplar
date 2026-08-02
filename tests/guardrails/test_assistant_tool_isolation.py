@@ -57,6 +57,12 @@ class TestAssistantToolIsolation:
         missing = _ASSISTANT_DISCOVERY_TOOLS - names
         assert not missing, f"主助理该保留能力目录发现工具,却缺失:{missing}"
 
+    def test_assistant_inspect_subagent_is_read_only(self, in_memory_db, orchestrator):
+        tools = orchestrator._build_assistant_tools(generate_id("assistant"))()
+        inspect_tool = next(tool for tool in tools if tool.name == "inspect_subagent")
+        assert inspect_tool.has_side_effects is False
+        assert inspect_tool.is_concurrency_safe is False
+
     def test_executor_still_includes_side_effect_tools(self, in_memory_db, orchestrator):
         """delegated executor 仍含全量 builtin 工具——防主助理隔离误伤执行层。"""
         factory = orchestrator._build_delegated_executor_tools(

@@ -5,6 +5,11 @@ from typing import Any
 
 from src.business.agents.config import AgentType
 from src.business.brain.specialist_service import parse_composition_ids, parse_tool_whitelist
+from src.business.orchestration.agent.subagent_scope import (
+    EffectiveSubagentScope,
+    ScopeCaptureState,
+    resolve_effective_builtin_names,
+)
 from src.business.services.skill_composition.builtin_compositions import (
     EXTERNAL_CODING_COMPOSITION_ID,
 )
@@ -75,6 +80,8 @@ class DelegationOrchestrator:
         task: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        workspace_root: str | None = None,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict:
         """同步起一个临时子代理并返回结果（上下文隔离助手）。
 
@@ -87,6 +94,8 @@ class DelegationOrchestrator:
             task=task,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
+            workspace_root=workspace_root,
+            effective_scope=effective_scope,
         )
         result["delegation_type"] = "ephemeral_subagent"
         result["task_description"] = task
@@ -101,27 +110,37 @@ class DelegationOrchestrator:
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
         workspace_root: str | None = None,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict:
         """临时子代理的纯执行核心：resolve tools → build prompt → create session →
         ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``（统一任务派发的
         异步执行器）共用此方法，避免两处复制 session/prompt 构建逻辑。
         """
-        allowed_tool_ids = self._owner._resolve_user_tool_ids(
-            parent_session_id=parent_session_id,
-            tool_whitelist=tool_whitelist,
-        )
-        # 从父会话解析 composition_ids，传递给执行体以保持组合授权限制
-        allowed_composition_ids: set[str] | None = None
-        try:
-            parent_session = self._owner._session_store.get_session(parent_session_id)
-            if parent_session is not None:
-                _, allowed_composition_ids = parent_session.parse_tool_ids()
-        except Exception:
-            logger.debug(
-                "composition_ids resolution skipped for parent=%s",
-                parent_session_id,
-                exc_info=True,
+        allowed_builtin_tool_names: set[str] | None = None
+        if effective_scope is not None:
+            # 专员嵌套子代理在首次 launch 前已物化有效权限；这里消费同一个不可变对象，
+            # 不再从 parent session 或模型原始 whitelist 二次推导。
+            allowed_tool_ids = set(effective_scope.dynamic_tool_ids)
+            allowed_composition_ids: set[str] | None = set(effective_scope.composition_ids)
+            allowed_builtin_tool_names = set(effective_scope.builtin_names)
+            workspace_root = effective_scope.workspace_root
+        else:
+            allowed_tool_ids = self._owner._resolve_user_tool_ids(
+                parent_session_id=parent_session_id,
+                tool_whitelist=tool_whitelist,
             )
+            # 从父会话解析 composition_ids，传递给执行体以保持组合授权限制
+            allowed_composition_ids = None
+            try:
+                parent_session = self._owner._session_store.get_session(parent_session_id)
+                if parent_session is not None:
+                    _, allowed_composition_ids = parent_session.parse_tool_ids()
+            except Exception:
+                logger.debug(
+                    "composition_ids resolution skipped for parent=%s",
+                    parent_session_id,
+                    exc_info=True,
+                )
         capability_catalog_section = self._owner._prompt_builder.format_capability_catalog(
             allowed_tool_ids,
             allowed_composition_ids=allowed_composition_ids,
@@ -150,6 +169,7 @@ class DelegationOrchestrator:
             current_task_id=current_task_id,
             workspace_root=workspace_root,
             allowed_composition_ids=allowed_composition_ids,
+            allowed_builtin_tool_names=allowed_builtin_tool_names,
         )
         if result.get("success"):
             self._owner._record_delegation_signal(
@@ -158,6 +178,57 @@ class DelegationOrchestrator:
                 result_text=str(result.get("result_text") or ""),
             )
         return result
+
+    def prepare_specialist_subagent_scope(
+        self,
+        *,
+        requested_tool_whitelist: list[str] | None,
+        specialist_allowed_tool_ids: set[str] | None,
+        specialist_builtin_names: set[str],
+        specialist_allowed_composition_ids: set[str] | None,
+        workspace_root: str | None,
+    ) -> EffectiveSubagentScope:
+        """Capture one concrete, non-expanding authority object before first launch."""
+
+        from src.business.agents.tools.builtin_general_tools import BUILTIN_GENERAL_TOOLS
+
+        dynamic_tool_ids = self._owner._resolve_tool_ids_with_upper_bound(
+            tool_whitelist=requested_tool_whitelist,
+            upper_bound_ids=specialist_allowed_tool_ids,
+            materialize_snapshot=True,
+        )
+        if requested_tool_whitelist is None:
+            requested_composition_ids = specialist_allowed_composition_ids
+        else:
+            requested_identifiers = {
+                item.strip()
+                for item in requested_tool_whitelist
+                if isinstance(item, str) and item.strip()
+            }
+            requested_composition_ids = (
+                requested_identifiers
+                if specialist_allowed_composition_ids is None
+                else requested_identifiers.intersection(specialist_allowed_composition_ids)
+            )
+        composition_ids = self._owner._resolve_available_composition_ids(requested_composition_ids)
+        unrestricted_at_capture = (
+            specialist_allowed_tool_ids is None and requested_tool_whitelist is None
+        ) or (specialist_allowed_composition_ids is None and requested_tool_whitelist is None)
+        return EffectiveSubagentScope(
+            dynamic_tool_ids=frozenset(dynamic_tool_ids or set()),
+            builtin_names=resolve_effective_builtin_names(
+                requested_tool_whitelist=requested_tool_whitelist,
+                specialist_builtin_names=specialist_builtin_names,
+                all_builtin_names={tool.name for tool in BUILTIN_GENERAL_TOOLS},
+            ),
+            composition_ids=frozenset(composition_ids),
+            workspace_root=workspace_root,
+            capture_state=(
+                ScopeCaptureState.UNRESTRICTED_AT_CAPTURE
+                if unrestricted_at_capture
+                else ScopeCaptureState.BOUNDED
+            ),
+        )
 
     def delegate_to_specialist(
         self,
@@ -233,6 +304,7 @@ class DelegationOrchestrator:
         instruction: str = "",
         extra_iterations: int = 20,
         workspace_root: str | None = None,
+        effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict:
         return self._owner._continue_subagent(
             parent_session_id=parent_session_id,
@@ -240,6 +312,7 @@ class DelegationOrchestrator:
             instruction=instruction,
             extra_iterations=extra_iterations,
             workspace_root=workspace_root,
+            effective_scope=effective_scope,
         )
 
     def inspect_subagent(self, *, parent_session_id: str, subagent_id: str) -> dict:
