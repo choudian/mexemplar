@@ -31,7 +31,7 @@ from src.data.repos.base_repository import generate_id
 from src.utils.events import emit
 
 # FR-023：委派拓扑结构上封顶为"枢纽单层 + 一级延伸"——根任务(深度 0) → 一级被委派者(1)
-# → 专员的至多一个临时子代理(2)。深度 2 的任务不得再有子任务，结构上杜绝无限/循环委派。
+# → 专员的临时子代理(2)。深度 2 的任务不得再有子任务，结构上杜绝无限/循环委派。
 _MAX_DELEGATION_DEPTH = 2
 _PENDING_REVIEW_EXPLANATION = "等待上级检查结果"
 
@@ -47,6 +47,7 @@ def _task_explanation(task, *, has_pending_adjudication: bool) -> str:
     if task.suspend_reason == SuspendReason.BLOCKED_BY_DEFECT:
         return _DEFECT_EXPLANATION
     return ""
+
 
 _COUNTERS: Counter[str] = Counter()
 _COUNTER_LOCK = Lock()

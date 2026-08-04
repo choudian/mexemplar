@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
-from src.business.agents.config import AgentType, ResultType, ToolSignal
+import pytest
+
+from src.business.agents.agent_loop import AgentLoop
+from src.business.agents.config import AgentConfig, AgentType, ResultType, ToolSignal
 from src.business.agents.tools.assistant_tools import (
     CONTINUE_SUBAGENT_SCHEMA,
     DELEGATE_TO_SUBAGENT_SCHEMA,
@@ -17,7 +22,9 @@ from src.business.orchestration.agent.subagent_scope import (
     ScopeCaptureState,
 )
 from src.business.orchestration.agent.tool_registry import ToolRegistry
+from src.business.ai.llm_client import ToolCallInfo
 from src.data.repos import AssistantTaskRepository, AssistantTodoRepository
+from tests.conftest import MockLLMClient
 
 
 def _tool_registry(*, run_sync_ephemeral_subagent=None, delegation=None) -> ToolRegistry:
@@ -69,8 +76,163 @@ def test_specialist_gets_continue_and_inspect_bound_to_executor_session() -> Non
     )
 
 
-def test_specialist_gets_single_use_delegate_to_subagent() -> None:
-    # FR-019：专员可起"至多一个"临时子代理用于隔离上下文
+def test_specialist_child_launch_tools_are_serial_side_effects() -> None:
+    registry = _tool_registry()
+    tools = {
+        tool.name: tool
+        for tool in registry.build_delegated_executor_tools(
+            {"tool-a"},
+            agent_type=AgentType.SPECIALIST,
+            executor_id="spec-session",
+            specialist_id="spec-1",
+        )()
+    }
+
+    for name in ("delegate_to_subagent", "continue_subagent"):
+        assert tools[name].has_side_effects is True
+        assert tools[name].is_concurrency_safe is False
+
+
+@pytest.mark.parametrize(
+    "tool_names",
+    [
+        pytest.param(
+            ("delegate_to_subagent", "delegate_to_subagent"),
+            id="delegate-delegate",
+        ),
+        pytest.param(
+            ("continue_subagent", "continue_subagent"),
+            id="continue-continue",
+        ),
+        pytest.param(
+            ("delegate_to_subagent", "continue_subagent"),
+            id="delegate-continue",
+        ),
+    ],
+)
+def test_specialist_child_launch_calls_do_not_overlap_in_one_tool_batch(
+    tool_names: tuple[str, str],
+    mock_config,
+    in_memory_db,
+) -> None:
+    delegation = MagicMock()
+    scope = EffectiveSubagentScope(
+        dynamic_tool_ids=frozenset({"tool-a"}),
+        builtin_names=frozenset(),
+        composition_ids=frozenset(),
+        workspace_root=None,
+    )
+    delegation.prepare_specialist_subagent_scope.return_value = scope
+    setup_child_ids = iter(("paused-child-a", "paused-child-b"))
+    delegation.run_sync_ephemeral_subagent.side_effect = lambda **_kwargs: {
+        "success": False,
+        "paused": True,
+        "subagent_id": next(setup_child_ids),
+    }
+    registry = _tool_registry(delegation=delegation)
+    tools = {
+        tool.name: tool
+        for tool in registry.build_delegated_executor_tools(
+            {"tool-a"},
+            agent_type=AgentType.SPECIALIST,
+            executor_id="spec-session",
+            specialist_id="spec-1",
+        )()
+    }
+
+    continue_child_ids: list[str] = []
+    for index in range(tool_names.count("continue_subagent")):
+        paused = json.loads(
+            tools["delegate_to_subagent"].handler(
+                task_description=f"setup paused child {index + 1}"
+            )
+        )
+        continue_child_ids.append(paused["subagent_id"])
+
+    lock = threading.Lock()
+    active = 0
+    max_active = 0
+    observed_calls = 0
+
+    def observe(result_factory):
+        def run(**kwargs):
+            nonlocal active, max_active, observed_calls
+            with lock:
+                active += 1
+                observed_calls += 1
+                call_index = observed_calls
+                max_active = max(max_active, active)
+            time.sleep(0.05)
+            result = result_factory(kwargs, call_index)
+            with lock:
+                active -= 1
+            return result
+
+        return run
+
+    delegation.run_sync_ephemeral_subagent.side_effect = observe(
+        lambda _kwargs, index: {
+            "success": True,
+            "subagent_id": f"new-child-{index}",
+        }
+    )
+    delegation.continue_subagent.side_effect = observe(
+        lambda kwargs, _index: {
+            "success": True,
+            "subagent_id": kwargs["subagent_id"],
+        }
+    )
+
+    continue_ids = iter(continue_child_ids)
+    calls = []
+    for index, name in enumerate(tool_names, start=1):
+        args = (
+            {"task_description": f"batch child {index}"}
+            if name == "delegate_to_subagent"
+            else {"subagent_id": next(continue_ids)}
+        )
+        calls.append(ToolCallInfo(id=f"call-{index}", name=name, args=args))
+
+    class RecordingContext:
+        session_id = "spec-session"
+
+        def __init__(self) -> None:
+            self.results: list[dict[str, str]] = []
+
+        def save_tool_result(self, *, tool_call_id: str, tool_name: str, content: str) -> None:
+            self.results.append(
+                {
+                    "tool_call_id": tool_call_id,
+                    "tool_name": tool_name,
+                    "content": content,
+                }
+            )
+
+    context = RecordingContext()
+    loop = AgentLoop(
+        AgentConfig(
+            agent_type=AgentType.SPECIALIST,
+            system_prompt="specialist child launch serialization test",
+        ),
+        MockLLMClient([]),
+        mock_config,
+    )
+    loop._current_tool_defs = {name: tools[name] for name in tool_names}
+
+    result = loop._execute_tool_batch(
+        calls,
+        context,
+        session_id=context.session_id,
+        iteration=1,
+    )
+
+    assert result is None
+    assert observed_calls == 2
+    assert max_active == 1
+    assert len(context.results) == 2
+
+
+def test_specialist_can_delegate_again_after_child_completes() -> None:
     run_sync = MagicMock(
         return_value={
             "success": True,
@@ -95,8 +257,71 @@ def test_specialist_gets_single_use_delegate_to_subagent() -> None:
     second = json.loads(handler(task_description="再起一个"))
 
     assert first["success"] is True
-    assert second["success"] is False  # 至多一个：第二次被单实例门卫拒
-    assert run_sync.call_count == 1
+    assert second["success"] is True
+    assert run_sync.call_count == 2
+
+
+def test_specialist_prompt_allows_sequential_children_but_states_runtime_slot() -> None:
+    prompt = AgentOrchestrator._build_specialist_prompt(
+        SimpleNamespace(
+            specialist_id="spec-1",
+            name="资料专员",
+            description="整理资料",
+            role_definition="按要求完成资料工作",
+            role_kind="executor",
+        ),
+        [],
+        equipped_skills=[],
+    )
+
+    assert "至多只能起一个" not in prompt
+    assert "同一次专员运行内" in prompt
+    assert "同时只会有一个" in prompt
+    assert "可以先后起多个" in prompt
+    assert "不能再向下委派或找平级" in prompt
+
+
+def test_specialist_can_delegate_again_while_previous_child_is_paused() -> None:
+    delegation = MagicMock()
+    delegation.prepare_specialist_subagent_scope.return_value = EffectiveSubagentScope(
+        dynamic_tool_ids=frozenset({"tool-a"}),
+        builtin_names=frozenset(),
+        composition_ids=frozenset(),
+        workspace_root=None,
+    )
+    delegation.run_sync_ephemeral_subagent.side_effect = [
+        {
+            "success": False,
+            "paused": True,
+            "subagent_id": "child-a",
+        },
+        {
+            "success": True,
+            "result_text": "第二份干净结果",
+            "subagent_id": "child-b",
+        },
+    ]
+    registry = _tool_registry(delegation=delegation)
+    tools = {
+        tool.name: tool
+        for tool in registry.build_delegated_executor_tools(
+            {"tool-a"},
+            agent_type=AgentType.SPECIALIST,
+            executor_id="spec-session",
+            specialist_id="spec-1",
+        )()
+    }
+
+    paused = json.loads(
+        tools["delegate_to_subagent"].handler(task_description="先处理会暂停的任务")
+    )
+    next_child = json.loads(
+        tools["delegate_to_subagent"].handler(task_description="再处理无关任务")
+    )
+
+    assert paused["paused"] is True
+    assert next_child["success"] is True
+    assert delegation.run_sync_ephemeral_subagent.call_count == 2
 
 
 def test_specialist_continuation_reuses_scope_bound_to_child_id() -> None:
@@ -174,8 +399,86 @@ def test_specialist_continuation_reuses_scope_bound_to_child_id() -> None:
     assert delegation.continue_subagent.call_count == 1
 
     second_delegate = json.loads(tools["delegate_to_subagent"].handler(task_description="再起一个"))
-    assert second_delegate["success"] is False
-    assert delegation.run_sync_ephemeral_subagent.call_count == 1
+    assert second_delegate["paused"] is True
+    assert delegation.run_sync_ephemeral_subagent.call_count == 2
+
+
+def test_specialist_continuation_keeps_scope_for_each_paused_child() -> None:
+    delegation = MagicMock()
+    scope_a = EffectiveSubagentScope(
+        dynamic_tool_ids=frozenset({"tool-a"}),
+        builtin_names=frozenset(),
+        composition_ids=frozenset(),
+        workspace_root="E:/isolated-worktree",
+    )
+    scope_b = EffectiveSubagentScope(
+        dynamic_tool_ids=frozenset({"tool-b"}),
+        builtin_names=frozenset(),
+        composition_ids=frozenset(),
+        workspace_root="E:/isolated-worktree",
+    )
+    delegation.prepare_specialist_subagent_scope.side_effect = [scope_a, scope_b]
+    delegation.run_sync_ephemeral_subagent.side_effect = [
+        {
+            "success": False,
+            "paused": True,
+            "subagent_id": "child-a",
+        },
+        {
+            "success": False,
+            "paused": True,
+            "subagent_id": "child-b",
+        },
+    ]
+    delegation.continue_subagent.side_effect = lambda **kwargs: {
+        "success": True,
+        "subagent_id": kwargs["subagent_id"],
+    }
+    registry = _tool_registry(delegation=delegation)
+    tools = {
+        tool.name: tool
+        for tool in registry.build_delegated_executor_tools(
+            {"tool-a", "tool-b"},
+            agent_type=AgentType.SPECIALIST,
+            executor_id="spec-session",
+            specialist_id="spec-1",
+            workspace_root="E:/isolated-worktree",
+        )()
+    }
+
+    paused_a = json.loads(
+        tools["delegate_to_subagent"].handler(
+            task_description="任务 A",
+            tool_whitelist=["tool-a"],
+        )
+    )
+    paused_b = json.loads(
+        tools["delegate_to_subagent"].handler(
+            task_description="任务 B",
+            tool_whitelist=["tool-b"],
+        )
+    )
+    resumed_a = json.loads(tools["continue_subagent"].handler(subagent_id=paused_a["subagent_id"]))
+    resumed_b = json.loads(tools["continue_subagent"].handler(subagent_id=paused_b["subagent_id"]))
+
+    assert resumed_a["subagent_id"] == "child-a"
+    assert resumed_b["subagent_id"] == "child-b"
+    assert delegation.continue_subagent.call_args_list == [
+        call(
+            parent_session_id="spec-session",
+            subagent_id="child-a",
+            instruction="",
+            extra_iterations=20,
+            effective_scope=scope_a,
+        ),
+        call(
+            parent_session_id="spec-session",
+            subagent_id="child-b",
+            instruction="",
+            extra_iterations=20,
+            effective_scope=scope_b,
+        ),
+    ]
 
 
 def test_specialist_control_schemas_are_deep_copies() -> None:

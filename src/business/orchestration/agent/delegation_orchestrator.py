@@ -85,9 +85,10 @@ class DelegationOrchestrator:
     ) -> dict:
         """同步起一个临时子代理并返回结果（上下文隔离助手）。
 
-        主助理委派的临时子代理走此同步路径；专员的"至多一个"上下文隔离子代理（FR-019）
-        也复用它。临时子代理领到的工具集（``_build_delegated_executor_tools`` 的
-        ephemeral 分支）不含 ``delegate_to_subagent``，因此结构上不能再向下委派或找平级。
+        主助理委派的临时子代理走此同步路径；专员的上下文隔离子代理也复用它。同一次
+        专员运行内的 child 启动调用由同步 handler 与 AgentLoop 工具串行分区保证不重叠，
+        但可以先后启动多个。临时子代理领到的工具集（``_build_delegated_executor_tools``
+        的 ephemeral 分支）不含 ``delegate_to_subagent``，因此结构上不能再向下委派或找平级。
         """
         result = self.run_ephemeral_via_delegated_executor(
             parent_session_id=parent_session_id,

@@ -1780,8 +1780,8 @@ class AgentOrchestrator:
             f"{capability_section}\n"
             "你只能处理主助理委派的任务；完成后直接输出最终结果。\n"
             "如需把会产生大量噪音的子工作（如批量读取、嘈杂检索）隔离出去，可用 "
-            "delegate_to_subagent 起一个临时子代理代办、只取其干净结果——这种临时子代理"
-            "至多只能起一个，且它不能再向下委派或找平级。"
+            "delegate_to_subagent 起临时子代理代办、只取其干净结果。系统保证同一次专员运行内"
+            "同时只会有一个临时子代理在跑；需要时可以先后起多个。临时子代理不能再向下委派或找平级。"
             f"{equipment_section}"
             f"{specialists_section}"
         )

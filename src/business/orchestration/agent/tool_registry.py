@@ -383,7 +383,6 @@ class ToolRegistry:
 
         specialist_subagent_tools: list[ToolDefinition] = []
         if agent_type == AgentType.SPECIALIST:
-            spawned_state = {"used": False}
             scope_by_subagent_id: dict[str, EffectiveSubagentScope] = {}
 
             specialist_continue_schema = copy.deepcopy(CONTINUE_SUBAGENT_SCHEMA)
@@ -426,13 +425,6 @@ class ToolRegistry:
                         "message": "task_description must not be empty",
                         "delegation_type": "ephemeral_subagent",
                     }
-                if spawned_state["used"]:
-                    return {
-                        "success": False,
-                        "message": "专员至多只能起一个临时子代理用于隔离上下文，本次已用尽。",
-                        "delegation_type": "ephemeral_subagent",
-                    }
-                spawned_state["used"] = True
                 effective_scope = self._delegation.prepare_specialist_subagent_scope(
                     requested_tool_whitelist=tool_whitelist,
                     specialist_allowed_tool_ids=allowed_tool_ids,
@@ -492,6 +484,8 @@ class ToolRegistry:
                         executor_id or "",
                         dispatch_callback=_specialist_subagent_callback,
                     ),
+                    has_side_effects=True,
+                    is_concurrency_safe=False,
                 ),
                 ToolDefinition(
                     name="continue_subagent",
@@ -500,6 +494,8 @@ class ToolRegistry:
                         executor_id or "",
                         continue_callback=_specialist_continue_callback,
                     ),
+                    has_side_effects=True,
+                    is_concurrency_safe=False,
                 ),
                 ToolDefinition(
                     name="inspect_subagent",
