@@ -92,9 +92,17 @@ Thumbs.db
 *.pyo
 *.pyd
 
+# PyInstaller 自动生成的 sidecar spec（build_executable.py 用 --name 调 PyInstaller，
+# 不传 spec 文件，于是每次构建都在仓库根重新生成一份）。
+# 注意只忽略这一个：build_exe.spec 是手写的、build.bat 依赖它，必须保持 tracked。
+/mexamplar-sidecar.spec
+
 # Claude Code temporary files
 tmpclaude-*
 .claude/
+
+# ZCode CLI temporary files（plans 等本地工作目录）
+.zcode/
 
 # Sensitive information
 *.env
