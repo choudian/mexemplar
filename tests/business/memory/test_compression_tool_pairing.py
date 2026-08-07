@@ -269,8 +269,7 @@ class TestCompressPersistence:
         config.get_memory_compression_trigger_strategy.return_value = "count"
         config.get_memory_compression_count_threshold.return_value = 2
         config.get_memory_reference_size_threshold.return_value = 10000
-        handler = CompressionHandler(config)
-        handler._llm_client = _FakeCompressionLLM()
+        handler = CompressionHandler(config, llm_client=_FakeCompressionLLM())
         repo = MessageRepository()
 
         handler.compress(session_id, repo.get_context(session_id), repo)

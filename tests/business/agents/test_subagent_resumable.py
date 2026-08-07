@@ -323,7 +323,7 @@ class TestInspectSubagent:
         assert res["tool_call_counts"]["noop"] == 2
         assert res["status"] == "suspended"
         assert res["last_output"] == "进展中"
-        orch._llm.chat_with_tools.assert_not_called()
+        orch._llm_override.chat_with_tools.assert_not_called()
 
     def test_inspect_flags_repeated_calls_when_spinning(self, orch):
         """同一工具用几乎相同的参数反复调用 → repeated_calls 标出该工具及重复次数。"""
@@ -503,7 +503,7 @@ class TestContinueSubagent:
         assert res["success"] is False
         assert res["result_type"] == ResultType.NEEDS_USER_INPUT.value
         assert "instruction" in res["message"]
-        orch._llm.chat_with_tools.assert_not_called()
+        orch._llm_override.chat_with_tools.assert_not_called()
 
     def test_continue_rejects_foreign_session(self, orch):
         foreign = _make_child_subagent(orch, "other-parent-ZZZ")

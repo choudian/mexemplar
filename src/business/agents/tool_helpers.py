@@ -8,7 +8,6 @@
 """
 
 import json
-import threading
 from typing import Any
 
 from src.business.agents.config import ResultType, ToolSignal
@@ -98,8 +97,10 @@ __all__ = [
 # 多模态 LLM 客户端共享工厂
 # =============================================================================
 
-_vision_client_cache: dict[tuple, Any] = {}
-_vision_client_lock = threading.Lock()
+# 注：原先这里有一个模块级 ``_vision_client_cache`` 字典做双检锁复用，但它没有
+# 失效机制——改了 vision 配置后旧 entry 仍被命中，导致连接方式不更新。改为每次
+# 基于最新配置现组装，使配置变更在下一次多模态调用立即生效。vision 调用低频，
+# 多一次 provider 构造的代价可接受。
 
 
 def get_vision_llm_client(model: str | None = None) -> Any:
@@ -107,32 +108,15 @@ def get_vision_llm_client(model: str | None = None) -> Any:
     from src.data.unified_config import get_unified_config
 
     config = get_unified_config()
-    provider = config.get_ai_vision_provider()
-    resolved_model = model or config.get_ai_vision_model()
-    api_key = config.get_ai_vision_api_key()
-    base_url = config.get_ai_vision_base_url()
-    temperature = config.get_ai_temperature()
-    key = (provider, resolved_model, api_key, base_url, temperature)
-
-    client = _vision_client_cache.get(key)
-    if client is not None:
-        return client
-
-    with _vision_client_lock:
-        client = _vision_client_cache.get(key)
-        if client is not None:
-            return client
-        client = LangChainLLMClient(
-            provider=provider,
-            model=resolved_model,
-            api_key=api_key,
-            base_url=base_url,
-            temperature=temperature,
-            max_tokens=1024,
-            timeout=config.get_ai_request_timeout(),
-        )
-        _vision_client_cache[key] = client
-        return client
+    return LangChainLLMClient(
+        provider=config.get_ai_vision_provider(),
+        model=model or config.get_ai_vision_model(),
+        api_key=config.get_ai_vision_api_key(),
+        base_url=config.get_ai_vision_base_url(),
+        temperature=config.get_ai_temperature(),
+        max_tokens=1024,
+        timeout=config.get_ai_request_timeout(),
+    )
 
 
 def invoke_vision_model(content: list[dict[str, Any]], model: str | None = None) -> str:

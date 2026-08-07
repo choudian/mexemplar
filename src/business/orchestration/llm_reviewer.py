@@ -6,6 +6,7 @@ LLM 代码质量 Reviewer
 
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from src.business.ai.llm_client import LangChainLLMClient
 from src.business.debug.context import TraceContext
@@ -68,20 +69,30 @@ class ReviewResult:
 class LLMReviewer:
     """LLM 代码质量审查器"""
 
-    def __init__(self, llm_client: LangChainLLMClient):
+    def __init__(self, llm_client: Optional[LangChainLLMClient] = None):
+        # ``_llm`` 保留为可选注入（测试 / 老构造路径），生产路径改由 ``review()``
+        # 每次接收调用方现组装的 client，使配置变更后下一次 review 立即生效。
         self._llm = llm_client
 
-    def review(self, code: str, requirement: dict) -> ReviewResult:
+    def review(
+        self,
+        code: str,
+        requirement: dict,
+        llm_client: Optional[LangChainLLMClient] = None,
+    ) -> ReviewResult:
         """
         审查代码质量
 
         Args:
             code: 待审查的 Python 代码
             requirement: 需求上下文，含 description 和 parameters 字段
+            llm_client: 本次审查使用的 LLM 客户端。调用方应传入基于最新配置现组装
+                的实例，以使配置变更热生效；未传时回退到 ``__init__`` 注入的 client。
 
         Returns:
             ReviewResult（passed + feedback）
         """
+        client = llm_client or self._llm
         try:
             prompt = safe_format_template(
                 REVIEW_PROMPT_TEMPLATE,
@@ -96,7 +107,7 @@ class LLMReviewer:
                     requirement.get("workflow_id") or requirement.get("recording_id") or ""
                 ),
             ):
-                response = self._llm.chat(prompt)
+                response = client.chat(prompt)
             return self._parse_result(response)
         except Exception as e:
             logger.error(f"[LLMReviewer] Review 调用失败: {e}")

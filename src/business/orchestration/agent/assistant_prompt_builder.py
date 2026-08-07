@@ -14,15 +14,18 @@ from src.utils.helpers import safe_format_template
 class AssistantPromptBuilder:
     def __init__(
         self,
-        llm_client,
-        session_store,
-        tool_repo,
-        composition_catalog,
+        llm_client=None,
+        session_store=None,
+        tool_repo=None,
+        composition_catalog=None,
         *,
         profile_repo=None,
         logger: Optional[logging.Logger] = None,
     ) -> None:
-        self._llm = llm_client
+        # ``llm_client`` 参数仅为向后兼容（测试构造时仍传入）保留；其原先唯一的
+        # 下游是 ``AssistantMemoryManager._llm``，而该字段在 memory manager 内
+        # 从不被实际调用（``get_global_summary()`` 只读 SQLite）。故不再保存，
+        # 促使每次走 FTS-only 降级路径，也避免在此处冻结一个永生 client。
         self._session_store = session_store
         self._tool_repo = tool_repo
         self._composition_catalog = composition_catalog
@@ -69,7 +72,7 @@ class AssistantPromptBuilder:
             try:
                 from src.business.memory.assistant_memory import get_memory_manager
 
-                memory_manager = get_memory_manager(llm_client=self._llm)
+                memory_manager = get_memory_manager()
                 memory_summary = memory_manager.get_global_summary()
             except Exception as exc:
                 self._logger.warning(f"[Orchestrator] 获取全局摘要失败: {exc}")

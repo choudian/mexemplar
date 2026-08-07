@@ -3,7 +3,7 @@
   "description": "Static model/provider invocation inventory for trace observation and real-tour credential coverage. Every supported .invoke(, embed_query(, LangChainLLMClient(, OpenAIEmbeddings(, or runtime credential getter callsite must be registered here.",
   "entries": [
     {
-      "callsite": "src/desktop_api/orchestrator_runtime.py::LangChainLLMClient",
+      "callsite": "src/business/orchestration/agent/orchestrator.py::LangChainLLMClient",
       "category": "main_llm_client_construction",
       "trace_handling": "LangChainLLMClient routes provider calls through observation_boundary",
       "real_tour_provider_handling": "unified_config_credential_used_in_real_tour_runtime",
@@ -13,7 +13,7 @@
       "verification_status": "covered"
     },
     {
-      "callsite": "src/desktop_api/orchestrator_runtime.py::get_ai_api_key",
+      "callsite": "src/business/orchestration/agent/orchestrator.py::get_ai_api_key",
       "category": "main_llm_credential_read",
       "trace_handling": "credential value is never emitted as a trace record",
       "real_tour_provider_handling": "unified_config_credential_used_in_real_tour_runtime",

@@ -321,7 +321,9 @@ class TeachingOrchestrator:
         }
         retry_count = self._owner._review_counts.get(workflow_id, 0)
         try:
-            review_result = self._owner._llm_reviewer.review(code, requirement)
+            review_result = self._owner._llm_reviewer.review(
+                code, requirement, llm_client=self._owner._make_llm()
+            )
         except Exception as exc:
             logger.error("LLM review failed for workflow %s: %s", workflow_id, exc, exc_info=True)
             self._owner._emit_agent_error(

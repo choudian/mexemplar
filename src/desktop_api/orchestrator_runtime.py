@@ -4,7 +4,6 @@ import logging
 import threading
 from collections.abc import Callable
 
-from src.business.ai.llm_client import LangChainLLMClient
 from src.business.agents.config import AgentType
 from src.business.orchestration.agent import AgentOrchestrator
 from src.data.unified_config import get_unified_config
@@ -15,17 +14,9 @@ logger = logging.getLogger(__name__)
 
 def build_default_orchestrator() -> AgentOrchestrator:
     config = get_unified_config()
-    llm_client = LangChainLLMClient(
-        provider=config.get_ai_provider(),
-        model=config.get_ai_model(),
-        api_key=config.get_ai_api_key(),
-        base_url=config.get_ai_base_url(),
-        temperature=config.get_ai_temperature(),
-        max_tokens=config.get_ai_max_tokens(),
-        thinking_level=config.get_ai_thinking_level(),
-        timeout=config.get_ai_request_timeout(),
-    )
-    return AgentOrchestrator(llm_client=llm_client, config=config)
+    # LLM client 不再在此冻结；AgentOrchestrator 在每个 AgentLoop 边界经
+    # ``_make_llm()`` 基于最新配置现组装，使 AI 配置变更热生效。
+    return AgentOrchestrator(config=config)
 
 
 class DesktopAgentRuntime:

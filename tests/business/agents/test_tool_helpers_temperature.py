@@ -36,14 +36,12 @@ def test_vision_client_uses_temperature_and_rebuilds_when_it_changes(monkeypatch
     config = Config()
     monkeypatch.setattr(unified_config_module, "get_unified_config", lambda: config)
     monkeypatch.setattr(llm_client_module, "LangChainLLMClient", FakeLLM)
-    tool_helpers._vision_client_cache.clear()
 
-    try:
-        first = tool_helpers.get_vision_llm_client()
-        config.temperature = 0.8
-        second = tool_helpers.get_vision_llm_client()
-    finally:
-        tool_helpers._vision_client_cache.clear()
+    # vision client 现在每次基于最新配置现组装（无模块级缓存），故配置变更后
+    # 下一次调用立即拾取新值。
+    first = tool_helpers.get_vision_llm_client()
+    config.temperature = 0.8
+    second = tool_helpers.get_vision_llm_client()
 
     assert first is not second
     assert [client["temperature"] for client in created] == [0.25, 0.8]

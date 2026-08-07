@@ -62,6 +62,9 @@ class BrainBackgroundWorker:
         self._running = False
         self._consecutive_tick_errors = 0
         self._llm_unavailable_logged_jobs: set[str] = set()
+        # tick 级主模型 client 快照，由 _worker_loop 在每个 tick 边界刷新；
+        # 单测直接调 job 方法时保持 None，job 回退到 _get_llm_client() 现取。
+        self._tick_llm_snapshot: Optional[object] = None
 
     def _get_config(self):
         if self._config is None:
@@ -85,8 +88,14 @@ class BrainBackgroundWorker:
         return self._prediction_service
 
     def _get_llm_client(self):
+        # 优先级：测试注入（self._llm_client）> tick 快照 > 基于最新配置现组装。
+        # tick 快照由 _worker_loop 在每个 tick 边界设置，保证同一 tick 内所有
+        # distillation/prediction job 复用同一 client（配置一致 + 不重复构造）；
+        # 跨 tick 由下一轮刷新。单测直接调 job 时不设快照，回退到现组装。
         if self._llm_client is not None:
             return self._llm_client
+        if self._tick_llm_snapshot is not None:
+            return self._tick_llm_snapshot
         try:
             from src.business.ai.llm_client import LangChainLLMClient
             from src.data.real_tour_audit import is_real_tour_runtime
@@ -98,7 +107,7 @@ class BrainBackgroundWorker:
             ):
                 logger.info("Brain worker LLM disabled during real-tour runtime")
                 return None
-            self._llm_client = LangChainLLMClient(
+            return LangChainLLMClient(
                 provider=config.get_ai_provider(),
                 model=config.get_ai_model(),
                 api_key=config.get_ai_api_key(),
@@ -108,7 +117,6 @@ class BrainBackgroundWorker:
                 thinking_level=config.get_ai_thinking_level(),
                 timeout=config.get_ai_request_timeout(),
             )
-            return self._llm_client
         except Exception as exc:
             logger.warning("Brain worker LLM client is unavailable: %s", exc)
             return None
@@ -187,6 +195,10 @@ class BrainBackgroundWorker:
         try:
             while not self._stop_event.is_set():
                 tick_job_errors = 0
+                # tick 边界快照一次主模型 client，供本 tick 内多个 distillation/prediction
+                # job 复用：避免同一 tick 内因配置变更混用不同 provider/model，也避免
+                # 重复构造。跨 tick 由下一轮重新快照以刷新配置。
+                self._tick_llm_snapshot = self._get_llm_client()
                 for job_name, job_fn in zip(_JOBS, _JOB_FNS):
                     if self._stop_event.is_set():
                         break
@@ -231,7 +243,7 @@ class BrainBackgroundWorker:
                     _brain_worker_thread = None
                 self._running = False
 
-    def _process_pending_segments(self):
+    def _process_pending_segments(self, llm_client=None):
         """处理所有 pending segments"""
         try:
             from src.data.repos.brain_repository import BrainRepository
@@ -242,7 +254,8 @@ class BrainBackgroundWorker:
         try:
             distillation = self._get_distillation_service()
             pending = repo.get_pending_segments()
-            llm_client = self._get_llm_client()
+            if llm_client is None:
+                llm_client = self._get_llm_client()
             if llm_client is None:
                 if pending:
                     logger.warning(
@@ -350,9 +363,10 @@ class BrainBackgroundWorker:
         if stats and stats.get("day_layers_created", 0) > 0:
             logger.info("Archive layering: %s", stats)
 
-    def _run_prediction_jobs(self):
+    def _run_prediction_jobs(self, llm_client=None):
         """运行猜测生成和验证周期任务"""
-        llm_client = self._get_llm_client()
+        if llm_client is None:
+            llm_client = self._get_llm_client()
         if llm_client is None:
             self._log_llm_skip_once("prediction jobs")
             return
@@ -386,9 +400,10 @@ class BrainBackgroundWorker:
             detail = "; ".join(f"{type(error).__name__}: {error}" for error in errors)
             raise RuntimeError(f"prediction jobs failed: {detail}") from errors[0]
 
-    def _run_subconscious_distillation(self):
+    def _run_subconscious_distillation(self, llm_client=None):
         """运行潜意识深层沉淀周期任务。"""
-        llm_client = self._get_llm_client()
+        if llm_client is None:
+            llm_client = self._get_llm_client()
         if llm_client is None:
             self._log_llm_skip_once("subconscious distillation")
             return
@@ -497,6 +512,9 @@ class BrainBackgroundWorker:
             logger.error("Proposal generation retry scan failed", exc_info=True)
 
     def _get_execution_review_llm_client(self):
+        # 测试注入路径：构造时传入 mock 时直接返回。生产路径每次基于最新
+        # ``self_improvement.execution_review.model``（回退主 ai 配置）现组装，
+        # 使复盘配置变更在下一批 review 热生效（一批 ≤3 条复用一个 client）。
         if self._execution_review_llm_client is not None:
             return self._execution_review_llm_client
         try:
@@ -520,7 +538,7 @@ class BrainBackgroundWorker:
             max_tokens = int(model_config.get("max_tokens", min(config.get_ai_max_tokens(), 4000)))
             thinking_level = model_config.get("thinking_level") or config.get_ai_thinking_level()
             timeout = model_config.get("timeout", config.get_ai_request_timeout())
-            self._execution_review_llm_client = LangChainLLMClient(
+            return LangChainLLMClient(
                 provider=provider,
                 model=model,
                 api_key=api_key,
@@ -531,7 +549,6 @@ class BrainBackgroundWorker:
                 timeout=timeout,
                 audit_source="execution_review",
             )
-            return self._execution_review_llm_client
         except Exception as exc:
             logger.warning("Execution review LLM client is unavailable: %s", exc)
             return None

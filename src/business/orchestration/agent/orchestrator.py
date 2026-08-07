@@ -92,15 +92,20 @@ class AgentOrchestrator:
 
     def __init__(
         self,
-        llm_client: LangChainLLMClient,
-        config: UnifiedConfigManager,
+        llm_client: Optional[LangChainLLMClient] = None,
+        config: Optional[UnifiedConfigManager] = None,
         llm_reviewer: Optional[LLMReviewer] = None,
         repos: Optional[OrchestratorRepos] = None,
         recording_repo: Optional[RecordingRepository] = None,
     ):
-        self._llm = llm_client
+        # ``llm_client`` 是可选注入覆盖：测试传 mock 时记住以便 AgentLoop 直接用；
+        # 生产路径不传（或传 None），由 ``_make_llm()`` 在每个工作单元边界基于最新
+        # 配置现组装，使 AI 配置变更无需重启 sidecar 即可热生效。
+        # 为向后兼容既有调用（``AgentOrchestrator(mock_llm, mock_config)``），
+        # ``llm_client`` 仍为第一个位置参数；生产构造走 keyword ``config=``。
+        self._llm_override = llm_client
         self._config = config
-        self._llm_reviewer = llm_reviewer or LLMReviewer(llm_client)
+        self._llm_reviewer = llm_reviewer or LLMReviewer()
         self._repos = repos or default_orchestrator_repos()
         self._session_repo = self._repos.session_repo
         self._message_repo = self._repos.message_repo
@@ -145,7 +150,7 @@ class AgentOrchestrator:
             logger=logger,
         )
         self._prompt_builder = AssistantPromptBuilder(
-            self._llm,
+            None,
             self._session_store,
             self._tool_repo,
             self._composition_service,
@@ -156,6 +161,27 @@ class AgentOrchestrator:
         self._delegation_orchestrator = DelegationOrchestrator(self)
         self._tool_registry = self._build_tool_registry()
         self._failure_tracker.connect_signals()
+
+    def _make_llm(self) -> LangChainLLMClient:
+        """基于当前主 ai 配置现组装一个 LLM 客户端（不缓存）。
+
+        每个 AgentLoop 构造时调用一次、整轮复用，使配置（model/api_key/base_url 等）
+        变更在下一个工作单元立即生效。测试注入路径（``__init__`` 传入 mock）会
+        短路返回该 mock，不触发真实组装。
+        """
+        if self._llm_override is not None:
+            return self._llm_override
+        config = self._config
+        return LangChainLLMClient(
+            provider=config.get_ai_provider(),
+            model=config.get_ai_model(),
+            api_key=config.get_ai_api_key(),
+            base_url=config.get_ai_base_url(),
+            temperature=config.get_ai_temperature(),
+            max_tokens=config.get_ai_max_tokens(),
+            thinking_level=config.get_ai_thinking_level(),
+            timeout=config.get_ai_request_timeout(),
+        )
 
     # --- Public sub-component accessors ---
 
@@ -713,8 +739,8 @@ class AgentOrchestrator:
     def _new_task_executor_orchestrator(self) -> "AgentOrchestrator":
         """Create a per-attempt orchestrator so dispatcher workers do not share repo sessions."""
         orchestrator = type(self)(
-            llm_client=self._llm,
             config=self._config,
+            llm_client=self._llm_override,
             llm_reviewer=self._llm_reviewer,
         )
         callback = getattr(self, "_parent_reentry_callback", None)
@@ -1318,7 +1344,7 @@ class AgentOrchestrator:
             resumable_on_failure=True,
             workspace_root=(Path(effective_workspace_root) if effective_workspace_root else None),
         )
-        loop = AgentLoop(config, self._llm, self._config)
+        loop = AgentLoop(config, self._make_llm(), self._config)
         tools = self._build_delegated_executor_tools(
             allowed_tool_ids,
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
@@ -2012,10 +2038,10 @@ class AgentOrchestrator:
     ) -> AgentLoop:
         if agent_type == AgentType.TRIAL:
             config = self._prompt_builder.build_trial_config(workflow_id)
-            return AgentLoop(config, self._llm, self._config)
+            return AgentLoop(config, self._make_llm(), self._config)
 
         if agent_type == AgentType.ASSISTANT:
-            return AgentLoop(ASSISTANT_CONFIG, self._llm, self._config)
+            return AgentLoop(ASSISTANT_CONFIG, self._make_llm(), self._config)
 
         if agent_type == AgentType.EPHEMERAL_SUBAGENT:
             from pathlib import Path
@@ -2029,7 +2055,7 @@ class AgentOrchestrator:
                 resumable_on_failure=True,
                 workspace_root=Path(workspace_root) if workspace_root else None,
             )
-            return AgentLoop(ephemeral_config, self._llm, self._config)
+            return AgentLoop(ephemeral_config, self._make_llm(), self._config)
 
         if agent_type == AgentType.SPECIALIST:
             from pathlib import Path
@@ -2045,15 +2071,15 @@ class AgentOrchestrator:
                 resumable_on_failure=True,
                 workspace_root=Path(workspace_root) if workspace_root else None,
             )
-            return AgentLoop(specialist_config, self._llm, self._config)
+            return AgentLoop(specialist_config, self._make_llm(), self._config)
 
         mode = self._recording_mode(workflow_id)
         if agent_type == AgentType.PM:
             config = replace(PM_CONFIG, system_prompt=build_pm_prompt(mode))
-            return AgentLoop(config, self._llm, self._config)
+            return AgentLoop(config, self._make_llm(), self._config)
         if agent_type == AgentType.PROGRAMMER:
             config = replace(PROGRAMMER_CONFIG, system_prompt=build_programmer_prompt(mode))
-            return AgentLoop(config, self._llm, self._config)
+            return AgentLoop(config, self._make_llm(), self._config)
         raise ValueError(f"[Orchestrator] 未知 Agent 类型: {agent_type}")
 
     def _save_tool(

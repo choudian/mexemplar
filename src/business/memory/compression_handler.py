@@ -209,14 +209,17 @@ class CompressionHandler:
 {messages_text}
 """
 
-    def __init__(self, config: UnifiedConfigManager):
+    def __init__(self, config: UnifiedConfigManager, llm_client=None):
         """
         初始化压缩处理器
 
         Args:
             config: 统一配置管理器
+            llm_client: 可选的测试注入覆盖。生产路径不传，由 ``_get_llm_client()``
+                每次基于最新配置现组装，使压缩配置变更热生效。
         """
         self._config = config
+        self._llm_override = llm_client
         self._trigger = self._create_trigger(config)
         self.keep_recent = config.get_memory_compression_keep_recent()
         # 复用旧 reference_handler 的阈值：同一个"多大算大"的判断，换了执行位置。
@@ -226,7 +229,6 @@ class CompressionHandler:
             config.get_memory_reference_size_threshold(),
             default=_DEFAULT_REFERENCE_SIZE_THRESHOLD,
         )
-        self._llm_client = None  # 懒初始化
 
     def _create_trigger(self, config: UnifiedConfigManager) -> CompressionTrigger:
         """
@@ -258,28 +260,32 @@ class CompressionHandler:
 
     def _get_llm_client(self):
         """
-        懒初始化压缩 LLM 客户端
+        基于当前压缩模型配置现组装 LLM 客户端（不缓存）。
+
+        一次 ``compress()`` 调用取一次、复用于单次请求，使压缩配置变更在下一次
+        压缩热生效。``get_compression_model_provider/_name/_api_key/_base_url``
+        内部直接转发主 ai getter，故主模型配置变更同样立即反映到压缩。
 
         Returns:
             LLM 客户端实例，如果创建失败则返回 None
         """
-        if self._llm_client is None:
-            try:
-                from src.business.ai.llm_client import LangChainLLMClient
+        if self._llm_override is not None:
+            return self._llm_override
+        try:
+            from src.business.ai.llm_client import LangChainLLMClient
 
-                self._llm_client = LangChainLLMClient(
-                    provider=self._config.get_compression_model_provider(),
-                    model=self._config.get_compression_model_name(),
-                    api_key=self._config.get_compression_model_api_key(),
-                    base_url=self._config.get_compression_model_base_url(),
-                    temperature=self._config.get_compression_model_temperature(),
-                    max_tokens=self._config.get_compression_model_max_tokens(),
-                    timeout=self._config.get_ai_request_timeout(),
-                )
-            except Exception as e:
-                logger.error(f"[压缩] 创建 LLM 客户端失败: {e}")
-                self._llm_client = None
-        return self._llm_client
+            return LangChainLLMClient(
+                provider=self._config.get_compression_model_provider(),
+                model=self._config.get_compression_model_name(),
+                api_key=self._config.get_compression_model_api_key(),
+                base_url=self._config.get_compression_model_base_url(),
+                temperature=self._config.get_compression_model_temperature(),
+                max_tokens=self._config.get_compression_model_max_tokens(),
+                timeout=self._config.get_ai_request_timeout(),
+            )
+        except Exception as e:
+            logger.error(f"[压缩] 创建 LLM 客户端失败: {e}")
+            return None
 
     def should_compress(self, messages: List[Message]) -> bool:
         """委托给触发策略判断"""

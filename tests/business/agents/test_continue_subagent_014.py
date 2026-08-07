@@ -34,7 +34,7 @@ def test_continue_suspended_subagent_runs_to_completion(orch, mock_config):
     parent = "parent-cont-014"
     child = _make_child_subagent(orch, parent, status="suspended")
     # 真实 loop + mock LLM：续跑一轮即给最终结果 → 子会话离开 suspended 并完成
-    orch._llm = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
+    orch._llm_override = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
     with (
         patch.object(orch, "_build_delegated_executor_tools", return_value=[]),
         patch.object(orch, "_resolve_user_tool_ids", return_value=set()),
@@ -87,7 +87,7 @@ def test_continue_cancelled_subagent_returns_paused_handle(orch):
 def test_assistant_continue_intent_invokes_continue_subagent_tool(orch, mock_config):
     parent = orch._session_store.create_session("wf-parent-assistant", AgentType.ASSISTANT)
     child = _make_child_subagent(orch, parent, status="suspended")
-    orch._llm = MockLLMClient(
+    orch._llm_override = MockLLMClient(
         [
             LLMResponse(content="续跑完成", tool_calls=[]),
             LLMResponse(content="已继续该子任务。", tool_calls=[]),
@@ -143,7 +143,7 @@ def test_continue_subagent_binds_subagent_id_as_executor_id(orch, mock_config):
     """
     parent = "parent-cont-exec-014"
     child = _make_child_subagent(orch, parent, status="suspended")
-    orch._llm = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
+    orch._llm_override = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
 
     captured: dict = {}
 
@@ -207,7 +207,7 @@ def test_continue_subagent_propagates_workspace_root(orch, mock_config, tmp_path
 
     parent = "parent-cont-ws-026"
     child = _make_child_subagent(orch, parent, status="suspended")
-    orch._llm = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
+    orch._llm_override = MockLLMClient([LLMResponse(content="续跑完成", tool_calls=[])])
     workspace_root = tmp_path / "proposal-worktree"
     workspace_root.mkdir()
 

@@ -56,7 +56,9 @@ class FakeConfig:
 
 
 def test_real_tour_build_default_orchestrator_uses_unified_config(monkeypatch) -> None:
-    from src.desktop_api import orchestrator_runtime
+    # client 构造已从 build_default_orchestrator 下沉到 AgentOrchestrator._make_llm，
+    # 使配置在每个工作单元边界热读。这里验证 credential 仍从统一配置流入 client。
+    from src.business.orchestration.agent import orchestrator as orchestrator_module
 
     captured = {}
 
@@ -64,17 +66,11 @@ def test_real_tour_build_default_orchestrator_uses_unified_config(monkeypatch) -
         def __init__(self, **kwargs):
             captured.update(kwargs)
 
-    class FakeOrchestrator:
-        def __init__(self, *, llm_client, config):
-            self.llm_client = llm_client
-            self.config = config
-
     monkeypatch.setenv("MEXEMPLAR_REAL_GRAND_TOUR", "1")
-    monkeypatch.setattr(orchestrator_runtime, "get_unified_config", lambda: FakeConfig())
-    monkeypatch.setattr(orchestrator_runtime, "LangChainLLMClient", FakeLLM)
-    monkeypatch.setattr(orchestrator_runtime, "AgentOrchestrator", FakeOrchestrator)
+    monkeypatch.setattr(orchestrator_module, "LangChainLLMClient", FakeLLM)
 
-    orchestrator_runtime.build_default_orchestrator()
+    orch = orchestrator_module.AgentOrchestrator(config=FakeConfig())
+    orch._make_llm()
 
     assert captured["api_key"] == "sk-config"
     assert captured["model"] == "model-from-config"
@@ -84,7 +80,7 @@ def test_real_tour_build_default_orchestrator_uses_unified_config(monkeypatch) -
 def test_real_tour_missing_unified_config_credential_reaches_client_validation(
     monkeypatch,
 ) -> None:
-    from src.desktop_api import orchestrator_runtime
+    from src.business.orchestration.agent import orchestrator as orchestrator_module
 
     class FakeLLM:
         def __init__(self, **kwargs):
@@ -92,15 +88,11 @@ def test_real_tour_missing_unified_config_credential_reaches_client_validation(
                 raise ValueError("missing real-tour credential")
 
     monkeypatch.setenv("MEXEMPLAR_REAL_GRAND_TOUR", "1")
-    monkeypatch.setattr(
-        orchestrator_runtime,
-        "get_unified_config",
-        lambda: FakeConfig(api_key=None),
-    )
-    monkeypatch.setattr(orchestrator_runtime, "LangChainLLMClient", FakeLLM)
+    monkeypatch.setattr(orchestrator_module, "LangChainLLMClient", FakeLLM)
 
+    orch = orchestrator_module.AgentOrchestrator(config=FakeConfig(api_key=None))
     with pytest.raises(ValueError, match="missing real-tour credential"):
-        orchestrator_runtime.build_default_orchestrator()
+        orch._make_llm()
 
 
 def test_settings_connection_validation_uses_unified_config() -> None:
