@@ -138,14 +138,37 @@ class LangChainLLMClient:
         except Exception:
             logger.debug("debug redactor secret registration failed", exc_info=True)
 
-        # 初始化 LangChain LLM 实例
-        self.llm = self._create_llm()
+        # root LangChain provider 延迟首次访问构造（见 ``llm`` property）：
+        # 主助理等带 cancel_token 的路径走 ``_request_llm`` 的请求级 provider，
+        # 根本不触碰 root；若立即构造会制造一个永不使用、等待 GC 的 HTTP client。
+        # 无锁快速路径 + 锁内复检保证多线程下只构造一次。
+        self._llm_instance: Any = None
+        self._llm_init_lock = threading.Lock()
 
         logger.info(
             f"[LLM客户端] 已初始化: {provider}/{model} "
             f"(温度={temperature}, max_tokens={max_tokens}, "
             f"thinking={self.thinking_level}, timeout={self.timeout})"
         )
+
+    @property
+    def llm(self) -> Any:
+        """惰性构造并返回 root LangChain provider 实例。
+
+        首次访问时基于 ``__init__`` 冻结的配置字段构造；此后缓存。带 cancel_token
+        的请求路径（``_request_llm``）不读此属性，故主助理对话不会触发此构造。
+        """
+        if self._llm_instance is not None:
+            return self._llm_instance
+        with self._llm_init_lock:
+            if self._llm_instance is None:
+                self._llm_instance = self._create_llm()
+            return self._llm_instance
+
+    @llm.setter
+    def llm(self, value: Any) -> None:
+        """允许直接注入 provider（测试复用）并跳过惰性构造。"""
+        self._llm_instance = value
 
     def _get_default_endpoint(self, provider: str) -> Optional[str]:
         """
