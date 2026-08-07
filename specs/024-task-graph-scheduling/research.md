@@ -27,7 +27,7 @@
 
 > **Amendment 2026-07-27：规划专员补只读调研工具与专员目录**
 >
-> **背景**：一次真实 run（见 `docs/local/2026-07-25-mexemplar-sandbox-run-postmortem.md`）暴露规划专员零工具调用直接建图——它手里只有 `build_task_graph`，既读不了目标项目，也看不到有哪些专员可派。产出的六个节点里，凡依赖项目现状的都退化成「先阅读以下文件确认…」把调研甩给下游执行体，且 assignee 两列全部 NULL。
+> **背景**：一次真实 run（见 `docs/local/task-execution-issue-ledger.md` 附录 A）暴露规划专员零工具调用直接建图——它手里只有 `build_task_graph`，既读不了目标项目，也看不到有哪些专员可派。产出的六个节点里，凡依赖项目现状的都退化成「先阅读以下文件确认…」把调研甩给下游执行体，且 assignee 两列全部 NULL。
 >
 > **这不是推翻 DEC-B，是修正实现对它的过度解读**。DEC-B 原文写的是「不注入 todo_update/ask_parent/**执行器工具**」；实现时把整个 `BUILTIN_GENERAL_TOOLS` 都当成执行器工具挡在门外，连纯只读的读取与搜索一并禁掉。
 >

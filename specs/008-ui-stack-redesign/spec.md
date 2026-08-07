@@ -281,7 +281,7 @@ Which layers are affected? Check all that apply:
 ## Assumptions
 
 - The approved design baseline is the 2026-05-09 prototype under `C:\Users\gaopan\Downloads\mexamplar`, including `Mexemplar.html`, `src/screen-*.jsx`, shared components, `starters/`, and `uploads/FEATURES.md`; [control-inventory.md](./control-inventory.md) records the traceable visible control list derived from those files.
-- The local decision document `docs/local/2026-05-10-ui-tech-stack-decision.md` records the implementation direction; this specification keeps implementation details for planning while preserving the user-visible scope and compatibility rules.
+- The local decision document `docs/local/_archive/design-drafts/2026-05-10-ui-tech-stack-decision.md` records the implementation direction; this specification keeps implementation details for planning while preserving the user-visible scope and compatibility rules.
 - "一次出锅" means the first accepted release of this feature covers all five primary screens, while plan/tasks may still split the work into independently testable implementation slices.
 - Existing Python business, data, recording, memory, and agent behavior remains the source of truth for product semantics during the UI migration.
 - Windows desktop is the primary packaging and validation target for this feature.

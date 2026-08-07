@@ -4,7 +4,7 @@
 **Created**: 2026-05-01
 **Status**: Completed
 **Input**: User description: "desktop-recording — 桌面录制 Phase 1：UIA + pynput hook + 多帧截图 + clip 编码 + 剪贴板 + 5 通用工具 mode dispatch + 3 桌面专属多模态工具 + PM/Programmer prompt 双轨"
-**Source**: 决策来源 `docs/local/2026-04-29-desktop-recording-brainstorm.md`（§9.10 最终 Phase 1 范围 + §9.12 / §9.14 / §9.15 修订）
+**Source**: 决策来源 `docs/local/_archive/design-drafts/2026-04-29-desktop-recording-brainstorm.md`（§9.10 最终 Phase 1 范围 + §9.12 / §9.14 / §9.15 修订）
 
 ## Clarifications
 

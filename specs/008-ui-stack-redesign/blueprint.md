@@ -30,7 +30,7 @@ Phase 8 polish depends on all P1 user stories
 |------|--------|
 | `build_tauri.bat` | Created by scaffold mode |
 | `docs/local/2026-05-10-ui-stack-redesign-validation.md` | Created by scaffold mode |
-| `docs/local/2026-05-10-ui-tech-stack-decision.md` | Created by scaffold mode |
+| `docs/local/_archive/design-drafts/2026-05-10-ui-tech-stack-decision.md` | Created by scaffold mode |
 | `frontend/index.html` | Created by scaffold mode |
 | `frontend/package.json` | Created by scaffold mode |
 | `frontend/postcss.config.js` | Created by scaffold mode |
@@ -173,7 +173,7 @@ Phase 8 polish depends on all P1 user stories
 | T005 | `pyproject.toml` | FR-020, FR-023 | Spec, plan, tasks | Implement Add FastAPI, Uvicorn, Pydantic, and PyInstaller sidecar dependencies in pyproject.toml following the layer boundary and bridge contracts from spec.md, plan.md, data-model.md, and contracts/desktop-backend-api.md. | Run the focused test or command named by the task, then include it in the quickstart validation sequence. |
 | T006 | `src/desktop_api/__init__.py`<br>`src/desktop_api/routers/__init__.py` | FR-020, FR-023 | Spec, plan, tasks | Implement Create Python sidecar API package skeleton in src/desktop_api/__init__.py and src/desktop_api/routers/__init__.py following the layer boundary and bridge contracts from spec.md, plan.md, data-model.md, and contracts/desktop-backend-api.md. | Run the focused test or command named by the task, then include it in the quickstart validation sequence. |
 | T007 | `frontend/package.json` | FR-020, FR-023 | Spec, plan, tasks | Implement Add frontend lint, unit test, e2e test, tauri dev, and tauri build scripts in frontend/package.json following the layer boundary and bridge contracts from spec.md, plan.md, data-model.md, and contracts/desktop-backend-api.md. | Run the focused test or command named by the task, then include it in the quickstart validation sequence. |
-| T008 | `docs/local/2026-05-10-ui-tech-stack-decision.md` | FR-020, FR-023 | Spec, plan, tasks | Implement Copy or record the UI stack decision input artifact in docs/local/2026-05-10-ui-tech-stack-decision.md following the layer boundary and bridge contracts from spec.md, plan.md, data-model.md, and contracts/desktop-backend-api.md. | Run the focused test or command named by the task, then include it in the quickstart validation sequence. |
+| T008 | `docs/local/_archive/design-drafts/2026-05-10-ui-tech-stack-decision.md` | FR-020, FR-023 | Spec, plan, tasks | Implement Copy or record the UI stack decision input artifact in docs/local/_archive/design-drafts/2026-05-10-ui-tech-stack-decision.md following the layer boundary and bridge contracts from spec.md, plan.md, data-model.md, and contracts/desktop-backend-api.md. | Run the focused test or command named by the task, then include it in the quickstart validation sequence. |
 
 ---
 
@@ -357,7 +357,7 @@ Phase 8 polish depends on all P1 user stories
 - [ ] T005: Add FastAPI, Uvicorn, Pydantic, and PyInstaller sidecar dependencies in pyproject.toml
 - [ ] T006: Create Python sidecar API package skeleton in src/desktop_api/__init__.py and src/desktop_api/routers/__init__.py
 - [ ] T007: Add frontend lint, unit test, e2e test, tauri dev, and tauri build scripts in frontend/package.json
-- [ ] T008: Copy or record the UI stack decision input artifact in docs/local/2026-05-10-ui-tech-stack-decision.md
+- [ ] T008: Copy or record the UI stack decision input artifact in docs/local/_archive/design-drafts/2026-05-10-ui-tech-stack-decision.md
 - [ ] T009: Define shared Pydantic DTOs for health, errors, paging, shell bootstrap, events, skills, compositions, and settings in src/desktop_api/schemas.py
 - [ ] T010: Implement FastAPI app factory, loopback CORS policy, auth-token middleware, and router registration in src/desktop_api/app.py
 - [ ] T011: Implement sidecar process entrypoint with random localhost port and runtime token handling in src/desktop_api/__main__.py

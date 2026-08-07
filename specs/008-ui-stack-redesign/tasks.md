@@ -16,7 +16,7 @@
 - [x] T005 Add FastAPI, Uvicorn, Pydantic, and PyInstaller sidecar dependencies in pyproject.toml
 - [x] T006 Create Python sidecar API package skeleton in src/desktop_api/__init__.py and src/desktop_api/routers/__init__.py
 - [x] T007 [P] Add frontend lint, unit test, e2e test, tauri dev, and tauri build scripts in frontend/package.json
-- [x] T008 Copy or record the UI stack decision input artifact in docs/local/2026-05-10-ui-tech-stack-decision.md and verify specs/008-ui-stack-redesign/control-inventory.md matches the approved prototype
+- [x] T008 Copy or record the UI stack decision input artifact in docs/local/_archive/design-drafts/2026-05-10-ui-tech-stack-decision.md and verify specs/008-ui-stack-redesign/control-inventory.md matches the approved prototype
 
 ---
 

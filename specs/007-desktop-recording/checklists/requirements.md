@@ -31,7 +31,7 @@
 
 ## 实施细节豁免（来自 brainstorm 已拍板决策）
 
-本 spec 的 FR / Architecture Impact / CC 章节包含具体技术名词（pynput、UIA、opencv-python、`dataclasses.replace`、表名 `desktop_recordings` / `desktop_actions`、行号 `:176` / `:459` 等）。这些**不属于"实施细节泄漏"**，而是 brainstorm 文档（`docs/local/2026-04-29-desktop-recording-brainstorm.md` §9.10 + §9.12-§9.15）已经经过 6 轮审查 + 4 轮修订（共 37 处变更）后**最终拍板**的技术决策，纳入 spec 用于：
+本 spec 的 FR / Architecture Impact / CC 章节包含具体技术名词（pynput、UIA、opencv-python、`dataclasses.replace`、表名 `desktop_recordings` / `desktop_actions`、行号 `:176` / `:459` 等）。这些**不属于"实施细节泄漏"**，而是 brainstorm 文档（`docs/local/_archive/design-drafts/2026-04-29-desktop-recording-brainstorm.md` §9.10 + §9.12-§9.15）已经经过 6 轮审查 + 4 轮修订（共 37 处变更）后**最终拍板**的技术决策，纳入 spec 用于：
 
 1. 锁定 Phase 1 启动前置条件（避免实施期间二次决策造成漂移）
 2. 守住浏览器路径不退化（门卫不变量 1-7 + prompt 行为级守卫）
