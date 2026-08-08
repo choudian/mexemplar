@@ -1,4 +1,9 @@
-"""v42：user_tasks 用户层任务表 + sessions.focused_user_task_id 聚焦指针。"""
+"""v42：user_tasks 用户层任务表 + sessions.focused_user_task_id 列。
+
+注：v42 建表时此列语义为「聚焦指针」；v44 已将其重命名为
+``owner_user_task_id`` 并重定义为「执行体 session 的出生归属」。
+本测试只验证迁移到 v42 这一步的中间态，不涉及 v44 的重定义。
+"""
 
 from __future__ import annotations
 
@@ -7,13 +12,13 @@ from sqlalchemy import inspect, text
 from src.data import migrations
 
 
-def test_v42_is_registered_as_the_latest_migration() -> None:
-    """v42 是 _MIGRATIONS 的最后一条，且函数引用正确。"""
-    assert migrations._MIGRATIONS[-1] == (42, migrations.migrate_to_v42)
+def test_v42_is_registered_in_migrations() -> None:
+    """v42 仍在 _MIGRATIONS 注册表里（不再断言是最新——v43 已接上）。"""
+    assert (42, migrations.migrate_to_v42) in migrations._MIGRATIONS
 
 
 def test_v42_creates_user_tasks_table_and_sessions_column() -> None:
-    """迁移建了 user_tasks 表（含 CHECK + 索引）+ sessions.focused_user_task_id 列。"""
+    """迁移建了 user_tasks 表（含 CHECK + 索引）+ sessions.focused_user_task_id 列（v42 中间态）。"""
     from tests.data.test_migrations_v41 import _engine_at_v40
 
     engine = _engine_at_v40()

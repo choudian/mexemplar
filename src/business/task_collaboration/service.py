@@ -343,6 +343,7 @@ class TaskCollaborationService(AtomicTaskService):
         description: str,
         user_message_sequence: int | None = None,
         graph_id: str | None = None,
+        user_task_id: str | None = None,
     ) -> str:
         resolved_graph_id = graph_id or generate_id("tg")
         # 根任务的 root_task_id 在创建时一次性写入（指向自身），避免"先建后改"的第二次
@@ -358,6 +359,7 @@ class TaskCollaborationService(AtomicTaskService):
                 title=title,
                 description=description,
                 user_message_sequence=user_message_sequence,
+                user_task_id=user_task_id,
                 owner_session_id=session_id,
             )
             status = task.status
@@ -459,6 +461,7 @@ class TaskCollaborationService(AtomicTaskService):
         nodes: list[dict],
         dependencies: list[dict] | None = None,
         user_message_sequence: int | None = None,
+        user_task_id: str | None = None,
     ) -> dict:
         """原子建图：创建根任务 + N 个节点任务 + M 条 dependency 边。
 
@@ -504,6 +507,7 @@ class TaskCollaborationService(AtomicTaskService):
                 title="任务图根节点",
                 description="DAG 任务图容器节点，不直接执行",
                 user_message_sequence=user_message_sequence,
+                user_task_id=user_task_id,
                 owner_session_id=session_id,
             )
 
@@ -957,6 +961,7 @@ class TaskCollaborationService(AtomicTaskService):
         user_message_sequence: int | None,
         title: str,
         description: str,
+        user_task_id: str | None = None,
     ) -> tuple[str, str]:
         """找到本次用户请求的任务图并返回 (graph_id, root_task_id)，没有就新建。
 
@@ -964,6 +969,8 @@ class TaskCollaborationService(AtomicTaskService):
         复用同一张图；新的用户消息（新 sequence）开新图，不会把新任务粘到上一条消息
         已完成或被中途放弃的旧图上。``user_message_sequence`` 为 None（无消息上下文）时
         每次都新建，避免误复用会话里的任意旧图。
+
+        ``user_task_id`` 在新建图根时写入归属；复用已有图时不改（旧图已有归属或为 None）。
         """
         if user_message_sequence is not None:
             graph_id = self._tasks.get_current_graph_id(session_id, user_message_sequence)
@@ -976,6 +983,7 @@ class TaskCollaborationService(AtomicTaskService):
             title=title,
             description=description,
             user_message_sequence=user_message_sequence,
+            user_task_id=user_task_id,
         )
         root = self._tasks.get_graph_root(graph_id)
         if root is None:

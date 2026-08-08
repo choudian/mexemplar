@@ -74,12 +74,15 @@ class AgentSessionStore:
 
         return self.create_session(workflow_id, agent_type)
 
-    def create_session(self, workflow_id: str, agent_type: str) -> str:
+    def create_session(
+        self, workflow_id: str, agent_type: str, *, user_task_id: str | None = None
+    ) -> str:
         model = Session(
             session_id=str(uuid.uuid4()),
             workflow_id=workflow_id,
             agent_type=agent_type,
             status="active",
+            owner_user_task_id=user_task_id,
         )
         session = self._session_repo.create(model)
         return session.session_id

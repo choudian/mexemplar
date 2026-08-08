@@ -173,7 +173,7 @@ class TestDelegateToSpecialist:
         )
         handler = create_delegate_to_specialist_handler(SESSION_ID, dispatch_callback=callback)
 
-        result = handler(specialist_name="天气专家", task="查北京天气")
+        result = handler(specialist_name="天气专家", task="查北京天气", taskId="utsk_test")
         data = json.loads(result)
         assert data["success"] is True
         assert data["specialist_id"] == "sp-001"
@@ -183,6 +183,7 @@ class TestDelegateToSpecialist:
             specialist_name="天气专家",
             task="查北京天气",
             execution_context="",
+            user_task_id="utsk_test",
         )
 
     def test_rejects_nonexistent_specialist(self):

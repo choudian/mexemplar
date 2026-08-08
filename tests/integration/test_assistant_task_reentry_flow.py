@@ -75,13 +75,16 @@ class _FakeOrchestrator:
         task,
         execution_context="",
         tool_whitelist=None,
+        user_task_id=None,
         current_task_id=None,
         workspace_root=None,
+        **_extra,
     ) -> dict:
         self.calls.append(
             {
                 "parent_session_id": parent_session_id,
                 "task": task,
+                "user_task_id": user_task_id,
                 "current_task_id": current_task_id,
                 "workspace_root": workspace_root,
             }
@@ -733,8 +736,10 @@ def test_adapter_uses_isolated_orchestrators_for_parallel_attempts(
                 task,
                 execution_context="",
                 tool_whitelist=None,
+                user_task_id=None,
                 current_task_id=None,
                 workspace_root=None,
+                **_extra,
             ) -> dict:
                 with calls_lock:
                     calls.append(task)

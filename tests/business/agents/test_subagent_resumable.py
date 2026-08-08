@@ -242,6 +242,15 @@ def orch(mock_config, in_memory_db):
     return AgentOrchestrator(MagicMock(), mock_config)
 
 
+@pytest.fixture(autouse=True)
+def _bypass_user_task_validation(monkeypatch):
+    """这些测试验证委派恢复行为，不关心 taskId 校验。"""
+    monkeypatch.setattr(
+        "src.business.orchestration.agent.delegation_orchestrator._validate_user_task_id",
+        lambda _uid: None,
+    )
+
+
 def _make_child_subagent(orch, parent_session_id, *, status="suspended"):
     """在 in-memory DB 里造一个归属 parent 的临时子代理 session，返回其 id。"""
     workflow_id = orch._new_delegation_workflow_id(parent_session_id)
@@ -274,7 +283,9 @@ class TestDelegateReturnsHandle:
                 patch.object(orch, "_record_delegation_signal"),
             ):
                 res = orch._delegate_to_subagent(
-                    parent_session_id="parent-D", task_description="做点事"
+                    parent_session_id="parent-D",
+                    task_description="做点事",
+                    user_task_id="utsk_test",
                 )
         finally:
             for p in patches:
@@ -290,9 +301,13 @@ class TestDelegateReturnsHandle:
             AgentResult(result_type=ResultType.PAUSED, error="已达迭代上限（50 轮）"),
         )
         try:
-            with patch.object(orch, "_extract_latest_assistant_text", return_value=""):
+            with (
+                patch.object(orch, "_extract_latest_assistant_text", return_value=""),
+            ):
                 res = orch._delegate_to_subagent(
-                    parent_session_id="parent-E", task_description="复杂任务"
+                    parent_session_id="parent-E",
+                    task_description="复杂任务",
+                    user_task_id="utsk_test",
                 )
         finally:
             for p in patches:

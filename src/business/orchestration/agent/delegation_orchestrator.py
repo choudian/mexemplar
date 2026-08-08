@@ -17,46 +17,57 @@ from src.business.services.skill_composition.builtin_compositions import (
 logger = logging.getLogger(__name__)
 
 
+def _validate_user_task_id(user_task_id: str | None) -> dict | None:
+    """校验主助理传入的 taskId：非空、存在、状态仍在进行中（active/cooling）。
+
+    返回 None 表示通过；返回 error dict 表示拒绝（与委派方法其他校验失败一致）。
+    对齐旧聚焦守卫的严格度：不仅查"有没有传"，还查"传得对不对"。
+    """
+    tid = (user_task_id or "").strip()
+    if not tid:
+        return {
+            "success": False,
+            "message": "taskId 必填：请先 create_task 创建用户任务后再委派。",
+        }
+    from src.data.repos import UserTaskRepository
+
+    task = UserTaskRepository().get(tid)
+    if task is None:
+        return {
+            "success": False,
+            "message": f"用户任务不存在: {tid}，请确认 taskId 正确或先 create_task。",
+        }
+    if task.status not in ("active", "cooling"):
+        return {
+            "success": False,
+            "message": (
+                f"用户任务「{task.title}」已{task.status}，不能在其底下新建委派。"
+                "如需继续请 create_task 创建新任务。"
+            ),
+        }
+    return None
+
+
 class DelegationOrchestrator:
     """Runs assistant delegation workflows behind a small dispatch interface."""
 
     def __init__(self, owner: Any) -> None:
         self._owner = owner
 
-    @staticmethod
-    def _has_focused_user_task(parent_session_id: str) -> bool:
-        """检查会话是否有聚焦用户任务且任务仍在进行中（用户任务层委派硬保证）。
-
-        聚焦指针指向 done/dropped 的任务时视为"没有聚焦"——对着一件事已经办完了
-        的任务还往底下挂委派没有意义。
-        """
-        from src.data.repos import SessionRepository, UserTaskRepository
-
-        focused_id = SessionRepository().get_focused_task_id(parent_session_id)
-        if focused_id is None:
-            return False
-        task = UserTaskRepository().get(focused_id)
-        if task is None:
-            return False
-        return task.status in ("active", "cooling")
-
     def delegate_to_subagent(
         self,
         *,
         parent_session_id: str,
         task_description: str,
+        user_task_id: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
         complexity: str = "complex",
     ) -> dict:
-        # 用户任务层硬保证：没有聚焦任务时不许委派（文档 62-64 行）。
-        # 守卫在所有分叉（simple/complex/unified/兜底）之前。
-        if not self._has_focused_user_task(parent_session_id):
-            return {
-                "success": False,
-                "message": "当前没有聚焦任务，请先 create_task 创建用户任务后再委派。",
-                "delegation_type": "ephemeral_subagent",
-            }
+        # 用户任务层硬保证：taskId 必须存在且仍在进行中（active/cooling）。
+        validated = _validate_user_task_id(user_task_id)
+        if validated is not None:
+            return validated
         task = (task_description or "").strip()
         if not task:
             return {
@@ -73,6 +84,7 @@ class DelegationOrchestrator:
                 task=task,
                 execution_context=execution_context,
                 tool_whitelist=tool_whitelist,
+                user_task_id=user_task_id,
             )
 
         # 复杂任务：走统一模型（建图 + durable accepted）
@@ -83,6 +95,7 @@ class DelegationOrchestrator:
             assignee_type=AgentType.EPHEMERAL_SUBAGENT.value,
             assignee_id=AgentType.EPHEMERAL_SUBAGENT.value,
             capability_scope=tool_whitelist,
+            user_task_id=user_task_id,
         )
         if unified is not None:
             return {
@@ -96,6 +109,7 @@ class DelegationOrchestrator:
             task=task,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
+            user_task_id=user_task_id,
         )
 
     def run_sync_ephemeral_subagent(
@@ -105,6 +119,7 @@ class DelegationOrchestrator:
         task: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        user_task_id: str | None = None,
         workspace_root: str | None = None,
         effective_scope: EffectiveSubagentScope | None = None,
     ) -> dict:
@@ -120,6 +135,7 @@ class DelegationOrchestrator:
             task=task,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
+            user_task_id=user_task_id,
             workspace_root=workspace_root,
             effective_scope=effective_scope,
         )
@@ -134,6 +150,7 @@ class DelegationOrchestrator:
         task: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        user_task_id: str | None = None,
         current_task_id: str | None = None,
         workspace_root: str | None = None,
         effective_scope: EffectiveSubagentScope | None = None,
@@ -192,6 +209,7 @@ class DelegationOrchestrator:
             child_session_id = self._owner._session_store.create_session(
                 workflow_id,
                 AgentType.EPHEMERAL_SUBAGENT,
+                user_task_id=user_task_id,
             )
         user_input = self._owner._format_delegated_task_input(task, execution_context)
         result = self._owner._run_delegated_executor(
@@ -274,15 +292,13 @@ class DelegationOrchestrator:
         parent_session_id: str,
         specialist_name: str,
         task: str,
+        user_task_id: str,
         execution_context: str = "",
     ) -> dict:
-        # 用户任务层硬保证：没有聚焦任务时不许委派（文档 62-64 行）。
-        if not self._has_focused_user_task(parent_session_id):
-            return {
-                "success": False,
-                "message": "当前没有聚焦任务，请先 create_task 创建用户任务后再委派。",
-                "delegation_type": "specialist",
-            }
+        # 用户任务层硬保证：taskId 必须存在且仍在进行中（active/cooling）。
+        validated = _validate_user_task_id(user_task_id)
+        if validated is not None:
+            return validated
         name = (specialist_name or "").strip()
         task_text = (task or "").strip()
         if not name or not task_text:
@@ -318,6 +334,7 @@ class DelegationOrchestrator:
             assignee_type=AgentType.SPECIALIST.value,
             assignee_id=specialist.specialist_id,
             capability_scope=whitelist,
+            user_task_id=user_task_id,
         )
         if unified is not None:
             return {
@@ -334,6 +351,7 @@ class DelegationOrchestrator:
             task=task_text,
             execution_context=execution_context,
             tool_whitelist=whitelist,
+            user_task_id=user_task_id,
         )
         result["delegation_type"] = "specialist"
         result["specialist_id"] = specialist.specialist_id
@@ -374,6 +392,7 @@ class DelegationOrchestrator:
         task: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
+        user_task_id: str | None = None,
         current_task_id: str | None = None,
         workspace_root: str | None = None,
         resume_session_id: str | None = None,
@@ -466,7 +485,7 @@ class DelegationOrchestrator:
         else:
             workflow_id = self._owner._new_delegation_workflow_id(parent_session_id)
             child_session_id = self._owner._session_store.create_session(
-                workflow_id, AgentType.SPECIALIST
+                workflow_id, AgentType.SPECIALIST, user_task_id=user_task_id
             )
         allowed_methodology_skill_ids = {
             str(item.get("skill_id") or "")

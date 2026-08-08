@@ -16,6 +16,15 @@ def _build_orchestrator(mock_config):
     )
 
 
+@pytest.fixture(autouse=True)
+def _bypass_user_task_validation(monkeypatch):
+    """这些测试验证委派架构接线，不关心 taskId 校验。"""
+    monkeypatch.setattr(
+        "src.business.orchestration.agent.delegation_orchestrator._validate_user_task_id",
+        lambda _uid: None,
+    )
+
+
 def test_phase3_split_modules_exist():
     from src.business.orchestration.agent.agent_session_store import AgentSessionStore
     from src.business.orchestration.agent.assistant_prompt_builder import AssistantPromptBuilder
@@ -445,6 +454,7 @@ def test_subagent_delegation_wires_shared_catalog_before_child_session_creation(
         task_description="完成任务",
         execution_context="上下文",
         tool_whitelist=["能力A"],
+        user_task_id="utsk_arch",
     )
 
     assert result["delegation_type"] == "ephemeral_subagent"
@@ -460,6 +470,7 @@ def test_subagent_delegation_wires_shared_catalog_before_child_session_creation(
     orchestrator._session_store.create_session.assert_called_once_with(
         "wf-child",
         "ephemeral_subagent",
+        user_task_id="utsk_arch",
     )
 
 
@@ -475,6 +486,7 @@ def test_subagent_delegation_uses_unified_dispatch_without_sync_child_execution(
         task_description="完成任务",
         execution_context="上下文",
         tool_whitelist=["tool-a"],
+        user_task_id="utsk_arch",
     )
 
     assert result["accepted"] is True
@@ -486,6 +498,7 @@ def test_subagent_delegation_uses_unified_dispatch_without_sync_child_execution(
         assignee_type="ephemeral_subagent",
         assignee_id="ephemeral_subagent",
         capability_scope=["tool-a"],
+        user_task_id="utsk_arch",
     )
     orchestrator._run_delegated_executor.assert_not_called()
 
@@ -675,6 +688,7 @@ def test_specialist_delegation_wires_shared_catalog_before_child_session_creatio
             parent_session_id="parent-session",
             specialist_name="测试专员",
             task="完成任务",
+            user_task_id="utsk_arch",
         )
 
     assert result["delegation_type"] == "specialist"
@@ -690,6 +704,7 @@ def test_specialist_delegation_wires_shared_catalog_before_child_session_creatio
     orchestrator._session_store.create_session.assert_called_once_with(
         "wf-specialist",
         "specialist",
+        user_task_id="utsk_arch",
     )
 
 
@@ -718,6 +733,7 @@ def test_specialist_delegation_uses_unified_dispatch_without_sync_child_executio
             parent_session_id="parent-session",
             specialist_name="测试专员",
             task="完成任务",
+            user_task_id="utsk_arch",
         )
 
     assert result["accepted"] is True
@@ -730,6 +746,7 @@ def test_specialist_delegation_uses_unified_dispatch_without_sync_child_executio
         assignee_type="specialist",
         assignee_id="specialist-1",
         capability_scope=["能力A"],
+        user_task_id="utsk_arch",
     )
     orchestrator._run_delegated_executor.assert_not_called()
 

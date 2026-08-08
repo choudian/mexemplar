@@ -427,8 +427,12 @@ class TestDelegationExecutionPaths:
         from tests.conftest import MockLLMClient
         from src.business.orchestration.agent.orchestrator import AgentOrchestrator
         from src.business.services.chat_service import ChatService
+        from src.data.repos import UserTaskRepository
 
         parent_session_id = ChatService().create_session(title="parent")
+        user_task_id = UserTaskRepository().create(
+            session_id=parent_session_id, title="天气查询"
+        ).task_id
         orchestrator = AgentOrchestrator(
             MockLLMClient([LLMResponse(content="已完成天气查询。", tool_calls=[])]),
             mock_config,
@@ -438,6 +442,7 @@ class TestDelegationExecutionPaths:
             parent_session_id=parent_session_id,
             task_description="查询北京明天天气",
             execution_context="只返回一句摘要",
+            user_task_id=user_task_id,
         )
 
         assert result["success"] is True
@@ -449,9 +454,13 @@ class TestDelegationExecutionPaths:
         from tests.conftest import MockLLMClient
         from src.business.orchestration.agent.orchestrator import AgentOrchestrator
         from src.business.services.chat_service import ChatService
+        from src.data.repos import UserTaskRepository
         from src.data.repos.specialist_repository import SpecialistRepository
 
         parent_session_id = ChatService().create_session(title="parent")
+        user_task_id = UserTaskRepository().create(
+            session_id=parent_session_id, title="天气查询"
+        ).task_id
         specialist_id = SpecialistRepository().create_specialist(
             name="天气专员",
             description="处理天气相关任务",
@@ -469,6 +478,7 @@ class TestDelegationExecutionPaths:
             parent_session_id=parent_session_id,
             specialist_name="天气专员",
             task="查询北京明天天气",
+            user_task_id=user_task_id,
         )
 
         assert result["success"] is True

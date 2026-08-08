@@ -3963,6 +3963,65 @@ def migrate_to_v42(engine):
     logger.info("迁移到版本 42 完成：user_tasks 表 + sessions.focused_user_task_id")
 
 
+def migrate_to_v43(engine):
+    """迁移到版本 43：assistant_tasks 加 user_task_id 列（图根归属）。
+
+    与 ``models_sqlite.py`` 的 ``AssistantTask.user_task_id`` 同步。
+    调用方约定只图根行（parent_task_id IS NULL）写 user_task_id，子节点不冗余——
+    但 DB 层不强制（无 CHECK 约束），靠 ``create_child_task`` 不传此参数保证。
+    nullable：旧数据和 proposal 场景为 None。
+    """
+    try:
+        with engine.begin() as conn:
+            _add_column_if_missing(conn, "assistant_tasks", "user_task_id", "TEXT")
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_assistant_tasks_user_task "
+                    "ON assistant_tasks(user_task_id) WHERE user_task_id IS NOT NULL"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 43"))
+    except Exception as e:
+        logger.error(f"迁移到版本 43 失败: {e}")
+        raise
+    logger.info("迁移到版本 43 完成：assistant_tasks.user_task_id 列 + 索引")
+
+
+def migrate_to_v44(engine):
+    """迁移到版本 44：sessions.focused_user_task_id → owner_user_task_id（语义重定义）。
+
+    原列存"主助理的聚焦指针"（已废弃——改为主助理显式传 task_id）。
+    新列存"执行体 session 的出生归属"——只有被委派出去的执行体 session 写此列。
+    SQLite 3.25+ 支持 RENAME COLUMN。旧数据（如有聚焦指针值）保留但语义已变，
+    实际使用中只有刚建的测试数据有值，可安全忽略。
+    """
+    try:
+        with engine.begin() as conn:
+            # 防御性检查：旧列可能不存在（迁移测试只建部分表）
+            exists = conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'"
+                )
+            ).fetchone()
+            if exists:
+                cols = {
+                    row[1]
+                    for row in conn.execute(text("PRAGMA table_info(sessions)")).fetchall()
+                }
+                if "focused_user_task_id" in cols:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE sessions RENAME COLUMN "
+                            "focused_user_task_id TO owner_user_task_id"
+                        )
+                    )
+            conn.execute(text("UPDATE schema_version SET version = 44"))
+    except Exception as e:
+        logger.error(f"迁移到版本 44 失败: {e}")
+        raise
+    logger.info("迁移到版本 44 完成：sessions.focused_user_task_id → owner_user_task_id")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -4005,6 +4064,8 @@ _MIGRATIONS = [
     (40, migrate_to_v40),
     (41, migrate_to_v41),
     (42, migrate_to_v42),
+    (43, migrate_to_v43),
+    (44, migrate_to_v44),
 ]
 
 

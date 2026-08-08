@@ -207,7 +207,7 @@ class TestDelegateToSpecialistContextIndexes:
         params = DELEGATE_TO_SPECIALIST_SCHEMA["function"]["parameters"]
         assert params["properties"]["execution_context"]["type"] == "string"
         assert params["properties"]["context_message_indexes"]["type"] == "array"
-        assert params["required"] == ["specialist_name", "task"]
+        assert params["required"] == ["specialist_name", "task", "taskId"]
         indexes_desc = params["properties"]["context_message_indexes"]["description"]
         assert "对话历史" in indexes_desc and "禁止" in indexes_desc
         assert "system" in indexes_desc and "不得引用" in indexes_desc
@@ -225,7 +225,8 @@ class TestDelegateToSubagentSchema:
         from src.business.agents.tools.assistant_tools import DELEGATE_TO_SUBAGENT_SCHEMA
 
         assert DELEGATE_TO_SUBAGENT_SCHEMA["function"]["parameters"]["required"] == [
-            "task_description"
+            "task_description",
+            "taskId",
         ]
 
     def test_descriptions_carry_hard_constraint_semantics(self):

@@ -68,6 +68,27 @@ class UserTaskService:
             raise LookupError(f"user task not found: {normalized_id}")
         return project_user_task(row)
 
+    def update(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> dict[str, Any]:
+        """更新任务的 title 和/或 description。任务建得早、title 可以含糊，
+        澄清需求后调此方法改成准确描述。"""
+        normalized_id = _normalize_id(task_id)
+        normalized_title = _normalize_title(title) if title is not None else None
+        normalized_desc = _normalize_description(description) if description is not None else None
+        row = self._repo.update(
+            normalized_id,
+            title=normalized_title,
+            description=normalized_desc,
+        )
+        if row is None:
+            raise LookupError(f"user task not found: {normalized_id}")
+        return project_user_task(row)
+
 
 def project_user_task(row: UserTask) -> dict[str, Any]:
     return {

@@ -159,6 +159,11 @@ class TestTaskGraphE2E:
 
         planner = SpecialistService().ensure_planner_specialist()
         parent_session_id = generate_id("parent")
+        from src.data.repos import UserTaskRepository
+
+        user_task_id = UserTaskRepository().create(
+            session_id=parent_session_id, title="会议纪要"
+        ).task_id
 
         class _PlannerLoop:
             def __init__(self) -> None:
@@ -173,6 +178,7 @@ class TestTaskGraphE2E:
                 build_tool = next(tool for tool in tool_list if tool.name == "build_task_graph")
                 self.graph_result = json.loads(
                     build_tool.handler(
+                        taskId=user_task_id,
                         nodes=[
                             {"nodeId": "n1", "title": "收集资料", "description": "收集资料"},
                             {"nodeId": "n2", "title": "生成报告", "description": "生成报告"},
@@ -194,13 +200,14 @@ class TestTaskGraphE2E:
         monkeypatch.setattr(
             orchestrator,
             "_extract_latest_assistant_text",
-            lambda _session_id: "planner graph built",
+            lambda _session_id, **_kw: "planner graph built",
         )
 
         result = orchestrator.delegation_orchestrator.delegate_to_specialist(
             parent_session_id=parent_session_id,
             specialist_name=planner["name"],
             task="整理会议纪要、生成报告并准备对外发送",
+            user_task_id=user_task_id,
         )
 
         assert result["success"] is True

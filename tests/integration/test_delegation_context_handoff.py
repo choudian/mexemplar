@@ -48,6 +48,15 @@ def orch(mock_config, in_memory_db):
     return AgentOrchestrator(MagicMock(), mock_config)
 
 
+@pytest.fixture(autouse=True)
+def _bypass_user_task_validation(monkeypatch):
+    """这些测试验证委派上下文透传，不关心 taskId 校验。"""
+    monkeypatch.setattr(
+        "src.business.orchestration.agent.delegation_orchestrator._validate_user_task_id",
+        lambda _uid: None,
+    )
+
+
 def _parent_session(orch) -> str:
     return orch._session_store.create_session(f"wf-{uuid.uuid4().hex[:8]}", AgentType.ASSISTANT)
 

@@ -135,8 +135,9 @@ class Session(Base):
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
     scheduled_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_scheduled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    # v42（用户任务层）：当前聚焦的用户任务 id。单值——一次只聚焦一件事。
-    focused_user_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # v42→v44（用户任务层）：执行体 session 的出生归属——"为哪件用户任务创建的"。
+    # 只有被委派出去的执行体 session 写此列（create_session 时传入）；主助理 session 为 None。
+    owner_user_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     def get_tool_id_set(self) -> Optional[set]:
         """解析 tool_ids JSON 字段为 set。None 表示全部工具。"""
@@ -315,6 +316,9 @@ class AssistantTask(Base):
     parent_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     session_id: Mapped[str] = mapped_column(String(50), nullable=False)
     user_message_sequence: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # v43（图根归属）：图根所属的用户任务 id。只有图根行写（parent_task_id IS NULL），
+    # 子节点不冗余——通过 graph_id 关联到图根即可。nullable：旧数据和 proposal 场景为 None。
+    user_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_dispatch")

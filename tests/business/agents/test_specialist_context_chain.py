@@ -30,6 +30,15 @@ def orch(mock_config, in_memory_db):
     return AgentOrchestrator(MagicMock(), mock_config)
 
 
+@pytest.fixture(autouse=True)
+def _bypass_user_task_validation(monkeypatch):
+    """这些测试验证 execution_context 透传，不关心 taskId 校验（不连库建 user_task）。"""
+    monkeypatch.setattr(
+        "src.business.orchestration.agent.delegation_orchestrator._validate_user_task_id",
+        lambda _uid: None,
+    )
+
+
 def _parent_session(orch) -> str:
     return orch._session_store.create_session(f"wf-{uuid.uuid4().hex[:8]}", AgentType.ASSISTANT)
 
@@ -133,6 +142,7 @@ class TestDelegateToSpecialistPassesContext:
             parent_session_id=parent_sid,
             specialist_name="文档专员",
             task="写文件",
+            user_task_id="utsk_test",
             execution_context="展开后的上下文全文",
         )
 
@@ -162,6 +172,7 @@ class TestDelegateToSpecialistPassesContext:
             parent_session_id=parent_sid,
             specialist_name="文档专员",
             task="写文件",
+            user_task_id="utsk_test",
             execution_context="展开后的上下文全文",
         )
 

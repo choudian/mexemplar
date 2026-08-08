@@ -382,6 +382,7 @@ def test_specialist_continuation_reuses_scope_bound_to_child_id() -> None:
         task="继续查完",
         execution_context="",
         tool_whitelist=["read_file", "forbidden-tool", "composition-a"],
+        user_task_id=None,
         workspace_root="E:/isolated-worktree",
         effective_scope=effective_scope,
     )

@@ -49,6 +49,9 @@ class TaskExecutorAdapter:
             raise RuntimeError(f"task attempt not found: {attempt_id}")
         with AssistantTaskRepository() as tasks:
             task = tasks.get_task(attempt.task_id)
+            # 子节点 user_task_id 按设计不冗余（只有图根写），恢复时沿 graph_id
+            # 上溯到图根取归属——否则恢复出的执行体 session 会丢失"出生归属"。
+            resolved_user_task_id = tasks.resolve_user_task_id(task) if task else None
         if task is None:
             raise RuntimeError(f"task not found for attempt {attempt_id}: {attempt.task_id}")
 
@@ -74,6 +77,7 @@ class TaskExecutorAdapter:
                     task,
                     parent_session_id,
                     capability_scope,
+                    user_task_id=resolved_user_task_id,
                     checkpoint_ref=attempt.checkpoint_ref,
                     workspace_root=workspace_root,
                     resume_session_id=resume_session_id,
@@ -85,6 +89,7 @@ class TaskExecutorAdapter:
                     task,
                     parent_session_id,
                     capability_scope,
+                    user_task_id=resolved_user_task_id,
                     checkpoint_ref=attempt.checkpoint_ref,
                     workspace_root=workspace_root,
                     resume_session_id=resume_session_id,
@@ -108,6 +113,7 @@ class TaskExecutorAdapter:
         parent_session_id: str,
         tool_whitelist,
         *,
+        user_task_id: str | None = None,
         checkpoint_ref: str | None = None,
         workspace_root: str | None = None,
         resume_session_id: str | None = None,
@@ -121,6 +127,7 @@ class TaskExecutorAdapter:
                 checkpoint_ref,
             ),
             tool_whitelist=tool_whitelist,
+            user_task_id=user_task_id,
             current_task_id=task.task_id,
             workspace_root=workspace_root,
             resume_session_id=resume_session_id,
@@ -134,6 +141,7 @@ class TaskExecutorAdapter:
         parent_session_id: str,
         tool_whitelist,
         *,
+        user_task_id: str | None = None,
         checkpoint_ref: str | None = None,
         workspace_root: str | None = None,
         resume_session_id: str | None = None,
@@ -166,6 +174,7 @@ class TaskExecutorAdapter:
                 checkpoint_ref,
             ),
             tool_whitelist=tool_whitelist,
+            user_task_id=user_task_id,
             current_task_id=task.task_id,
             workspace_root=workspace_root,
             resume_session_id=resume_session_id,

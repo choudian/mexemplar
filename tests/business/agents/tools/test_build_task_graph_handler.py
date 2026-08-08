@@ -9,6 +9,14 @@ from unittest.mock import patch
 from src.business.agents.tools.assistant_tools import create_build_task_graph_handler
 
 
+def _bypass_user_task_validation():
+    """本测试验证 workspaceRoot 剥离，不关心 taskId 校验（不连库建 user_task）。"""
+    return patch(
+        "src.business.agents.tools.assistant_tools._validate_user_task_id",
+        lambda tid: tid.strip() if (tid or "").strip() else "",
+    )
+
+
 class _FakeTaskGraphService:
     """记录传给 build_task_graph 的 nodes，避免连库与 scheduler 副作用。"""
 
@@ -21,7 +29,7 @@ class _FakeTaskGraphService:
     def __exit__(self, *exc):
         return False
 
-    def build_task_graph(self, *, session_id, nodes, dependencies, user_message_sequence):
+    def build_task_graph(self, *, session_id, nodes, dependencies, user_message_sequence, **kwargs):
         self.captured_nodes = nodes
         # graphId=None 避免触发 _trigger_graph_scheduler_start 真实调度
         return {"graphId": None}
@@ -42,27 +50,25 @@ def test_build_task_graph_handler_strips_workspace_root_injection():
         user_message_sequence_provider=lambda: 1,
         service_factory=lambda: fake,
     )
-    # 用户任务层聚焦守卫：测试不连库，mock 掉聚焦检查
-    with patch(
-        "src.business.agents.tools.assistant_tools._check_focused_user_task",
-        return_value=True,
-    ):
+    # 用户任务 id 现在由主助理显式传入（聚焦指针已移除）。
+    with _bypass_user_task_validation():
         handler(
-            nodes=[
-                {
-                    "nodeId": "n1",
-                    "title": "t1",
-                    "description": "d1",
-                    "workspaceRoot": "/evil/workspace-1",
-                },
-                {
-                    "nodeId": "n2",
-                    "title": "t2",
-                    "description": "d2",
-                    "workspace_root": "/evil/workspace-2",
-                },
-            ]
-        )
+        taskId="user-task-1",
+        nodes=[
+            {
+                "nodeId": "n1",
+                "title": "t1",
+                "description": "d1",
+                "workspaceRoot": "/evil/workspace-1",
+            },
+            {
+                "nodeId": "n2",
+                "title": "t2",
+                "description": "d2",
+                "workspace_root": "/evil/workspace-2",
+            },
+        ],
+    )
 
     assert fake.captured_nodes is not None
     for node in fake.captured_nodes:

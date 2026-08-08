@@ -537,6 +537,7 @@ class AgentOrchestrator:
         assignee_type: str,
         assignee_id: str | None,
         capability_scope: list[str] | None = None,
+        user_task_id: str | None = None,
     ) -> dict | None:
         """Durably enqueue an Assistant task when the v15 task model is explicitly enabled.
 
@@ -565,6 +566,7 @@ class AgentOrchestrator:
                     user_message_sequence=request_sequence,
                     title="Assistant request",
                     description=task,
+                    user_task_id=user_task_id,
                 )
 
                 dispatcher = self._get_task_dispatcher()
@@ -774,6 +776,7 @@ class AgentOrchestrator:
         *,
         parent_session_id: str,
         task_description: str,
+        user_task_id: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
         complexity: str = "complex",
@@ -784,6 +787,7 @@ class AgentOrchestrator:
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
             complexity=complexity,
+            user_task_id=user_task_id,
         )
 
     def _run_sync_ephemeral_subagent(
@@ -811,6 +815,7 @@ class AgentOrchestrator:
         parent_session_id: str,
         specialist_name: str,
         task: str,
+        user_task_id: str,
         execution_context: str = "",
     ) -> dict:
         return self._get_delegation_orchestrator().delegate_to_specialist(
@@ -818,6 +823,7 @@ class AgentOrchestrator:
             specialist_name=specialist_name,
             task=task,
             execution_context=execution_context,
+            user_task_id=user_task_id,
         )
 
     @staticmethod

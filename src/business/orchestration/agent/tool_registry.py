@@ -417,6 +417,7 @@ class ToolRegistry:
                 execution_context: str = "",
                 tool_whitelist: list[str] | None = None,
                 complexity: str = "complex",
+                user_task_id: str = "",
             ) -> dict:
                 task = (task_description or "").strip()
                 if not task:
@@ -437,6 +438,7 @@ class ToolRegistry:
                     task=task,
                     execution_context=execution_context,
                     tool_whitelist=tool_whitelist,
+                    user_task_id=user_task_id or None,
                     workspace_root=workspace_root,
                     effective_scope=effective_scope,
                 )
@@ -615,6 +617,7 @@ class ToolRegistry:
             RETRIEVE_FAILURE_ZONE_SCHEMA,
             SAVE_PROFILE_SCHEMA,
             UPDATE_SCHEDULED_TASK_SCHEMA,
+            UPDATE_TASK_SCHEMA,
             create_abandon_request_graph_handler,
             create_answer_task_question_handler,
             create_ask_user_question_handler,
@@ -640,6 +643,7 @@ class ToolRegistry:
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
             create_update_scheduled_task_handler,
+            create_update_task_handler,
         )
         from src.business.agents.tools.proposal_source_tools import (
             create_inspect_proposal_source_tool,
@@ -799,6 +803,11 @@ class ToolRegistry:
             schema=CREATE_TASK_SCHEMA,
             handler=create_create_task_handler(session_id),
         )
+        update_task_tool = ToolDefinition(
+            name="update_task",
+            schema=UPDATE_TASK_SCHEMA,
+            handler=create_update_task_handler(session_id),
+        )
         mutate_task_graph_tool = ToolDefinition(
             name="mutate_task_graph",
             schema=MUTATE_TASK_GRAPH_SCHEMA,
@@ -879,6 +888,7 @@ class ToolRegistry:
             load_skill_methodology_tool,
             build_task_graph_tool,
             create_task_tool,
+            update_task_tool,
             mutate_task_graph_tool,
         ] + scheduled_management_tools
 

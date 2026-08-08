@@ -20,6 +20,15 @@ def _clean_signals():
     clear_all()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_user_task_validation(monkeypatch):
+    """这些测试验证委派生命周期事件，不关心 taskId 校验。"""
+    monkeypatch.setattr(
+        "src.business.orchestration.agent.delegation_orchestrator._validate_user_task_id",
+        lambda _uid: None,
+    )
+
+
 def _capture(signal_name: str) -> list[dict]:
     events: list[dict] = []
     connect(signal_name, lambda sender, **kw: events.append(kw), weak=False)
@@ -47,7 +56,9 @@ def test_delegation_emits_started_and_finished(orch):
             patch.object(orch, "_record_delegation_signal"),
         ):
             res = orch._delegate_to_subagent(
-                parent_session_id="parent-LE", task_description="查资料"
+                parent_session_id="parent-LE",
+                task_description="查资料",
+                user_task_id="utsk_test",
             )
     finally:
         for p in patches:

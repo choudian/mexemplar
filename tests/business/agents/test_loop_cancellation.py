@@ -76,6 +76,15 @@ def _clean_run_context():
     run_context.reset_for_tests()
 
 
+@pytest.fixture(autouse=True)
+def _bypass_user_task_validation(monkeypatch):
+    """这些测试验证取消/恢复行为，不关心 taskId 校验。"""
+    monkeypatch.setattr(
+        "src.business.orchestration.agent.delegation_orchestrator._validate_user_task_id",
+        lambda _uid: None,
+    )
+
+
 class TestLoopCancellation:
     def test_executor_exit_cleans_background_processes_for_its_session(
         self, mock_config, in_memory_db, tmp_path
@@ -451,9 +460,13 @@ class TestOrchestratorCancelled:
 
         patches, _ = _patch_loop(orch, AgentResult(result_type=ResultType.CANCELLED))
         try:
-            with patch.object(orch, "_extract_latest_assistant_text", return_value="部分结果"):
+            with (
+                patch.object(orch, "_extract_latest_assistant_text", return_value="部分结果"),
+            ):
                 res = orch._delegate_to_subagent(
-                    parent_session_id=parent, task_description="跑个长任务"
+                    parent_session_id=parent,
+                    task_description="跑个长任务",
+                    user_task_id="utsk_test",
                 )
         finally:
             for p in patches:

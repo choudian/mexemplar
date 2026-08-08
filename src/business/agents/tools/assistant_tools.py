@@ -571,6 +571,8 @@ __all__ = [
     "create_user_todo_handler",
     "CREATE_TASK_SCHEMA",
     "create_create_task_handler",
+    "UPDATE_TASK_SCHEMA",
+    "create_update_task_handler",
     "LIST_USER_TODOS_SCHEMA",
     "create_list_user_todos_handler",
     "UPDATE_USER_TODO_SCHEMA",
@@ -1332,14 +1334,38 @@ def _make_user_task_service(service_factory: Callable[[], "UserTaskService"] | N
     return UserTaskService()
 
 
+def _validate_user_task_id(task_id: str) -> str:
+    """校验主助理传入的 taskId：非空、存在、状态仍在进行中（active/cooling）。
+
+    委派/建图三个入口的硬保证——对齐旧聚焦守卫的严格度：
+    不仅查"有没有传"，还查"传得对不对"。taskId 不存在或已终态（done/dropped）
+    时抛 ValueError，由各 handler catch 后回 error_json 给主助理。
+    """
+    tid = (task_id or "").strip()
+    if not tid:
+        raise ValueError("taskId 必填：请先 create_task 创建用户任务。")
+    from src.data.repos import UserTaskRepository
+
+    task = UserTaskRepository().get(tid)
+    if task is None:
+        raise ValueError(f"用户任务不存在: {tid}，请确认 taskId 正确或先 create_task。")
+    if task.status not in ("active", "cooling"):
+        raise ValueError(
+            f"用户任务「{task.title}」已{task.status}，不能在其底下新建委派。"
+            "如需继续请 create_task 创建新任务。"
+        )
+    return tid
+
+
 CREATE_TASK_SCHEMA = make_tool_schema(
     name="create_task",
     description=(
         "创建一个用户任务——用户交办的「一件事」。"
         "当与用户谈拢了要做什么、准备开始委派执行时调用。"
-        "建完即成为当前会话的聚焦任务，此后 delegate_to_subagent / "
-        "delegate_to_specialist / build_task_graph 都会挂到它底下。"
-        "会话同一时刻只聚焦一个任务；建新任务会自动切换聚焦。"
+        "后续 delegate_to_subagent / delegate_to_specialist / build_task_graph "
+        "都必须显式带上返回的 taskId，把委派/建图挂到这个任务底下。"
+        "（是否携带 taskId 是模型软约束；三个委派工具的 schema required + "
+        "存在性/状态校验是代码层硬保证。）"
     ),
     properties={
         "title": {"type": "string", "description": "任务标题，必填"},
@@ -1361,14 +1387,10 @@ def create_create_task_handler(
                     title=title,
                     description=description,
                 )
-            # 建完即设为聚焦——委派守卫读这个指针
-            from src.data.repos import SessionRepository
-
-            SessionRepository().update_focused_task(session_id, task["taskId"])
             return to_json(
                 {
                     "success": True,
-                    "message": "已创建用户任务并设为当前聚焦。",
+                    "message": "已创建用户任务。",
                     "task": task,
                 }
             )
@@ -1378,6 +1400,48 @@ def create_create_task_handler(
         )
 
     return create_task
+
+
+UPDATE_TASK_SCHEMA = make_tool_schema(
+    name="update_task",
+    description=(
+        "更新一个用户任务的标题或描述。任务建得早、title 可以含糊，"
+        "澄清需求后调用本工具改成准确描述。"
+    ),
+    properties={
+        "taskId": {"type": "string", "description": "用户任务 id（create_task 返回的 taskId），必填"},
+        "title": {"type": "string", "description": "可选的新标题"},
+        "description": {"type": "string", "description": "可选的新描述"},
+    },
+    required=["taskId"],
+)
+
+
+def create_update_task_handler(
+    session_id: str,
+    service_factory: Callable[[], "UserTaskService"] | None = None,
+):
+    def update_task(taskId: str, title: str | None = None, description: str | None = None) -> str:
+        def _action():
+            with _make_user_task_service(service_factory) as service:
+                task = service.update(
+                    taskId,
+                    title=title,
+                    description=description,
+                )
+                return to_json(
+                    {
+                        "success": True,
+                        "message": "已更新用户任务。",
+                        "task": task,
+                    }
+                )
+
+        return _run_task_service(
+            "update_task", "更新用户任务时发生内部错误，请稍后重试。", _action
+        )
+
+    return update_task
 
 
 def create_list_user_todos_handler(
@@ -1870,6 +1934,10 @@ BUILD_TASK_GRAPH_SCHEMA = make_tool_schema(
         "调度器会在执行前暂停等主助理裁定。"
     ),
     properties={
+        "taskId": {
+            "type": "string",
+            "description": "用户任务 id（create_task 返回的 taskId），建图必须挂在用户任务底下",
+        },
         "nodes": {
             "type": "array",
             "minItems": 1,
@@ -1926,7 +1994,7 @@ BUILD_TASK_GRAPH_SCHEMA = make_tool_schema(
             },
         },
     },
-    required=["nodes"],
+    required=["nodes", "taskId"],
 )
 
 
@@ -1942,24 +2010,6 @@ def _latest_user_message_sequence(session_id: str) -> int | None:
             session_id,
             exc_info=True,
         )
-
-
-def _check_focused_user_task(session_id: str) -> bool:
-    """检查会话是否有聚焦用户任务且任务仍在进行中（用户任务层委派硬保证）。
-
-    独立为模块级函数，便于在测试中 patch 掉（build_task_graph handler 测试不连库）。
-    聚焦指针指向 done/dropped 的任务时视为"没有聚焦"——对着一件事已经办完了
-    的任务还往底下挂委派没有意义。
-    """
-    from src.data.repos import SessionRepository, UserTaskRepository
-
-    focused_id = SessionRepository().get_focused_task_id(session_id)
-    if focused_id is None:
-        return False
-    task = UserTaskRepository().get(focused_id)
-    if task is None:
-        return False
-    return task.status in ("active", "cooling")
 
 
 def _trigger_graph_scheduler_start(graph_id: str, *, source: str) -> bool:
@@ -2009,13 +2059,13 @@ def create_build_task_graph_handler(
     def build_task_graph_handler(
         nodes: list[dict] | None = None,
         dependencies: list[dict] | None = None,
+        taskId: str = "",
     ) -> str:
         """将复杂任务分解成带依赖的 DAG 并原子落库。"""
 
         def _action() -> str:
-            # 用户任务层硬保证：没有聚焦任务时不许建图（文档 62-64 行）。
-            if not _check_focused_user_task(session_id):
-                raise ValueError("当前没有聚焦任务，请先 create_task 创建用户任务后再建图。")
+            # 用户任务层硬保证：taskId 必须存在且仍在进行中。
+            task_id = _validate_user_task_id(taskId)
             # workspaceRoot 是特权字段，只允许受信的 proposal_bridge 直连 service
             # 设置；LLM 工具入口（主助理 + 规划专员共享此 handler）必须剥离，避免
             # 执行体 blast radius 被重定向、proposal 沙箱守卫被绕过（026 C2）。
@@ -2032,6 +2082,7 @@ def create_build_task_graph_handler(
                     session_id=session_id,
                     nodes=sanitized_nodes,
                     dependencies=dependencies,
+                    user_task_id=task_id,
                     user_message_sequence=(
                         user_message_sequence_provider()
                         if user_message_sequence_provider is not None
@@ -2228,6 +2279,7 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
                 "引用对话中已产生的内容时必须配合 context_message_indexes 携带原文"
             ),
         },
+        "taskId": {"type": "string", "description": "用户任务 id（create_task 返回的 taskId），委派必须挂在用户任务底下"},
         "execution_context": {
             "type": "string",
             "description": (
@@ -2264,7 +2316,7 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
             ),
         },
     },
-    required=["task_description"],
+    required=["task_description", "taskId"],
 )
 
 
@@ -2293,6 +2345,7 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
 
     def delegate_to_subagent_handler(
         task_description: str,
+        taskId: str = "",
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
         complexity: str = "complex",
@@ -2302,6 +2355,7 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
         from src.business.agents.delegation_context import DelegationContextError
 
         try:
+            task_id = (taskId or "").strip()
             try:
                 merged_context = _merge_context_message_indexes(
                     execution_context, context_message_indexes
@@ -2327,6 +2381,7 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
                         execution_context=merged_context,
                         tool_whitelist=tool_whitelist,
                         complexity=complexity,
+                        user_task_id=task_id,
                     )
                 )
             # 无 dispatch_callback（仅测试场景）时只返回占位结果；统一任务派发由
@@ -2622,6 +2677,7 @@ DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
                 "引用对话中已产生的内容时必须配合 context_message_indexes 携带原文"
             ),
         },
+        "taskId": {"type": "string", "description": "用户任务 id（create_task 返回的 taskId），委派必须挂在用户任务底下"},
         "execution_context": {
             "type": "string",
             "description": (
@@ -2644,7 +2700,7 @@ DELEGATE_TO_SPECIALIST_SCHEMA = make_tool_schema(
             ),
         },
     },
-    required=["specialist_name", "task"],
+    required=["specialist_name", "task", "taskId"],
 )
 
 
@@ -2654,6 +2710,7 @@ def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=Non
     def delegate_to_specialist_handler(
         specialist_name: str,
         task: str,
+        taskId: str = "",
         execution_context: str = "",
         context_message_indexes: list[int] | None = None,
     ) -> str:
@@ -2661,6 +2718,7 @@ def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=Non
         from src.business.agents.delegation_context import DelegationContextError
 
         try:
+            task_id = (taskId or "").strip()
             try:
                 merged_context = _merge_context_message_indexes(
                     execution_context, context_message_indexes
@@ -2683,6 +2741,7 @@ def create_delegate_to_specialist_handler(session_id: str, dispatch_callback=Non
                         specialist_name=specialist_name,
                         task=task,
                         execution_context=merged_context,
+                        user_task_id=task_id,
                     )
                 )
             # 无 dispatch_callback（仅测试场景）时只返回占位结果；统一任务派发由

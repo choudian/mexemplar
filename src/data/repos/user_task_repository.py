@@ -61,3 +61,21 @@ class UserTaskRepository(BaseRepository):
             row.completed_at = None
         row.updated_at = now
         return self._update_and_flush(row)
+
+    def update(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+    ) -> UserTask | None:
+        """更新任务的 title 和/或 description。只更新非 None 字段。"""
+        row = self.get(task_id)
+        if row is None:
+            return None
+        if title is not None:
+            row.title = title
+        if description is not None:
+            row.description = description
+        row.updated_at = utc_now_naive()
+        return self._update_and_flush(row)

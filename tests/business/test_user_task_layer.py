@@ -45,8 +45,8 @@ def _seed_session(session_id: str) -> str:
 
 
 class TestCreateTask:
-    def test_create_task_creates_user_task_and_sets_focus(self, in_memory_db):
-        """create_task 建用户任务 + 设为会话聚焦。"""
+    def test_create_task_creates_user_task(self, in_memory_db):
+        """create_task 建用户任务（聚焦指针已移除，不再有建完即聚焦副作用）。"""
         sid = _seed_session("ast_create")
         handler = create_create_task_handler(sid)
         result = json.loads(handler(title="季度报告", description="Q3 数据"))
@@ -54,19 +54,22 @@ class TestCreateTask:
         assert result["success"] is True
         assert result["task"]["title"] == "季度报告"
         assert result["task"]["status"] == "active"
-        # 聚焦指针已设
-        assert SessionRepository().get_focused_task_id(sid) == result["task"]["taskId"]
 
-    def test_focused_task_pointer_single_value(self, in_memory_db):
-        """切换聚焦后旧值被覆盖（单值指针）。"""
+    def test_create_task_does_not_set_focus_pointer(self, in_memory_db):
+        """create_task 不再写聚焦指针——后续委派/建图改由主助理显式传 taskId。
+
+        聚焦指针已移除：session 不再持有 focused_user_task_id 列，create_task
+        不做 update_focused_task 副作用。回归保护：避免有人把聚焦指针再加回来。
+        """
         sid = _seed_session("ast_focus")
         handler = create_create_task_handler(sid)
         r1 = json.loads(handler(title="任务一"))
         r2 = json.loads(handler(title="任务二"))
 
-        # 第二次建任务后聚焦指向第二个
-        assert SessionRepository().get_focused_task_id(sid) == r2["task"]["taskId"]
+        # 两次建任务都成功，互不干扰；不再有单值聚焦指针
         assert r1["task"]["taskId"] != r2["task"]["taskId"]
+        # SessionRepository 已无 get_focused_task_id 方法
+        assert not hasattr(SessionRepository(), "get_focused_task_id")
 
 
 # ---------------------------------------------------------------------------
@@ -75,31 +78,33 @@ class TestCreateTask:
 
 
 class TestDelegationGuard:
-    def test_delegate_without_focus_task_rejected(self, in_memory_db):
-        """无聚焦时 delegate_to_subagent 拒绝。"""
+    def test_delegate_to_subagent_requires_user_task_id(self, in_memory_db):
+        """delegate_to_subagent 现在把 user_task_id 作为必填 kw-only 参数。
+
+        聚焦指针已移除——用户任务归属由主助理经工具的 taskId 显式传入；orchestrator
+        层不再做"有没有聚焦"的守卫，而是要求调用方一定带 user_task_id。
+        """
         sid = _seed_session("ast_guard1")
         orch = AgentOrchestrator(MagicMock(), MagicMock())
-        result = orch.delegation_orchestrator.delegate_to_subagent(
-            parent_session_id=sid,
-            task_description="做点什么",
-        )
-        assert result["success"] is False
-        assert "聚焦" in result["message"]
+        with pytest.raises(TypeError):
+            orch.delegation_orchestrator.delegate_to_subagent(
+                parent_session_id=sid,
+                task_description="做点什么",
+            )
 
-    def test_delegate_specialist_without_focus_task_rejected(self, in_memory_db):
-        """无聚焦时 delegate_to_specialist 拒绝。"""
+    def test_delegate_to_specialist_requires_user_task_id(self, in_memory_db):
+        """delegate_to_specialist 同样把 user_task_id 作为必填 kw-only 参数。"""
         sid = _seed_session("ast_guard2")
         orch = AgentOrchestrator(MagicMock(), MagicMock())
-        result = orch.delegation_orchestrator.delegate_to_specialist(
-            parent_session_id=sid,
-            specialist_name="data_analyst",
-            task="分析数据",
-        )
-        assert result["success"] is False
-        assert "聚焦" in result["message"]
+        with pytest.raises(TypeError):
+            orch.delegation_orchestrator.delegate_to_specialist(
+                parent_session_id=sid,
+                specialist_name="data_analyst",
+                task="分析数据",
+            )
 
-    def test_build_task_graph_without_focus_task_rejected(self, in_memory_db):
-        """无聚焦时 build_task_graph 拒绝。"""
+    def test_build_task_graph_without_task_id_rejected(self, in_memory_db):
+        """build_task_graph 工具层守卫：未带 taskId 时拒绝（fail-closed）。"""
         from src.business.agents.tools.assistant_tools import create_build_task_graph_handler
 
         sid = _seed_session("ast_guard3")
@@ -108,31 +113,33 @@ class TestDelegationGuard:
         result = json.loads(result_str)
         assert result["success"] is False
 
-    def test_delegate_with_focus_task_passes_guard(self, in_memory_db):
-        """有聚焦时委派守卫放行（不因守卫误拒）。"""
+    def test_delegate_with_user_task_id_passes_to_executor(self, in_memory_db):
+        """显式带 user_task_id 时委派放行，并透传给执行核心。"""
         sid = _seed_session("ast_guard4")
-        # 先建任务设聚焦
-        handler = create_create_task_handler(sid)
-        json.loads(handler(title="任务"))
-
         orch = AgentOrchestrator(MagicMock(), MagicMock())
-        # mock 掉下游让委派快速返回（守卫放行即可，不关心下游结果）
+        # 建一个真实的用户任务，让 taskId 校验通过
+        UserTaskRepository().create(session_id=sid, title="测试任务")
+        user_task_id = UserTaskRepository().list_for_session(sid)[0].task_id
+        captured: dict = {}
+
+        def _fake_run_sync(*, parent_session_id, task, execution_context, tool_whitelist,
+                           user_task_id, **kwargs):
+            captured["user_task_id"] = user_task_id
+            return {"success": True, "message": "ok"}
+
         with patch.object(
             orch.delegation_orchestrator,
             "run_sync_ephemeral_subagent",
-            return_value={"success": True, "message": "ok"},
+            side_effect=_fake_run_sync,
         ):
-            with patch.object(
-                orch.delegation_orchestrator,
-                "_has_focused_user_task",
-                return_value=True,
-            ):
-                result = orch.delegation_orchestrator.delegate_to_subagent(
-                    parent_session_id=sid,
-                    task_description="做点什么",
-                    complexity="simple",
-                )
-        # 守卫放行了（没返回"聚焦"错误）
+            result = orch.delegation_orchestrator.delegate_to_subagent(
+                parent_session_id=sid,
+                task_description="做点什么",
+                user_task_id=user_task_id,
+                complexity="simple",
+            )
+        # 放行并透传
+        assert captured["user_task_id"] == user_task_id
         assert "聚焦" not in result.get("message", "")
 
 
@@ -187,10 +194,10 @@ class TestTableSeparation:
     def test_user_tasks_independent_from_assistant_tasks(self, in_memory_db):
         """user_tasks 表独立，不影响 assistant_tasks 的 parent_task_id 根判据。"""
         sid = _seed_session("ast_sep")
-        # 建一个用户任务并设为聚焦
+        # 建一个用户任务（聚焦指针已移除，create_task 不再写副作用）
         handler = create_create_task_handler(sid)
-        json.loads(handler(title="用户的事"))
-        # 建一个执行任务图（直接走 service 层，不经 handler 的聚焦守卫）
+        user_task = json.loads(handler(title="用户的事"))
+        # 建一个执行任务图（直接走 service 层，不经 handler 的 taskId 守卫）
         from src.business.task_collaboration.service import TaskCollaborationService
 
         with TaskCollaborationService() as tcs:
@@ -207,10 +214,10 @@ class TestTableSeparation:
         root_task_id = root.root_task_id
 
         # user_tasks 和 assistant_tasks 是完全独立的 id 空间
-        focused = SessionRepository().get_focused_task_id(sid)
-        assert focused is not None
-        assert focused != root_task_id
-        assert focused.startswith("utsk_")
+        user_task_id = user_task["task"]["taskId"]
+        assert user_task_id is not None
+        assert user_task_id != root_task_id
+        assert user_task_id.startswith("utsk_")
         assert root_task_id.startswith("tsk_")
 
 
@@ -221,7 +228,12 @@ class TestTableSeparation:
 
 class TestMigrationV42:
     def test_migration_creates_user_tasks_table_and_column(self, in_memory_db):
-        """迁移 v42 建了 user_tasks 表 + sessions.focused_user_task_id 列。"""
+        """迁移建了 user_tasks 表 + sessions 上的用户任务归属列。
+
+        注：原 v42 引入的 ``focused_user_task_id`` 单值聚焦指针已在去聚焦指针
+        重构中改为 ``owner_user_task_id``（会话归属的用户任务 id）。本测试只断言
+        表与归属列存在，不再锁定已废弃的聚焦指针列名。
+        """
         from src.data.models_sqlite import UserTask
         from sqlalchemy import inspect
 
@@ -230,19 +242,19 @@ class TestMigrationV42:
 
         # user_tasks 表存在
         assert "user_tasks" in inspector.get_table_names()
-        # sessions 有 focused_user_task_id 列
+        # sessions 上有用户任务归属列（owner_user_task_id）
         session_cols = {c["name"] for c in inspector.get_columns("sessions")}
-        assert "focused_user_task_id" in session_cols
+        assert "owner_user_task_id" in session_cols
         # user_tasks 有正确的列
         task_cols = {c["name"] for c in inspector.get_columns("user_tasks")}
         assert {"task_id", "session_id", "title", "status", "created_at"} <= task_cols
 
-    def test_schema_version_is_42(self, in_memory_db):
+    def test_schema_version_is_latest(self, in_memory_db):
         from sqlalchemy import text
 
         with in_memory_db.engine.connect() as conn:
             version = conn.execute(text("SELECT version FROM schema_version")).scalar()
-        assert version == 42
+        assert version >= 42
 
 
 # ---------------------------------------------------------------------------

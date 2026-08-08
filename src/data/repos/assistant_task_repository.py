@@ -23,6 +23,7 @@ class AssistantTaskRepository(BaseRepository):
         root_task_id: str | None = None,
         parent_task_id: str | None = None,
         user_message_sequence: int | None = None,
+        user_task_id: str | None = None,
         owner_session_id: str | None = None,
         assignee_type: str | None = None,
         assignee_id: str | None = None,
@@ -39,6 +40,7 @@ class AssistantTaskRepository(BaseRepository):
             parent_task_id=parent_task_id,
             session_id=session_id,
             user_message_sequence=user_message_sequence,
+            user_task_id=user_task_id,
             title=title,
             description=description,
             owner_session_id=owner_session_id,
@@ -55,6 +57,17 @@ class AssistantTaskRepository(BaseRepository):
 
     def get_task(self, task_id: str) -> AssistantTask | None:
         return self.session.get(AssistantTask, task_id)
+
+    def resolve_user_task_id(self, task: AssistantTask) -> str | None:
+        """解析一个执行节点归属的用户任务 id。
+
+        图根节点直接返回自身 ``user_task_id``；子节点（按设计不冗余写）沿
+        ``graph_id`` 上溯到图根取归属。图根也没有时返回 None（proposal 等场景）。
+        """
+        if task.user_task_id is not None:
+            return task.user_task_id
+        root = self.get_graph_root(task.graph_id)
+        return getattr(root, "user_task_id", None) if root else None
 
     def list_graph_tasks(self, graph_id: str) -> list[AssistantTask]:
         rows = self.session.query(AssistantTask).filter(AssistantTask.graph_id == graph_id).all()
@@ -143,6 +156,21 @@ class AssistantTaskRepository(BaseRepository):
             .first()
         )
         return row[0] if row else None
+
+    def list_graph_roots_for_user_task(self, user_task_id: str) -> list[AssistantTask]:
+        """返回某用户任务下的所有图根（parent_task_id IS NULL）。
+
+        供界面层（⑦）和"继续一件事"用：遍历一件事底下所有图，逐个推进。
+        """
+        return (
+            self.session.query(AssistantTask)
+            .filter(
+                AssistantTask.user_task_id == user_task_id,
+                AssistantTask.parent_task_id.is_(None),
+            )
+            .order_by(AssistantTask.created_at)
+            .all()
+        )
 
     def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
         """返回 session 内是否仍有未终态执行节点；root 容器不参与判定。"""
