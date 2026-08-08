@@ -902,6 +902,7 @@ class AgentOrchestrator:
         workspace_root: str | None = None,
         allowed_composition_ids: set[str] | None = None,
         allowed_builtin_tool_names: set[str] | None = None,
+        iteration_budget: int | None = None,
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -936,7 +937,10 @@ class AgentOrchestrator:
 
         try:
             loop = self._get_loop(
-                agent_type, workflow_id=workflow_id, workspace_root=workspace_root
+                agent_type,
+                workflow_id=workflow_id,
+                workspace_root=workspace_root,
+                max_iterations_override=iteration_budget,
             )
             tools = self._build_delegated_executor_tools(
                 allowed_tool_ids,
@@ -952,6 +956,9 @@ class AgentOrchestrator:
                 allowed_builtin_tool_names=allowed_builtin_tool_names,
                 workspace_root=workspace_root,
             )
+            # 消息水位线：记录跑之前的消息序号，续跑后交付物只取此线之后的（034 先例）。
+            # 非续跑时 baseline=0，after_sequence=0 等价于"取全部"。
+            baseline_sequence = self._message_repo.get_next_sequence(session_id) - 1
             result = loop.run(
                 session_id,
                 user_input,
@@ -1114,7 +1121,9 @@ class AgentOrchestrator:
                 "safe_summary": question_summary or "子任务正在等待派活方答复。",
             }
 
-        result_text = self._extract_latest_assistant_text(session_id)
+        result_text = self._extract_latest_assistant_text(
+            session_id, after_sequence=baseline_sequence
+        )
         success = result.result_type == ResultType.COMPLETED and bool(result_text)
         payload = {
             "result_type": result.result_type.value,
@@ -1680,8 +1689,12 @@ class AgentOrchestrator:
             if self._composition_service.get_execution_snapshot(composition_id) is not None
         }
 
-    def _extract_latest_assistant_text(self, session_id: str) -> str:
-        return self._message_repo.get_latest_assistant_text(session_id)
+    def _extract_latest_assistant_text(
+        self, session_id: str, *, after_sequence: int | None = None
+    ) -> str:
+        return self._message_repo.get_latest_assistant_text(
+            session_id, after_sequence=after_sequence
+        )
 
     def _record_delegation_signal(
         self,
@@ -2034,7 +2047,11 @@ class AgentOrchestrator:
         return self.tool_registry.build_assistant_tools(session_id)
 
     def _get_loop(
-        self, agent_type: str, workflow_id: str = None, workspace_root: str | None = None
+        self,
+        agent_type: str,
+        workflow_id: str = None,
+        workspace_root: str | None = None,
+        max_iterations_override: int | None = None,
     ) -> AgentLoop:
         if agent_type == AgentType.TRIAL:
             config = self._prompt_builder.build_trial_config(workflow_id)
@@ -2048,10 +2065,12 @@ class AgentOrchestrator:
 
             from src.business.agents.config import AgentConfig
 
+            # 续跑时调用方可传 iteration_budget 追加轮数（与 _continue_subagent 的
+            # extra_iterations 同语义），否则用默认 50。
             ephemeral_config = AgentConfig(
                 agent_type=AgentType.EPHEMERAL_SUBAGENT,
                 system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
-                max_iterations=50,
+                max_iterations=50 + (max_iterations_override or 0),
                 resumable_on_failure=True,
                 workspace_root=Path(workspace_root) if workspace_root else None,
             )
@@ -2065,7 +2084,7 @@ class AgentOrchestrator:
             specialist_config = AgentConfig(
                 agent_type=AgentType.SPECIALIST,
                 system_prompt="你是一个固定专员。根据你的角色定义完成指定工作。",
-                max_iterations=30,
+                max_iterations=30 + (max_iterations_override or 0),
                 # 撞轮次上限不是失败：工作历史完整保留，父侧可 continue_subagent 追加
                 # 预算续跑。此前默认 False 让专员直接判 ERROR，30 轮做不完的任务全部作废。
                 resumable_on_failure=True,

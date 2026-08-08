@@ -61,16 +61,14 @@ class TaskExecutorAdapter:
         _assert_proposal_executor_workspace_or_raise(parent_session_id, workspace_root)
 
         executor_orchestrator = self._new_executor_orchestrator()
+        # ③ 第一阶段：续跑统一走 _run_specialist/_run_ephemeral + resume_session_id，
+        # 不再走 _try_resume_from_checkpoint → continue_subagent（那条路变身+扩权）。
+        # checkpoint_ref 里存的是续跑会话 id + 追加轮数预算（若有）。
+        resume_info = _resume_info_from_checkpoint(attempt.checkpoint_ref)
+        resume_session_id = resume_info["session_id"] if resume_info else None
+        iteration_budget = resume_info["iteration_budget"] if resume_info else None
         try:
-            resumed = self._try_resume_from_checkpoint(
-                executor_orchestrator,
-                task,
-                parent_session_id,
-                attempt.checkpoint_ref,
-            )
-            if resumed is not None:
-                result = resumed
-            elif task.assignee_type == AgentType.SPECIALIST.value:
+            if task.assignee_type == AgentType.SPECIALIST.value:
                 result = self._run_specialist(
                     executor_orchestrator,
                     task,
@@ -78,6 +76,8 @@ class TaskExecutorAdapter:
                     capability_scope,
                     checkpoint_ref=attempt.checkpoint_ref,
                     workspace_root=workspace_root,
+                    resume_session_id=resume_session_id,
+                    iteration_budget=iteration_budget,
                 )
             else:
                 result = self._run_ephemeral(
@@ -87,6 +87,8 @@ class TaskExecutorAdapter:
                     capability_scope,
                     checkpoint_ref=attempt.checkpoint_ref,
                     workspace_root=workspace_root,
+                    resume_session_id=resume_session_id,
+                    iteration_budget=iteration_budget,
                 )
         finally:
             if executor_orchestrator is not self._orchestrator:
@@ -108,6 +110,8 @@ class TaskExecutorAdapter:
         *,
         checkpoint_ref: str | None = None,
         workspace_root: str | None = None,
+        resume_session_id: str | None = None,
+        iteration_budget: int | None = None,
     ) -> dict:
         return orchestrator.delegation_orchestrator.run_ephemeral_via_delegated_executor(
             parent_session_id=parent_session_id,
@@ -119,6 +123,8 @@ class TaskExecutorAdapter:
             tool_whitelist=tool_whitelist,
             current_task_id=task.task_id,
             workspace_root=workspace_root,
+            resume_session_id=resume_session_id,
+            iteration_budget=iteration_budget,
         )
 
     def _run_specialist(
@@ -130,6 +136,8 @@ class TaskExecutorAdapter:
         *,
         checkpoint_ref: str | None = None,
         workspace_root: str | None = None,
+        resume_session_id: str | None = None,
+        iteration_budget: int | None = None,
     ) -> dict:
         from src.data.repos.specialist_repository import SpecialistRepository
 
@@ -145,7 +153,7 @@ class TaskExecutorAdapter:
         # "主对话相关原文"全文)作为 execution_context 传递,不再被静默丢弃;
         # checkpoint 提示随 execution_context 一并进入"补充上下文"段。
         # 统一派发会在 context 为空时把 title 兜底写进 description；专员在 032
-        # 之前忽略 description，因此空值和 title 兜底都不得新增“补充上下文”重复。
+        # 之前忽略 description，因此空值和 title 兜底都不得新增"补充上下文"重复。
         effective_context = (
             task.description if task.description and task.description != task.title else ""
         )
@@ -160,31 +168,9 @@ class TaskExecutorAdapter:
             tool_whitelist=tool_whitelist,
             current_task_id=task.task_id,
             workspace_root=workspace_root,
+            resume_session_id=resume_session_id,
+            iteration_budget=iteration_budget,
         )
-
-    @staticmethod
-    def _try_resume_from_checkpoint(
-        orchestrator,
-        task,
-        parent_session_id: str,
-        checkpoint_ref: str | None,
-    ) -> dict | None:
-        resume_id = _subagent_id_from_checkpoint(checkpoint_ref)
-        if not resume_id:
-            return None
-        try:
-            return orchestrator.delegation_orchestrator.continue_subagent(
-                parent_session_id=parent_session_id,
-                subagent_id=resume_id,
-                workspace_root=task.workspace_root,
-            )
-        except Exception:
-            logger.warning(
-                "[task attempt] checkpoint resume failed for task %s; falling back to checkpoint context",
-                getattr(task, "task_id", ""),
-                exc_info=True,
-            )
-            return None
 
     @staticmethod
     def _map_to_outcome(result: dict) -> dict[str, Any]:
@@ -313,7 +299,15 @@ def _summary(text: str | None) -> str:
     return text[:500] if text else "任务已回传结果，等待上级检查。"
 
 
-def _subagent_id_from_checkpoint(checkpoint_ref: str | None) -> str | None:
+def _resume_info_from_checkpoint(
+    checkpoint_ref: str | None,
+) -> dict[str, Any] | None:
+    """从 checkpoint_ref JSON 解析续跑信息：会话 id + 追加轮数预算。
+
+    返回 ``{"session_id": str, "iteration_budget": int | None}`` 或 None。
+    向后兼容：旧 checkpoint_ref 只存 subagent_id（非 JSON 或无 iteration_budget），
+    仍能解析出 session_id。
+    """
     if not checkpoint_ref:
         return None
     try:
@@ -324,7 +318,11 @@ def _subagent_id_from_checkpoint(checkpoint_ref: str | None) -> str | None:
         return None
     value = parsed.get("subagent_id") or parsed.get("executor_session_id")
     text = str(value or "").strip()
-    return text or None
+    if not text:
+        return None
+    budget_raw = parsed.get("iteration_budget")
+    budget = int(budget_raw) if isinstance(budget_raw, (int, float)) and budget_raw > 0 else None
+    return {"session_id": text, "iteration_budget": budget}
 
 
 def _execution_context_with_checkpoint(text: str, checkpoint_ref: str | None) -> str:

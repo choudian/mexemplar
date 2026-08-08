@@ -112,6 +112,8 @@ class DelegationOrchestrator:
         current_task_id: str | None = None,
         workspace_root: str | None = None,
         effective_scope: EffectiveSubagentScope | None = None,
+        resume_session_id: str | None = None,
+        iteration_budget: int | None = None,
     ) -> dict:
         """临时子代理的纯执行核心：resolve tools → build prompt → create session →
         ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``（统一任务派发的
@@ -152,11 +154,20 @@ class DelegationOrchestrator:
             tool_whitelist,
             capability_catalog_section=capability_catalog_section,
         )
-        workflow_id = self._owner._new_delegation_workflow_id(parent_session_id)
-        child_session_id = self._owner._session_store.create_session(
-            workflow_id,
-            AgentType.EPHEMERAL_SUBAGENT,
-        )
+        # 续跑时复用已有会话（跳过 create_session），否则新建。workflow_id 从被复用的
+        # session 记录读出（参照 _continue_subagent :1357），保证 transition/归属校验一致。
+        if resume_session_id:
+            existing = self._owner._session_store.get_session(resume_session_id)
+            if existing is None:
+                return {"success": False, "message": "续跑会话不存在"}
+            child_session_id = existing.session_id
+            workflow_id = getattr(existing, "workflow_id", "") or ""
+        else:
+            workflow_id = self._owner._new_delegation_workflow_id(parent_session_id)
+            child_session_id = self._owner._session_store.create_session(
+                workflow_id,
+                AgentType.EPHEMERAL_SUBAGENT,
+            )
         user_input = self._owner._format_delegated_task_input(task, execution_context)
         result = self._owner._run_delegated_executor(
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
@@ -171,6 +182,7 @@ class DelegationOrchestrator:
             workspace_root=workspace_root,
             allowed_composition_ids=allowed_composition_ids,
             allowed_builtin_tool_names=allowed_builtin_tool_names,
+            iteration_budget=iteration_budget,
         )
         if result.get("success"):
             self._owner._record_delegation_signal(
@@ -332,6 +344,8 @@ class DelegationOrchestrator:
         tool_whitelist: list[str] | None = None,
         current_task_id: str | None = None,
         workspace_root: str | None = None,
+        resume_session_id: str | None = None,
+        iteration_budget: int | None = None,
     ) -> dict:
         """专员委派的纯执行核心：resolve tools → equipped skills → build prompt →
         create session → ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``
@@ -410,10 +424,18 @@ class DelegationOrchestrator:
         except RuntimeError as exc:
             logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
             return {"success": False, "message": "专员方法论提示词构建失败，已取消委派。"}
-        workflow_id = self._owner._new_delegation_workflow_id(parent_session_id)
-        child_session_id = self._owner._session_store.create_session(
-            workflow_id, AgentType.SPECIALIST
-        )
+        # 续跑时复用已有会话（跳过 create_session），否则新建。
+        if resume_session_id:
+            existing = self._owner._session_store.get_session(resume_session_id)
+            if existing is None:
+                return {"success": False, "message": "续跑会话不存在"}
+            child_session_id = existing.session_id
+            workflow_id = getattr(existing, "workflow_id", "") or ""
+        else:
+            workflow_id = self._owner._new_delegation_workflow_id(parent_session_id)
+            child_session_id = self._owner._session_store.create_session(
+                workflow_id, AgentType.SPECIALIST
+            )
         allowed_methodology_skill_ids = {
             str(item.get("skill_id") or "")
             for item in equipped_skills_snapshot
@@ -437,5 +459,6 @@ class DelegationOrchestrator:
             role_kind=role_kind,
             workspace_root=workspace_root,
             allowed_composition_ids=allowed_composition_ids,
+            iteration_budget=iteration_budget,
         )
         return result

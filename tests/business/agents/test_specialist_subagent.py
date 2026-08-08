@@ -686,6 +686,7 @@ def test_first_launch_consumes_captured_scope_and_workspace() -> None:
         workspace_root="E:/isolated-worktree",
         allowed_composition_ids={"composition-a"},
         allowed_builtin_tool_names={"read_file"},
+        iteration_budget=None,
     )
 
 
