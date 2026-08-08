@@ -4,6 +4,8 @@ SessionRepository -- 会话 Repository
 
 import logging
 from datetime import datetime
+
+from src.utils.timezone import utc_now_naive
 from typing import List, Optional
 
 from src.data.scheduling_types import SessionSource
@@ -134,6 +136,26 @@ class SessionRepository(BaseRepository):
         """获取会话状态"""
         model = self.get_by_id(session_id)
         return model.status if model else None
+
+    def get_focused_task_id(self, session_id: str) -> Optional[str]:
+        """获取会话当前聚焦的用户任务 id（单值指针，无则 None）。"""
+        model = self.get_by_id(session_id)
+        return getattr(model, "focused_user_task_id", None) if model else None
+
+    def update_focused_task(self, session_id: str, task_id: str | None) -> bool:
+        """设置/清除会话的聚焦用户任务指针。task_id=None 表示清除聚焦。
+
+        单值语义：设置新值自动覆盖旧值（一次只聚焦一件事）。
+        返回是否找到并更新了该 session。
+        """
+        model = self.session.query(Session).filter(Session.session_id == session_id).first()
+        if model is None:
+            return False
+        model.focused_user_task_id = task_id
+        model.updated_at = utc_now_naive()
+        self._commit()
+        logger.debug("会话 %s 聚焦任务设为 %s", session_id, task_id)
+        return True
 
     def clear_all_active(self) -> int:
         """断电恢复：把所有 ``status='active'`` 的会话一次性翻成 ``suspended``。

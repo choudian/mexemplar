@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from src.business.task_collaboration.service import TaskCollaborationService
     from src.business.task_collaboration.todos import TaskTodoService
     from src.business.user_todos import UserTodoService
+    from src.business.user_tasks import UserTaskService
 
 from src.business.agents.config import ResultType, ToolDefinition, ToolSignal
 from src.business.agents.tool_helpers import make_tool_schema, error_json, to_json
@@ -568,6 +569,8 @@ __all__ = [
     "create_todo_update_handler",
     "CREATE_USER_TODO_SCHEMA",
     "create_user_todo_handler",
+    "CREATE_TASK_SCHEMA",
+    "create_create_task_handler",
     "LIST_USER_TODOS_SCHEMA",
     "create_list_user_todos_handler",
     "UPDATE_USER_TODO_SCHEMA",
@@ -1318,6 +1321,65 @@ def create_user_todo_handler(
     return create_user_todo
 
 
+# ===== 用户任务层（«用户交办的一件事»）=====
+
+
+def _make_user_task_service(service_factory: Callable[[], "UserTaskService"] | None):
+    if service_factory is not None:
+        return service_factory()
+    from src.business.user_tasks import UserTaskService
+
+    return UserTaskService()
+
+
+CREATE_TASK_SCHEMA = make_tool_schema(
+    name="create_task",
+    description=(
+        "创建一个用户任务——用户交办的「一件事」。"
+        "当与用户谈拢了要做什么、准备开始委派执行时调用。"
+        "建完即成为当前会话的聚焦任务，此后 delegate_to_subagent / "
+        "delegate_to_specialist / build_task_graph 都会挂到它底下。"
+        "会话同一时刻只聚焦一个任务；建新任务会自动切换聚焦。"
+    ),
+    properties={
+        "title": {"type": "string", "description": "任务标题，必填"},
+        "description": {"type": "string", "description": "可选的任务描述/需求说明"},
+    },
+    required=["title"],
+)
+
+
+def create_create_task_handler(
+    session_id: str,
+    service_factory: Callable[[], "UserTaskService"] | None = None,
+):
+    def create_task(title: str, description: str = "") -> str:
+        def _action():
+            with _make_user_task_service(service_factory) as service:
+                task = service.create(
+                    session_id=session_id,
+                    title=title,
+                    description=description,
+                )
+            # 建完即设为聚焦——委派守卫读这个指针
+            from src.data.repos import SessionRepository
+
+            SessionRepository().update_focused_task(session_id, task["taskId"])
+            return to_json(
+                {
+                    "success": True,
+                    "message": "已创建用户任务并设为当前聚焦。",
+                    "task": task,
+                }
+            )
+
+        return _run_task_service(
+            "create_task", "创建用户任务时发生内部错误，请稍后重试。", _action
+        )
+
+    return create_task
+
+
 def create_list_user_todos_handler(
     service_factory: Callable[[], "UserTodoService"] | None = None,
 ):
@@ -1880,7 +1942,24 @@ def _latest_user_message_sequence(session_id: str) -> int | None:
             session_id,
             exc_info=True,
         )
-        return None
+
+
+def _check_focused_user_task(session_id: str) -> bool:
+    """检查会话是否有聚焦用户任务且任务仍在进行中（用户任务层委派硬保证）。
+
+    独立为模块级函数，便于在测试中 patch 掉（build_task_graph handler 测试不连库）。
+    聚焦指针指向 done/dropped 的任务时视为"没有聚焦"——对着一件事已经办完了
+    的任务还往底下挂委派没有意义。
+    """
+    from src.data.repos import SessionRepository, UserTaskRepository
+
+    focused_id = SessionRepository().get_focused_task_id(session_id)
+    if focused_id is None:
+        return False
+    task = UserTaskRepository().get(focused_id)
+    if task is None:
+        return False
+    return task.status in ("active", "cooling")
 
 
 def _trigger_graph_scheduler_start(graph_id: str, *, source: str) -> bool:
@@ -1934,6 +2013,9 @@ def create_build_task_graph_handler(
         """将复杂任务分解成带依赖的 DAG 并原子落库。"""
 
         def _action() -> str:
+            # 用户任务层硬保证：没有聚焦任务时不许建图（文档 62-64 行）。
+            if not _check_focused_user_task(session_id):
+                raise ValueError("当前没有聚焦任务，请先 create_task 创建用户任务后再建图。")
             # workspaceRoot 是特权字段，只允许受信的 proposal_bridge 直连 service
             # 设置；LLM 工具入口（主助理 + 规划专员共享此 handler）必须剥离，避免
             # 执行体 blast radius 被重定向、proposal 沙箱守卫被绕过（026 C2）。

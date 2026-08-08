@@ -36,6 +36,7 @@ ID_PREFIX_EXTERNAL_CODING_ROLLBACK = "ecr_"
 ID_PREFIX_SCHEDULED_TASK = "sch_"
 ID_PREFIX_SCHEDULED_TASK_RUN = "schr_"
 ID_PREFIX_SCHEDULING_CONFIRMATION = "scf_"
+ID_PREFIX_USER_TASK = "utsk_"
 
 
 def generate_id(prefix: str) -> str:

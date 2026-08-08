@@ -135,6 +135,8 @@ class Session(Base):
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
     scheduled_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     is_scheduled: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # v42（用户任务层）：当前聚焦的用户任务 id。单值——一次只聚焦一件事。
+    focused_user_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     def get_tool_id_set(self) -> Optional[set]:
         """解析 tool_ids JSON 字段为 set。None 表示全部工具。"""
@@ -678,6 +680,33 @@ class UserTodo(Base):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     priority: Mapped[str] = mapped_column(String(20), nullable=False, default="medium")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+
+class UserTask(Base):
+    """用户交办的「一件事」——意愿层身份，与执行层 ``assistant_tasks`` 分开存储。
+
+    状态只回答"这件事还办不办"，不传染执行层的停顿/卡住（文档 116 行）。
+    四态 MUST NOT 复用 ``suspended``/``abandoned``（执行层已占用且含义相反）。
+    """
+
+    __tablename__ = "user_tasks"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('active', 'cooling', 'done', 'dropped')",
+            name="ck_user_tasks_status",
+        ),
+        Index("idx_user_tasks_session_created", "session_id", "created_at"),
+        Index("idx_user_tasks_status", "status"),
+    )
+
+    task_id: Mapped[str] = mapped_column(String(50), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(50), nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=func.now(), onupdate=func.now())
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

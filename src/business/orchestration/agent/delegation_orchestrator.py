@@ -23,6 +23,23 @@ class DelegationOrchestrator:
     def __init__(self, owner: Any) -> None:
         self._owner = owner
 
+    @staticmethod
+    def _has_focused_user_task(parent_session_id: str) -> bool:
+        """检查会话是否有聚焦用户任务且任务仍在进行中（用户任务层委派硬保证）。
+
+        聚焦指针指向 done/dropped 的任务时视为"没有聚焦"——对着一件事已经办完了
+        的任务还往底下挂委派没有意义。
+        """
+        from src.data.repos import SessionRepository, UserTaskRepository
+
+        focused_id = SessionRepository().get_focused_task_id(parent_session_id)
+        if focused_id is None:
+            return False
+        task = UserTaskRepository().get(focused_id)
+        if task is None:
+            return False
+        return task.status in ("active", "cooling")
+
     def delegate_to_subagent(
         self,
         *,
@@ -32,6 +49,14 @@ class DelegationOrchestrator:
         tool_whitelist: list[str] | None = None,
         complexity: str = "complex",
     ) -> dict:
+        # 用户任务层硬保证：没有聚焦任务时不许委派（文档 62-64 行）。
+        # 守卫在所有分叉（simple/complex/unified/兜底）之前。
+        if not self._has_focused_user_task(parent_session_id):
+            return {
+                "success": False,
+                "message": "当前没有聚焦任务，请先 create_task 创建用户任务后再委派。",
+                "delegation_type": "ephemeral_subagent",
+            }
         task = (task_description or "").strip()
         if not task:
             return {
@@ -251,6 +276,13 @@ class DelegationOrchestrator:
         task: str,
         execution_context: str = "",
     ) -> dict:
+        # 用户任务层硬保证：没有聚焦任务时不许委派（文档 62-64 行）。
+        if not self._has_focused_user_task(parent_session_id):
+            return {
+                "success": False,
+                "message": "当前没有聚焦任务，请先 create_task 创建用户任务后再委派。",
+                "delegation_type": "specialist",
+            }
         name = (specialist_name or "").strip()
         task_text = (task or "").strip()
         if not name or not task_text:

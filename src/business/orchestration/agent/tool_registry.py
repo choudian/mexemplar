@@ -596,6 +596,7 @@ class ToolRegistry:
             CONTINUE_SUBAGENT_SCHEMA,
             CREATE_SCHEDULED_TASK_SCHEMA,
             CREATE_SPECIALIST_SCHEMA,
+            CREATE_TASK_SCHEMA,
             DECIDE_ADJUDICATION_SCHEMA,
             DELETE_SCHEDULED_TASK_SCHEMA,
             DELEGATE_TO_SPECIALIST_SCHEMA,
@@ -622,6 +623,7 @@ class ToolRegistry:
             create_continue_subagent_handler,
             create_create_scheduled_task_handler,
             create_create_specialist_handler,
+            create_create_task_handler,
             create_decide_task_adjudication_handler,
             create_delete_scheduled_task_handler,
             create_delegate_to_specialist_handler,
@@ -792,6 +794,11 @@ class ToolRegistry:
             schema=BUILD_TASK_GRAPH_SCHEMA,
             handler=create_build_task_graph_handler(session_id),
         )
+        create_task_tool = ToolDefinition(
+            name="create_task",
+            schema=CREATE_TASK_SCHEMA,
+            handler=create_create_task_handler(session_id),
+        )
         mutate_task_graph_tool = ToolDefinition(
             name="mutate_task_graph",
             schema=MUTATE_TASK_GRAPH_SCHEMA,
@@ -871,6 +878,7 @@ class ToolRegistry:
             create_skill_methodology_tool,
             load_skill_methodology_tool,
             build_task_graph_tool,
+            create_task_tool,
             mutate_task_graph_tool,
         ] + scheduled_management_tools
 

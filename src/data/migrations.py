@@ -3912,6 +3912,57 @@ def downgrade_from_v35(engine):
     logger.info("回退版本 35 完成：移除内置专员种子标记列")
 
 
+def migrate_to_v42(engine):
+    """迁移到版本 42：user_tasks 用户层任务表 + sessions.focused_user_task_id 聚焦指针。
+
+    与 ``models_sqlite.py`` 的 ``UserTask`` ORM 和 ``Session.focused_user_task_id`` 同步。
+    用户任务与执行任务（``assistant_tasks``）分开存储——塞进同一张表会让图根
+    ``parent_task_id`` 判据静默失效（7 处查询依赖它）。
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                CREATE TABLE IF NOT EXISTS user_tasks (
+                    task_id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    status TEXT NOT NULL DEFAULT 'active'
+                        CONSTRAINT ck_user_tasks_status
+                        CHECK (status IN ('active', 'cooling', 'done', 'dropped')),
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    completed_at DATETIME
+                )
+                """
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_user_tasks_session_created "
+                    "ON user_tasks(session_id, created_at)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_user_tasks_status "
+                    "ON user_tasks(status)"
+                )
+            )
+            # sessions 表可能不存在（迁移测试只建部分表）；防御性检查
+            if conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'")
+            ).fetchone():
+                _add_column_if_missing(conn, "sessions", "focused_user_task_id", "TEXT")
+            conn.execute(text("UPDATE schema_version SET version = 42"))
+    except Exception as e:
+        logger.error(f"迁移到版本 42 失败: {e}")
+        raise
+    logger.info("迁移到版本 42 完成：user_tasks 表 + sessions.focused_user_task_id")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -3953,6 +4004,7 @@ _MIGRATIONS = [
     (39, migrate_to_v39),
     (40, migrate_to_v40),
     (41, migrate_to_v41),
+    (42, migrate_to_v42),
 ]
 
 

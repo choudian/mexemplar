@@ -4,6 +4,8 @@
 受信的 proposal_bridge 直连 service 设置（026 C2）。
 """
 
+from unittest.mock import patch
+
 from src.business.agents.tools.assistant_tools import create_build_task_graph_handler
 
 
@@ -40,23 +42,27 @@ def test_build_task_graph_handler_strips_workspace_root_injection():
         user_message_sequence_provider=lambda: 1,
         service_factory=lambda: fake,
     )
-
-    handler(
-        nodes=[
-            {
-                "nodeId": "n1",
-                "title": "t1",
-                "description": "d1",
-                "workspaceRoot": "/evil/workspace-1",
-            },
-            {
-                "nodeId": "n2",
-                "title": "t2",
-                "description": "d2",
-                "workspace_root": "/evil/workspace-2",
-            },
-        ]
-    )
+    # 用户任务层聚焦守卫：测试不连库，mock 掉聚焦检查
+    with patch(
+        "src.business.agents.tools.assistant_tools._check_focused_user_task",
+        return_value=True,
+    ):
+        handler(
+            nodes=[
+                {
+                    "nodeId": "n1",
+                    "title": "t1",
+                    "description": "d1",
+                    "workspaceRoot": "/evil/workspace-1",
+                },
+                {
+                    "nodeId": "n2",
+                    "title": "t2",
+                    "description": "d2",
+                    "workspace_root": "/evil/workspace-2",
+                },
+            ]
+        )
 
     assert fake.captured_nodes is not None
     for node in fake.captured_nodes:

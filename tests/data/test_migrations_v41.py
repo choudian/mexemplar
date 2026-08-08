@@ -127,5 +127,6 @@ def test_v41_orm_and_migration_agree_on_every_suspend_reason() -> None:
     assert orm_values == migrated_values == {reason.value for reason in SuspendReason}
 
 
-def test_v41_is_registered_as_the_latest_migration() -> None:
-    assert migrations._MIGRATIONS[-1] == (41, migrations.migrate_to_v41)
+def test_v41_is_registered_in_migrations() -> None:
+    """v41 仍在 _MIGRATIONS 注册表里（不再断言是最新——v42 已接上）。"""
+    assert (41, migrations.migrate_to_v41) in migrations._MIGRATIONS
