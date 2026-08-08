@@ -105,6 +105,22 @@ class AssistantTaskAttemptRepository(BaseRepository):
             .all()
         )
 
+    def scan_all_active(self) -> list[AssistantTaskAttempt]:
+        """重启扫描：所有 active attempt，不看 lease 过期。
+
+        与 ``scan_expired_active`` 的区别：那个只扫 lease 过期的（运行期失联，由
+        ``TaskCollaborationBackgroundWorker`` 周期调用）；这个扫**全部** active——sidecar
+        重启后上一代进程的执行体线程物理全死，无论 lease 到没到期，状态都是假的。判据是
+        进程级全局事实（重启 = 上一代全死），不需要逐 attempt 的 PID 校验，因为普通 attempt
+        的执行体是进程内线程（``dispatcher.py`` 的 ThreadPoolExecutor），不起子进程。
+        """
+        return (
+            self.session.query(AssistantTaskAttempt)
+            .filter(AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES))
+            .order_by(AssistantTaskAttempt.created_at)
+            .all()
+        )
+
     def latest_resume_ref_for_task(self, task_id: str) -> str | None:
         """Return the newest checkpoint/result reference that can guide a resumed attempt."""
         row = (

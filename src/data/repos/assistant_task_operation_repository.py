@@ -62,3 +62,19 @@ class AssistantTaskOperationRepository(BaseRepository):
         if status == "completed":
             row.completed_at = row.updated_at
         return self._update_and_flush(row)
+
+    def scan_in_progress(self) -> list[AssistantTaskOperation]:
+        """断电恢复：所有 ``in_progress`` 副作用记录。
+
+        ``run_side_effect`` 是同步的——在 attempt worker 线程里执行，``in_progress`` 表示
+        ``execute()`` 正在跑。断电只可能发生在执行期间，那时 operation 卡在 in_progress。
+        它所属的 attempt 已被断电扫描标 fenced（终态），这个 in_progress 没人会来完成。
+        不清的后果：in_progress 行撑着 ``uq_assistant_task_operations_non_failed_key``
+        partial unique index（排除 failed），挡住同 operation_key 的重入重试。
+        """
+        return (
+            self.session.query(AssistantTaskOperation)
+            .filter(AssistantTaskOperation.status == "in_progress")
+            .order_by(AssistantTaskOperation.created_at)
+            .all()
+        )

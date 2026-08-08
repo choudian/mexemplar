@@ -69,9 +69,10 @@ _SUSPEND_REASON_WAITING_ON: dict[SuspendReason, WaitingOn] = {
     # _map_to_outcome 的兜底（未知情形）。映射成 SYSTEM 会让它进 recovery 自动
     # 重试，那是错的；映射成 ASSISTANT 最坏只是多叫醒主助理一次。
     SuspendReason.WAITING_SYSTEM: WaitingOn.ASSISTANT,
-    # INTERRUPTED 目前零生产者。启动对账落地后它才会被真正写入，届时改成 USER
-    # ——重启是一次新的开工，得有人拍板，不能自动烧 token。
-    SuspendReason.INTERRUPTED: WaitingOn.SYSTEM,
+    # 断电 / sidecar 异常退出后，启动栅栏（TaskRecoveryService.mark_interrupted_after_restart）
+    # 把遗留的 running attempt 标 fenced、task 落 SUSPENDED+INTERRUPTED。归 USER：重启是一次新的
+    # 开工，得有人拍板，不能自动烧 token（ledger 决策 18）。
+    SuspendReason.INTERRUPTED: WaitingOn.USER,
     # 缺陷谁都修不了（用户改不了代码，主助理重试一百次还是同样的错），但**主助理
     # 是唯一能做绕行决定的角色**——跳过这一步还是放弃整个任务，而那正是这个活接
     # 下来唯一能发生的事。用户侧只需要被告知"有程序问题、这部分做不了"。

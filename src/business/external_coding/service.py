@@ -564,6 +564,57 @@ class ExternalCodingSessionService:
         self._emit(row, "abandoned")
         return self.detail_to_dict(row)
 
+    def recover_interrupted_after_restart(self) -> int:
+        """sidecar 重启后：把上一代遗留的 running external coding attempt 标 interrupted。
+
+        035/v33 的 ``termination_unconfirmed`` 是写入时不变式守卫（running 必然带 unconfirmed），
+        **不是**启动自愈——断电后 running+unconfirmed 的行会永久卡住 partial unique index
+        ``uq_external_coding_attempts_active_session``，挡住同 coding session 的新 attempt；
+        关联 session 卡在 planning/implementing，``resume_session`` 直接拒绝（``service.py:489``）。
+
+        不需要 adapter——进程已死（重启 = 上一代 CLI 子进程的父 sidecar 没了，CLI 也不会
+        跨 sidecar 重启存活）。直接原子投影 attempt+session 到 interrupted，复用
+        ``update_session_and_attempt`` 的 CAS 守卫（``expected_attempt_status='running'``），
+        ``_attempt_update_values`` 自动清 ``termination_unconfirmed``、补 ``finished_at``。
+
+        必须在启动栅栏里跑（和 task collaboration 的扫描同期）。返回处理过的 attempt 条数。
+        """
+        count = 0
+        for attempt in self._repo.scan_running_attempts():
+            try:
+                projected = self._repo.update_session_and_attempt(
+                    coding_session_id=attempt.coding_session_id,
+                    attempt_id=attempt.attempt_id,
+                    session_fields={
+                        "status": CodingSessionStatus.INTERRUPTED.value,
+                        "last_error_category": ErrorCategory.UNKNOWN.value,
+                        "last_error_message": "sidecar restart: attempt interrupted",
+                    },
+                    attempt_fields={
+                        "status": AttemptStatus.INTERRUPTED.value,
+                        "error_category": ErrorCategory.UNKNOWN.value,
+                        "error_message": "sidecar restart: process no longer exists",
+                    },
+                    expected_attempt_status=AttemptStatus.RUNNING.value,
+                )
+                if projected is not None:
+                    count += 1
+                    # 与所有状态变更方法一致：发 external_coding_session_changed，否则已连
+                    # 接的前端只能等 backend.resync_required 才知道 session 变了。
+                    self._emit(projected[0], "interrupted")
+            except Exception:
+                logger.exception(
+                    "[external-coding] recover interrupted attempt %s failed",
+                    attempt.attempt_id,
+                )
+                continue
+        if count:
+            logger.info(
+                "[external-coding] recovered %d interrupted attempts after restart",
+                count,
+            )
+        return count
+
     def list_sessions(
         self,
         *,

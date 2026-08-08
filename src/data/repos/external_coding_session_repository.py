@@ -425,6 +425,21 @@ class ExternalCodingSessionRepository(BaseRepository):
             .first()
         )
 
+    def scan_running_attempts(self) -> list[ExternalCodingAttempt]:
+        """断电恢复：跨 session 列出所有 ``status='running'`` 的 attempt。
+
+        ``get_active_attempt`` 是按单 session 查；本方法扫全表，供 sidecar 重启时的启动
+        栅栏使用。DB 约束 ``ck_external_coding_attempts_ownership_status`` 强制 running 行必然
+        带 ``termination_unconfirmed=1``，所以这里无需再合取该条件——扫 running 即扫"假活"。
+        终态值（succeeded/interrupted/failed）断电后是真的，不扫。
+        """
+        return (
+            self.session.query(ExternalCodingAttempt)
+            .filter(ExternalCodingAttempt.status == "running")
+            .order_by(ExternalCodingAttempt.started_at)
+            .all()
+        )
+
     def list_attempts(self, coding_session_id: str) -> list[ExternalCodingAttempt]:
         return (
             self.session.query(ExternalCodingAttempt)

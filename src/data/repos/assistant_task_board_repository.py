@@ -181,3 +181,18 @@ class AssistantTaskClaimRepository(BaseRepository):
             )
             .all()
         )
+
+    def scan_all_active_claims(self) -> list[AssistantTaskClaim]:
+        """断电恢复：所有 ``claimed`` 认领，不看 lease 过期。
+
+        与 ``scan_expired_claims`` 的区别：那个只扫 lease 过期的（运行期，由
+        ``TaskCollaborationBackgroundWorker`` 周期调用）；这个扫**全部** claimed——sidecar
+        重启后认领它的执行体已死，无论 lease 到没到期都是假的。不清的后果：claimed 行撑着
+        ``uq_assistant_task_claims_active_claimer`` partial unique index，挡住重新认领。
+        """
+        return (
+            self.session.query(AssistantTaskClaim)
+            .filter(AssistantTaskClaim.status == "claimed")
+            .order_by(AssistantTaskClaim.created_at)
+            .all()
+        )

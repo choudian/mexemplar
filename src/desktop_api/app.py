@@ -78,6 +78,37 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 )
         except Exception:
             logger.warning("Assistant retry recovery failed", exc_info=True)
+        # ⑤ 状态对齐半·启动栅栏：在任何后台 worker .start() 之前，把上一代进程遗留的
+        # 假状态一次性对齐。判据是进程级全局事实——重启 = 上一代执行体线程物理全死。
+        # 失败用 WARNING：退化为现状（worker 周期清 lease 过期的 / external coding 卡住
+        # 等用户手动 abandon），不比现在更糟；比 worker 起不来（整条恢复链路废）轻一档。
+        try:
+            from src.business.task_collaboration.recovery import TaskRecoveryService
+
+            with TaskRecoveryService() as service:
+                interrupted = service.mark_interrupted_after_restart()
+            if interrupted:
+                logger.info(
+                    "Marked interrupted attempts after restart",
+                    extra={"count": interrupted},
+                )
+        except Exception:
+            logger.warning(
+                "Post-restart task collaboration interruption scan failed",
+                exc_info=True,
+            )
+        try:
+            from src.business.external_coding.service import (
+                ExternalCodingSessionService,
+            )
+
+            with ExternalCodingSessionService() as coding_service:
+                coding_service.recover_interrupted_after_restart()
+        except Exception:
+            logger.warning(
+                "Post-restart external coding interruption scan failed",
+                exc_info=True,
+            )
         ensure_builtin_deps()
         try:
             from src.data.real_tour_audit import ensure_initialized

@@ -135,6 +135,28 @@ class SessionRepository(BaseRepository):
         model = self.get_by_id(session_id)
         return model.status if model else None
 
+    def clear_all_active(self) -> int:
+        """断电恢复：把所有 ``status='active'`` 的会话一次性翻成 ``suspended``。
+
+        sidecar 重启后，上一代进程的执行体线程物理全死——任何 ``active`` 会话都是假的
+        （执行体没走到正常出口，``update_session_status`` 一次没调用）。包括子代理 executor
+        会话**和**主助理根会话（后者不挂在任何 attempt 的 ``executor_session_id`` 上，按 attempt
+        绑定来清会漏掉它）。重启后没有任何执行体活着，所以所有 active 一律是假，一刀切最稳；
+        用户下次发消息时 ``AgentLoop`` 会把 ``suspended`` 复活回 ``active``。
+
+        返回受影响行数。幂等：无 active 行时返回 0。
+        """
+        from sqlalchemy import update
+
+        now = datetime.now()
+        result = self.session.execute(
+            update(Session)
+            .where(Session.status == "active")
+            .values(status="suspended", updated_at=now)
+        )
+        self._commit()
+        return result.rowcount or 0
+
     def get_by_agent_type(
         self,
         agent_type: str,
