@@ -1246,24 +1246,9 @@ class TaskCollaborationService(AtomicTaskService):
                         )
                         not_pushed.append({"title": task.title, "reason": reason})
                     else:
-                        pushed.append({"title": task.title, "graph_id": graph_id})
-            # 对整张图执行 continue_graph（翻 PENDING_DISPATCH + 触发 scheduler）
-            if has_children:
-                should_continue = any(
-                    t.status == TaskStatus.SUSPENDED
-                    and t.suspend_reason not in _CONTINUE_CANNOT_MOVE
-                    and t.parent_task_id is not None
-                    for t in tasks
-                )
-            else:
-                # 单节点图：根就是执行节点
-                should_continue = (
-                    len(tasks) == 1
-                    and tasks[0].status == TaskStatus.SUSPENDED
-                    and tasks[0].suspend_reason not in _CONTINUE_CANNOT_MOVE
-                )
-            if should_continue:
-                self.continue_graph(session_id=session_id, graph_id=graph_id)
+                        pushed.append({"title": task.title, "graph_id": graph_id, "task_id": task.task_id})
+            # ③ §2.4 原子化 continue：不再在这里调 continue_graph（翻 PENDING_DISPATCH），
+            # 由 runtime 层的 continue_task_atomically 逐个原子推进（跳过 PENDING_DISPATCH）。
 
         return {
             "pushed": pushed,

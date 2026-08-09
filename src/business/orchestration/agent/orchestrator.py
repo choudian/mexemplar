@@ -657,6 +657,15 @@ class AgentOrchestrator:
             use_resume_target=use_resume_target,
         )
 
+    def continue_task_atomically(self, *, task_id: str) -> bool:
+        """③ §2.4 原子化 continue：不经过 PENDING_DISPATCH，一事务内建 attempt + task running。"""
+        future = self._get_task_dispatcher().continue_task_atomically(task_id=task_id)
+        return future is not None
+
+    def wait_for_active_attempt(self, task_id: str, **kwargs) -> bool:
+        """③ §2.5 有界等待：等 task 的 active attempt 停稳。"""
+        return self._get_task_dispatcher().wait_for_active_attempt(task_id, **kwargs)
+
     def resume_recovered_task(self, *, task_id: str, checkpoint_ref: str) -> bool:
         task = self._task_repo.get_task(task_id)
         if task is None or not task.assignee_type:

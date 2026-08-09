@@ -320,6 +320,110 @@ class TaskDispatcher:
                 started += 1
         return started
 
+    def continue_task_atomically(
+        self,
+        *,
+        task_id: str,
+    ) -> Future | None:
+        """③ §2.4 原子化 continue：不经过 PENDING_DISPATCH 中间态。
+
+        在一个 ``_worker_scope`` 事务内完成：选续跑目标 → 建 attempt（带 checkpoint_ref）
+        → task 从 SUSPENDED 直接翻 RUNNING。scheduler 扫的是 PENDING_DISPATCH，从头到尾
+        看不到这个节点——不存在并发抢跑的缝。
+
+        返回 Future（已提交到线程池）或 None（无 executor / 无续跑目标 / 容量冲突）。
+        """
+        if self._executor_callback is None:
+            return None
+        lease_seconds = self._config.get_assistant_tasks_attempt_lease_seconds()
+        with self._write_lock:
+            with _worker_scope() as (attempts, service):
+                task_row = service.get_task(task_id)
+                if task_row is None:
+                    logger.warning("[atomic_continue] task %s not found", task_id)
+                    return None
+                if task_row.status != TaskStatus.SUSPENDED:
+                    logger.warning(
+                        "[atomic_continue] task %s is %s, not suspended; skip",
+                        task_id,
+                        task_row.status,
+                    )
+                    return None
+                if not task_row.assignee_type or not task_row.assignee_id:
+                    logger.warning(
+                        "[atomic_continue] task %s has no assignee; skip", task_id
+                    )
+                    return None
+                # 选续跑目标（三条硬规则：paused/fenced 都续跑 + executor 匹配 + has_progress）
+                target = attempts.latest_resume_target_for_task(
+                    task_id,
+                    assignee_type=task_row.assignee_type,
+                    assignee_id=task_row.assignee_id,
+                )
+                checkpoint_ref = None
+                if target:
+                    checkpoint_ref = json.dumps(
+                        {"executor_session_id": target["session_id"]}
+                    )
+                # 建 attempt（start_attempt 内部有容量=1 守卫 + 唯一索引兜底）
+                executor_id = (
+                    task_row.assignee_id
+                    if task_row.assignee_type == "specialist" and task_row.assignee_id
+                    else task_id
+                )
+                attempt = attempts.start_attempt(
+                    task_id=task_id,
+                    executor_type=task_row.assignee_type,
+                    executor_id=executor_id,
+                    lease_owner="atomic_continue",
+                    lease_expires_at=utc_now_naive() + timedelta(seconds=lease_seconds),
+                    checkpoint_ref=checkpoint_ref,
+                )
+                if attempt is None:
+                    logger.warning(
+                        "[atomic_continue] start_attempt returned None (capacity conflict): task=%s",
+                        task_id,
+                    )
+                    return None
+                attempt_id = attempt.attempt_id
+                fence_token = attempt.fence_token
+                # task 从 SUSPENDED 直接翻 RUNNING（不经过 PENDING_DISPATCH）
+                service.update_task_status(
+                    task_id=task_id,
+                    status=TaskStatus.RUNNING,
+                )
+                increment_task_collaboration_counter("attempt_started")
+        return self._pool.submit(
+            self._run_attempt_worker,
+            attempt_id,
+            fence_token,
+        )
+
+    def wait_for_active_attempt(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float = 5.0,
+        poll_interval_seconds: float = 0.2,
+    ) -> bool:
+        """③ §2.5 有界等待：等 task 的 active attempt 停稳。
+
+        stop→continue 场景：用户点了停止后立刻点继续，旧 attempt 可能还 running。
+        新 attempt 会撞唯一索引。此方法轮询等旧 attempt 变非 active。
+
+        返回 True（已停稳，可以建新 attempt）或 False（超时，旧 attempt 仍 active）。
+        """
+        import time
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            with AssistantTaskAttemptRepository() as attempts:
+                active = attempts._active_attempt_for_task(task_id)
+            if active is None:
+                return True
+            time.sleep(poll_interval_seconds)
+        return False
+
     def _run_attempt_worker(self, attempt_id: str, fence_token: int) -> dict[str, Any]:
         # 整个 worker 体外层兜底：executor 之外（complete/fail/裁定等 DB 操作）的异常
         # 否则会被线程池 Future 静默吞掉，任务永远卡在 running 只能等 lease 过期。

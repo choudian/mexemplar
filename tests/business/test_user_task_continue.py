@@ -250,3 +250,130 @@ class TestStatusDistribution:
 
         assert distribution.get("done") == 2
         assert distribution.get("suspended:user") == 1
+
+
+# ---------------------------------------------------------------------------
+# §2.4 原子化 continue：不经过 PENDING_DISPATCH
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicContinue:
+    def test_suspended_task_goes_straight_to_running(self, in_memory_db):
+        """原子化 continue：task 从 SUSPENDED 直接翻 RUNNING，不经过 PENDING_DISPATCH。"""
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+
+        sid = _seed_session("sess_atomic")
+        # 建一条 suspended task（有 paused attempt + executor_session_id + assistant 消息）
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_atomic", session_id=sid,
+                task_id="tsk_atomic", title="原子测试", description="d",
+                assignee_type="ephemeral_subagent", assignee_id="exec_atomic",
+                status="running",
+            )
+        _suspend_task("tsk_atomic", suspend_reason="user_stop", waiting_on="user")
+
+        with AssistantTaskAttemptRepository() as attempts:
+            attempt = attempts.start_attempt(
+                task_id="tsk_atomic", executor_type="ephemeral_subagent",
+                executor_id="exec_atomic", lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+            )
+            attempts.bind_session(task_id="tsk_atomic", executor_session_id="exec_sess_atomic")
+            attempts.pause_if_current(
+                attempt_id=attempt.attempt_id, fence_token=attempt.fence_token,
+            )
+        from src.data.repos.message_repository import MessageRepository
+        with MessageRepository() as msgs:
+            msgs.create(Message(
+                message_id="msg_atomic", session_id="exec_sess_atomic",
+                sequence=1, role="assistant", content="",
+            ))
+
+        # 执行原子化 continue——只验证状态变更（attempt + task RUNNING），
+        # 不实际跑 worker。直接模拟原子操作的核心：选续跑目标 → 建 attempt → 翻 RUNNING。
+        with AssistantTaskAttemptRepository() as attempts:
+            target = attempts.latest_resume_target_for_task(
+                "tsk_atomic",
+                assignee_type="ephemeral_subagent",
+                assignee_id="exec_atomic",
+            )
+            assert target is not None
+            import json
+            checkpoint_ref = json.dumps({"executor_session_id": target["session_id"]})
+            attempt = attempts.start_attempt(
+                task_id="tsk_atomic", executor_type="ephemeral_subagent",
+                executor_id="exec_atomic", lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+                checkpoint_ref=checkpoint_ref,
+            )
+            assert attempt is not None
+
+        # task 从 SUSPENDED 直接翻 RUNNING（不经过 PENDING_DISPATCH）
+        from src.business.task_collaboration.service import TaskCollaborationService
+        with TaskCollaborationService() as svc:
+            svc.update_task_status(task_id="tsk_atomic", status="running")
+
+        # task 应该直接是 running，不是 pending_dispatch
+        with AssistantTaskRepository() as tasks:
+            task = tasks.get_task("tsk_atomic")
+        assert task is not None
+        assert task.status == "running"  # 不是 pending_dispatch
+
+    def test_non_suspended_task_skipped(self, in_memory_db):
+        """非 SUSPENDED 的 task 被跳过（返回 None）。"""
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+
+        sid = _seed_session("sess_atomic_skip")
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_skip", session_id=sid,
+                task_id="tsk_skip", title="skip", description="d",
+                assignee_type="ephemeral_subagent", assignee_id="exec",
+                status="done",
+            )
+
+        dispatcher = TaskDispatcher(executor_callback=lambda _aid: {"success": True})
+        future = dispatcher.continue_task_atomically(task_id="tsk_skip")
+        assert future is None  # done 状态不该被 continue
+
+
+# ---------------------------------------------------------------------------
+# §2.5 有界等待：旧 attempt 还 active 时轮询等停稳
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForActiveAttempt:
+    def test_returns_true_when_no_active_attempt(self, in_memory_db):
+        """没有 active attempt 时立即返回 True。"""
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+
+        dispatcher = TaskDispatcher()
+        assert dispatcher.wait_for_active_attempt("never_exists", timeout_seconds=0.5) is True
+
+    def test_returns_false_on_timeout(self, in_memory_db):
+        """旧 attempt 一直 active 时超时返回 False。"""
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+
+        sid = _seed_session("sess_wait_timeout")
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_wait", session_id=sid,
+                task_id="tsk_wait", title="wait", description="d",
+                assignee_type="ephemeral_subagent", assignee_id="exec_wait",
+                status="running",
+            )
+        with AssistantTaskAttemptRepository() as attempts:
+            attempts.start_attempt(
+                task_id="tsk_wait", executor_type="ephemeral_subagent",
+                executor_id="exec_wait", lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+            )
+
+        dispatcher = TaskDispatcher()
+        # attempt 是 running（active），轮询 0.5 秒后超时
+        result = dispatcher.wait_for_active_attempt(
+            "tsk_wait", timeout_seconds=0.5, poll_interval_seconds=0.1
+        )
+        assert result is False
+

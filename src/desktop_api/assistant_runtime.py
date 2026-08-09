@@ -776,6 +776,9 @@ class AssistantRuntime:
         """用户对一件事点「继续」：遍历这件事底下所有图，推得动的都推。
 
         返回结构化报告（几摊动了/几摊没动/原因）。
+
+        ③ §2.4 原子化：每个任务走 continue_task_atomically（不经过 PENDING_DISPATCH，
+        scheduler 不可能抢跑）。
         """
         from src.business.task_collaboration.service import TaskCollaborationService
 
@@ -784,23 +787,22 @@ class AssistantRuntime:
                 session_id=session_id,
                 user_task_id=user_task_id,
             )
-        # 对每个被推的图触发 dispatcher 派发
+        # 对每个推得动的任务走原子化 continue（跳过 PENDING_DISPATCH）
         orch = self._get_orchestrator()
         for item in report.get("pushed", []):
-            graph_id = item.get("graph_id")
-            if graph_id:
-                try:
-                    orch.resume_pending_graph_tasks(
-                        session_id=session_id,
-                        graph_id=graph_id,
-                        use_resume_target=True,
-                    )
-                except Exception:
-                    logging.warning(
-                        "continue_user_task: dispatch failed for graph %s",
-                        graph_id,
-                        exc_info=True,
-                    )
+            task_id = item.get("task_id")
+            if not task_id:
+                continue
+            try:
+                # §2.5 有界等待：如果旧 attempt 还 active（刚 stop），等它停稳
+                orch.wait_for_active_attempt(task_id, timeout_seconds=5.0)
+                orch.continue_task_atomically(task_id=task_id)
+            except Exception:
+                logging.warning(
+                    "continue_user_task: atomic continue failed for task %s",
+                    task_id,
+                    exc_info=True,
+                )
         return report
 
     def resume_recovered_task(self, task_id: str, checkpoint_ref: str) -> bool:
