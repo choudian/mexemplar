@@ -34,6 +34,7 @@ from src.desktop_api.routers import (
     skills_methodology,
     teaching,
     user_todos,
+    user_tasks,
 )
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
 from src.execution.tool_executor import ensure_builtin_deps
@@ -406,6 +407,7 @@ def create_app(session_token: str | None = None) -> FastAPI:
     app.include_router(external_coding_sessions.router)
     app.include_router(proposals.router)
     app.include_router(user_todos.router)
+    app.include_router(user_tasks.router)
     app.include_router(mcp_servers.router)
     app.include_router(skill_store.router)
     app.include_router(scheduled_tasks.router)

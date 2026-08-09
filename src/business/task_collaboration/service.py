@@ -1208,6 +1208,59 @@ class TaskCollaborationService(AtomicTaskService):
             change_type="graph_continued",
         )
 
+    def continue_user_task(
+        self,
+        *,
+        session_id: str,
+        user_task_id: str,
+    ) -> dict:
+        """用户对一件事点「继续」：遍历这件事底下的所有图，推得动的都推。
+
+        返回结构化报告（设计文档硬要求）：
+        ``{"pushed": [{title, graph_id}], "not_pushed": [{title, reason}], "total": int}``
+
+        每摊没推动的原因分两类：
+        - ``"waiting_user"`` —— 等用户回答，用户答了才推得动
+        - ``"blocked_by_defect"`` —— 撞缺陷了，重试也是同样结果
+
+        一摊都没推动时不报 success——设计文档 218 行："一摊都没推动时尤其不能报成功"。
+        """
+        roots = self._tasks.list_graph_roots_for_user_task(user_task_id)
+        pushed: list[dict] = []
+        not_pushed: list[dict] = []
+        for root in roots:
+            graph_id = root.graph_id
+            # 读图内所有节点，区分"推得动"和"推不动"
+            tasks = self._tasks.list_graph_tasks(graph_id)
+            for task in tasks:
+                if task.parent_task_id is None:
+                    continue  # root 容器不参与
+                if task.status == TaskStatus.SUSPENDED:
+                    if task.suspend_reason in _CONTINUE_CANNOT_MOVE:
+                        reason = (
+                            "在等你回答，你答了才推得动"
+                            if task.suspend_reason == SuspendReason.WAITING_USER.value
+                            else "这一步遇到程序问题，重试也是同样结果"
+                        )
+                        not_pushed.append({"title": task.title, "reason": reason})
+                    else:
+                        pushed.append({"title": task.title, "graph_id": graph_id})
+            # 对整张图执行 continue_graph（翻 PENDING_DISPATCH + 触发 scheduler）
+            if any(
+                t.status == TaskStatus.SUSPENDED
+                and t.suspend_reason not in _CONTINUE_CANNOT_MOVE
+                and t.parent_task_id is not None
+                for t in tasks
+            ):
+                self.continue_graph(session_id=session_id, graph_id=graph_id)
+
+        return {
+            "pushed": pushed,
+            "not_pushed": not_pushed,
+            "total": len(pushed) + len(not_pushed),
+            "success": len(pushed) > 0 or len(not_pushed) == 0,
+        }
+
     def cancel_graph(
         self,
         *,

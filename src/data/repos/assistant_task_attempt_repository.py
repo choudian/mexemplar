@@ -122,7 +122,13 @@ class AssistantTaskAttemptRepository(BaseRepository):
         )
 
     def latest_resume_ref_for_task(self, task_id: str) -> str | None:
-        """Return the newest checkpoint/result reference that can guide a resumed attempt."""
+        """Return the newest checkpoint/result reference that can guide a resumed attempt.
+
+        ⚠️ 此方法已被 ``latest_resume_target_for_task`` 取代——后者返回结构化续跑目标，
+        含三条硬规则校验（执行人匹配、capability_scope fail-closed、has_progress）。
+        此方法保留仅供 fresh 派发路径（``start_pending_graph_tasks``）使用，
+        fresh 派发不需要续跑校验，只需要"有没有旧会话可参考"的粗粒度信号。
+        """
         row = (
             self.session.query(AssistantTaskAttempt)
             .filter(
@@ -139,6 +145,63 @@ class AssistantTaskAttemptRepository(BaseRepository):
         if row is None:
             return None
         return row.checkpoint_ref or row.result_ref
+
+    def latest_resume_target_for_task(
+        self,
+        task_id: str,
+        *,
+        assignee_type: str,
+        assignee_id: str,
+    ) -> dict | None:
+        """③ 第二阶段：选出可续跑的 attempt，返回结构化续跑目标。
+
+        三条硬规则（详见 step-3-resume-plan §2.2）：
+        1. paused 和 fenced 都续跑（fenced 带对账提示）
+        2. 候选 executor_type/executor_id 必须匹配 assignee_type/assignee_id
+        3. has_progress：会话里有任何 assistant 消息才算（含 content 空的）
+
+        返回 ``{"session_id": str, "was_fenced": bool, "has_progress": bool}`` 或 None。
+        capability_scope 的 fail-closed 校验由调用方做（数据层不持有 task.capability_scope）。
+        """
+        from src.data.models_sqlite import Message
+
+        candidates = (
+            self.session.query(AssistantTaskAttempt)
+            .filter(
+                AssistantTaskAttempt.task_id == task_id,
+                AssistantTaskAttempt.status.in_(("paused", "fenced")),
+                AssistantTaskAttempt.executor_type == assignee_type,
+                AssistantTaskAttempt.executor_id == assignee_id,
+                AssistantTaskAttempt.executor_session_id.is_not(None),
+            )
+            .order_by(
+                AssistantTaskAttempt.finished_at.desc().nullslast(),
+                AssistantTaskAttempt.updated_at.desc(),
+                AssistantTaskAttempt.created_at.desc(),
+            )
+            .all()
+        )
+        for attempt in candidates:
+            session_id = attempt.executor_session_id
+            if not session_id:
+                continue
+            # has_progress：会话里有任何 assistant 消息就算（含 content 空的、只带 tool_calls 的）
+            has_msg = (
+                self.session.query(Message.message_id)
+                .filter(
+                    Message.session_id == session_id,
+                    Message.role == "assistant",
+                )
+                .first()
+            )
+            if has_msg is None:
+                continue  # 没进度，往前找下一个
+            return {
+                "session_id": session_id,
+                "was_fenced": attempt.status == "fenced",
+                "has_progress": True,
+            }
+        return None
 
     def latest_attempt_for_task(self, task_id: str) -> AssistantTaskAttempt | None:
         """返回某 task 最新一条 attempt（不限状态），按创建时间倒序。
@@ -421,7 +484,26 @@ class AssistantTaskAttemptRepository(BaseRepository):
         attempt_id: str,
         fence_token: int,
         result_ref: str | None = None,
+        checkpoint_ref: str | None = None,
     ) -> AssistantTaskAttempt | None:
+        """暂停 attempt。checkpoint_ref 存续跑信息 JSON（executor_session_id 等），
+        供 ``latest_resume_target_for_task`` 解析续跑目标。
+        """
+        if checkpoint_ref is not None:
+            # _terminate_if_current 不写 checkpoint_ref，单独先写
+            self.ensure_immediate_transaction()
+            updated = (
+                self.session.query(AssistantTaskAttempt)
+                .filter(
+                    AssistantTaskAttempt.attempt_id == attempt_id,
+                    AssistantTaskAttempt.fence_token == fence_token,
+                    AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
+                )
+                .update({"checkpoint_ref": checkpoint_ref}, synchronize_session=False)
+            )
+            self._commit()
+            if updated == 0:
+                return None
         return self._terminate_if_current(
             attempt_id=attempt_id,
             fence_token=fence_token,

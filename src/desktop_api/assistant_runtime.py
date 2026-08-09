@@ -772,6 +772,36 @@ class AssistantRuntime:
         )
         return {"resumed": resumed, "started": started}
 
+    def continue_user_task(self, session_id: str, user_task_id: str) -> dict:
+        """用户对一件事点「继续」：遍历这件事底下所有图，推得动的都推。
+
+        返回结构化报告（几摊动了/几摊没动/原因）。
+        """
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            report = service.continue_user_task(
+                session_id=session_id,
+                user_task_id=user_task_id,
+            )
+        # 对每个被推的图触发 dispatcher 派发
+        orch = self._get_orchestrator()
+        for item in report.get("pushed", []):
+            graph_id = item.get("graph_id")
+            if graph_id:
+                try:
+                    orch.resume_pending_graph_tasks(
+                        session_id=session_id,
+                        graph_id=graph_id,
+                    )
+                except Exception:
+                    logging.warning(
+                        "continue_user_task: dispatch failed for graph %s",
+                        graph_id,
+                        exc_info=True,
+                    )
+        return report
+
     def resume_recovered_task(self, task_id: str, checkpoint_ref: str) -> bool:
         """Background recovery callback for checkpoint-backed tasks."""
         return self._get_orchestrator().resume_recovered_task(

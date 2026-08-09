@@ -546,10 +546,20 @@ class TaskDispatcher:
                     "lateResult": True,
                     "taskTerminal": task_row.status,
                 }
+            # ③ 第二阶段：checkpoint_ref 存 executor_session_id，供续跑路径解析。
+            # result_ref 继续做它本职（给主助理看的产出预览），两者不再混用。
+            checkpoint_json = None
+            if current_attempt.executor_session_id:
+                import json as _json
+
+                checkpoint_json = _json.dumps(
+                    {"executor_session_id": current_attempt.executor_session_id}
+                )
             resolved = attempts.pause_if_current(
                 attempt_id=attempt_id,
                 fence_token=fence_token,
                 result_ref=result_ref,
+                checkpoint_ref=checkpoint_json,
             )
             if resolved is None:
                 increment_task_collaboration_counter("late_result_rejected")

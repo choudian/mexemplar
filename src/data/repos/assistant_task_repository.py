@@ -172,6 +172,51 @@ class AssistantTaskRepository(BaseRepository):
             .all()
         )
 
+    def status_distribution_for_user_task(self, user_task_id: str) -> dict[str, int]:
+        """返回用户任务下所有执行节点的状态分布（供界面画分布条）。
+
+        遍历 user_task 下所有图的子节点，按 status + waiting_on 聚合。
+        返回 key 形如 ``done``, ``skipped``, ``delivered``, ``running``,
+        ``pending_dispatch``, ``suspended_user``, ``suspended_system``, ``suspended_assistant``。
+        """
+        from sqlalchemy import func
+
+        roots = self.list_graph_roots_for_user_task(user_task_id)
+        if not roots:
+            return {}
+        graph_ids = [root.graph_id for root in roots]
+        rows = (
+            self.session.query(
+                AssistantTask.status,
+                AssistantTask.suspend_reason,
+                func.count(AssistantTask.task_id),
+            )
+            .filter(
+                AssistantTask.graph_id.in_(graph_ids),
+                AssistantTask.parent_task_id.is_not(None),  # 只看执行节点
+            )
+            .group_by(AssistantTask.status, AssistantTask.suspend_reason)
+            .all()
+        )
+        distribution: dict[str, int] = {}
+        for status, suspend_reason, count in rows:
+            if status == "suspended" and suspend_reason:
+                # 暂停的按 waiting_on 细分（waiting_on 跟 suspend_reason 一一对应）
+                waiting_on_map = {
+                    "waiting_user": "suspended_user",
+                    "waiting_system": "suspended_system",
+                    "user_stop": "suspended_user",
+                    "budget_exhausted": "suspended_assistant",
+                    "quota_exhausted": "suspended_user",
+                    "interrupted": "suspended_user",
+                    "blocked_by_defect": "suspended_assistant",
+                }
+                key = waiting_on_map.get(suspend_reason, "suspended_system")
+            else:
+                key = status
+            distribution[key] = distribution.get(key, 0) + count
+        return distribution
+
     def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
         """返回 session 内是否仍有未终态执行节点；root 容器不参与判定。"""
         row = (
