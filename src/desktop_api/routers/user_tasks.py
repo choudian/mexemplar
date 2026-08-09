@@ -17,6 +17,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/sessions/{session_id}/user-tasks", tags=["user-tasks"])
 
 
+class UserTaskItem(BaseModel):
+    taskId: str
+    title: str
+    description: str
+    status: str
+
+
+class UserTaskListResponse(BaseModel):
+    tasks: list[UserTaskItem]
+
+
 class UserTaskStatusDistributionResponse(BaseModel):
     """一件事底下所有执行节点的状态分布。"""
     taskId: str
@@ -29,6 +40,30 @@ class UserTaskContinueResponse(BaseModel):
     notPushed: list[dict[str, Any]]
     total: int
     success: bool
+
+
+@router.get("", response_model=UserTaskListResponse)
+def list_user_tasks(
+    session_id: str,
+    status_filter: str = "open",
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> UserTaskListResponse:
+    """列出会话的用户任务。默认只看 open（active/cooling）。"""
+    with UserTaskService() as service:
+        tasks = service.list_for_session(
+            session_id=session_id, status_filter=status_filter
+        )
+    return UserTaskListResponse(
+        tasks=[
+            UserTaskItem(
+                taskId=t["taskId"],
+                title=t["title"],
+                description=t.get("description", ""),
+                status=t["status"],
+            )
+            for t in tasks
+        ]
+    )
 
 
 @router.get("/{task_id}/distribution", response_model=UserTaskStatusDistributionResponse)
@@ -54,9 +89,19 @@ def continue_user_task(
     返回结构化回报：几摊动了、几摊没动、每摊没动的原因。
     """
     report = runtime.continue_user_task(session_id, task_id)
+    # 后端 service 返回 snake_case（graph_id），DTO 要求 camelCase（graphId）
+    pushed = [
+        {"title": item.get("title", ""), "graphId": item.get("graph_id")}
+        for item in report.get("pushed", [])
+    ]
+    not_pushed = [
+        {"title": item.get("title", ""), "reason": item.get("reason", "")}
+        for item in report.get("not_pushed", [])
+    ]
     return UserTaskContinueResponse(
-        pushed=report.get("pushed", []),
-        notPushed=report.get("not_pushed", []),
+        pushed=pushed,
+        notPushed=not_pushed,
         total=report.get("total", 0),
         success=report.get("success", False),
     )
+

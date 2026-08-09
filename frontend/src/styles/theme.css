@@ -8834,6 +8834,152 @@ select:focus-visible,
   background: color-mix(in oklch, var(--ok) 18%, transparent);
 }
 
+/* ===== 用户任务卡片（⑦ 界面层） ===== */
+
+.me-task-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 16px;
+}
+
+.me-task-fold summary {
+  gap: 6px;
+}
+.me-chev {
+  transition: transform 150ms ease;
+  opacity: 0.5;
+}
+.me-chev-open {
+  transform: rotate(90deg);
+}
+.me-task-fold-title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 迷你分布条（折叠行） */
+.me-mini {
+  display: inline-flex;
+  gap: 1px;
+  width: 52px;
+  height: 4px;
+  border-radius: 2px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.me-mini > i {
+  display: block;
+  min-width: 2px;
+}
+
+/* 全尺寸分布条（展开后） */
+.me-bar {
+  display: flex;
+  gap: 2px;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  margin: 8px 0 6px;
+}
+.me-bar > i {
+  display: block;
+  min-width: 4px;
+}
+
+/* 分布条段颜色 */
+.s-done { background: var(--ok); }
+.s-run { background: var(--info); }
+.s-rev { background: var(--warn); }
+.s-you { background: var(--warn); opacity: 0.7; }
+.s-bug { background: var(--danger); }
+.s-todo { background: var(--border-1); }
+
+/* 图例 */
+.me-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.me-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.me-legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+.me-legend b {
+  font-weight: 500;
+}
+
+.me-empty {
+  color: var(--text-3);
+  font-size: 13px;
+  margin: 8px 0;
+}
+
+.me-attention-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--danger);
+  background: color-mix(in oklch, var(--danger) 12%, transparent);
+  flex-shrink: 0;
+}
+
+.me-defect-notice {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 4px;
+  background: color-mix(in oklch, var(--danger) 8%, transparent);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+/* 继续回报 */
+.me-report {
+  margin-top: 10px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.me-report-head {
+  margin: 0 0 4px;
+  font-weight: 500;
+  color: var(--text-1);
+}
+.me-report-fail {
+  color: var(--danger);
+}
+.me-report-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.me-report-list li {
+  padding: 2px 0;
+  color: var(--text-2);
+}
+.me-report-pushed::before {
+  content: "✓ ";
+  color: var(--ok);
+}
+.me-report-blocked::before {
+  content: "• ";
+  color: var(--warn);
+}
+
 /* 详情抽屉 */
 .assistant-drawer-scrim {
   position: absolute;

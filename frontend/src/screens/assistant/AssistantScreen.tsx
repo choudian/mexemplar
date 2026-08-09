@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
+import { listUserTasks, type UserTaskItem } from "../../api/userTasks";
 import { useAssistantStore } from "../../state/assistantStore";
 import type { AssistantTurnActivity, PendingAssistantMessage } from "../../state/assistantStore";
 import { emptyTurn, turnIdFromMessage, turnIdFromSequence } from "../../state/assistantStore";
@@ -16,6 +17,7 @@ import MessageComposer from "./MessageComposer";
 import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
 import SubagentDetailDrawer from "./SubagentDetailDrawer";
+import UserTaskCard from "./UserTaskCard";
 import { MeetingChannelDrawer } from "./MeetingChannelDrawer";
 import { TaskBoardPanel } from "./TaskBoardPanel";
 import { TodoChecklistPanel } from "./TodoChecklistPanel";
@@ -129,6 +131,17 @@ export function AssistantScreen(): JSX.Element {
   const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
   const [editingFailureSeq, setEditingFailureSeq] = useState<number | null>(null);
   const [editedContent, setEditedContent] = useState("");
+  const [userTasks, setUserTasks] = useState<UserTaskItem[]>([]);
+
+  useEffect(() => {
+    if (!activeSessionId) {
+      setUserTasks([]);
+      return;
+    }
+    listUserTasks(activeSessionId)
+      .then((res) => setUserTasks(res.tasks ?? []))
+      .catch(() => setUserTasks([]));
+  }, [activeSessionId, messages.length]);
 
   const activeTurns = useMemo(
     () => (activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {}),
@@ -482,6 +495,18 @@ export function AssistantScreen(): JSX.Element {
             onSubmit={() => void submitClarification(activeSessionId)}
             onCancel={() => void cancelClarification(activeSessionId)}
           />
+        ) : null}
+        {activeSessionId && userTasks.length > 0 ? (
+          <div className="me-task-list">
+            {userTasks.map((task) => (
+              <UserTaskCard
+                key={task.taskId}
+                sessionId={activeSessionId}
+                taskId={task.taskId}
+                title={task.title}
+              />
+            ))}
+          </div>
         ) : null}
         <MessageComposer
           key={activeSessionId ?? "new"}
