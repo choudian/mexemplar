@@ -254,8 +254,20 @@ class TaskDispatcher:
                 increment_task_collaboration_counter("fallback_executor_started")
         return started
 
-    def start_pending_graph_tasks(self, *, session_id: str, graph_id: str) -> int:
-        """Start attempts for already-assigned pending tasks in a graph."""
+    def start_pending_graph_tasks(
+        self,
+        *,
+        session_id: str,
+        graph_id: str,
+        use_resume_target: bool = False,
+    ) -> int:
+        """Start attempts for already-assigned pending tasks in a graph.
+
+        ``use_resume_target=True`` 时用 ``latest_resume_target_for_task``（三条硬规则
+        + has_progress + executor 匹配）选续跑目标，供用户点继续路径使用；
+        ``False``（默认，fresh 派发/recovery）用 ``latest_resume_ref_for_task``
+        （粗粒度"有没有旧会话"信号）。
+        """
         if self._executor_callback is None:
             return 0
         with AssistantTaskRepository() as tasks, AssistantTaskAttemptRepository() as attempts:
@@ -269,10 +281,27 @@ class TaskDispatcher:
                 and task.assignee_type
                 and task.assignee_id
             ]
-            resume_refs = {
-                task.task_id: attempts.latest_resume_ref_for_task(task.task_id)
-                for task in candidates
-            }
+            if use_resume_target:
+                resume_refs: dict[str, str | None] = {}
+                for task in candidates:
+                    target = attempts.latest_resume_target_for_task(
+                        task.task_id,
+                        assignee_type=task.assignee_type,
+                        assignee_id=task.assignee_id,
+                    )
+                    if target:
+                        import json as _json
+
+                        resume_refs[task.task_id] = _json.dumps({
+                            "executor_session_id": target["session_id"],
+                        })
+                    else:
+                        resume_refs[task.task_id] = None
+            else:
+                resume_refs = {
+                    task.task_id: attempts.latest_resume_ref_for_task(task.task_id)
+                    for task in candidates
+                }
         started = 0
         for task in candidates:
             executor_id = (

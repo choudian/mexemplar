@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.business.user_tasks import UserTaskService
-from src.data.repos import AssistantTaskRepository
 from src.desktop_api.assistant_runtime import AssistantRuntime
 from src.desktop_api.routers.assistant import get_assistant_runtime
 
@@ -39,8 +38,8 @@ def get_user_task_distribution(
     runtime: AssistantRuntime = Depends(get_assistant_runtime),
 ) -> UserTaskStatusDistributionResponse:
     """获取用户任务下所有执行节点的状态分布（供界面画分布条）。"""
-    with AssistantTaskRepository() as tasks:
-        distribution = tasks.status_distribution_for_user_task(task_id)
+    with UserTaskService() as service:
+        distribution = service.status_distribution(task_id)
     return UserTaskStatusDistributionResponse(taskId=task_id, distribution=distribution)
 
 

@@ -1232,9 +1232,11 @@ class TaskCollaborationService(AtomicTaskService):
             graph_id = root.graph_id
             # 读图内所有节点，区分"推得动"和"推不动"
             tasks = self._tasks.list_graph_tasks(graph_id)
+            has_children = any(t.parent_task_id is not None for t in tasks)
             for task in tasks:
-                if task.parent_task_id is None:
-                    continue  # root 容器不参与
+                # 多节点图跳过根容器；单节点图（同步委派）的根就是执行节点，不跳
+                if task.parent_task_id is None and has_children:
+                    continue
                 if task.status == TaskStatus.SUSPENDED:
                     if task.suspend_reason in _CONTINUE_CANNOT_MOVE:
                         reason = (
@@ -1246,12 +1248,21 @@ class TaskCollaborationService(AtomicTaskService):
                     else:
                         pushed.append({"title": task.title, "graph_id": graph_id})
             # 对整张图执行 continue_graph（翻 PENDING_DISPATCH + 触发 scheduler）
-            if any(
-                t.status == TaskStatus.SUSPENDED
-                and t.suspend_reason not in _CONTINUE_CANNOT_MOVE
-                and t.parent_task_id is not None
-                for t in tasks
-            ):
+            if has_children:
+                should_continue = any(
+                    t.status == TaskStatus.SUSPENDED
+                    and t.suspend_reason not in _CONTINUE_CANNOT_MOVE
+                    and t.parent_task_id is not None
+                    for t in tasks
+                )
+            else:
+                # 单节点图：根就是执行节点
+                should_continue = (
+                    len(tasks) == 1
+                    and tasks[0].status == TaskStatus.SUSPENDED
+                    and tasks[0].suspend_reason not in _CONTINUE_CANNOT_MOVE
+                )
+            if should_continue:
                 self.continue_graph(session_id=session_id, graph_id=graph_id)
 
         return {

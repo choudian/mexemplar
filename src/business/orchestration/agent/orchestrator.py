@@ -648,10 +648,13 @@ class AgentOrchestrator:
             checkpoint_ref=checkpoint_ref,
         )
 
-    def resume_pending_graph_tasks(self, *, session_id: str, graph_id: str) -> int:
+    def resume_pending_graph_tasks(
+        self, *, session_id: str, graph_id: str, use_resume_target: bool = False
+    ) -> int:
         return self._get_task_dispatcher().start_pending_graph_tasks(
             session_id=session_id,
             graph_id=graph_id,
+            use_resume_target=use_resume_target,
         )
 
     def resume_recovered_task(self, *, task_id: str, checkpoint_ref: str) -> bool:

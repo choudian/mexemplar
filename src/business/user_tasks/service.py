@@ -89,6 +89,17 @@ class UserTaskService:
             raise LookupError(f"user task not found: {normalized_id}")
         return project_user_task(row)
 
+    def status_distribution(self, task_id: str) -> dict[str, int]:
+        """返回用户任务下所有执行节点的状态分布（供界面画分布条）。
+
+        聚合由 ``AssistantTaskRepository.status_distribution_for_user_task`` 完成，
+        本方法只做 Service 层入口 + 传参——路由层调这里，不直连 Repository。
+        """
+        from src.data.repos import AssistantTaskRepository
+
+        with AssistantTaskRepository() as tasks:
+            return tasks.status_distribution_for_user_task(task_id)
+
 
 def project_user_task(row: UserTask) -> dict[str, Any]:
     return {

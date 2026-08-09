@@ -793,6 +793,7 @@ class AssistantRuntime:
                     orch.resume_pending_graph_tasks(
                         session_id=session_id,
                         graph_id=graph_id,
+                        use_resume_target=True,
                     )
                 except Exception:
                     logging.warning(
