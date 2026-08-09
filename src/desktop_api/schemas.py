@@ -175,8 +175,10 @@ class AssistantStopResponse(BaseModel):
 TaskStatus = Literal[
     "pending_dispatch",
     "running",
+    "delivered",
     "suspended",
     "completed",
+    "skipped",
     # 有人看过之后决定不做了，不是系统判死——详见 TaskStatus.ABANDONED 的说明。
     "abandoned",
     "cancelled",

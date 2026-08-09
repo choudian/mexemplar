@@ -467,6 +467,10 @@ class TaskDispatcher:
                 safe_summary=safe_summary,
                 raw_result_ref=result_ref,
             )
+            # ⑥ 执行体交了活——task 从 running 落 delivered（显式"等裁定"状态）。
+            # 必须在 create_parent_adjudication 之后写：先建裁定再标 delivered，
+            # 崩在中间留下"delivered 但无 pending 裁定"的死格子。
+            service.update_task_status(task_id=task_id, status=TaskStatus.DELIVERED)
             # 回流 payload 带足续跑所需信息：父侧 runtime 据此 kick 续跑 worker，续跑首轮
             # drain 后直接用 deliveredStatus/safeSummary 组装回流摘要，无需再查 DB。
             payload = {

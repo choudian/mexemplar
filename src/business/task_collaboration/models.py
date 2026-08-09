@@ -13,8 +13,14 @@ from src.business.services.ui_event_safety_service import redact_public_ui_event
 class TaskStatus(StrEnum):
     PENDING_DISPATCH = "pending_dispatch"
     RUNNING = "running"
+    # 执行体交了活，建了一条 pending 裁定，等主助理验收（accept / return / abandon）。
+    # 与 running 的区别：running 时执行体还在跑，delivered 时已经跑完、球在主助理手上。
+    DELIVERED = "delivered"
     SUSPENDED = "suspended"
     COMPLETED = "completed"
+    # 跳过——图变异时主助理决定绕行这个节点（撞缺陷后改路等）。不是失败，是不做了。
+    # 写入路径暂未接通（当前跳过靠 mutate_task_graph），枚举先到位。
+    SKIPPED = "skipped"
     # 「有人看过之后决定不做了」——**不是**系统判死。这个格子只有两条路进得来，
     # 两条都是明确拍板：裁定选 abandoned，或主助理调 abandon_request_graph 放弃整个请求。
     #
@@ -288,10 +294,18 @@ def derive_display_phase(
     has_pending_adjudication: bool = False,
 ) -> Literal["running", "reviewing", "needs_attention", "paused", "done"]:
     task_status = coerce_task_status(status)
+    # DELIVERED 显式映射——执行体交了活、等裁定。
+    if task_status == TaskStatus.DELIVERED:
+        return "reviewing"
+    # has_pending_adjudication 保留给 requires_confirmation 节点：
+    # 它们在派发前建裁定并暂停（task 是 SUSPENDED 不是 DELIVERED），
+    # 拿掉这个参数会让这类节点变成"已暂停"，用户不知道在等自己放行。
     if has_pending_adjudication:
         return "reviewing"
     if task_status == TaskStatus.SUSPENDED:
         return "paused"
+    if task_status == TaskStatus.SKIPPED:
+        return "done"
     if task_status in TERMINAL_TASK_STATUSES:
         return "done" if task_status == TaskStatus.COMPLETED else "needs_attention"
     return "running"

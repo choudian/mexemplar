@@ -7,8 +7,9 @@ from sqlalchemy import inspect, text
 from src.data import migrations
 
 
-def test_v44_is_registered_as_the_latest_migration() -> None:
-    assert migrations._MIGRATIONS[-1] == (44, migrations.migrate_to_v44)
+def test_v44_is_registered_in_migrations() -> None:
+    """v44 仍在 _MIGRATIONS 注册表里（不再断言是最新——v45 已接上）。"""
+    assert (44, migrations.migrate_to_v44) in migrations._MIGRATIONS
 
 
 def test_v44_renames_focused_to_owner() -> None:

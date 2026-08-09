@@ -159,8 +159,10 @@ def test_v40_check_accepts_abandoned_and_rejects_the_old_name() -> None:
     engine = _engine_at_v39()
     migrations.migrate_to_v40(engine)
 
+    # v40 的值集（硬编码，不跟 TaskStatus 枚举绑——后续迁移会加新值）
     assert _allowed_values(engine, "assistant_tasks", "ck_assistant_tasks_status") == {
-        status.value for status in TaskStatus
+        "pending_dispatch", "running", "suspended",
+        "completed", "abandoned", "cancelled",
     }
 
     with pytest.raises(IntegrityError, match="ck_assistant_tasks_status"):
@@ -187,10 +189,12 @@ def test_v40_skips_cleanly_when_the_table_is_absent() -> None:
 
 
 def test_orm_and_migration_agree_on_every_task_status() -> None:
-    """ORM 建的表和迁移建的表必须认同一组状态。
+    """ORM 建的表和完整迁移链建的表必须认同一组状态。
 
     两条路径分别服务全新安装和存量升级；它们分岔时，症状是"我这儿好好的，你那儿
     一存就报错"，而两边的代码都看不出问题。
+
+    跑完整迁移链（不只是 v40），因为后续迁移也会改 CHECK 值集。
     """
     orm_constraint = next(
         c
@@ -200,7 +204,10 @@ def test_orm_and_migration_agree_on_every_task_status() -> None:
     orm_values = set(re.findall(r"'([a-z_]+)'", str(orm_constraint.sqltext)))
 
     engine = _engine_at_v39()
-    migrations.migrate_to_v40(engine)
+    # 跑完整迁移链到最新版本
+    for version, migrate_fn in migrations._MIGRATIONS:
+        if version >= 40:
+            migrate_fn(engine)
     migrated_values = _allowed_values(engine, "assistant_tasks", "ck_assistant_tasks_status")
 
     assert orm_values == migrated_values == {status.value for status in TaskStatus}

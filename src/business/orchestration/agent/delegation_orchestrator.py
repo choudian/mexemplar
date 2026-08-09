@@ -125,15 +125,21 @@ def _finalize_sync_attempt(
     task_id: str | None,
     result: dict,
 ) -> None:
-    """同步委派路径：执行完后把 attempt 映射到终态。
+    """同步委派路径：执行完后把 attempt + task 行映射到终态。
 
     映射逻辑与 ``TaskExecutorAdapter._map_to_outcome`` 对齐：
-    success → succeeded，paused/code_defect → paused，其余 → failed。
+    - success → attempt succeeded + task COMPLETED（同步委派不走裁定，交了活就是完了）
+    - paused/code_defect → attempt paused + task SUSPENDED
+    - 失败 → attempt failed + task SUSPENDED + waiting_system（不落 ABANDONED——
+      ABANDONED 定义是"有人拍板决定不做了"，执行体挂了是系统判死；落 SUSPENDED
+      把球交回主助理）
+
     task_id 为 None（建 attempt 失败）时整体跳过。
     """
     if not task_id:
         return
-    from src.data.repos import AssistantTaskAttemptRepository
+    from src.business.task_collaboration.models import SuspendReason, TaskStatus
+    from src.data.repos import AssistantTaskAttemptRepository, AssistantTaskRepository
 
     try:
         with AssistantTaskAttemptRepository() as attempts:
@@ -148,11 +154,17 @@ def _finalize_sync_attempt(
                     fence_token=latest.fence_token,
                     result_ref=str(result.get("result_text") or "")[:500] or None,
                 )
+                _update_sync_task_status(task_id, TaskStatus.COMPLETED)
             elif result.get("paused"):
                 attempts.pause_if_current(
                     attempt_id=latest.attempt_id,
                     fence_token=latest.fence_token,
                     result_ref=result.get("subagent_id"),
+                )
+                _update_sync_task_status(
+                    task_id,
+                    TaskStatus.SUSPENDED,
+                    suspend_reason=result.get("suspend_reason") or SuspendReason.WAITING_SYSTEM.value,
                 )
             elif result.get("failure_class") == "code_defect":
                 # code_defect 暂停而非失败——代码不改，换执行体重试也是同一个错。
@@ -162,15 +174,46 @@ def _finalize_sync_attempt(
                     fence_token=latest.fence_token,
                     result_ref=result.get("failure_exception_type"),
                 )
+                _update_sync_task_status(
+                    task_id,
+                    TaskStatus.SUSPENDED,
+                    suspend_reason=SuspendReason.BLOCKED_BY_DEFECT.value,
+                )
             else:
                 attempts.fail_if_current(
                     attempt_id=latest.attempt_id,
                     fence_token=latest.fence_token,
                     error_category=result.get("failure_class") or "unknown",
                 )
+                _update_sync_task_status(
+                    task_id,
+                    TaskStatus.SUSPENDED,
+                    suspend_reason=SuspendReason.WAITING_SYSTEM.value,
+                )
     except Exception:
         logger.warning(
             "[sync_delegation] failed to finalize attempt for task=%s", task_id, exc_info=True
+        )
+
+
+def _update_sync_task_status(
+    task_id: str,
+    status: str,
+    *,
+    suspend_reason: str | None = None,
+) -> None:
+    """更新同步委派 task 行的状态（修了卡 running 的 bug）。
+
+    不吞异常——异常传播到 _finalize_sync_attempt 的外层 except 记录日志。
+    吞掉异常会让 task 静默留在 running，正是这个函数要修的 bug。
+    """
+    from src.business.task_collaboration.service import TaskCollaborationService
+
+    with TaskCollaborationService() as service:
+        service.update_task_status(
+            task_id=task_id,
+            status=status,
+            suspend_reason=suspend_reason,
         )
 
 

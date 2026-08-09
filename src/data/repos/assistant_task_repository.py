@@ -290,7 +290,7 @@ class AssistantTaskRepository(BaseRepository):
         row.waiting_on = waiting_on
         row.task_version += 1
         row.updated_at = now
-        if status == "completed":
+        if status in ("completed", "skipped"):
             row.completed_at = now
         elif status == "abandoned":
             # 列名仍是 failed_at：它没有任何读取方，改列名要动 5 段迁移历史 DDL 和
