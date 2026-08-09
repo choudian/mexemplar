@@ -1,6 +1,7 @@
 """Delegation orchestration for assistant subagents and specialists."""
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from src.business.agents.config import AgentType
@@ -13,8 +14,14 @@ from src.business.orchestration.agent.subagent_scope import (
 from src.business.services.skill_composition.builtin_compositions import (
     EXTERNAL_CODING_COMPOSITION_ID,
 )
+from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
+
+# 同步委派的保守租约：同步路径调用方线程持有执行体，不会发生 lease 过期
+# （dispatcher 的心跳机制不需要）。30 分钟给足任何同步委派跑完的余量；
+# 万一真的超时，recovery 扫描会 fence 它，效果跟异步路径一致。
+_SYNC_LEASE_TTL = timedelta(minutes=30)
 
 
 def _validate_user_task_id(user_task_id: str | None) -> dict | None:
@@ -46,6 +53,125 @@ def _validate_user_task_id(user_task_id: str | None) -> dict | None:
             ),
         }
     return None
+
+
+def _start_sync_attempt(
+    *,
+    parent_session_id: str,
+    task_title: str,
+    task_description: str,
+    executor_type: str,
+    executor_id: str,
+    user_task_id: str | None,
+) -> str | None:
+    """同步委派路径：建一条单节点 task 行 + active attempt，返回 task_id。
+
+    同步路径不经 dispatcher 线程池，调用方线程同步持有执行体——不需要心跳续约，
+    lease 给保守的 30 分钟余量。建的 task 行同时挂 user_task_id（解决同步委派归属缺口）。
+
+    返回 task_id 供 ``_run_delegated_executor`` 的 ``current_task_id`` 参数使用，
+    使 ``_bind_executor_session_to_attempt`` 能把 executor_session_id 绑到 attempt 上。
+    任一步失败返回 None（不阻断委派本身——attempt 是追踪层，不是执行的前提）。
+    """
+    from src.data.repos import AssistantTaskAttemptRepository, AssistantTaskRepository
+    from src.data.repos.base_repository import generate_id
+
+    graph_id = generate_id("tg")
+    task_id = generate_id("tsk")
+    try:
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id=graph_id,
+                session_id=parent_session_id,
+                task_id=task_id,
+                root_task_id=task_id,
+                parent_task_id=None,
+                title=task_title,
+                description=task_description,
+                owner_session_id=parent_session_id,
+                user_task_id=user_task_id,
+                assignee_type=executor_type,
+                assignee_id=executor_id,
+                status="running",
+            )
+        lease_expires = utc_now_naive() + _SYNC_LEASE_TTL
+        with AssistantTaskAttemptRepository() as attempts:
+            attempt = attempts.start_attempt(
+                task_id=task_id,
+                executor_type=executor_type,
+                executor_id=executor_id,
+                lease_owner="sync_delegation",
+                lease_expires_at=lease_expires,
+            )
+            if attempt is None:
+                logger.warning(
+                    "[sync_delegation] start_attempt returned None (capacity conflict): "
+                    "executor=%s task=%s",
+                    executor_id,
+                    task_id,
+                )
+                return None
+    except Exception:
+        logger.warning(
+            "[sync_delegation] failed to create task+attempt for executor=%s",
+            executor_id,
+            exc_info=True,
+        )
+        return None
+    return task_id
+
+
+def _finalize_sync_attempt(
+    task_id: str | None,
+    result: dict,
+) -> None:
+    """同步委派路径：执行完后把 attempt 映射到终态。
+
+    映射逻辑与 ``TaskExecutorAdapter._map_to_outcome`` 对齐：
+    success → succeeded，paused/code_defect → paused，其余 → failed。
+    task_id 为 None（建 attempt 失败）时整体跳过。
+    """
+    if not task_id:
+        return
+    from src.data.repos import AssistantTaskAttemptRepository
+
+    try:
+        with AssistantTaskAttemptRepository() as attempts:
+            latest = attempts.latest_attempt_for_task(task_id)
+            if latest is None:
+                return
+            if latest.status not in AssistantTaskAttemptRepository.ACTIVE_STATUSES:
+                return  # 已终态（recovery fence 或并发终态写过）
+            if result.get("success"):
+                attempts.complete_if_current(
+                    attempt_id=latest.attempt_id,
+                    fence_token=latest.fence_token,
+                    result_ref=str(result.get("result_text") or "")[:500] or None,
+                )
+            elif result.get("paused"):
+                attempts.pause_if_current(
+                    attempt_id=latest.attempt_id,
+                    fence_token=latest.fence_token,
+                    result_ref=result.get("subagent_id"),
+                )
+            elif result.get("failure_class") == "code_defect":
+                # code_defect 暂停而非失败——代码不改，换执行体重试也是同一个错。
+                # 与 TaskExecutorAdapter._map_to_outcome 的 BLOCKED_BY_DEFECT 映射对齐。
+                attempts.pause_if_current(
+                    attempt_id=latest.attempt_id,
+                    fence_token=latest.fence_token,
+                    result_ref=result.get("failure_exception_type"),
+                )
+            else:
+                attempts.fail_if_current(
+                    attempt_id=latest.attempt_id,
+                    fence_token=latest.fence_token,
+                    error_category=result.get("failure_class") or "unknown",
+                )
+    except Exception:
+        logger.warning(
+            "[sync_delegation] failed to finalize attempt for task=%s", task_id, exc_info=True
+        )
 
 
 class DelegationOrchestrator:
@@ -212,6 +338,19 @@ class DelegationOrchestrator:
                 user_task_id=user_task_id,
             )
         user_input = self._owner._format_delegated_task_input(task, execution_context)
+        # 同步委派（current_task_id is None 且非续跑）建 task + attempt，
+        # 让"执行体在不在跑"有 attempt 可查，同时挂 user_task_id 归属。
+        sync_task_id = None
+        if current_task_id is None and not resume_session_id:
+            sync_task_id = _start_sync_attempt(
+                parent_session_id=parent_session_id,
+                task_title=task,
+                task_description=execution_context or task,
+                executor_type=AgentType.EPHEMERAL_SUBAGENT.value,
+                executor_id=AgentType.EPHEMERAL_SUBAGENT.value,
+                user_task_id=user_task_id,
+            )
+            current_task_id = sync_task_id or current_task_id
         result = self._owner._run_delegated_executor(
             agent_type=AgentType.EPHEMERAL_SUBAGENT,
             session_id=child_session_id,
@@ -227,6 +366,7 @@ class DelegationOrchestrator:
             allowed_builtin_tool_names=allowed_builtin_tool_names,
             iteration_budget=iteration_budget,
         )
+        _finalize_sync_attempt(sync_task_id, result)
         if result.get("success"):
             self._owner._record_delegation_signal(
                 parent_session_id=parent_session_id,
@@ -408,6 +548,21 @@ class DelegationOrchestrator:
             if tool_whitelist is not None
             else parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
         )
+        # 同步委派（current_task_id is None 且非续跑）建 task + attempt，
+        # 让"执行体在不在跑"有 attempt 可查，同时挂 user_task_id 归属。
+        # 放在 composition gate 之前——同步委派的专员跟建图路径一样是正式执行，
+        # current_task_id 有值后外部 Coding 组合正常授权。
+        sync_task_id = None
+        if current_task_id is None and not resume_session_id:
+            sync_task_id = _start_sync_attempt(
+                parent_session_id=parent_session_id,
+                task_title=task,
+                task_description=execution_context or task,
+                executor_type=AgentType.SPECIALIST.value,
+                executor_id=specialist.specialist_id,
+                user_task_id=user_task_id,
+            )
+            current_task_id = sync_task_id or current_task_id
         allowed_tool_ids = self._owner._resolve_user_tool_ids(
             parent_session_id=parent_session_id,
             tool_whitelist=effective_whitelist,
@@ -458,6 +613,7 @@ class DelegationOrchestrator:
             equipped_skills_snapshot = self._owner._specialist_equipped_skills_snapshot(specialist)
         except RuntimeError as exc:
             logger.error("[Orchestrator] 专员方法论装备快照加载失败: %s", exc, exc_info=True)
+            _finalize_sync_attempt(sync_task_id, {"success": False, "message": str(exc)})
             return {"success": False, "message": "专员方法论装备加载失败，已取消委派。"}
         try:
             capability_catalog_section = self._owner._prompt_builder.format_capability_catalog(
@@ -474,6 +630,7 @@ class DelegationOrchestrator:
             )
         except RuntimeError as exc:
             logger.error("[Orchestrator] 专员方法论提示词构建失败: %s", exc, exc_info=True)
+            _finalize_sync_attempt(sync_task_id, {"success": False, "message": str(exc)})
             return {"success": False, "message": "专员方法论提示词构建失败，已取消委派。"}
         # 续跑时复用已有会话（跳过 create_session），否则新建。
         if resume_session_id:
@@ -512,4 +669,5 @@ class DelegationOrchestrator:
             allowed_composition_ids=allowed_composition_ids,
             iteration_budget=iteration_budget,
         )
+        _finalize_sync_attempt(sync_task_id, result)
         return result

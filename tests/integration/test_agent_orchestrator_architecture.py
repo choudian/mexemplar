@@ -353,7 +353,9 @@ def test_builtin_external_coding_catalog_requires_explicit_composition_assignmen
     ("current_task_id", "role_kind", "expected_composition_ids"),
     [
         ("task-coding", "executor", {"comp_builtin_external_coding"}),
-        (None, "executor", set()),
+        # 同步委派路径现在自动建 task（current_task_id=None → 建 sync task），
+        # 同步委派的专员跟建图路径一样是正式执行，外部 Coding 正常授权。
+        (None, "executor", {"comp_builtin_external_coding"}),
         ("task-coding", "planner", set()),
     ],
 )

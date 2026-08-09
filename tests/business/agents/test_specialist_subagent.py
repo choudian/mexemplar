@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from types import SimpleNamespace
+from unittest import mock
 from unittest.mock import MagicMock, call
 
 import pytest
@@ -683,7 +684,7 @@ def test_first_launch_consumes_captured_scope_and_workspace() -> None:
         system_prompt="system prompt",
         allowed_tool_ids={"tool-a"},
         tool_whitelist=["read_file", "tool-a", "composition-a"],
-        current_task_id=None,
+        current_task_id=mock.ANY,  # 同步委派现在建 task+attempt，id 由系统生成
         workspace_root="E:/isolated-worktree",
         allowed_composition_ids={"composition-a"},
         allowed_builtin_tool_names={"read_file"},

@@ -84,6 +84,10 @@ def test_handle_idle_trigger_seals_when_no_active_subagent() -> None:
 def _seed_delegation(parent_id: str, child_id: str, child_status: str) -> None:
     from src.data.models_sqlite import Session as SessionModel
     from src.data.models_sqlite import WorkflowTransition
+    from src.data.repos import AssistantTaskRepository
+    from src.data.repos.assistant_task_attempt_repository import (
+        AssistantTaskAttemptRepository,
+    )
     from src.data.repos.session_repository import SessionRepository
     from src.data.repos.workflow_transition_repository import WorkflowTransitionRepository
 
@@ -105,6 +109,31 @@ def _seed_delegation(parent_id: str, child_id: str, child_status: str) -> None:
             payload=None,
         )
     )
+    # "在不在跑"现在查 attempt：active child 需要对应一条 active attempt
+    if child_status == "active":
+        from datetime import timedelta
+
+        from src.utils.timezone import utc_now_naive
+
+        with AssistantTaskRepository() as tasks:
+            task_id = tasks.create_task(
+                graph_id=f"tg_{child_id}",
+                session_id=parent_id,
+                title="测试",
+                description="d",
+                assignee_type="ephemeral_subagent",
+                assignee_id=child_id,
+                status="running",
+            ).task_id
+        with AssistantTaskAttemptRepository() as attempts:
+            attempts.start_attempt(
+                task_id=task_id,
+                executor_type="ephemeral_subagent",
+                executor_id=child_id,
+                lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=30),
+            )
+            attempts.bind_session(task_id=task_id, executor_session_id=child_id)
 
 
 def test_has_active_subagent_detects_running_child_session() -> None:

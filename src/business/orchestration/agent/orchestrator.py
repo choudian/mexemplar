@@ -854,6 +854,27 @@ class AgentOrchestrator:
             )
 
     @staticmethod
+    def _is_executor_running(executor_session_id: str) -> bool:
+        """查 attempt 表判断执行体当前是否在跑（status ∈ active）。
+
+        替代旧的 ``session.status == "active"`` 判断——session.status 是持久化字符串，
+        进程重启后可能是假的；attempt 有租约/心跳/唯一索引，是"在不在跑"的可靠信息源。
+        """
+        from src.data.repos import AssistantTaskAttemptRepository
+
+        try:
+            with AssistantTaskAttemptRepository() as attempts:
+                latest = attempts.latest_attempt_for_session(executor_session_id)
+            if latest is None:
+                return False
+            return latest.status in AssistantTaskAttemptRepository.ACTIVE_STATUSES
+        except Exception:
+            logger.warning(
+                "[Orchestrator] 查执行体运行状态失败: session=%s", executor_session_id, exc_info=True
+            )
+            return False
+
+    @staticmethod
     def _build_delegated_pause_payload(
         result: AgentResult,
         *,
@@ -1311,7 +1332,8 @@ class AgentOrchestrator:
         session = self._resolve_subagent_session(parent_session_id, subagent_id)
         if session is None:
             return {"success": False, "error": "未找到可唤回的子代理，请确认 subagent_id 正确"}
-        if getattr(session, "status", None) == "active":
+        # "在不在跑"查 attempt（有租约/唯一索引保证），不读 session.status（进程重启后是假的）。
+        if self._is_executor_running(subagent_id):
             return {
                 "success": False,
                 "error": "该子代理仍在运行中，暂不可唤回",

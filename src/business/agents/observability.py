@@ -269,7 +269,7 @@ class AssistantObservability:
                     getattr(tr, "created_at", None),
                 )
 
-        # 批量重建子任务明细（状态/任务/最后产出），把逐子任务 3 次查询收敛为固定 3 次批量查询
+        # 批量重建子任务明细（状态/任务/最后产出），把逐子任务查询收敛为固定批量查询
         try:
             sessions_by_id = {
                 getattr(s, "session_id", None): s for s in self._session_repo.get_by_ids(child_ids)
@@ -280,10 +280,18 @@ class AssistantObservability:
             logger.error("subagent list detail lookup failed: parent_session=%s error=%s", pid, exc)
             raise
 
+        # "在不在跑"查 attempt 表（有租约/唯一索引保证），session.status 作 fallback
+        # （同步委派建 attempt 前，或极少数无 attempt 的场景）。
+        attempt_statuses = _batch_attempt_statuses(child_ids)
+
         items: list[SubagentSummary] = []
         for child in child_ids:
             session = sessions_by_id.get(child)
-            status = _map_subagent_status(getattr(session, "status", None) if session else None)
+            attempt_status = attempt_statuses.get(child)
+            status = _map_subagent_status(
+                getattr(session, "status", None) if session else None,
+                attempt_status=attempt_status,
+            )
             items.append(
                 SubagentSummary(
                     subagent_id=child,
@@ -373,7 +381,28 @@ def _delegation_agent_type(payload: object) -> str:
         return ""
 
 
-def _map_subagent_status(session_status: Optional[str]) -> str:
+def _map_subagent_status(
+    session_status: Optional[str],
+    *,
+    attempt_status: Optional[str] = None,
+) -> str:
+    """把执行体状态映射为 observability 公开状态串。
+
+    优先用 attempt.status（可靠信息源）；无 attempt 时回退到 session.status
+    （同步委派建 attempt 前的过渡期，或极少数无 attempt 场景）。
+    """
+    if attempt_status is not None:
+        mapping = {
+            "starting": "running",
+            "running": "running",
+            "paused": "suspended",
+            "succeeded": "done",
+            "failed": "failed",
+            "cancelled": "failed",
+            "fenced": "failed",
+        }
+        return mapping.get(attempt_status, "running")
+    # fallback：无 attempt 时读 session.status
     mapping = {
         "active": "running",
         "suspended": "suspended",
@@ -381,6 +410,23 @@ def _map_subagent_status(session_status: Optional[str]) -> str:
         "failed": "failed",
     }
     return mapping.get(session_status or "", "running")
+
+
+def _batch_attempt_statuses(child_ids: list[str]) -> dict[str, str]:
+    """批量查子会话最新 attempt status，返回 {session_id: status}。
+
+    查询失败时返回空 dict（调用方回退到 session.status）。
+    """
+    if not child_ids:
+        return {}
+    try:
+        from src.data.repos import AssistantTaskAttemptRepository
+
+        with AssistantTaskAttemptRepository() as attempts:
+            return attempts.latest_statuses_for_sessions(child_ids)
+    except Exception:
+        logger.debug("attempt status batch lookup failed", exc_info=True)
+        return {}
 
 
 def _find_turn_start_sequence(messages: list, transition_created_at) -> int | None:

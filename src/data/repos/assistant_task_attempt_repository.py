@@ -140,6 +140,18 @@ class AssistantTaskAttemptRepository(BaseRepository):
             return None
         return row.checkpoint_ref or row.result_ref
 
+    def latest_attempt_for_task(self, task_id: str) -> AssistantTaskAttempt | None:
+        """返回某 task 最新一条 attempt（不限状态），按创建时间倒序。
+
+        供同步委派终态映射用：拿到最新 attempt 后看 status 决定要不要写终态。
+        """
+        return (
+            self.session.query(AssistantTaskAttempt)
+            .filter(AssistantTaskAttempt.task_id == task_id)
+            .order_by(AssistantTaskAttempt.created_at.desc())
+            .first()
+        )
+
     def _refetch(self, attempt_id: str) -> AssistantTaskAttempt | None:
         """条件 UPDATE 后用 ``populate_existing`` 重取受影响行的权威态。
 
@@ -207,6 +219,79 @@ class AssistantTaskAttemptRepository(BaseRepository):
         """
         row = self._active_attempt_for_task(task_id)
         return row.executor_session_id if row is not None else None
+
+    def latest_attempt_for_session(self, executor_session_id: str) -> AssistantTaskAttempt | None:
+        """按执行会话 id 反查最新 attempt（不限状态）。
+
+        供"判断执行体在不在跑"用：拿到 attempt 后看 status 是否在 ACTIVE_STATUSES。
+        返回最新一条是因为一个 session 可能先后跑过多轮 attempt（暂停→续跑开新 attempt），
+        只有最新那条反映当前真实状态。
+        """
+        return (
+            self.session.query(AssistantTaskAttempt)
+            .filter(AssistantTaskAttempt.executor_session_id == executor_session_id)
+            .order_by(AssistantTaskAttempt.created_at.desc())
+            .first()
+        )
+
+    def active_executor_sessions(self, executor_session_ids: list[str]) -> set[str]:
+        """批量返回有 active attempt 的执行会话 id 集合。
+
+        供 observability 等批量查询用：一次查 N 个子代理各自的 attempt，返回其中
+        有 active（starting/running）attempt 的 session_id 子集。
+        """
+        if not executor_session_ids:
+            return set()
+        rows = (
+            self.session.query(AssistantTaskAttempt.executor_session_id)
+            .filter(
+                AssistantTaskAttempt.executor_session_id.in_(executor_session_ids),
+                AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
+            )
+            .all()
+        )
+        return {row[0] for row in rows if row[0]}
+
+    def latest_statuses_for_sessions(
+        self, executor_session_ids: list[str]
+    ) -> dict[str, str]:
+        """批量返回每个执行会话最新 attempt 的 status。
+
+        供 observability 批量渲染子代理列表用：一次查 N 个 session 的最新 attempt status，
+        返回 ``{session_id: attempt_status}``。无 attempt 的 session 不在结果中。
+        """
+        if not executor_session_ids:
+            return {}
+        # 每个 session 最新 attempt 的 status：用 ROW_NUMBER() 窗口函数保证确定性。
+        # 比 IN(subquery)+ORDER BY 更可靠——后者不保证去重和外层顺序。
+        from sqlalchemy import func, literal_column
+        from sqlalchemy.orm import aliased
+
+        # 子查询给每行按 session 分组、created_at 倒序编号
+        ranked = (
+            self.session.query(
+                AssistantTaskAttempt.executor_session_id.label("sid"),
+                AssistantTaskAttempt.status.label("st"),
+                func.row_number()
+                .over(
+                    partition_by=AssistantTaskAttempt.executor_session_id,
+                    order_by=AssistantTaskAttempt.created_at.desc(),
+                )
+                .label("rn"),
+            )
+            .filter(AssistantTaskAttempt.executor_session_id.in_(executor_session_ids))
+            .subquery()
+        )
+        rows = (
+            self.session.query(ranked.c.sid, ranked.c.st)
+            .filter(ranked.c.rn == 1)
+            .all()
+        )
+        result: dict[str, str] = {}
+        for session_id, status in rows:
+            if session_id:
+                result[session_id] = status
+        return result
 
     def renew_lease(self, attempt_id: str, *, lease_expires_at: datetime) -> bool:
         """续租一个仍在执行的 attempt，返回是否续上。

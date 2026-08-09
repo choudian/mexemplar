@@ -27,7 +27,41 @@ def _make_child_subagent(orch, parent_session_id, *, status="suspended"):
     child = orch._session_store.create_session(workflow_id, AgentType.EPHEMERAL_SUBAGENT)
     if status != "active":
         ContextManager(child, orch._config).update_session_status(status)
+    else:
+        # "在不在跑"现在查 attempt：active session 需要对应一个 active attempt。
+        _make_active_attempt_for_session(child)
     return child
+
+
+def _make_active_attempt_for_session(session_id: str) -> None:
+    """给执行体 session 建一条 active attempt（模拟"正在跑"）。"""
+    from datetime import timedelta
+
+    from src.data.repos import AssistantTaskRepository
+    from src.data.repos.assistant_task_attempt_repository import (
+        AssistantTaskAttemptRepository,
+    )
+    from src.utils.timezone import utc_now_naive
+
+    with AssistantTaskRepository() as tasks:
+        task_id = tasks.create_task(
+            graph_id=f"tg_test_{session_id[:8]}",
+            session_id=session_id,
+            title="测试任务",
+            description="d",
+            assignee_type="ephemeral_subagent",
+            assignee_id=session_id,
+            status="running",
+        ).task_id
+    with AssistantTaskAttemptRepository() as attempts:
+        attempts.start_attempt(
+            task_id=task_id,
+            executor_type="ephemeral_subagent",
+            executor_id=session_id,
+            lease_owner="test",
+            lease_expires_at=utc_now_naive() + timedelta(minutes=30),
+        )
+        attempts.bind_session(task_id=task_id, executor_session_id=session_id)
 
 
 def test_continue_suspended_subagent_runs_to_completion(orch, mock_config):

@@ -134,11 +134,11 @@ class SegmentService:
         """会话是否仍有活跃（运行中）的子代理/专员。
 
         主助理通过 `assistant_delegation_started` 交接（from=主会话, to=子会话）派活；
-        子会话运行期间 status='active'，完成/暂停/失败后转其它状态。只要存在任一仍为
-        active 的子会话，就说明主助理在等待结果，会话并非真正空闲。
+        只要任一子会话有 active attempt（starting/running），就说明主助理在等待结果，
+        会话并非真正空闲。"在不在跑"查 attempt 表（有租约/唯一索引），不读 session.status
+        （进程重启后可能是假的）。
         """
         try:
-            from src.data.repos.session_repository import SessionRepository
             from src.data.repos.workflow_transition_repository import (
                 WorkflowTransitionRepository,
             )
@@ -164,14 +164,15 @@ class SegmentService:
         if not subagent_ids:
             return False
 
-        session_repo = SessionRepository()
+        from src.data.repos import AssistantTaskAttemptRepository
+
         try:
-            return any(session_repo.get_status(sid) == "active" for sid in subagent_ids)
+            with AssistantTaskAttemptRepository() as attempts:
+                active = attempts.active_executor_sessions(subagent_ids)
         except Exception as exc:
-            logger.warning("Failed to inspect subagent status for session %s: %s", session_id, exc)
+            logger.warning("Failed to inspect subagent attempts for session %s: %s", session_id, exc)
             return False
-        finally:
-            session_repo.close()
+        return bool(active)
 
     def _infer_message_range(self, session_id: str) -> tuple[Optional[str], Optional[str]]:
         """Infer the contiguous user-visible message range not covered by sealed segments."""
