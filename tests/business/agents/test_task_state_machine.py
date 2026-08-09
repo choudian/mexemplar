@@ -111,7 +111,7 @@ class TestDisplayPhase:
         assert derive_display_phase("suspended") == "paused"
 
     def test_completed_is_done(self) -> None:
-        assert derive_display_phase("completed") == "done"
+        assert derive_display_phase("done") == "done"
 
     def test_abandoned_is_needs_attention(self) -> None:
         # 改名前后映射不变，所以前端零改动——这正是 derive_display_phase 这层的作用：

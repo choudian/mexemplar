@@ -88,7 +88,7 @@ def test_approved_proposal_builds_graph_and_recovery_writes_done(
                         ),
                     )
                     assert completed is not None
-            graph_service.update_task_status(task_id=task.task_id, status="completed")
+            graph_service.update_task_status(task_id=task.task_id, status="done")
 
     assert run_proposal_recovery_cycle() >= 1
 

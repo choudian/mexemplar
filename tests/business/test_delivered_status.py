@@ -95,7 +95,7 @@ class TestSyncDelegationTaskStatus:
         with AssistantTaskRepository() as tasks:
             task = tasks.get_task(task_id)
         assert task is not None
-        assert task.status == "completed"
+        assert task.status == "done"
 
     def test_sync_attempt_paused_suspends_task(self, in_memory_db):
         """同步委派暂停后 task 行落 SUSPENDED。"""

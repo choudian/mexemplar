@@ -117,7 +117,7 @@ def _pending_adjudication_id(task_id):
 
 def _mark_completed(task_id):
     with TaskCollaborationService() as svc:
-        svc.update_task_status(task_id=task_id, status="completed")
+        svc.update_task_status(task_id=task_id, status="done")
 
 
 def _mark_pending(task_id):
@@ -378,7 +378,7 @@ class TestNormalOutcomeAdjudicationSemantics:
         )
 
         # 普通结果采纳 → completed（023 语义保留）
-        assert _status(n1) == "completed"
+        assert _status(n1) == "done"
 
 
 class TestGraphCompletion:
@@ -395,7 +395,7 @@ class TestGraphCompletion:
         scheduler.on_attempt_outcome(graph_id, n1)
 
         assert graph_id in sink.completed
-        assert _status(root_id) == "completed"
+        assert _status(root_id) == "done"
 
     def test_root_close_retries_after_transient_status_update_failure(self, monkeypatch):
         """终态观察去重不能吞掉 root 收口的下一次重试。"""
@@ -426,11 +426,11 @@ class TestGraphCompletion:
         monkeypatch.setattr(TaskCollaborationService, "update_task_status", _fail_once)
 
         scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
-        assert _status(root_id) != "completed"
+        assert _status(root_id) != "done"
         assert sink.completed == []
 
         scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
-        assert _status(root_id) == "completed"
+        assert _status(root_id) == "done"
         assert sink.completed == [graph_id]
         assert root_updates == 2
 
@@ -514,7 +514,7 @@ class TestGraphCompletion:
         scheduler.on_attempt_outcome(graph_id, node_ids["n1"])
 
         assert sink.completed == [graph_id]
-        assert _status(root_id) == "completed"
+        assert _status(root_id) == "done"
 
     def test_no_notify_until_all_completed(self):
         graph_id, node_ids, _, _ = _build_graph(
@@ -556,7 +556,7 @@ class TestGraphCompletion:
         # 含失败也必须通知主助理裁定后续
         assert graph_id in sink.completed
         # 含失败不收口 root（保留非终态供主助理 replan/abandon 裁定）
-        assert _status(root_id) not in ("completed", "abandoned", "cancelled")
+        assert _status(root_id) not in ("done", "abandoned", "cancelled")
 
     def test_failed_terminal_graph_emits_only_once_per_graph_version(self, monkeypatch):
         """失败图重复推进时 observer 去重，父侧回流仍保持可重试。"""
@@ -645,7 +645,7 @@ class TestGraphCompletion:
         scheduler.on_attempt_outcome(graph_id, node_ids["n2"])
 
         assert sink.completed == [graph_id]
-        assert _status(root_id) not in ("completed", "abandoned", "cancelled")
+        assert _status(root_id) not in ("done", "abandoned", "cancelled")
 
     def test_terminal_notify_not_repeated_after_root_closed(self):
         """全 completed 收口后，重复 _advance 不重复唤醒主助理。"""
@@ -838,7 +838,7 @@ class TestNeedsConfirmationAdjudicationAcceptedPaths:
 
         # ACCEPTED on running task → completed (normal result adjudication, not confirmation release)
         _decide(result_adj_id, "accepted", session_id=session_id, scheduler=scheduler)
-        assert _status(n1) == "completed"
+        assert _status(n1) == "done"
 
 
 class TestSchedulerSingleton:

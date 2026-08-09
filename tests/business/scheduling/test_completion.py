@@ -45,8 +45,8 @@ def _root(status="pending_dispatch"):
 def test_graph_all_completed_returns_terminal_and_completed():
     tasks = [
         _root(),
-        _executor("t1", "completed"),
-        _executor("t2", "completed"),
+        _executor("t1", "done"),
+        _executor("t2", "done"),
     ]
     all_terminal, all_completed = compute_graph_terminal_state(
         tasks, terminal_statuses=_TERM, completed_status=_DONE
@@ -58,8 +58,8 @@ def test_graph_all_completed_returns_terminal_and_completed():
 def test_graph_with_failed_executor_terminal_but_not_completed():
     """含 failed 执行节点：all_terminal=True 但 all_completed=False（不依赖 root=completed）。"""
     tasks = [
-        _root(status="completed"),  # 即使 root completed，含 failed 子节点也不算全成功
-        _executor("t1", "completed"),
+        _root(status="done"),  # 即使 root completed，含 failed 子节点也不算全成功
+        _executor("t1", "done"),
         _executor("t2", "abandoned"),
     ]
     all_terminal, all_completed = compute_graph_terminal_state(
@@ -85,7 +85,7 @@ def test_graph_non_terminal_running_does_not_qualify():
     """首轮 durable accepted：还有 running 执行节点 → all_terminal=False（不误报完成）。"""
     tasks = [
         _root(),
-        _executor("t1", "completed"),
+        _executor("t1", "done"),
         _executor("t2", "in_progress"),  # 仍在跑
     ]
     all_terminal, all_completed = compute_graph_terminal_state(
@@ -258,7 +258,7 @@ def test_evaluate_does_not_finalize_when_worker_still_active():
         monitor = _make_monitor(
             has_active_worker=lambda sid: True,  # worker 仍在跑
             has_pending_reentry=lambda sid: False,
-            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            snapshot_tasks=[_root(), _executor("t1", "done")],
             run_repo=rr,
         )
         result = monitor.evaluate_session("ast_active")
@@ -281,7 +281,7 @@ def test_evaluate_does_not_finalize_when_graph_not_terminal():
             has_pending_reentry=lambda sid: False,
             snapshot_tasks=[
                 _root(),
-                _executor("t1", "completed"),
+                _executor("t1", "done"),
                 _executor("t2", "in_progress"),  # 仍在跑
             ],
             run_repo=rr,
@@ -303,8 +303,8 @@ def test_evaluate_marks_failed_when_graph_has_failed_executor():
             has_active_worker=lambda sid: False,
             has_pending_reentry=lambda sid: False,
             snapshot_tasks=[
-                _root(status="completed"),
-                _executor("t1", "completed"),
+                _root(status="done"),
+                _executor("t1", "done"),
                 _executor("t2", "abandoned"),  # 含失败
             ],
             run_repo=rr,
@@ -349,7 +349,7 @@ def test_evaluate_marks_succeeded_when_all_completed_and_quiescent():
         monitor = _make_monitor(
             has_active_worker=lambda sid: False,
             has_pending_reentry=lambda sid: False,
-            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            snapshot_tasks=[_root(), _executor("t1", "done")],
             run_repo=rr,
             message_repo=mr,
         )
@@ -728,7 +728,7 @@ def test_evaluate_reads_graph_snapshot_only_once() -> None:
     from src.data.repos.scheduled_task_run_repository import ScheduledTaskRunRepository
 
     snapshot_reads: list[str] = []
-    snapshot = SimpleNamespace(tasks=[_root(), _executor("t1", "completed")])
+    snapshot = SimpleNamespace(tasks=[_root(), _executor("t1", "done")])
 
     def get_snapshot(session_id: str):
         snapshot_reads.append(session_id)
@@ -761,7 +761,7 @@ def test_evaluate_defers_when_pending_reentry():
         monitor = _make_monitor(
             has_active_worker=lambda sid: False,
             has_pending_reentry=lambda sid: True,  # 有 pending 回流
-            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            snapshot_tasks=[_root(), _executor("t1", "done")],
             run_repo=rr,
         )
         result = monitor.evaluate_session("ast_reentry")
@@ -781,7 +781,7 @@ def test_evaluate_skips_already_terminal_run():
         monitor = _make_monitor(
             has_active_worker=lambda sid: False,
             has_pending_reentry=lambda sid: False,
-            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            snapshot_tasks=[_root(), _executor("t1", "done")],
             run_repo=rr,
         )
         result = monitor.evaluate_session("ast_done")
@@ -814,7 +814,7 @@ def test_terminal_event_failure_remains_pending_and_next_evaluation_retries(
             has_active_worker=lambda _sid: False,
             has_pending_reentry=lambda _sid: False,
             get_graph_snapshot=lambda _sid: SimpleNamespace(
-                tasks=[_root(), _executor("t1", "completed")]
+                tasks=[_root(), _executor("t1", "done")]
             ),
             run_repo=rr,
         )
@@ -963,7 +963,7 @@ def test_evaluate_marks_succeeded_after_takeover_round():
         monitor_final = _make_monitor(
             has_active_worker=lambda sid: False,
             has_pending_reentry=lambda sid: False,
-            snapshot_tasks=[_root(), _executor("t1", "completed")],
+            snapshot_tasks=[_root(), _executor("t1", "done")],
             run_repo=rr,
         )
         result = monitor_final.evaluate_session("ast_takeover")
@@ -995,7 +995,7 @@ def test_evaluate_checks_pending_reentry_for_the_current_graph_only() -> None:
     pending_queries: list[tuple[str, str | None]] = []
     snapshot = SimpleNamespace(
         graph_id="tg_current_pending_scope",
-        tasks=[_root(), _executor("t1", "completed")],
+        tasks=[_root(), _executor("t1", "done")],
     )
 
     def has_pending(session_id: str, graph_id: str | None = None) -> bool:

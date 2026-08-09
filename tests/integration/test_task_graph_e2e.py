@@ -73,7 +73,7 @@ class TestTaskGraphE2E:
                 svc._tasks.assert_dependencies_satisfied(graph_id, n2_id)
 
             # n1 完成后 n2 就绪
-            svc.update_task_status(task_id=n1_id, status="completed")
+            svc.update_task_status(task_id=n1_id, status="done")
             svc._tasks.assert_dependencies_satisfied(graph_id, n2_id)
 
     def test_parallel_nodes_both_ready(self):
@@ -106,8 +106,8 @@ class TestTaskGraphE2E:
                 svc._tasks.assert_dependencies_satisfied(graph_id, n3_id)
 
             # 两个前置都完成后 n3 就绪
-            svc.update_task_status(task_id=n1_id, status="completed")
-            svc.update_task_status(task_id=n2_id, status="completed")
+            svc.update_task_status(task_id=n1_id, status="done")
+            svc.update_task_status(task_id=n2_id, status="done")
             svc._tasks.assert_dependencies_satisfied(graph_id, n3_id)
 
     def test_full_graph_completion(self):
@@ -125,11 +125,11 @@ class TestTaskGraphE2E:
             # 完成根节点和 n1
             graph_id = result["graphId"]
             root = svc._tasks.get_graph_root(graph_id)
-            svc.update_task_status(task_id=root.task_id, status="completed")
-            svc.update_task_status(task_id=n1_id, status="completed")
+            svc.update_task_status(task_id=root.task_id, status="done")
+            svc.update_task_status(task_id=n1_id, status="done")
 
             snapshot = svc.get_graph_snapshot(session_id=session_id, graph_id=graph_id)
-            all_completed = all(t.status == "completed" for t in snapshot.tasks)
+            all_completed = all(t.status == "done" for t in snapshot.tasks)
             assert all_completed
 
     def test_needs_confirmation_node_in_graph(self):

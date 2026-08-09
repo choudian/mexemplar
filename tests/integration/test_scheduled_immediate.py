@@ -172,8 +172,8 @@ def test_scheduled_immediate_full_flow():
         # 构造一个全 completed 的图 snapshot（模拟主助理委派完成）
         completed_snapshot = SimpleNamespace(
             tasks=[
-                SimpleNamespace(task_id="root", parent_task_id=None, status="completed"),
-                SimpleNamespace(task_id="t1", parent_task_id="root", status="completed"),
+                SimpleNamespace(task_id="root", parent_task_id=None, status="done"),
+                SimpleNamespace(task_id="t1", parent_task_id="root", status="done"),
             ]
         )
 
@@ -211,7 +211,7 @@ def test_scheduled_immediate_full_flow():
     # 说的不是一件事。
     ("node_status", "expected_outcome"),
     [
-        ("completed", "succeeded"),
+        ("done", "succeeded"),
         ("abandoned", "failed"),
     ],
 )

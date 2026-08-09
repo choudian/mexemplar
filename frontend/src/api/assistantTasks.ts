@@ -6,7 +6,7 @@ export type TaskStatus =
   | "running"
   | "delivered"
   | "suspended"
-  | "completed"
+  | "done"
   | "skipped"
   /** 有人看过之后决定不做了，不是系统判死。展示仍走 displayPhase，不直接判这个值。 */
   | "abandoned"

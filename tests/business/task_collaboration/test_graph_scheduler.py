@@ -49,7 +49,7 @@ class TestDependenciesSatisfied:
             n1_id = result["nodeTaskIds"]["n1"]
             n2_id = result["nodeTaskIds"]["n2"]
             # n1 完成
-            svc.update_task_status(task_id=n1_id, status="completed")
+            svc.update_task_status(task_id=n1_id, status="done")
             # n2 的前置已完成，校验应通过
             svc.assert_dependencies_satisfied(graph_id, n2_id)
 
@@ -108,14 +108,14 @@ class TestReadyActivationOrder:
                 svc.assert_dependencies_satisfied(graph_id, n3_id)
 
             # n1 完成后，n2 就绪
-            svc.update_task_status(task_id=n1_id, status="completed")
+            svc.update_task_status(task_id=n1_id, status="done")
             svc.assert_dependencies_satisfied(graph_id, n2_id)
             # n3 仍不就绪
             with pytest.raises(ValueError):
                 svc.assert_dependencies_satisfied(graph_id, n3_id)
 
             # n2 完成后，n3 就绪
-            svc.update_task_status(task_id=n2_id, status="completed")
+            svc.update_task_status(task_id=n2_id, status="done")
             svc.assert_dependencies_satisfied(graph_id, n3_id)
 
     def test_parallel_fan_out(self):
@@ -140,7 +140,7 @@ class TestReadyActivationOrder:
             n3_id = result["nodeTaskIds"]["n3"]
 
             # n1 完成后，n2 和 n3 都就绪
-            svc.update_task_status(task_id=n1_id, status="completed")
+            svc.update_task_status(task_id=n1_id, status="done")
             svc.assert_dependencies_satisfied(graph_id, n2_id)
             svc.assert_dependencies_satisfied(graph_id, n3_id)
 

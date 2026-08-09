@@ -218,8 +218,8 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
     "status": [
       "abandoned",
       "cancelled",
-      "completed",
       "delivered",
+      "done",
       "pending_dispatch",
       "running",
       "skipped",

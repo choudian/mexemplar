@@ -61,7 +61,7 @@ class _AdjudicationService:
             "taskId": "tsk_1",
             "graphId": "tg_1",
             "decision": decision,
-            "taskStatus": "completed" if decision == "accepted" else "pending_dispatch",
+            "taskStatus": "done" if decision == "accepted" else "pending_dispatch",
         }
 
 
@@ -279,7 +279,7 @@ def test_adjudication_decision_endpoint_scopes_to_session(monkeypatch, desktop_a
     )
 
     assert ok.status_code == 200
-    assert ok.json()["taskStatus"] == "completed"
+    assert ok.json()["taskStatus"] == "done"
     assert missing.status_code == 404
     assert invalid.status_code == 422
 

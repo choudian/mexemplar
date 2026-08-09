@@ -198,7 +198,7 @@ def test_repository_detects_nonterminal_execution_nodes_by_session(db_session) -
 
     assert repo.has_nonterminal_execution_tasks("ast_terminal_scan") is True
 
-    repo.update_status(child.task_id, status="completed")
+    repo.update_status(child.task_id, status="done")
 
     # Root is a container and may remain nonterminal for mixed-result graphs.
     assert repo.has_nonterminal_execution_tasks("ast_terminal_scan") is False

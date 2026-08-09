@@ -290,7 +290,7 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                         "running",
                         "delivered",
                         "suspended",
-                        "completed",
+                        "done",
                         "skipped",
                         "abandoned",
                         "cancelled",

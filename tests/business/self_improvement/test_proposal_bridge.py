@@ -448,7 +448,7 @@ def test_recovery_marks_terminal_success_graph_done(in_memory_db, tmp_path, monk
         if task.parent_task_id is not None:
             if task.title.startswith("验证改进"):
                 _record_structured_test_result(task.task_id, passed=True)
-            service.update_task_status(task_id=task.task_id, status="completed")
+            service.update_task_status(task_id=task.task_id, status="done")
 
     monkeypatch.setattr(
         proposal_bridge,
@@ -497,7 +497,7 @@ def test_recovery_fails_completed_test_node_without_structured_result(
     service = TaskCollaborationService()
     for task in tasks:
         if task.parent_task_id is not None:
-            service.update_task_status(task_id=task.task_id, status="completed")
+            service.update_task_status(task_id=task.task_id, status="done")
 
     monkeypatch.setattr(
         proposal_bridge,
@@ -956,7 +956,7 @@ def test_recovery_fails_when_test_node_reports_failing_tests(
         if task.parent_task_id is not None:
             if task.title.startswith("验证改进"):
                 _record_structured_test_result(task.task_id, passed=False)
-            service.update_task_status(task_id=task.task_id, status="completed")
+            service.update_task_status(task_id=task.task_id, status="done")
 
     monkeypatch.setattr(
         proposal_bridge,
@@ -1019,7 +1019,7 @@ def test_recovery_fails_when_implementation_node_abandoned(
     service = TaskCollaborationService()
     for task in tasks:
         if task.parent_task_id is not None:
-            status = "abandoned" if task.title.startswith("实施") else "completed"
+            status = "abandoned" if task.title.startswith("实施") else "done"
             service.update_task_status(task_id=task.task_id, status=status)
 
     monkeypatch.setattr(
@@ -1098,7 +1098,7 @@ def test_recovery_identifies_test_node_by_graph_structure_not_title(
             continue
         if task.title == "Run pytest suite":  # 夹具知道测试节点 title
             _record_structured_test_result(task.task_id, passed=True)
-        service.update_task_status(task_id=task.task_id, status="completed")
+        service.update_task_status(task_id=task.task_id, status="done")
 
     monkeypatch.setattr(
         proposal_bridge,
@@ -1231,7 +1231,7 @@ def test_recovery_started_branch_kicks_once_and_auto_decides_pending_adjudicatio
             continue
         if task.title.startswith("验证改进"):
             _record_structured_test_result(task.task_id, passed=True)
-        service.update_task_status(task_id=task.task_id, status="completed")
+        service.update_task_status(task_id=task.task_id, status="done")
 
     kick_calls: list[str] = []
 

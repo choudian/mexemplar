@@ -276,7 +276,7 @@ class AssistantTask(Base):
     __table_args__ = (
         CheckConstraint(
             "status IN ('pending_dispatch', 'running', 'delivered', 'suspended', "
-            "'completed', 'skipped', 'abandoned', 'cancelled')",
+            "'done', 'skipped', 'abandoned', 'cancelled')",
             name="ck_assistant_tasks_status",
         ),
         CheckConstraint(

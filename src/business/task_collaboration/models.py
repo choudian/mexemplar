@@ -17,7 +17,10 @@ class TaskStatus(StrEnum):
     # 与 running 的区别：running 时执行体还在跑，delivered 时已经跑完、球在主助理手上。
     DELIVERED = "delivered"
     SUSPENDED = "suspended"
-    COMPLETED = "completed"
+    # 验收通过（accept 裁定）。值 "done" 与 DeliveredStatus.DONE 的 "done" 相同——
+    # 前者是 task 行的"验收通过了"，后者是 adjudication 行的"执行体自称干完了"。
+    # 库里和日志里长得一样，靠表名区分。详见下方 DeliveredStatus。
+    COMPLETED = "done"
     # 跳过——图变异时主助理决定绕行这个节点（撞缺陷后改路等）。不是失败，是不做了。
     # 写入路径暂未接通（当前跳过靠 mutate_task_graph），枚举先到位。
     SKIPPED = "skipped"
@@ -180,6 +183,7 @@ class TodoStatus(StrEnum):
 TERMINAL_TASK_STATUSES = frozenset(
     {
         TaskStatus.COMPLETED,
+        TaskStatus.SKIPPED,
         TaskStatus.ABANDONED,
         TaskStatus.CANCELLED,
     }

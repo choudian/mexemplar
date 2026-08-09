@@ -38,8 +38,8 @@ def test_parent_adjudication_accepts_task() -> None:
         session_id="ast_adj",
     )
 
-    assert result["taskStatus"] == "completed"
-    assert AssistantTaskRepository().get_task(task_id).status == "completed"
+    assert result["taskStatus"] == "done"
+    assert AssistantTaskRepository().get_task(task_id).status == "done"
     assert AssistantTaskAdjudicationRepository().get_by_id(adjudication_id).decision == "accepted"
 
 
@@ -238,7 +238,7 @@ def test_abandoned_adjudication_cascades_cancel_skips_terminal_children() -> Non
     service.update_task_status(task_id=child_id, status="running")
     # grandchild_a already completed
     service.update_task_status(task_id=grandchild_a_id, status="running")
-    service.update_task_status(task_id=grandchild_a_id, status="completed")
+    service.update_task_status(task_id=grandchild_a_id, status="done")
     # grandchild_b still running
     service.update_task_status(task_id=grandchild_b_id, status="running")
     adjudication = service.create_parent_adjudication(
@@ -256,6 +256,6 @@ def test_abandoned_adjudication_cascades_cancel_skips_terminal_children() -> Non
     # child is abandoned
     assert task_repo.get_task(child_id).status == "abandoned"
     # grandchild_a stays completed (already terminal, not re-cancelled)
-    assert task_repo.get_task(grandchild_a_id).status == "completed"
+    assert task_repo.get_task(grandchild_a_id).status == "done"
     # grandchild_b is cancelled
     assert task_repo.get_task(grandchild_b_id).status == "cancelled"

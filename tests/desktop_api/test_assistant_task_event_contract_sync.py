@@ -26,6 +26,6 @@ def test_task_collaboration_event_contracts_exist_in_backend_and_frontend() -> N
         assert event_type in frontend_contract
         validate_ui_event_payload(event_type, examples[event_type])
     assert '"opened"' in frontend_contract
-    assert '"completed"' in frontend_contract
+    assert '"done"' in frontend_contract
     assert '"deleted"' in frontend_contract
     assert '"reordered"' in frontend_contract

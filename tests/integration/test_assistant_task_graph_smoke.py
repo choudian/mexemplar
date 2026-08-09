@@ -91,7 +91,7 @@ def test_request_graph_is_scoped_per_user_message() -> None:
         assert (graph_a2, root_a2) == (graph_a, root_a)
 
         # 上一张图标记完成（模拟任务跑完或被中途放下）
-        task_repo.update_status(root_a, status="completed")
+        task_repo.update_status(root_a, status="done")
 
         # 新的用户消息（seq=2）→ 开新图，不会把新任务粘到旧图上
         graph_b, root_b = service.get_or_create_request_graph_root(

@@ -98,7 +98,7 @@ def _pending_adjudication_id(task_id):
 
 def _mark_completed(task_id):
     with TaskCollaborationService() as svc:
-        svc.update_task_status(task_id=task_id, status="completed")
+        svc.update_task_status(task_id=task_id, status="done")
 
 
 def _mark_pending(task_id):

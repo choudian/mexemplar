@@ -139,7 +139,7 @@ class TestCancelPropagation:
                     parent_task_id="tsk-root",
                     title="步骤A",
                     description_preview="先做",
-                    status="completed",
+                    status="done",
                     display_phase="done",
                     requires_review=False,
                 ),

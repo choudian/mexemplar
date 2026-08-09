@@ -68,7 +68,7 @@ def test_adjudication_changed_projects_to_task_graph_event() -> None:
             "graph_id": "tg_1",
             "task_id": "tsk_1",
             "change_type": "adjudication_decided",
-            "status": "completed",
+            "status": "done",
             "display_phase": "done",
             "requires_review": False,
             "safe_explanation": "",

@@ -385,7 +385,7 @@ describe("assistantTaskStore", () => {
           taskId: "tsk_1",
           graphId: "tg_1",
           decision: "accepted",
-          taskStatus: "completed",
+          taskStatus: "done",
         }),
       )
       .mockResolvedValueOnce(jsonResponse(GRAPH));

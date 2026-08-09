@@ -34,23 +34,23 @@ class TestFullE2E:
 
             # n1 就绪 → 完成
             svc._tasks.assert_dependencies_satisfied(graph_id, n1_id)
-            svc.update_task_status(task_id=n1_id, status="completed")
+            svc.update_task_status(task_id=n1_id, status="done")
 
             # n2 就绪 → 完成
             svc._tasks.assert_dependencies_satisfied(graph_id, n2_id)
-            svc.update_task_status(task_id=n2_id, status="completed")
+            svc.update_task_status(task_id=n2_id, status="done")
 
             # n3 就绪 → 完成
             svc._tasks.assert_dependencies_satisfied(graph_id, n3_id)
-            svc.update_task_status(task_id=n3_id, status="completed")
+            svc.update_task_status(task_id=n3_id, status="done")
 
             # 完成根节点（图的容器）
             root = svc._tasks.get_graph_root(graph_id)
-            svc.update_task_status(task_id=root.task_id, status="completed")
+            svc.update_task_status(task_id=root.task_id, status="done")
 
             # 全图完成
             snapshot = svc.get_graph_snapshot(session_id=session_id, graph_id=graph_id)
-            all_completed = all(t.status == "completed" for t in snapshot.tasks)
+            all_completed = all(t.status == "done" for t in snapshot.tasks)
             assert all_completed
 
     def test_needs_confirmation_adjudicate(self):

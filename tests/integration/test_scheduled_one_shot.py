@@ -39,8 +39,8 @@ class _FakeLauncher:
 def _quiesce(session_id: str, snapshot_tasks=None):
     """构造静默 RunCompletionMonitor.evaluate_session。"""
     tasks = snapshot_tasks or [
-        SimpleNamespace(task_id="root", parent_task_id=None, status="completed"),
-        SimpleNamespace(task_id="t1", parent_task_id="root", status="completed"),
+        SimpleNamespace(task_id="root", parent_task_id=None, status="done"),
+        SimpleNamespace(task_id="t1", parent_task_id="root", status="done"),
     ]
     snapshot = SimpleNamespace(tasks=tasks)
     with ScheduledTaskRunRepository() as rr:

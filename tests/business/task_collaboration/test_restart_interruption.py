@@ -159,7 +159,7 @@ class TestRestartMarksRunningAttemptsInterrupted:
         task_id = result["nodeTaskIds"]["n1"]
         with TaskCollaborationService() as svc:
             svc.update_task_status(task_id=task_id, status="running")
-            svc.update_task_status(task_id=task_id, status="completed")
+            svc.update_task_status(task_id=task_id, status="done")
         with AssistantTaskAttemptRepository() as attempts:
             attempt = attempts.start_attempt(
                 task_id=task_id,

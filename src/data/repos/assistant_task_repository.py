@@ -181,7 +181,7 @@ class AssistantTaskRepository(BaseRepository):
                 AssistantTask.parent_task_id.is_not(None),
                 # ⚠️ 手抄的 TERMINAL_TASK_STATUSES 副本（数据层不 import 业务枚举）。
                 # 改枚举时这里不会报错，只会静默把某个终态当成"还在跑"。
-                AssistantTask.status.notin_(("completed", "abandoned", "cancelled")),
+                AssistantTask.status.notin_(("done", "skipped", "abandoned", "cancelled")),
             )
             .first()
         )
@@ -290,7 +290,7 @@ class AssistantTaskRepository(BaseRepository):
         row.waiting_on = waiting_on
         row.task_version += 1
         row.updated_at = now
-        if status in ("completed", "skipped"):
+        if status in ("done", "skipped"):
             row.completed_at = now
         elif status == "abandoned":
             # 列名仍是 failed_at：它没有任何读取方，改列名要动 5 段迁移历史 DDL 和
@@ -447,10 +447,10 @@ class AssistantTaskRepository(BaseRepository):
             if pred_id not in found_ids:
                 raise ValueError(f"dependency predecessor {pred_id} not found for task {task_id}")
         for r in rows:
-            if r.status != "completed":
+            if r.status != "done":
                 raise ValueError(
                     f"dependency not satisfied: predecessor {r.task_id} "
-                    f"is {r.status}, expected completed (task {task_id})"
+                    f"is {r.status}, expected done (task {task_id})"
                 )
 
     def _assert_no_cycle(self, graph_id: str, source_task_id: str, target_task_id: str) -> None:
