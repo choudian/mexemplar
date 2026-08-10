@@ -259,6 +259,23 @@ export async function listSubagents(sessionId: string): Promise<AssistantSubagen
   return response.items ?? [];
 }
 
+/** 执行体详情聚合（⑦ 递归抽屉用）。 */
+export interface ExecutorDetail {
+  summary: AssistantSubagentSummary;
+  steps: AssistantActivityStep[];
+  children: AssistantSubagentSummary[];
+}
+
+export async function getExecutorDetail(
+  sessionId: string,
+  executorSessionId: string,
+): Promise<ExecutorDetail> {
+  const qs = `executorSessionId=${encodeURIComponent(executorSessionId)}`;
+  return requestJson<ExecutorDetail>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/executor-detail?${qs}`,
+  );
+}
+
 export function decideAssistantConfirmation(
   requestId: string,
   decision: "approve" | "deny",

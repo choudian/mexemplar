@@ -28,6 +28,7 @@ from src.desktop_api.ui_events import (
     EVENT_TYPE_BRAIN_ZONE_CHANGED,
     EVENT_TYPE_COMPOSITIONS_CHANGED,
     EVENT_TYPE_IMPROVEMENT_PROPOSAL_CHANGED,
+    EVENT_TYPE_USER_TASK_CHANGED,
     EVENT_TYPE_RECORDING_PROGRESS,
     EVENT_TYPE_SETTINGS_CHANGED,
     EVENT_TYPE_SKILL_CHANGED,
@@ -227,6 +228,14 @@ _TASK_EVENT_PROJECTIONS: dict[str, tuple[str, dict[str, tuple[str, Any]]]] = {
             "changeType": ("change_type", _string_or_none),
             "status": ("status", _string_or_none),
             "sortOrder": ("sort_order", _int_or_none),
+        },
+    ),
+    "user_task_changed": (
+        EVENT_TYPE_USER_TASK_CHANGED,
+        {
+            "userTaskId": ("user_task_id", _string_or_none),
+            "changeType": ("change_type", _string_or_none),
+            "sessionId": ("session_id", _string_or_none),
         },
     ),
 }

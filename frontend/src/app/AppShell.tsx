@@ -56,6 +56,7 @@ const TASK_COLLAB_EVENT_TYPES = new Set([
   "assistant.task_question.changed",
   "assistant.meeting.changed",
   "assistant.todo.changed",
+  "user_task.changed",
 ]);
 
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {

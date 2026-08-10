@@ -10,10 +10,27 @@ from typing import Any
 
 from src.data.models_sqlite import UserTask
 from src.data.repos import UserTaskRepository
+from src.utils.events import emit
 
 USER_TASK_STATUSES = {"active", "cooling", "done", "dropped"}
 TITLE_LIMIT = 200
 DESCRIPTION_LIMIT = 4000
+
+
+def _emit_user_task_changed(
+    task_id: str, session_id: str, change_type: str
+) -> None:
+    """user_task 变更 → user_task_changed 公开 UI 事件。
+
+    前端收到后刷新用户任务列表 + distribution（替代轮询）。
+    """
+    emit(
+        "user_task_changed",
+        sender="user_task_service",
+        user_task_id=task_id,
+        session_id=session_id,
+        change_type=change_type,
+    )
 
 
 class UserTaskService:
@@ -43,7 +60,9 @@ class UserTaskService:
             title=_normalize_title(title),
             description=_normalize_description(description),
         )
-        return project_user_task(row)
+        result = project_user_task(row)
+        _emit_user_task_changed(row.task_id, row.session_id, "created")
+        return result
 
     def get(self, task_id: str) -> dict[str, Any] | None:
         row = self._repo.get(_normalize_id(task_id))
@@ -66,7 +85,9 @@ class UserTaskService:
         row = self._repo.update_status(normalized_id, normalized_status)
         if row is None:
             raise LookupError(f"user task not found: {normalized_id}")
-        return project_user_task(row)
+        result = project_user_task(row)
+        _emit_user_task_changed(row.task_id, row.session_id, "status_changed")
+        return result
 
     def update(
         self,

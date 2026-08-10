@@ -61,6 +61,7 @@ EventName: TypeAlias = Literal[
     "assistant_task_question_changed",
     "assistant_meeting_changed",
     "assistant_todo_changed",
+    "user_task_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
     "external_coding_session_changed",
@@ -250,6 +251,11 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "change_type",
         "status",
         "sort_order",
+    ),
+    "user_task_changed": (
+        "session_id",
+        "user_task_id",
+        "change_type",
     ),
     "assistant_task_adjudication_changed": (
         "session_id",
@@ -462,6 +468,7 @@ assistant_task_board_changed = _registry.signal("assistant_task_board_changed")
 assistant_task_question_changed = _registry.signal("assistant_task_question_changed")
 assistant_meeting_changed = _registry.signal("assistant_meeting_changed")
 assistant_todo_changed = _registry.signal("assistant_todo_changed")
+user_task_changed = _registry.signal("user_task_changed")
 assistant_task_adjudication_changed = _registry.signal("assistant_task_adjudication_changed")
 assistant_task_root_failed = _registry.signal("assistant_task_root_failed")
 external_coding_session_changed = _registry.signal("external_coding_session_changed")
@@ -640,6 +647,7 @@ __all__ = [
     "assistant_task_question_changed",
     "assistant_meeting_changed",
     "assistant_todo_changed",
+    "user_task_changed",
     "assistant_task_adjudication_changed",
     "assistant_task_root_failed",
     "external_coding_session_changed",

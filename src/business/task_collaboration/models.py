@@ -215,6 +215,7 @@ class TaskSnapshot:
     adjudication_id: str | None = None
     updated_at: datetime | None = None
     external_coding_sessions: list[dict] = field(default_factory=list)
+    executor_session_id: str | None = None
 
 
 @dataclass(frozen=True)

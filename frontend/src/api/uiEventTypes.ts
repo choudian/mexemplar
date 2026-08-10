@@ -12,6 +12,7 @@ export const UI_EVENT_TYPES = [
   "assistant.task_question.changed",
   "assistant.meeting.changed",
   "assistant.todo.changed",
+  "user_task.changed",
   "assistant.external_coding.changed",
   "recording.progress",
   "teaching.stage_changed",
@@ -168,6 +169,7 @@ export const UI_EVENT_EXAMPLES = {
   "scheduling.confirmation_requested": { "requestId": "scf_abc", "sessionId": "ast_001", "draft": { "title": "查竞品价格", "scheduleDescription": "每天 09:00", "instruction": "查询竞品价格并汇总", "scheduleKind": "recurring", "sourceType": "direct" }, "unattendedAutoApprove": false, "expiresAt": "2026-07-19T12:00:00+00:00" },
   "scheduling.confirmation_resolved": { "requestId": "scf_abc", "sessionId": "ast_001", "status": "confirmed" },
   "backend.resync_required": { "reason": "replay_gap", "domains": ["teaching", "tools", "brain", "skill"] },
+  "user_task.changed": { "userTaskId": "utsk_1", "changeType": "progress_changed", "sessionId": "sess_1" },
 } as const satisfies Record<UiEventType, Record<string, unknown>>;
 
 export const UI_EVENT_PAYLOAD_ENUMS = {
@@ -274,6 +276,9 @@ export const UI_EVENT_PAYLOAD_ENUMS = {
   "assistant.todo.changed": {
     "changeType": ["created", "deleted", "reordered", "updated"],
     "status": ["doing", "done", "skipped", "todo"],
+  },
+  "user_task.changed": {
+    "changeType": ["created", "graph_added", "progress_changed", "status_changed"],
   },
   "assistant.external_coding.changed": {
     "ownerType": ["task", "workflow"],
@@ -416,6 +421,7 @@ export const UI_EVENT_HANDLER_DOMAINS = {
   "assistant.task_question.changed": "assistant",
   "assistant.meeting.changed": "assistant",
   "assistant.todo.changed": "assistant",
+  "user_task.changed": "assistant",
   "assistant.external_coding.changed": "assistant",
   "recording.progress": "teaching",
   "teaching.stage_changed": "teaching",
@@ -853,6 +859,17 @@ export type TodoChangedEvent = UiEventEnvelope<
   }
 >;
 
+export type UserTaskChangeType = (typeof UI_EVENT_PAYLOAD_ENUMS)["user_task.changed"]["changeType"][number];
+
+export type UserTaskChangedEvent = UiEventEnvelope<
+  "user_task.changed",
+  {
+    userTaskId: string;
+    changeType: UserTaskChangeType;
+    sessionId?: string | null;
+  }
+>;
+
 export type ExternalCodingChangedEvent = UiEventEnvelope<
   "assistant.external_coding.changed",
   {
@@ -917,6 +934,7 @@ export type UiEvent =
   | TaskQuestionChangedEvent
   | MeetingChangedEvent
   | TodoChangedEvent
+  | UserTaskChangedEvent
   | ExternalCodingChangedEvent
   | ScheduledTaskCompletedEvent
   | ScheduledTaskNeedsTakeoverEvent

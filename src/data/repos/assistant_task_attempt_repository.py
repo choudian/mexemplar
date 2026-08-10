@@ -356,6 +356,45 @@ class AssistantTaskAttemptRepository(BaseRepository):
                 result[session_id] = status
         return result
 
+    def latest_executor_sessions_for_tasks(
+        self, task_ids: list[str]
+    ) -> dict[str, str]:
+        """批量返回每个 task 最新 attempt 的 ``executor_session_id``。
+
+        供图快照构建用：一次查 N 个 task 的最新 attempt，返回
+        ``{task_id: executor_session_id}``。无 attempt 或 executor_session_id
+        为空的 task 不在结果中。与 ``latest_statuses_for_sessions`` 同样用
+        ROW_NUMBER() 窗口函数保证确定性。
+        """
+        if not task_ids:
+            return {}
+        from sqlalchemy import func
+
+        ranked = (
+            self.session.query(
+                AssistantTaskAttempt.task_id.label("tid"),
+                AssistantTaskAttempt.executor_session_id.label("sid"),
+                func.row_number()
+                .over(
+                    partition_by=AssistantTaskAttempt.task_id,
+                    order_by=AssistantTaskAttempt.created_at.desc(),
+                )
+                .label("rn"),
+            )
+            .filter(AssistantTaskAttempt.task_id.in_(task_ids))
+            .subquery()
+        )
+        rows = (
+            self.session.query(ranked.c.tid, ranked.c.sid)
+            .filter(ranked.c.rn == 1)
+            .all()
+        )
+        result: dict[str, str] = {}
+        for task_id, session_id in rows:
+            if task_id and session_id:
+                result[task_id] = session_id
+        return result
+
     def renew_lease(self, attempt_id: str, *, lease_expires_at: datetime) -> bool:
         """续租一个仍在执行的 attempt，返回是否续上。
 

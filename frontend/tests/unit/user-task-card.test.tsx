@@ -54,11 +54,13 @@ describe("UserTaskCard", () => {
 
   it("shows the task title in collapsed state", async () => {
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByText("季度报告")).toBeInTheDocument();
+      expect(screen.getAllByText("季度报告")[0]).toBeInTheDocument();
     });
+    // 标题同时出现在折叠 summary 和展开 body 的 me-task-title 里
+    expect(screen.getAllByText("季度报告").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows continue button when there are pushable suspensions", async () => {
@@ -71,7 +73,7 @@ describe("UserTaskCard", () => {
       ),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByTitle("继续这件事")).toBeInTheDocument();
@@ -88,10 +90,10 @@ describe("UserTaskCard", () => {
       ),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
     );
     await waitFor(() => {
-      expect(screen.getByText("季度报告")).toBeInTheDocument();
+      expect(screen.getAllByText("季度报告")[0]).toBeInTheDocument();
     });
     expect(screen.queryByTitle("继续这件事")).not.toBeInTheDocument();
   });
@@ -106,13 +108,13 @@ describe("UserTaskCard", () => {
       ),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByText("需处理")).toBeInTheDocument();
     });
     // 展开后应有缺陷说明
-    const summary = screen.getByText("季度报告").closest("summary");
+    const summary = screen.getAllByText("季度报告")[0].closest("summary");
     if (summary) fireEvent.click(summary);
     await waitFor(() => {
       expect(screen.getByText(/遇到程序问题/)).toBeInTheDocument();
@@ -141,7 +143,7 @@ describe("UserTaskCard", () => {
       }),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByTitle("继续这件事")).toBeInTheDocument();
@@ -173,7 +175,7 @@ describe("UserTaskCard", () => {
       }),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByTitle("继续这件事")).toBeInTheDocument();

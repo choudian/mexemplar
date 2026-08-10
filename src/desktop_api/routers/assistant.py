@@ -41,6 +41,7 @@ from src.desktop_api.schemas import (
     AssistantStopResponse,
     AssistantSubagentListResponse,
     AssistantTranscriptResponse,
+    ExecutorDetailResponse,
     SegmentBoundaryRequest,
 )
 
@@ -256,6 +257,29 @@ def list_subagents(
         return AssistantSubagentListResponse(**runtime.list_subagents(session_id))
     except Exception as exc:
         logger.error("Assistant subagent list failed for session %s: %s", session_id, exc)
+        raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
+
+
+@router.get("/sessions/{session_id}/executor-detail", response_model=ExecutorDetailResponse)
+def get_executor_detail(
+    session_id: str,
+    executorSessionId: str = Query(...),
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> ExecutorDetailResponse:
+    """取某执行体会话的聚合详情（⑦ 递归抽屉用）：summary + transcript + children。"""
+    try:
+        return ExecutorDetailResponse(
+            **runtime.get_executor_detail(session_id, executorSessionId)
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="executor not found") from exc
+    except Exception as exc:
+        logger.error(
+            "Executor detail failed for session %s executor %s: %s",
+            session_id,
+            executorSessionId,
+            exc,
+        )
         raise HTTPException(status_code=500, detail={"error": "internal_error"}) from exc
 
 

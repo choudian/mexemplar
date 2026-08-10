@@ -85,6 +85,7 @@ export interface AssistantTaskSnapshot {
   adjudicationId?: string | null;
   updatedAt?: string | null;
   externalCodingSessions?: ExternalCodingSessionTaskSummary[];
+  executorSessionId?: string | null;
 }
 
 export interface AssistantTaskEdgeSnapshot {

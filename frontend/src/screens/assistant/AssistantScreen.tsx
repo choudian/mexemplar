@@ -18,6 +18,7 @@ import SafeMarkdown from "./SafeMarkdown";
 import SessionSidebar from "./SessionSidebar";
 import SubagentDetailDrawer from "./SubagentDetailDrawer";
 import UserTaskCard from "./UserTaskCard";
+import TaskGraphDialog from "./TaskGraphDialog";
 import { MeetingChannelDrawer } from "./MeetingChannelDrawer";
 import { TaskBoardPanel } from "./TaskBoardPanel";
 import { TodoChecklistPanel } from "./TodoChecklistPanel";
@@ -127,11 +128,13 @@ export function AssistantScreen(): JSX.Element {
   const executeResync = useAssistantTaskStore((state) => state.executeResync);
   const loadNewTaskTodos = useAssistantTaskStore((state) => state.loadNewTaskTodos);
   const clearSessionTracking = useAssistantTaskStore((state) => state.clearSessionTracking);
+  const userTaskVersion = useAssistantTaskStore((state) => state.userTaskVersion);
   const [historyOpen, setHistoryOpen] = useState(true);
   const [openSubagentId, setOpenSubagentId] = useState<string | null>(null);
   const [editingFailureSeq, setEditingFailureSeq] = useState<number | null>(null);
   const [editedContent, setEditedContent] = useState("");
   const [userTasks, setUserTasks] = useState<UserTaskItem[]>([]);
+  const [openGraphDialog, setOpenGraphDialog] = useState<{ graphId: string; title: string } | null>(null);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -141,7 +144,7 @@ export function AssistantScreen(): JSX.Element {
     listUserTasks(activeSessionId)
       .then((res) => setUserTasks(res.tasks ?? []))
       .catch(() => setUserTasks([]));
-  }, [activeSessionId, messages.length]);
+  }, [activeSessionId, messages.length, userTaskVersion]);
 
   const activeTurns = useMemo(
     () => (activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {}),
@@ -472,6 +475,14 @@ export function AssistantScreen(): JSX.Element {
             onClose={() => useAssistantTaskStore.getState().closeMeeting()}
           />
         ) : null}
+        {openGraphDialog && activeSessionId ? (
+          <TaskGraphDialog
+            sessionId={activeSessionId}
+            graphId={openGraphDialog.graphId}
+            taskTitle={openGraphDialog.title}
+            onClose={() => setOpenGraphDialog(null)}
+          />
+        ) : null}
         <div className="assistant-confirmation-stack">
           {confirmations.map((confirmation) => (
             <ConfirmationToast
@@ -504,6 +515,10 @@ export function AssistantScreen(): JSX.Element {
                 sessionId={activeSessionId}
                 taskId={task.taskId}
                 title={task.title}
+                status={task.status}
+                onOpenFullGraph={(graphId, title) =>
+                  setOpenGraphDialog({ graphId, title })
+                }
               />
             ))}
           </div>

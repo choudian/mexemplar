@@ -289,9 +289,7 @@ class AssistantTaskSnapshot(BaseModel):
     adjudicationId: str | None = None
     updatedAt: datetime | None = None
     externalCodingSessions: list[ExternalCodingSessionTaskSummary] = Field(default_factory=list)
-
-
-class AssistantTaskEdgeSnapshot(BaseModel):
+    executorSessionId: str | None = None
     sourceTaskId: str
     targetTaskId: str
     type: Literal["dependency", "delegation", "question", "meeting_channel", "resource_request"]
@@ -727,6 +725,13 @@ class AssistantSubagentSummary(BaseModel):
 
 class AssistantSubagentListResponse(BaseModel):
     items: list[AssistantSubagentSummary]
+
+
+class ExecutorDetailResponse(BaseModel):
+    """执行体详情聚合（⑦ 递归抽屉用）：summary + transcript + children。"""
+    summary: AssistantSubagentSummary
+    steps: list[AssistantActivityStep]
+    children: list[AssistantSubagentSummary]
 
 
 class AssistantConfirmationDecisionRequest(BaseModel):

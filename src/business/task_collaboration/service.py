@@ -25,7 +25,11 @@ from src.business.task_collaboration.models import (
     waiting_on_for_reason,
 )
 from src.business.task_collaboration.unit_of_work import AtomicTaskService
-from src.data.repos import AssistantTaskAdjudicationRepository, AssistantTaskRepository
+from src.data.repos import (
+    AssistantTaskAdjudicationRepository,
+    AssistantTaskAttemptRepository,
+    AssistantTaskRepository,
+)
 from src.data.repos.assistant_task_repository import graph_version_from_tasks
 from src.data.repos.base_repository import generate_id
 from src.utils.events import emit
@@ -316,6 +320,7 @@ class TaskCollaborationService(AtomicTaskService):
         self,
         task_repo: AssistantTaskRepository | None = None,
         adjudication_repo: AssistantTaskAdjudicationRepository | None = None,
+        attempt_repo: AssistantTaskAttemptRepository | None = None,
     ) -> None:
         # 守卫：task_repo 与 adjudication_repo 必须同时注入或同时省略。只注入一个
         # 时，未注入的 repo 会走 ``repo_cls()`` 自建独立 session，``_atomic`` 只
@@ -324,6 +329,8 @@ class TaskCollaborationService(AtomicTaskService):
         # 性而非 session 一致性——因为 ``TaskMeetingService`` 内部组合总是同时传
         # 入两个 repo（即便在 stub 单元测试里它们 session 不同也无害，不触发跨
         # repo 原子写），通用 session 校验会误伤那种合法模式。
+        # attempt_repo 是可选的只读依赖（图快照读 executor_session_id），可以省略；
+        # 省略时由 ``_init_repos`` 自建独立实例。
         if (task_repo is None) != (adjudication_repo is None):
             raise RuntimeError(
                 "TaskCollaborationService requires task_repo and adjudication_repo "
@@ -333,6 +340,7 @@ class TaskCollaborationService(AtomicTaskService):
         self._init_repos(
             tasks=(AssistantTaskRepository, task_repo),
             adjudications=(AssistantTaskAdjudicationRepository, adjudication_repo),
+            attempts=(AssistantTaskAttemptRepository, attempt_repo),
         )
 
     def create_root_graph(
@@ -1034,6 +1042,10 @@ class TaskCollaborationService(AtomicTaskService):
                 )
         snapshots: list[TaskSnapshot] = []
         adjudication_items: list[TaskAdjudicationSnapshot] = []
+        # 批量取每个 task 最新 attempt 的 executor_session_id，供前端下钻执行体详情用。
+        executor_sessions = self._attempts.latest_executor_sessions_for_tasks(
+            [task.task_id for task in tasks]
+        )
         try:
             for task in tasks:
                 pending = pending_by_task.get(task.task_id)
@@ -1081,6 +1093,7 @@ class TaskCollaborationService(AtomicTaskService):
                         adjudication_id=pending.adjudication_id if pending else None,
                         updated_at=task.updated_at,
                         external_coding_sessions=external_summaries,
+                        executor_session_id=executor_sessions.get(task.task_id),
                     )
                 )
         finally:
@@ -1106,6 +1119,34 @@ class TaskCollaborationService(AtomicTaskService):
     def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
         """供上层 adapter 证明 session 图执行已静默，不暴露 Repository。"""
         return self._tasks.has_nonterminal_execution_tasks(session_id)
+
+    def list_graphs_for_user_task(
+        self, user_task_id: str
+    ) -> list[dict[str, object]]:
+        """列出某 user_task 名下所有任务图的摘要。
+
+        返回每项 ``{graphId, rootTaskId, title, nodeCount, status, createdAt}``。
+        供用户任务卡片的局部图/全图弹窗入口用——一件事可能有多张图。
+        """
+        roots = self._tasks.list_graph_roots_for_user_task(user_task_id)
+        if not roots:
+            return []
+        # 批量取每张图的节点数
+        node_counts: dict[str, int] = {}
+        for root in roots:
+            tasks_in_graph = self._tasks.list_graph_tasks(root.graph_id)
+            node_counts[root.graph_id] = len(tasks_in_graph)
+        return [
+            {
+                "graphId": root.graph_id,
+                "rootTaskId": root.task_id,
+                "title": safe_public_preview(root.title, key="title", max_chars=80),
+                "nodeCount": node_counts.get(root.graph_id, 0),
+                "status": root.status,
+                "createdAt": root.created_at,
+            }
+            for root in roots
+        ]
 
     def _bulk_transition(
         self,
@@ -1312,6 +1353,7 @@ class TaskCollaborationService(AtomicTaskService):
                     "adjudicationId": t.adjudication_id,
                     "updatedAt": t.updated_at,
                     "externalCodingSessions": t.external_coding_sessions,
+                    "executorSessionId": t.executor_session_id,
                 }
                 for t in snapshot.tasks
             ],

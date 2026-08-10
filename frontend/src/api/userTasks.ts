@@ -33,6 +33,20 @@ export interface UserTaskContinueResponse {
   success: boolean;
 }
 
+/** 某 user_task 名下一张图的摘要。 */
+export interface UserTaskGraphSummary {
+  graphId: string;
+  rootTaskId: string;
+  title: string;
+  nodeCount: number;
+  status: string;
+  createdAt?: string | null;
+}
+
+export interface UserTaskGraphsResponse {
+  graphs: UserTaskGraphSummary[];
+}
+
 export async function listUserTasks(
   sessionId: string,
   statusFilter = "open",
@@ -58,5 +72,14 @@ export async function continueUserTask(
   return requestJson<UserTaskContinueResponse>(
     `/api/assistant/sessions/${encodeURIComponent(sessionId)}/user-tasks/${encodeURIComponent(taskId)}/continue`,
     { method: "POST" },
+  );
+}
+
+export async function getUserTaskGraphs(
+  sessionId: string,
+  taskId: string,
+): Promise<UserTaskGraphsResponse> {
+  return requestJson<UserTaskGraphsResponse>(
+    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/user-tasks/${encodeURIComponent(taskId)}/graphs`,
   );
 }

@@ -63,6 +63,8 @@ import type {
   TodoChangeType,
   TodoChangedEvent,
   TodoStatus,
+  UserTaskChangeType,
+  UserTaskChangedEvent,
   TrialPreviewRequestedEvent,
   TrialPreviewResolvedEvent,
   TrialProgressEvent,
@@ -544,6 +546,24 @@ function parseTodoChangedPayload(payload: Record<string, unknown>): TodoChangedE
   };
 }
 
+const USER_TASK_CHANGE_TYPE_SET = new Set<string>(
+  UI_EVENT_PAYLOAD_ENUMS["user_task.changed"].changeType,
+);
+const isUserTaskChangeType = makeEnumGuard<UserTaskChangeType>(USER_TASK_CHANGE_TYPE_SET);
+
+function parseUserTaskChangedPayload(
+  payload: Record<string, unknown>,
+): UserTaskChangedEvent["payload"] | null {
+  if (!hasStringPayloadFields(payload, ["userTaskId"]) || !isUserTaskChangeType(payload.changeType)) {
+    return null;
+  }
+  return {
+    userTaskId: payload.userTaskId as string,
+    changeType: payload.changeType,
+    sessionId: payload.sessionId as string | null | undefined,
+  };
+}
+
 function parseExternalCodingChangedPayload(
   payload: Record<string, unknown>,
 ): ExternalCodingChangedEvent["payload"] | null {
@@ -846,6 +866,7 @@ const UI_EVENT_MAPPERS: Partial<Record<UiEventType, UiEventMapper>> = {
   "assistant.meeting.changed": (event) =>
     requireSessionScopedEvent<MeetingChangedEvent>(event, parseMeetingChangedPayload),
   "assistant.todo.changed": (event) => requireSessionScopedEvent<TodoChangedEvent>(event, parseTodoChangedPayload),
+  "user_task.changed": (event) => requireSessionScopedEvent<UserTaskChangedEvent>(event, parseUserTaskChangedPayload),
   "assistant.external_coding.changed": (event) =>
     requireSessionScopedEvent<ExternalCodingChangedEvent>(event, parseExternalCodingChangedPayload),
   "scheduled_task.completed": (event) =>

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
+from src.business.task_collaboration.service import TaskCollaborationService
 from src.business.user_tasks import UserTaskService
 from src.desktop_api.assistant_runtime import AssistantRuntime
 from src.desktop_api.routers.assistant import get_assistant_runtime
@@ -40,6 +41,20 @@ class UserTaskContinueResponse(BaseModel):
     notPushed: list[dict[str, Any]]
     total: int
     success: bool
+
+
+class UserTaskGraphSummary(BaseModel):
+    """某 user_task 名下一张图的摘要。"""
+    graphId: str
+    rootTaskId: str
+    title: str
+    nodeCount: int
+    status: str
+    createdAt: str | None = None
+
+
+class UserTaskGraphsResponse(BaseModel):
+    graphs: list[UserTaskGraphSummary]
 
 
 @router.get("", response_model=UserTaskListResponse)
@@ -103,5 +118,32 @@ def continue_user_task(
         notPushed=not_pushed,
         total=report.get("total", 0),
         success=report.get("success", False),
+    )
+
+
+@router.get("/{task_id}/graphs", response_model=UserTaskGraphsResponse)
+def get_user_task_graphs(
+    session_id: str,
+    task_id: str,
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> UserTaskGraphsResponse:
+    """列出某 user_task 名下所有任务图（供局部图/全图弹窗入口）。
+
+    一件事可能有多张图（跨多轮沟通先后建图）。
+    """
+    with TaskCollaborationService() as service:
+        graphs = service.list_graphs_for_user_task(task_id)
+    return UserTaskGraphsResponse(
+        graphs=[
+            UserTaskGraphSummary(
+                graphId=g["graphId"],
+                rootTaskId=g["rootTaskId"],
+                title=g["title"],
+                nodeCount=g["nodeCount"],
+                status=g["status"],
+                createdAt=g.get("createdAt"),
+            )
+            for g in graphs
+        ]
     )
 

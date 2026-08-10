@@ -4,9 +4,12 @@ import { useCallback, useEffect, useState } from "react";
 import {
   continueUserTask,
   getUserTaskDistribution,
+  getUserTaskGraphs,
   type TaskDistribution,
   type UserTaskContinueResponse,
+  type UserTaskGraphSummary,
 } from "../../api/userTasks";
+import TaskGraphPeek from "./TaskGraphPeek";
 
 /** 分布条各段的配置：key → 颜色类 + 标签。顺序决定渲染顺序。 */
 const DISTRIBUTION_SEGMENTS: { key: string; cls: string; label: string }[] = [
@@ -19,6 +22,13 @@ const DISTRIBUTION_SEGMENTS: { key: string; cls: string; label: string }[] = [
   { key: "suspended:assistant", cls: "s-bug", label: "需处理" },
   { key: "suspended:system", cls: "s-bug", label: "等待中" },
 ];
+
+const STATUS_LABELS: Record<string, string> = {
+  active: "在办",
+  cooling: "冷却",
+  done: "办完",
+  dropped: "不办了",
+};
 
 /** 判断有没有可以"继续"的暂停（suspended:user 之外的暂停）。 */
 function hasPushable(distribution: TaskDistribution | null): boolean {
@@ -49,21 +59,26 @@ function needsAttention(distribution: TaskDistribution | null): boolean {
  * 用户任务卡片（⑦ 界面层）：折叠在对话流里，展示一件事的状态。
  *
  * 折叠行：▶ [迷你分布条] 任务标题  N/M
- * 展开后：分布条 + 状态计数 + 继续按钮（有推得动的暂停时显示）
+ * 展开后：分布条 + 状态计数 + 局部图 + 继续按钮（有推得动的暂停时显示）
  * 点继续后就地显示回报（几摊动了/没动/原因）
  */
 function UserTaskCard({
   sessionId,
   taskId,
   title,
+  status = "active",
+  onOpenFullGraph,
 }: {
   sessionId: string;
   taskId: string;
   title: string;
+  status?: string;
+  onOpenFullGraph: (graphId: string, title: string) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [distribution, setDistribution] = useState<TaskDistribution | null>(null);
   const [loadingDist, setLoadingDist] = useState(false);
+  const [graphs, setGraphs] = useState<UserTaskGraphSummary[]>([]);
   const [continueResult, setContinueResult] = useState<UserTaskContinueResponse | null>(null);
   const [continuing, setContinuing] = useState(false);
 
@@ -75,12 +90,18 @@ function UserTaskCard({
       .finally(() => setLoadingDist(false));
   }, [sessionId, taskId]);
 
-  // 初次加载 + 定时刷新（任务在跑时 10 秒刷新一次）
+  // 首次加载 distribution（summary 需要它显示继续按钮/缺陷标签）；
+  // graphs 展开时才加载（懒加载，只在用户要看局部图时请求）
   useEffect(() => {
     loadDistribution();
-    const timer = setInterval(loadDistribution, 10000);
-    return () => clearInterval(timer);
   }, [loadDistribution]);
+
+  useEffect(() => {
+    if (!open) return;
+    getUserTaskGraphs(sessionId, taskId)
+      .then((res) => setGraphs(res.graphs ?? []))
+      .catch(() => setGraphs([]));
+  }, [open, sessionId, taskId, loadDistribution]);
 
   const total = distribution
     ? Object.values(distribution).reduce((a, b) => a + b, 0)
@@ -121,6 +142,9 @@ function UserTaskCard({
     (seg) => (distribution?.[seg.key] ?? 0) > 0,
   );
 
+  // 多节点图（nodeCount > 1）才显示局部图入口
+  const graphsWithNodes = graphs.filter((g) => g.nodeCount > 1);
+
   return (
     <details
       className="assistant-activity me-task-fold"
@@ -128,7 +152,7 @@ function UserTaskCard({
       onToggle={(e) => setOpen(e.currentTarget.open)}
     >
       <summary>
-        {loadingDist ? (
+        {loadingDist && open ? (
           <Loader2 size={13} className="assistant-spin" />
         ) : (
           <ChevronRight size={13} className={`me-chev${open ? " me-chev-open" : ""}`} />
@@ -172,6 +196,14 @@ function UserTaskCard({
       </summary>
       <div className="assistant-activity-body">
         <div className="me-task">
+          {/* 标题行 + 状态标签 */}
+          <div className="me-task-head">
+            <span className="me-task-title">{title}</span>
+            <span className="me-pill" data-status={status}>
+              {STATUS_LABELS[status] ?? status}
+            </span>
+          </div>
+
           {/* 分布条 */}
           {miniSegments.length > 0 ? (
             <>
@@ -198,6 +230,21 @@ function UserTaskCard({
           ) : (
             <p className="me-empty">暂无执行进度</p>
           )}
+
+          {/* 局部图（每张多节点图一个） */}
+          {graphsWithNodes.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+              {graphsWithNodes.map((g) => (
+                <TaskGraphPeek
+                  key={g.graphId}
+                  sessionId={sessionId}
+                  graphId={g.graphId}
+                  title={g.title}
+                  onOpenFullGraph={() => onOpenFullGraph(g.graphId, title)}
+                />
+              ))}
+            </div>
+          ) : null}
 
           {/* 撞缺陷提示（设计 295 行：不给「继续」，给说明） */}
           {hasDefect ? (

@@ -37,6 +37,8 @@ interface AssistantTaskState {
   boardError: string | null;
   meetingError: string | null;
   needsResync: boolean;
+  /** user_task.changed 事件到达时递增，供 AssistantScreen 触发用户任务列表刷新。 */
+  userTaskVersion: number;
   loadCurrentGraph: (sessionId: string) => Promise<void>;
   reloadGraph: (sessionId: string, graphId: string) => Promise<void>;
   loadBoard: (sessionId: string) => Promise<void>;
@@ -147,6 +149,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
   boardError: null,
   meetingError: null,
   needsResync: false,
+  userTaskVersion: 0,
   loadCurrentGraph: async (sessionId) => {
     set({ graphLoading: true, graphError: null });
     try {
@@ -382,6 +385,11 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
       set({ needsResync: true });
       return;
     }
+    if (event.type === "user_task.changed") {
+      // user_task 变更：递增版本号，供 AssistantScreen 刷新用户任务列表 + distribution
+      set((state) => ({ userTaskVersion: state.userTaskVersion + 1 }));
+      return;
+    }
     if (event.type !== "assistant.task_graph.changed") {
       return;
     }
@@ -487,5 +495,6 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
     boardError: null,
     meetingError: null,
     needsResync: false,
+    userTaskVersion: 0,
   }),
 }));

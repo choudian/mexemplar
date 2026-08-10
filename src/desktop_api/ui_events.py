@@ -73,6 +73,7 @@ EVENT_TYPE_ASSISTANT_TASK_QUESTION_CHANGED = "assistant.task_question.changed"
 EVENT_TYPE_ASSISTANT_MEETING_CHANGED = "assistant.meeting.changed"
 EVENT_TYPE_ASSISTANT_TODO_CHANGED = "assistant.todo.changed"
 EVENT_TYPE_ASSISTANT_EXTERNAL_CODING_CHANGED = "assistant.external_coding.changed"
+EVENT_TYPE_USER_TASK_CHANGED = "user_task.changed"
 EVENT_TYPE_RECORDING_PROGRESS = "recording.progress"
 EVENT_TYPE_TEACHING_STAGE_CHANGED = "teaching.stage_changed"
 EVENT_TYPE_TEACHING_PROGRESS = "teaching.progress"
@@ -494,6 +495,27 @@ UI_EVENT_REGISTRY: dict[str, UiEventDefinition] = {
                         "missing_artifact",
                         "completed",
                     }
+                ),
+            ),
+        ),
+    ),
+    EVENT_TYPE_USER_TASK_CHANGED: UiEventDefinition(
+        EVENT_TYPE_USER_TASK_CHANGED,
+        "notification",
+        frozenset({"userTaskId", "changeType", "sessionId"}),
+        _SESSION_SCOPE,
+        {
+            "userTaskId": "utsk_1",
+            "changeType": "progress_changed",
+            "sessionId": "sess_1",
+        },
+        required_payload_keys=frozenset({"userTaskId", "changeType"}),
+        required_scope_keys=_SESSION_SCOPE,
+        payload_enum_values=(
+            (
+                "changeType",
+                frozenset(
+                    {"created", "status_changed", "graph_added", "progress_changed"}
                 ),
             ),
         ),

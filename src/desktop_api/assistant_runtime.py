@@ -894,6 +894,85 @@ class AssistantRuntime:
             ]
         }
 
+    def get_executor_detail(
+        self, session_id: str, executor_session_id: str
+    ) -> dict:
+        """执行体详情聚合 facade（⑦ 递归抽屉用）：一次返回某执行体会话的 summary +
+        transcript + children（它派出去的子执行体）。
+
+        - summary: ``find_subagent_summary(session_id, executor_session_id)``；
+          找不到（如直接以 session_id 取根执行体）时回退用 session_id 造最小 summary。
+        - transcript: ``build_transcript(executor_session_id)`` —— 该执行体自己的过程。
+        - children: ``build_subagent_list(executor_session_id)`` —— 它委派的下一层执行体。
+        """
+        observability = self._obs
+        target = executor_session_id.strip()
+        if not target:
+            raise LookupError("executor_session_id required")
+
+        summary_obj = observability.find_subagent_summary(session_id, target)
+        if summary_obj is not None:
+            summary = {
+                "subagentId": summary_obj.subagent_id,
+                "label": summary_obj.label,
+                "task": summary_obj.task,
+                "status": summary_obj.status,
+                "lastOutput": summary_obj.last_output,
+                "turnStartSequence": summary_obj.turn_start_sequence,
+            }
+        else:
+            # 回退：直接查该 session 取 label/lastOutput
+            transcript_result = observability.build_transcript(target)
+            summary = {
+                "subagentId": target,
+                "label": target,
+                "task": "",
+                "status": "done",
+                "lastOutput": None,
+                "turnStartSequence": None,
+            }
+            return {
+                "summary": summary,
+                "steps": [
+                    {
+                        "kind": step.kind,
+                        "toolName": step.tool_name,
+                        "text": step.text,
+                        "seq": step.seq,
+                        "redacted": step.redacted,
+                    }
+                    for step in transcript_result.steps
+                ],
+                "children": [],
+            }
+
+        transcript_result = observability.build_transcript(target)
+        children = observability.build_subagent_list(target)
+        return {
+            "summary": summary,
+            "steps": [
+                {
+                    "kind": step.kind,
+                    "toolName": step.tool_name,
+                    "text": step.text,
+                    "seq": step.seq,
+                    "redacted": step.redacted,
+                }
+                for step in transcript_result.steps
+            ],
+            "children": [
+                {
+                    "subagentId": child.subagent_id,
+                    "label": child.label,
+                    "task": child.task,
+                    "status": child.status,
+                    "lastOutput": child.last_output,
+                    "turnStartSequence": child.turn_start_sequence,
+                }
+                for child in children
+            ],
+        }
+
     def _publish_display_messages(self, session_id: str, after_sequence: int) -> None:
         """把回合新增的可展示消息按序补发到前端（停止/完成/反问后保证已产内容不丢）。"""
         for message in self._chat_service.get_display_messages_after(session_id, after_sequence):
