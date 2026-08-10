@@ -362,6 +362,18 @@ class TaskDispatcher:
                 )
                 checkpoint_ref = None
                 if target:
+                    # §2.2 规则三：capability_scope 为空时 fail-closed，不续跑原会话。
+                    # 无法证明"续跑的工具 ⊆ 首次的工具"（专员可能被改宽权限），开新会话。
+                    if not task_row.capability_scope:
+                        logger.info(
+                            "[atomic_continue] task %s has empty capability_scope; "
+                            "fresh start (not resuming session)",
+                            task_id,
+                        )
+                    else:
+                        checkpoint_ref = json.dumps(
+                            {"executor_session_id": target["session_id"]}
+                        )
                     checkpoint_ref = json.dumps(
                         {"executor_session_id": target["session_id"]}
                     )

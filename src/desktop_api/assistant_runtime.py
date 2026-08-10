@@ -789,20 +789,42 @@ class AssistantRuntime:
             )
         # 对每个推得动的任务走原子化 continue（跳过 PENDING_DISPATCH）
         orch = self._get_orchestrator()
+        actual_pushed: list[dict] = []
+        still_finishing: list[dict] = []
         for item in report.get("pushed", []):
             task_id = item.get("task_id")
             if not task_id:
                 continue
             try:
-                # §2.5 有界等待：如果旧 attempt 还 active（刚 stop），等它停稳
-                orch.wait_for_active_attempt(task_id, timeout_seconds=5.0)
-                orch.continue_task_atomically(task_id=task_id)
+                # §2.5 有界等待：如果旧 attempt 还 active（刚 stop），等它停稳。
+                # 超时返回 False → 不调 atomic continue，标"正在收尾"。
+                settled = orch.wait_for_active_attempt(task_id, timeout_seconds=5.0)
+                if not settled:
+                    still_finishing.append({"title": item.get("title", ""), "reason": "正在收尾，尚未重新开工"})
+                    continue
+                # §2.4 规则三：capability_scope 为空时 fail-closed，不续跑
+                success = orch.continue_task_atomically(task_id=task_id)
+                if success:
+                    actual_pushed.append(item)
+                else:
+                    report.setdefault("not_pushed", []).append(
+                        {"title": item.get("title", ""), "reason": "无法续跑（容量冲突或无续跑目标）"}
+                    )
             except Exception:
                 logging.warning(
                     "continue_user_task: atomic continue failed for task %s",
                     task_id,
                     exc_info=True,
                 )
+                report.setdefault("not_pushed", []).append(
+                    {"title": item.get("title", ""), "reason": "续跑时发生内部错误"}
+                )
+        # 用实际结果替换 service 层的预判
+        report["pushed"] = actual_pushed
+        report["still_finishing"] = still_finishing
+        report["success"] = len(actual_pushed) > 0 or (
+            len(report.get("not_pushed", [])) == 0 and len(still_finishing) == 0
+        )
         return report
 
     def resume_recovered_task(self, task_id: str, checkpoint_ref: str) -> bool:

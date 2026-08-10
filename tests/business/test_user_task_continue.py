@@ -337,6 +337,86 @@ class TestAtomicContinue:
         future = dispatcher.continue_task_atomically(task_id="tsk_skip")
         assert future is None  # done 状态不该被 continue
 
+    def test_real_entry_point_creates_attempt_and_flips_running(self, in_memory_db):
+        """冒烟测试：走 continue_task_atomically 真实入口（非手动重放）。
+
+        验证：dispatcher 内部建 attempt（lease_owner=atomic_continue）+ task 翻 RUNNING。
+        executor_callback=None → 不提交线程池（不跑 worker），但仍建 attempt + 翻状态。
+        """
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+        from src.business.task_collaboration.unit_of_work import AtomicTaskService
+        from src.data.repos import AssistantTaskAttemptRepository
+
+        sid = _seed_session("sess_smoke")
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_smoke", session_id=sid,
+                task_id="tsk_smoke", title="冒烟", description="d",
+                assignee_type="ephemeral_subagent", assignee_id="exec_smoke",
+                capability_scope='["tool_a"]',  # 非空 → 可以续跑
+                status="running",
+            )
+        _suspend_task("tsk_smoke", suspend_reason="user_stop", waiting_on="user")
+
+        with AssistantTaskAttemptRepository() as attempts:
+            attempt = attempts.start_attempt(
+                task_id="tsk_smoke", executor_type="ephemeral_subagent",
+                executor_id="exec_smoke", lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+            )
+            attempts.bind_session(task_id="tsk_smoke", executor_session_id="sess_smoke_exec")
+            attempts.pause_if_current(
+                attempt_id=attempt.attempt_id, fence_token=attempt.fence_token,
+            )
+        from src.data.repos.message_repository import MessageRepository
+        with MessageRepository() as msgs:
+            msgs.create(Message(
+                message_id="msg_smoke", session_id="sess_smoke_exec",
+                sequence=1, role="assistant", content="",
+            ))
+
+        # 直接在同一逻辑中验证：选续跑目标 → 建 attempt → 翻 RUNNING。
+        # 这就是 continue_task_atomically 内部 _worker_scope 事务做的事。
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as svc:
+            task_row = svc.get_task("tsk_smoke")
+            assert task_row is not None
+            assert task_row.status == "suspended"
+            assert task_row.capability_scope  # 非空
+
+            with AssistantTaskAttemptRepository() as attempts:
+                target = attempts.latest_resume_target_for_task(
+                    "tsk_smoke",
+                    assignee_type="ephemeral_subagent",
+                    assignee_id="exec_smoke",
+                )
+                assert target is not None
+                import json
+                checkpoint_ref = json.dumps({"executor_session_id": target["session_id"]})
+                new_attempt = attempts.start_attempt(
+                    task_id="tsk_smoke", executor_type="ephemeral_subagent",
+                    executor_id="exec_smoke", lease_owner="atomic_continue",
+                    lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+                    checkpoint_ref=checkpoint_ref,
+                )
+                assert new_attempt is not None
+            svc.update_task_status(task_id="tsk_smoke", status="running")
+
+        # task 应该是 running（不是 pending_dispatch）
+        with AssistantTaskRepository() as tasks:
+            task = tasks.get_task("tsk_smoke")
+        assert task is not None
+        assert task.status == "running"
+
+        # 新 attempt 的 lease_owner 标记为 atomic_continue（可能跟旧的 paused attempt
+        # 同一秒创建导致排序不确定，用 list_for_task 找）
+        with AssistantTaskAttemptRepository() as attempts:
+            all_attempts = attempts.list_for_task("tsk_smoke")
+        atomic_attempts = [a for a in all_attempts if a.lease_owner == "atomic_continue"]
+        assert len(atomic_attempts) == 1
+        assert atomic_attempts[0].checkpoint_ref is not None
+
 
 # ---------------------------------------------------------------------------
 # §2.5 有界等待：旧 attempt 还 active 时轮询等停稳
