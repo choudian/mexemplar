@@ -457,3 +457,125 @@ class TestWaitForActiveAttempt:
         )
         assert result is False
 
+
+# ---------------------------------------------------------------------------
+# continue_task_atomically：真实入口成功路径 + capability_scope fail-closed
+# ---------------------------------------------------------------------------
+
+
+class TestContinueTaskAtomicallyRealEntry:
+    """走 ``continue_task_atomically`` 真实入口（非手动重放 repository 调用）。
+
+    验证：dispatcher 内部一个事务完成 选续跑目标 → 建 attempt（带 checkpoint_ref）
+    → task SUSPENDED→RUNNING。executor_callback 是真实的（提交到线程池）。
+    """
+
+    def test_suspended_task_with_progress_gets_resumed_with_checkpoint(self, in_memory_db):
+        """suspended task + 有 assistant 消息 → 续跑原会话（checkpoint_ref 非空）。"""
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+        from src.data.repos.message_repository import MessageRepository
+
+        sid = _seed_session("sess_atomic_ok")
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_atomic", session_id=sid,
+                task_id="tsk_atomic", title="原子续跑", description="d",
+                assignee_type="ephemeral_subagent", assignee_id="exec_atomic",
+                capability_scope='["tool_a"]',  # 非空 → 续跑原会话
+                status="running",
+            )
+        _suspend_task("tsk_atomic", suspend_reason="user_stop", waiting_on="user")
+
+        with AssistantTaskAttemptRepository() as attempts:
+            attempt = attempts.start_attempt(
+                task_id="tsk_atomic", executor_type="ephemeral_subagent",
+                executor_id="exec_atomic", lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+            )
+            attempts.bind_session(task_id="tsk_atomic", executor_session_id="sess_atomic_exec")
+            attempts.pause_if_current(
+                attempt_id=attempt.attempt_id, fence_token=attempt.fence_token,
+            )
+        with MessageRepository() as msgs:
+            msgs.create(Message(
+                message_id="msg_atomic", session_id="sess_atomic_exec",
+                sequence=1, role="assistant", content="",
+            ))
+
+        callback_called: list[str] = []
+        task_status_at_callback: list[str] = []
+        def callback(aid: str):
+            # 在 executor 运行时（worker 已翻 RUNNING），快照 task 状态
+            with AssistantTaskRepository() as tasks:
+                task_row = tasks.get_task("tsk_atomic")
+            if task_row:
+                task_status_at_callback.append(task_row.status)
+            callback_called.append(aid)
+            return {"success": True}
+
+        dispatcher = TaskDispatcher(executor_callback=callback)
+        future = dispatcher.continue_task_atomically(task_id="tsk_atomic")
+
+        # 真实入口返回 Future（提交到线程池），不是 None
+        assert future is not None
+        future.result(timeout=5)  # 等线程池跑完
+        assert len(callback_called) == 1
+
+        # executor 运行时 task 应该是 running（atomic continue 不经过 PENDING_DISPATCH）
+        assert "running" in task_status_at_callback
+
+        # 新 attempt 带 checkpoint_ref（续跑原会话）
+        with AssistantTaskAttemptRepository() as attempts:
+            all_attempts = attempts.list_for_task("tsk_atomic")
+        atomic_attempts = [a for a in all_attempts if a.lease_owner == "atomic_continue"]
+        assert len(atomic_attempts) == 1
+        assert atomic_attempts[0].checkpoint_ref is not None
+        import json
+        ref = json.loads(atomic_attempts[0].checkpoint_ref)
+        assert ref["executor_session_id"] == "sess_atomic_exec"
+
+    def test_empty_capability_scope_gets_null_checkpoint(self, in_memory_db):
+        """capability_scope 为空 → checkpoint_ref 为 None（fail-closed，开新会话）。"""
+        from src.business.task_collaboration.dispatcher import TaskDispatcher
+        from src.data.repos.message_repository import MessageRepository
+
+        sid = _seed_session("sess_atomic_scope")
+        with AssistantTaskRepository() as tasks:
+            tasks.create_task(
+                graph_id="tg_scope", session_id=sid,
+                task_id="tsk_scope", title="空 scope", description="d",
+                assignee_type="ephemeral_subagent", assignee_id="exec_scope",
+                capability_scope=None,  # 空 → fail-closed
+                status="running",
+            )
+        _suspend_task("tsk_scope", suspend_reason="user_stop", waiting_on="user")
+
+        with AssistantTaskAttemptRepository() as attempts:
+            attempt = attempts.start_attempt(
+                task_id="tsk_scope", executor_type="ephemeral_subagent",
+                executor_id="exec_scope", lease_owner="test",
+                lease_expires_at=utc_now_naive() + timedelta(minutes=5),
+            )
+            attempts.bind_session(task_id="tsk_scope", executor_session_id="sess_scope_exec")
+            attempts.pause_if_current(
+                attempt_id=attempt.attempt_id, fence_token=attempt.fence_token,
+            )
+        with MessageRepository() as msgs:
+            msgs.create(Message(
+                message_id="msg_scope", session_id="sess_scope_exec",
+                sequence=1, role="assistant", content="",
+            ))
+
+        dispatcher = TaskDispatcher(executor_callback=lambda _aid: {"success": True})
+        future = dispatcher.continue_task_atomically(task_id="tsk_scope")
+        assert future is not None
+        future.result(timeout=5)
+
+        with AssistantTaskAttemptRepository() as attempts:
+            all_attempts = attempts.list_for_task("tsk_scope")
+        atomic_attempts = [a for a in all_attempts if a.lease_owner == "atomic_continue"]
+        assert len(atomic_attempts) == 1
+        # fail-closed 生效：checkpoint_ref 应为 None（不续跑原会话）
+        assert atomic_attempts[0].checkpoint_ref is None
+
+

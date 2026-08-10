@@ -370,13 +370,11 @@ class TaskDispatcher:
                             "fresh start (not resuming session)",
                             task_id,
                         )
+                        # checkpoint_ref 保持 None → start_attempt 不带续跑句柄 → 开新会话
                     else:
                         checkpoint_ref = json.dumps(
                             {"executor_session_id": target["session_id"]}
                         )
-                    checkpoint_ref = json.dumps(
-                        {"executor_session_id": target["session_id"]}
-                    )
                 # 建 attempt（start_attempt 内部有容量=1 守卫 + 唯一索引兜底）
                 executor_id = (
                     task_row.assignee_id

@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.business.task_collaboration.service import TaskCollaborationService
 from src.business.user_tasks import UserTaskService
@@ -39,6 +39,7 @@ class UserTaskContinueResponse(BaseModel):
     """用户点继续的结构化回报。"""
     pushed: list[dict[str, Any]]
     notPushed: list[dict[str, Any]]
+    stillFinishing: list[dict[str, Any]] = Field(default_factory=list)
     total: int
     success: bool
 
@@ -113,9 +114,14 @@ def continue_user_task(
         {"title": item.get("title", ""), "reason": item.get("reason", "")}
         for item in report.get("not_pushed", [])
     ]
+    still_finishing = [
+        {"title": item.get("title", ""), "reason": item.get("reason", "")}
+        for item in report.get("still_finishing", [])
+    ]
     return UserTaskContinueResponse(
         pushed=pushed,
         notPushed=not_pushed,
+        stillFinishing=still_finishing,
         total=report.get("total", 0),
         success=report.get("success", False),
     )

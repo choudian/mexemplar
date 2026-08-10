@@ -30,13 +30,23 @@ const STATUS_LABELS: Record<string, string> = {
   dropped: "不办了",
 };
 
-/** 判断有没有可以"继续"的暂停（suspended:user 之外的暂停）。 */
+/**
+ * 判断有没有可以"继续"的暂停。
+ *
+ * 设计 294 行：``waiting_on == user → 自动展开 + 继续``。user_stop（用户手动停）
+ * 和 interrupted（崩溃重启栅栏对齐）都映射到 ``waiting_on=user``，分布 key 是
+ * ``suspended:user``。这两种都是用户点继续就能推的。
+ *
+ * 唯一不该给继续按钮的是 ``suspended:assistant``——撞上程序缺陷，重试必是同样的
+ * 结果（设计 300 行）。``suspended:system`` 目前无生产者（``WaitingOn.SYSTEM``
+ * 全映射到 USER 或 ASSISTANT），但保留放行：未来加了 system 自动重试时它本来就
+ * 不需要用户点继续，留着按钮无害。
+ */
 function hasPushable(distribution: TaskDistribution | null): boolean {
   if (!distribution) return false;
   return Object.entries(distribution).some(
     ([key, count]) =>
       key.startsWith("suspended:") &&
-      key !== "suspended:user" &&
       key !== "suspended:assistant" &&
       (count ?? 0) > 0,
   );
@@ -130,6 +140,7 @@ function UserTaskCard({
         setContinueResult({
           pushed: [],
           notPushed: [],
+          stillFinishing: [],
           total: 0,
           success: false,
         });
@@ -258,7 +269,7 @@ function UserTaskCard({
             <div className="me-report">
               {continueResult.success ? (
                 <p className="me-report-head">
-                  已继续 · {continueResult.pushed.length + continueResult.notPushed.length} 摊里动了{" "}
+                  已继续 · {continueResult.pushed.length + continueResult.notPushed.length + continueResult.stillFinishing.length} 摊里动了{" "}
                   {continueResult.pushed.length} 摊
                 </p>
               ) : (
@@ -271,6 +282,15 @@ function UserTaskCard({
                   {continueResult.pushed.map((item, i) => (
                     <li key={`p${i}`} className="me-report-pushed">
                       动了 &nbsp;{item.title} —— 已重新开工
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              {continueResult.stillFinishing.length > 0 ? (
+                <ul className="me-report-list">
+                  {continueResult.stillFinishing.map((item, i) => (
+                    <li key={`s${i}`} className="me-report-blocked">
+                      收尾中 &nbsp;{item.title} —— {item.reason ?? "正在收尾，尚未重新开工"}
                     </li>
                   ))}
                 </ul>

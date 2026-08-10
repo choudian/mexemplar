@@ -29,6 +29,7 @@ export interface UserTaskContinueReportItem {
 export interface UserTaskContinueResponse {
   pushed: UserTaskContinueReportItem[];
   notPushed: UserTaskContinueReportItem[];
+  stillFinishing: UserTaskContinueReportItem[];
   total: number;
   success: boolean;
 }

@@ -63,12 +63,14 @@ describe("UserTaskCard", () => {
     expect(screen.getAllByText("季度报告").length).toBeGreaterThanOrEqual(1);
   });
 
-  it("shows continue button when there are pushable suspensions", async () => {
+  it("shows continue button when user_stop maps to suspended:user", async () => {
+    // user_stop（用户手动停）和 interrupted（崩溃重启）都映射到 waiting_on=user，
+    // 分布 key 是 suspended:user。设计 294 行：waiting_on==user → 自动展开 + 继续。
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
         jsonResponse({
-          distribution: { running: 2, "suspended:system": 1, done: 3 },
+          distribution: { running: 2, "suspended:user": 1, done: 3 },
         }),
       ),
     );
@@ -80,12 +82,13 @@ describe("UserTaskCard", () => {
     });
   });
 
-  it("hides continue button when only waiting on user", async () => {
+  it("hides continue button when only blocked_by_defect", async () => {
+    // suspended:assistant = 撞上程序缺陷，重试必是同样的结果，不给继续按钮。
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
         jsonResponse({
-          distribution: { "suspended:user": 2, done: 1 },
+          distribution: { "suspended:assistant": 2, done: 1 },
         }),
       ),
     );
@@ -125,6 +128,7 @@ describe("UserTaskCard", () => {
     const continueResponse: UserTaskContinueResponse = {
       pushed: [{ title: "整理区域明细" }],
       notPushed: [{ title: "华东区口径", reason: "在等你回答" }],
+      stillFinishing: [],
       total: 2,
       success: true,
     };
@@ -138,7 +142,7 @@ describe("UserTaskCard", () => {
           return jsonResponse(continueResponse);
         }
         return jsonResponse({
-          distribution: { "suspended:system": 1, done: 1 },
+          distribution: { "suspended:user": 1, done: 1 },
         });
       }),
     );
@@ -165,6 +169,7 @@ describe("UserTaskCard", () => {
           return jsonResponse({
             pushed: [],
             notPushed: [],
+            stillFinishing: [],
             total: 0,
             success: false,
           });
