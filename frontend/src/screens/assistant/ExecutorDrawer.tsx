@@ -3,6 +3,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { getExecutorDetail } from "../../api/assistant";
 import type { ExecutorDetail } from "../../api/assistant";
+import { getAssistantTaskTodos } from "../../api/assistantTasks";
+import type { AssistantTodoItem } from "../../api/assistantTasks";
 import { ActivityStepRow, LoadableContent } from "./ActivityStepRow";
 import ExecutorCard from "./ExecutorCard";
 
@@ -33,6 +35,7 @@ function ExecutorDrawer({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [todosByTaskId, setTodosByTaskId] = useState<Record<string, AssistantTodoItem[]>>({});
 
   const currentLayer = stack[stack.length - 1];
   const currentSessionId = currentLayer.executorSessionId;
@@ -48,6 +51,31 @@ function ExecutorDrawer({
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [sessionId, currentSessionId, reloadKey]);
+
+  // 加载子执行体的 todo（⑦ 递归规则：任意深度的执行体卡片正面展示 todolist）
+  useEffect(() => {
+    if (!detail || detail.children.length === 0) return;
+    let active = true;
+    const taskIds = detail.children
+      .map((c) => c.taskId)
+      .filter((tid): tid is string => Boolean(tid));
+    if (taskIds.length === 0) return;
+    Promise.all(
+      taskIds.map((tid) =>
+        getAssistantTaskTodos(sessionId, tid)
+          .then((r) => ({ tid, items: r.items }))
+          .catch(() => ({ tid, items: [] as AssistantTodoItem[] })),
+      ),
+    ).then((results) => {
+      if (!active) return;
+      const map: Record<string, AssistantTodoItem[]> = {};
+      for (const { tid, items } of results) {
+        map[tid] = items;
+      }
+      setTodosByTaskId((prev) => ({ ...prev, ...map }));
+    });
+    return () => { active = false; };
+  }, [detail, sessionId]);
 
   const handleNavigate = useCallback((childSessionId: string, childLabel: string) => {
     setStack((prev) => [...prev, { executorSessionId: childSessionId, label: childLabel }]);
@@ -109,7 +137,11 @@ function ExecutorDrawer({
               <div className="sect">它派出去的</div>
               {detail.children.map((child) => (
                 <div key={child.subagentId} style={{ marginBottom: 7 }}>
-                  <ExecutorCard summary={child} onClick={() => handleNavigate(child.subagentId, child.label)} />
+                  <ExecutorCard
+                    summary={child}
+                    todos={child.taskId ? todosByTaskId[child.taskId] : undefined}
+                    onClick={() => handleNavigate(child.subagentId, child.label)}
+                  />
                 </div>
               ))}
             </>

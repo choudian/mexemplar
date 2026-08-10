@@ -250,6 +250,7 @@ export interface AssistantSubagentSummary {
   status: SubagentStatus;
   lastOutput?: string | null;
   turnStartSequence?: number | null;
+  taskId?: string | null;
 }
 
 export async function listSubagents(sessionId: string): Promise<AssistantSubagentSummary[]> {

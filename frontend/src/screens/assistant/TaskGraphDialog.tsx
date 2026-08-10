@@ -1,8 +1,8 @@
 import { Loader2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getAssistantTaskGraph } from "../../api/assistantTasks";
-import type { AssistantTaskGraphSnapshot, AssistantTaskSnapshot } from "../../api/assistantTasks";
+import { getAssistantTaskGraph, getAssistantTaskTodos } from "../../api/assistantTasks";
+import type { AssistantTaskGraphSnapshot, AssistantTaskSnapshot, AssistantTodoItem } from "../../api/assistantTasks";
 import { getExecutorDetail } from "../../api/assistant";
 import type { ExecutorDetail } from "../../api/assistant";
 import DagCanvas from "./DagCanvas";
@@ -175,7 +175,7 @@ function TaskGraphDialog({
               <p className="sub">点左侧节点查看详情</p>
             ) : currentSide.kind === "node" ? (
               selectedTask ? (
-                <NodeDetail task={selectedTask} onOpenExecutor={handleOpenExecutor} />
+                <NodeDetail task={selectedTask} sessionId={sessionId} onOpenExecutor={handleOpenExecutor} />
               ) : (
                 <p className="sub">未选中节点</p>
               )
@@ -184,7 +184,7 @@ function TaskGraphDialog({
                 <Loader2 size={14} className="assistant-spin" /> 加载执行体详情…
               </div>
             ) : executorDetail ? (
-              <ExecutorSideDetail detail={executorDetail} onNavigate={handleOpenExecutor} />
+              <ExecutorSideDetail detail={executorDetail} sessionId={sessionId} onNavigate={handleOpenExecutor} />
             ) : (
               <p className="sub">执行体详情加载失败</p>
             )}
@@ -197,11 +197,22 @@ function TaskGraphDialog({
 
 function NodeDetail({
   task,
+  sessionId,
   onOpenExecutor,
 }: {
   task: AssistantTaskSnapshot;
+  sessionId: string;
   onOpenExecutor: (executorSessionId: string, label: string) => void;
 }): JSX.Element {
+  const [todos, setTodos] = useState<AssistantTodoItem[]>([]);
+  useEffect(() => {
+    let active = true;
+    getAssistantTaskTodos(sessionId, task.taskId)
+      .then((r) => { if (active) setTodos(r.items); })
+      .catch(() => { if (active) setTodos([]); });
+    return () => { active = false; };
+  }, [sessionId, task.taskId]);
+
   const tone = deriveToneForTask(task);
   const statusText = STATUS_TEXT[tone] ?? task.status;
   const hasDefect = task.suspendReason === "blocked_by_defect";
@@ -234,7 +245,9 @@ function NodeDetail({
               status: deriveExecutorStatus(task),
               lastOutput: null,
               turnStartSequence: null,
+              taskId: task.taskId,
             }}
+            todos={todos}
             onClick={() =>
               onOpenExecutor(
                 task.executorSessionId ?? "",
@@ -255,11 +268,36 @@ function NodeDetail({
 
 function ExecutorSideDetail({
   detail,
+  sessionId,
   onNavigate,
 }: {
   detail: ExecutorDetail;
+  sessionId: string;
   onNavigate: (executorSessionId: string, label: string) => void;
 }): JSX.Element {
+  const [todosByTaskId, setTodosByTaskId] = useState<Record<string, AssistantTodoItem[]>>({});
+  useEffect(() => {
+    if (detail.children.length === 0) return;
+    let active = true;
+    const taskIds = detail.children.map((c) => c.taskId).filter((tid): tid is string => Boolean(tid));
+    if (taskIds.length === 0) return;
+    Promise.all(
+      taskIds.map((tid) =>
+        getAssistantTaskTodos(sessionId, tid)
+          .then((r) => ({ tid, items: r.items }))
+          .catch(() => ({ tid, items: [] as AssistantTodoItem[] })),
+      ),
+    ).then((results) => {
+      if (!active) return;
+      const map: Record<string, AssistantTodoItem[]> = {};
+      for (const { tid, items } of results) {
+        map[tid] = items;
+      }
+      setTodosByTaskId(map);
+    });
+    return () => { active = false; };
+  }, [detail, sessionId]);
+
   return (
     <div>
       <h5>{detail.summary.label}</h5>
@@ -280,7 +318,11 @@ function ExecutorSideDetail({
           <div className="sect">它派出去的</div>
           {detail.children.map((child) => (
             <div key={child.subagentId} style={{ marginBottom: 7 }}>
-              <ExecutorCard summary={child} onClick={() => onNavigate(child.subagentId, child.label)} />
+              <ExecutorCard
+                summary={child}
+                todos={child.taskId ? todosByTaskId[child.taskId] : undefined}
+                onClick={() => onNavigate(child.subagentId, child.label)}
+              />
             </div>
           ))}
         </>

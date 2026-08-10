@@ -724,6 +724,7 @@ class AssistantSubagentSummary(BaseModel):
     status: Literal["running", "done", "suspended", "failed"]
     lastOutput: str | None = None
     turnStartSequence: int | None = None
+    taskId: str | None = None
 
 
 class AssistantSubagentListResponse(BaseModel):

@@ -919,6 +919,7 @@ class AssistantRuntime:
                 "status": summary_obj.status,
                 "lastOutput": summary_obj.last_output,
                 "turnStartSequence": summary_obj.turn_start_sequence,
+                "taskId": None,
             }
         else:
             # 回退：直接查该 session 取 label/lastOutput
@@ -930,6 +931,7 @@ class AssistantRuntime:
                 "status": "done",
                 "lastOutput": None,
                 "turnStartSequence": None,
+                "taskId": None,
             }
             return {
                 "summary": summary,
@@ -948,6 +950,17 @@ class AssistantRuntime:
 
         transcript_result = observability.build_transcript(target)
         children = observability.build_subagent_list(target)
+        # 批量建立 session→task_id 映射，让前端能按 task_id 加载 todo（⑦ 递归规则）
+        all_session_ids = [target] + [c.subagent_id for c in children]
+        task_id_map: dict[str, str] = {}
+        try:
+            from src.data.repos import AssistantTaskAttemptRepository
+
+            with AssistantTaskAttemptRepository() as attempts:
+                task_id_map = attempts.latest_tasks_for_sessions(all_session_ids)
+        except Exception:
+            pass
+        summary["taskId"] = task_id_map.get(target)
         return {
             "summary": summary,
             "steps": [
@@ -968,6 +981,7 @@ class AssistantRuntime:
                     "status": child.status,
                     "lastOutput": child.last_output,
                     "turnStartSequence": child.turn_start_sequence,
+                    "taskId": task_id_map.get(child.subagent_id),
                 }
                 for child in children
             ],
