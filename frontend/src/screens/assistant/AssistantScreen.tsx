@@ -19,9 +19,8 @@ import SessionSidebar from "./SessionSidebar";
 import SubagentDetailDrawer from "./SubagentDetailDrawer";
 import UserTaskCard from "./UserTaskCard";
 import TaskGraphDialog from "./TaskGraphDialog";
+import ExecutorDrawer from "./ExecutorDrawer";
 import { MeetingChannelDrawer } from "./MeetingChannelDrawer";
-import { TaskBoardPanel } from "./TaskBoardPanel";
-import { TodoChecklistPanel } from "./TodoChecklistPanel";
 
 type AssistantDisplayMessage = AssistantMessage | PendingAssistantMessage;
 
@@ -110,12 +109,9 @@ export function AssistantScreen(): JSX.Element {
   const setAutoApprove = useAssistantStore((state) => state.setAutoApprove);
   const clearIdleTimer = useAssistantStore((state) => state.clearIdleTimer);
   const currentTaskGraph = useAssistantTaskStore((state) => state.currentGraph);
-  const taskBoardItems = useAssistantTaskStore((state) => state.boardItems);
   const activeMeeting = useAssistantTaskStore((state) => state.activeMeeting);
   const activeMeetingChannelId = useAssistantTaskStore((state) => state.activeMeeting?.channelId ?? null);
   const taskTodosByTaskId = useAssistantTaskStore((state) => state.todosByTaskId);
-  const todoLoadingTaskIds = useAssistantTaskStore((state) => state.todoLoadingTaskIds);
-  const taskBoardLoading = useAssistantTaskStore((state) => state.boardLoading);
   const taskMeetingLoading = useAssistantTaskStore((state) => state.meetingLoading);
   const taskNeedsResync = useAssistantTaskStore((state) => state.needsResync);
   const loadCurrentTaskGraph = useAssistantTaskStore((state) => state.loadCurrentGraph);
@@ -135,6 +131,7 @@ export function AssistantScreen(): JSX.Element {
   const [editedContent, setEditedContent] = useState("");
   const [userTasks, setUserTasks] = useState<UserTaskItem[]>([]);
   const [openGraphDialog, setOpenGraphDialog] = useState<{ graphId: string; title: string } | null>(null);
+  const [openExecutor, setOpenExecutor] = useState<{ sessionId: string; label: string } | null>(null);
 
   useEffect(() => {
     if (!activeSessionId) {
@@ -315,16 +312,9 @@ export function AssistantScreen(): JSX.Element {
             </IconButton>
           </div>
         </div>
-        {/* 025: TaskGraphPanel 已移除，任务图节点现在嵌入 ActivityTimeline */}
-        <TaskBoardPanel
-          items={taskBoardItems}
-          loading={taskBoardLoading}
-        />
-        <TodoChecklistPanel
-          tasks={currentTaskGraph?.tasks ?? []}
-          todosByTaskId={taskTodosByTaskId}
-          loadingTaskIds={todoLoadingTaskIds}
-        />
+        {/* 025: TaskGraphPanel 已移除，任务图节点现在嵌入 ActivityTimeline。
+            ⑦: TaskBoardPanel 和 TodoChecklistPanel 也已移除——任务看板的数据被
+            用户任务卡片的分布条覆盖，私人清单的数据由执行体卡片接管。 */}
         <div className="assistant-timeline" aria-live="polite">
           {hasMoreBefore ? (
             <div className="assistant-history-more">
@@ -483,6 +473,14 @@ export function AssistantScreen(): JSX.Element {
             onClose={() => setOpenGraphDialog(null)}
           />
         ) : null}
+        {openExecutor && activeSessionId ? (
+          <ExecutorDrawer
+            sessionId={activeSessionId}
+            initialExecutorSessionId={openExecutor.sessionId}
+            initialLabel={openExecutor.label}
+            onClose={() => setOpenExecutor(null)}
+          />
+        ) : null}
         <div className="assistant-confirmation-stack">
           {confirmations.map((confirmation) => (
             <ConfirmationToast
@@ -518,6 +516,9 @@ export function AssistantScreen(): JSX.Element {
                 status={task.status}
                 onOpenFullGraph={(graphId, title) =>
                   setOpenGraphDialog({ graphId, title })
+                }
+                onOpenExecutor={(executorSessionId, label) =>
+                  setOpenExecutor({ sessionId: executorSessionId, label })
                 }
               />
             ))}

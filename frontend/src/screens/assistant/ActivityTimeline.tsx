@@ -161,22 +161,8 @@ function ActivityTimeline({
         </div>
       ),
     })),
-    ...subagents.map((subagent) => ({
-      sortSeq: subagent.anchorSeq ?? Number.MAX_SAFE_INTEGER,
-      tie: 1,
-      node: (
-        <SubagentCard
-          key={subagent.subagentId}
-          subagent={subagent}
-          onOpen={() => onOpenSubagent?.(subagent.subagentId)}
-          onContinue={
-            onContinueSubagent
-              ? (note) => onContinueSubagent(subagent.subagentId, note)
-              : undefined
-          }
-        />
-      ),
-    })),
+    // ⑦: 对话流中不再渲染独立的 SubagentCard——执行过程已收进用户任务卡片
+    // 的折叠区（设计 402-403 行）。同一执行体不在两处呈现。
     ...taskNodes.map((task) => ({
       sortSeq: graphAnchorSeq,
       tie: 2,

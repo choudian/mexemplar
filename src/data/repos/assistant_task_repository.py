@@ -175,12 +175,16 @@ class AssistantTaskRepository(BaseRepository):
     def status_distribution_for_user_task(self, user_task_id: str) -> dict[str, int]:
         """返回用户任务下所有执行节点的状态分布（供界面画分布条）。
 
-        遍历 user_task 下所有图的节点，按 status + waiting_on 聚合。
-        直接读持久化的 ``waiting_on`` 列（不重新推导——权威映射在业务层
-        ``waiting_on_for_reason``，DB 层不 import 它）。
+        遍历 user_task 下所有图的节点，按 status + suspend_reason 聚合。
         返回 key 形如 ``done``, ``skipped``, ``delivered``, ``running``,
-        ``pending_dispatch``, ``suspended:user``, ``suspended:system``,
-        ``suspended:assistant``。
+        ``pending_dispatch``, ``suspended:user_stop``, ``suspended:interrupted``,
+        ``suspended:quota_exhausted``, ``suspended:waiting_user``,
+        ``suspended:blocked_by_defect`` 等。
+
+        用 ``suspend_reason`` 而非 ``waiting_on`` 做 key：前者精确到每种暂停
+        原因，前端可以区分「等用户回答」（``waiting_user``，不可继续）和
+        「用户手动停」（``user_stop``，可继续）；后者把它们合进同一个 key
+        ``suspended:user``，无法区分（问题 7）。
         """
         from sqlalchemy import func
 
@@ -204,7 +208,7 @@ class AssistantTaskRepository(BaseRepository):
         rows = (
             self.session.query(
                 AssistantTask.status,
-                AssistantTask.waiting_on,
+                AssistantTask.suspend_reason,
                 AssistantTask.parent_task_id,
                 AssistantTask.graph_id,
                 func.count(AssistantTask.task_id),
@@ -212,19 +216,19 @@ class AssistantTaskRepository(BaseRepository):
             .filter(AssistantTask.graph_id.in_(graph_ids))
             .group_by(
                 AssistantTask.status,
-                AssistantTask.waiting_on,
+                AssistantTask.suspend_reason,
                 AssistantTask.parent_task_id,
                 AssistantTask.graph_id,
             )
             .all()
         )
         distribution: dict[str, int] = {}
-        for status, waiting_on, parent_task_id, graph_id, count in rows:
+        for status, suspend_reason, parent_task_id, graph_id, count in rows:
             # 多节点图跳过根容器；单节点图（同步委派）的根就是执行节点
             if parent_task_id is None and child_counts.get(graph_id, 0) > 0:
                 continue
-            if status == "suspended" and waiting_on:
-                key = f"suspended:{waiting_on}"
+            if status == "suspended" and suspend_reason:
+                key = f"suspended:{suspend_reason}"
             else:
                 key = status
             distribution[key] = distribution.get(key, 0) + count

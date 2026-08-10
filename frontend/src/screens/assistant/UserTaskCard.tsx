@@ -9,18 +9,31 @@ import {
   type UserTaskContinueResponse,
   type UserTaskGraphSummary,
 } from "../../api/userTasks";
+import { getAssistantTaskGraph } from "../../api/assistantTasks";
+import type { AssistantTaskSnapshot } from "../../api/assistantTasks";
 import TaskGraphPeek from "./TaskGraphPeek";
+import ExecutorCard from "./ExecutorCard";
 
-/** 分布条各段的配置：key → 颜色类 + 标签。顺序决定渲染顺序。 */
+/** 分布条各段的配置：key → 颜色类 + 标签。顺序决定渲染顺序。
+ *
+ * 分布 key 用 ``suspend_reason``（后端 ``status_distribution_for_user_task``
+ * 按 ``suspended:{suspend_reason}`` 聚合）。每个暂停原因一个 key，前端可以
+ * 精确区分「等用户回答」（``waiting_user``，不可继续）和「用户手动停」
+ * （``user_stop``，可继续）。
+ */
 const DISTRIBUTION_SEGMENTS: { key: string; cls: string; label: string }[] = [
   { key: "done", cls: "s-done", label: "已完成" },
   { key: "skipped", cls: "s-done", label: "已跳过" },
   { key: "delivered", cls: "s-rev", label: "待验收" },
   { key: "running", cls: "s-run", label: "进行中" },
   { key: "pending_dispatch", cls: "s-todo", label: "待开始" },
-  { key: "suspended:user", cls: "s-you", label: "等你回答" },
-  { key: "suspended:assistant", cls: "s-bug", label: "需处理" },
-  { key: "suspended:system", cls: "s-bug", label: "等待中" },
+  { key: "suspended:waiting_user", cls: "s-you", label: "等你回答" },
+  { key: "suspended:quota_exhausted", cls: "s-you", label: "额度耗尽" },
+  { key: "suspended:user_stop", cls: "s-you", label: "已暂停" },
+  { key: "suspended:interrupted", cls: "s-you", label: "已中断" },
+  { key: "suspended:blocked_by_defect", cls: "s-bug", label: "需处理" },
+  { key: "suspended:budget_exhausted", cls: "s-bug", label: "轮次耗尽" },
+  { key: "suspended:waiting_system", cls: "s-bug", label: "等待中" },
 ];
 
 const STATUS_LABELS: Record<string, string> = {
@@ -30,36 +43,39 @@ const STATUS_LABELS: Record<string, string> = {
   dropped: "不办了",
 };
 
+/** 不可继续的暂停原因：等用户回答（要先回答问题）和撞缺陷（重试无用）。 */
+const UNPUSHABLE_SUSPEND_REASONS = new Set([
+  "suspended:waiting_user",
+  "suspended:blocked_by_defect",
+]);
+
 /**
  * 判断有没有可以"继续"的暂停。
  *
- * 设计 294 行：``waiting_on == user → 自动展开 + 继续``。user_stop（用户手动停）
- * 和 interrupted（崩溃重启栅栏对齐）都映射到 ``waiting_on=user``，分布 key 是
- * ``suspended:user``。这两种都是用户点继续就能推的。
- *
- * 唯一不该给继续按钮的是 ``suspended:assistant``——撞上程序缺陷，重试必是同样的
- * 结果（设计 300 行）。``suspended:system`` 目前无生产者（``WaitingOn.SYSTEM``
- * 全映射到 USER 或 ASSISTANT），但保留放行：未来加了 system 自动重试时它本来就
- * 不需要用户点继续，留着按钮无害。
+ * 用 ``suspend_reason`` 维度判断（与后端 ``_CONTINUE_CANNOT_MOVE`` 同维度）：
+ * ``waiting_user`` 要先回答问题、``blocked_by_defect`` 重试必是同样的结果，
+ * 这两种不给继续按钮。其余暂停原因（``user_stop``、``interrupted``、
+ * ``quota_exhausted`` 等）点继续都能推动。
  */
 function hasPushable(distribution: TaskDistribution | null): boolean {
   if (!distribution) return false;
   return Object.entries(distribution).some(
     ([key, count]) =>
       key.startsWith("suspended:") &&
-      key !== "suspended:assistant" &&
+      !UNPUSHABLE_SUSPEND_REASONS.has(key) &&
       (count ?? 0) > 0,
   );
 }
 
-/** 判断有没有需要用户关注的暂停。 */
+/** 需要用户关注的暂停原因：等用户回答、撞缺陷、额度耗尽、待验收。 */
 function needsAttention(distribution: TaskDistribution | null): boolean {
   if (!distribution) return false;
   return Object.entries(distribution).some(([key, count]) => {
     if ((count ?? 0) === 0) return false;
     return (
-      key === "suspended:user" ||
-      key === "suspended:assistant" ||
+      key === "suspended:waiting_user" ||
+      key === "suspended:blocked_by_defect" ||
+      key === "suspended:quota_exhausted" ||
       key === "delivered"
     );
   });
@@ -78,17 +94,20 @@ function UserTaskCard({
   title,
   status = "active",
   onOpenFullGraph,
+  onOpenExecutor,
 }: {
   sessionId: string;
   taskId: string;
   title: string;
   status?: string;
   onOpenFullGraph: (graphId: string, title: string) => void;
+  onOpenExecutor: (executorSessionId: string, label: string) => void;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
   const [distribution, setDistribution] = useState<TaskDistribution | null>(null);
   const [loadingDist, setLoadingDist] = useState(false);
   const [graphs, setGraphs] = useState<UserTaskGraphSummary[]>([]);
+  const [executorTasks, setExecutorTasks] = useState<AssistantTaskSnapshot[]>([]);
   const [continueResult, setContinueResult] = useState<UserTaskContinueResponse | null>(null);
   const [continuing, setContinuing] = useState(false);
 
@@ -109,8 +128,30 @@ function UserTaskCard({
   useEffect(() => {
     if (!open) return;
     getUserTaskGraphs(sessionId, taskId)
-      .then((res) => setGraphs(res.graphs ?? []))
-      .catch(() => setGraphs([]));
+      .then((res) => {
+        const gs = res.graphs ?? [];
+        setGraphs(gs);
+        // 加载所有图的快照，提取有 executorSessionId 的节点（供执行体列表展示）
+        return Promise.all(
+          gs.map((g) => getAssistantTaskGraph(sessionId, g.graphId).catch(() => null)),
+        );
+      })
+      .then((snapshots) => {
+        const tasks: AssistantTaskSnapshot[] = [];
+        for (const snap of snapshots) {
+          if (!snap) continue;
+          for (const t of snap.tasks) {
+            if (t.executorSessionId && t.status !== "done" && t.status !== "skipped") {
+              tasks.push(t);
+            }
+          }
+        }
+        setExecutorTasks(tasks);
+      })
+      .catch(() => {
+        setGraphs([]);
+        setExecutorTasks([]);
+      });
   }, [open, sessionId, taskId, loadDistribution]);
 
   const total = distribution
@@ -120,7 +161,7 @@ function UserTaskCard({
     (distribution?.["done"] ?? 0) + (distribution?.["skipped"] ?? 0);
 
   const showContinue = hasPushable(distribution);
-  const defectCount = distribution?.["suspended:assistant"] ?? 0;
+  const defectCount = distribution?.["suspended:blocked_by_defect"] ?? 0;
   const hasDefect = defectCount > 0;
   const shouldAutoOpen = needsAttention(distribution) || continueResult != null;
 
@@ -257,11 +298,41 @@ function UserTaskCard({
             </div>
           ) : null}
 
+          {/* 执行体列表（点开看它的工具调用和子执行体，⑦ 核心交互） */}
+          {executorTasks.length > 0 ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
+              {executorTasks.map((task) => (
+                <ExecutorCard
+                  key={task.taskId}
+                  summary={{
+                    subagentId: task.executorSessionId ?? "",
+                    label: task.assignee?.label ?? task.assignee?.id ?? "执行体",
+                    task: task.title,
+                    status: task.status === "suspended" ? "suspended" : "running",
+                    lastOutput: null,
+                    turnStartSequence: null,
+                  }}
+                  onClick={() =>
+                    onOpenExecutor(
+                      task.executorSessionId ?? "",
+                      task.assignee?.label ?? task.assignee?.id ?? "执行体",
+                    )
+                  }
+                />
+              ))}
+            </div>
+          ) : null}
+
           {/* 撞缺陷提示（设计 295 行：不给「继续」，给说明） */}
           {hasDefect ? (
             <p className="me-defect-notice">
               有 {defectCount} 步遇到程序问题，做不下去了。已记录详情，正在处理。
             </p>
+          ) : null}
+
+          {/* 额度耗尽提示（设计 307-308 行：只提示这一种原因） */}
+          {(distribution?.["suspended:quota_exhausted"] ?? 0) > 0 ? (
+            <p className="me-defect-notice">模型额度耗尽。</p>
           ) : null}
 
           {/* 继续回报 */}

@@ -54,7 +54,7 @@ describe("UserTaskCard", () => {
 
   it("shows the task title in collapsed state", async () => {
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} onOpenExecutor={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getAllByText("季度报告")[0]).toBeInTheDocument();
@@ -70,12 +70,12 @@ describe("UserTaskCard", () => {
       "fetch",
       vi.fn(async () =>
         jsonResponse({
-          distribution: { running: 2, "suspended:user": 1, done: 3 },
+          distribution: { running: 2, "suspended:user_stop": 1, done: 3 },
         }),
       ),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} onOpenExecutor={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByTitle("继续这件事")).toBeInTheDocument();
@@ -88,12 +88,12 @@ describe("UserTaskCard", () => {
       "fetch",
       vi.fn(async () =>
         jsonResponse({
-          distribution: { "suspended:assistant": 2, done: 1 },
+          distribution: { "suspended:blocked_by_defect": 2, done: 1 },
         }),
       ),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} onOpenExecutor={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getAllByText("季度报告")[0]).toBeInTheDocument();
@@ -106,12 +106,12 @@ describe("UserTaskCard", () => {
       "fetch",
       vi.fn(async () =>
         jsonResponse({
-          distribution: { "suspended:assistant": 1, done: 2 },
+          distribution: { "suspended:blocked_by_defect": 1, done: 2 },
         }),
       ),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} onOpenExecutor={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByText("需处理")).toBeInTheDocument();
@@ -142,12 +142,12 @@ describe("UserTaskCard", () => {
           return jsonResponse(continueResponse);
         }
         return jsonResponse({
-          distribution: { "suspended:user": 1, done: 1 },
+          distribution: { "suspended:user_stop": 1, done: 1 },
         });
       }),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} onOpenExecutor={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByTitle("继续这件事")).toBeInTheDocument();
@@ -175,12 +175,12 @@ describe("UserTaskCard", () => {
           });
         }
         return jsonResponse({
-          distribution: { "suspended:system": 1 },
+          distribution: { "suspended:budget_exhausted": 1 },
         });
       }),
     );
     render(
-      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} />,
+      <UserTaskCard sessionId="s1" taskId="utsk_1" title="季度报告" onOpenFullGraph={() => {}} onOpenExecutor={() => {}} />,
     );
     await waitFor(() => {
       expect(screen.getByTitle("继续这件事")).toBeInTheDocument();

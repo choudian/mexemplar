@@ -53,8 +53,6 @@ function ExecutorCard({
               </li>
             ))}
           </ul>
-        ) : summary.lastOutput ? (
-          <span className="plain">{summary.lastOutput}</span>
         ) : null}
       </span>
     </button>

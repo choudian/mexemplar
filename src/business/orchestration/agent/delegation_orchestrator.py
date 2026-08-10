@@ -380,7 +380,14 @@ class DelegationOrchestrator:
                 AgentType.EPHEMERAL_SUBAGENT,
                 user_task_id=user_task_id,
             )
-        user_input = self._owner._format_delegated_task_input(task, execution_context)
+        # 续跑（resume_session_id 非空）时不追发任务书：会话历史已保留首次派发的
+        # 完整任务描述，AgentLoop 的 suspended→active 恢复直接接着跑。追发只会让
+        # 执行体在同一会话里读到两遍任务（问题 6）。参照 _continue_subagent 路径。
+        user_input = (
+            self._owner._format_delegated_task_input(task, execution_context)
+            if not resume_session_id
+            else None
+        )
         # 同步委派（current_task_id is None 且非续跑）建 task + attempt，
         # 让"执行体在不在跑"有 attempt 可查，同时挂 user_task_id 归属。
         sync_task_id = None
@@ -698,7 +705,12 @@ class DelegationOrchestrator:
             session_id=child_session_id,
             workflow_id=workflow_id,
             parent_session_id=parent_session_id,
-            user_input=self._owner._format_delegated_task_input(task, execution_context),
+            # 续跑（resume_session_id 非空）时不追发任务书（问题 6，同 ephemeral 路径）
+            user_input=(
+                self._owner._format_delegated_task_input(task, execution_context)
+                if not resume_session_id
+                else None
+            ),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,
             tool_whitelist=effective_whitelist,

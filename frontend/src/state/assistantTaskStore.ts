@@ -37,6 +37,12 @@ interface AssistantTaskState {
   boardError: string | null;
   meetingError: string | null;
   needsResync: boolean;
+  /**
+   * 连续 resync 失败计数。超过 MAX_RESYNC_ATTEMPTS 后不再自动重试，
+   * 等待下一次 UI 事件（用户操作、会话切换）或外部 resync 信号再清零重试。
+   * 防止接口持续失败时形成无退避无限重试循环（问题 9）。
+   */
+  resyncAttempts: number;
   /** user_task.changed 事件到达时递增，供 AssistantScreen 触发用户任务列表刷新。 */
   userTaskVersion: number;
   loadCurrentGraph: (sessionId: string) => Promise<void>;
@@ -76,6 +82,9 @@ interface AssistantTaskState {
 function orderedTodos(items: AssistantTodoItem[]): AssistantTodoItem[] {
   return [...items].sort((left, right) => left.sortOrder - right.sortOrder);
 }
+
+/** 自动 resync 最大连续失败次数。超过后停止自动重试，等外部信号（用户操作、事件）再清零。 */
+const MAX_RESYNC_ATTEMPTS = 3;
 
 // 图级变更（无 taskId 但图结构已变）：必须 resync 拉权威快照。
 const GRAPH_LEVEL_CHANGE_TYPES = new Set([
@@ -149,12 +158,13 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
   boardError: null,
   meetingError: null,
   needsResync: false,
+  resyncAttempts: 0,
   userTaskVersion: 0,
   loadCurrentGraph: async (sessionId) => {
     set({ graphLoading: true, graphError: null });
     try {
       const response = await getCurrentAssistantTaskGraph(sessionId);
-      set({ currentGraph: response.graph, graphLoading: false, needsResync: false });
+      set({ currentGraph: response.graph, graphLoading: false, needsResync: false, resyncAttempts: 0 });
     } catch (error) {
       set({ graphError: toErrorMessage(error, "任务进度加载失败"), graphLoading: false, needsResync: true });
     }
@@ -282,7 +292,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
         domains.includes("assistant_meetings") ||
         domains.includes("assistant_todos")
       ) {
-        set({ needsResync: true });
+        set({ needsResync: true, resyncAttempts: 0 });
       }
       return;
     }
@@ -298,7 +308,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
         if (!taskId) return state;
         const existing = state.boardItems.some((item) => item.taskId === taskId);
         if (!existing || event.payload.changeType === "completed") {
-          return { needsResync: true };
+          return { needsResync: true, resyncAttempts: 0 };
         }
         return {
           boardItems: state.boardItems.map((item) =>
@@ -335,7 +345,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
       // created/deleted/reordered 改变集合结构或批量顺序，单条局部更新无法表达；
       // 按 CLAUDE.md「assistant.todo.changed 只做局部提示，缺口必须 resync」拉权威快照。
       if (String(event.payload.changeType ?? "") !== "updated") {
-        set({ needsResync: true });
+        set({ needsResync: true, resyncAttempts: 0 });
         return;
       }
       set((state) => {
@@ -344,11 +354,11 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
         if (!taskId || !todoId) return state;
         const current = state.todosByTaskId[taskId];
         if (!current) {
-          return { needsResync: true };
+          return { needsResync: true, resyncAttempts: 0 };
         }
         const existingIndex = current.findIndex((item) => item.todoId === todoId);
         if (existingIndex < 0) {
-          return { needsResync: true };
+          return { needsResync: true, resyncAttempts: 0 };
         }
         const next = current.map((item, index) =>
           index === existingIndex
@@ -404,7 +414,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
         // 没有 taskId 但图结构已变，必须标记 resync 让前端重新拉权威快照
         const changeType = String(event.payload.changeType ?? "");
         if (GRAPH_LEVEL_CHANGE_TYPES.has(changeType)) {
-          return { needsResync: true };
+          return { needsResync: true, resyncAttempts: 0 };
         }
         return state;
       }
@@ -412,7 +422,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
       // 不能静默丢弃，标记 resync 让前端重新拉 typed 权威快照。
       const known = state.currentGraph.tasks.some((task) => task.taskId === taskId);
       if (!known) {
-        return { needsResync: true };
+        return { needsResync: true, resyncAttempts: 0 };
       }
       return {
         currentGraph: {
@@ -435,7 +445,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
       };
     });
   },
-  markNeedsResync: () => set({ needsResync: true }),
+  markNeedsResync: () => set({ needsResync: true, resyncAttempts: 0 }),
   loadNewTaskTodos: (sessionId, currentTaskIds, currentTaskIdsKey) => {
     // 先计算新 ID，再更新状态，最后触发异步加载（副作用在 set 外）
     const state = get();
@@ -465,8 +475,12 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
   executeResync: async (sessionId, activeMeetingChannelId, currentTaskIds) => {
     const state = get();
     if (!sessionId || !state.needsResync) return;
-    // 先清除标记，防止 effect 重入
-    set({ needsResync: false });
+    // 退避保护：连续失败超过上限后不再自动重试（问题 9）。
+    // 外部事件（task_graph.changed / resync_required 等）在 applyEvent 里
+    // 设 needsResync=true 时会同时清零 resyncAttempts，从而允许新一轮重试。
+    if (state.resyncAttempts >= MAX_RESYNC_ATTEMPTS) return;
+    // 先清除标记 + 递增计数，防止 effect 重入
+    set({ needsResync: false, resyncAttempts: state.resyncAttempts + 1 });
     await Promise.all([
       state.loadCurrentGraph(sessionId),
       state.loadBoard(sessionId),
@@ -495,6 +509,7 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
     boardError: null,
     meetingError: null,
     needsResync: false,
+    resyncAttempts: 0,
     userTaskVersion: 0,
   }),
 }));

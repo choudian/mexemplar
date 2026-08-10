@@ -290,6 +290,9 @@ class AssistantTaskSnapshot(BaseModel):
     updatedAt: datetime | None = None
     externalCodingSessions: list[ExternalCodingSessionTaskSummary] = Field(default_factory=list)
     executorSessionId: str | None = None
+
+
+class AssistantTaskEdgeSnapshot(BaseModel):
     sourceTaskId: str
     targetTaskId: str
     type: Literal["dependency", "delegation", "question", "meeting_channel", "resource_request"]

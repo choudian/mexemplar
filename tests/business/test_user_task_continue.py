@@ -212,8 +212,8 @@ class TestContinueUserTaskSingleNode:
 
 
 class TestStatusDistribution:
-    def test_distribution_reads_waiting_on_column(self, in_memory_db):
-        """分布查询直接读 waiting_on 列（不硬编码 map）。"""
+    def test_distribution_reads_suspend_reason_column(self, in_memory_db):
+        """分布查询按 suspend_reason 聚合（问题 7：精确区分每种暂停原因）。"""
         sid = _seed_session("sess_dist")
         user_task_id = UserTaskRepository().create(
             session_id=sid, title="分布测试"
@@ -249,7 +249,9 @@ class TestStatusDistribution:
             distribution = tasks.status_distribution_for_user_task(user_task_id)
 
         assert distribution.get("done") == 2
-        assert distribution.get("suspended:user") == 1
+        # key 用 suspend_reason（waiting_user），不是 waiting_on（user）
+        assert distribution.get("suspended:waiting_user") == 1
+        assert "suspended:user" not in distribution
 
 
 # ---------------------------------------------------------------------------
