@@ -942,6 +942,7 @@ class AgentOrchestrator:
         allowed_composition_ids: set[str] | None = None,
         allowed_builtin_tool_names: set[str] | None = None,
         iteration_budget: int | None = None,
+        resume_existing_turn: bool = False,
     ) -> dict:
         start_transition_id = self._session_store.record_transition(
             workflow_id,
@@ -1003,6 +1004,7 @@ class AgentOrchestrator:
                 user_input,
                 tools=tools,
                 system_prompt_override=system_prompt,
+                resume_existing_turn=resume_existing_turn,
             )
         except Exception as exc:
             # 这里是**唯一还握着执行体真异常**的地方：再往上一层，它会被重新包成一个

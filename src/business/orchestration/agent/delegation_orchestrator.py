@@ -415,6 +415,7 @@ class DelegationOrchestrator:
             allowed_composition_ids=allowed_composition_ids,
             allowed_builtin_tool_names=allowed_builtin_tool_names,
             iteration_budget=iteration_budget,
+            resume_existing_turn=resume_session_id is not None,
         )
         _finalize_sync_attempt(sync_task_id, result)
         if result.get("success"):
@@ -723,6 +724,7 @@ class DelegationOrchestrator:
             workspace_root=workspace_root,
             allowed_composition_ids=allowed_composition_ids,
             iteration_budget=iteration_budget,
+            resume_existing_turn=resume_session_id is not None,
         )
         _finalize_sync_attempt(sync_task_id, result)
         return result

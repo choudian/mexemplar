@@ -9,8 +9,8 @@ import {
   type UserTaskContinueResponse,
   type UserTaskGraphSummary,
 } from "../../api/userTasks";
-import { getAssistantTaskGraph } from "../../api/assistantTasks";
-import type { AssistantTaskSnapshot } from "../../api/assistantTasks";
+import { getAssistantTaskGraph, getAssistantTaskTodos } from "../../api/assistantTasks";
+import type { AssistantTaskSnapshot, AssistantTodoItem } from "../../api/assistantTasks";
 import TaskGraphPeek from "./TaskGraphPeek";
 import ExecutorCard from "./ExecutorCard";
 
@@ -108,6 +108,7 @@ function UserTaskCard({
   const [loadingDist, setLoadingDist] = useState(false);
   const [graphs, setGraphs] = useState<UserTaskGraphSummary[]>([]);
   const [executorTasks, setExecutorTasks] = useState<AssistantTaskSnapshot[]>([]);
+  const [todosByTaskId, setTodosByTaskId] = useState<Record<string, AssistantTodoItem[]>>({});
   const [continueResult, setContinueResult] = useState<UserTaskContinueResponse | null>(null);
   const [continuing, setContinuing] = useState(false);
 
@@ -131,22 +132,48 @@ function UserTaskCard({
       .then((res) => {
         const gs = res.graphs ?? [];
         setGraphs(gs);
-        // 加载所有图的快照，提取有 executorSessionId 的节点（供执行体列表展示）
+        // 设计 [95]: 图里节点派出去的只从图里进（局部图/全图弹窗）；
+        // 卡片下只放直接挂载的执行体（单节点图根，nodeCount<=1）。
+        const directGraphs = gs.filter((g) => g.nodeCount <= 1);
+        if (directGraphs.length === 0) {
+          setExecutorTasks([]);
+          return;
+        }
+        // 单节点图直接取快照拿 executorSessionId（不拉多节点图，避免 N+1）
         return Promise.all(
-          gs.map((g) => getAssistantTaskGraph(sessionId, g.graphId).catch(() => null)),
-        );
-      })
-      .then((snapshots) => {
-        const tasks: AssistantTaskSnapshot[] = [];
-        for (const snap of snapshots) {
-          if (!snap) continue;
-          for (const t of snap.tasks) {
-            if (t.executorSessionId && t.status !== "done" && t.status !== "skipped") {
-              tasks.push(t);
+          directGraphs.map((g) =>
+            getAssistantTaskGraph(sessionId, g.graphId).catch(() => null),
+          ),
+        ).then((snapshots) => {
+          const tasks: AssistantTaskSnapshot[] = [];
+          const taskIdsToLoad: string[] = [];
+          for (const snap of snapshots) {
+            if (!snap) continue;
+            for (const t of snap.tasks) {
+              // 单节点图的根节点就是执行节点；跳过 done/skipped
+              if (t.parentTaskId === null && t.executorSessionId && t.status !== "done" && t.status !== "skipped") {
+                tasks.push(t);
+                taskIdsToLoad.push(t.taskId);
+              }
             }
           }
-        }
-        setExecutorTasks(tasks);
+          setExecutorTasks(tasks);
+          // 加载这些执行体的 todo（⑦ 核心规则：执行体卡片正面展示 todolist）
+          return Promise.all(
+            taskIdsToLoad.map((tid) =>
+              getAssistantTaskTodos(sessionId, tid)
+                .then((r) => ({ tid, items: r.items }))
+                .catch(() => ({ tid, items: [] as AssistantTodoItem[] })),
+            ),
+          );
+        }).then((todoResults) => {
+          if (!todoResults) return;
+          const map: Record<string, AssistantTodoItem[]> = {};
+          for (const { tid, items } of todoResults) {
+            map[tid] = items;
+          }
+          setTodosByTaskId(map);
+        });
       })
       .catch(() => {
         setGraphs([]);
@@ -312,6 +339,7 @@ function UserTaskCard({
                     lastOutput: null,
                     turnStartSequence: null,
                   }}
+                  todos={todosByTaskId[task.taskId]}
                   onClick={() =>
                     onOpenExecutor(
                       task.executorSessionId ?? "",

@@ -73,7 +73,8 @@ const liveSteps = [
 ];
 
 describe("ActivityTimeline + task graph", () => {
-  it("TaskNodeCard 与 SubagentCard 交错排列", () => {
+  it("TaskNodeCard 在时间线渲染，SubagentCard 已移至用户任务卡片", () => {
+    // ⑦: 对话流不再渲染独立的 SubagentCard（收进用户任务卡片折叠区）
     const subagent = makeSubagent({ anchorSeq: 3 });
     const graph = makeGraph(); // userMessageSequence=1, tsk-001 是非根节点
 
@@ -91,8 +92,8 @@ describe("ActivityTimeline + task graph", () => {
     const timeline = container.querySelector(".assistant-activity");
     expect(timeline).toBeDefined();
 
-    // SubagentCard 内容可见
-    expect(screen.getByText("数据分析")).toBeDefined();
+    // SubagentCard 内容不再出现在时间线（⑦ 移除）
+    expect(screen.queryByText("数据分析")).toBeNull();
 
     // TaskNodeCard 内容可见（非根节点 tsk-001）
     expect(screen.getByText("步骤A")).toBeDefined();
@@ -313,8 +314,8 @@ describe("ActivityTimeline + task graph", () => {
       />,
     );
 
-    // SubagentCard 仍正常出现
-    expect(screen.getByText("数据分析")).toBeDefined();
+    // ⑦: SubagentCard 已从对话流移除（收进用户任务卡片），不再出现
+    expect(screen.queryByText("数据分析")).toBeNull();
 
     // 步骤仍正常出现
     expect(screen.getByText("搜索数据")).toBeDefined();

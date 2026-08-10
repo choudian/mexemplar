@@ -96,7 +96,7 @@ describe("ActivityTimeline (US3)", () => {
     expect(await screen.findByText("retry")).toBeInTheDocument();
   });
 
-  test("步骤与子卡片按 anchorSeq 交错：子卡片紧跟委派步骤、排在最终回复之前", () => {
+  test("步骤按 seq 排列（⑦: SubagentCard 已移除，不再交错）", () => {
     const sub: Subagent = {
       subagentId: "c1",
       label: "子助手",
@@ -117,15 +117,14 @@ describe("ActivityTimeline (US3)", () => {
       />,
     );
     const body = container.querySelector(".assistant-activity-body") as HTMLElement;
-    const order = Array.from(body.children).map((el) =>
-      el.classList.contains("assistant-subcard") ? "card" : el.textContent ?? "",
-    );
+    const order = Array.from(body.children).map((el) => el.textContent ?? "");
+    // ⑦: SubagentCard 已从对话流移除，时间线只剩步骤
     const resultIdx = order.findIndex((t) => t.includes("委派结果"));
-    const cardIdx = order.indexOf("card");
     const replyIdx = order.findIndex((t) => t.includes("最终回复"));
     expect(resultIdx).toBeGreaterThanOrEqual(0);
-    expect(cardIdx).toBeGreaterThan(resultIdx);
-    expect(replyIdx).toBeGreaterThan(cardIdx);
+    expect(replyIdx).toBeGreaterThan(resultIdx);
+    // 不应出现子助手卡片内容
+    expect(screen.queryByText("子助手")).toBeNull();
   });
 
   test("工具步骤的 JSON 参数被缩进美化为代码块", () => {
