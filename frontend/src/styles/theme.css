@@ -10926,3 +10926,105 @@ select:focus-visible,
     border-top: 1px solid var(--border-1);
   }
 }
+
+/* 调度中心「查看这一轮」弹窗：外壳与气泡都复用既有样式，这里只补对话区自己的部分。 */
+.sched-session-dlg {
+  max-width: 720px;
+  height: min(78vh, 720px);
+}
+.sched-session-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 18px 20px;
+}
+/* 自动触发标记：这句不是用户说的，所以不给气泡，只作一条安静的分隔。 */
+.sched-session-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.sched-session-trigger::before,
+.sched-session-trigger::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border-1);
+}
+.sched-session-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.sched-session-running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.sched-session-error {
+  margin: 0;
+  padding: 8px 20px;
+  color: var(--danger, #b4443a);
+  font-size: 12px;
+}
+.sched-session-handoff {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  border-top: 1px solid var(--border-1);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.sched-session-handoff .me-button {
+  flex: none;
+  gap: 4px;
+}
+.sched-session-footer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px 20px 14px;
+  border-top: 1px solid var(--border-1);
+  flex: none;
+}
+.sched-session-input {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 8px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 12px;
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.sched-session-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.sched-session-input:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+@media (max-width: 820px) {
+  .sched-session-dlg {
+    height: min(86vh, 720px);
+  }
+}

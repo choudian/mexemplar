@@ -16,7 +16,9 @@ import {
 
 import { Badge, IconButton } from "../../components/primitives";
 import { useAssistantStore } from "../../state/assistantStore";
+import { useScheduledSessionStore } from "../../state/scheduledSessionStore";
 import { useScheduledStore } from "../../state/scheduledStore";
+import ScheduledSessionDialog from "./ScheduledSessionDialog";
 import { useShellStore } from "../../state/shellStore";
 import { useToastStore } from "../../state/toastStore";
 import { formatMonthDayTime } from "../../utils/dates";
@@ -109,6 +111,9 @@ export function ScheduledScreen(): JSX.Element {
   const resetSession = useScheduledStore((s) => s.resetSession);
   const remove = useScheduledStore((s) => s.remove);
 
+  const openScheduledSession = useScheduledSessionStore((s) => s.openRun);
+  const closeScheduledSession = useScheduledSessionStore((s) => s.close);
+
   const setRoute = useShellStore((s) => s.setRoute);
   const selectSession = useAssistantStore((s) => s.selectSession);
   const setAssistantDraft = useAssistantStore((s) => s.setDraft);
@@ -129,7 +134,10 @@ export function ScheduledScreen(): JSX.Element {
   const expandTask = (task: ScheduledTaskItem) => {
     const willExpand = !expandedTaskIds.has(task.scheduledTaskId);
     toggleExpanded(task.scheduledTaskId, willExpand);
-    if (willExpand && !runsByTask[task.scheduledTaskId]) {
+    // 每次展开都取最新：执行记录会随时间新增，而"拉过一次"里也包括
+    // 任务刚建好、还没跑过时拉到的空列表。认那份缓存就会在跑完之后
+    // 仍然显示"还没有执行记录"，连进入会话的入口都不出现。
+    if (willExpand) {
       void loadRuns(task.scheduledTaskId);
     }
   };
@@ -255,39 +263,44 @@ export function ScheduledScreen(): JSX.Element {
     }
   };
 
-  const openRunSession = async (run: ScheduledTaskRunItem) => {
-    if (run.status === "skipped") {
-      return;
-    }
-    if (run.status !== "waiting_user" && run.status !== "failed") {
-      // 已成功的 run 只读历史会话：直接打开。running 当前不展示入口。
-      setOpeningRunId(run.runId);
-      try {
-        await selectSession(run.sessionId);
-        setRoute("assistant");
-      } catch {
-        // best-effort：失败留给既有 toast 路径。
-      } finally {
-        setOpeningRunId(null);
-      }
-      return;
-    }
-    // waiting_user / failed：经 takeover REST 获得可继续的 sessionId。
+  // 三种可打开的结局都先弹窗看记录：留在调度中心，不丢当前浏览位置。
+  // 需要任务图/失败恢复这类完整能力时，再由弹窗里的入口跳主助理屏。
+  const openRunSession = async (run: ScheduledTaskRunItem, task: ScheduledTaskItem) => {
+    if (run.status === "skipped" || !run.sessionId) return;
     setOpeningRunId(run.runId);
     try {
-      const takeoverResult = await takeover(run.scheduledTaskId, run.runId);
-      if (takeoverResult) {
-        await selectSession(takeoverResult.sessionId);
-        if (
-          takeoverResult.recoveryDraft &&
-          !useAssistantStore.getState().draft.trim()
-        ) {
-          setAssistantDraft(takeoverResult.recoveryDraft);
-        }
-        setRoute("assistant");
-      }
+      await openScheduledSession(task, run);
     } finally {
       setOpeningRunId(null);
+    }
+  };
+
+  // 弹窗交接：先接管拿回可继续的会话，再切到主助理屏。
+  // waiting_user 靠接管放掉 active 槽位；failed 不会被复活，但接管会带回后端
+  // 重建的任务指令，填进空草稿省得用户重打一遍。
+  const openRunInAssistant = async (sessionId: string) => {
+    const run = useScheduledSessionStore.getState().run;
+    try {
+      if (run && (run.status === "waiting_user" || run.status === "failed")) {
+        const takeoverResult = await takeover(run.scheduledTaskId, run.runId);
+        if (takeoverResult) {
+          await selectSession(takeoverResult.sessionId);
+          if (
+            takeoverResult.recoveryDraft &&
+            !useAssistantStore.getState().draft.trim()
+          ) {
+            setAssistantDraft(takeoverResult.recoveryDraft);
+          }
+          closeScheduledSession();
+          setRoute("assistant");
+          return;
+        }
+      }
+      await selectSession(sessionId);
+      closeScheduledSession();
+      setRoute("assistant");
+    } catch {
+      // best-effort：失败留给既有 toast 路径，弹窗保持打开。
     }
   };
 
@@ -543,7 +556,7 @@ export function ScheduledScreen(): JSX.Element {
                               key={run.runId}
                               run={run}
                               opening={openingRunId === run.runId}
-                              onOpen={() => void openRunSession(run)}
+                              onOpen={() => void openRunSession(run, task)}
                             />
                           ))}
                         </ul>
@@ -556,6 +569,7 @@ export function ScheduledScreen(): JSX.Element {
           })}
         </ul>
       ) : null}
+      <ScheduledSessionDialog onOpenInAssistant={(sessionId) => void openRunInAssistant(sessionId)} />
     </section>
   );
 }

@@ -49,6 +49,21 @@ function replaceTask(items: ScheduledTaskItem[], next: ScheduledTaskItem): Sched
 
 const scheduleListRefresh = createDebouncedRefresh(300);
 
+/**
+ * 终态事件到达时刷新该任务正展开着的执行记录。
+ *
+ * 列表刷新只更新任务行的"上次执行"，展开区里的记录不在其中。用户开着展开区
+ * 等这一轮跑完时，不刷新就会一直停在触发前的旧快照——看不到这一轮，也没有
+ * 进入会话的入口。没展开的任务不拉，避免为看不见的内容发请求。
+ */
+function refreshExpandedRuns(taskId: unknown, get: () => ScheduledState): void {
+  const id = typeof taskId === "string" ? taskId.trim() : "";
+  if (!id || !get().expandedTaskIds.has(id)) return;
+  void get()
+    .loadRuns(id)
+    .catch(() => undefined);
+}
+
 export interface ScheduledState {
   hydrated: boolean;
   tasks: ScheduledTaskItem[];
@@ -395,6 +410,7 @@ export const useScheduledStore = create<ScheduledState>((set, get) => ({
         typeof event.payload.failureReason === "string" ? event.payload.failureReason : null;
       // completed 事件权威承载任务终态：列表层 last_run_outcome/last_run_at 必须刷新。
       scheduleListRefresh(() => get().load().catch(() => undefined));
+      refreshExpandedRuns(event.payload.taskId, get);
       if (outcome === "succeeded") {
         const message = summary ? `${taskTitle} 已完成：${summary}` : `${taskTitle} 已完成`;
         useToastStore.getState().notifySuccess(message);
@@ -413,6 +429,7 @@ export const useScheduledStore = create<ScheduledState>((set, get) => ({
       const taskTitle = typeof event.payload.taskTitle === "string" ? event.payload.taskTitle : "定时任务";
       // run 落 waiting_user / failed_takeover：历史层需要刷新。
       scheduleListRefresh(() => get().load().catch(() => undefined));
+      refreshExpandedRuns(event.payload.taskId, get);
       const message =
         reason === "failed_takeover"
           ? `${taskTitle} 跑了一半失败了，要不要接着处理一下？`

@@ -143,6 +143,75 @@ describe("scheduledStore.applyEvent", () => {
     });
   });
 
+  test("终态事件刷新已展开任务的执行记录", async () => {
+    // 事件只刷任务列表时，正开着的展开区会一直停在触发前的旧快照——
+    // 跑完了却看不到那一轮，也就没有进入会话的入口。
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => ({
+      ok: true,
+      status: 200,
+      json: async () =>
+        String(input).includes("/runs")
+          ? { items: [{ runId: "r1" }], total: 1, limit: 50, offset: 0 }
+          : { items: [baseTask], total: 1, limit: 200, offset: 0 },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    useScheduledStore.setState({
+      expandedTaskIds: new Set(["sch_1"]),
+      runsByTask: { sch_1: [] },
+    } as any);
+
+    useScheduledStore.getState().applyEvent({
+      type: "scheduled_task.completed",
+      payload: {
+        taskId: "sch_1",
+        taskTitle: "查竞品",
+        runId: "r1",
+        sessionId: "s",
+        outcome: "succeeded",
+        summary: "99 元",
+      },
+    } as any);
+
+    await vi.waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(([input]) => String(input).includes("/runs")),
+      ).toBe(true),
+    );
+    await vi.waitFor(() =>
+      expect(useScheduledStore.getState().runsByTask.sch_1).toHaveLength(1),
+    );
+  });
+
+  test("终态事件不去拉没展开任务的执行记录", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ items: [baseTask], total: 1, limit: 200, offset: 0 }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    useScheduledStore.setState({
+      expandedTaskIds: new Set<string>(),
+      runsByTask: {},
+    } as any);
+
+    useScheduledStore.getState().applyEvent({
+      type: "scheduled_task.completed",
+      payload: {
+        taskId: "sch_1",
+        taskTitle: "查竞品",
+        runId: "r1",
+        sessionId: "s",
+        outcome: "succeeded",
+        summary: "99 元",
+      },
+    } as any);
+
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input).includes("/runs")),
+    ).toBe(false);
+  });
+
   test("scheduled_task.completed(failed) pushes warning toast", () => {
     useScheduledStore.getState().applyEvent({
       type: "scheduled_task.completed",

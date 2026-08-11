@@ -622,7 +622,59 @@ describe("ScheduledScreen", () => {
     );
   });
 
-  test("succeeded history opens its existing session without takeover", async () => {
+  test("re-expanding refetches runs instead of trusting an empty cached snapshot", async () => {
+    // 建完任务先展开看一眼时还没跑过，存下的是空列表。之后跑完再展开，
+    // 若认这份缓存就会显示"还没有执行记录"，连进入会话的入口都没有。
+    let runs: unknown[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith("http://desktop.test/api/scheduled-tasks?")) {
+        return jsonResponse({ items: [baseTask], total: 1, limit: 200, offset: 0 });
+      }
+      if (url.includes("/api/scheduled-tasks/sch_1/runs")) {
+        return jsonResponse({ items: runs, total: runs.length, limit: 50, offset: 0 });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ScheduledScreen />);
+    await screen.findByText("查竞品价格");
+
+    const toggle = screen.getByRole("button", { name: /展开任务执行记录/ });
+    await act(async () => {
+      fireEvent.click(toggle);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    expect(await screen.findByText("这条任务还没有执行记录。")).toBeTruthy();
+
+    // 收起期间这一轮跑完了
+    runs = [
+      {
+        runId: "schr_later",
+        scheduledTaskId: "sch_1",
+        sessionId: "ast_later",
+        startedAt: "2026-07-19T01:00:00Z",
+        finishedAt: "2026-07-19T01:05:00Z",
+        status: "succeeded",
+        summary: "榜单已整理",
+        failureReason: null,
+      },
+    ];
+    await act(async () => {
+      fireEvent.click(toggle);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    await act(async () => {
+      fireEvent.click(toggle);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(await screen.findByText("榜单已整理")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "查看会话" })).toBeTruthy();
+  });
+
+  test("succeeded history opens the run dialog in place, without navigating or taking over", async () => {
     const selectSession = vi.fn(async () => undefined);
     useAssistantStore.setState({ selectSession });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -670,21 +722,25 @@ describe("ScheduledScreen", () => {
         setTimeout(resolve, 0);
       });
     });
-    expect(selectSession).toHaveBeenCalledWith("ast_succeeded");
+    // 查看这一轮就地弹窗：不切路由、不动主助理会话，调度中心的浏览位置得以保留。
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(selectSession).not.toHaveBeenCalled();
     expect(openButton).toBeEnabled();
-    expect(useShellStore.getState().activeRoute).toBe("assistant");
+    expect(useShellStore.getState().activeRoute).toBe("scheduled");
     expect(
       fetchMock.mock.calls.some(([input]) =>
         String(input).endsWith("/takeover"),
       ),
     ).toBe(false);
+    // 已成功的一轮没有待处理的事，不给跳主助理的出口。
+    expect(screen.queryByRole("button", { name: "在主助理里继续" })).toBeNull();
   });
 
   test.each([
     ["waiting_user", "去帮一把"],
     ["failed", "接着处理"],
   ])(
-    "%s history takes over before opening the returned session",
+    "%s history previews in a dialog first, and only hands off on request",
     async (status, openLabel) => {
       const selectSession = vi.fn(async () => undefined);
       useAssistantStore.setState({ selectSession });
@@ -741,13 +797,34 @@ describe("ScheduledScreen", () => {
           setTimeout(resolve, 0);
         });
       });
-      expect(selectSession).toHaveBeenCalledWith(`ast_taken_${status}`);
-      expect(openButton).toBeEnabled();
-      expect(useShellStore.getState().activeRoute).toBe("assistant");
+      // 第一步只是看这一轮发生了什么：先不接管、也不离开调度中心。
+      expect(await screen.findByRole("dialog")).toBeTruthy();
+      expect(selectSession).not.toHaveBeenCalled();
+      expect(useShellStore.getState().activeRoute).toBe("scheduled");
+      expect(
+        fetchMock.mock.calls.some(([input]) =>
+          String(input).endsWith("/takeover"),
+        ),
+      ).toBe(false);
+
+      // 第二步用户明确要接着处理，才接管并把会话交给主助理屏。
+      const handoff = await screen.findByRole("button", {
+        name: "在主助理里继续",
+      });
+      await act(async () => {
+        handoff.click();
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      });
+
+      // 交接才接管：waiting_user 借此放掉 active 槽位，failed 借此拿回重建的任务指令。
       expect(fetchMock).toHaveBeenCalledWith(
         `http://desktop.test/api/scheduled-tasks/sch_1/runs/schr_${status}/takeover`,
         expect.objectContaining({ method: "POST" }),
       );
+      expect(selectSession).toHaveBeenCalledWith(`ast_taken_${status}`);
+      expect(useShellStore.getState().activeRoute).toBe("assistant");
     },
   );
 
@@ -806,6 +883,12 @@ describe("ScheduledScreen", () => {
     const openButton = await screen.findByRole("button", { name: "接着处理" });
     await act(async () => {
       openButton.click();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    // 先弹窗预览，再由用户点交接——恢复出来的指令在交接这一步才落进草稿。
+    const handoff = await screen.findByRole("button", { name: "在主助理里继续" });
+    await act(async () => {
+      handoff.click();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
 
@@ -881,6 +964,11 @@ describe("ScheduledScreen", () => {
     const openButton = await screen.findByRole("button", { name: "接着处理" });
     await act(async () => {
       openButton.click();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
+    const handoff = await screen.findByRole("button", { name: "在主助理里继续" });
+    await act(async () => {
+      handoff.click();
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     });
 

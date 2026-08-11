@@ -18,6 +18,7 @@ import { useAssistantStore } from "../state/assistantStore";
 import { useAssistantTaskStore } from "../state/assistantTaskStore";
 import { useBrainStore } from "../state/brainStore";
 import { useCompositionsStore } from "../state/compositionsStore";
+import { useScheduledSessionStore } from "../state/scheduledSessionStore";
 import { useScheduledStore } from "../state/scheduledStore";
 import { useSettingsStore } from "../state/settingsStore";
 import { useShellStore } from "../state/shellStore";
@@ -256,6 +257,8 @@ export function AppShell(): JSX.Element {
           if (TASK_COLLAB_EVENT_TYPES.has(event.type)) {
             useAssistantTaskStore.getState().applyEvent(event);
           }
+          // 调度中心弹窗有独立会话状态（不共用 activeSessionId），自行按 sessionId 过滤。
+          useScheduledSessionStore.getState().applyEvent(event);
           break;
         case "teaching":
           applyTeachingEvent(event);
