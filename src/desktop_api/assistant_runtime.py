@@ -39,6 +39,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# 中断型工具中表示"本轮已向用户交付"的那些；其余 NEEDS_USER_INPUT 都当成在等用户答复。
+# 见 ``AssistantRuntime._is_report_completion``。
+_REPORT_COMPLETION_SIGNALS = frozenset({"reply_to_user"})
+
 
 @dataclass(frozen=True)
 class ContinueSubagentDirective:
@@ -251,6 +255,23 @@ class AssistantRuntime:
         return bool(sink.has_pending(session_id, graph_id))
 
     @staticmethod
+    def _is_report_completion(result: object) -> bool:
+        """收尾是"向用户汇报"而非"向用户提问"时返回 True。
+
+        主助理给用户的回复统一走 ``reply_to_user``，需要用户拍板才走
+        ``ask_user_question``；两者都是中断型工具，都让 AgentLoop 返回
+        ``NEEDS_USER_INPUT``，但语义相反——前者是"本轮已交付"，后者才是"等你回话"。
+        scheduled run 必须按 ``signal_tool`` 区分：主助理架构上没有别的收尾方式
+        （``text_as_user_input=False``），不区分就等于每次正常汇报都被记成待接管，
+        run 永不结束、占住 per-task active 槽位，后续每轮到点静默 skipped。
+
+        signal 缺失（非工具触发的 ``NEEDS_USER_INPUT``）一律按提问处理：宁可让用户
+        多看一眼，也不把无法证明已交付的一轮报成完成。
+        """
+        name = getattr(getattr(result, "signal_tool", None), "name", None)
+        return name in _REPORT_COMPLETION_SIGNALS
+
+    @staticmethod
     def _mark_scheduled_waiting_user(run_id: str | None) -> bool:
         if not run_id:
             return True
@@ -459,9 +480,11 @@ class AssistantRuntime:
                     {"status": "waiting_for_user", "headline": result.question or ""},
                     {"sessionId": session_id},
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(
-                    scheduled_run_id
-                )
+                # 与主路径同口径：汇报收尾不是在等用户答复，见 _is_report_completion。
+                if not self._is_report_completion(result):
+                    can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(
+                        scheduled_run_id
+                    )
             else:
                 # ERROR / 异常结果：续跑未成功，必须发 failed（不能照发 succeeded 让
                 # 前端卡在成功）。reentry 失败不接 AssistantFailureService——它没有
@@ -1197,9 +1220,13 @@ class AssistantRuntime:
                     {"status": "waiting_for_user", "headline": result.question or ""},
                     {"sessionId": session_id},
                 )
-                can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(
-                    scheduled_run_id
-                )
+                # 汇报收尾对 scheduled run 是"本轮已交付"，不落 waiting_user：终态交给
+                # finally 的静默判定（worker 退出 ∧ 无 pending 回流 ∧ 图全终态）裁决。
+                # 普通会话的进度事件语义不变，仍是等用户接着说。
+                if not self._is_report_completion(result):
+                    can_evaluate_scheduled_completion = self._mark_scheduled_waiting_user(
+                        scheduled_run_id
+                    )
                 self._publish_continue_fallback_if_needed(session_id, continue_directive)
                 return
             if retry_directive is not None:

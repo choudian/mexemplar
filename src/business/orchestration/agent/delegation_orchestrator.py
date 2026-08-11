@@ -55,6 +55,30 @@ def _validate_user_task_id(user_task_id: str | None) -> dict | None:
     return None
 
 
+def _latest_user_message_sequence(session_id: str) -> int | None:
+    """当前请求（最新一条 user 消息）的序号，用作追踪 task 行的归属编号。
+
+    同步委派有意不建任务图，但它建的追踪行 ``parent_task_id`` 为空，形状与图根一致。
+    不带归属编号时 ``AssistantTaskRepository.resolve_graph_id_for_run`` 会把它判成
+    "run 窗口内存在身份不明的图"并 fail-closed，使 scheduled run 的完成判定永远停在
+    未知——run 不结束、占住 per-task active 槽位，后续每轮到点被静默 skipped。
+
+    取不到时返回 None，维持既有行为：归属只是追踪信息，不阻断委派本身。
+    """
+    from src.data.repos import MessageRepository
+
+    try:
+        with MessageRepository() as repo:
+            return repo.get_latest_user_message_sequence(session_id)
+    except Exception:
+        logger.warning(
+            "[sync_delegation] failed to resolve user message sequence for session=%s",
+            session_id,
+            exc_info=True,
+        )
+        return None
+
+
 def _start_sync_attempt(
     *,
     parent_session_id: str,
@@ -90,6 +114,7 @@ def _start_sync_attempt(
                 description=task_description,
                 owner_session_id=parent_session_id,
                 user_task_id=user_task_id,
+                user_message_sequence=_latest_user_message_sequence(parent_session_id),
                 assignee_type=executor_type,
                 assignee_id=executor_id,
                 status="running",
