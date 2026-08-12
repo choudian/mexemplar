@@ -244,6 +244,7 @@ class ToolRegistry:
             LIST_SPECIALISTS_SCHEMA,
             LIST_USER_TODOS_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
+            TODO_CREATE_SCHEMA,
             TODO_UPDATE_SCHEMA,
             UPDATE_USER_TODO_SCHEMA,
             create_ask_parent_handler,
@@ -256,7 +257,7 @@ class ToolRegistry:
             create_list_specialists_handler,
             create_list_user_todos_handler,
             create_meeting_send_message_handler,
-            create_todo_update_handler,
+            create_todo_handlers,
             create_update_user_todo_handler,
             create_user_todo_handler,
         )
@@ -311,6 +312,11 @@ class ToolRegistry:
             if current_task_id
             else ASK_PARENT_SCHEMA
         )
+        todo_create_schema = (
+            self.schema_with_bound_task_id(TODO_CREATE_SCHEMA)
+            if current_task_id
+            else TODO_CREATE_SCHEMA
+        )
         todo_schema = (
             self.schema_with_bound_task_id(TODO_UPDATE_SCHEMA)
             if current_task_id
@@ -341,17 +347,23 @@ class ToolRegistry:
             ),
         ]
         todo_executor_id = specialist_id or executor_type
+        _todo_create_handler, _todo_update_handler = create_todo_handlers(
+            executor_type=executor_type,
+            executor_id=todo_executor_id,
+            executor_session_id=executor_id,
+            bound_task_id=current_task_id,
+        )
         executor_collaboration_tools: list[ToolDefinition] = [
             *ask_parent_meeting_tools,
             ToolDefinition(
+                name=todo_create_schema["function"]["name"],
+                schema=todo_create_schema,
+                handler=_todo_create_handler,
+            ),
+            ToolDefinition(
                 name=todo_schema["function"]["name"],
                 schema=todo_schema,
-                handler=create_todo_update_handler(
-                    executor_type=executor_type,
-                    executor_id=todo_executor_id,
-                    executor_session_id=executor_id,
-                    bound_task_id=current_task_id,
-                ),
+                handler=_todo_update_handler,
             ),
             ToolDefinition(
                 name="create_user_todo",

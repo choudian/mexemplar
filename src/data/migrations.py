@@ -4302,6 +4302,37 @@ def migrate_to_v46(engine):
     logger.info("迁移到版本 46 完成：assistant_tasks.status completed → done")
 
 
+def migrate_to_v47(engine):
+    """迁移到版本 47：assistant_todo_items 加 creator_session_id 列。
+
+    记「这条 todo 是哪个执行会话建的」，供后续数据分析回溯——临时子代理建的
+    就是它自己的 session id。原先表里只有 ``executor_type`` / ``executor_id``，
+    而临时子代理的 ``executor_id`` 就是类型名 ``ephemeral_subagent`` 本身，
+    所有临时子代理都一样，定位不到具体是哪次执行。
+
+    只记**创建者**，后续更新（含续跑后换会话接手）不覆盖：todo 挂在 task 上、
+    跨执行会话延续，改成"最后修改者"会把创建来源冲掉。
+    nullable：存量行和不带会话上下文的写入路径为 None。
+    """
+    try:
+        with engine.begin() as conn:
+            _add_column_if_missing(
+                conn, "assistant_todo_items", "creator_session_id", "TEXT"
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS idx_assistant_todo_creator_session "
+                    "ON assistant_todo_items(creator_session_id) "
+                    "WHERE creator_session_id IS NOT NULL"
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 47"))
+    except Exception as e:
+        logger.error(f"迁移到版本 47 失败: {e}")
+        raise
+    logger.info("迁移到版本 47 完成：assistant_todo_items.creator_session_id 列 + 索引")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -4348,6 +4379,7 @@ _MIGRATIONS = [
     (44, migrate_to_v44),
     (45, migrate_to_v45),
     (46, migrate_to_v46),
+    (47, migrate_to_v47),
 ]
 
 

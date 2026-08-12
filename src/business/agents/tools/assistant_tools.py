@@ -565,8 +565,9 @@ __all__ = [
     "create_open_meeting_channel_handler",
     "MEETING_SEND_MESSAGE_SCHEMA",
     "create_meeting_send_message_handler",
+    "TODO_CREATE_SCHEMA",
     "TODO_UPDATE_SCHEMA",
-    "create_todo_update_handler",
+    "create_todo_handlers",
     "CREATE_USER_TODO_SCHEMA",
     "create_user_todo_handler",
     "CREATE_TASK_SCHEMA",
@@ -1117,34 +1118,31 @@ def create_meeting_send_message_handler(
     return meeting_send_message_handler
 
 
-TODO_UPDATE_SCHEMA = make_tool_schema(
-    name="todo_update",
+TODO_CREATE_SCHEMA = make_tool_schema(
+    name="todo_create",
     description=(
-        "更新当前被派任务的私人 checklist。"
-        "何时用：当前任务内部 ≥3 个子步骤、或非平凡的多步执行时，开工前先用本工具列出 todo。"
-        "何时不用：1-2 步的简单任务直接做；纯信息查询不必列 todo。"
-        "三态流转：todo（待办）→ doing（进行中，同一时刻尽量一件）→ done（真正完成）/ skipped（有意跳过）。"
-        "实时更新：每完成一个子步骤立即标 done 再推进下一个，不要全做完一次性更新。"
-        "完成判定红线：未真正完成的子步骤绝不标 done；拿不准就先列 todo 再动手。"
-        "范围：todo 是你当前任务的私人 checklist，不委派、不裁定、不进入任务图依赖。"
+        "为当前被派的任务列出 checklist（可一次列多条）。"
+        "何时用：当前任务内部 ≥3 个子步骤、或非平凡的多步执行时，开工前先列出来。"
+        "何时不用：1-2 步的简单任务直接做；纯信息查询不必列。"
+        "标识由系统分配并随返回值给你——之后改状态用 todo_update 带上它。"
+        "追加语义：不影响已列出的条目；想推翻某条就用 todo_update 标 skipped。"
     ),
     properties={
         "taskId": {"type": "string", "description": "当前统一任务 ID"},
         "items": {
             "type": "array",
-            "description": "完整 Todo 列表，按 sortOrder 排序",
+            "description": "要列出的条目，按你打算执行的先后顺序给",
             "items": {
                 "type": "object",
                 "properties": {
-                    "todoId": {"type": "string"},
-                    "text": {"type": "string"},
+                    "text": {"type": "string", "description": "这一步做什么"},
                     "status": {
                         "type": "string",
                         "enum": ["todo", "doing", "done", "skipped"],
+                        "description": "省略即 todo；开工第一条可直接给 doing",
                     },
-                    "sortOrder": {"type": "integer"},
                 },
-                "required": ["text", "status", "sortOrder"],
+                "required": ["text"],
             },
         },
     },
@@ -1152,7 +1150,36 @@ TODO_UPDATE_SCHEMA = make_tool_schema(
 )
 
 
-def create_todo_update_handler(
+TODO_UPDATE_SCHEMA = make_tool_schema(
+    name="todo_update",
+    description=(
+        "改 checklist 里某一条：标进度、改措辞或调顺序。"
+        "三态流转：todo（待办）→ doing（进行中，同一时刻尽量一件）→ done（真正完成）"
+        "/ skipped（有意跳过）。"
+        "实时更新：每完成一个子步骤立即标 done 再推进下一个，不要全做完一次性更新。"
+        "完成判定红线：未真正完成的子步骤绝不标 done。"
+        "只改给出的字段，其余保持原样；todoId 必须是 todo_create 返回过的。"
+    ),
+    properties={
+        "taskId": {"type": "string", "description": "当前统一任务 ID"},
+        "todoId": {
+            "type": "string",
+            "description": "要改哪一条——用 todo_create 返回的 todoId，不要自己编",
+        },
+        "status": {
+            "type": "string",
+            "enum": ["todo", "doing", "done", "skipped"],
+            "description": "新状态；不改就不要给",
+        },
+        "text": {"type": "string", "description": "改写这一步的描述；不改就不要给"},
+        "sortOrder": {"type": "integer", "description": "调整顺序；不改就不要给"},
+    },
+    required=["taskId", "todoId"],
+)
+
+
+
+def create_todo_handlers(
     executor_type: str = "specialist",
     executor_id: str = "",
     *,
@@ -1160,6 +1187,12 @@ def create_todo_update_handler(
     bound_task_id: str | None = None,
     service_factory: Callable[[], "TaskTodoService"] | None = None,
 ):
+    """建 todo_create / todo_update 两个 handler。
+
+    身份（executor_session_id / bound_task_id）在装配时闭包进来，执行体填不了
+    也改不了；它只负责说「列哪几条」「改哪一条」。
+    """
+
     def _todo_service():
         if service_factory is not None:
             return service_factory()
@@ -1167,11 +1200,11 @@ def create_todo_update_handler(
 
         return TaskTodoService()
 
-    def todo_update_handler(taskId: str = "", items: list[dict] | None = None) -> str:
+    def todo_create_handler(taskId: str = "", items: list[dict] | None = None) -> str:
         def _action():
             effective_task_id = _resolve_bound_task_id(taskId, bound_task_id)
             with _todo_service() as service:
-                projected = service.update_todos(
+                projected = service.create_todos(
                     task_id=effective_task_id,
                     executor_type=executor_type,
                     executor_id=executor_id or executor_type,
@@ -1181,8 +1214,37 @@ def create_todo_update_handler(
                 return to_json({"success": True, "taskId": effective_task_id, "items": projected})
 
         return _run_task_service(
+            "todo_create", "列出任务 Todo 时发生内部错误，请稍后重试。", _action
+        )
+
+    def todo_update_handler(
+        taskId: str = "",
+        todoId: str = "",
+        status: str | None = None,
+        text: str | None = None,
+        sortOrder: int | None = None,
+    ) -> str:
+        def _action():
+            effective_task_id = _resolve_bound_task_id(taskId, bound_task_id)
+            with _todo_service() as service:
+                item = service.update_todo(
+                    task_id=effective_task_id,
+                    todo_id=todoId,
+                    executor_type=executor_type,
+                    executor_id=executor_id or executor_type,
+                    executor_session_id=executor_session_id,
+                    status=status,
+                    text=text,
+                    sort_order=sortOrder,
+                )
+                return to_json({"success": True, "taskId": effective_task_id, "item": item})
+
+        return _run_task_service(
             "todo_update", "更新任务 Todo 时发生内部错误，请稍后重试。", _action
         )
+
+    return todo_create_handler, todo_update_handler
+
 
     return todo_update_handler
 

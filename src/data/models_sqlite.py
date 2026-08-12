@@ -653,6 +653,10 @@ class AssistantTodoItem(Base):
     task_id: Mapped[str] = mapped_column(String(50), nullable=False)
     executor_type: Mapped[str] = mapped_column(String(40), nullable=False)
     executor_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    # 建这条 todo 的执行会话（临时子代理就是它自己的 session id）。
+    # ``executor_id`` 对临时子代理来说只是类型名，定位不到具体哪次执行；
+    # 这一列供事后回溯与数据分析。只记创建者，续跑接手后更新不覆盖。
+    creator_session_id: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="todo")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
