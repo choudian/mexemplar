@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -15,7 +16,12 @@ from src.desktop_api.routers.assistant import get_assistant_runtime
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/sessions/{session_id}/user-tasks", tags=["user-tasks"])
+# 前缀必须带 `/api/assistant`，与 assistant.py / assistant_tasks.py 一致——
+# 前端 typed client 统一按该前缀调用；少了它整个用户任务层接口 404，
+# 卡片拿不到列表就不渲染，⑦ 的界面链路第一步就断了。
+router = APIRouter(
+    prefix="/api/assistant/sessions/{session_id}/user-tasks", tags=["user-tasks"]
+)
 
 
 class UserTaskItem(BaseModel):
@@ -51,7 +57,11 @@ class UserTaskGraphSummary(BaseModel):
     title: str
     nodeCount: int
     status: str
-    createdAt: str | None = None
+    # 仓库层给的是 datetime 对象，不是字符串——声明成 str 会让整个接口
+    # 500（pydantic string_type 校验失败），卡片展开时拉不到图。
+    # 项目内其他 DTO 的时间字段同样直接用 datetime。
+    createdAt: datetime | None = None
+    userMessageSequence: int | None = None
 
 
 class UserTaskGraphsResponse(BaseModel):
@@ -148,6 +158,7 @@ def get_user_task_graphs(
                 nodeCount=g["nodeCount"],
                 status=g["status"],
                 createdAt=g.get("createdAt"),
+                userMessageSequence=g.get("userMessageSequence"),
             )
             for g in graphs
         ]
