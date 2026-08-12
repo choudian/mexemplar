@@ -17,20 +17,30 @@ TITLE_LIMIT = 200
 DESCRIPTION_LIMIT = 4000
 
 
-def _emit_user_task_changed(
-    task_id: str, session_id: str, change_type: str
+def emit_user_task_changed(
+    task_id: str, session_id: str, change_type: str, *, sender: str = "user_task_service"
 ) -> None:
     """user_task 变更 → user_task_changed 公开 UI 事件。
 
     前端收到后刷新用户任务列表 + distribution（替代轮询）。
+
+    ``change_type`` 取值见 ``ui_events.py`` 的 ``EVENT_TYPE_USER_TASK_CHANGED``
+    枚举：``created`` / ``status_changed`` / ``graph_added`` / ``progress_changed``。
+    其中 ``progress_changed`` 由执行层在节点状态变化时发出（见
+    ``task_collaboration.service.emit_task_updated``）——用户任务自身的状态几天
+    才变一次，而底下"卡在谁手上"每分钟都在变，卡片要跟上后者。
     """
     emit(
         "user_task_changed",
-        sender="user_task_service",
+        sender=sender,
         user_task_id=task_id,
         session_id=session_id,
         change_type=change_type,
     )
+
+
+# 兼容旧内部调用名
+_emit_user_task_changed = emit_user_task_changed
 
 
 class UserTaskService:

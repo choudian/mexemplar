@@ -134,7 +134,13 @@ _CONTINUE_CANNOT_MOVE = frozenset(
 
 
 def emit_task_updated(sender, task) -> None:
-    """单条任务状态变更 → assistant_task_graph_changed(change_type=task_updated)。"""
+    """单条任务状态变更 → assistant_task_graph_changed(change_type=task_updated)。
+
+    同时向该节点所属的用户任务发一条 ``progress_changed``：用户任务卡片展示的是
+    "底下卡在谁手上"的分布，它随执行节点变化，而 ``user_task_changed`` 原本只在
+    用户任务自身状态（active/cooling/done/dropped，几天一次）变化时才发——卡片
+    因此拿不到任何进度更新，只能停在挂载那一刻的快照上。
+    """
     emit(
         "assistant_task_graph_changed",
         sender=sender,
@@ -147,6 +153,37 @@ def emit_task_updated(sender, task) -> None:
         suspend_reason=task.suspend_reason,
         waiting_on=task.waiting_on,
     )
+    emit_user_task_progress(sender, task)
+
+
+def emit_user_task_progress(sender, task) -> None:
+    """执行节点变化 → 所属用户任务的 ``progress_changed``。
+
+    ``user_task_id`` 已在 task 行上，不额外查库。未挂用户任务的节点（同步委派
+    之外的历史数据、系统内部任务）直接跳过。事件失败不得影响调用方的状态落库
+    ——通知是尽力而为，业务事实已经提交。
+    """
+    user_task_id = getattr(task, "user_task_id", None)
+    if not user_task_id:
+        return
+    try:
+        from src.business.user_tasks.service import emit_user_task_changed
+
+        emit_user_task_changed(
+            user_task_id,
+            task.session_id,
+            "progress_changed",
+            sender="task_collaboration",
+        )
+    except Exception:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "[user_task] progress 通知失败 task=%s user_task=%s",
+            getattr(task, "task_id", "?"),
+            user_task_id,
+            exc_info=True,
+        )
 
 
 def emit_board_changed(sender, task, *, change_type: str, claim_status: str) -> None:
@@ -1144,6 +1181,9 @@ class TaskCollaborationService(AtomicTaskService):
                 "nodeCount": node_counts.get(root.graph_id, 0),
                 "status": root.status,
                 "createdAt": root.created_at,
+                # 建图那一刻的消息序号：卡片把 msg、执行体、任务图按发生顺序排成
+                # 一个流，图不该固定在最前——主助理可能先调研一番才建图。
+                "userMessageSequence": root.user_message_sequence,
             }
             for root in roots
         ]
