@@ -638,6 +638,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
           task: item.task,
           status: item.status,
           lastOutput: item.lastOutput ?? undefined,
+          taskId: item.taskId ?? null,
           anchorSeq: priorAnchors.get(item.subagentId),
         };
         nextTurns[targetTurnId] = {

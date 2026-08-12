@@ -475,37 +475,17 @@ describe("AssistantScreen taskGraph 锚定", () => {
     }));
   }
 
-  test("userMessageSequence 精确匹配 turn → DAG 节点只在该 turn 渲染", async () => {
+  // ⑦: 对话流里每一轮都是同一张卡片（建了任务的带任务身份，没建的用默认标题）。
+  // DAG 不再以节点卡片平铺在时间线里——改由卡片内的局部图 + 全图弹窗承载
+  // （设计 371-397：局部只画"卡住的 + 等谁 + 挡住谁"，看全貌点开弹窗）。
+  test("DAG 节点不再平铺在对话流里，改由卡片内的局部图承载", async () => {
     stubGraph(makeGraphForAnchor(3));
     const { container } = render(<AssistantScreen />);
     await waitFor(() => {
-      expect(container.querySelector(".assistant-task-node")).not.toBeNull();
+      expect(container.querySelector(".assistant-thread")).not.toBeNull();
     });
-    const activity1 = container.querySelector('.assistant-activity[data-turn-id="seq_1"]');
-    const activity3 = container.querySelector('.assistant-activity[data-turn-id="seq_3"]');
-    expect(activity3?.querySelector(".assistant-task-node")).not.toBeNull();
-    expect(activity1?.querySelector(".assistant-task-node")).toBeNull();
-  });
-
-  test("userMessageSequence 为 null → 回退到最近 turn，DAG 节点不消失", async () => {
-    stubGraph(makeGraphForAnchor(null));
-    const { container } = render(<AssistantScreen />);
-    await waitFor(() => {
-      expect(container.querySelector(".assistant-task-node")).not.toBeNull();
-    });
-    const activity1 = container.querySelector('.assistant-activity[data-turn-id="seq_1"]');
-    const activity3 = container.querySelector('.assistant-activity[data-turn-id="seq_3"]');
-    expect(activity3?.querySelector(".assistant-task-node")).not.toBeNull();
-    expect(activity1?.querySelector(".assistant-task-node")).toBeNull();
-  });
-
-  test("origin turn 不在当前窗口 → 回退到最近 turn，DAG 节点不消失", async () => {
-    stubGraph(makeGraphForAnchor(99));
-    const { container } = render(<AssistantScreen />);
-    await waitFor(() => {
-      expect(container.querySelector(".assistant-task-node")).not.toBeNull();
-    });
-    const activity3 = container.querySelector('.assistant-activity[data-turn-id="seq_3"]');
-    expect(activity3?.querySelector(".assistant-task-node")).not.toBeNull();
+    expect(container.querySelector(".assistant-task-node")).toBeNull();
+    // 每一轮仍有过程卡片可看
+    expect(container.querySelectorAll(".assistant-activity").length).toBeGreaterThan(0);
   });
 });

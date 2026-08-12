@@ -1,5 +1,5 @@
 import { Loader2, Play, ChevronRight } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   continueUserTask,
@@ -13,6 +13,19 @@ import { getAssistantTaskGraph, getAssistantTaskTodos } from "../../api/assistan
 import type { AssistantTaskSnapshot, AssistantTodoItem } from "../../api/assistantTasks";
 import TaskGraphPeek from "./TaskGraphPeek";
 import ExecutorCard from "./ExecutorCard";
+import { ActivityStepRow } from "./ActivityStepRow";
+import type { ActivityStep, Subagent } from "../../state/assistantTypes";
+import { useAssistantTaskStore } from "../../state/assistantTaskStore";
+
+/** 执行节点状态 → 执行体卡片状态。done/skipped 是已办完，不能显示成"正在干"。 */
+function executorStatusOf(
+  taskStatus: string,
+): "running" | "done" | "suspended" | "failed" {
+  if (taskStatus === "suspended") return "suspended";
+  if (taskStatus === "done" || taskStatus === "skipped" || taskStatus === "delivered") return "done";
+  if (taskStatus === "failed" || taskStatus === "abandoned" || taskStatus === "cancelled") return "failed";
+  return "running";
+}
 
 /** 分布条各段的配置：key → 颜色类 + 标签。顺序决定渲染顺序。
  *
@@ -93,13 +106,27 @@ function UserTaskCard({
   taskId,
   title,
   status = "active",
+  steps = [],
+  subagents = [],
+  taskIdByExecutorSession: taskIdMapFromScreen = {},
+  running = false,
   onOpenFullGraph,
   onOpenExecutor,
 }: {
   sessionId: string;
-  taskId: string;
+  /** 没建任务的轮次为空——那时卡片只展示这一轮的过程，不拉任务相关数据。 */
+  taskId?: string;
   title: string;
   status?: string;
+  /** 主助理为这件事做的动作。**只含它自己的**——`subagentId` 非空的那些属于
+   *  子代理，要收在子代理卡片后面，点开才看，不能铺在第一层。 */
+  steps?: ActivityStep[];
+  /** 派出去的执行体。用实时的 turn.subagents（委派一发生就有、自带 anchorSeq），
+   *  不从图快照反查——那条链要等建图 + 绑定会话 + 卡片展开，委派当下是空的。 */
+  subagents?: Subagent[];
+  /** 执行会话 id → task id。todo 按 task_id 存，卡片手上只有会话 id。 */
+  taskIdByExecutorSession?: Record<string, string>;
+  running?: boolean;
   onOpenFullGraph: (graphId: string, title: string) => void;
   onOpenExecutor: (executorSessionId: string, label: string) => void;
 }): JSX.Element {
@@ -111,8 +138,15 @@ function UserTaskCard({
   const [todosByTaskId, setTodosByTaskId] = useState<Record<string, AssistantTodoItem[]>>({});
   const [continueResult, setContinueResult] = useState<UserTaskContinueResponse | null>(null);
   const [continuing, setContinuing] = useState(false);
+  // 后端 user_task.changed(progress_changed) 到达时递增，驱动卡片重新拉数据
+  const userTaskVersion = useAssistantTaskStore((state) => state.userTaskVersion);
+  // 执行体的 todolist 用 store 里那份：它由 assistant.todo.changed 事件驱动，
+  // 子代理跑到一半创建清单、勾掉一条，卡片正面都会跟着变。自己拉一份就没有这个。
+  const storeTodos = useAssistantTaskStore((state) => state.todosByTaskId);
+  const loadTodos = useAssistantTaskStore((state) => state.loadTodos);
 
   const loadDistribution = useCallback(() => {
+    if (!taskId) return;
     setLoadingDist(true);
     getUserTaskDistribution(sessionId, taskId)
       .then((res) => setDistribution(res.distribution))
@@ -120,14 +154,16 @@ function UserTaskCard({
       .finally(() => setLoadingDist(false));
   }, [sessionId, taskId]);
 
-  // 首次加载 distribution（summary 需要它显示继续按钮/缺陷标签）；
-  // graphs 展开时才加载（懒加载，只在用户要看局部图时请求）
+  // 加载 distribution（summary 需要它显示继续按钮/缺陷标签）。
+  // 依赖 userTaskVersion：后端执行节点变化会发 user_task.changed(progress_changed)，
+  // store 递增该版本号——否则卡片只在挂载时拉一次，之后执行体跑完、todo 打勾
+  // 都看不到，一直停在委派那一刻的快照上。
   useEffect(() => {
     loadDistribution();
-  }, [loadDistribution]);
+  }, [loadDistribution, userTaskVersion]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !taskId) return;
     getUserTaskGraphs(sessionId, taskId)
       .then((res) => {
         const gs = res.graphs ?? [];
@@ -150,8 +186,10 @@ function UserTaskCard({
           for (const snap of snapshots) {
             if (!snap) continue;
             for (const t of snap.tasks) {
-              // 单节点图的根节点就是执行节点；跳过 done/skipped
-              if (t.parentTaskId === null && t.executorSessionId && t.status !== "done" && t.status !== "skipped") {
+              // 单节点图的根节点就是执行节点。已完成的也要列出来：用户要能回头
+              // 看历史任务里子代理干了什么（它的 todolist、工具调用、msg）——
+              // 任务办完之后卡片变空，等于把过程记录藏了。
+              if (t.parentTaskId === null && t.executorSessionId) {
                 tasks.push(t);
                 taskIdsToLoad.push(t.taskId);
               }
@@ -179,7 +217,7 @@ function UserTaskCard({
         setGraphs([]);
         setExecutorTasks([]);
       });
-  }, [open, sessionId, taskId, loadDistribution]);
+  }, [open, sessionId, taskId, loadDistribution, userTaskVersion]);
 
   const total = distribution
     ? Object.values(distribution).reduce((a, b) => a + b, 0)
@@ -187,7 +225,104 @@ function UserTaskCard({
   const done =
     (distribution?.["done"] ?? 0) + (distribution?.["skipped"] ?? 0);
 
-  const showContinue = hasPushable(distribution);
+  // 三类东西按发生顺序合成一个流：主助理的 msg（step.seq）、派出去的执行体
+  // （anchorSeq = 委派那一刻）、建的任务图（graph 的 userMessageSequence）。
+  // 同一 seq 时用 tie 决定先后：msg → 执行体 → 任务图。
+  // 多节点图才画局部图；单节点图的执行体已作为卡片直接列出
+  const graphsWithNodes = graphs.filter((g) => g.nodeCount > 1);
+
+  // 子代理刚出现时它可能还没建 todolist；等它建了会发 assistant.todo.changed，
+  // store 走 resync 补上。这里只负责首次把已有的拉进来。
+  useEffect(() => {
+    for (const sub of subagents) {
+      const tid = sub.taskId ?? taskIdMapFromScreen[sub.subagentId];
+      if (tid && !(tid in storeTodos)) {
+        void loadTodos(sessionId, tid);
+      }
+    }
+  }, [subagents, storeTodos, loadTodos, sessionId, taskIdMapFromScreen]);
+
+  // todo 按 task_id 存，而执行体卡片手上只有会话 id——用图快照建立映射
+  const taskIdByExecutorSession = useMemo(() => {
+    const map: Record<string, string> = { ...taskIdMapFromScreen };
+    for (const t of executorTasks) {
+      if (t.executorSessionId) map[t.executorSessionId] = t.taskId;
+    }
+    return map;
+  }, [executorTasks, taskIdMapFromScreen]);
+
+  const timeline = useMemo(() => {
+    const entries: { seq: number; tie: number; node: JSX.Element }[] = [];
+    for (const step of steps) {
+      entries.push({
+        seq: step.seq,
+        tie: 0,
+        node: (
+          <div key={`step_${step.seq}`} className="assistant-step" data-kind={step.kind}>
+            <ActivityStepRow
+              kind={step.kind}
+              seq={step.seq}
+              toolName={step.toolName}
+              text={step.text}
+              redacted={step.redacted}
+            />
+          </div>
+        ),
+      });
+    }
+    for (const sub of subagents) {
+      // 委派那一刻的 seq；缺锚点时落到末尾，不硬塞开头造成假顺序
+      const taskId = sub.taskId ?? taskIdByExecutorSession[sub.subagentId];
+      entries.push({
+        seq: sub.anchorSeq ?? Number.MAX_SAFE_INTEGER,
+        tie: 1,
+        node: (
+          <ExecutorCard
+            key={`exec_${sub.subagentId}`}
+            summary={{
+              subagentId: sub.subagentId,
+              label: sub.label,
+              task: sub.task,
+              status: sub.status,
+              lastOutput: sub.lastOutput ?? null,
+              turnStartSequence: null,
+            }}
+            todos={taskId ? (storeTodos[taskId] ?? todosByTaskId[taskId]) : undefined}
+            onClick={() => onOpenExecutor(sub.subagentId, sub.label)}
+          />
+        ),
+      });
+    }
+    for (const g of graphsWithNodes) {
+      entries.push({
+        seq: g.userMessageSequence ?? Number.MAX_SAFE_INTEGER,
+        tie: 2,
+        node: (
+          <TaskGraphPeek
+            key={`graph_${g.graphId}`}
+            sessionId={sessionId}
+            graphId={g.graphId}
+            title={g.title}
+            onOpenFullGraph={() => onOpenFullGraph(g.graphId, title)}
+          />
+        ),
+      });
+    }
+    return entries.sort((a, b) => a.seq - b.seq || a.tie - b.tie);
+  }, [
+    steps,
+    subagents,
+    graphsWithNodes,
+    todosByTaskId,
+    storeTodos,
+    taskIdByExecutorSession,
+    sessionId,
+    title,
+    onOpenExecutor,
+    onOpenFullGraph,
+  ]);
+
+  const showContinue = Boolean(taskId) && hasPushable(distribution);
   const defectCount = distribution?.["suspended:blocked_by_defect"] ?? 0;
   const hasDefect = defectCount > 0;
   const shouldAutoOpen = needsAttention(distribution) || continueResult != null;
@@ -197,6 +332,7 @@ function UserTaskCard({
   }, [shouldAutoOpen]);
 
   const handleContinue = () => {
+    if (!taskId) return; // 没建任务就没有"继续"这回事，按钮本身也不会出现
     setContinuing(true);
     setContinueResult(null);
     continueUserTask(sessionId, taskId)
@@ -222,7 +358,6 @@ function UserTaskCard({
   );
 
   // 多节点图（nodeCount > 1）才显示局部图入口
-  const graphsWithNodes = graphs.filter((g) => g.nodeCount > 1);
 
   return (
     <details
@@ -278,9 +413,12 @@ function UserTaskCard({
           {/* 标题行 + 状态标签 */}
           <div className="me-task-head">
             <span className="me-task-title">{title}</span>
-            <span className="me-pill" data-status={status}>
-              {STATUS_LABELS[status] ?? status}
-            </span>
+            {/* 没建任务的轮次没有"在办/办完"这种状态可言，标签留空 */}
+            {taskId ? (
+              <span className="me-pill" data-status={status}>
+                {STATUS_LABELS[status] ?? status}
+              </span>
+            ) : null}
           </div>
 
           {/* 分布条 */}
@@ -310,44 +448,13 @@ function UserTaskCard({
             <p className="me-empty">暂无执行进度</p>
           )}
 
-          {/* 局部图（每张多节点图一个） */}
-          {graphsWithNodes.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-              {graphsWithNodes.map((g) => (
-                <TaskGraphPeek
-                  key={g.graphId}
-                  sessionId={sessionId}
-                  graphId={g.graphId}
-                  title={g.title}
-                  onOpenFullGraph={() => onOpenFullGraph(g.graphId, title)}
-                />
-              ))}
-            </div>
-          ) : null}
-
-          {/* 执行体列表（点开看它的工具调用和子执行体，⑦ 核心交互） */}
-          {executorTasks.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 7, marginTop: 10 }}>
-              {executorTasks.map((task) => (
-                <ExecutorCard
-                  key={task.taskId}
-                  summary={{
-                    subagentId: task.executorSessionId ?? "",
-                    label: task.assignee?.label ?? task.assignee?.id ?? "执行体",
-                    task: task.title,
-                    status: task.status === "suspended" ? "suspended" : "running",
-                    lastOutput: null,
-                    turnStartSequence: null,
-                  }}
-                  todos={todosByTaskId[task.taskId]}
-                  onClick={() =>
-                    onOpenExecutor(
-                      task.executorSessionId ?? "",
-                      task.assignee?.label ?? task.assignee?.id ?? "执行体",
-                    )
-                  }
-                />
-              ))}
+          {/* 主助理为这件事做的过程：msg、派出去的执行体卡片、建的任务图，
+              **按发生顺序排成一个流**——它可能先调研一番、再建图、再委派，
+              这些就该按这个次序出现，而不是分成三堆各占一块。
+              抽屉里是同一个形状（那一层的 msg + 它派出去的下一层）。 */}
+          {timeline.length > 0 ? (
+            <div className="me-task-flow">
+              {timeline.map((entry) => entry.node)}
             </div>
           ) : null}
 

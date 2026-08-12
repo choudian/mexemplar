@@ -42,6 +42,8 @@ export interface UserTaskGraphSummary {
   nodeCount: number;
   status: string;
   createdAt?: string | null;
+  /** 建图那一刻的消息序号，用于把局部图按发生顺序插进卡片的流里 */
+  userMessageSequence?: number | null;
 }
 
 export interface UserTaskGraphsResponse {

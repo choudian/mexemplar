@@ -19,3 +19,7 @@ export function subagentStatusTone(status: string): NodeTone {
       return "todo";
   }
 }
+
+/** 执行体详情打开期间的刷新间隔。抽屉与任务图弹窗共用同一节奏。
+ *  执行体一步通常几秒到几十秒，3s 够跟上又不至于打搅后端。 */
+export const EXECUTOR_REFRESH_MS = 3000;

@@ -30,6 +30,8 @@ export type Subagent = {
   task: string;
   status: SubagentStatus;
   lastOutput?: string;
+  /** 它在干哪个 task。todo 按 task_id 存，卡片正面要展示 todolist 就得靠它。 */
+  taskId?: string | null;
   // 排序锚点：子任务首次出现时主时间线已到的步骤 seq（≈委派那一刻）。
   // 让子卡片紧跟其 delegate 步骤、排在最终回复之前；权威恢复无法定位时为 undefined（落到末尾）。
   anchorSeq?: number;

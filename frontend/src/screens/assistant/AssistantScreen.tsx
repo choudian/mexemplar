@@ -156,6 +156,30 @@ export function AssistantScreen(): JSX.Element {
     () => currentTaskGraph?.tasks.map((task) => task.taskId) ?? [],
     [currentTaskGraph],
   );
+  // 本会话各轮的活动步骤汇总，交给任务卡片展示（对话流里不再单独开折叠区）。
+  // 按 seq 排序保证顺序与原时间线一致。
+  // 执行会话 id → task id。执行体卡片正面要展示它的 todolist，而 todo 按
+  // task_id 存、卡片手上只有会话 id。用 currentTaskGraph 建映射：store 里的
+  // todosByTaskId 本来就是按这张图的 taskIds 拉的，两边同源，天然对齐。
+  const taskIdByExecutorSession = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const t of currentTaskGraph?.tasks ?? []) {
+      if (t.executorSessionId) map[t.executorSessionId] = t.taskId;
+    }
+    return map;
+  }, [currentTaskGraph]);
+
+  // 只取主助理自己的动作：subagentId 非空的属于某个子代理，要收在它的卡片
+  // 后面（点开进抽屉才看），铺到第一层就成了"派出去之后直接显示子代理的 msg"。
+  // 与 ActivityTimeline 的 `liveSteps.filter(step => step.subagentId == null)` 同口径。
+  const allTurnSteps = useMemo(
+    () =>
+      Object.values(activeTurns)
+        .flatMap((turn) => turn.steps)
+        .filter((step) => step.subagentId == null)
+        .sort((a, b) => a.seq - b.seq),
+    [activeTurns],
+  );
   const currentTaskIdsKey = currentTaskIds.join("|");
   const openSubagent = activeSubagents.find((item) => item.subagentId === openSubagentId);
 
@@ -222,6 +246,11 @@ export function AssistantScreen(): JSX.Element {
   const threadBlocks = useMemo(
     () => buildThreadBlocks(visibleMessages, activeTurns, activeTurnId, isRunning),
     [activeTurnId, activeTurns, isRunning, visibleMessages],
+  );
+  // 任务卡片挂在第一个过程块的位置——即原来「正在处理」出现的地方
+  const firstTransparencyTurnId = useMemo(
+    () => threadBlocks.find((b) => b.kind === "transparency")?.turnId,
+    [threadBlocks],
   );
   // 任务图锚点：优先锚到 userMessageSequence 对应的 turn；当该 sequence 为 null，
   // 或其 origin turn 已分页出当前渲染窗口时，回退到最近一个可见 transparency turn，
@@ -347,40 +376,36 @@ export function AssistantScreen(): JSX.Element {
           <div className="assistant-thread">
             {threadBlocks.map((block) => {
               if (block.kind === "transparency") {
-                return activeSessionId ? (
-                  <ActivityTimeline
-                    key={`turn_${activeSessionId}_${block.turnId}`}
-                    sessionId={activeSessionId}
-                    turnId={block.turnId}
-                    liveSteps={block.turn.steps}
-                    running={block.running}
-                    afterSequence={block.turn.fromSequence}
-                    beforeSequence={block.turn.beforeSequence}
-                    subagents={block.turn.subagents}
-                    onOpenSubagent={(id) => setOpenSubagentId(id)}
-                    onContinueSubagent={(id, note) => void continueSubagent(activeSessionId, id, note)}
-                    taskGraph={
-                      currentTaskGraph && block.turnId === graphAnchorTurnId
-                        ? currentTaskGraph
-                        : undefined
-                    }
-                    todosByTaskId={taskTodosByTaskId}
-                    onLoadTodos={(taskId: string) => {
-                      if (activeSessionId) void useAssistantTaskStore.getState().loadTodos(activeSessionId, taskId);
-                    }}
-                    onDecide={(adjudicationId, decision, instruction) => {
-                      if (activeSessionId) {
-                        void decideTaskAdjudication(activeSessionId, adjudicationId, decision, instruction);
+                // 任务卡片长在「正在处理」原来的位置——它替代那一轮的过程框，
+                // 不是并排多一个（设计 [87]：对话流里一个折叠区，里边是任务卡片）。
+                // 只占第一个过程块；**其余轮次照常显示各自的过程**——不是每轮都
+                // 建任务，没建任务的那轮要看的就是主助理自己的 msg 和它派出去的人。
+                // 每一轮都用同一张卡片：建了任务的那轮带任务身份（分布条、
+                // 继续按钮、局部图），没建任务的轮次就是一张默认标题的卡片，
+                // 里面照样是主助理的 msg + 它派出去的执行体（可点开下钻）。
+                // 用户视角只有一种东西，不该因为"这轮有没有建任务"而换形态。
+                if (!activeSessionId) return null;
+                const cardTask =
+                  block.turnId === firstTransparencyTurnId ? userTasks[0] : undefined;
+                return (
+                    <UserTaskCard
+                      key={`turncard_${block.turnId}`}
+                      sessionId={activeSessionId}
+                      taskId={cardTask?.taskId}
+                      title={cardTask?.title ?? (block.running ? "正在处理" : "这一轮做了什么")}
+                      status={cardTask?.status ?? "active"}
+                      steps={block.turn.steps.filter((step) => step.subagentId == null)}
+                      subagents={block.turn.subagents}
+                      taskIdByExecutorSession={taskIdByExecutorSession}
+                      running={block.running}
+                      onOpenFullGraph={(graphId, graphTitle) =>
+                        setOpenGraphDialog({ graphId, title: graphTitle })
                       }
-                    }}
-                    onStopGraph={(graphId) => {
-                      if (activeSessionId) void stopTaskGraph(activeSessionId, graphId, progress.runId);
-                    }}
-                    onContinueGraph={(graphId) => {
-                      if (activeSessionId) void continueTaskGraph(activeSessionId, graphId);
-                    }}
-                  />
-                ) : null;
+                      onOpenExecutor={(executorSessionId, label) =>
+                        setOpenExecutor({ sessionId: executorSessionId, label })
+                      }
+                    />
+                );
               }
               const { message } = block;
               const failureSequence = "sequence" in message ? message.sequence : undefined;
@@ -504,25 +529,6 @@ export function AssistantScreen(): JSX.Element {
             onSubmit={() => void submitClarification(activeSessionId)}
             onCancel={() => void cancelClarification(activeSessionId)}
           />
-        ) : null}
-        {activeSessionId && userTasks.length > 0 ? (
-          <div className="me-task-list">
-            {userTasks.map((task) => (
-              <UserTaskCard
-                key={task.taskId}
-                sessionId={activeSessionId}
-                taskId={task.taskId}
-                title={task.title}
-                status={task.status}
-                onOpenFullGraph={(graphId, title) =>
-                  setOpenGraphDialog({ graphId, title })
-                }
-                onOpenExecutor={(executorSessionId, label) =>
-                  setOpenExecutor({ sessionId: executorSessionId, label })
-                }
-              />
-            ))}
-          </div>
         ) : null}
         <MessageComposer
           key={activeSessionId ?? "new"}

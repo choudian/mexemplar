@@ -7,6 +7,7 @@ import { getAssistantTaskTodos } from "../../api/assistantTasks";
 import type { AssistantTodoItem } from "../../api/assistantTasks";
 import { ActivityStepRow, LoadableContent } from "./ActivityStepRow";
 import ExecutorCard from "./ExecutorCard";
+import { EXECUTOR_REFRESH_MS } from "./executorStatus";
 
 interface DrawerLayer {
   executorSessionId: string;
@@ -40,6 +41,7 @@ function ExecutorDrawer({
   const currentLayer = stack[stack.length - 1];
   const currentSessionId = currentLayer.executorSessionId;
 
+  // 首次打开/切层：清空并显示加载态
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -51,6 +53,20 @@ function ExecutorDrawer({
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [sessionId, currentSessionId, reloadKey]);
+
+  // 打开期间自动跟进最新过程。只在执行体还在跑时轮询——终态了内容不再变，
+  // 继续轮询纯属浪费。抽屉一关组件卸载，定时器随 cleanup 停掉。
+  // 静默替换，不清空 detail：否则每次刷新都会闪一下加载态。
+  useEffect(() => {
+    if (detail?.summary.status !== "running") return;
+    let active = true;
+    const timer = setInterval(() => {
+      getExecutorDetail(sessionId, currentSessionId)
+        .then((d) => { if (active) setDetail(d); })
+        .catch(() => { /* 刷新失败保留上一次内容，不打断阅读 */ });
+    }, EXECUTOR_REFRESH_MS);
+    return () => { active = false; clearInterval(timer); };
+  }, [sessionId, currentSessionId, detail?.summary.status]);
 
   // 加载子执行体的 todo（⑦ 递归规则：任意深度的执行体卡片正面展示 todolist）
   useEffect(() => {

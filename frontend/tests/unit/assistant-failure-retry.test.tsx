@@ -238,8 +238,9 @@ describe("Assistant failed-message recovery", () => {
     render(<AssistantScreen />);
 
     await screen.findByText("这条消息没有完成");
-    // 失败回合不渲染思考过程时间线
-    expect(screen.queryByText("查看这一回合的思考过程")).not.toBeInTheDocument();
+    // 失败回合不渲染过程卡片（⑦ 后每轮的过程由 UserTaskCard 承载，
+    // 没建任务的轮次用默认标题「这一轮做了什么」）
+    expect(screen.queryByText("这一轮做了什么")).not.toBeInTheDocument();
 
     // 清除失败后，同一回合的思考过程恢复展示——门控只取决于 failure。
     act(() => {
@@ -253,6 +254,6 @@ describe("Assistant failed-message recovery", () => {
         createdAt: "2026-06-15T00:00:05Z",
       });
     });
-    expect(await screen.findByText("查看这一回合的思考过程")).toBeInTheDocument();
+    expect((await screen.findAllByText("这一轮做了什么")).length).toBeGreaterThan(0);
   });
 });

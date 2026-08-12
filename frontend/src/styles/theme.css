@@ -8008,14 +8008,18 @@ select:focus-visible,
   margin-left: 0;
 }
 
+/* 展开后自然铺开，只由外层对话流滚动。
+   原来这里是 max-height:240px + overflow-y:auto——那是给旧「思考过程」框设的，
+   当时里面只有几行步骤。现在卡片承载一整轮：主助理的 msg、执行体卡片及其
+   todolist、局部图，装进 240px 的小窗就会出现第二根滚动条：用户滚外层，
+   卡片里的内容纹丝不动，像悬浮住了。卡片默认折叠，展开是用户主动要看全的，
+   长就让它长。 */
 .assistant-activity-body {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 4px 12px 12px;
   border-top: 1px solid var(--border-2);
-  max-height: 240px;
-  overflow-y: auto;
 }
 
 .assistant-step {
@@ -8056,6 +8060,42 @@ select:focus-visible,
 }
 
 /* 步骤原文（JSON/长结果）整齐展示：等宽 + 缩进 + 限高内滚，不撑爆时间线 */
+/* 工具参数/结果默认折叠：一行摘要，点开才铺内容 */
+.assistant-step-fold {
+  margin-top: 3px;
+}
+
+.assistant-step-fold > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  user-select: none;
+}
+
+.assistant-step-fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+.assistant-step-fold > summary::before {
+  content: "▶";
+  font-size: 8px;
+  transition: transform 0.15s ease;
+}
+
+.assistant-step-fold[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.assistant-step-fold > summary:hover {
+  color: var(--text-2);
+}
+
+/* 这里保留内滚（与卡片展开区不同）：JSON 原文动辄几百行，是用户点开
+   「参数 · N 行」才看的叶子内容，不是主线。铺开会把整张卡片撑爆。 */
 .assistant-step-pre {
   margin: 4px 0 0;
   max-height: 200px;
@@ -8716,6 +8756,9 @@ select:focus-visible,
 
 .task-node-todo-item .todo-text {
   color: var(--text-2);
+  /* 长条目换行，不撑出横向滚动条 */
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .task-node-todo-todo .todo-status {
@@ -8945,6 +8988,25 @@ select:focus-visible,
   color: var(--text-2);
   font-size: 13px;
 }
+
+/* 这件事的过程流：主助理的 msg、派出去的执行体卡片、建的任务图，
+   按发生顺序排在一起。原对话流里那个独立的「正在处理 N 项」折叠区收进这里。 */
+.me-task-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+  border-top: 1px solid var(--border-1);
+  padding-top: 10px;
+  /* 流里混着 msg、执行体卡片、局部图，任一超宽都不该让整张卡片横向滚动 */
+  min-width: 0;
+}
+
+.me-task-flow > * {
+  min-width: 0;
+  max-width: 100%;
+}
+
 
 /* 继续回报 */
 .me-report {
@@ -10618,19 +10680,30 @@ select:focus-visible,
   display: flex;
   align-items: center;
   gap: 7px;
+  /* flex 子项默认 min-width:auto，长文本会把容器撑破而不是收缩 */
+  min-width: 0;
 }
 .me-agent-head .who {
   font-size: 12.5px;
   font-weight: 650;
   color: var(--text);
+  /* 不加就会被后面的长任务描述挤成一列竖排字 */
+  flex: none;
+  white-space: nowrap;
 }
+/* 这里装的是任务描述（可能整段任务书），不是原型里「专员」那种短标签，
+   所以要能收缩并省略，而不是把整张卡片撑出横向滚动条。 */
 .me-agent-head .kind {
   font-size: 10.5px;
   padding: 1px 6px;
   border-radius: 999px;
   background: var(--surface-3);
   color: var(--text-muted);
-  flex: none;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .me-agent-head .st {
   margin-left: auto;

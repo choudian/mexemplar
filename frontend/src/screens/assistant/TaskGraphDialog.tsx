@@ -7,6 +7,7 @@ import { getExecutorDetail } from "../../api/assistant";
 import type { ExecutorDetail } from "../../api/assistant";
 import DagCanvas from "./DagCanvas";
 import ExecutorCard from "./ExecutorCard";
+import { EXECUTOR_REFRESH_MS } from "./executorStatus";
 import { layoutDag } from "../../components/taskGraph/layoutDag";
 import { ActivityStepRow, LoadableContent } from "./ActivityStepRow";
 
@@ -102,6 +103,28 @@ function TaskGraphDialog({
       active = false;
     };
   }, [sessionId, currentSide]);
+
+  // 侧栏停在某个执行体上时自动跟进它的最新过程，与抽屉同一套规则：
+  // 只在还在跑时轮询、静默替换不闪、切走或关窗随 cleanup 停。
+  useEffect(() => {
+    if (!currentSide || currentSide.kind !== "executor") return;
+    if (executorDetail?.summary.status !== "running") return;
+    const executorSessionId = currentSide.executorSessionId;
+    let active = true;
+    const timer = setInterval(() => {
+      getExecutorDetail(sessionId, executorSessionId)
+        .then((d) => {
+          if (active) setExecutorDetail(d);
+        })
+        .catch(() => {
+          /* 刷新失败保留上一次内容，不打断阅读 */
+        });
+    }, EXECUTOR_REFRESH_MS);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [sessionId, currentSide, executorDetail?.summary.status]);
 
   const handleSelectNode = useCallback((taskId: string) => {
     setSelectedTaskId(taskId);

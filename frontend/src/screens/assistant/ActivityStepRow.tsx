@@ -31,6 +31,14 @@ function prettyStepText(text: string): string {
   return text.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\t/g, "\t");
 }
 
+/** 折叠行上那句话：说清里面是什么、有多少，不用点开就能判断要不要点。 */
+function foldLabel(kind: ActivityStepKind, formatted: string): string {
+  const lines = formatted.split("\n").length;
+  const noun =
+    kind === "tool_result" ? "结果" : kind === "tool_call" ? "参数" : "内容";
+  return `${noun} · ${lines} 行`;
+}
+
 /** 单条活动步骤行——共享于 ActivityTimeline（div）与 SubagentDetailDrawer（li）。
  * `seq` 是步骤排序键，由父列表用于 React key，行本身不渲染它。 */
 export function ActivityStepRow({ kind, toolName, text, redacted = false }: StepRowProps): JSX.Element {
@@ -62,7 +70,12 @@ export function ActivityStepRow({ kind, toolName, text, redacted = false }: Step
             内容已隐藏 · 双击查看
           </span>
         ) : multiline ? (
-          <pre className="assistant-step-pre me-scroll">{formatted}</pre>
+          // 工具的参数/结果往往是整段 JSON，摊开会把一次委派撑成几十行，
+          // 把周围的步骤全挤走。默认折叠成一行，点开才看内容。
+          <details className="assistant-step-fold">
+            <summary>{foldLabel(kind, formatted)}</summary>
+            <pre className="assistant-step-pre me-scroll">{formatted}</pre>
+          </details>
         ) : (
           <span className="assistant-step-inline">{formatted}</span>
         )}

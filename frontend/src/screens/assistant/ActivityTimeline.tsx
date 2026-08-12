@@ -161,8 +161,8 @@ function ActivityTimeline({
         </div>
       ),
     })),
-    // ⑦: 对话流中不再渲染独立的 SubagentCard——执行过程已收进用户任务卡片
-    // 的折叠区（设计 402-403 行）。同一执行体不在两处呈现。
+    // ⑦: 对话流里的过程统一由 UserTaskCard 承载（没建任务的轮次用默认标题），
+    // 这里不再单独渲染执行体卡片。
     ...taskNodes.map((task) => ({
       sortSeq: graphAnchorSeq,
       tie: 2,
