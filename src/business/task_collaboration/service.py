@@ -1279,8 +1279,8 @@ class TaskCollaborationService(AtomicTaskService):
             suspend_reason=SuspendReason.USER_STOP,
             change_type="graph_stopped",
         )
-        # 控制状态：running → stopped（显式操作驱动，不推导）
-        self._tasks.set_graph_control_status(graph_id, "stopped")
+        # 控制状态：running → stopped（显式操作驱动，不推导；走透传包 _atomic 提交）
+        self.set_graph_control_status(graph_id, "stopped")
         from src.business.agents import run_context
         from src.business.task_collaboration.dispatcher import graph_cancel_key
         from src.execution.cancellation import CancelReason
@@ -1391,8 +1391,14 @@ class TaskCollaborationService(AtomicTaskService):
         }
 
     def set_graph_control_status(self, graph_id: str, status: str) -> bool:
-        """透传：翻图根控制状态（供 dispatcher 在 _worker_scope 共享事务内调用）。"""
-        return self._tasks.set_graph_control_status(graph_id, status)
+        """透传：翻图根控制状态（供 dispatcher 在 _worker_scope 共享事务内调用）。
+
+        必须包 ``_atomic``：service 出口的 close 只关 session 不提交，提交边界是
+        ``_atomic``（真机验证踩中——不包时 UPDATE 只 flush 被静默丢弃，控制状态
+        永远停在旧值，busy 判据/mutate 校验全跟着错）。
+        """
+        with self._atomic():
+            return self._tasks.set_graph_control_status(graph_id, status)
 
     def get_graph_control_status(self, graph_id: str) -> str | None:
         """透传：读图根控制状态（mutate/start 校验用）。"""
@@ -1413,8 +1419,8 @@ class TaskCollaborationService(AtomicTaskService):
             expected_graph_version=expected_graph_version,
             change_type="graph_cancelled",
         )
-        # 控制状态 → cancelled（废弃是静态终态标记）
-        self._tasks.set_graph_control_status(graph_id, "cancelled")
+        # 控制状态 → cancelled（废弃是静态终态标记；走透传包 _atomic 提交）
+        self.set_graph_control_status(graph_id, "cancelled")
         from src.business.agents import run_context
         from src.business.task_collaboration.dispatcher import graph_cancel_key
         from src.execution.cancellation import CancelReason

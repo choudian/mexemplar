@@ -97,6 +97,11 @@ class GraphScheduler:
             if decision == AdjudicationDecision.ACCEPTED:
                 # 需确认放行 → dispatch 该节点
                 self._dispatch_node(svc, graph_id, task_id)
+                # ⑥ delivered→裁定 accepted→done 流程：节点已执行完，accepted 需要的是
+                # 推进它的下游——只 dispatch 该节点（它非 pending 会被跳过）会让下游
+                # 就绪节点永久无人派（真机验证踩中：1 done 7 pending 卡死）。
+                # _advance 幂等，对非就绪/终态节点天然跳过。
+                self._advance(svc, graph_id)
             else:
                 # returned（打回重做，重入就绪扫描）与 abandoned（放弃，重扫下游）都触发重扫
                 self._advance(svc, graph_id)
