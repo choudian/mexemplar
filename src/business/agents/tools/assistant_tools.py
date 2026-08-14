@@ -2120,8 +2120,14 @@ def create_build_task_graph_handler(
     session_id: str,
     user_message_sequence_provider: Callable[[], int | None] | None = None,
     service_factory: Callable[[], "TaskCollaborationService"] | None = None,
+    default_task_id: str | None = None,
 ):
-    """工厂函数：创建 build_task_graph handler。"""
+    """工厂函数：创建 build_task_graph handler。
+
+    ``default_task_id``：委派方注入的真实用户任务 id（planner 场景由工具装配层从
+    current_task_id 反查）。**归属是委派事实，不靠模型填参**——default 存在时优先生效，
+    模型传入的 taskId 被忽略（planner 看不到主助理会话，只能编造，真机上已验证会编）。
+    """
 
     def _task_graph_service():
         if service_factory is not None:
@@ -2139,7 +2145,9 @@ def create_build_task_graph_handler(
 
         def _action() -> str:
             # 用户任务层硬保证：taskId 必须存在且仍在进行中。
-            task_id = _validate_user_task_id(taskId)
+            # default_task_id（委派方注入的委派事实）优先——planner 看不到主助理会话，
+            # 传入的 taskId 只可能是编造（真机验证确认），注入值仍走存在性/状态校验。
+            task_id = _validate_user_task_id(default_task_id or taskId)
             # workspaceRoot 是特权字段，只允许受信的 proposal_bridge 直连 service
             # 设置；LLM 工具入口（规划专员使用此 handler）必须剥离，避免
             # 执行体 blast radius 被重定向、proposal 沙箱守卫被绕过（026 C2）。

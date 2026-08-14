@@ -1413,12 +1413,28 @@ class AgentOrchestrator:
                 workspace_root=(Path(effective_workspace_root) if effective_workspace_root else None),
             )
             loop = AgentLoop(config, self._make_llm(), self._config)
+            # 委派事实注入：从该 planner 会话的最新 attempt 反查当前任务节点，
+            # 供 build_task_graph 的 default_task_id 反查 user_task（续跑改图/补建图场景）。
+            resumed_task_id = None
+            try:
+                from src.data.repos import AssistantTaskAttemptRepository
+
+                with AssistantTaskAttemptRepository() as attempts:
+                    attempt = attempts.latest_attempt_for_session(subagent_id)
+                resumed_task_id = attempt.task_id if attempt is not None else None
+            except Exception:
+                logger.debug(
+                    "[Orchestrator] resumed planner attempt lookup failed for %s",
+                    subagent_id,
+                    exc_info=True,
+                )
             tools = self._build_delegated_executor_tools(
                 allowed_tool_ids,
                 agent_type=effective_agent_type,
                 executor_id=subagent_id,
                 specialist_id=planner_specialist.specialist_id,
                 parent_session_id=parent_session_id,
+                current_task_id=resumed_task_id,
                 role_kind="planner",
                 allowed_composition_ids=set(),
                 workspace_root=effective_workspace_root,

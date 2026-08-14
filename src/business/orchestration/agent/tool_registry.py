@@ -115,6 +115,27 @@ class _DelegationFacade(Protocol):
 _PLANNER_DENIED_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset()
 
 
+def resolve_user_task_id_for_current_task(current_task_id: str | None) -> str | None:
+    """从当前执行的任务节点反查所属用户任务 id（委派事实）。
+
+    链：task 节点 → 所在图 → 图根.user_task_id。查不到返回 None（调用方回退到
+    模型传参/报错，不阻断装配）。
+    """
+    if not current_task_id:
+        return None
+    try:
+        from src.data.repos import AssistantTaskRepository
+
+        with AssistantTaskRepository() as tasks:
+            task = tasks.get_task(current_task_id)
+            if task is None:
+                return None
+            root = tasks.get_graph_root(task.graph_id)
+            return getattr(root, "user_task_id", None) if root is not None else None
+    except Exception:
+        return None
+
+
 def _filter_builtin_tools(
     builtin_tools: list[ToolDefinition],
     tool_whitelist: list[str] | None,
@@ -455,6 +476,20 @@ class ToolRegistry:
                         "message": "task_description must not be empty",
                         "delegation_type": "ephemeral_subagent",
                     }
+                # 隔离子代理的归属兜底：planner 会随手编造 taskId（真机验证出现 'auto'）。
+                # 传入值在库里不存在时，用委派事实（当前任务节点反查）顶替，防垃圾归属落库。
+                effective_user_task = resolve_user_task_id_for_current_task(current_task_id)
+                if user_task_id:
+                    try:
+                        from src.data.repos import UserTaskRepository
+
+                        with UserTaskRepository() as user_tasks:
+                            if user_tasks.get(user_task_id) is None:
+                                user_task_id = effective_user_task or ""
+                    except Exception:
+                        pass
+                else:
+                    user_task_id = effective_user_task or ""
                 effective_scope = self._delegation.prepare_specialist_subagent_scope(
                     requested_tool_whitelist=tool_whitelist,
                     specialist_allowed_tool_ids=allowed_tool_ids,
@@ -543,12 +578,16 @@ class ToolRegistry:
         planner_tools: list[ToolDefinition] = []
         if role_kind == "planner":
             graph_owner_session_id = parent_session_id or executor_id or ""
+            # 委派事实注入：planner 看不到主助理会话，taskId 只能编造（真机验证确认）。
+            # 从当前执行的任务节点反查所属 user_task，作为 build 的 default_task_id。
+            planner_user_task_id = resolve_user_task_id_for_current_task(current_task_id)
             planner_tools = [
                 ToolDefinition(
                     name="build_task_graph",
                     schema=BUILD_TASK_GRAPH_SCHEMA,
                     handler=create_build_task_graph_handler(
                         graph_owner_session_id,
+                        default_task_id=planner_user_task_id,
                     ),
                 ),
                 ToolDefinition(
