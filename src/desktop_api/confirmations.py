@@ -87,7 +87,16 @@ def confirmation_event_payload(request_id: str) -> dict[str, object]:
         expires_at = datetime.now(timezone.utc) + timedelta(milliseconds=remaining_ms)
 
     tool_name = pending.tool_name if pending else "unknown"
-    session_id = get_confirmation_session_context() or _GLOBAL_CONFIRMATION_SESSION_ID
+    # 归属会话优先级：pending.session_id（_ask_user_confirm 捕获的 run_context root——
+    # 异步执行体线程里 = 任务 owner 会话 = 主助理会话，用户看得到的地方）>
+    # threading.local 的 confirmation 上下文（主助理线程设置）> 全局兜底。
+    # 只认 thread local 时 dispatcher 线程上的执行体确认会落到 _global_confirmation，
+    # 没有界面订阅该会话——确认卡永远不出现，等满超时被 fail-closed 拒绝（真机验证踩中）。
+    session_id = (
+        (pending.session_id if pending else None)
+        or get_confirmation_session_context()
+        or _GLOBAL_CONFIRMATION_SESSION_ID
+    )
     payload = {
         "requestId": request_id,
         "sessionId": session_id,
