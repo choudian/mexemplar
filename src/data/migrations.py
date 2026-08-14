@@ -4371,6 +4371,36 @@ def migrate_to_v48(engine):
     logger.info("迁移到版本 48 完成：assistant_tasks.graph_control_status 列 + 图根回填")
 
 
+def migrate_to_v49(engine):
+    """迁移到版本 49：assistant_tasks 加 graph_kind 列（图类型）。
+
+    plan=planner 产的 DAG（界面展示局部图）；request=委派容器（节点平铺为执行体，
+    不以任务图身份展示）。回填按图根 title：'任务图根节点'（build_task_graph 固定
+    title，含 proposal DAG）→ plan；其余图根（create_root_graph 的 request 容器）→
+    request。子节点行 NULL。
+    """
+    try:
+        with engine.begin() as conn:
+            _add_column_if_missing(conn, "assistant_tasks", "graph_kind", "TEXT")
+            conn.execute(
+                text(
+                    """
+                    UPDATE assistant_tasks
+                    SET graph_kind = CASE
+                        WHEN title = '任务图根节点' THEN 'plan'
+                        ELSE 'request'
+                    END
+                    WHERE parent_task_id IS NULL
+                    """
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 49"))
+    except Exception as e:
+        logger.error(f"迁移到版本 49 失败: {e}")
+        raise
+    logger.info("迁移到版本 49 完成：assistant_tasks.graph_kind 列 + 图根回填")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -4419,6 +4449,7 @@ _MIGRATIONS = [
     (46, migrate_to_v46),
     (47, migrate_to_v47),
     (48, migrate_to_v48),
+    (49, migrate_to_v49),
 ]
 
 

@@ -32,6 +32,7 @@ class AssistantTaskRepository(BaseRepository):
         requires_confirmation: bool = False,
         status: str = "pending_dispatch",
         graph_control_status: str | None = None,
+        graph_kind: str | None = None,
     ) -> AssistantTask:
         self.ensure_immediate_transaction()
         row = AssistantTask(
@@ -52,6 +53,7 @@ class AssistantTaskRepository(BaseRepository):
             requires_confirmation=requires_confirmation,
             status=status,
             graph_control_status=graph_control_status,
+            graph_kind=graph_kind,
         )
         if row.root_task_id is None and row.parent_task_id is not None:
             row.root_task_id = row.parent_task_id

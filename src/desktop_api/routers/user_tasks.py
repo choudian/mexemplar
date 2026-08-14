@@ -64,6 +64,9 @@ class UserTaskGraphSummary(BaseModel):
     title: str
     nodeCount: int
     status: str
+    # plan=planner 产的 DAG（展示局部图）；request=委派容器（节点平铺为执行体，
+    # 不以任务图身份展示）。旧数据无值时 service 层默认 request。
+    kind: str = "request"
     # 仓库层给的是 datetime 对象，不是字符串——声明成 str 会让整个接口
     # 500（pydantic string_type 校验失败），卡片展开时拉不到图。
     # 项目内其他 DTO 的时间字段同样直接用 datetime。

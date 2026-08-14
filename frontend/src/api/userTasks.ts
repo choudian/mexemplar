@@ -41,6 +41,8 @@ export interface UserTaskGraphSummary {
   title: string;
   nodeCount: number;
   status: string;
+  /** plan=planner 的 DAG（展示局部图）；request=委派容器（节点平铺为执行体） */
+  kind?: string | null;
   createdAt?: string | null;
   /** 建图那一刻的消息序号，用于把局部图按发生顺序插进卡片的流里 */
   userMessageSequence?: number | null;

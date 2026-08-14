@@ -169,13 +169,14 @@ function UserTaskCard({
         const gs = res.graphs ?? [];
         setGraphs(gs);
         // 设计 [95]: 图里节点派出去的只从图里进（局部图/全图弹窗）；
-        // 卡片下只放直接挂载的执行体（单节点图根，nodeCount<=1）。
-        const directGraphs = gs.filter((g) => g.nodeCount <= 1);
+        // 卡片下只放直接挂载的执行体。request 容器图（kind!=plan）的节点都是
+        // 委派执行体——不管几张、几个节点，一律平铺；plan 图走局部图不在这列。
+        const directGraphs = gs.filter((g) => g.kind !== "plan");
         if (directGraphs.length === 0) {
           setExecutorTasks([]);
           return;
         }
-        // 单节点图直接取快照拿 executorSessionId（不拉多节点图，避免 N+1）
+        // 拉快照列出这些图的全部执行节点（根容器无 executorSessionId 自然跳过）
         return Promise.all(
           directGraphs.map((g) =>
             getAssistantTaskGraph(sessionId, g.graphId).catch(() => null),
@@ -186,10 +187,10 @@ function UserTaskCard({
           for (const snap of snapshots) {
             if (!snap) continue;
             for (const t of snap.tasks) {
-              // 单节点图的根节点就是执行节点。已完成的也要列出来：用户要能回头
-              // 看历史任务里子代理干了什么（它的 todolist、工具调用、msg）——
-              // 任务办完之后卡片变空，等于把过程记录藏了。
-              if (t.parentTaskId === null && t.executorSessionId) {
+              // 已完成的也要列出来：用户要能回头看历史任务里子代理干了什么
+              // （它的 todolist、工具调用、msg）——任务办完之后卡片变空，
+              // 等于把过程记录藏了。
+              if (t.executorSessionId) {
                 tasks.push(t);
                 taskIdsToLoad.push(t.taskId);
               }
@@ -228,8 +229,9 @@ function UserTaskCard({
   // 三类东西按发生顺序合成一个流：主助理的 msg（step.seq）、派出去的执行体
   // （anchorSeq = 委派那一刻）、建的任务图（graph 的 userMessageSequence）。
   // 同一 seq 时用 tie 决定先后：msg → 执行体 → 任务图。
-  // 多节点图才画局部图；单节点图的执行体已作为卡片直接列出
-  const graphsWithNodes = graphs.filter((g) => g.nodeCount > 1);
+  // 只有 planner 的 DAG（kind=plan）画局部图；request 容器图的节点是委派执行体，
+  // 一律平铺为执行体卡片（真机验证踩中：request 图 nodeCount>1 被当任务图展示）。
+  const graphsWithNodes = graphs.filter((g) => g.kind === "plan" && g.nodeCount > 1);
 
   // 子代理刚出现时它可能还没建 todolist；等它建了会发 assistant.todo.changed，
   // store 走 resync 补上。这里只负责首次把已有的拉进来。

@@ -324,6 +324,10 @@ class AssistantTask(Base):
     # 状态推导——"图被允许推进吗"（控制面）和"节点跑到哪了"（数据面）是两个事实。
     # 只有图根行有值（parent_task_id IS NULL），子节点 NULL。
     graph_control_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # v49（图类型）：plan=planner 产的 DAG（界面以此展示局部图）；request=委派容器
+    # （简单委派/异步派发按消息聚合，其节点在界面上平铺为执行体，不以任务图身份展示）。
+    # 只有图根行有值，子节点 NULL。
+    graph_kind: Mapped[Optional[str]] = mapped_column(String(10), nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_dispatch")

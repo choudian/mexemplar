@@ -408,6 +408,7 @@ class TaskCollaborationService(AtomicTaskService):
                 owner_session_id=session_id,
                 # request graph 建出来就在派发（简单委派/异步派发的容器），控制状态直接 running
                 graph_control_status="running",
+                graph_kind="request",
             )
             status = task.status
         emit_graph_changed(
@@ -557,6 +558,7 @@ class TaskCollaborationService(AtomicTaskService):
                 user_task_id=user_task_id,
                 owner_session_id=session_id,
                 graph_control_status="draft",
+                graph_kind="plan",
             )
 
             # 2. 逐节点创建任务
@@ -1199,6 +1201,7 @@ class TaskCollaborationService(AtomicTaskService):
                 "title": safe_public_preview(root.title, key="title", max_chars=80),
                 "nodeCount": node_counts.get(root.graph_id, 0),
                 "status": root.status,
+                "kind": getattr(root, "graph_kind", None) or "request",
                 "createdAt": root.created_at,
                 # 建图那一刻的消息序号：卡片把 msg、执行体、任务图按发生顺序排成
                 # 一个流，图不该固定在最前——主助理可能先调研一番才建图。
