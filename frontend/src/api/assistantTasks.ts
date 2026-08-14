@@ -168,20 +168,6 @@ export interface CurrentAssistantTaskGraphResponse {
   graph: AssistantTaskGraphSnapshot | null;
 }
 
-export interface TaskGraphStopResponse {
-  accepted: boolean;
-  graphId: string;
-  affectedTaskCount: number;
-  cancelSignalAccepted?: boolean;
-}
-
-export interface TaskGraphContinueResponse {
-  accepted: boolean;
-  graphId: string;
-  resumedTaskCount: number;
-  startedAttemptCount?: number;
-}
-
 export type TaskAdjudicationDecision = "accepted" | "returned" | "abandoned";
 
 export interface TaskAdjudicationDecisionResponse {
@@ -209,27 +195,6 @@ export async function getAssistantTaskGraph(
 ): Promise<AssistantTaskGraphSnapshot> {
   return requestJson<AssistantTaskGraphSnapshot>(
     `/api/assistant/sessions/${encodeURIComponent(sessionId)}/task-graphs/${encodeURIComponent(graphId)}`,
-  );
-}
-
-export async function stopAssistantTaskGraph(
-  sessionId: string,
-  graphId: string,
-  runId?: string | null,
-): Promise<TaskGraphStopResponse> {
-  return requestJson<TaskGraphStopResponse>(
-    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/task-graphs/${encodeURIComponent(graphId)}/stop`,
-    { method: "POST", body: JSON.stringify({ runId: runId ?? null }) },
-  );
-}
-
-export async function continueAssistantTaskGraph(
-  sessionId: string,
-  graphId: string,
-): Promise<TaskGraphContinueResponse> {
-  return requestJson<TaskGraphContinueResponse>(
-    `/api/assistant/sessions/${encodeURIComponent(sessionId)}/task-graphs/${encodeURIComponent(graphId)}/continue`,
-    { method: "POST" },
   );
 }
 

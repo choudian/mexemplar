@@ -4333,6 +4333,44 @@ def migrate_to_v47(engine):
     logger.info("迁移到版本 47 完成：assistant_todo_items.creator_session_id 列 + 索引")
 
 
+def migrate_to_v48(engine):
+    """迁移到版本 48：assistant_tasks 加 graph_control_status 列（图控制状态）。
+
+    图根行（parent_task_id IS NULL）记录控制状态：draft（建好未启动，待审查）/
+    running（已启动，调度器可推进）/ stopped（被显式停止）/ cancelled（废弃）。
+    由显式操作驱动（build/start_graph/stop/cancel），不从节点状态推导。
+    子节点行 NULL。回填近似：图内有 attempt → running（被启动过），否则 → draft。
+    """
+    try:
+        with engine.begin() as conn:
+            _add_column_if_missing(
+                conn, "assistant_tasks", "graph_control_status", "TEXT"
+            )
+            conn.execute(
+                text(
+                    """
+                    UPDATE assistant_tasks
+                    SET graph_control_status = CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM assistant_task_attempts a
+                            WHERE a.task_id IN (
+                                SELECT t2.task_id FROM assistant_tasks t2
+                                WHERE t2.graph_id = assistant_tasks.graph_id
+                            )
+                        ) THEN 'running'
+                        ELSE 'draft'
+                    END
+                    WHERE parent_task_id IS NULL
+                    """
+                )
+            )
+            conn.execute(text("UPDATE schema_version SET version = 48"))
+    except Exception as e:
+        logger.error(f"迁移到版本 48 失败: {e}")
+        raise
+    logger.info("迁移到版本 48 完成：assistant_tasks.graph_control_status 列 + 图根回填")
+
+
 _MIGRATIONS = [
     (2, migrate_to_v2),
     (3, migrate_to_v3),
@@ -4380,6 +4418,7 @@ _MIGRATIONS = [
     (45, migrate_to_v45),
     (46, migrate_to_v46),
     (47, migrate_to_v47),
+    (48, migrate_to_v48),
 ]
 
 

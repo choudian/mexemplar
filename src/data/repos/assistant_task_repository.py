@@ -31,6 +31,7 @@ class AssistantTaskRepository(BaseRepository):
         workspace_root: str | None = None,
         requires_confirmation: bool = False,
         status: str = "pending_dispatch",
+        graph_control_status: str | None = None,
     ) -> AssistantTask:
         self.ensure_immediate_transaction()
         row = AssistantTask(
@@ -50,10 +51,44 @@ class AssistantTaskRepository(BaseRepository):
             workspace_root=workspace_root,
             requires_confirmation=requires_confirmation,
             status=status,
+            graph_control_status=graph_control_status,
         )
         if row.root_task_id is None and row.parent_task_id is not None:
             row.root_task_id = row.parent_task_id
         return self._add_and_flush(row)
+
+    def get_graph_control_status(self, graph_id: str) -> str | None:
+        """读图根的控制状态（draft/running/stopped/cancelled）。图不存在返回 None。"""
+        row = (
+            self.session.query(AssistantTask.graph_control_status)
+            .filter(
+                AssistantTask.graph_id == graph_id,
+                AssistantTask.parent_task_id.is_(None),
+            )
+            .first()
+        )
+        return row.graph_control_status if row is not None else None
+
+    def set_graph_control_status(self, graph_id: str, status: str) -> bool:
+        """翻图根的控制状态。只改图根行；图不存在返回 False。
+
+        只允许显式操作调用（build/start_graph/stop/cancel/continue 续跑），
+        不做节点状态推导。
+        """
+        if status not in ("draft", "running", "stopped", "cancelled"):
+            raise ValueError(f"invalid graph control status: {status!r}")
+        self.ensure_immediate_transaction()
+        updated = (
+            self.session.query(AssistantTask)
+            .filter(
+                AssistantTask.graph_id == graph_id,
+                AssistantTask.parent_task_id.is_(None),
+            )
+            .update(
+                {"graph_control_status": status}, synchronize_session=False
+            )
+        )
+        return updated > 0
 
     def get_task(self, task_id: str) -> AssistantTask | None:
         return self.session.get(AssistantTask, task_id)
@@ -233,6 +268,34 @@ class AssistantTaskRepository(BaseRepository):
                 key = status
             distribution[key] = distribution.get(key, 0) + count
         return distribution
+
+    def has_active_execution_tasks(self, session_id: str) -> bool:
+        """会话是否仍有真正在跑/将跑的执行节点（busy 判据）。
+
+        只算 ``running / pending_dispatch`` 且所属图 ``graph_control_status='running'``：
+        - suspended（等用户回答/额度停）不算——用户此刻该能说话（回答/改方向）；
+        - delivered（等主助理裁定）不算——回流链路自己处理；
+        - draft 图的 pending 不算——图未启动，系统没在干活。
+        """
+        running_graphs = (
+            self.session.query(AssistantTask.graph_id)
+            .filter(
+                AssistantTask.session_id == session_id,
+                AssistantTask.parent_task_id.is_(None),
+                AssistantTask.graph_control_status == "running",
+            )
+            .subquery()
+        )
+        row = (
+            self.session.query(AssistantTask.task_id)
+            .filter(
+                AssistantTask.parent_task_id.is_not(None),
+                AssistantTask.status.in_(("running", "pending_dispatch")),
+                AssistantTask.graph_id.in_(running_graphs),
+            )
+            .first()
+        )
+        return row is not None
 
     def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
         """返回 session 内是否仍有未终态执行节点；root 容器不参与判定。"""

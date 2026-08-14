@@ -319,6 +319,11 @@ class AssistantTask(Base):
     # v43（图根归属）：图根所属的用户任务 id。只有图根行写（parent_task_id IS NULL），
     # 子节点不冗余——通过 graph_id 关联到图根即可。nullable：旧数据和 proposal 场景为 None。
     user_task_id: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    # v48（图控制状态）：draft/running/stopped/cancelled。控制状态由显式操作驱动
+    # （build→draft、start_graph→running、stop→stopped、cancel→cancelled），不从节点
+    # 状态推导——"图被允许推进吗"（控制面）和"节点跑到哪了"（数据面）是两个事实。
+    # 只有图根行有值（parent_task_id IS NULL），子节点 NULL。
+    graph_control_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="pending_dispatch")

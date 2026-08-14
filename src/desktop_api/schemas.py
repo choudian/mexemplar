@@ -319,24 +319,6 @@ class AssistantCurrentTaskGraphResponse(BaseModel):
     graph: AssistantTaskGraphSnapshot | None = None
 
 
-class AssistantTaskGraphStopRequest(BaseModel):
-    runId: str | None = None
-
-
-class AssistantTaskGraphStopResponse(BaseModel):
-    accepted: bool
-    graphId: str
-    affectedTaskCount: int
-    cancelSignalAccepted: bool = False
-
-
-class AssistantTaskGraphContinueResponse(BaseModel):
-    accepted: bool
-    graphId: str
-    resumedTaskCount: int
-    startedAttemptCount: int = 0
-
-
 class AssistantTaskGraphCancelRequest(BaseModel):
     expectedGraphVersion: int | None = None
 

@@ -41,6 +41,39 @@ class MessageRepository(BaseRepository):
             .first()
         )
 
+    def get_latest_tool_call_args(
+        self, session_id: str, tool_name: str, *, scan_limit: int = 50
+    ) -> Optional[dict]:
+        """查会话里最后一次调用指定工具的参数（report_result 汇报提取用）。
+
+        从最近的 assistant tool_calls JSON（``[{"id", "name", "args"}]`` 扁平格式，
+        见 agent_loop._serialize_tool_calls）倒序解析。取不到返回 None（调用方兜底）。
+        """
+        import json as _json
+
+        rows = (
+            self.session.query(Message.tool_calls)
+            .filter(
+                Message.session_id == session_id,
+                Message.role == "assistant",
+                Message.tool_calls.is_not(None),
+            )
+            .order_by(Message.sequence.desc())
+            .limit(scan_limit)
+            .all()
+        )
+        for (raw,) in rows:
+            try:
+                calls = _json.loads(raw)
+            except (TypeError, ValueError):
+                continue
+            for call in calls or []:
+                if not isinstance(call, dict) or call.get("name") != tool_name:
+                    continue
+                args = call.get("args")
+                return args if isinstance(args, dict) else {}
+        return None
+
     def get_first(self, session_id: str) -> Optional[Message]:
         """获取会话的第一条消息（最小序列号）"""
         return (

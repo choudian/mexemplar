@@ -132,6 +132,7 @@ class TaskRecoveryService(AtomicTaskService):
         """
         count = 0
         updated_tasks: list = []
+        interrupted_graph_ids: set[str] = set()
 
         # 摊①：遗留 active attempt → fenced + task → SUSPENDED+INTERRUPTED。
         # 与 fence_expired_attempts 的关键区别：落 SUSPENDED 等用户点继续，而非 PENDING_DISPATCH
@@ -155,12 +156,27 @@ class TaskRecoveryService(AtomicTaskService):
                     )
                     if task is not None:
                         updated_tasks.append(task)
+                        if task.graph_id:
+                            interrupted_graph_ids.add(task.graph_id)
             except Exception:
                 logger.exception(
                     "[recovery] mark interrupted attempt %s failed; skipping",
                     attempt.attempt_id,
                 )
                 continue
+
+        # 摊①b：图控制状态对齐——节点已被打断全停，图还遗留 running 是假状态，
+        # 会让 mutate 校验误拒（"运行中先停止"）并误导展示。running → stopped；
+        # 用户点继续时 atomic continue 会翻回 running。启动栅栏期间无并发，先查后写安全。
+        for graph_id in interrupted_graph_ids:
+            try:
+                if self._tasks.get_graph_control_status(graph_id) == "running":
+                    self._tasks.set_graph_control_status(graph_id, "stopped")
+            except Exception:
+                logger.warning(
+                    "[recovery] align graph control status failed for %s", graph_id,
+                    exc_info=True,
+                )
 
         # 摊②：所有 active session → suspended。
         # 不依赖 attempt 绑定——主助理根会话不挂在任何 attempt 上，按绑定清会漏掉它。

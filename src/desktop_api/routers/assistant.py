@@ -215,8 +215,14 @@ def stop_session(
     request: AssistantStopRequest | None = Body(default=None),
     runtime: AssistantRuntime = Depends(get_assistant_runtime),
 ) -> AssistantStopResponse:
-    """停止会话当前回合（协作式，在下一安全节点生效；深度穿透其同步派出的子任务）。"""
-    accepted = runtime.cancel_session(session_id, run_id=request.runId if request else None)
+    """方块停止 = 全停：取消当前回合 + 停掉该会话所有在办用户任务。
+
+    用户心里只有一个"停"——异步派出的执行体靠 session 取消信号穿不透，
+    必须经 stop_user_task 的图级取消信号停到。
+    """
+    accepted = runtime.stop_session_all(
+        session_id, run_id=request.runId if request else None
+    )
     return AssistantStopResponse(accepted=accepted)
 
 

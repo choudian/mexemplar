@@ -56,14 +56,11 @@ def _validate_user_task_id(user_task_id: str | None) -> dict | None:
 
 
 def _latest_user_message_sequence(session_id: str) -> int | None:
-    """当前请求（最新一条 user 消息）的序号，用作追踪 task 行的归属编号。
+    """当前请求（最新一条 user 消息）的序号，喂给 get_or_create_request_graph_root 实现同消息复用图。
 
-    同步委派有意不建任务图，但它建的追踪行 ``parent_task_id`` 为空，形状与图根一致。
-    不带归属编号时 ``AssistantTaskRepository.resolve_graph_id_for_run`` 会把它判成
-    "run 窗口内存在身份不明的图"并 fail-closed，使 scheduled run 的完成判定永远停在
-    未知——run 不结束、占住 per-task active 槽位，后续每轮到点被静默 skipped。
-
-    取不到时返回 None，维持既有行为：归属只是追踪信息，不阻断委派本身。
+    方向 B：同步委派复用 request graph（同一条用户消息内共享），需要 sequence 来定位/复用
+    当前请求的图。取不到时返回 None——get_or_create_request_graph_root 在 sequence=None 时每次
+    新建，不影响委派本身（只是不复用图）。
     """
     from src.data.repos import MessageRepository
 
@@ -97,24 +94,35 @@ def _start_sync_attempt(
     使 ``_bind_executor_session_to_attempt`` 能把 executor_session_id 绑到 attempt 上。
     任一步失败返回 None（不阻断委派本身——attempt 是追踪层，不是执行的前提）。
     """
+    from src.business.task_collaboration.service import TaskCollaborationService
     from src.data.repos import AssistantTaskAttemptRepository, AssistantTaskRepository
     from src.data.repos.base_repository import generate_id
 
-    graph_id = generate_id("tg")
     task_id = generate_id("tsk")
     try:
+        # 方向 B：复用 request graph（同一条用户消息内共享），简单委派作为图根的子节点，
+        # 不再自成单节点图根——消掉 resolve_graph_id_for_run 的"身份不明图"fail-closed。
+        msg_seq = _latest_user_message_sequence(parent_session_id)
+        with TaskCollaborationService() as service:
+            graph_id, root_task_id = service.get_or_create_request_graph_root(
+                session_id=parent_session_id,
+                user_message_sequence=msg_seq,
+                title=task_title,
+                description=task_description,
+                user_task_id=user_task_id,
+            )
         with AssistantTaskRepository() as tasks:
             tasks.create_task(
                 graph_id=graph_id,
                 session_id=parent_session_id,
                 task_id=task_id,
-                root_task_id=task_id,
-                parent_task_id=None,
+                root_task_id=root_task_id,
+                parent_task_id=root_task_id,
                 title=task_title,
                 description=task_description,
                 owner_session_id=parent_session_id,
                 user_task_id=user_task_id,
-                user_message_sequence=_latest_user_message_sequence(parent_session_id),
+                user_message_sequence=msg_seq,
                 assignee_type=executor_type,
                 assignee_id=executor_id,
                 status="running",
@@ -256,7 +264,6 @@ class DelegationOrchestrator:
         user_task_id: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
-        complexity: str = "complex",
     ) -> dict:
         # 用户任务层硬保证：taskId 必须存在且仍在进行中（active/cooling）。
         validated = _validate_user_task_id(user_task_id)
@@ -270,18 +277,7 @@ class DelegationOrchestrator:
                 "delegation_type": "ephemeral_subagent",
             }
 
-        if complexity == "simple":
-            # 简单任务（1-2 步单领域）：直接走同步委派路径，不建任务图。
-            # 与 FR-398 "快速委派路径" 一致，崩溃恢复由 resumable_on_failure 覆盖。
-            return self.run_sync_ephemeral_subagent(
-                parent_session_id=parent_session_id,
-                task=task,
-                execution_context=execution_context,
-                tool_whitelist=tool_whitelist,
-                user_task_id=user_task_id,
-            )
-
-        # 复杂任务：走统一模型（建图 + durable accepted）
+        # 全异步：统一模型建图 + durable accepted，主助理不嵌套等待。
         unified = self._owner._dispatch_task_via_unified_model(
             parent_session_id=parent_session_id,
             task=task,
@@ -298,6 +294,7 @@ class DelegationOrchestrator:
                 "task_description": task,
             }
 
+        # 统一模型不可用（flag 关/基建失败）时的同步兜底，正常运行不走
         return self.run_sync_ephemeral_subagent(
             parent_session_id=parent_session_id,
             task=task,
@@ -541,6 +538,13 @@ class DelegationOrchestrator:
                 "specialist_id": specialist.specialist_id,
                 "delegation_type": "specialist",
             }
+        if getattr(specialist, "role_kind", "executor") == "planner":
+            return {
+                "success": False,
+                "message": "planner 是规划专员，请使用 delegate_to_planner 委派规划任务",
+                "specialist_id": specialist.specialist_id,
+                "delegation_type": "specialist",
+            }
 
         whitelist = parse_tool_whitelist(getattr(specialist, "tool_whitelist", "[]"))
         unified = self._owner._dispatch_task_via_unified_model(
@@ -573,6 +577,84 @@ class DelegationOrchestrator:
         result["specialist_id"] = specialist.specialist_id
         result["specialist_name"] = name
         result["task"] = task_text
+        return result
+
+    def delegate_to_planner(
+        self,
+        *,
+        parent_session_id: str,
+        task_description: str,
+        user_task_id: str,
+        execution_context: str = "",
+    ) -> dict:
+        """将复杂任务委托给规划专员 planner，由 planner 调研并产出 DAG 任务图。
+
+        planner 是系统内置的规划专员（role_kind=planner），工具集硬编码（build_task_graph
+        + mutate_task_graph + 调研工具），不接受 tool_whitelist。委派走统一模型，planner
+        作为 request graph 的一个"规划任务"节点异步执行，产出独立 DAG 图挂到 user_task 下。
+        """
+        # 用户任务层硬保证：taskId 必须存在且仍在进行中（active/cooling）。
+        validated = _validate_user_task_id(user_task_id)
+        if validated is not None:
+            return validated
+        task = (task_description or "").strip()
+        if not task:
+            return {
+                "success": False,
+                "message": "task_description must not be empty",
+                "delegation_type": "planner",
+            }
+
+        # resolve planner specialist（名字由配置决定，默认 "planner"）
+        planner_name = (
+            self._owner._config.get_assistant_tasks_planner_specialist_name()
+            if getattr(self._owner, "_config", None) is not None
+            else "planner"
+        )
+        from src.data.repos.specialist_repository import SpecialistRepository
+
+        with SpecialistRepository() as repo:
+            specialist = repo.get_specialist_by_name(planner_name)
+        if specialist is None or not getattr(specialist, "is_active", 1):
+            return {
+                "success": False,
+                "message": f"规划专员不可用: {planner_name}",
+                "delegation_type": "planner",
+            }
+
+        # 走统一模型：planner 作为 request graph 的规划任务节点，异步执行。
+        # capability_scope 传空——planner 工具由 role_kind 硬编码装配，不经 whitelist。
+        unified = self._owner._dispatch_task_via_unified_model(
+            parent_session_id=parent_session_id,
+            task=task,
+            context=execution_context or task,
+            assignee_type=AgentType.SPECIALIST.value,
+            assignee_id=specialist.specialist_id,
+            capability_scope=[],
+            user_task_id=user_task_id,
+        )
+        if unified is not None:
+            return {
+                **unified,
+                "delegation_type": "planner",
+                "planner_id": specialist.specialist_id,
+                "planner_name": planner_name,
+                "task_description": task,
+            }
+
+        # 统一模型不可用时回退同步路径
+        result = self.run_specialist_via_delegated_executor(
+            parent_session_id=parent_session_id,
+            specialist=specialist,
+            task=task,
+            execution_context=execution_context,
+            tool_whitelist=[],
+            user_task_id=user_task_id,
+        )
+        result["delegation_type"] = "planner"
+        result["planner_id"] = specialist.specialist_id
+        result["planner_name"] = planner_name
+        result["task_description"] = task
         return result
 
     def continue_subagent(

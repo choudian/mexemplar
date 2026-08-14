@@ -601,6 +601,23 @@ class AssistantRuntime:
             session_id,
             continue_subagent,
         )
+        # busy 锁：异步任务在跑期间拒绝新消息（200 + accepted=false，前端进排队态）。
+        # 回合正在跑的互斥由 _spawn_session_worker 兜底；这里补"回合空闲但任务在跑"。
+        # suspended（等用户回答/额度停）不算 busy——用户此刻该能说话。
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        try:
+            with TaskCollaborationService() as service:
+                busy = service.has_active_execution_tasks(session_id)
+        except Exception:
+            logging.warning(
+                "[dispatch_message] busy check failed for session=%s; allow message",
+                session_id,
+                exc_info=True,
+            )
+            busy = False
+        if busy:
+            return False
         scheduled_run_id = self._resolve_active_scheduled_run_id(session_id)
 
         def build() -> tuple[threading.Thread, None]:
@@ -764,36 +781,40 @@ class AssistantRuntime:
             settle_scheduling_confirmations_for_session_stopped(sid)
         return accepted
 
-    def stop_task_graph(self, session_id: str, graph_id: str, run_id: str | None = None) -> dict:
-        """Stop the persisted task graph and signal any active graph workers."""
-        from src.business.task_collaboration.dispatcher import graph_cancel_key
-        from src.business.task_collaboration.service import TaskCollaborationService
+    def stop_session_all(self, session_id: str, run_id: str | None = None) -> bool:
+        """方块停止 = 全停：取消当前回合 + 停掉该会话所有在办用户任务。
 
-        with TaskCollaborationService() as service:
-            affected = service.stop_graph(session_id=session_id, graph_id=graph_id)
-        signaled = run_context.request_cancel_key(
-            graph_cancel_key(graph_id),
-            reason=run_context.CancelReason.USER_CANCEL,
-        )
-        if run_id:
-            signaled = self.cancel_session(session_id, run_id=run_id) or signaled
-        if signaled:
-            fail_closed_confirmations_for_session(session_id)
-            settle_clarifications_for_session_stopped(session_id)
-            settle_scheduling_confirmations_for_session_stopped(session_id)
-        return {"affected": affected, "cancel_signal_accepted": signaled}
+        回合取消与任务停止无条件都做——回合可能已结束（cancel 返回 False）但
+        异步执行体仍在 dispatcher 线程跑，session 取消信号穿不透异步边界，
+        只有 stop_user_task 的图级取消信号能停到它们。
+        """
+        accepted = self.cancel_session(session_id, run_id=run_id)
+        from src.business.user_tasks import UserTaskService
 
-    def continue_task_graph(self, session_id: str, graph_id: str) -> dict:
-        """Resume user-stopped tasks and dispatch assigned work again."""
-        from src.business.task_collaboration.service import TaskCollaborationService
-
-        with TaskCollaborationService() as service:
-            resumed = service.continue_graph(session_id=session_id, graph_id=graph_id)
-        started = self._get_orchestrator().resume_pending_graph_tasks(
-            session_id=session_id,
-            graph_id=graph_id,
-        )
-        return {"resumed": resumed, "started": started}
+        try:
+            with UserTaskService() as service:
+                # open = active + cooling：冷却的任务底下也可能有执行在跑，全停不漏
+                active_tasks = service.list_for_session(
+                    session_id, status_filter="open"
+                )
+            for task in active_tasks:
+                task_id = task.get("taskId") or task.get("task_id")
+                if not task_id:
+                    continue
+                try:
+                    self.stop_user_task(session_id, task_id)
+                except Exception:
+                    logging.warning(
+                        "[stop_session_all] stop_user_task failed for %s", task_id,
+                        exc_info=True,
+                    )
+        except Exception:
+            logging.warning(
+                "[stop_session_all] list active user tasks failed for session=%s",
+                session_id,
+                exc_info=True,
+            )
+        return accepted
 
     def continue_user_task(self, session_id: str, user_task_id: str) -> dict:
         """用户对一件事点「继续」：遍历这件事底下所有图，推得动的都推。
@@ -848,6 +869,25 @@ class AssistantRuntime:
         report["success"] = len(actual_pushed) > 0 or (
             len(report.get("not_pushed", [])) == 0 and len(still_finishing) == 0
         )
+        return report
+
+    def stop_user_task(self, session_id: str, user_task_id: str) -> dict:
+        """用户对一件事点「停止」：遍历这件事底下所有图，把正在跑的都停了。
+
+        返回结构化报告（跟 continue_user_task 对称）。
+        """
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            report = service.stop_user_task(
+                session_id=session_id,
+                user_task_id=user_task_id,
+            )
+        # side effects（跟 stop_task_graph 一致）
+        if report.get("total", 0) > 0:
+            fail_closed_confirmations_for_session(session_id)
+            settle_clarifications_for_session_stopped(session_id)
+            settle_scheduling_confirmations_for_session_stopped(session_id)
         return report
 
     def resume_recovered_task(self, task_id: str, checkpoint_ref: str) -> bool:

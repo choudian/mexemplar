@@ -44,7 +44,6 @@ class _DelegationFacade(Protocol):
         task_description: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
-        complexity: str = "complex",
     ) -> dict: ...
 
     def continue_subagent(
@@ -107,15 +106,13 @@ class _DelegationFacade(Protocol):
 # 写文件，因此上面禁 write_file 只挡直接调用、挡不住绕道。实际约束由 exec 自身的
 # 权限层承担（OS 系统路径硬拒、workspace 外操作走确认链、self-improvement worktree
 # 守卫），而非本清单。
-_PLANNER_DENIED_BUILTIN_TOOL_NAMES = frozenset(
-    {
-        "write_file",
-        "edit_file",
-        "apply_patch",
-        "web_search",
-        "web_fetch",
-    }
-)
+# 规划专员的内置工具放行记录：
+# - 2026-07-27（DEC-B 修订）：放行 exec 与 process_*，"只规划不执行"不再是工具层硬边界。
+# - 2026-08-14（用户决策）：全量放行——write_file / edit_file / apply_patch /
+#   web_search / web_fetch 也不再排除。规划中偶需落盘草稿/联网核实；实际约束由
+#   各工具自身的权限层承担（OS 系统路径硬拒、workspace 外确认链、worktree 守卫），
+#   而非本清单。常量保留为空以记录决策点。
+_PLANNER_DENIED_BUILTIN_TOOL_NAMES: frozenset[str] = frozenset()
 
 
 def _filter_builtin_tools(
@@ -244,6 +241,9 @@ class ToolRegistry:
             LIST_SPECIALISTS_SCHEMA,
             LIST_USER_TODOS_SCHEMA,
             MEETING_SEND_MESSAGE_SCHEMA,
+            MUTATE_TASK_GRAPH_SCHEMA,
+            REPORT_RESULT_SCHEMA,
+            VIEW_TASK_GRAPH_SCHEMA,
             TODO_CREATE_SCHEMA,
             TODO_UPDATE_SCHEMA,
             UPDATE_USER_TODO_SCHEMA,
@@ -255,8 +255,11 @@ class ToolRegistry:
             create_delegate_to_subagent_handler,
             create_inspect_subagent_handler,
             create_list_specialists_handler,
+            create_report_result_handler,
+            create_view_task_graph_handler,
             create_list_user_todos_handler,
             create_meeting_send_message_handler,
+            create_mutate_task_graph_handler,
             create_todo_handlers,
             create_update_user_todo_handler,
             create_user_todo_handler,
@@ -353,6 +356,21 @@ class ToolRegistry:
             executor_session_id=executor_id,
             bound_task_id=current_task_id,
         )
+        # 汇报工具：所有执行体（ephemeral/specialist/planner）都拿——完成后显式汇报结论，
+        # 记账优先读它（见 orchestrator._extract_latest_assistant_text），没调才兜底捞最后一句。
+        report_result_tool = ToolDefinition(
+            name="report_result",
+            schema=REPORT_RESULT_SCHEMA,
+            handler=create_report_result_handler(executor_id or ""),
+        )
+        # 只读图快照：审图专员（读图判断拆解/依赖/指派）与 planner（改图前看现状）用。
+        # allow_cross_session=True——graph_id 由任务书携带，不可猜测。
+        view_task_graph_tool = ToolDefinition(
+            name="view_task_graph",
+            schema=VIEW_TASK_GRAPH_SCHEMA,
+            handler=create_view_task_graph_handler(executor_id or ""),
+            has_side_effects=False,
+        )
         executor_collaboration_tools: list[ToolDefinition] = [
             *ask_parent_meeting_tools,
             ToolDefinition(
@@ -428,7 +446,6 @@ class ToolRegistry:
                 task_description: str,
                 execution_context: str = "",
                 tool_whitelist: list[str] | None = None,
-                complexity: str = "complex",
                 user_task_id: str = "",
             ) -> dict:
                 task = (task_description or "").strip()
@@ -534,6 +551,17 @@ class ToolRegistry:
                         graph_owner_session_id,
                     ),
                 ),
+                ToolDefinition(
+                    name="mutate_task_graph",
+                    schema=MUTATE_TASK_GRAPH_SCHEMA,
+                    handler=create_mutate_task_graph_handler(graph_owner_session_id),
+                ),
+                ToolDefinition(
+                    name="view_task_graph",
+                    schema=VIEW_TASK_GRAPH_SCHEMA,
+                    handler=create_view_task_graph_handler(graph_owner_session_id),
+                    has_side_effects=False,
+                ),
                 # build_task_graph 的 assigneeId 要求填具体 specialist id，规划专员必须
                 # 能查到有哪些专员、各自什么工具，否则只能把所有节点退化成临时子代理。
                 # 专员目录同时按阈值注入 prompt（见 _build_specialist_prompt）：条目少时
@@ -564,13 +592,17 @@ class ToolRegistry:
 
         def tool_factory() -> list[ToolDefinition]:
             if role_kind == "planner":
-                # 规划专员：search + 规划工具（build_task_graph / list_specialists /
-                # 调研工具）+ load_skill。不拿执行器协作工具（todo_update / ask_parent /
-                # meeting_* / delegate_to_subagent）——深度封顶仍然成立。
+                # 规划专员：search + 规划工具（build_task_graph / mutate_task_graph /
+                # view_task_graph / list_specialists / 调研工具）+ load_skill。
+                # 2026-08-14（用户决策）：放行 delegate_to_subagent（连带 continue/
+                # inspect 管理隔离子代理）——大任务规划时可把批量调研隔离出去。
+                # 不拿执行器协作工具（todo_update / ask_parent / meeting_*）——深度
+                # 封顶对协作工具仍然成立。
                 return (
                     search_tools
                     + planner_tools
-                    + [load_skill_tool]
+                    + specialist_subagent_tools
+                    + [report_result_tool, load_skill_tool]
                     + dynamic_manager.get_activated_tools()
                     + mcp_registry.get_preset_tools()  # 轨道 A
                     + mcp_registry.get_activated_custom_tools()  # 轨道 B
@@ -579,6 +611,7 @@ class ToolRegistry:
                 search_tools
                 + [*executor_collaboration_tools, load_skill_tool]
                 + specialist_subagent_tools
+                + [report_result_tool, view_task_graph_tool]
                 + builtin_tools
                 + dynamic_manager.get_activated_tools()
                 + mcp_registry.get_preset_tools()  # 轨道 A
@@ -605,7 +638,7 @@ class ToolRegistry:
             ABANDON_REQUEST_GRAPH_SCHEMA,
             ANSWER_TASK_QUESTION_SCHEMA,
             ASK_USER_QUESTION_SCHEMA,
-            BUILD_TASK_GRAPH_SCHEMA,
+            CANCEL_GRAPH_SCHEMA,
             CODIFY_AS_TOOL_SCHEMA,
             CONTINUE_SUBAGENT_SCHEMA,
             CREATE_SCHEDULED_TASK_SCHEMA,
@@ -613,6 +646,7 @@ class ToolRegistry:
             CREATE_TASK_SCHEMA,
             DECIDE_ADJUDICATION_SCHEMA,
             DELETE_SCHEDULED_TASK_SCHEMA,
+            DELEGATE_TO_PLANNER_SCHEMA,
             DELEGATE_TO_SPECIALIST_SCHEMA,
             DELEGATE_TO_SUBAGENT_SCHEMA,
             DISMISS_SUGGESTION,
@@ -620,7 +654,6 @@ class ToolRegistry:
             INVALIDATE_MEMORY_ENTRY_SCHEMA,
             LIST_SCHEDULED_TASKS_SCHEMA,
             LOAD_TASK_RESULT_SCHEMA,
-            MUTATE_TASK_GRAPH_SCHEMA,
             OPEN_MEETING_CHANNEL_SCHEMA,
             PAUSE_SCHEDULED_TASK_SCHEMA,
             REPLY_TO_USER_SCHEMA,
@@ -628,12 +661,14 @@ class ToolRegistry:
             RETRIEVE_ARCHIVE_SCHEMA,
             RETRIEVE_FAILURE_ZONE_SCHEMA,
             SAVE_PROFILE_SCHEMA,
+            START_GRAPH_SCHEMA,
+            STOP_GRAPH_SCHEMA,
             UPDATE_SCHEDULED_TASK_SCHEMA,
             UPDATE_TASK_SCHEMA,
             create_abandon_request_graph_handler,
             create_answer_task_question_handler,
             create_ask_user_question_handler,
-            create_build_task_graph_handler,
+            create_cancel_graph_handler,
             create_codify_as_tool_handler,
             create_continue_subagent_handler,
             create_create_scheduled_task_handler,
@@ -641,19 +676,21 @@ class ToolRegistry:
             create_create_task_handler,
             create_decide_task_adjudication_handler,
             create_delete_scheduled_task_handler,
+            create_delegate_to_planner_handler,
             create_delegate_to_specialist_handler,
             create_delegate_to_subagent_handler,
             create_inspect_subagent_handler,
             create_invalidate_memory_entry_handler,
             create_list_scheduled_tasks_handler,
             create_load_task_result_handler,
-            create_mutate_task_graph_handler,
             create_open_meeting_channel_handler,
             create_pause_scheduled_task_handler,
             create_reply_to_user_handler,
             create_retrieve_archive_handler,
             create_retrieve_failure_zone_handler,
             create_save_profile_handler,
+            create_start_graph_handler,
+            create_stop_graph_handler,
             create_update_scheduled_task_handler,
             create_update_task_handler,
         )
@@ -689,6 +726,21 @@ class ToolRegistry:
             name="save_profile",
             schema=SAVE_PROFILE_SCHEMA,
             handler=create_save_profile_handler(session_id),
+        )
+        start_graph_tool = ToolDefinition(
+            name="start_graph",
+            schema=START_GRAPH_SCHEMA,
+            handler=create_start_graph_handler(session_id),
+        )
+        stop_graph_tool = ToolDefinition(
+            name="stop_graph",
+            schema=STOP_GRAPH_SCHEMA,
+            handler=create_stop_graph_handler(session_id),
+        )
+        cancel_graph_tool = ToolDefinition(
+            name="cancel_graph",
+            schema=CANCEL_GRAPH_SCHEMA,
+            handler=create_cancel_graph_handler(session_id),
         )
         memory_search_tool = ToolDefinition(
             name="memory_search",
@@ -760,6 +812,14 @@ class ToolRegistry:
                 dispatch_callback=self._delegation.delegate_to_specialist,
             ),
         )
+        delegate_to_planner_tool = ToolDefinition(
+            name="delegate_to_planner",
+            schema=DELEGATE_TO_PLANNER_SCHEMA,
+            handler=create_delegate_to_planner_handler(
+                session_id,
+                dispatch_callback=self._delegation.delegate_to_planner,
+            ),
+        )
         create_specialist_tool = ToolDefinition(
             name="create_specialist",
             schema=CREATE_SPECIALIST_SCHEMA,
@@ -802,14 +862,6 @@ class ToolRegistry:
             caller_id=ASSISTANT_ENTITY_ID,
         )
 
-        # 024: build_task_graph + mutate_task_graph 工具
-        # scheduler 已在 orchestrator init 时装配（runtime -> _get_task_dispatcher -> _wire_graph_scheduler），
-        # 无需 per-call 重新确认。
-        build_task_graph_tool = ToolDefinition(
-            name="build_task_graph",
-            schema=BUILD_TASK_GRAPH_SCHEMA,
-            handler=create_build_task_graph_handler(session_id),
-        )
         create_task_tool = ToolDefinition(
             name="create_task",
             schema=CREATE_TASK_SCHEMA,
@@ -819,11 +871,6 @@ class ToolRegistry:
             name="update_task",
             schema=UPDATE_TASK_SCHEMA,
             handler=create_update_task_handler(session_id),
-        )
-        mutate_task_graph_tool = ToolDefinition(
-            name="mutate_task_graph",
-            schema=MUTATE_TASK_GRAPH_SCHEMA,
-            handler=create_mutate_task_graph_handler(session_id),
         )
         # 033 调度中心：5 个主助理独占工具（不进 delegated executor）
         create_scheduled_task_tool = ToolDefinition(
@@ -894,14 +941,16 @@ class ToolRegistry:
             continue_subagent_tool,
             inspect_subagent_tool,
             delegate_to_specialist_tool,
+            delegate_to_planner_tool,
+            start_graph_tool,
+            stop_graph_tool,
+            cancel_graph_tool,
             open_meeting_channel_tool,
             create_specialist_tool,
             create_skill_methodology_tool,
             load_skill_methodology_tool,
-            build_task_graph_tool,
             create_task_tool,
             update_task_tool,
-            mutate_task_graph_tool,
         ] + scheduled_management_tools
 
         def tool_factory() -> list[ToolDefinition]:

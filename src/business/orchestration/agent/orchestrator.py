@@ -52,16 +52,19 @@ _SUBAGENT_WORK_RULES = (
     "工作规则（必须遵守）：\n"
     "1. 严格限定在任务范围内，不要做任务描述以外的事情。\n"
     "2. 每次工具返回结果后，先评估当前已有信息是否足以完成任务。"
-    "如果足够，直接输出最终结果，不要为了更全面而继续调用工具。"
+    "如果足够，收尾并汇报结果，不要为了更全面而继续调用工具。"
     "如果任务需要先规划再执行（多步复杂任务），可以先用 todo_update 列出计划再逐步执行。\n"
     "3. 多步任务中可以适度输出关键进度信息，帮助上级理解执行状态；"
     "简单任务仍静默使用工具，最后一次性报告结果。\n"
     "4. 不要闲聊、不要发表意见、不要建议下一步，只报告结构化的事实。\n"
-    "5. 最终回复控制在 500 字以内，除非任务本身需要更长的输出。"
+    "5. 任务完成时必须调用 `report_result` 工具汇报结论（做了什么、结果是什么、关键产出）。"
+    "汇报内容是系统记账与上级裁定的依据——不调用时系统只能截取你的最后一句话充当结果，"
+    "可能丢失结论。调用后正常收尾即可，不要在汇报后再继续别的工作。\n"
+    "6. 最终回复控制在 500 字以内，除非任务本身需要更长的输出。"
 )
 
 _EPHEMERAL_SUBAGENT_PROMPT = (
-    "你是一个临时子代理。根据任务描述完成指定工作，完成后直接返回结果。\n"
+    "你是一个临时子代理。根据任务描述完成指定工作，完成后用 report_result 汇报结果。\n"
     "\n" + _SUBAGENT_WORK_RULES
 )
 _LEGACY_DELEGATION_PARENT_PREFIX_LENGTH = 12
@@ -791,34 +794,13 @@ class AgentOrchestrator:
         user_task_id: str,
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
-        complexity: str = "complex",
     ) -> dict:
         return self._get_delegation_orchestrator().delegate_to_subagent(
             parent_session_id=parent_session_id,
             task_description=task_description,
             execution_context=execution_context,
             tool_whitelist=tool_whitelist,
-            complexity=complexity,
             user_task_id=user_task_id,
-        )
-
-    def _run_sync_ephemeral_subagent(
-        self,
-        *,
-        parent_session_id: str,
-        task: str,
-        execution_context: str = "",
-        tool_whitelist: list[str] | None = None,
-        workspace_root: str | None = None,
-        effective_scope: EffectiveSubagentScope | None = None,
-    ) -> dict:
-        return self._get_delegation_orchestrator().run_sync_ephemeral_subagent(
-            parent_session_id=parent_session_id,
-            task=task,
-            execution_context=execution_context,
-            tool_whitelist=tool_whitelist,
-            workspace_root=workspace_root,
-            effective_scope=effective_scope,
         )
 
     def _delegate_to_specialist(
@@ -1271,6 +1253,36 @@ class AgentOrchestrator:
             return session
         return None
 
+    def _resolve_planner_if_specialist(self, subagent_id, session):
+        """续跑时反查 session 是否对应 planner specialist。
+
+        通过 latest attempt 的 executor_id 反查 specialist.role_kind。
+        返回 planner specialist（是 planner）或 None（不是 / 查不到）。
+        临时子代理的 attempt.executor_id 不是 specialist_id，get_specialist 返回 None，自然过滤。
+        """
+        try:
+            from src.data.repos import AssistantTaskAttemptRepository
+            from src.data.repos.specialist_repository import SpecialistRepository
+
+            with AssistantTaskAttemptRepository() as attempts:
+                attempt = attempts.latest_attempt_for_session(subagent_id)
+            if attempt is None or not attempt.executor_id:
+                return None
+            with SpecialistRepository() as repo:
+                specialist = repo.get_specialist(attempt.executor_id)
+            if specialist is None:
+                return None
+            if getattr(specialist, "role_kind", "executor") != "planner":
+                return None
+            return specialist
+        except Exception:
+            logger.warning(
+                "[Orchestrator] failed to resolve planner identity for subagent=%s",
+                subagent_id,
+                exc_info=True,
+            )
+            return None
+
     def _subagent_transition_belongs_to_parent(
         self,
         workflow_id: str,
@@ -1388,28 +1400,53 @@ class AgentOrchestrator:
             allowed_builtin_tool_names = None
             effective_workspace_root = workspace_root
 
-        config = AgentConfig(
-            agent_type=AgentType.EPHEMERAL_SUBAGENT,
-            system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
-            max_iterations=max(1, extra),
-            resumable_on_failure=True,
-            workspace_root=(Path(effective_workspace_root) if effective_workspace_root else None),
-        )
-        loop = AgentLoop(config, self._make_llm(), self._config)
-        tools = self._build_delegated_executor_tools(
-            allowed_tool_ids,
-            agent_type=AgentType.EPHEMERAL_SUBAGENT,
-            executor_id=subagent_id,
-            allowed_composition_ids=allowed_composition_ids,
-            allowed_builtin_tool_names=allowed_builtin_tool_names,
-            workspace_root=effective_workspace_root,
-        )
+        # 续跑身份：planner specialist 续跑时用 planner 角色 prompt + planner 工具集
+        # （build_task_graph + mutate_task_graph + 调研工具），而非临时子代理 prompt + executor 工具。
+        planner_specialist = self._resolve_planner_if_specialist(subagent_id, session)
+        if planner_specialist is not None:
+            effective_agent_type = AgentType.SPECIALIST
+            config = AgentConfig(
+                agent_type=effective_agent_type,
+                system_prompt=self._build_specialist_prompt(planner_specialist, []),
+                max_iterations=max(1, extra),
+                resumable_on_failure=True,
+                workspace_root=(Path(effective_workspace_root) if effective_workspace_root else None),
+            )
+            loop = AgentLoop(config, self._make_llm(), self._config)
+            tools = self._build_delegated_executor_tools(
+                allowed_tool_ids,
+                agent_type=effective_agent_type,
+                executor_id=subagent_id,
+                specialist_id=planner_specialist.specialist_id,
+                parent_session_id=parent_session_id,
+                role_kind="planner",
+                allowed_composition_ids=set(),
+                workspace_root=effective_workspace_root,
+            )
+        else:
+            effective_agent_type = AgentType.EPHEMERAL_SUBAGENT
+            config = AgentConfig(
+                agent_type=effective_agent_type,
+                system_prompt=_EPHEMERAL_SUBAGENT_PROMPT,
+                max_iterations=max(1, extra),
+                resumable_on_failure=True,
+                workspace_root=(Path(effective_workspace_root) if effective_workspace_root else None),
+            )
+            loop = AgentLoop(config, self._make_llm(), self._config)
+            tools = self._build_delegated_executor_tools(
+                allowed_tool_ids,
+                agent_type=effective_agent_type,
+                executor_id=subagent_id,
+                allowed_composition_ids=allowed_composition_ids,
+                allowed_builtin_tool_names=allowed_builtin_tool_names,
+                workspace_root=effective_workspace_root,
+            )
         user_input = instruction.strip() if (instruction or "").strip() else None
         workflow_id = getattr(session, "workflow_id", "") or ""
         self._emit_subagent_started(
             parent_session_id=parent_session_id,
             subagent_id=subagent_id,
-            agent_type=AgentType.EPHEMERAL_SUBAGENT,
+            agent_type=effective_agent_type,
             task=self._message_repo.get_first_user_message(subagent_id) or "继续任务",
         )
         try:
@@ -1734,6 +1771,27 @@ class AgentOrchestrator:
     def _extract_latest_assistant_text(
         self, session_id: str, *, after_sequence: int | None = None
     ) -> str:
+        # report_result 优先：执行体显式汇报的结论是记账/裁定的依据；
+        # 没调（模型软约束失效）才兜底捞最后一句 assistant 文本。
+        try:
+            reported = self._message_repo.get_latest_tool_call_args(
+                session_id, "report_result"
+            )
+        except Exception:
+            logger.debug(
+                "[Orchestrator] report_result lookup failed for %s",
+                session_id,
+                exc_info=True,
+            )
+            reported = None
+        if reported:
+            summary = str(reported.get("result_summary") or "").strip()
+            artifacts = reported.get("artifacts") or []
+            parts = [summary] if summary else []
+            if artifacts:
+                parts.append("产出物: " + "; ".join(str(a) for a in artifacts))
+            if parts:
+                return "\n".join(parts)
         return self._message_repo.get_latest_assistant_text(
             session_id, after_sequence=after_sequence
         )
@@ -1859,7 +1917,9 @@ class AgentOrchestrator:
             "角色定义：\n"
             f"{getattr(specialist, 'role_definition', '') or '按专员职责完成主助理委派的任务。'}\n\n"
             f"{capability_section}\n"
-            "你只能处理主助理委派的任务；完成后直接输出最终结果。\n"
+            "你只能处理主助理委派的任务；任务完成后必须调用 `report_result` 汇报结论"
+            "（做了什么、结果是什么、关键产出）——汇报内容是上级记账与裁定的依据，"
+            "不调用时系统只能截取你的最后一句话充当结果。\n"
             "如需把会产生大量噪音的子工作（如批量读取、嘈杂检索）隔离出去，可用 "
             "delegate_to_subagent 起临时子代理代办、只取其干净结果。系统保证同一次专员运行内"
             "同时只会有一个临时子代理在跑；需要时可以先后起多个。临时子代理不能再向下委派或找平级。"

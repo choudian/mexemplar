@@ -1,14 +1,12 @@
 import { create } from "zustand";
 
 import {
-  continueAssistantTaskGraph,
   decideAssistantTaskAdjudication,
   getAssistantTaskGraph,
   getAssistantMeetingTranscript,
   getAssistantTaskBoard,
   getAssistantTaskTodos,
   getCurrentAssistantTaskGraph,
-  stopAssistantTaskGraph,
   updateAssistantTaskTodos,
 } from "../api/assistantTasks";
 import { useExternalCodingSessionStore } from "./externalCodingSessionStore";
@@ -57,8 +55,6 @@ interface AssistantTaskState {
     executorId: string,
     items: AssistantTodoItem[],
   ) => Promise<void>;
-  stopGraph: (sessionId: string, graphId: string, runId?: string | null) => Promise<void>;
-  continueGraph: (sessionId: string, graphId: string) => Promise<void>;
   decideAdjudication: (
     sessionId: string,
     adjudicationId: string,
@@ -249,24 +245,6 @@ export const useAssistantTaskStore = create<AssistantTaskState>((set, get) => ({
         needsResync: true,
       }));
     }
-  },
-  stopGraph: async (sessionId, graphId, runId = null) => {
-    await runGraphMutation(
-      set,
-      sessionId,
-      graphId,
-      () => stopAssistantTaskGraph(sessionId, graphId, runId),
-      "任务停止失败",
-    );
-  },
-  continueGraph: async (sessionId, graphId) => {
-    await runGraphMutation(
-      set,
-      sessionId,
-      graphId,
-      () => continueAssistantTaskGraph(sessionId, graphId),
-      "任务继续失败",
-    );
   },
   decideAdjudication: async (sessionId, adjudicationId, decision, instruction = "") => {
     set({ graphLoading: true, graphError: null });

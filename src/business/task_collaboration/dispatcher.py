@@ -278,16 +278,14 @@ class TaskDispatcher:
                 task
                 for task in rows
                 if task.status == TaskStatus.PENDING_DISPATCH
-                and task.assignee_type
-                and task.assignee_id
             ]
             if use_resume_target:
                 resume_refs: dict[str, str | None] = {}
                 for task in candidates:
                     target = attempts.latest_resume_target_for_task(
                         task.task_id,
-                        assignee_type=task.assignee_type,
-                        assignee_id=task.assignee_id,
+                        assignee_type=task.assignee_type or "ephemeral_subagent",
+                        assignee_id=task.assignee_id or task.task_id,
                     )
                     if target:
                         import json as _json
@@ -311,7 +309,7 @@ class TaskDispatcher:
             )
             future = self.start_attempt_async(
                 task_id=task.task_id,
-                executor_type=task.assignee_type,
+                executor_type=task.assignee_type or "ephemeral_subagent",
                 executor_id=executor_id,
                 lease_owner="unified_continue",
                 checkpoint_ref=resume_refs.get(task.task_id),
@@ -349,16 +347,15 @@ class TaskDispatcher:
                         task_row.status,
                     )
                     return None
-                if not task_row.assignee_type or not task_row.assignee_id:
-                    logger.warning(
-                        "[atomic_continue] task %s has no assignee; skip", task_id
-                    )
-                    return None
+                # 空归属兜底成 ephemeral_subagent + task_id（跟 start_pending_graph_tasks
+                # 的 fallback 对齐，#9：临时执行体 assignee 为空不再被拒绝）
+                effective_assignee_type = task_row.assignee_type or "ephemeral_subagent"
+                effective_assignee_id = task_row.assignee_id or task_id
                 # 选续跑目标（三条硬规则：paused/fenced 都续跑 + executor 匹配 + has_progress）
                 target = attempts.latest_resume_target_for_task(
                     task_id,
-                    assignee_type=task_row.assignee_type,
-                    assignee_id=task_row.assignee_id,
+                    assignee_type=effective_assignee_type,
+                    assignee_id=effective_assignee_id,
                 )
                 checkpoint_ref = None
                 if target:
@@ -377,13 +374,13 @@ class TaskDispatcher:
                         )
                 # 建 attempt（start_attempt 内部有容量=1 守卫 + 唯一索引兜底）
                 executor_id = (
-                    task_row.assignee_id
-                    if task_row.assignee_type == "specialist" and task_row.assignee_id
+                    effective_assignee_id
+                    if effective_assignee_type == "specialist" and effective_assignee_id
                     else task_id
                 )
                 attempt = attempts.start_attempt(
                     task_id=task_id,
-                    executor_type=task_row.assignee_type,
+                    executor_type=effective_assignee_type,
                     executor_id=executor_id,
                     lease_owner="atomic_continue",
                     lease_expires_at=utc_now_naive() + timedelta(seconds=lease_seconds),
@@ -402,6 +399,10 @@ class TaskDispatcher:
                     task_id=task_id,
                     status=TaskStatus.RUNNING,
                 )
+                # 续跑即推进：图控制状态 stopped → running（draft 保持，未启动的图不算跑）。
+                # 走 service 透传——_worker_scope 三仓共享同一 session，另开 repo 会锁冲突。
+                if service.get_graph_control_status(task_row.graph_id) == "stopped":
+                    service.set_graph_control_status(task_row.graph_id, "running")
                 increment_task_collaboration_counter("attempt_started")
         return self._pool.submit(
             self._run_attempt_worker,

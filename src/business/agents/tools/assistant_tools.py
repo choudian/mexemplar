@@ -528,6 +528,16 @@ __all__ = [
     "REPORT_TOOL_BUG",
     "SAVE_PROFILE_SCHEMA",
     "create_save_profile_handler",
+    "START_GRAPH_SCHEMA",
+    "create_start_graph_handler",
+    "STOP_GRAPH_SCHEMA",
+    "create_stop_graph_handler",
+    "REPORT_RESULT_SCHEMA",
+    "create_report_result_handler",
+    "VIEW_TASK_GRAPH_SCHEMA",
+    "create_view_task_graph_handler",
+    "CANCEL_GRAPH_SCHEMA",
+    "create_cancel_graph_handler",
     "CODIFY_AS_TOOL_SCHEMA",
     "create_codify_as_tool_handler",
     "DISMISS_SUGGESTION",
@@ -547,6 +557,8 @@ __all__ = [
     "create_delegate_to_subagent_handler",
     "DELEGATE_TO_SPECIALIST_SCHEMA",
     "create_delegate_to_specialist_handler",
+    "DELEGATE_TO_PLANNER_SCHEMA",
+    "create_delegate_to_planner_handler",
     "CREATE_SPECIALIST_SCHEMA",
     "create_create_specialist_handler",
     "LIST_SPECIALISTS_SCHEMA",
@@ -2129,7 +2141,7 @@ def create_build_task_graph_handler(
             # 用户任务层硬保证：taskId 必须存在且仍在进行中。
             task_id = _validate_user_task_id(taskId)
             # workspaceRoot 是特权字段，只允许受信的 proposal_bridge 直连 service
-            # 设置；LLM 工具入口（主助理 + 规划专员共享此 handler）必须剥离，避免
+            # 设置；LLM 工具入口（规划专员使用此 handler）必须剥离，避免
             # 执行体 blast radius 被重定向、proposal 沙箱守卫被绕过（026 C2）。
             sanitized_nodes = [
                 {
@@ -2151,16 +2163,218 @@ def create_build_task_graph_handler(
                         else _latest_user_message_sequence(session_id)
                     ),
                 )
-            # 024: 建图后触发 scheduler 推进就绪节点（FR-006 自动推进）。scheduler 未装配
-            # 时优雅降级（图已持久化，后续 dispatch/recovery 兜底）。
-            graph_id = result.get("graphId")
-            if graph_id:
-                _trigger_graph_scheduler_start(graph_id, source="build_task_graph")
+            # 建图后不自动执行——主助理审查通过后用 start_graph 启动。
             return to_json(result)
 
         return _run_task_service("build_task_graph", "建图时发生内部错误，请稍后重试。", _action)
 
     return build_task_graph_handler
+
+
+START_GRAPH_SCHEMA = make_tool_schema(
+    name="start_graph",
+    description=(
+        "启动一张已建好的任务图（开始执行图里的节点）。"
+        "planner 建图后图不会自动执行，需审查通过后用此工具启动。"
+    ),
+    properties={
+        "graphId": {"type": "string", "description": "要启动的任务图 id（build_task_graph 返回的 graphId）"},
+    },
+    required=["graphId"],
+)
+
+
+def create_start_graph_handler(session_id: str):
+    """工厂函数：创建 start_graph handler。"""
+
+    def start_graph_handler(graphId: str = "") -> str:
+        """启动任务图：校验控制状态 → 翻 running → trigger scheduler 推进就绪节点。"""
+        graph_id = (graphId or "").strip()
+        if not graph_id:
+            return error_json("graphId 必填")
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            control = service.get_graph_control_status(graph_id)
+            if control not in ("draft", "stopped"):
+                return error_json(
+                    f"图当前控制状态是 {control or '未知'}，"
+                    "只有待跑（draft）或已停止（stopped）的图可以启动。"
+                )
+            service.set_graph_control_status(graph_id, "running")
+        triggered = _trigger_graph_scheduler_start(graph_id, source="start_graph")
+        return to_json({"success": True, "graphId": graph_id, "schedulerTriggered": triggered})
+
+    return start_graph_handler
+
+
+STOP_GRAPH_SCHEMA = make_tool_schema(
+    name="stop_graph",
+    description=(
+        "停止一张运行中的任务图：把图里正在跑的节点暂停（可恢复），图进入停止状态。"
+        "停止后图可被修改（经 planner 的 mutate_task_graph），改完用 start_graph 重启。"
+        "自愈改图的标准流程：stop_graph → continue_subagent(planner_id) 改图 → start_graph。"
+    ),
+    properties={
+        "graphId": {"type": "string", "description": "要停止的任务图 id"},
+    },
+    required=["graphId"],
+)
+
+
+def create_stop_graph_handler(session_id: str):
+    """工厂函数：创建 stop_graph handler。"""
+
+    def stop_graph_handler(graphId: str = "") -> str:
+        """停止任务图：校验运行中 → 停节点 + 翻 stopped。"""
+        graph_id = (graphId or "").strip()
+        if not graph_id:
+            return error_json("graphId 必填")
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            control = service.get_graph_control_status(graph_id)
+            if control != "running":
+                return error_json(
+                    f"图当前控制状态是 {control or '未知'}，只有运行中的图可以停止。"
+                )
+            affected = service.stop_graph(session_id=session_id, graph_id=graph_id)
+        return to_json({"success": True, "graphId": graph_id, "affected": affected})
+
+    return stop_graph_handler
+
+
+REPORT_RESULT_SCHEMA = make_tool_schema(
+    name="report_result",
+    description=(
+        "任务完成后必须调用本工具汇报结论。汇报内容是系统记账与上级裁定的依据——"
+        "不调用时系统只能截取你的最后一句话充当结果，可能丢失结论。"
+        "这是你收尾的最后一步：调用后正常结束即可，不要在汇报后再继续别的工作。"
+    ),
+    properties={
+        "result_summary": {
+            "type": "string",
+            "description": "任务结论汇报：做了什么、结果是什么、关键产出/数据。自包含，不要写指代。",
+        },
+        "artifacts": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "可选的产出物引用列表（文件路径、链接等）。",
+        },
+    },
+    required=["result_summary"],
+)
+
+
+def create_report_result_handler(session_id: str):
+    """工厂函数：创建 report_result handler。
+
+    handler 只做确认——汇报内容作为 tool call 参数本身已持久化在会话里，
+    记账侧（orchestrator._extract_latest_assistant_text）优先读取最后一次
+    report_result 调用的参数，没有才回退捞最后一句 assistant 文本。
+    """
+
+    def report_result_handler(result_summary: str = "", artifacts: list[str] | None = None) -> str:
+        summary = (result_summary or "").strip()
+        if not summary:
+            return error_json("result_summary 必填：汇报内容不能为空。")
+        parts = [summary]
+        if artifacts:
+            parts.append("产出物: " + "; ".join(str(a) for a in artifacts))
+        return to_json(
+            {
+                "success": True,
+                "message": "汇报已记录：'" + summary[:120] + "'。任务收尾即可。",
+            }
+        )
+
+    return report_result_handler
+
+
+VIEW_TASK_GRAPH_SCHEMA = make_tool_schema(
+    name="view_task_graph",
+    description=(
+        "只读查看一张任务图的完整快照：节点（标题/状态/执行体/暂停原因）+ 依赖边 + 待裁定项。"
+        "用于审查任务图——主助理把你派来审图时，用它读取图内容，"
+        "判断拆解是否合理、依赖是否正确、执行体指派是否恰当。只读，无副作用。"
+    ),
+    properties={
+        "graphId": {"type": "string", "description": "要查看的任务图 id（任务书里给出）"},
+    },
+    required=["graphId"],
+)
+
+
+def create_view_task_graph_handler(session_id: str):
+    """工厂函数：创建 view_task_graph handler（只读快照，审图用）。"""
+
+    def view_task_graph_handler(graphId: str = "") -> str:
+        graph_id = (graphId or "").strip()
+        if not graph_id:
+            return error_json("graphId 必填")
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            snapshot = service.get_graph_snapshot(
+                session_id=session_id,
+                graph_id=graph_id,
+                allow_cross_session=True,
+            )
+            if snapshot is None:
+                return error_json(f"任务图不存在: {graph_id}")
+            return to_json(TaskCollaborationService.snapshot_to_dict(snapshot))
+
+    return view_task_graph_handler
+
+
+CANCEL_GRAPH_SCHEMA = make_tool_schema(
+    name="cancel_graph",
+    description=(
+        "废弃一张任务图：图内未终态节点全部取消，图进入废弃终态（不可恢复）。"
+        "用于审查后发现整张图方向错误、或计划不再需要的场景。"
+        "draft/running/stopped 状态的图都可以废弃；废弃前图会先被取消执行。"
+        "这是不可逆操作——节点都失败、图被废弃后只能重新规划。"
+    ),
+    properties={
+        "graphId": {"type": "string", "description": "要废弃的任务图 id"},
+        "reason": {
+            "type": "string",
+            "description": "废弃原因（审计用）：为什么这张图不要了",
+        },
+    },
+    required=["graphId", "reason"],
+)
+
+
+def create_cancel_graph_handler(session_id: str):
+    """工厂函数：创建 cancel_graph handler（主助理废弃图）。"""
+
+    def cancel_graph_handler(graphId: str = "", reason: str = "") -> str:
+        graph_id = (graphId or "").strip()
+        why = (reason or "").strip()
+        if not graph_id:
+            return error_json("graphId 必填")
+        if not why:
+            return error_json("reason 必填：废弃是不可逆操作，必须说明原因")
+        from src.business.task_collaboration.service import TaskCollaborationService
+
+        with TaskCollaborationService() as service:
+            control = service.get_graph_control_status(graph_id)
+            if control is None:
+                return error_json(f"任务图不存在: {graph_id}")
+            if control == "cancelled":
+                return to_json({"success": True, "graphId": graph_id, "message": "图已是废弃状态"})
+            affected = service.cancel_graph(session_id=session_id, graph_id=graph_id)
+        return to_json(
+            {
+                "success": True,
+                "graphId": graph_id,
+                "cancelledTaskCount": affected,
+                "reason": why,
+            }
+        )
+
+    return cancel_graph_handler
 
 
 MUTATE_TASK_GRAPH_SCHEMA = make_tool_schema(
@@ -2230,18 +2444,25 @@ def create_mutate_task_graph_handler(
         changes: list[dict] | None = None,
         reason: str = "",
     ) -> str:
-        """自愈改图。"""
+        """静止时改图（draft/stopped），运行中的图先停止再修改。"""
 
         def _action() -> str:
             with _task_graph_service() as service:
+                # 图控制状态硬校验：只有静止（draft/stopped）的图可改。
+                # 运行中改图会与 scheduler 派发竞争，废弃图不可复活。
+                control = service.get_graph_control_status(graphId)
+                if control not in ("draft", "stopped"):
+                    raise ValueError(
+                        f"图当前控制状态是 {control or '未知'}，只有待跑或已停止的图可以修改；"
+                        "运行中的图请先 stop_graph 停止再修改。"
+                    )
                 result = service.mutate_task_graph(
                     graph_id=graphId,
                     session_id=session_id,
                     changes=changes or [],
                     reason=reason,
                 )
-            if result.get("rescanned") and graphId:
-                _trigger_graph_scheduler_start(graphId, source="mutate_task_graph")
+            # 改完不自动执行——图重新动起来统一走 start_graph
             return to_json(result)
 
         return _run_task_service("mutate_task_graph", "改图时发生内部错误，请稍后重试。", _action)
@@ -2329,8 +2550,7 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
         "子代理在全新会话启动，看不到你与用户的任何对话历史；"
         "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
         "必须用 context_message_indexes 把内容所在消息带上，禁止只写『之前讨论的方案』这类指代。"
-        "简单任务（1-2 步单领域）设 complexity=simple 走快速委派，不建任务图；"
-        "复杂任务（多步/跨领域/有依赖）默认走统一任务图，返回受理回执（accepted+taskId），"
+        "任务异步受理：立刻返回受理回执（accepted+taskId），不阻塞你的回合，"
         "结果完成后经「任务结果回流提示」送达，由你用 decide_task_adjudication 裁定。"
     ),
     properties={
@@ -2368,15 +2588,6 @@ DELEGATE_TO_SUBAGENT_SCHEMA = make_tool_schema(
             "items": {"type": "string"},
             "description": "可选工具名称白名单；不传则继承当前助理会话可用技能池",
         },
-        "complexity": {
-            "type": "string",
-            "enum": ["simple", "complex"],
-            "description": (
-                "任务复杂度。simple=1-2步单领域快速委派，不建任务图；"
-                "complex=多步/跨领域/有依赖，建任务图由调度器推进。"
-                "默认 complex（向后兼容）。"
-            ),
-        },
     },
     required=["task_description", "taskId"],
 )
@@ -2410,10 +2621,9 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
         taskId: str = "",
         execution_context: str = "",
         tool_whitelist: list[str] | None = None,
-        complexity: str = "complex",
         context_message_indexes: list[int] | None = None,
     ) -> str:
-        """将任务委托给临时子代理"""
+        """将任务委托给临时子代理（异步受理）"""
         from src.business.agents.delegation_context import DelegationContextError
 
         try:
@@ -2427,12 +2637,11 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
                 # 错误经 tool result 回主助理，由其重填。
                 return error_json(str(exc))
             logger.info(
-                "[delegate_to_subagent] session=%s task_chars=%d context_chars=%d whitelist_count=%d complexity=%s ctx_indexes=%d",
+                "[delegate_to_subagent] session=%s task_chars=%d context_chars=%d whitelist_count=%d ctx_indexes=%d",
                 session_id,
                 len(task_description or ""),
                 len(merged_context),
                 len(tool_whitelist or []),
-                complexity,
                 len(context_message_indexes or []),
             )
             if dispatch_callback is not None:
@@ -2442,7 +2651,6 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
                         task_description=task_description,
                         execution_context=merged_context,
                         tool_whitelist=tool_whitelist,
-                        complexity=complexity,
                         user_task_id=task_id,
                     )
                 )
@@ -2460,6 +2668,105 @@ def create_delegate_to_subagent_handler(session_id: str, dispatch_callback=None)
             return error_json("委派任务时发生内部错误，请稍后重试。")
 
     return delegate_to_subagent_handler
+
+
+DELEGATE_TO_PLANNER_SCHEMA = make_tool_schema(
+    name="delegate_to_planner",
+    description=(
+        "将复杂任务委托给规划专员（planner），由 planner 调研现状并把任务拆成带依赖关系的 DAG 任务图。"
+        "planner 看不到你与用户的任何对话历史；"
+        "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
+        "必须用 context_message_indexes 把内容所在消息带上，禁止只写『之前讨论的方案』这类指代。"
+        "planner 产出的任务图由调度器按依赖自动推进，执行体跑完后结果经「任务结果回流提示」送达，"
+        "由你用 decide_task_adjudication 裁定。"
+        "返回 planner_id 和 graphId；后续需要更新任务图（补充需求/自愈改图）时，"
+        "用 continue_subagent(planner_id) 在原规划会话上续跑。"
+    ),
+    properties={
+        "task_description": {
+            "type": "string",
+            "description": (
+                "要委托给 planner 规划的任务描述。planner 看不到对话历史，描述必须自包含；"
+                "引用对话中已产生的内容时必须配合 context_message_indexes 携带原文"
+            ),
+        },
+        "taskId": {"type": "string", "description": "用户任务 id（create_task 返回的 taskId），委派必须挂在用户任务底下"},
+        "execution_context": {
+            "type": "string",
+            "description": (
+                "补充给 planner 的执行上下文，例如用户约束、已知背景或输出格式要求。"
+                "planner 看不到对话历史；引用对话中已产生的内容时必须使用 "
+                "context_message_indexes 携带原文，禁止只写指代。"
+                "被 context_message_indexes 引用的消息原文会由系统自动附加在本字段之后"
+            ),
+        },
+        "context_message_indexes": {
+            "type": "array",
+            "items": {"type": "integer"},
+            "description": (
+                "要携带给 planner 的历史消息下标（1-based，按你本轮收到的消息顺序计数）；"
+                "不得引用 system 消息（其中可能含当前 Agent 专属能力目录）。"
+                "planner 看不到任何对话历史；"
+                "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
+                "必须用本参数把内容所在消息带上，禁止只写指代。"
+                "系统会把被引用消息的原文逐字附给 planner"
+            ),
+        },
+    },
+    required=["task_description", "taskId"],
+)
+
+
+def create_delegate_to_planner_handler(session_id: str, dispatch_callback=None):
+    """工厂函数：创建 delegate_to_planner handler。"""
+
+    def delegate_to_planner_handler(
+        task_description: str,
+        taskId: str = "",
+        execution_context: str = "",
+        context_message_indexes: list[int] | None = None,
+    ) -> str:
+        """将复杂任务委托给规划专员 planner 产出 DAG 任务图"""
+        from src.business.agents.delegation_context import DelegationContextError
+
+        try:
+            task_id = (taskId or "").strip()
+            try:
+                merged_context = _merge_context_message_indexes(
+                    execution_context, context_message_indexes
+                )
+            except DelegationContextError as exc:
+                # fail-closed：下标非法/无快照/超限整体拒绝，不部分展开
+                return error_json(str(exc))
+            logger.info(
+                "[delegate_to_planner] session=%s task_chars=%d context_chars=%d ctx_indexes=%d",
+                session_id,
+                len(task_description or ""),
+                len(merged_context),
+                len(context_message_indexes or []),
+            )
+            if dispatch_callback is not None:
+                return to_json(
+                    dispatch_callback(
+                        parent_session_id=session_id,
+                        task_description=task_description,
+                        execution_context=merged_context,
+                        user_task_id=task_id,
+                    )
+                )
+            # 无 dispatch_callback（仅测试场景）时只返回占位结果
+            return to_json(
+                {
+                    "success": True,
+                    "message": "任务已委托给规划专员",
+                    "delegation_type": "planner",
+                }
+            )
+        except Exception as e:
+            logger.error("[delegate_to_planner] 委派失败: %s", e, exc_info=True)
+            return error_json("委派规划任务时发生内部错误，请稍后重试。")
+
+    return delegate_to_planner_handler
 
 
 LOAD_TASK_RESULT_SCHEMA = make_tool_schema(
@@ -2622,7 +2929,10 @@ CONTINUE_SUBAGENT_SCHEMA = make_tool_schema(
     description=(
         "继续执行一个已暂停（suspended）的可唤回子代理。仅当 delegate_to_subagent 直接同步返回 "
         "paused=true 时使用——子代理达到迭代上限或可恢复失败会暂停，用此工具续跑配额、从断点接着跑；"
-        "也可对已完成但未达标的子代理带追加指令返工。异步委派（返回 taskId）的子代理不要用本工具。"
+        "也可对已完成但未达标的子代理带追加指令返工。"
+        "可续跑的子代理包括临时子代理、专员和 planner；续 planner 用于在原规划会话上更新任务图"
+        "（补充需求/自愈改图），此时传 delegate_to_planner 返回的 planner_id。"
+        "异步委派（返回 taskId）的子代理不要用本工具。"
     ),
     properties={
         "subagent_id": {

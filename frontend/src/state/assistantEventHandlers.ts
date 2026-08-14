@@ -1,6 +1,7 @@
 import { sendAssistantMessage } from "../api/assistant";
 import type { AssistantConfirmation, AssistantMessage, ClarificationRequest } from "../api/assistant";
 import type { UiEvent } from "../api/client";
+import { useAssistantTaskStore } from "./assistantTaskStore";
 import type { AssistantState } from "./assistantStore";
 import type { ActivityStep, AssistantProgress, Subagent } from "./assistantTypes";
 import {
@@ -117,9 +118,19 @@ function flushQueuedMessageAfterRun(
 ): void {
   const queued = get().queuedMessageBySession[sessionId];
   if (!queued) return;
+  // 全异步 busy：回合结束但当前图仍有在跑/待派发节点时，排队消息保持排队不自动外发
+  // （回流回合跑完、任务终态后自然放行）。尽力判——多图场景漏判时由后端 busy 拒绝兜底回排队。
+  const graph = useAssistantTaskStore.getState().currentGraph;
+  const graphBusy =
+    graph?.tasks.some(
+      (task) => task.status === "running" || task.status === "pending_dispatch",
+    ) ?? false;
   const map = { ...get().queuedMessageBySession };
   delete map[sessionId];
-  const autoSend = queued.state === "queued" && (status === "succeeded" || status === "waiting_for_user");
+  const autoSend =
+    queued.state === "queued" &&
+    (status === "succeeded" || status === "waiting_for_user") &&
+    !graphBusy;
   if (!autoSend) {
     set({
       queuedMessageBySession: map,

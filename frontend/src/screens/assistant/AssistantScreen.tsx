@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { Badge, Button, IconButton } from "../../components/primitives";
 import type { AssistantMessage } from "../../api/assistant";
-import { listUserTasks, type UserTaskItem } from "../../api/userTasks";
+import { getUserTaskDistribution, listUserTasks, type UserTaskItem } from "../../api/userTasks";
 import { useAssistantStore } from "../../state/assistantStore";
 import type { AssistantTurnActivity, PendingAssistantMessage } from "../../state/assistantStore";
 import { emptyTurn, turnIdFromMessage, turnIdFromSequence } from "../../state/assistantStore";
@@ -117,8 +117,6 @@ export function AssistantScreen(): JSX.Element {
   const loadCurrentTaskGraph = useAssistantTaskStore((state) => state.loadCurrentGraph);
   const loadTaskBoard = useAssistantTaskStore((state) => state.loadBoard);
   const loadMeeting = useAssistantTaskStore((state) => state.loadMeeting);
-  const stopTaskGraph = useAssistantTaskStore((state) => state.stopGraph);
-  const continueTaskGraph = useAssistantTaskStore((state) => state.continueGraph);
   const decideTaskAdjudication = useAssistantTaskStore((state) => state.decideAdjudication);
   const resetTaskGraph = useAssistantTaskStore((state) => state.reset);
   const executeResync = useAssistantTaskStore((state) => state.executeResync);
@@ -142,6 +140,23 @@ export function AssistantScreen(): JSX.Element {
       .then((res) => setUserTasks(res.tasks ?? []))
       .catch(() => setUserTasks([]));
   }, [activeSessionId, messages.length, userTaskVersion]);
+
+  // 全异步 busy：主助理回合空闲但任务还在跑时保持输入"忙"态（排队编辑+停止按钮）。
+  // 解锁由任务状态事件驱动：task_graph.changed / user_task.changed → userTaskVersion → 本 effect 重拉。
+  const [sessionBusy, setSessionBusy] = useState(false);
+  const focusUserTaskId = userTasks[0]?.taskId;
+  useEffect(() => {
+    if (!activeSessionId || !focusUserTaskId) {
+      setSessionBusy(false);
+      return;
+    }
+    getUserTaskDistribution(activeSessionId, focusUserTaskId)
+      .then((res) => {
+        const d = res.distribution ?? {};
+        setSessionBusy((d.running ?? 0) + (d.pending_dispatch ?? 0) > 0);
+      })
+      .catch(() => setSessionBusy(false));
+  }, [activeSessionId, focusUserTaskId, userTaskVersion]);
 
   const activeTurns = useMemo(
     () => (activeSessionId ? turnActivityBySession[activeSessionId] ?? {} : {}),
@@ -242,10 +257,13 @@ export function AssistantScreen(): JSX.Element {
         : messages,
     [activeSessionId, messages, pendingOptimisticMessages],
   );
-  const isRunning = progress.status === "running";
+  const progressRunning = progress.status === "running";
+  // 合成忙态：回合在跑（progress）或任务在跑（sessionBusy）都算"忙"，驱动输入框排队态。
+  // threadBlocks 只认回合运行（轮次已结束但任务在跑时，那轮的活动步骤不算运行中）。
+  const isRunning = progressRunning || sessionBusy;
   const threadBlocks = useMemo(
-    () => buildThreadBlocks(visibleMessages, activeTurns, activeTurnId, isRunning),
-    [activeTurnId, activeTurns, isRunning, visibleMessages],
+    () => buildThreadBlocks(visibleMessages, activeTurns, activeTurnId, progressRunning),
+    [activeTurnId, activeTurns, progressRunning, visibleMessages],
   );
   // 任务卡片挂在第一个过程块的位置——即原来「正在处理」出现的地方
   const firstTransparencyTurnId = useMemo(

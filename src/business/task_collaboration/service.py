@@ -406,6 +406,8 @@ class TaskCollaborationService(AtomicTaskService):
                 user_message_sequence=user_message_sequence,
                 user_task_id=user_task_id,
                 owner_session_id=session_id,
+                # request graph 建出来就在派发（简单委派/异步派发的容器），控制状态直接 running
+                graph_control_status="running",
             )
             status = task.status
         emit_graph_changed(
@@ -543,7 +545,7 @@ class TaskCollaborationService(AtomicTaskService):
         confirmation_required = False
 
         with self._atomic():
-            # 1. 创建根任务（图的容器）
+            # 1. 创建根任务（图的容器）——控制状态 draft：建好待审查，start_graph 才启动
             self._tasks.create_task(
                 graph_id=resolved_graph_id,
                 session_id=session_id,
@@ -554,6 +556,7 @@ class TaskCollaborationService(AtomicTaskService):
                 user_message_sequence=user_message_sequence,
                 user_task_id=user_task_id,
                 owner_session_id=session_id,
+                graph_control_status="draft",
             )
 
             # 2. 逐节点创建任务
@@ -1042,9 +1045,21 @@ class TaskCollaborationService(AtomicTaskService):
             for adjudication in self._adjudications.list_pending_for_graph(graph_id)
         }
 
-    def get_graph_snapshot(self, *, session_id: str, graph_id: str) -> TaskGraphSnapshot | None:
+    def get_graph_snapshot(
+        self,
+        *,
+        session_id: str,
+        graph_id: str,
+        allow_cross_session: bool = False,
+    ) -> TaskGraphSnapshot | None:
         tasks = self._tasks.list_graph_tasks(graph_id)
-        if not tasks or any(task.session_id != session_id for task in tasks):
+        if not tasks:
+            return None
+        # allow_cross_session：审图专员是子会话（task.session_id 是主助理会话），
+        # 归属校验会误拒。graph_id 不可猜测、由任务书携带——审图场景专用边界。
+        if not allow_cross_session and any(
+            task.session_id != session_id for task in tasks
+        ):
             return None
         edges = self._tasks.list_graph_edges(graph_id)
         pending_by_task = {
@@ -1157,6 +1172,10 @@ class TaskCollaborationService(AtomicTaskService):
         """供上层 adapter 证明 session 图执行已静默，不暴露 Repository。"""
         return self._tasks.has_nonterminal_execution_tasks(session_id)
 
+    def has_active_execution_tasks(self, session_id: str) -> bool:
+        """busy 判据：仍有 running/pending_dispatch 节点且图在运行（见 repo 同名方法）。"""
+        return self._tasks.has_active_execution_tasks(session_id)
+
     def list_graphs_for_user_task(
         self, user_task_id: str
     ) -> list[dict[str, object]]:
@@ -1247,6 +1266,11 @@ class TaskCollaborationService(AtomicTaskService):
         return affected
 
     def stop_graph(self, *, session_id: str, graph_id: str) -> int:
+        # 只停运行中的图：draft（建好待审查）本来就没跑——翻它的 pending 节点会让
+        # start_graph 后 scheduler 无节点可派（只派 pending_dispatch），图卡死；
+        # cancelled 终态不碰；已 stopped 幂等跳过。
+        if self._tasks.get_graph_control_status(graph_id) != "running":
+            return 0
         affected = self._bulk_transition(
             session_id=session_id,
             graph_id=graph_id,
@@ -1255,6 +1279,8 @@ class TaskCollaborationService(AtomicTaskService):
             suspend_reason=SuspendReason.USER_STOP,
             change_type="graph_stopped",
         )
+        # 控制状态：running → stopped（显式操作驱动，不推导）
+        self._tasks.set_graph_control_status(graph_id, "stopped")
         from src.business.agents import run_context
         from src.business.task_collaboration.dispatcher import graph_cancel_key
         from src.execution.cancellation import CancelReason
@@ -1338,6 +1364,40 @@ class TaskCollaborationService(AtomicTaskService):
             "success": len(pushed) > 0 or len(not_pushed) == 0,
         }
 
+    def stop_user_task(
+        self,
+        *,
+        session_id: str,
+        user_task_id: str,
+    ) -> dict:
+        """用户对一件事点「停止」：遍历这件事底下所有图，把正在跑的都停了。
+
+        返回结构化报告（跟 continue_user_task 对称）：
+        ``{"stopped": [{graph_id, affected}], "total": int}``
+
+        stop_graph 内部把 PENDING_DISPATCH/RUNNING 的节点改成 SUSPENDED(USER_STOP)
+        并发取消信号；已经停了的（等用户/撞额度）和终态的不受影响。
+        """
+        roots = self._tasks.list_graph_roots_for_user_task(user_task_id)
+        stopped: list[dict] = []
+        for root in roots:
+            affected = self.stop_graph(session_id=session_id, graph_id=root.graph_id)
+            if affected > 0:
+                stopped.append({"graph_id": root.graph_id, "affected": affected})
+        return {
+            "stopped": stopped,
+            "total": sum(item["affected"] for item in stopped),
+            "success": True,
+        }
+
+    def set_graph_control_status(self, graph_id: str, status: str) -> bool:
+        """透传：翻图根控制状态（供 dispatcher 在 _worker_scope 共享事务内调用）。"""
+        return self._tasks.set_graph_control_status(graph_id, status)
+
+    def get_graph_control_status(self, graph_id: str) -> str | None:
+        """透传：读图根控制状态（mutate/start 校验用）。"""
+        return self._tasks.get_graph_control_status(graph_id)
+
     def cancel_graph(
         self,
         *,
@@ -1353,6 +1413,8 @@ class TaskCollaborationService(AtomicTaskService):
             expected_graph_version=expected_graph_version,
             change_type="graph_cancelled",
         )
+        # 控制状态 → cancelled（废弃是静态终态标记）
+        self._tasks.set_graph_control_status(graph_id, "cancelled")
         from src.business.agents import run_context
         from src.business.task_collaboration.dispatcher import graph_cancel_key
         from src.execution.cancellation import CancelReason

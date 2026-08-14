@@ -222,6 +222,10 @@ class SpecialistService:
         if specialist is None:
             raise KeyError("specialist_not_found")
 
+        # planner 是系统内置规划专员，可看不可编辑
+        if getattr(specialist, "role_kind", "executor") == "planner":
+            raise PermissionError("planner 是系统内置规划专员，不可编辑")
+
         # 如果修改了名称（忽略大小写后确实不同），检查新名称唯一性
         if name is not None and name.lower() != specialist.name.lower():
             existing = self._repo.get_specialist_by_name(name)

@@ -50,6 +50,13 @@ class UserTaskContinueResponse(BaseModel):
     success: bool
 
 
+class UserTaskStopResponse(BaseModel):
+    """用户点停止的结构化回报。"""
+    stopped: list[dict[str, Any]]
+    total: int
+    success: bool
+
+
 class UserTaskGraphSummary(BaseModel):
     """某 user_task 名下一张图的摘要。"""
     graphId: str
@@ -132,6 +139,28 @@ def continue_user_task(
         pushed=pushed,
         notPushed=not_pushed,
         stillFinishing=still_finishing,
+        total=report.get("total", 0),
+        success=report.get("success", False),
+    )
+
+
+@router.post("/{task_id}/stop", response_model=UserTaskStopResponse)
+def stop_user_task(
+    session_id: str,
+    task_id: str,
+    runtime: AssistantRuntime = Depends(get_assistant_runtime),
+) -> UserTaskStopResponse:
+    """用户对一件事点「停止」：遍历这件事底下所有图，把正在跑的都停了。
+
+    返回结构化回报：停了几张图、几张没动。
+    """
+    report = runtime.stop_user_task(session_id, task_id)
+    stopped = [
+        {"graphId": item.get("graph_id"), "affected": item.get("affected", 0)}
+        for item in report.get("stopped", [])
+    ]
+    return UserTaskStopResponse(
+        stopped=stopped,
         total=report.get("total", 0),
         success=report.get("success", False),
     )

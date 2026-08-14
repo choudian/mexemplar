@@ -23,10 +23,7 @@ from src.desktop_api.schemas import (
     AssistantTaskBoardResponse,
     AssistantTaskGraphCancelRequest,
     AssistantTaskGraphCancelResponse,
-    AssistantTaskGraphContinueResponse,
     AssistantTaskGraphSnapshot,
-    AssistantTaskGraphStopRequest,
-    AssistantTaskGraphStopResponse,
     AssistantTodoResponse,
     AssistantTodoUpdateRequest,
 )
@@ -105,53 +102,6 @@ async def get_task_graph(session_id: str, graph_id: str) -> AssistantTaskGraphSn
         if snapshot is None:
             raise HTTPException(status_code=404, detail="Task graph not found.")
         return AssistantTaskGraphSnapshot.model_validate(service.snapshot_to_dict(snapshot))
-
-
-@router.post(
-    "/sessions/{session_id}/task-graphs/{graph_id}/stop",
-    response_model=AssistantTaskGraphStopResponse,
-)
-async def stop_task_graph(
-    session_id: str,
-    graph_id: str,
-    body: AssistantTaskGraphStopRequest | None = None,
-    runtime: AssistantRuntime = Depends(get_assistant_runtime),
-) -> AssistantTaskGraphStopResponse:
-    try:
-        result = runtime.stop_task_graph(
-            session_id=session_id,
-            graph_id=graph_id,
-            run_id=body.runId if body else None,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="Task graph not found.") from exc
-    return AssistantTaskGraphStopResponse(
-        accepted=True,
-        graphId=graph_id,
-        affectedTaskCount=int(result.get("affected", 0)),
-        cancelSignalAccepted=bool(result.get("cancel_signal_accepted", False)),
-    )
-
-
-@router.post(
-    "/sessions/{session_id}/task-graphs/{graph_id}/continue",
-    response_model=AssistantTaskGraphContinueResponse,
-)
-async def continue_task_graph(
-    session_id: str,
-    graph_id: str,
-    runtime: AssistantRuntime = Depends(get_assistant_runtime),
-) -> AssistantTaskGraphContinueResponse:
-    try:
-        result = runtime.continue_task_graph(session_id=session_id, graph_id=graph_id)
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="Task graph not found.") from exc
-    return AssistantTaskGraphContinueResponse(
-        accepted=True,
-        graphId=graph_id,
-        resumedTaskCount=int(result.get("resumed", 0)),
-        startedAttemptCount=int(result.get("started", 0)),
-    )
 
 
 @router.post(
