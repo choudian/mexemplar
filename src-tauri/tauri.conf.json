@@ -31,6 +31,10 @@
     "externalBin": [
       "binaries/mexamplar-sidecar"
     ],
+    "resources": {
+      "../config.example.json": "config.example.json",
+      "../config.example.comments.md": "config.example.comments.md"
+    },
     "windows": {
       "nsis": {
         "installMode": "both",
