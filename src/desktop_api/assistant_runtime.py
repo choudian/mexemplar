@@ -1002,8 +1002,10 @@ class AssistantRuntime:
                 "taskId": None,
             }
         else:
-            # 回退：直接查该 session 取 label/lastOutput
-            transcript_result = observability.build_transcript(target)
+            # 回退：直接查该 session 取 label/lastOutput（同样包含执行体文本消息）
+            transcript_result = observability.build_transcript(
+                target, include_final_text=True
+            )
             summary = {
                 "subagentId": target,
                 "label": target,
@@ -1028,7 +1030,10 @@ class AssistantRuntime:
                 "children": [],
             }
 
-        transcript_result = observability.build_transcript(target)
+        # 执行体详情：过程步骤 + 它的文本消息（结论只在这一个展示面，必须带上）
+        transcript_result = observability.build_transcript(
+            target, include_final_text=True
+        )
         children = observability.build_subagent_list(target)
         # 批量建立 session→task_id 映射，让前端能按 task_id 加载 todo（⑦ 递归规则）
         all_session_ids = [target] + [c.subagent_id for c in children]

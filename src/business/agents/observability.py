@@ -123,11 +123,16 @@ class AssistantObservability:
         *,
         after_sequence: int | None = None,
         before_sequence: int | None = None,
+        include_final_text: bool = False,
     ) -> TranscriptResult:
         """由 MessageRepository 的中间 assistant（含 tool_calls）与 tool 结果消息重建过程时间线。
 
         kind=reasoning 仅从【带 tool_calls 的中间消息】重建（与实时口径一致，C2-E4）；
         最终无工具调用的回复不进时间线；命中既有压缩痕迹（006「之前的对话内容」summary）即标记 compressed。
+
+        ``include_final_text=True``（执行体详情抽屉专用）：纯文本 assistant 消息也进时间线
+        （kind=reasoning）——执行体的结论只存在于抽屉这一处展示面，被默认口径排除后
+        用户看不到它"说了什么"（真机验证踩中）。主助理路径不传，口径不变。
         """
         sid = (session_id or "").strip()
         if not sid:
@@ -183,7 +188,20 @@ class AssistantObservability:
             if role == "assistant":
                 raw_tc = getattr(msg, "tool_calls", None)
                 if not raw_tc:
-                    continue  # 最终回复，不进时间线
+                    if include_final_text:
+                        content = getattr(msg, "content", None)
+                        if content:
+                            seq += 1
+                            text, text_redacted = _redact_with_flag(content)
+                            steps.append(
+                                ActivityStep(
+                                    kind="reasoning",
+                                    seq=seq,
+                                    text=text,
+                                    redacted=text_redacted,
+                                )
+                            )
+                    continue  # 最终回复，默认不进时间线
                 content = getattr(msg, "content", None)
                 if content:
                     seq += 1
