@@ -134,6 +134,9 @@ function UserTaskCard({
   const [distribution, setDistribution] = useState<TaskDistribution | null>(null);
   const [loadingDist, setLoadingDist] = useState(false);
   const [graphs, setGraphs] = useState<UserTaskGraphSummary[]>([]);
+  // plan 图（planner DAG）的全部节点 taskId——这些执行体从局部图/全图弹窗里看，
+  // 不平铺为独立执行体卡片（设计 [95]：图里节点派出去的只从图里进）。
+  const [planTaskIds, setPlanTaskIds] = useState<Set<string>>(new Set());
   const [executorTasks, setExecutorTasks] = useState<AssistantTaskSnapshot[]>([]);
   const [todosByTaskId, setTodosByTaskId] = useState<Record<string, AssistantTodoItem[]>>({});
   const [continueResult, setContinueResult] = useState<UserTaskContinueResponse | null>(null);
@@ -168,6 +171,17 @@ function UserTaskCard({
       .then((res) => {
         const gs = res.graphs ?? [];
         setGraphs(gs);
+        // plan 图拉一次快照收集节点集合（供 subagents 平铺过滤）；失败降级为空集合
+        const planGraphs = gs.filter((g) => g.kind === "plan");
+        Promise.all(
+          planGraphs.map((g) => getAssistantTaskGraph(sessionId, g.graphId).catch(() => null)),
+        ).then((snaps) => {
+          const ids = new Set<string>();
+          for (const snap of snaps) {
+            for (const t of snap?.tasks ?? []) ids.add(t.taskId);
+          }
+          setPlanTaskIds(ids);
+        });
         // 设计 [95]: 图里节点派出去的只从图里进（局部图/全图弹窗）；
         // 卡片下只放直接挂载的执行体。request 容器图（kind!=plan）的节点都是
         // 委派执行体——不管几张、几个节点，一律平铺；plan 图走局部图不在这列。
@@ -275,6 +289,9 @@ function UserTaskCard({
     for (const sub of subagents) {
       // 委派那一刻的 seq；缺锚点时落到末尾，不硬塞开头造成假顺序
       const taskId = sub.taskId ?? taskIdByExecutorSession[sub.subagentId];
+      // plan 图（DAG）节点的执行体不平铺——它们从局部图/全图弹窗里看；
+      // 查不到归属的（无 taskId）宁可保留平铺，不隐藏。
+      if (taskId && planTaskIds.has(taskId)) continue;
       entries.push({
         seq: sub.anchorSeq ?? Number.MAX_SAFE_INTEGER,
         tie: 1,
@@ -315,6 +332,7 @@ function UserTaskCard({
     steps,
     subagents,
     graphsWithNodes,
+    planTaskIds,
     todosByTaskId,
     storeTodos,
     taskIdByExecutorSession,

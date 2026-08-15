@@ -65,6 +65,20 @@ class AttemptHeartbeat:
         self._thread = None
 
     def __enter__(self) -> "AttemptHeartbeat":
+        # 立即续一次租：线程池排队期间租约一直在倒计时（submit 到 worker 真正
+        # 开始跑之间没有人心跳），多任务并发排队超过 lease 就会被 recovery 误
+        # fence → 重派 → 再排队——死循环（真机验证踩中：max_workers=4 一次派 7 个）。
+        # 开始执行的时刻才是租约的正确起点。续约被拒（已被 fence/终态）只记日志：
+        # worker 继续跑完，记账时 CAS 自会拒绝，不与 recovery 抢。
+        try:
+            expires_at = utc_now_naive() + timedelta(seconds=self._lease_seconds)
+            self._renew(self._attempt_id, lease_expires_at=expires_at)
+        except Exception:
+            logger.warning(
+                "[task attempt] initial lease renewal failed: %s",
+                self._attempt_id,
+                exc_info=True,
+            )
         self.start()
         return self
 
