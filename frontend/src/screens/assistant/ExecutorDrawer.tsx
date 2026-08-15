@@ -111,7 +111,7 @@ function ExecutorDrawer({
             <Bot size={16} />
             <div>
               <strong>{detail?.summary.label ?? currentLayer.label}</strong>
-              <small>{detail?.summary.task || ""}</small>
+              <small title={detail?.summary.task || undefined}>{detail?.summary.task || ""}</small>
             </div>
           </div>
           <button type="button" className="me-icon-button" aria-label="关闭" onClick={onClose}><X size={16} /></button>

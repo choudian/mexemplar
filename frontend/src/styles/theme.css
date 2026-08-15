@@ -9062,37 +9062,61 @@ select:focus-visible,
   box-shadow: -18px 0 40px rgb(20 20 20 / 16%);
 }
 
+/* 头部固定不长个：任务描述可能是整份任务书，不截断的话 header 会把
+   下面的过程列表整个挤出视口（只剩一个超高标题和一个关闭按钮）。 */
 .assistant-drawer-head {
   display: flex;
-  align-items: center;
+  flex-shrink: 0;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 10px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border-1);
 }
 
+.assistant-drawer-head > .me-icon-button {
+  flex-shrink: 0;
+}
+
 .assistant-drawer-title {
   display: flex;
-  align-items: center;
+  min-width: 0;
+  align-items: flex-start;
   gap: 10px;
   color: var(--accent);
 }
 
+.assistant-drawer-title > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
 .assistant-drawer-title > div {
   display: flex;
+  min-width: 0;
   flex-direction: column;
 }
 
 .assistant-drawer-title strong {
   color: var(--text);
   font-size: 13.5px;
+  overflow-wrap: anywhere;
 }
 
+/* 全文挂在 title 属性上，悬停可看 */
 .assistant-drawer-title small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   color: var(--text-muted);
   font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .assistant-drawer-body {
+  min-height: 0;
   flex: 1;
   overflow-y: auto;
   padding: 14px 16px;

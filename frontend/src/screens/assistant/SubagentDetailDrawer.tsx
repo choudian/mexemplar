@@ -60,7 +60,7 @@ function SubagentDetailDrawer({
             <Bot size={16} />
             <div>
               <strong>{subagent.label}</strong>
-              <small>{subagent.task}</small>
+              <small title={subagent.task || undefined}>{subagent.task}</small>
             </div>
           </div>
           <button type="button" className="me-icon-button" aria-label="关闭" onClick={onClose}>
