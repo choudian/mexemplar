@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from dataclasses import replace
 from typing import Any
@@ -35,8 +36,28 @@ from src.execution.process_manager import (
     ProcessOperationError,
     get_process_manager,
 )
+from src.execution.shell_resolver import resolve_shell, shell_kind
 
 logger = logging.getLogger(__name__)
+
+# 裸露的 Windows 盘符路径（E:\code）。bash 把行内反斜杠当转义符，`cd E:\code\Exemplar`
+# 实际执行的是 `cd E:codeExemplar` —— 静默变成不存在的路径（真机：planner 9 次 exec 全挂）。
+# 只用于「命令已经失败」时补一条定位提示，不做执行前拦截：引号包裹的写法
+# （"E:\code" / 'E:\code'）在 bash 下是合法的，执行前按正则拦会误杀。
+_WINDOWS_ABS_PATH_RE = re.compile(r"[A-Za-z]:\\")
+
+
+def _current_shell_kind() -> str:
+    """当前 exec 实际使用的 shell 种类（bash/sh/cmd/pwsh）。
+
+    ``resolve_shell`` 带 lru_cache，这里每次调用不额外付出解析成本。解析失败返回
+    ``unknown``——shell 种类只用于给模型的提示信息，拿不到不能影响命令执行。
+    """
+    try:
+        return shell_kind(resolve_shell())
+    except Exception:
+        logger.warning("[agent_tools] shell kind resolution failed", exc_info=True)
+        return "unknown"
 
 
 def _handle_command_start_error(
@@ -224,6 +245,9 @@ def exec_handler(
         payload = manager.poll(record.process_id) or {}
         payload["duplicate"] = duplicate
         payload["logTail"] = manager.logs(record.process_id, tail_chars=log_cap) or ""
+        # 后台进程走同一个 shell（process_manager 也用 shell_argv(resolve_shell())），
+        # 同样受反斜杠转义影响。启动时还没有 exitCode，所以只给 shell 事实。
+        payload["shell"] = _current_shell_kind()
         return success_json(
             tool, payload, permission=check.decision, outcome=OUTCOME_BACKGROUND_STARTED
         )
@@ -256,6 +280,7 @@ def exec_handler(
         ),
         visible_truncated=stdout_truncated or stderr_truncated,
     )
+    shell = _current_shell_kind()
     payload = {
         "status": result.status,
         "exitCode": result.exit_code,
@@ -263,6 +288,9 @@ def exec_handler(
         "stderr": stderr,
         "durationMs": result.duration_ms,
         "cwd": check.classification.display_path,
+        # 确定性事实：命令实际经哪种 shell 执行。模型据此决定路径/引号写法——
+        # description 只能写"通常是 bash"，这里是本次调用的真实值。
+        "shell": shell,
     }
     if result.timed_out:
         return error_json(
@@ -287,6 +315,14 @@ def exec_handler(
             references=references,
             warnings=warnings or None,
         )
+    # 非零退出码仍是 outcome=success（工具本身跑完了，命令结果由 exitCode 表达；
+    # grep 无匹配、diff 有差异等正常场景都是非零）。但真机验证过模型会漏看 exitCode
+    # 只读 outcome，所以补一条确定性 warning 把失败抬到显眼位置。
+    warnings = list(warnings)
+    if result.exit_code not in (0, None):
+        warnings.append("nonzero_exit_code")
+        if shell in ("bash", "sh") and _WINDOWS_ABS_PATH_RE.search(command or ""):
+            warnings.append("windows_backslash_path_eaten_by_shell")
     return success_json(
         tool,
         payload,

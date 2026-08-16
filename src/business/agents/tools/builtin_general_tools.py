@@ -1718,7 +1718,11 @@ EXEC_SCHEMA = make_tool_schema(
     name="exec",
     description=(
         "Run a command inside the workspace with bounded output, or start it as a managed "
-        "current-session background process. Elevated commands require confirmation."
+        "current-session background process. Elevated commands require confirmation. "
+        "命令经 shell 执行，Windows 上默认是 Git Bash（本次实际用的 shell 见返回的 "
+        "payload.shell）。bash 下写 Windows 路径必须用正斜杠 E:/code/Exemplar，或整段加引号 "
+        "\"E:\\code\\Exemplar\"；裸写 E:\\code\\Exemplar 会被 bash 当转义符吃掉反斜杠，"
+        "变成不存在的 E:codeExemplar 而静默失败。命令是否成功看 payload.exitCode，不要只看 outcome。"
     ),
     properties={
         "command": {"type": "string", "description": "要执行的命令"},
