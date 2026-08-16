@@ -890,13 +890,6 @@ class AssistantRuntime:
             settle_scheduling_confirmations_for_session_stopped(session_id)
         return report
 
-    def resume_recovered_task(self, task_id: str, checkpoint_ref: str) -> bool:
-        """Background recovery callback for checkpoint-backed tasks."""
-        return self._get_orchestrator().resume_recovered_task(
-            task_id=task_id,
-            checkpoint_ref=checkpoint_ref,
-        )
-
     def get_transcript(
         self,
         session_id: str,

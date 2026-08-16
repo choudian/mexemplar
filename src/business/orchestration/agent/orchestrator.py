@@ -646,12 +646,14 @@ class AgentOrchestrator:
         task_id: str,
         assignee_type: str,
         assignee_id: str | None,
-        checkpoint_ref: str | None = None,
     ) -> None:
         """非阻塞派发：建 attempt + 置 running + 提交 executor 到 dispatcher 线程池。
 
         executor_id 取 capacity=1 语义：specialist 用 specialist_id（同一专员串行），
         ephemeral 用 task_id（每任务一执行者，天然唯一、互不冲突）。
+
+        只走首次派发，不带续跑句柄：续跑由 dispatcher 自己构造 checkpoint_ref
+        （``continue_task_atomically`` / ``start_pending_graph_tasks``），不经这一层。
         """
         executor_id = (
             assignee_id if assignee_type == AgentType.SPECIALIST.value and assignee_id else task_id
@@ -661,7 +663,6 @@ class AgentOrchestrator:
             executor_type=assignee_type,
             executor_id=executor_id,
             lease_owner="unified_dispatch",
-            checkpoint_ref=checkpoint_ref,
         )
 
     def resume_pending_graph_tasks(
@@ -695,23 +696,6 @@ class AgentOrchestrator:
     def wait_for_active_attempt(self, task_id: str, **kwargs) -> bool:
         """③ §2.5 有界等待：等 task 的 active attempt 停稳。"""
         return self._get_task_dispatcher().wait_for_active_attempt(task_id, **kwargs)
-
-    def resume_recovered_task(self, *, task_id: str, checkpoint_ref: str) -> bool:
-        task = self._task_repo.get_task(task_id)
-        if task is None or not task.assignee_type:
-            return False
-        try:
-            self._start_unified_attempt(
-                self._get_task_dispatcher(),
-                task_id=task.task_id,
-                assignee_type=task.assignee_type,
-                assignee_id=task.assignee_id,
-                checkpoint_ref=checkpoint_ref,
-            )
-        except Exception:
-            logger.error("[Orchestrator] recovered task resume failed: %s", task_id, exc_info=True)
-            return False
-        return True
 
     def _redispatch_answered_task(self, task_id: str) -> bool:
         task = self._task_repo.get_task(task_id)
