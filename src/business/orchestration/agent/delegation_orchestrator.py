@@ -347,6 +347,7 @@ class DelegationOrchestrator:
         effective_scope: EffectiveSubagentScope | None = None,
         resume_session_id: str | None = None,
         iteration_budget: int | None = None,
+        resume_instruction: str | None = None,
     ) -> dict:
         """临时子代理的纯执行核心：resolve tools → build prompt → create session →
         ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``（统一任务派发的
@@ -405,10 +406,14 @@ class DelegationOrchestrator:
         # 续跑（resume_session_id 非空）时不追发任务书：会话历史已保留首次派发的
         # 完整任务描述，AgentLoop 的 suspended→active 恢复直接接着跑。追发只会让
         # 执行体在同一会话里读到两遍任务（问题 6）。参照 _continue_subagent 路径。
+        #
+        # 唯一例外是 resume_instruction——主助理唤回时给的纠偏指令（"别再搜了，
+        # 直接产出报告"）。它不是任务书重发，是这一轮唯一的新输入；丢掉它，主助理
+        # 会以为自己已经纠偏，执行体却照旧撞同一堵墙。
         user_input = (
             self._owner._format_delegated_task_input(task, execution_context)
             if not resume_session_id
-            else None
+            else (resume_instruction or None)
         )
         # 同步委派（current_task_id is None 且非续跑）建 task + attempt，
         # 让"执行体在不在跑"有 attempt 可查，同时挂 user_task_id 归属。
@@ -695,6 +700,7 @@ class DelegationOrchestrator:
         workspace_root: str | None = None,
         resume_session_id: str | None = None,
         iteration_budget: int | None = None,
+        resume_instruction: str | None = None,
     ) -> dict:
         """专员委派的纯执行核心：resolve tools → equipped skills → build prompt →
         create session → ``_run_delegated_executor``。同步委派与 ``TaskExecutorAdapter``
@@ -813,11 +819,12 @@ class DelegationOrchestrator:
             session_id=child_session_id,
             workflow_id=workflow_id,
             parent_session_id=parent_session_id,
-            # 续跑（resume_session_id 非空）时不追发任务书（问题 6，同 ephemeral 路径）
+            # 续跑（resume_session_id 非空）时不追发任务书（问题 6，同 ephemeral 路径）；
+            # resume_instruction 是唤回时的纠偏指令，是这一轮唯一的新输入，不能丢。
             user_input=(
                 self._owner._format_delegated_task_input(task, execution_context)
                 if not resume_session_id
-                else None
+                else (resume_instruction or None)
             ),
             system_prompt=system_prompt,
             allowed_tool_ids=allowed_tool_ids,

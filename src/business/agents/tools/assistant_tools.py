@@ -1999,13 +1999,15 @@ def create_delete_scheduled_task_handler(service_factory=None):
 BUILD_TASK_GRAPH_SCHEMA = make_tool_schema(
     name="build_task_graph",
     description=(
-        "把一个复杂任务分解成一张带依赖关系的任务图并原子落库，交由 DAG 调度器按依赖自动推进。"
+        "把一个复杂任务分解成一张带依赖关系的任务图并原子落库。"
+        "落库后图是草稿状态，不会自动执行——需主助理审查通过后调 start_graph 启动，"
+        "你没有这个工具；所以建完图必须在 report_result 里明确说明「图已建好，待启动」。"
         "仅用于多步、有先后依赖或跨领域的复杂任务；1-2 步的简单任务直接用 "
         "delegate_to_subagent/specialist，不要建图。"
         "节点粒度=一个执行器（专员/子agent）的一次连贯执行；"
         "节点内部若≥3步，执行器会用 todo_update 自行分解子步骤。"
         "高风险/不可逆节点（发邮件、删数据、对外发送）必须标 needsConfirmation=true，"
-        "调度器会在执行前暂停等主助理裁定。"
+        "图启动后，调度器会在执行该节点前暂停等主助理裁定。"
     ),
     properties={
         "taskId": {
@@ -2685,8 +2687,10 @@ DELEGATE_TO_PLANNER_SCHEMA = make_tool_schema(
         "planner 看不到你与用户的任何对话历史；"
         "凡任务引用了对话中已产生的内容（方案、清单、代码、结论），"
         "必须用 context_message_indexes 把内容所在消息带上，禁止只写『之前讨论的方案』这类指代。"
-        "planner 产出的任务图由调度器按依赖自动推进，执行体跑完后结果经「任务结果回流提示」送达，"
-        "由你用 decide_task_adjudication 裁定。"
+        "planner 产出的任务图落库时是草稿状态，不会自动执行："
+        "planner 汇报回流后，你先用 decide_task_adjudication 裁定这份规划本身，"
+        "裁定通过后必须再调 start_graph(graphId)，图才会开始推进——只裁定不启动，图会一直停在草稿。"
+        "图启动后，各节点执行体跑完的结果同样经「任务结果回流提示」送达，由你逐个裁定。"
         "返回 planner_id 和 graphId；后续需要更新任务图（补充需求/自愈改图）时，"
         "用 continue_subagent(planner_id) 在原规划会话上续跑。"
     ),
@@ -2935,12 +2939,16 @@ def create_abandon_request_graph_handler(
 CONTINUE_SUBAGENT_SCHEMA = make_tool_schema(
     name="continue_subagent",
     description=(
-        "继续执行一个已暂停（suspended）的可唤回子代理。仅当 delegate_to_subagent 直接同步返回 "
-        "paused=true 时使用——子代理达到迭代上限或可恢复失败会暂停，用此工具续跑配额、从断点接着跑；"
-        "也可对已完成但未达标的子代理带追加指令返工。"
+        "继续执行一个已暂停（suspended）的可唤回子代理。子代理达到迭代上限或可恢复失败会暂停，"
+        "用此工具续跑配额、从断点接着跑；也可对已完成但未达标的子代理带追加指令返工。"
         "可续跑的子代理包括临时子代理、专员和 planner；续 planner 用于在原规划会话上更新任务图"
         "（补充需求/自愈改图），此时传 delegate_to_planner 返回的 planner_id。"
-        "异步委派（返回 taskId）的子代理不要用本工具。"
+        "参数只接受 subagent_id（执行体会话 id），异步委派返回的 taskId/graphId 不可用于本工具。"
+        "\n返回值分两种，必须区分对待："
+        "① 同步委派的子代理直接返回 result_text，那就是最终结果；"
+        "② 任务图节点的执行体返回 accepted=true + taskId，表示续跑已受理并交回派发器，"
+        "结果稍后按常规回流并等你裁定——此时 MUST NOT 认为任务已完成、MUST NOT 据此"
+        "向用户宣布结果或声称下游节点会自动开始，等回流提示到达再裁定。"
     ),
     properties={
         "subagent_id": {

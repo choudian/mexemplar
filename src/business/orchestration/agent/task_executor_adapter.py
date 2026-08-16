@@ -70,6 +70,7 @@ class TaskExecutorAdapter:
         resume_info = _resume_info_from_checkpoint(attempt.checkpoint_ref)
         resume_session_id = resume_info["session_id"] if resume_info else None
         iteration_budget = resume_info["iteration_budget"] if resume_info else None
+        resume_instruction = resume_info["instruction"] if resume_info else None
         try:
             if task.assignee_type == AgentType.SPECIALIST.value:
                 result = self._run_specialist(
@@ -82,6 +83,7 @@ class TaskExecutorAdapter:
                     workspace_root=workspace_root,
                     resume_session_id=resume_session_id,
                     iteration_budget=iteration_budget,
+                    resume_instruction=resume_instruction,
                 )
             else:
                 result = self._run_ephemeral(
@@ -94,6 +96,7 @@ class TaskExecutorAdapter:
                     workspace_root=workspace_root,
                     resume_session_id=resume_session_id,
                     iteration_budget=iteration_budget,
+                    resume_instruction=resume_instruction,
                 )
         finally:
             if executor_orchestrator is not self._orchestrator:
@@ -118,6 +121,7 @@ class TaskExecutorAdapter:
         workspace_root: str | None = None,
         resume_session_id: str | None = None,
         iteration_budget: int | None = None,
+        resume_instruction: str | None = None,
     ) -> dict:
         return orchestrator.delegation_orchestrator.run_ephemeral_via_delegated_executor(
             parent_session_id=parent_session_id,
@@ -132,6 +136,7 @@ class TaskExecutorAdapter:
             workspace_root=workspace_root,
             resume_session_id=resume_session_id,
             iteration_budget=iteration_budget,
+            resume_instruction=resume_instruction,
         )
 
     def _run_specialist(
@@ -146,6 +151,7 @@ class TaskExecutorAdapter:
         workspace_root: str | None = None,
         resume_session_id: str | None = None,
         iteration_budget: int | None = None,
+        resume_instruction: str | None = None,
     ) -> dict:
         from src.data.repos.specialist_repository import SpecialistRepository
 
@@ -179,6 +185,7 @@ class TaskExecutorAdapter:
             workspace_root=workspace_root,
             resume_session_id=resume_session_id,
             iteration_budget=iteration_budget,
+            resume_instruction=resume_instruction,
         )
 
     @staticmethod
@@ -311,11 +318,15 @@ def _summary(text: str | None) -> str:
 def _resume_info_from_checkpoint(
     checkpoint_ref: str | None,
 ) -> dict[str, Any] | None:
-    """从 checkpoint_ref JSON 解析续跑信息：会话 id + 追加轮数预算。
+    """从 checkpoint_ref JSON 解析续跑信息：会话 id + 追加轮数预算 + 追加指令。
 
-    返回 ``{"session_id": str, "iteration_budget": int | None}`` 或 None。
-    向后兼容：旧 checkpoint_ref 只存 subagent_id（非 JSON 或无 iteration_budget），
+    返回 ``{"session_id": str, "iteration_budget": int | None, "instruction": str | None}``
+    或 None。向后兼容：旧 checkpoint_ref 只存 subagent_id（非 JSON 或无附加字段），
     仍能解析出 session_id。
+
+    ``instruction`` 是主助理唤回执行体时给的纠偏指令（"别再搜了，直接产出报告"）。
+    续跑路径本身不追发任务书（会话历史已有），这条指令是唯一的新输入，丢了等于
+    主助理以为自己纠了偏而执行体一无所知。
     """
     if not checkpoint_ref:
         return None
@@ -331,7 +342,8 @@ def _resume_info_from_checkpoint(
         return None
     budget_raw = parsed.get("iteration_budget")
     budget = int(budget_raw) if isinstance(budget_raw, (int, float)) and budget_raw > 0 else None
-    return {"session_id": text, "iteration_budget": budget}
+    instruction = str(parsed.get("resume_instruction") or "").strip() or None
+    return {"session_id": text, "iteration_budget": budget, "instruction": instruction}
 
 
 def _execution_context_with_checkpoint(text: str, checkpoint_ref: str | None) -> str:

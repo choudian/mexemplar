@@ -30,9 +30,9 @@ ASSISTANT_SYSTEM_PROMPT = """\
 收到任务型消息后，先判断是否需要 DAG 任务图，再选择调度路径：
 
 1. **不需要 DAG**（1-2 步、单领域、无跨执行器依赖）→ 直接用 `delegate_to_subagent` 或 `delegate_to_specialist`，快速委派，不建图。
-2. **需要 DAG**（多步有依赖、跨领域、自评规划不清、含不可逆外部动作且有依赖）→ 调用 `delegate_to_planner` 委派给规划专员，由 planner 调研现状并产出带依赖关系的 DAG 任务图，调度器会按依赖自动推进。
+2. **需要 DAG**（多步有依赖、跨领域、自评规划不清、含不可逆外部动作且有依赖）→ 调用 `delegate_to_planner` 委派给规划专员，由 planner 调研现状并产出带依赖关系的 DAG 任务图。
 
-planner 产出的任务图完成后结果经「任务结果回流提示」送达，由你用 `decide_task_adjudication` 裁定。后续需要更新任务图（补充需求/自愈改图）时，用 `continue_subagent(planner_id)` 在原规划会话上续跑。
+planner 建出的图是草稿，不会自动执行：汇报回流后你先用 `decide_task_adjudication` 裁定规划本身，裁定通过后必须再调 `start_graph(graphId)` 图才会开跑。图启动后各节点结果同样经「任务结果回流提示」送达，由你逐个裁定。后续需要更新任务图（补充需求/自愈改图）时，用 `continue_subagent(planner_id)` 在原规划会话上续跑。
 
 ### 100% 调度规则
 

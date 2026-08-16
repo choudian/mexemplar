@@ -69,6 +69,18 @@ _EPHEMERAL_SUBAGENT_PROMPT = (
 )
 _LEGACY_DELEGATION_PARENT_PREFIX_LENGTH = 12
 
+# 可续跑的 attempt 状态——与 ``latest_resume_target_for_task`` 的候选口径一致。
+_RESUMABLE_ATTEMPT_STATUSES = ("paused", "fenced")
+# 同步委派（delegate_to_subagent 当场返回 paused）建的 attempt 由 ``_finalize_sync_attempt``
+# 自己收尾，续跑保持原地同步执行——主助理在那条路径上等的就是即时结果。其余 lease_owner
+# （graph_scheduler / unified_dispatch / atomic_continue / …）都是派发器建的任务节点，
+# 终态只能由 dispatcher 写，必须交回去。未知 owner 归到"要记账"一侧：漏记账会让图永久
+# 静止且无人知情，误记账最多只是把一次同步续跑变成异步受理。
+_SYNC_DELEGATION_LEASE_OWNER = "sync_delegation"
+# 归属查询失败的哨兵：与"查到了，但不是任务节点"（None）区分开，避免基础设施
+# 故障被当成"可以原地裸跑"。
+_ATTEMPT_LOOKUP_FAILED = object()
+
 
 @dataclass
 class _DesktopSyntaxState:
@@ -593,9 +605,10 @@ class AgentOrchestrator:
             )
             return None
         # 任务已 durable 入图。非阻塞派发执行：start_attempt_async 把 executor
-        # （TaskExecutorAdapter → _run_delegated_executor）提交到 dispatcher 线程池，主助理
-        # 线程不阻塞（FR-003 真并行 / FR-004 非阻塞回流）。start 失败不回退同步路径——任务已
-        # 持久化为 pending_dispatch，由 background recovery 或后续 redispatch 兜底。
+        # （TaskExecutorAdapter → _run_delegated_executor）排进 dispatcher 的 FIFO 队列，
+        # 主助理线程不阻塞（FR-003 真并行 / FR-004 非阻塞回流）。start 失败不回退同步路径
+        # ——任务已持久化为 pending_dispatch，由 GraphScheduler 后续重扫兜底（同图任一
+        # attempt 完成即触发 _advance 扫全图就绪节点）。
         try:
             self._start_unified_attempt(
                 dispatcher,
@@ -660,9 +673,23 @@ class AgentOrchestrator:
             use_resume_target=use_resume_target,
         )
 
-    def continue_task_atomically(self, *, task_id: str) -> bool:
-        """③ §2.4 原子化 continue：不经过 PENDING_DISPATCH，一事务内建 attempt + task running。"""
-        future = self._get_task_dispatcher().continue_task_atomically(task_id=task_id)
+    def continue_task_atomically(
+        self,
+        *,
+        task_id: str,
+        resume_instruction: str | None = None,
+        iteration_budget: int | None = None,
+    ) -> bool:
+        """③ §2.4 原子化 continue：不经过 PENDING_DISPATCH，一事务内建 attempt + task running。
+
+        ``resume_instruction`` / ``iteration_budget`` 供主助理唤回执行体时透传纠偏指令
+        与追加轮数；UI 的「继续」按钮不传，行为不变。
+        """
+        future = self._get_task_dispatcher().continue_task_atomically(
+            task_id=task_id,
+            resume_instruction=resume_instruction,
+            iteration_budget=iteration_budget,
+        )
         return future is not None
 
     def wait_for_active_attempt(self, task_id: str, **kwargs) -> bool:
@@ -867,6 +894,102 @@ class AgentOrchestrator:
                 "[Orchestrator] 查执行体运行状态失败: session=%s", executor_session_id, exc_info=True
             )
             return False
+
+    @staticmethod
+    def _pending_task_attempt_for_session(executor_session_id: str):
+        """反查这个执行体会话背后是否还挂着一个没收尾的任务节点 attempt。
+
+        返回 attempt（需交回 dispatcher 续跑）、``None``（不是任务节点，可原地续跑）
+        或 ``_ATTEMPT_LOOKUP_FAILED``（查不出来，调用方必须 fail-closed）。
+
+        只认 ``paused`` / ``fenced``——这正是 ``latest_resume_target_for_task`` 认定
+        「可续跑」的两个状态。active 已由 ``_is_executor_running`` 挡在前面；终态说明
+        任务节点已经收口，此时唤回属于返工，图不会卡死，保持既有原地续跑行为。
+
+        同步委派建的 attempt（``sync_delegation``）排除在外：它由同步路径自己收尾，
+        且主助理在那条路径上等的就是即时结果。
+
+        查询失败时不退化成原地裸跑：裸跑的代价是整张图永久静止且无人知情，
+        而拒绝只是让主助理换条路或重试。
+        """
+        from src.data.repos import AssistantTaskAttemptRepository
+
+        try:
+            with AssistantTaskAttemptRepository() as attempts:
+                latest = attempts.latest_attempt_for_session(executor_session_id)
+        except Exception:
+            logger.warning(
+                "[Orchestrator] 查执行体任务归属失败: session=%s",
+                executor_session_id,
+                exc_info=True,
+            )
+            return _ATTEMPT_LOOKUP_FAILED
+        if latest is None or latest.status not in _RESUMABLE_ATTEMPT_STATUSES:
+            return None
+        if (latest.lease_owner or "") == _SYNC_DELEGATION_LEASE_OWNER:
+            return None
+        return latest
+
+    def _continue_task_node_subagent(
+        self,
+        *,
+        subagent_id: str,
+        attempt,
+        instruction: str,
+        iteration_budget: int,
+    ) -> dict:
+        """把任务图节点的续跑交回 dispatcher 的记账路径。
+
+        续跑动作本身与原地裸跑没有区别——两者恢复的都是同一个执行体会话。差别只在
+        外面那圈记账：建承载本轮的 attempt、task 从 suspended 翻 running、跑完由
+        ``_run_attempt_worker`` 写终态。下游节点的 blocking 依赖只认 completed，
+        账不平，图就不动。
+
+        返回受理句柄而不是结果：任务图委派一律不阻塞等 child 跑完，结果经回流 +
+        父侧裁定重入（真机那次同步等了近 3 分钟，本身也不该发生）。
+        """
+        task_id = attempt.task_id
+        graph_id = ""
+        try:
+            task = self._task_repo.get_task(task_id)
+            graph_id = getattr(task, "graph_id", "") or ""
+        except Exception:
+            logger.debug("[Orchestrator] 续跑任务节点查 graph_id 失败: %s", task_id, exc_info=True)
+
+        accepted = self.continue_task_atomically(
+            task_id=task_id,
+            resume_instruction=instruction,
+            iteration_budget=iteration_budget,
+        )
+        if not accepted:
+            return {
+                "success": False,
+                "error": (
+                    "该子代理属于任务节点，但当前无法续跑（执行名额冲突或无可续跑目标）。"
+                    "稍后重试，或改用裁定打回让它重做。"
+                ),
+                "subagent_id": subagent_id,
+                "taskId": task_id,
+                "graphId": graph_id,
+            }
+        logger.info(
+            "[continue_subagent] 任务节点续跑已交回派发器: session=%s task=%s budget=%s",
+            subagent_id,
+            task_id,
+            iteration_budget,
+        )
+        return {
+            "success": True,
+            "accepted": True,
+            "subagent_id": subagent_id,
+            "executor_session_id": subagent_id,
+            "taskId": task_id,
+            "graphId": graph_id,
+            "message": (
+                "已受理续跑。该执行体是任务图节点，结果会按常规回流并等你裁定——"
+                "不要在这里等结果，也不要据此判定任务已完成。"
+            ),
+        }
 
     @staticmethod
     def _build_delegated_pause_payload(
@@ -1376,6 +1499,30 @@ class AgentOrchestrator:
         except (TypeError, ValueError):
             extra = 20
         extra = min(max(1, extra), _MAX_EXTRA_ITERATIONS)
+
+        # 任务图节点的执行体：续跑必须交回 dispatcher，不能在这里裸跑。
+        # 裸跑照样能把活干完（恢复的是同一个会话），但 attempt/task 一个字节都不会
+        # 动——真机 2026-08-16：执行体跑完交回结果，attempt 却永远停在 paused，
+        # 汇总节点的 blocking 依赖只认 completed，整张图就此静止，而主助理拿到的
+        # 是 success=true，于是它告诉用户"会自动跑完"。
+        resume_target = self._pending_task_attempt_for_session(subagent_id)
+        if resume_target is _ATTEMPT_LOOKUP_FAILED:
+            return {
+                "success": False,
+                "error": (
+                    "无法确认该子代理是否属于某个任务节点，已中止续跑。"
+                    "裸跑会让任务状态失去回流，请稍后重试。"
+                ),
+                "subagent_id": subagent_id,
+            }
+        if resume_target is not None:
+            return self._continue_task_node_subagent(
+                subagent_id=subagent_id,
+                attempt=resume_target,
+                instruction=instruction,
+                iteration_budget=extra,
+            )
+
         if effective_scope is not None:
             # Same-run specialist continuation: the closure supplies the exact object
             # captured before first launch.  Revalidate publication/availability only
