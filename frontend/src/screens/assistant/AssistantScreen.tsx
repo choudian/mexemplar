@@ -151,10 +151,10 @@ export function AssistantScreen(): JSX.Element {
       return;
     }
     getUserTaskDistribution(activeSessionId, focusUserTaskId)
-      .then((res) => {
-        const d = res.distribution ?? {};
-        setSessionBusy((d.running ?? 0) + (d.pending_dispatch ?? 0) > 0);
-      })
+      // 用后端的权威判定，别拿状态计数自己推：应用被强杀后图会被打到
+      // stopped，图里剩下的「待开始」不会再被派发，按计数推就会一直显示
+      // 运行态和停止按钮。后端拒收新消息的 busy 锁用的是同一个判据。
+      .then((res) => setSessionBusy(res.active === true))
       .catch(() => setSessionBusy(false));
   }, [activeSessionId, focusUserTaskId, userTaskVersion]);
 

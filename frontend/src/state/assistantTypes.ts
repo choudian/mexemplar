@@ -1,4 +1,9 @@
-import type { AssistantActivityStep, AssistantMessage, SubagentStatus } from "../api/assistant";
+import type {
+  AssistantActivityStep,
+  AssistantMessage,
+  ExecutorGraphKind,
+  SubagentStatus,
+} from "../api/assistant";
 
 export type AssistantProgress = {
   // "cancelled"=用户主动停止（014）：视为非 running，解锁输入、不自动派发排队消息。
@@ -32,6 +37,9 @@ export type Subagent = {
   lastOutput?: string;
   /** 它在干哪个 task。todo 按 task_id 存，卡片正面要展示 todolist 就得靠它。 */
   taskId?: string | null;
+  /** 它挂在哪种图上。`plan`（DAG 节点）只在任务图里看，不平铺成执行体卡片；
+   *  空 = 归属未知，按不确定处理（宁可平铺，不隐藏）。 */
+  graphKind?: ExecutorGraphKind | null;
   // 排序锚点：子任务首次出现时主时间线已到的步骤 seq（≈委派那一刻）。
   // 让子卡片紧跟其 delegate 步骤、排在最终回复之前；权威恢复无法定位时为 undefined（落到末尾）。
   anchorSeq?: number;

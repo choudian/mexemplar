@@ -14,6 +14,7 @@ import type { AssistantTaskSnapshot, AssistantTodoItem } from "../../api/assista
 import TaskGraphPeek from "./TaskGraphPeek";
 import ExecutorCard from "./ExecutorCard";
 import { ActivityStepRow } from "./ActivityStepRow";
+import { executorAnchorSeq, graphAnchorSeq } from "./timelineOrder";
 import type { ActivityStep, Subagent } from "../../state/assistantTypes";
 import { useAssistantTaskStore } from "../../state/assistantTaskStore";
 
@@ -134,9 +135,6 @@ function UserTaskCard({
   const [distribution, setDistribution] = useState<TaskDistribution | null>(null);
   const [loadingDist, setLoadingDist] = useState(false);
   const [graphs, setGraphs] = useState<UserTaskGraphSummary[]>([]);
-  // plan 图（planner DAG）的全部节点 taskId——这些执行体从局部图/全图弹窗里看，
-  // 不平铺为独立执行体卡片（设计 [95]：图里节点派出去的只从图里进）。
-  const [planTaskIds, setPlanTaskIds] = useState<Set<string>>(new Set());
   const [executorTasks, setExecutorTasks] = useState<AssistantTaskSnapshot[]>([]);
   const [todosByTaskId, setTodosByTaskId] = useState<Record<string, AssistantTodoItem[]>>({});
   const [continueResult, setContinueResult] = useState<UserTaskContinueResponse | null>(null);
@@ -171,17 +169,6 @@ function UserTaskCard({
       .then((res) => {
         const gs = res.graphs ?? [];
         setGraphs(gs);
-        // plan 图拉一次快照收集节点集合（供 subagents 平铺过滤）；失败降级为空集合
-        const planGraphs = gs.filter((g) => g.kind === "plan");
-        Promise.all(
-          planGraphs.map((g) => getAssistantTaskGraph(sessionId, g.graphId).catch(() => null)),
-        ).then((snaps) => {
-          const ids = new Set<string>();
-          for (const snap of snaps) {
-            for (const t of snap?.tasks ?? []) ids.add(t.taskId);
-          }
-          setPlanTaskIds(ids);
-        });
         // 设计 [95]: 图里节点派出去的只从图里进（局部图/全图弹窗）；
         // 卡片下只放直接挂载的执行体。request 容器图（kind!=plan）的节点都是
         // 委派执行体——不管几张、几个节点，一律平铺；plan 图走局部图不在这列。
@@ -241,7 +228,8 @@ function UserTaskCard({
     (distribution?.["done"] ?? 0) + (distribution?.["skipped"] ?? 0);
 
   // 三类东西按发生顺序合成一个流：主助理的 msg（step.seq）、派出去的执行体
-  // （anchorSeq = 委派那一刻）、建的任务图（graph 的 userMessageSequence）。
+  // （anchorSeq = 委派那一刻的步骤号）、建的任务图（启动图那一步的步骤号）。
+  // 三者必须是同一个量纲——本轮内的步骤计数，见 timelineOrder.ts。
   // 同一 seq 时用 tie 决定先后：msg → 执行体 → 任务图。
   // 只有 planner 的 DAG（kind=plan）画局部图；request 容器图的节点是委派执行体，
   // 一律平铺为执行体卡片（真机验证踩中：request 图 nodeCount>1 被当任务图展示）。
@@ -287,13 +275,19 @@ function UserTaskCard({
       });
     }
     for (const sub of subagents) {
-      // 委派那一刻的 seq；缺锚点时落到末尾，不硬塞开头造成假顺序
+      // 委派那一刻的步骤号；两条路都查不到时落到末尾，不硬塞开头造成假顺序
       const taskId = sub.taskId ?? taskIdByExecutorSession[sub.subagentId];
-      // plan 图（DAG）节点的执行体不平铺——它们从局部图/全图弹窗里看；
-      // 查不到归属的（无 taskId）宁可保留平铺，不隐藏。
-      if (taskId && planTaskIds.has(taskId)) continue;
+      // plan 图（DAG）节点的执行体不平铺——它们从局部图/全图弹窗里看。
+      //
+      // 归属由执行体自带（后端按 attempt→task→图根反查 graph_kind），不再靠本卡片
+      // 拉 plan 图快照收集节点 id 去比对：那份名单是会话级事实，却存在卡片私有
+      // state 里，而只有第一个过程块的卡片绑着用户任务、才会去加载它——其余每一轮
+      // 的卡片名单恒空，DAG 节点的执行体于是全被平铺出来（真机发现）。
+      // graphKind 为空 = 归属未知（无 attempt / 图根缺失），宁可平铺不隐藏。
+      if (sub.graphKind === "plan") continue;
       entries.push({
-        seq: sub.anchorSeq ?? Number.MAX_SAFE_INTEGER,
+        // 实时锚点优先；重启后内存里没有它，从过程记录里按 taskId 找回委派那一步
+        seq: sub.anchorSeq ?? executorAnchorSeq(steps, taskId),
         tie: 1,
         node: (
           <ExecutorCard
@@ -314,7 +308,7 @@ function UserTaskCard({
     }
     for (const g of graphsWithNodes) {
       entries.push({
-        seq: g.userMessageSequence ?? Number.MAX_SAFE_INTEGER,
+        seq: graphAnchorSeq(steps, g.graphId),
         tie: 2,
         node: (
           <TaskGraphPeek
@@ -332,7 +326,6 @@ function UserTaskCard({
     steps,
     subagents,
     graphsWithNodes,
-    planTaskIds,
     todosByTaskId,
     storeTodos,
     taskIdByExecutorSession,

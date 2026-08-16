@@ -325,6 +325,13 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
       });
       // 子任务权威列表兜底（重开会话恢复卡片与状态）
       void get().refreshSubagents(sessionId);
+      // 主助理自己的过程步骤兜底：它只活在事件流里，重启应用后内存归零，
+      // 不补拉的话卡片里只剩执行体，主助理做过什么（建图、调工具）全没了。
+      // 逐轮拉——每轮的 from/beforeSequence 刚由 syncTurnsFromMessages 定好，
+      // 只恢复最后一轮的话，往上翻的历史轮次仍是空卡片。
+      for (const turnId of Object.keys(syncedTurns)) {
+        void get().refreshActivityTranscript(sessionId, turnId);
+      }
       // 待答澄清快照兜底（重开/重连恢复卡片，019 FR-014）
       void get().refreshPendingClarification(sessionId);
     } catch (error) {
@@ -639,6 +646,7 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
           status: item.status,
           lastOutput: item.lastOutput ?? undefined,
           taskId: item.taskId ?? null,
+          graphKind: item.graphKind ?? null,
           anchorSeq: priorAnchors.get(item.subagentId),
         };
         nextTurns[targetTurnId] = {
@@ -673,8 +681,11 @@ export const useAssistantStore = create<AssistantState>((set, get) => ({
         redacted: step.redacted ?? false,
       }));
       set({
-        ...updateTurn(get(), sessionId, turnId, () => ({
-          ...turn,
+        // 用 updater 拿到的当前值，不是请求发出前的 turn 快照：这中间
+        // refreshSubagents 或事件流可能已经往同一个 turn 写了执行体，
+        // 拿旧快照展开会把它们抹掉。
+        ...updateTurn(get(), sessionId, turnId, (current) => ({
+          ...current,
           turnId,
           steps,
           transcriptCompressed: transcript.compressed,

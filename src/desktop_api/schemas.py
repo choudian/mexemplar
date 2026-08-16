@@ -707,6 +707,12 @@ class AssistantSubagentSummary(BaseModel):
     lastOutput: str | None = None
     turnStartSequence: int | None = None
     taskId: str | None = None
+    # 这个执行体挂在哪种图上：plan=planner 产的 DAG（界面只在任务图里看它），
+    # request=委派容器（平铺成执行体卡片）。归属由执行体自带，展示层不必反过来
+    # 拉整张图的节点清单去比对——那份清单是会话级事实，放在单张卡片里只有绑了
+    # 用户任务的那张能拿到，其余轮次的 DAG 执行体会漏出来（真机发现）。
+    # None = 归属未知（无 attempt / 图根缺失），调用方按「不确定」处理，不得当成 DAG。
+    graphKind: Literal["plan", "request"] | None = None
 
 
 class AssistantSubagentListResponse(BaseModel):

@@ -943,19 +943,22 @@ class AssistantRuntime:
         `/subagents` 兼容端点和旧过程观察面，不能作为 Task 图事实来源。
         """
         items = self._obs.build_subagent_list(session_id)
-        # 批量下发 task_id：执行体卡片正面要展示它自己的 todolist，而 todo 按
-        # task_id 存，卡片手上只有执行会话 id。一次聚合查询，不做 N+1。
+        # 批量下发 task_id 与 graph_kind：前者供卡片展示自己的 todolist（todo 按 task_id
+        # 存，卡片手上只有执行会话 id）；后者告诉界面这个执行体是不是 DAG 里的节点——
+        # DAG 节点只在任务图里看，不平铺成卡片。两次聚合查询，都不做 N+1。
         task_id_map: dict[str, str] = {}
+        graph_kind_map: dict[str, str] = {}
         try:
             from src.data.repos import AssistantTaskAttemptRepository
 
+            session_ids = [item.subagent_id for item in items]
             with AssistantTaskAttemptRepository() as attempts:
-                task_id_map = attempts.latest_tasks_for_sessions(
-                    [item.subagent_id for item in items]
-                )
+                task_id_map = attempts.latest_tasks_for_sessions(session_ids)
+                graph_kind_map = attempts.latest_graph_kinds_for_sessions(session_ids)
         except Exception:
             logging.warning(
-                "[subagents] task_id 反查失败，卡片将无 todolist session=%s",
+                "[subagents] task_id / graph_kind 反查失败，卡片将无 todolist "
+                "且无法区分 DAG 节点 session=%s",
                 session_id,
                 exc_info=True,
             )
@@ -969,6 +972,7 @@ class AssistantRuntime:
                     "lastOutput": item.last_output,
                     "turnStartSequence": item.turn_start_sequence,
                     "taskId": task_id_map.get(item.subagent_id),
+                    "graphKind": graph_kind_map.get(item.subagent_id),
                 }
                 for item in items
             ]

@@ -39,6 +39,11 @@ class UserTaskStatusDistributionResponse(BaseModel):
     """一件事底下所有执行节点的状态分布。"""
     taskId: str
     distribution: dict[str, int]
+    # 这件事此刻是否真的在推进。不能由界面拿 distribution 自己推——
+    # 待开始的节点只有在图还running 时才会被派发，应用被强杀后图会打到
+    # stopped，那些节点不看图就会被误当成「正在跑」。与后端拒收新消息的
+    # busy 锁同判据。
+    active: bool = False
 
 
 class UserTaskContinueResponse(BaseModel):
@@ -111,7 +116,11 @@ def get_user_task_distribution(
     """获取用户任务下所有执行节点的状态分布（供界面画分布条）。"""
     with UserTaskService() as service:
         distribution = service.status_distribution(task_id)
-    return UserTaskStatusDistributionResponse(taskId=task_id, distribution=distribution)
+    with TaskCollaborationService() as collab:
+        active = collab.has_active_execution_tasks_for_user_task(task_id)
+    return UserTaskStatusDistributionResponse(
+        taskId=task_id, distribution=distribution, active=active
+    )
 
 
 @router.post("/{task_id}/continue", response_model=UserTaskContinueResponse)
@@ -189,6 +198,10 @@ def get_user_task_graphs(
                 title=g["title"],
                 nodeCount=g["nodeCount"],
                 status=g["status"],
+                # 漏传这个字段会让所有图退成默认的 request：前端据此判断
+                # 「画局部图」还是「节点平铺成执行体卡片」，plan 图就再也
+                # 显示不出来，DAG 节点全被平铺。
+                kind=g.get("kind") or "request",
                 createdAt=g.get("createdAt"),
                 userMessageSequence=g.get("userMessageSequence"),
             )

@@ -17,6 +17,9 @@ export type TaskDistribution = Record<string, number>;
 export interface UserTaskDistributionResponse {
   taskId: string;
   distribution: TaskDistribution;
+  /** 这件事此刻是否真的在推进（后端权威判据，含图有没有在跑）。不要从
+   *  distribution 自己推：图停掉之后剩下的「待开始」不会再被派发。 */
+  active?: boolean;
 }
 
 /** 用户点继续的结构化回报。 */

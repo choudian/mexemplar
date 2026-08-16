@@ -243,6 +243,9 @@ export function getSubagentTranscript(
 
 export type SubagentStatus = "running" | "done" | "suspended" | "failed";
 
+/** 执行体挂在哪种图上：plan=planner 产的 DAG，request=委派容器。 */
+export type ExecutorGraphKind = "plan" | "request";
+
 export interface AssistantSubagentSummary {
   subagentId: string;
   label: string;
@@ -251,6 +254,8 @@ export interface AssistantSubagentSummary {
   lastOutput?: string | null;
   turnStartSequence?: number | null;
   taskId?: string | null;
+  /** DAG 节点（`plan`）只在任务图里看，不平铺成执行体卡片。空 = 归属未知，按不确定处理。 */
+  graphKind?: ExecutorGraphKind | null;
 }
 
 export async function listSubagents(sessionId: string): Promise<AssistantSubagentSummary[]> {

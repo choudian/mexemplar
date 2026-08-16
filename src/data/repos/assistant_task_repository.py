@@ -299,6 +299,34 @@ class AssistantTaskRepository(BaseRepository):
         )
         return row is not None
 
+    def has_active_execution_tasks_for_user_task(self, user_task_id: str) -> bool:
+        """一件事是否真的在推进。判据与 ``has_active_execution_tasks`` 完全相同，
+        只是按 user_task 而不是 session 聚合——界面按「一件事」展示。
+
+        必须带图控制状态这一半：应用被强杀后 ``mark_interrupted_after_restart``
+        会把受影响的图打到 ``stopped``，图里剩下的 ``pending_dispatch`` 不会再被
+        派发。只数状态不看图，就会把「12 个待开始」误报成「正在跑」，界面一直
+        挂着运行态和停止按钮。
+        """
+        roots = self.list_graph_roots_for_user_task(user_task_id)
+        running_graph_ids = [
+            root.graph_id
+            for root in roots
+            if getattr(root, "graph_control_status", None) == "running"
+        ]
+        if not running_graph_ids:
+            return False
+        row = (
+            self.session.query(AssistantTask.task_id)
+            .filter(
+                AssistantTask.parent_task_id.is_not(None),
+                AssistantTask.status.in_(("running", "pending_dispatch")),
+                AssistantTask.graph_id.in_(running_graph_ids),
+            )
+            .first()
+        )
+        return row is not None
+
     def has_nonterminal_execution_tasks(self, session_id: str) -> bool:
         """返回 session 内是否仍有未终态执行节点；root 容器不参与判定。"""
         row = (

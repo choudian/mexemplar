@@ -1178,6 +1178,10 @@ class TaskCollaborationService(AtomicTaskService):
         """busy 判据：仍有 running/pending_dispatch 节点且图在运行（见 repo 同名方法）。"""
         return self._tasks.has_active_execution_tasks(session_id)
 
+    def has_active_execution_tasks_for_user_task(self, user_task_id: str) -> bool:
+        """同上判据，按「一件事」聚合——界面的运行态/停止按钮据此显示。"""
+        return self._tasks.has_active_execution_tasks_for_user_task(user_task_id)
+
     def list_graphs_for_user_task(
         self, user_task_id: str
     ) -> list[dict[str, object]]:
