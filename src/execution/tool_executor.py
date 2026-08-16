@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 
@@ -44,9 +45,18 @@ _PIP_TO_IMPORT = {
 # 内置工具所需的第三方依赖，应用启动时预装到 tool_venv
 BUILTIN_TOOL_DEPS: list[str] = ["duckduckgo-search"]
 
+# 建 venv 和 pip install 都是「写同一个目录」的非幂等操作，必须串行：`python -m venv`
+# 并发跑同一目录会互相覆盖，pip 并发装同一 site-packages 会留下半装状态。并发源至少
+# 三个——工具执行本身可并发（AgentLoop 最多 4 worker 同时跑），加上启动预热线程。
+_VENV_LOCK = threading.RLock()
+
 
 def ensure_builtin_deps() -> None:
-    """应用启动时预装内置工具依赖到 tool_venv。失败仅打 warning，不阻塞启动。"""
+    """预装内置工具依赖到 tool_venv（同步，会阻塞到装完）。失败仅打 warning。
+
+    首启要建 venv + pip install，真机实测约 89 秒。启动路径请用
+    ``ensure_builtin_deps_async``，别在 lifespan 里直接调这个。
+    """
     try:
         venv_python = _get_venv_python()
     except RuntimeError as e:
@@ -58,6 +68,28 @@ def ensure_builtin_deps() -> None:
         logger.info(f"[ToolExecutor] 内置工具依赖就绪: {BUILTIN_TOOL_DEPS}")
     else:
         logger.warning(f"[ToolExecutor] 内置依赖预装失败: {err}")
+
+
+def ensure_builtin_deps_async() -> threading.Thread:
+    """后台预装内置工具依赖，立即返回，不阻塞启动。
+
+    首启建 venv + pip install 实测约 89 秒（真机：13:22:06 建 venv → 13:23:35 就绪），
+    同步调用会把 sidecar 的 lifespan 卡住这么久，用户对着空界面干等。
+
+    后台化是安全的：预装只是「预热」，不是可用性前提——``run_tool_code`` 在真正执行
+    工具前会自己调 ``_ensure_dependencies``。最坏情况是预热没跑完用户就调了工具，
+    那次调用自己装（慢一点），``_VENV_LOCK`` 保证两边不会同时写同一个 venv。
+
+    daemon 线程：装依赖装到一半不该拦着进程退出，下次启动会重来。
+    返回线程对象供调用方按需 join（当前无人 join）。
+    """
+    thread = threading.Thread(
+        target=ensure_builtin_deps,
+        name="builtin-deps-preinstall",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 # Runner 脚本：以模块方式加载工具代码，调用 execute()，结果写入 JSON 文件
@@ -113,22 +145,30 @@ def _get_venv_python() -> str:
     else:
         venv_python = venv_dir / "bin" / "python"
 
+    # 快路径：venv 已就绪时不进锁，避免每次工具执行都排队。
     if venv_python.exists():
         return str(venv_python)
 
-    system_python = _find_system_python()
-    if not system_python:
-        raise RuntimeError("未找到系统 Python。请安装 Python 3.11+ 并确保 python 命令在 PATH 中。")
+    with _VENV_LOCK:
+        # 双重检查：等锁期间可能已被别的线程建好。
+        if venv_python.exists():
+            return str(venv_python)
 
-    logger.info(f"[ToolExecutor] 使用 {system_python} 创建虚拟环境: {venv_dir}")
-    venv_dir.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run(
-        [system_python, "-m", "venv", str(venv_dir)],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return str(venv_python)
+        system_python = _find_system_python()
+        if not system_python:
+            raise RuntimeError(
+                "未找到系统 Python。请安装 Python 3.11+ 并确保 python 命令在 PATH 中。"
+            )
+
+        logger.info(f"[ToolExecutor] 使用 {system_python} 创建虚拟环境: {venv_dir}")
+        venv_dir.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            [system_python, "-m", "venv", str(venv_dir)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return str(venv_python)
 
 
 def _ensure_runner() -> str:
@@ -225,10 +265,18 @@ def _ensure_dependencies(venv_python: str, dependencies: list[str]) -> tuple[boo
     检查并安装缺失的 pip 依赖到 venv。
 
     通过 venv 的 python 检查哪些包未安装，只安装缺失的。
+
+    「检查缺失」和「pip install」必须一起串行，否则两个并发调用都查到同一个包缺失，
+    各自跑一次 pip install 写同一个 site-packages。
     """
     if not dependencies:
         return True, ""
+    with _VENV_LOCK:
+        return _ensure_dependencies_locked(venv_python, dependencies)
 
+
+def _ensure_dependencies_locked(venv_python: str, dependencies: list[str]) -> tuple[bool, str]:
+    """``_ensure_dependencies`` 的实际逻辑；调用方必须已持有 ``_VENV_LOCK``。"""
     # 用 venv python 检查哪些包缺失
     pkg_pairs = [[pkg, _PIP_TO_IMPORT.get(pkg, pkg)] for pkg in dependencies]
     check_script = (

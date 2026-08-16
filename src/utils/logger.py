@@ -13,6 +13,30 @@ from logging.handlers import RotatingFileHandler
 from src.utils.helpers import get_default_data_dir
 
 
+def _force_utf8_stream(stream) -> None:
+    """把标准流切成 UTF-8 + errors=replace。
+
+    Windows 上子进程的 ``sys.stdout`` 默认用系统 ANSI 代码页（中文机器是 GBK）：
+    日志里的中文在 Tauri 侧全成乱码，emoji 更是直接让 ``StreamHandler.emit`` 抛
+    ``UnicodeEncodeError`` 打断 logging（真机 sidecar 启动时 3 次
+    ``--- Logging error ---``，丢了录制恢复的三条日志）。文件 handler 一直显式
+    ``encoding="utf-8"``，这里对齐。
+
+    ``errors="replace"`` 是第二道保险：万一仍有编不出的字符，替换成占位符而不是
+    抛异常——日志编码问题不该打断业务流程。
+
+    流不支持 ``reconfigure``（被替换成非 TextIOWrapper，如测试期的 capture 对象）
+    或已分离时静默跳过：日志配置失败不能中断启动。
+    """
+    reconfigure = getattr(stream, "reconfigure", None)
+    if reconfigure is None:
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except (ValueError, OSError):
+        pass
+
+
 def setup_logger(
     name: str = "mexemplar",
     log_dir: Optional[str] = None,
@@ -50,6 +74,11 @@ def setup_logger(
 
         # 控制台处理器
         if console_output:
+            # sidecar 的 stdout/stderr 由 Tauri 收走转发，必须先固定成 UTF-8，
+            # 否则中文乱码 + emoji 抛 UnicodeEncodeError。stderr 一并处理：
+            # uvicorn 往 stderr 写日志，同样可能带非 ASCII。
+            _force_utf8_stream(sys.stdout)
+            _force_utf8_stream(sys.stderr)
             console_handler = logging.StreamHandler(sys.stdout)
             console_handler.setLevel(log_level)
             console_handler.setFormatter(formatter)
