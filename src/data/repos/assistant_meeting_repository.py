@@ -54,8 +54,8 @@ class AssistantMeetingRepository(BaseRepository):
     def scan_expired_open_channels(self, now: datetime) -> list[AssistantMeetingChannel]:
         """open 且已过期的频道（created_at + time_budget_seconds <= now）。
 
-        与 scan_expired_claims / scan_expired_active / scan_expired 对齐：过期判定集中在
-        repository，service 只迭代结果，让四种过期扫描形态一致、便于发现。
+        与 scan_expired_claims / scan_expired 对齐：过期判定集中在 repository，
+        service 只迭代结果，让各种过期扫描形态一致、便于发现。
         """
         return [
             channel

@@ -1,9 +1,13 @@
 """Background worker for Assistant task collaboration recovery scans.
 
-周期性回收过期 TaskAttempt（lease 围栏）、过期看板认领、超预算会议通道、过期问题，
-并宿主 self-improvement proposal recovery job。让 FR-005（无永久 running 僵任务）、
-FR-014（认领租约超时释放）、FR-016（会议时长预算关闭）以及 proposal 自动实施回报的
-超时/恢复语义在运行态真正生效，而不只是停在"可调用但无人调度"的原语。
+周期性回收过期看板认领、超预算会议通道、过期问题，并宿主 self-improvement proposal
+recovery job。让 FR-014（认领租约超时释放）、FR-016（会议时长预算关闭）以及 proposal
+自动实施回报的超时/恢复语义在运行态真正生效，而不只是停在"可调用但无人调度"的原语。
+
+TaskAttempt 不在此列：执行体是本进程线程池的线程，存活性由 worker 体直接写终态 +
+启动栅栏（``TaskRecoveryService.mark_interrupted_after_restart``）覆盖，无需超时推断。
+曾经的 lease 围栏扫描会误杀排队中的 attempt（租约自建 attempt 起算，而心跳要等线程池
+调度到才开始），派发数超过 max_workers 时必然空转过期 → 误 fence → 重派 → 再排队。
 
 随 desktop API sidecar 生命周期启动/停止；统一任务派发默认关闭时整轮 no-op。
 """
@@ -13,7 +17,6 @@ from __future__ import annotations
 import logging
 import threading
 from datetime import datetime
-from typing import Callable
 
 from src.utils.timezone import utc_now_naive
 
@@ -23,11 +26,8 @@ logger = logging.getLogger(__name__)
 class TaskCollaborationBackgroundWorker:
     """周期扫描线程，跑 task collaboration 与 proposal recovery 原语。"""
 
-    def __init__(
-        self, config=None, resume_callback: Callable[[str, str], bool] | None = None
-    ) -> None:
+    def __init__(self, config=None) -> None:
         self._config = config
-        self._resume_callback = resume_callback
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -67,11 +67,6 @@ class TaskCollaborationBackgroundWorker:
         """
         current = now or utc_now_naive()
         return {
-            "fenced_attempts": self._run_job(
-                "fence_expired_attempts",
-                lambda now: _fence_expired_attempts(now, self._resume_callback),
-                current,
-            ),
             "expired_claims": self._run_job("expire_claims", _expire_claims, current),
             "closed_channels": self._run_job(
                 "close_expired_channels", _close_expired_channels, current
@@ -109,7 +104,7 @@ class TaskCollaborationBackgroundWorker:
     def _run_recovery_tick(self) -> None:
         """Run one recovery tick respecting the unified_dispatch toggle.
 
-        task collaboration recovery (fence/claim/channel/question) only runs when
+        task collaboration recovery (claim/channel/question) only runs when
         ``unified_dispatch`` is on, because it depends on the dispatcher and the
         graph scheduler assembled under that toggle.  Proposal recovery, however,
         is deterministic and must not be silently dropped when an operator disables
@@ -163,16 +158,6 @@ class TaskCollaborationBackgroundWorker:
 # 每个 job 用对应 service 自持 session 的 context manager：不注入 repo 时 service 自建共享
 # session，恢复方法内部 `_atomic()` 负责提交，`__exit__` 关闭 session——和过去手工 wire
 # `task_session_scope` + 三个 Repository 等价，但去掉了每个 job 重复的接线样板。
-def _fence_expired_attempts(
-    now: datetime,
-    resume_callback: Callable[[str, str], bool] | None = None,
-) -> int:
-    from src.business.task_collaboration.recovery import TaskRecoveryService
-
-    with TaskRecoveryService(resume_callback=resume_callback) as service:
-        return service.fence_expired_attempts(now)
-
-
 def _expire_claims(now: datetime) -> int:
     from src.business.task_collaboration.board import TaskBoardService
 

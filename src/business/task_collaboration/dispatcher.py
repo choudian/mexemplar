@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import threading
+from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime
 from collections.abc import Iterator
 from typing import Any, Callable
 
@@ -37,8 +38,6 @@ from src.data.repos import (
 from src.data.repos.workflow_transition_repository import WorkflowTransitionRepository
 from src.data.unified_config import get_unified_config
 
-from .attempt_heartbeat import AttemptHeartbeat
-from src.utils.helpers import positive_int
 from src.utils.timezone import utc_now_naive
 
 logger = logging.getLogger(__name__)
@@ -48,9 +47,25 @@ ParentReentryCallback = Callable[[dict[str, Any]], None]
 
 _TASK_OUTCOME_SUSPENDED = "suspended"
 
-# 租约时长的下界与兜底值，与 unified_config 的 minimum / default 一致。
-_MIN_SANE_LEASE_SECONDS = 10
-_DEFAULT_LEASE_SECONDS = 120
+# 租约已废弃：执行体是本进程 ThreadPoolExecutor 的线程，存活性由三条确定性路径覆盖——
+# 正常返回/异常由 `_run_attempt_worker` 直接写终态，进程崩溃由启动栅栏
+# （`TaskRecoveryService.mark_interrupted_after_restart`）按"重启 = 上一代线程全死"
+# 的进程级事实一次性对齐。超时推断反而会误杀排队中的 attempt：租约从建 attempt 起算，
+# 而心跳要等线程池真正调度到它才开始，派发数超过 max_workers 时排队期必然空转过期
+# → 误 fence → 重派 → 再排队（真机：12 节点图 / max_workers=4，1163 次误判）。
+# `lease_expires_at` 列 NOT NULL 暂留，统一写这个哨兵表示"永不按租约过期"。
+_LEASE_DISABLED_SENTINEL = datetime(9999, 12, 31)
+
+
+@dataclass(frozen=True)
+class _QueuedLaunch:
+    """一次待执行的派发请求：入队时只记参数，出队拿到 worker 时才建 attempt。"""
+
+    task_id: str
+    executor_type: str
+    executor_id: str
+    lease_owner: str
+    checkpoint_ref: str | None = None
 
 # 024: 失败自愈动作候选集（确定性，按失败类；FR-010）。advisory——主助理仍可自由裁定，
 # 这里只提供"下一步建议"避免开放自由发挥（FR-015）。display_hint 供 briefing 渲染。
@@ -140,10 +155,22 @@ class TaskDispatcher:
         # 在锁内串行，规避 SQLAlchemy Session 多线程并发写竞态；executor_callback（跑
         # LLM/子代理）在锁外并行——即"LLM 并行、写串行"（FR-003）。
         self._write_lock = threading.Lock()
+        self._max_workers = self._config.get_assistant_tasks_dispatch_max_workers()
         self._pool = ThreadPoolExecutor(
-            max_workers=self._config.get_assistant_tasks_dispatch_max_workers(),
+            max_workers=self._max_workers,
             thread_name_prefix="AssistantTaskDispatcher",
         )
+        # 显式 FIFO 派发队列。派发数超过 max_workers 时，多出来的请求以前躺在
+        # ThreadPoolExecutor 的内部队列里——不可见、不可控，而 attempt 已经建好并置
+        # task=running，于是库里写着"执行中"的节点其实一行没跑。把队列提到外面来：
+        # attempt 只在真正拿到 worker 时才创建，"有 attempt = 正在执行"因此成立。
+        #
+        # 锁序：_queue_lock 只护队列/计数这三个内存字段，且**绝不**在持有它时去拿
+        # _write_lock（建 attempt 要 DB 写）。出队与建 attempt 分两段，避免与写锁交叉成环。
+        self._queue_lock = threading.Lock()
+        self._queue: deque[_QueuedLaunch] = deque()
+        self._queued_task_ids: set[str] = set()
+        self._active = 0
 
     def delegate_task(
         self,
@@ -179,59 +206,151 @@ class TaskDispatcher:
         executor_id: str,
         lease_owner: str,
         checkpoint_ref: str | None = None,
-    ) -> Future | None:
-        lease_seconds = self._config.get_assistant_tasks_attempt_lease_seconds()
+    ) -> bool:
+        """把一次派发请求排进 FIFO 队列，返回是否受理。
+
+        受理 ≠ 已开始执行：``max_workers`` 满时请求在队列里按先来后到等，轮到它时才
+        建 attempt 并置 task=running。返回 False 只有两种情况——没有 executor_callback
+        （纯记账模式），或该 task 已在队列中（去重）。
+
+        就绪/确认校验放在出队时做而不是入队时：队列可能积压几分钟，入队那一刻的判断
+        到出队时可能已经过期（依赖完成了、任务被取消了、确认被否了）。出队重校验才是
+        权威的。
+        """
+        if self._executor_callback is None:
+            return False
+        request = _QueuedLaunch(
+            task_id=task_id,
+            executor_type=executor_type,
+            executor_id=executor_id,
+            lease_owner=lease_owner,
+            checkpoint_ref=checkpoint_ref,
+        )
+        with self._queue_lock:
+            # scheduler 的 _advance 会重扫全图就绪节点，同一 task 可能被反复请求派发。
+            # 以前靠 start_attempt 的 partial unique index 挡（第二次建 attempt 返回
+            # None）；队列化后 attempt 建得晚，去重得提到入队这一层，否则队列会被同一个
+            # task 的重复请求撑爆。真正的容量硬保证仍在 DB 索引，这里只是省掉无用功。
+            if task_id in self._queued_task_ids:
+                return False
+            self._queue.append(request)
+            self._queued_task_ids.add(task_id)
+        self._pump()
+        return True
+
+    def _pump(self) -> None:
+        """有空位就出队执行，直到填满 ``max_workers`` 或队列见底。
+
+        出队与建 attempt 分两段：``_queue_lock`` 内只做"取请求 + 占坑"，锁外再建
+        attempt（那里要拿 ``_write_lock`` 做 DB 写）。两把锁不重叠，不存在环。
+        占坑失败（校验没过 / 容量冲突）立即退坑并继续尝试下一个，不能让空位漏掉。
+
+        FIFO 的保证范围是**出队顺序**——先入队的先拿到 worker 名额。它不保证
+        ``attempt.started_at`` 严格递增：出队后锁已释放，多个 worker 同时完成时，
+        各自的 ``_launch`` 要重新竞争 ``_write_lock``，后出队的可能先写进库（实测
+        12 任务 / 4 worker 会出现相邻一对错位）。这是锁分段换来的，业务上无意义——
+        排队公平性看的是谁先获得执行机会，不是时间戳的毫秒排序。要按调度顺序复盘
+        请看出队日志，不要拿 ``started_at`` 当 FIFO 证据。
+        """
+        while True:
+            with self._queue_lock:
+                if self._active >= self._max_workers or not self._queue:
+                    return
+                request = self._queue.popleft()
+                self._queued_task_ids.discard(request.task_id)
+                self._active += 1
+            if not self._launch(request):
+                with self._queue_lock:
+                    self._active -= 1
+
+    def _launch(self, request: _QueuedLaunch) -> bool:
+        """建 attempt + 置 running + 提交线程池。返回是否真的跑起来了。
+
+        这里才是 attempt 的出生点——此刻 worker 名额已经占住，attempt 一建出来就在跑，
+        不存在"建了但在排队"的中间态。
+        """
         # attempt 创建与任务置 running 必须同一事务：否则 attempt=running 而任务仍
-        # pending_dispatch，恢复扫描与看板状态会不一致。写锁串行化建 attempt 写。
+        # pending_dispatch，重启恢复与看板状态会不一致。写锁串行化建 attempt 写。
         with self._write_lock:
             with _worker_scope() as (attempts, service):
                 # 024 C5: 派发层就绪硬校验兜底（FR-003），独立于 GraphScheduler 装配状态。
                 # 无 dependency 的 task（simple delegation / root 容器）直接通过；有
                 # dependency 的 task 前置必须全 completed，否则跳过派发——防止任何路径绕过
-                # scheduler 乱序派发未就绪节点。未就绪时 return None（不抛错），保护
-                # fallback / continue 等批量调用方。
-                task_row = service.get_task(task_id)
+                # scheduler 乱序派发未就绪节点。
+                task_row = service.get_task(request.task_id)
                 if task_row is not None and task_row.graph_id:
                     try:
-                        service.assert_dependencies_satisfied(task_row.graph_id, task_id)
+                        service.assert_dependencies_satisfied(task_row.graph_id, request.task_id)
                     except ValueError:
                         logger.warning(
                             "[dispatch] task %s dependencies not satisfied; skip attempt",
-                            task_id,
+                            request.task_id,
                         )
-                        return None
+                        return False
                     if (
                         task_row.requires_confirmation
                         and task_row.status == TaskStatus.PENDING_DISPATCH
-                        and not service.has_accepted_confirmation(task_id)
+                        and not service.has_accepted_confirmation(request.task_id)
                     ):
                         logger.warning(
                             "[dispatch] task %s requires confirmation but has no accepted adjudication; skip attempt",
-                            task_id,
+                            request.task_id,
                         )
-                        return None
+                        return False
                 attempt = attempts.start_attempt(
-                    task_id=task_id,
-                    executor_type=executor_type,
-                    executor_id=executor_id,
-                    lease_owner=lease_owner,
-                    lease_expires_at=utc_now_naive() + timedelta(seconds=lease_seconds),
-                    checkpoint_ref=checkpoint_ref,
+                    task_id=request.task_id,
+                    executor_type=request.executor_type,
+                    executor_id=request.executor_id,
+                    lease_owner=request.lease_owner,
+                    lease_expires_at=_LEASE_DISABLED_SENTINEL,
+                    checkpoint_ref=request.checkpoint_ref,
                 )
                 if attempt is None:
-                    return None
+                    return False
                 attempt_id = attempt.attempt_id
                 fence_token = attempt.fence_token
-                if self._executor_callback is not None:
-                    service.update_task_status(task_id=task_id, status=TaskStatus.RUNNING)
+                service.update_task_status(task_id=request.task_id, status=TaskStatus.RUNNING)
                 increment_task_collaboration_counter("attempt_started")
-        if self._executor_callback is None:
-            return None
-        return self._pool.submit(
-            self._run_attempt_worker,
-            attempt_id,
-            fence_token,
-        )
+        self._submit_worker(attempt_id, fence_token)
+        return True
+
+    def _submit_worker(self, attempt_id: str, fence_token: int) -> Future:
+        """提交 worker 并接住 Future——它是执行体存活性的权威句柄。
+
+        完成回调让出名额并继续 pump：队列由"上一个干完"驱动前进，不靠轮询也不靠超时。
+        回调在 worker 线程上跑，只做减计数和再 pump，重活仍在 ``_launch`` 里。
+        """
+        future = self._pool.submit(self._run_attempt_worker, attempt_id, fence_token)
+        future.add_done_callback(self._on_worker_done)
+        return future
+
+    def _on_worker_done(self, _future: Future) -> None:
+        with self._queue_lock:
+            self._active -= 1
+        # 异常绝不能逃出 done callback：那样只会进 concurrent.futures 的日志，而名额
+        # 已经让出、队列却再没人推动，剩下的任务就永远排在那里。
+        try:
+            self._pump()
+        except RuntimeError as exc:
+            # 进程关停途中线程池拒收新任务，属正常路径不是故障：队列里尚未建 attempt
+            # 的请求随进程消失，对应 task 仍停在 pending_dispatch，重启后由 scheduler
+            # 重扫重派。按 ERROR 报会在每次正常退出时刷一片假告警。
+            if "shutdown" not in str(exc):
+                logger.exception("[dispatch] pump after worker completion failed")
+                return
+            logger.debug("[dispatch] pump skipped; pool shutting down: %s", exc)
+        except Exception:
+            logger.exception("[dispatch] pump after worker completion failed")
+
+    def queue_snapshot(self) -> dict[str, Any]:
+        """当前派发占用情况：几个在跑、几个在等、等的是谁（FIFO 顺序）。"""
+        with self._queue_lock:
+            return {
+                "active": self._active,
+                "maxWorkers": self._max_workers,
+                "queued": len(self._queue),
+                "queuedTaskIds": [item.task_id for item in self._queue],
+            }
 
     def start_fallback_attempts(self, *, session_id: str | None = None) -> int:
         """Start attempts for stale open-board tasks claimed by fallback selection."""
@@ -243,13 +362,12 @@ class TaskDispatcher:
         with TaskBoardService() as board:
             task_ids = board.start_fallback_executors(session_id=session_id)
         for task_id in task_ids:
-            future = self.start_attempt_async(
+            if self.start_attempt_async(
                 task_id=task_id,
                 executor_type="ephemeral_subagent",
                 executor_id=task_id,
                 lease_owner="fallback_dispatch",
-            )
-            if future is not None:
+            ):
                 started += 1
                 increment_task_collaboration_counter("fallback_executor_started")
         return started
@@ -307,14 +425,13 @@ class TaskDispatcher:
                 if task.assignee_type == "specialist" and task.assignee_id
                 else task.task_id
             )
-            future = self.start_attempt_async(
+            if self.start_attempt_async(
                 task_id=task.task_id,
                 executor_type=task.assignee_type or "ephemeral_subagent",
                 executor_id=executor_id,
                 lease_owner="unified_continue",
                 checkpoint_ref=resume_refs.get(task.task_id),
-            )
-            if future is not None:
+            ):
                 started += 1
         return started
 
@@ -322,6 +439,8 @@ class TaskDispatcher:
         self,
         *,
         task_id: str,
+        resume_instruction: str | None = None,
+        iteration_budget: int | None = None,
     ) -> Future | None:
         """③ §2.4 原子化 continue：不经过 PENDING_DISPATCH 中间态。
 
@@ -329,11 +448,15 @@ class TaskDispatcher:
         → task 从 SUSPENDED 直接翻 RUNNING。scheduler 扫的是 PENDING_DISPATCH，从头到尾
         看不到这个节点——不存在并发抢跑的缝。
 
+        不走 FIFO 队列：原子性是这条路径的全部意义，排队会把"选目标→建 attempt→翻状态"
+        拆开，重新打开抢跑的缝；而且这是用户点"继续"的显式意图，理应插队。但它仍占用
+        并发名额（经 ``_submit_worker`` 计数），所以不会让在跑的执行体数量失控——名额
+        满时多出来的那个由线程池内部短暂排队消化，属于有意为之的例外。
+
         返回 Future（已提交到线程池）或 None（无 executor / 无续跑目标 / 容量冲突）。
         """
         if self._executor_callback is None:
             return None
-        lease_seconds = self._config.get_assistant_tasks_attempt_lease_seconds()
         with self._write_lock:
             with _worker_scope() as (attempts, service):
                 task_row = service.get_task(task_id)
@@ -369,9 +492,17 @@ class TaskDispatcher:
                         )
                         # checkpoint_ref 保持 None → start_attempt 不带续跑句柄 → 开新会话
                     else:
-                        checkpoint_ref = json.dumps(
-                            {"executor_session_id": target["session_id"]}
-                        )
+                        # 续跑句柄：会话 id 之外，可带唤回方的纠偏指令与追加轮数。
+                        # 两者都只在真正续跑原会话时有意义——上面 fail-closed 开新
+                        # 会话的分支会重发任务书，指令无处安放也不该安放。
+                        resume_payload: dict[str, Any] = {
+                            "executor_session_id": target["session_id"]
+                        }
+                        if (resume_instruction or "").strip():
+                            resume_payload["resume_instruction"] = resume_instruction.strip()
+                        if iteration_budget and iteration_budget > 0:
+                            resume_payload["iteration_budget"] = int(iteration_budget)
+                        checkpoint_ref = json.dumps(resume_payload, ensure_ascii=False)
                 # 建 attempt（start_attempt 内部有容量=1 守卫 + 唯一索引兜底）
                 executor_id = (
                     effective_assignee_id
@@ -383,7 +514,7 @@ class TaskDispatcher:
                     executor_type=effective_assignee_type,
                     executor_id=executor_id,
                     lease_owner="atomic_continue",
-                    lease_expires_at=utc_now_naive() + timedelta(seconds=lease_seconds),
+                    lease_expires_at=_LEASE_DISABLED_SENTINEL,
                     checkpoint_ref=checkpoint_ref,
                 )
                 if attempt is None:
@@ -404,11 +535,9 @@ class TaskDispatcher:
                 if service.get_graph_control_status(task_row.graph_id) == "stopped":
                     service.set_graph_control_status(task_row.graph_id, "running")
                 increment_task_collaboration_counter("attempt_started")
-        return self._pool.submit(
-            self._run_attempt_worker,
-            attempt_id,
-            fence_token,
-        )
+        with self._queue_lock:
+            self._active += 1
+        return self._submit_worker(attempt_id, fence_token)
 
     def wait_for_active_attempt(
         self,
@@ -437,18 +566,11 @@ class TaskDispatcher:
 
     def _run_attempt_worker(self, attempt_id: str, fence_token: int) -> dict[str, Any]:
         # 整个 worker 体外层兜底：executor 之外（complete/fail/裁定等 DB 操作）的异常
-        # 否则会被线程池 Future 静默吞掉，任务永远卡在 running 只能等 lease 过期。
+        # 否则会被线程池 Future 静默吞掉，任务永远卡在 running 无人回收。
         run_started = _begin_attempt_run_context(attempt_id)
         try:
             try:
-                # 执行期间持续续租：租约只在创建时写死，不续约的话执行体跑得比
-                # 租约长就会被恢复扫描判死重派，而它还活着——重派只是又起一个。
-                # 心跳随 executor 返回或抛出立即停止：租约活得比执行体久，正是
-                # 恢复机制要抓的那种情况。
-                with _lease_heartbeat(attempt_id):
-                    result = (
-                        self._executor_callback(attempt_id) if self._executor_callback else None
-                    )
+                result = self._executor_callback(attempt_id) if self._executor_callback else None
             except Exception as exc:
                 # executor 原始异常只进后端日志，不进安全投影（result_ref 只留异常类型名）。
                 logger.exception("[task attempt] executor failed attempt=%s", attempt_id)
@@ -841,6 +963,16 @@ class TaskDispatcher:
         return result
 
     def shutdown(self, *, wait: bool = False) -> None:
+        # 先丢队列再关池子：队列里的请求还没建 attempt，只是内存里的待办，进程退出即
+        # 消失，对应 task 仍停在 pending_dispatch，重启后由 scheduler 重扫重派——不留
+        # 半启动状态。不清的话 queue_snapshot 会一直报"还有 N 个排队"，而实际上再没有
+        # worker 会去推动它们。
+        with self._queue_lock:
+            dropped = len(self._queue)
+            self._queue.clear()
+            self._queued_task_ids.clear()
+        if dropped:
+            logger.info("[dispatch] shutdown dropped %d queued launch request(s)", dropped)
         self._pool.shutdown(wait=wait, cancel_futures=not wait)
 
 
@@ -973,34 +1105,6 @@ def _paused_reentry_payload(
     return payload
 
 
-def _lease_heartbeat(attempt_id: str) -> AttemptHeartbeat:
-    """构造该 attempt 的续租心跳。
-
-    每次续约用独立 Repository：心跳跑在执行线程，与 worker 的终态写入、恢复扫描
-    的围栏各自独立连接，共用 Session 会踩 SQLAlchemy 的多线程竞态。
-    """
-
-    def _renew(target_attempt_id: str, *, lease_expires_at) -> bool:
-        with AssistantTaskAttemptRepository() as attempts:
-            return attempts.renew_lease(target_attempt_id, lease_expires_at=lease_expires_at)
-
-    return AttemptHeartbeat(
-        attempt_id,
-        lease_seconds=_sane_lease_seconds(
-            get_unified_config().get_assistant_tasks_attempt_lease_seconds()
-        ),
-        renew=_renew,
-    )
-
-
-def _sane_lease_seconds(value: Any) -> int:
-    """把租约时长归一化；荒谬值退回默认。
-
-    续约频率由租约推导，租约被读成 1 秒就会让后台线程每秒打一次库。
-    ``UnifiedConfigManager`` 自己有 minimum=10 的下界，但这里还会收到测试替身
-    和损坏配置——``int(MagicMock())`` 返回 1，静默把心跳变成忙循环。
-    """
-    return positive_int(value, default=_DEFAULT_LEASE_SECONDS, minimum=_MIN_SANE_LEASE_SECONDS)
 
 
 def _begin_attempt_run_context(attempt_id: str) -> bool:

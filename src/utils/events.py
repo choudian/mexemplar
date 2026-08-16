@@ -71,7 +71,6 @@ EventName: TypeAlias = Literal[
     "avoidance_rule_injected",
     "improvement_proposal_changed",
     "graph_scheduler_start_requested",
-    "graph_scheduler_recovery_completed",
     "mcp_server_disconnected",
     "backend_resync_required",
     "scheduler_task_changed",
@@ -318,10 +317,6 @@ _EVENT_FIELDS: dict[EventName, tuple[str, ...]] = {
         "change_type",
     ),
     "graph_scheduler_start_requested": ("graph_id",),
-    "graph_scheduler_recovery_completed": (
-        "graph_id",
-        "task_id",
-    ),
     "backend_resync_required": ("reason",),
     "mcp_server_disconnected": (
         "server_id",

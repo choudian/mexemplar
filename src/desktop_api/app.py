@@ -37,7 +37,7 @@ from src.desktop_api.routers import (
     user_tasks,
 )
 from src.desktop_api.schemas import ErrorDetail, ErrorResponse
-from src.execution.tool_executor import ensure_builtin_deps
+from src.execution.tool_executor import ensure_builtin_deps_async
 
 SESSION_HEADER = "X-Mexemplar-Session"
 logger = logging.getLogger(__name__)
@@ -110,7 +110,9 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 "Post-restart external coding interruption scan failed",
                 exc_info=True,
             )
-        ensure_builtin_deps()
+        # 后台预热：首启建 venv + pip install 约 90 秒，同步跑会把 lifespan 卡死那么久。
+        # 工具真正执行前 run_tool_code 会自己确保依赖，预热只是让首次调用不必现装。
+        ensure_builtin_deps_async()
         try:
             from src.data.real_tour_audit import ensure_initialized
 
@@ -152,15 +154,13 @@ def create_app(session_token: str | None = None) -> FastAPI:
                 TaskCollaborationBackgroundWorker,
             )
 
-            task_worker = TaskCollaborationBackgroundWorker(
-                resume_callback=assistant.get_assistant_runtime().resume_recovered_task,
-            )
+            task_worker = TaskCollaborationBackgroundWorker()
             task_worker.start()
         except Exception:
             task_worker = None
-            # I4：worker 起不来 = lease/fence 恢复、claim 过期、通道/问题超时全部静默空转，
-            # 撞崩执行者的任务会永久卡在 running 无人回收。升到 ERROR + 堆栈，避免被当成
-            # 一行 WARNING 在启动日志里漏掉。
+            # I4：worker 起不来 = claim 过期、通道/问题超时全部静默空转。升到 ERROR + 堆栈，
+            # 避免被当成一行 WARNING 在启动日志里漏掉。（遗留 running attempt 的回收不依赖
+            # 这个 worker，由启动栅栏 mark_interrupted_after_restart 同步完成。）
             logger.error(
                 "TaskCollaborationBackgroundWorker failed to start; "
                 "recovery/timeout jobs are DISABLED for this process",

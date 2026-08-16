@@ -6,15 +6,16 @@
 核心循环：
 1. 扫就绪节点（status=pending_dispatch 且所有 dependency 前置=completed）
 2. requires_confirmation=1 → 建裁定暂停，不 dispatch
-3. dispatcher.start_attempt_async(node) → running（capacity=1，复用 023）
+3. dispatcher.start_attempt_async(node) → 进 FIFO 队列，轮到时才建 attempt 并置
+   running（capacity=1，复用 023）。派发数超过 max_workers 时按先来后到等，
+   队列由"上一个执行体干完"驱动前进。
 4. attempt 完成 → 重扫激活下游
 5. 全图完成 → 通知主助理汇报
 
 装配：GraphScheduler 由 orchestrator 构造为进程级单例（``set_graph_scheduler``），
 dispatcher 经 ``scheduler_callback`` 回调 ``on_attempt_outcome``；其余触发点
-（build_task_graph 建图、adjudication decide、background_worker 恢复）通过
-blinker 事件 ``graph_scheduler_start_requested`` /
-``graph_scheduler_recovery_completed`` 触发，不再由调用方直接取单例。
+（build_task_graph 建图、adjudication decide）通过 blinker 事件
+``graph_scheduler_start_requested`` 触发，不再由调用方直接取单例。
 每次推进用临时 TaskCollaborationService（per-operation session），避免长生命周期
 service 的 identity-map stale，与 dispatcher/adjudication 的 per-operation service
 模式一致。
@@ -107,15 +108,6 @@ class GraphScheduler:
                 self._advance(svc, graph_id)
 
         self._run(graph_id, _apply)
-
-    def on_executor_recovered(self, graph_id: str, task_id: str) -> None:
-        """executor lease 过期/崩溃恢复后调；重入就绪重派。"""
-        logger.info(
-            "GraphScheduler.on_executor_recovered: graph_id=%s task_id=%s",
-            graph_id,
-            task_id,
-        )
-        self._run(graph_id, lambda svc: self._advance(svc, graph_id))
 
     # === 内部方法 ===
 
@@ -405,26 +397,6 @@ def _on_graph_scheduler_start_requested(sender, *, graph_id: str, **_kwargs) -> 
         )
 
 
-def _on_graph_scheduler_recovery_completed(
-    sender, *, graph_id: str, task_id: str = "", **_kwargs
-) -> None:
-    """订阅 graph_scheduler_recovery_completed 事件，触发 scheduler.on_executor_recovered。
-
-    scheduler 未装配时静默跳过。
-    """
-    scheduler = get_graph_scheduler()
-    if scheduler is None:
-        return
-    try:
-        scheduler.on_executor_recovered(graph_id, task_id)
-    except Exception:
-        logger.warning(
-            "graph_scheduler_recovery_completed: on_executor_recovered failed for graph=%s",
-            graph_id,
-            exc_info=True,
-        )
-
-
 _subscriptions_installed = False
 
 
@@ -442,4 +414,3 @@ def install_graph_scheduler_event_subscriptions() -> None:
     from src.utils.events import connect
 
     connect("graph_scheduler_start_requested", _on_graph_scheduler_start_requested)
-    connect("graph_scheduler_recovery_completed", _on_graph_scheduler_recovery_completed)

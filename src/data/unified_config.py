@@ -951,6 +951,13 @@ class UnifiedConfigManager:
         )
 
     def get_assistant_tasks_attempt_lease_seconds(self) -> int:
+        """看板认领（``assistant_task_claims``）的租约时长。
+
+        键名里的 ``attempt`` 是历史遗留：TaskAttempt 的租约已废除（执行体是本进程
+        线程池的线程，存活性由 worker 体写终态 + 启动栅栏覆盖，超时推断只会误杀
+        排队中的 attempt）。认领租约是另一回事——认领只是"预约"，预约后迟迟不开工
+        本就该超时释放，不存在误判执行中的问题。当前唯一消费者是 ``board.py``。
+        """
         return self._get_bounded_positive_int(
             "assistant_tasks.attempt.lease_seconds",
             120,

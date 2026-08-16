@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import aliased
 
 from src.data.models_sqlite import AssistantTaskAttempt
 from src.utils.timezone import utc_now_naive
@@ -70,7 +71,6 @@ class AssistantTaskAttemptRepository(BaseRepository):
             status="running",
             lease_owner=lease_owner,
             lease_expires_at=lease_expires_at,
-            heartbeat_at=now,
             started_at=now,
             checkpoint_ref=checkpoint_ref,
         )
@@ -94,25 +94,16 @@ class AssistantTaskAttemptRepository(BaseRepository):
             .all()
         )
 
-    def scan_expired_active(self, now: datetime) -> list[AssistantTaskAttempt]:
-        return (
-            self.session.query(AssistantTaskAttempt)
-            .filter(
-                AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
-                AssistantTaskAttempt.lease_expires_at <= now,
-            )
-            .order_by(AssistantTaskAttempt.lease_expires_at)
-            .all()
-        )
-
     def scan_all_active(self) -> list[AssistantTaskAttempt]:
-        """重启扫描：所有 active attempt，不看 lease 过期。
+        """重启扫描：所有 active attempt。
 
-        与 ``scan_expired_active`` 的区别：那个只扫 lease 过期的（运行期失联，由
-        ``TaskCollaborationBackgroundWorker`` 周期调用）；这个扫**全部** active——sidecar
-        重启后上一代进程的执行体线程物理全死，无论 lease 到没到期，状态都是假的。判据是
-        进程级全局事实（重启 = 上一代全死），不需要逐 attempt 的 PID 校验，因为普通 attempt
-        的执行体是进程内线程（``dispatcher.py`` 的 ThreadPoolExecutor），不起子进程。
+        sidecar 重启后上一代进程的执行体线程物理全死，状态都是假的。判据是进程级全局
+        事实（重启 = 上一代全死），不需要逐 attempt 的 PID 校验，因为普通 attempt 的
+        执行体是进程内线程（``dispatcher.py`` 的 ThreadPoolExecutor），不起子进程。
+
+        这是遗留 running attempt 的唯一回收入口——按租约到期扫描的 ``scan_expired_active``
+        已废除：租约自建 attempt 起算而心跳要等线程池调度到才开始，排队期必然空转过期，
+        会把还在队列里等 worker 的 attempt 误判成失联执行体。
         """
         return (
             self.session.query(AssistantTaskAttempt)
@@ -251,7 +242,7 @@ class AssistantTaskAttemptRepository(BaseRepository):
         "此刻谁在干这活"因此在库里不存在。执行体启动时回填本列补上这条事实，
         归属校验和任务下钻都以它为准。
 
-        与 ``renew_lease`` 同样用条件 UPDATE：绑定跑在执行线程，围栏和终态跑在别的
+        与 ``fence`` 同样用条件 UPDATE：绑定跑在执行线程，围栏和终态跑在别的
         连接上，ORM 的 read-check-write 会盲写把已终态的 attempt 复活。守卫进 SQL，
         匹配 0 行说明这个任务已经没有 active attempt——绑定失败即返回 False，
         由调用方决定是继续还是放弃，不静默当成功。
@@ -434,36 +425,61 @@ class AssistantTaskAttemptRepository(BaseRepository):
                 result[session_id] = task_id
         return result
 
-    def renew_lease(self, attempt_id: str, *, lease_expires_at: datetime) -> bool:
-        """续租一个仍在执行的 attempt，返回是否续上。
+    def latest_graph_kinds_for_sessions(
+        self, executor_session_ids: list[str]
+    ) -> dict[str, str]:
+        """批量返回每个执行会话所属图的类型（``plan`` / ``request``）。
 
-        租约原本只在创建时写死一个到期时间，此后无人续约，于是执行体只要跑得比
-        租约长就会被恢复扫描判死并重新派发——而它其实还活着，重派只会又起一个。
+        判断「这个执行体是不是 DAG 里的节点」此前要反着做：先把用户任务下所有 plan 图
+        拉下来、收集全部节点 id，再拿执行体的 task_id 去比对。那份名单是会话级事实，却
+        存在单张卡片的局部 state 里，只有绑了用户任务的那张卡片会去加载——其余每一轮的
+        卡片名单恒空，DAG 节点的执行体于是全被平铺出来（真机发现）。执行体自己知道它挂
+        在哪个 task 上，归属该由它自带，不该让展示层去重建整张图。
 
-        与 ``fence`` 同样用条件 UPDATE：续约跑在执行线程，围栏和终态跑在别的
-        连接上，ORM 的 read-check-write 会盲写覆盖，把已终态的 attempt 复活。
-        守卫进 SQL，匹配 0 行就说明这个 attempt 已经不归自己管了。
+        ``graph_kind`` 只写在图根（``parent_task_id IS NULL``，见 v49 迁移），子节点行为
+        NULL，所以要 executor_session → attempt → task → 图根 三跳。一次窗口函数 + 两次
+        join 完成，不做 N+1。取最新 attempt，与 ``latest_tasks_for_sessions`` 同口径。
+
+        返回 ``{session_id: graph_kind}``；无 attempt、图根缺失或 kind 为空的 session 不在
+        结果中——调用方据此按「未知归属」处理，不能默认它是 DAG。
         """
-        self.ensure_immediate_transaction()
-        now = utc_now_naive()
-        updated = (
-            self.session.query(AssistantTaskAttempt)
-            .filter(
-                AssistantTaskAttempt.attempt_id == attempt_id,
-                AssistantTaskAttempt.status.in_(self.ACTIVE_STATUSES),
+        if not executor_session_ids:
+            return {}
+        from sqlalchemy import func
+
+        from src.data.models_sqlite import AssistantTask
+
+        ranked = (
+            self.session.query(
+                AssistantTaskAttempt.executor_session_id.label("sid"),
+                AssistantTaskAttempt.task_id.label("tid"),
+                func.row_number()
+                .over(
+                    partition_by=AssistantTaskAttempt.executor_session_id,
+                    order_by=AssistantTaskAttempt.created_at.desc(),
+                )
+                .label("rn"),
             )
-            .update(
-                {"lease_expires_at": lease_expires_at, "heartbeat_at": now},
-                synchronize_session=False,
-            )
+            .filter(AssistantTaskAttempt.executor_session_id.in_(executor_session_ids))
+            .subquery()
         )
-        self._commit()
-        if updated == 0:
-            return False
-        # bulk UPDATE 不同步 identity map：同 session 的后续读会拿到旧的到期时间，
-        # 看起来像"续约没生效"。与 fence 一致，只刷新本行。
-        self._refetch(attempt_id)
-        return True
+        node = aliased(AssistantTask)
+        root = aliased(AssistantTask)
+        rows = (
+            self.session.query(ranked.c.sid, root.graph_kind)
+            .join(node, node.task_id == ranked.c.tid)
+            .join(
+                root,
+                (root.graph_id == node.graph_id) & (root.parent_task_id.is_(None)),
+            )
+            .filter(ranked.c.rn == 1)
+            .all()
+        )
+        result: dict[str, str] = {}
+        for session_id, graph_kind in rows:
+            if session_id and graph_kind:
+                result[session_id] = graph_kind
+        return result
 
     def fence(self, attempt_id: str) -> AssistantTaskAttempt | None:
         # 原子条件 UPDATE：守卫（仅 active 才围栏）进 SQL，不在 Python 读后判断。recovery 的
