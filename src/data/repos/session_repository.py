@@ -3,7 +3,6 @@ SessionRepository -- 会话 Repository
 """
 
 import logging
-from datetime import datetime
 
 from src.utils.timezone import utc_now_naive
 from typing import List, Optional
@@ -116,7 +115,7 @@ class SessionRepository(BaseRepository):
         model = self.session.query(Session).filter(Session.session_id == session_id).first()
         if model:
             model.status = status
-            model.updated_at = datetime.now()
+            model.updated_at = utc_now_naive()
             self.session.commit()
             logger.debug(f"会话 {session_id} 状态更新为 {status}")
 
@@ -126,7 +125,7 @@ class SessionRepository(BaseRepository):
         if not model:
             return None
         model.title = title
-        model.updated_at = datetime.now()
+        model.updated_at = utc_now_naive()
         self.session.commit()
         self.session.refresh(model)
         logger.debug("会话 %s 标题已更新", session_id)
@@ -150,7 +149,7 @@ class SessionRepository(BaseRepository):
         """
         from sqlalchemy import update
 
-        now = datetime.now()
+        now = utc_now_naive()
         result = self.session.execute(
             update(Session)
             .where(Session.status == "active")

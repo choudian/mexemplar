@@ -1,8 +1,10 @@
 """Self-improvement persistence: metrics, audit log, prompt supplements, tool gaps and fix proposals."""
 
 import logging
-from datetime import date, datetime
+from datetime import datetime
 from typing import Optional
+
+from src.utils.timezone import local_now, to_naive_utc, utc_now_naive
 
 from sqlalchemy import case, func
 
@@ -100,8 +102,15 @@ class SelfImprovementRepository(BaseRepository):
             raise
 
     def count_actions_today(self, action_type: str) -> int:
-        """Count actions of a given type created today (for rate limiting)."""
-        today_start = datetime.combine(date.today(), datetime.min.time())
+        """Count actions of a given type created today (for rate limiting).
+
+        「今天」按用户本地日期算，但 ``created_at`` 存的是 naive UTC，所以要把本地
+        零点换算成 UTC 再比较。原来直接拿本地零点当 UTC 用：在 UTC+8 下等于筛
+        ``UTC >= 今天00:00``，而本地今天真正对应的是 ``[昨天16:00, 今天16:00)``——
+        本地今天 00:00~08:00 产生的记录全被漏掉，限流在每天早上失效。
+        """
+        today_start_local = local_now().replace(hour=0, minute=0, second=0, microsecond=0)
+        today_start = to_naive_utc(today_start_local)
         return (
             self.session.query(SelfImprovementAuditLogEntry)
             .filter(
@@ -266,7 +275,7 @@ class SelfImprovementRepository(BaseRepository):
             )
             return None
         try:
-            now = datetime.now()
+            now = utc_now_naive()
             # 原子 supersede 当前 active（批量 UPDATE，避免逐行 read-modify-write）
             self.session.query(PromptSupplement).filter(
                 PromptSupplement.target_section == supplement.target_section,
@@ -336,7 +345,7 @@ class SelfImprovementRepository(BaseRepository):
             return None
         try:
             supplement.status = "retracted"
-            supplement.retracted_at = datetime.now()
+            supplement.retracted_at = utc_now_naive()
             if reason:
                 supplement.rationale = (
                     f"{supplement.rationale}\n\nRetraction reason: {reason}"
@@ -515,7 +524,7 @@ class SelfImprovementRepository(BaseRepository):
                     ToolGapReport.status.in_(sources),
                 )
                 .update(
-                    {"status": to_status, "updated_at": datetime.now()},
+                    {"status": to_status, "updated_at": utc_now_naive()},
                     synchronize_session=False,
                 )
             )
@@ -601,7 +610,7 @@ class SelfImprovementRepository(BaseRepository):
         if trial_result is not None:
             values["trial_result"] = trial_result
         if new_status == "applied":
-            values["applied_at"] = datetime.now()
+            values["applied_at"] = utc_now_naive()
         try:
             updated = (
                 self.session.query(ToolFixProposal)

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+
+from src.utils.timezone import utc_now_naive
 
 from src.data.models_sqlite import AssistantRunFailure
 
@@ -61,7 +62,7 @@ class AssistantRunFailureRepository(BaseRepository):
         exception_type: str | None,
         source_failure_id: str | None = None,
     ) -> AssistantRunFailure:
-        now = datetime.now()
+        now = utc_now_naive()
         # 同一会话的 agent run 串行执行，不会并发 record_failure；即便极端情况下重复插入，
         # get_current 也按最新行兜底，无有害后果，因此不加并发守卫。
         row = (
@@ -104,7 +105,7 @@ class AssistantRunFailureRepository(BaseRepository):
         # 保证并发重试只有一个成功（SQL 标准 CAS，不依赖 BEGIN IMMEDIATE 的手动时序）。
         # 两个并发请求在 SQLite 单写者下排队：第一个把 status 改成 retrying 后，第二个的
         # WHERE 已匹配不到，update 返回 0 行 → 返回 None，拒绝重复认领。
-        now = datetime.now()
+        now = utc_now_naive()
         claimed = (
             self.session.query(AssistantRunFailure)
             .filter(
@@ -132,7 +133,7 @@ class AssistantRunFailureRepository(BaseRepository):
         if row is None or row.status != "retrying":
             return False
         row.status = "failed"
-        row.updated_at = datetime.now()
+        row.updated_at = utc_now_naive()
         self.session.commit()
         return True
 
@@ -140,7 +141,7 @@ class AssistantRunFailureRepository(BaseRepository):
         row = self.get_by_id(failure_id)
         if row is None or row.status == "resolved":
             return row
-        now = datetime.now()
+        now = utc_now_naive()
         row.status = "resolved"
         row.resolved_at = now
         row.updated_at = now
@@ -155,7 +156,7 @@ class AssistantRunFailureRepository(BaseRepository):
         return self.resolve(row.failure_id)
 
     def recover_interrupted_retries(self) -> int:
-        now = datetime.now()
+        now = utc_now_naive()
         count = (
             self.session.query(AssistantRunFailure)
             .filter(AssistantRunFailure.status == "retrying")
